@@ -60,7 +60,7 @@ import {
 import { requireEnum, withinOneEdit } from "./contract.js";
 import { readSchemaJson, resolveSchemaFile, type SchemaLocation } from "./source.js";
 import { matchesPattern } from "../report/patterns.js";
-import { CONVENTIONAL_SUBJECT_CASE, parseSubjectCaseTuple, type SubjectCaseSpec } from "../commit/rule.js";
+import { CONVENTIONAL_SUBJECT_CASE, parseBodyWidth, parseSubjectCaseTuple, type SubjectCaseSpec } from "../commit/rule.js";
 
 /** Where the policy file lives inside the target repository. */
 export const WORKFLOW_FILE = "nen/workflow.json";
@@ -384,6 +384,26 @@ export interface CommitsPolicy {
    * convention, exactly as a default `models` matrix would be.
    */
   readonly subjectCase: DeclaredSubjectCase | null;
+  /**
+   * The BODY width commitlint's `body-max-line-length` holds a commit to,
+   * DECLARED as data (zheref/nen#290; the maintainer's ruling "Refuse at 100,
+   * declarable"). Where the commitlint config is code, or nen cannot
+   * otherwise read the rule from it, `nen commit format` and `nen commit
+   * write` assume config-conventional's 100 and REFUSE a body line over it;
+   * this key states the repository's own width instead, and binds the same
+   * way -- a line over it is exit 2. A positive whole number, validated by
+   * ../commit/rule.ts's parseBodyWidth.
+   *
+   * THE SAME PRECEDENCE AS `subjectCase`: a commitlint config nen can read as
+   * data wins, and this key beside it is reported as not applied (agreeing or
+   * differing); it binds where that config is code or unreadable, and where
+   * there is none. It names the BODY only: `footer-max-line-length` is not
+   * declared here. ../commit/bodywidth.ts states the rules in full.
+   *
+   * NO DEFAULT: absent is "not declared", and the verbs then say what they
+   * assumed.
+   */
+  readonly bodyMaxLineLength: number | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -531,7 +551,7 @@ export function defaultWorkflow(): Workflow {
       raw: empty,
     },
     notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
-    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, raw: empty },
+    commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, bodyMaxLineLength: null, raw: empty },
     monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
     review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
@@ -577,6 +597,7 @@ const COMMITS_KEYS: readonly string[] = [
   "forbiddenTrailers",
   "runTrailer",
   "subjectCase",
+  "bodyMaxLineLength",
 ];
 const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds"];
 const PROFILE_KEYS: readonly string[] = ["default", "allowed"];
@@ -1325,7 +1346,7 @@ function parseSubjectCase(path: string, value: unknown): DeclaredSubjectCase | n
 }
 
 function parseCommits(path: string, value: unknown): CommitsPolicy {
-  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's four keys are");
+  const raw = block(path, "commits", value, COMMITS_KEYS, "A commits policy's five keys are");
   const read = (key: string): readonly string[] =>
     stringsOr(path, `commits.${key}`, raw[key], []).map((entry, index): string =>
       requireTrailerKey(path, `commits.${key}[${index}]`, entry),
@@ -1359,7 +1380,7 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
   // every commit unconditionally. Caught here, at load, by pointer, rather
   // than as a hook nobody can ever get past.
   if (runTrailer !== null) {
-    const refused = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, subjectCase: null, raw: {} }).find(
+    const refused = refusedTrailerKeys({ allowedAttributionTrailers, forbiddenTrailers, runTrailer: null, subjectCase: null, bodyMaxLineLength: null, raw: {} }).find(
       (key): boolean => key.toLowerCase() === runTrailer.toLowerCase(),
     );
     if (refused !== undefined) {
@@ -1370,7 +1391,26 @@ function parseCommits(path: string, value: unknown): CommitsPolicy {
       );
     }
   }
-  return { allowedAttributionTrailers, forbiddenTrailers, runTrailer, subjectCase: parseSubjectCase(path, raw["subjectCase"]), raw };
+  return {
+    allowedAttributionTrailers,
+    forbiddenTrailers,
+    runTrailer,
+    subjectCase: parseSubjectCase(path, raw["subjectCase"]),
+    bodyMaxLineLength: parseBodyMaxLineLength(path, raw["bodyMaxLineLength"]),
+    raw,
+  };
+}
+
+/**
+ * `commits.bodyMaxLineLength`: a positive whole number, held to
+ * ../commit/rule.ts's parseBodyWidth and refused BY POINTER rather than
+ * defaulted around -- a width nen could not read is a width nobody checked.
+ */
+function parseBodyMaxLineLength(path: string, value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  const parsed = parseBodyWidth(value);
+  if (!parsed.ok) throw new SchemaError(path, "commits.bodyMaxLineLength", `the declared body width ${parsed.problem}, got ${describeValue(value)}`);
+  return parsed.width;
 }
 
 function parseMonitor(path: string, value: unknown): MonitorPolicy {

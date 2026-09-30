@@ -234,7 +234,7 @@ describe("nen commit format -- nen/workflow.json's attribution-trailer policy", 
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root);
     expect(result.code).toBe(1);
     expect(result.out).toEqual([]);
-    expect(result.err.join("\n")).toMatch(/states the commit policy -- which attribution trailers a commit may carry, and commits\.subjectCase -- and nen will not shape a message under a policy it could not read/);
+    expect(result.err.join("\n")).toMatch(/states the commit policy -- which attribution trailers a commit may carry, commits\.subjectCase and commits\.bodyMaxLineLength -- and nen will not shape a message under a policy it could not read/);
   });
 
   it("exits 1, not 2, on a MALFORMED policy -- the invocation was correct", async () => {
@@ -506,5 +506,274 @@ describe("nen commit format -- declared-rule outcomes at the verb: exit code and
     expect(result.code).toBe(1);
     expect(result.err[0]).toMatch(/nen\/workflow\.json.*nen will not shape a message under a policy it could not read/);
     expect(result.err.slice(1)).toEqual([expect.stringMatching(/^nen: type 'bogus' is not one of/)]);
+  });
+});
+
+// ── the body's line length: commitlint's body-/footer-max-line-length (zheref/nen#290)
+
+describe("nen commit format -- --body wrapped to the width commitlint holds it to (zheref/nen#290)", () => {
+  /** zheref/kro-pwa's shape: a code config extending config-conventional, with its own header rule. */
+  const KRO_PWA = {
+    "commitlint.config.cjs":
+      "module.exports = { extends: ['@commitlint/config-conventional'], rules: { 'header-max-length': [2, 'always', 72] } }\nthrow new Error('nen executed the repository config')\n",
+  };
+  /** A sentence of 144 characters -- the issue's shape: one --body line past config-conventional's 100. */
+  const SENTENCE =
+    "This rebuilds the capture prompt so that endeavor pills are rendered inline and the pane-hosted Inbox triage keeps its selection across reloads.";
+  /** A 75-character header: `feat(capture): ` (15) and a 60-character subject. */
+  const SUBJECT_75 = "rebuild the capture prompt and pane-hosted inbox triage flow";
+  const lengths = (out: readonly string[]): number[] => out.join("\n").split("\n").map((line) => line.length);
+
+  it("fixture: the two inputs are the ones the issue names -- a 144-character sentence and a 75-character header", () => {
+    expect(SENTENCE.length).toBe(144);
+    expect(`feat(capture): ${SUBJECT_75}`.length).toBe(75);
+  });
+
+  it("wraps a --body line over config-conventional's 100 at spaces, notes it, and exits 0 (AC1)", async () => {
+    const root = repoWithCommitlint(CONVENTIONAL_RC);
+    const result = await capture(["commit", "format", "--type", "fix", "--scope", "capture", "--subject", "rebuild the prompt", "--body", SENTENCE], false, root);
+    expect(result.code).toBe(0);
+    const message = result.out.join("\n");
+    expect(message).toBe(
+      "fix(capture): rebuild the prompt\n\nThis rebuilds the capture prompt so that endeavor pills are rendered inline and the pane-hosted\nInbox triage keeps its selection across reloads.",
+    );
+    expect(Math.max(...lengths(result.out))).toBeLessThanOrEqual(100);
+    // Never inside a word: the words are the caller's, in order.
+    expect(message.split("\n").slice(2).join(" ")).toBe(SENTENCE);
+    expect(result.err).toEqual([
+      expect.stringMatching(
+        /^nen: note: --body rewrapped: its line 1 \(144 characters\) was over the 100 characters this repository's commitlint rule 'body-max-line-length' allows \(@commitlint\/config-conventional's default, which .*\.commitlintrc\.json extends\), so nen broke it at spaces, never inside a word$/,
+      ),
+    ]);
+  });
+
+  it("refuses at exit 2 a line the wrap cannot shorten under a readable level-2 rule, naming the line (AC1)", async () => {
+    const root = repoWithCommitlint(CONVENTIONAL_RC);
+    const token = `src/${"deeply/nested/".repeat(8)}module.ts`;
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "move the module", "--body", `It moved to ${token} today.`], false, root);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    const err = result.err.join("\n");
+    expect(err).toMatch(new RegExp(`^nen: line 4 is ${token.length} characters, over the 100 that this repository's commitlint rule 'body-max-line-length' allows`, "m"));
+    expect(err).toMatch(/it holds a word longer than 100 characters, which nen never splits -- shorten it/);
+  });
+
+  it("still names a header over 72 characters before any git commit -- a 75-character header is refused at exit 2 (AC2)", async () => {
+    for (const root of [repoWithCommitlint({}), repoWithCommitlint(CONVENTIONAL_RC), repoWithCommitlint(KRO_PWA)]) {
+      const result = await capture(["commit", "format", "--type", "feat", "--scope", "capture", "--subject", SUBJECT_75], false, root);
+      expect(result.code).toBe(2);
+      expect(result.out).toEqual([]);
+      expect(result.err.join("\n")).toContain(`nen: header line is 75 characters, over the 72-character convention: 'feat(capture): ${SUBJECT_75}'`);
+    }
+  });
+
+  it("fixture: a 75-character header and a 144-character body sentence -- the verb's own output names BOTH, in one run (AC3)", async () => {
+    for (const [name, root] of [
+      ["kro-pwa's code config", repoWithCommitlint(KRO_PWA)],
+      ["a data config", repoWithCommitlint(CONVENTIONAL_RC)],
+      ["no config", repoWithCommitlint({})],
+    ] as const) {
+      const result = await capture(["commit", "format", "--type", "feat", "--scope", "capture", "--subject", SUBJECT_75, "--body", SENTENCE], false, root);
+      expect(result.code, name).toBe(2);
+      expect(result.out, name).toEqual([]);
+      const err = result.err.join("\n");
+      expect(err, name).toContain("nen: header line is 75 characters, over the 72-character convention");
+      expect(err, name).toMatch(/nen: note: --body rewrapped: its line 1 \(144 characters\) was over (the )?100 characters/);
+    }
+  });
+
+  it("emits a message within its limits byte for byte, and says nothing, where a rule is read (AC4)", async () => {
+    const body = `Why it matters.\n\n- a list item\n- another, with https://example.com/${"x".repeat(120)}\n${"y".repeat(100)}`;
+    const expected = `fix(commit): keep the message as typed\n\n${body}\n\nHatsu-Agent: kurapika`;
+    for (const root of [repoWithCommitlint(CONVENTIONAL_RC), repoWithCommitlint({})]) {
+      const result = await capture(
+        ["commit", "format", "--type", "fix", "--scope", "commit", "--subject", "keep the message as typed", "--body", body, "--trailer", "Hatsu-Agent=kurapika"],
+        false,
+        root,
+      );
+      expect(result.code).toBe(0);
+      expect(result.out.join("\n")).toBe(expected);
+      expect(result.err).toEqual([]);
+    }
+  });
+
+  it("wraps a code config's body at config-conventional's 100 and says the width was NOT read -- never executing it", async () => {
+    const root = repoWithCommitlint(KRO_PWA);
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "rebuild the prompt", "--body", SENTENCE], false, root);
+    expect(result.code).toBe(0);
+    expect(Math.max(...lengths(result.out))).toBeLessThanOrEqual(100);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/nen: note: --body rewrapped: its line 1 \(144 characters\) was over 100 characters, @commitlint\/config-conventional's default, since 'body-max-line-length' could not be read/);
+    expect(err).toMatch(/nen: note: 'body-max-line-length' NOT read: .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute\. So nen holds the body -- every line before the trailer block, wherever commitlint places it -- to @commitlint\/config-conventional's 100 characters a line.*and refuses a line over it -- declare the repository's own width in nen\/workflow\.json's commits\.bodyMaxLineLength/);
+  });
+
+  it("leaves a URL-bearing line whole whatever its length, as commitlint exempts it", async () => {
+    const root = repoWithCommitlint(CONVENTIONAL_RC);
+    const line = `The discussion is at https://github.com/zheref/nen/issues/290#issuecomment-1234567890 and ${"it ran long ".repeat(8)}`.trim();
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "cite the thread", "--body", line], false, root);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toBe(`fix: cite the thread\n\n${line}`);
+    expect(result.err).toEqual([]);
+  });
+
+  it("wraps to an explicit narrower width, and only warns for what it cannot wrap under a level-1 rule", async () => {
+    const root = repoWithCommitlint({ ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": [1, "always", 72] } }) });
+    const wrapped = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", SENTENCE], false, root);
+    expect(wrapped.code).toBe(0);
+    expect(Math.max(...lengths(wrapped.out))).toBeLessThanOrEqual(72);
+    const token = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", "w".repeat(80)], false, root);
+    expect(token.code).toBe(0);
+    expect(token.err.join("\n")).toMatch(/nen: warning: line 3 is 80 characters, over the 72 .*The rule is at level 1/);
+  });
+
+  it("warns, with no rule to refuse it, when it cannot wrap a line where no commitlint config exists", async () => {
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", "w".repeat(120)], false, repoWithCommitlint({}));
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toBe(`fix: x\n\n${"w".repeat(120)}`);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: warning: line 3 is 120 characters, and 'commit format' could not wrap it to 100: .*No commitlint rule limits it here \(no commitlint config was found\)/)]);
+  });
+
+  it("never wraps a --trailer, and refuses one over a level-2 footer width at exit 2", async () => {
+    const root = repoWithCommitlint(CONVENTIONAL_RC);
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--trailer", `Refs=${"a ".repeat(55)}end`], false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/^nen: line 3 is 119 characters, over the 100 that this repository's commitlint rule 'footer-max-line-length' allows/m);
+  });
+
+  it("keeps --json's one key, carrying the wrapped message", async () => {
+    const root = repoWithCommitlint(CONVENTIONAL_RC);
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", SENTENCE], true, root);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(Object.keys(parsed)).toEqual(["message"]);
+    expect(String(parsed["message"]).split("\n").every((line) => line.length <= 100)).toBe(true);
+  });
+
+  it("exits 1 only on a line-length rule of a shape commitlint rejects, naming the rule -- and names it beside a broken policy file", async () => {
+    const root = repoWithCommitlint({ ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": [2, "sometimes", 100] } }) });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root);
+    expect(result.code).toBe(1);
+    expect(result.err).toEqual([
+      expect.stringMatching(
+        /^nen: .*\.commitlintrc\.json could not be read for its commitlint 'body-max-line-length' rule: rule 'body-max-line-length' must have 'always' or 'never' as its condition.*nen will not call a message well-formed under a body-max-line-length rule it could not read: fix the file, then run this again\.$/,
+      ),
+    ]);
+    const both = repoWithCommitlint({ ".commitlintrc.json": JSON.stringify({ rules: { "footer-max-line-length": [5] } }) }, { allowedAttributionTrailers: [] });
+    writeFileSync(join(both, "nen", "workflow.json"), '{"coverage":{"minimum":95,"ideal":10}}');
+    const broken = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, both);
+    expect(broken.code).toBe(1);
+    expect(broken.err.join("\n")).toContain("does not ascend");
+    expect(broken.err.join("\n")).toContain("'footer-max-line-length' rule");
+  });
+});
+
+describe("nen commit format -- the review's settle: widths commitlint accepts, a rule turned off, and --body numbering (zheref/nen#290)", () => {
+  const LONG = "This rebuilds the capture prompt so that endeavor pills are rendered inline and the pane-hosted Inbox triage keeps its selection across reloads.";
+
+  it("takes a width stated as a string, as commitlint does -- origin/main's exit 0 is kept, and the width is applied (M1)", async () => {
+    const root = repoWithCommitlint({ ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": [2, "always", "100"] } }) });
+    const bare = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root);
+    expect(bare).toMatchObject({ code: 0, out: ["fix: x"], err: [] });
+    const wrapped = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", LONG], false, root);
+    expect(wrapped.code).toBe(0);
+    expect(wrapped.out.join("\n").split("\n").every((line) => line.length <= 100)).toBe(true);
+  });
+
+  it("passes a subject-only message under a rule with no width, and refuses a body there, saying what commitlint does (M1)", async () => {
+    const root = repoWithCommitlint({ ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": [2, "always"] } }) });
+    expect(await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root)).toMatchObject({ code: 0, out: ["fix: x"], err: [] });
+    const body = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", "why it matters"], false, root);
+    expect(body.code).toBe(2);
+    expect(body.err).toEqual([
+      expect.stringMatching(/^nen: the body's line 3 breaks this repository's commitlint rule 'body-max-line-length' .*commitlint compares each line's length against 0, so it refuses every body line that is not blank and holds no URL; a message with no body passes\./),
+    ]);
+  });
+
+  it("does not wrap under a rule the repository turned off, and says nothing (L2)", async () => {
+    const root = repoWithCommitlint({ ".commitlintrc.json": JSON.stringify({ extends: ["@commitlint/config-conventional"], rules: { "body-max-line-length": [0] } }) });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", LONG], false, root);
+    expect(result).toMatchObject({ code: 0, out: [`fix: x\n\n${LONG}`], err: [] });
+  });
+
+  it("numbers the rewrapped line as the --body was given, blank lines it starts with included (nit)", async () => {
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", `\n\n${LONG}`], false, repoWithCommitlint({}));
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: --body rewrapped: its line 3 \(144 characters\)/)]);
+  });
+});
+
+describe("nen commit format -- the maintainer's ruling on #290: refuse at 100, declarable in commits.bodyMaxLineLength", () => {
+  const KRO_PWA = { "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\nthrow new Error('nen executed the repository config')\n" };
+  const TOKEN = "w".repeat(120);
+
+  it("REFUSES at exit 2 a body line it cannot bring under 100 when the config is code and nothing is declared", async () => {
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", `see ${TOKEN}`], false, repoWithCommitlint(KRO_PWA));
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/^nen: line 4 is 120 characters, over the 100 nen holds the body to because 'body-max-line-length' could not be read .*declare its width in nen\/workflow\.json's commits\.bodyMaxLineLength\.$/m);
+  });
+
+  it("holds the body to a DECLARED width instead: 150 admits the line, and the note names the declaration", async () => {
+    const root = repoWithCommitlint(KRO_PWA, { bodyMaxLineLength: 150 });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", `see ${TOKEN}`], false, root);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toBe(`fix: x\n\nsee ${TOKEN}`);
+    expect(result.err.join("\n")).toMatch(/nen: note: body-max-line-length checked against commits\.bodyMaxLineLength in .*nen\/workflow\.json, 150; nen applies it because .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute -- keep the two in step/);
+    const over = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", "w".repeat(160)], false, root);
+    expect(over.code).toBe(2);
+    expect(over.err.join("\n")).toMatch(/^nen: line 3 is 160 characters, over the body width this repository declares \(commits\.bodyMaxLineLength in .*, 150;/m);
+  });
+
+  it("binds where there is no commitlint config at all, too", async () => {
+    const root = repoWithCommitlint({}, { bodyMaxLineLength: 72 });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", "w".repeat(80)], false, root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/over the body width this repository declares \(commits\.bodyMaxLineLength in .*, 72; nen applies it because no commitlint config was found at /);
+  });
+
+  it("refuses a malformed declaration at exit 1, by pointer", async () => {
+    const root = repoWithCommitlint(KRO_PWA, { bodyMaxLineLength: "150" });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root);
+    expect(result.code).toBe(1);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: .*nen\/workflow\.json: at commits\.bodyMaxLineLength, the declared body width must be a whole number of at least 1/)]);
+  });
+
+  it("lets a readable data config decide, with a note that the declaration differs", async () => {
+    const root = repoWithCommitlint(CONVENTIONAL_RC, { bodyMaxLineLength: 150 });
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", `see ${TOKEN}`], false, root);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/nen: note: commits\.bodyMaxLineLength in .*nen\/workflow\.json is not applied, and it DIFFERS: .*\.commitlintrc\.json states \[2, "always", 100\].*the declaration states 150; nen follows/);
+    expect(err).toMatch(/^nen: line 4 is 120 characters, over the 100 that this repository's commitlint rule 'body-max-line-length' allows/m);
+  });
+});
+
+describe("nen commit format -- --body prose commitlint reads as footer is held to the ruled width (review F1, F4)", () => {
+  const KRO_PWA = { "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\nthrow new Error('nen executed the repository config')\n" };
+  const TOKEN = "w".repeat(120);
+
+  it("refuses at exit 2 an unwrappable line after a 'Note:' paragraph, under a code config and nothing declared", async () => {
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "a subject", "--body", `Note: the cache is now keyed by path.\n\nThe trace is at ${TOKEN}`], false, repoWithCommitlint(KRO_PWA));
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/^nen: line 6 is 120 characters, over the 100 nen holds every line before the trailer block \(commitlint reads this one as footer, after a footer token\) to because 'footer-max-line-length' could not be read/m);
+  });
+
+  it("wraps a wrappable one at that width instead, and exits 0", async () => {
+    const prose = "The trace is at the far end of a long sentence that keeps going well past the hundred characters commitlint allows here.";
+    const result = await capture(["commit", "format", "--type", "fix", "--subject", "a subject", "--body", `Note: the cache is now keyed by path.\n\n${prose}`], false, repoWithCommitlint(KRO_PWA));
+    expect(result.code).toBe(0);
+    const lines = result.out.join("\n").split("\n");
+    expect(lines.every((line) => line.length <= 100)).toBe(true);
+    expect(lines.slice(4).join(" ")).toBe(prose);
+  });
+
+  it("names an overlong --trailer value as the long word it is, not as a break it cannot make (F4)", async () => {
+    const code = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--trailer", `Refs=${TOKEN}`], false, repoWithCommitlint(KRO_PWA));
+    expect(code.code).toBe(0);
+    expect(code.err.join("\n")).toMatch(/nen: warning: line 3 is 126 characters: 'footer-max-line-length' NOT checked, .*To clear it: it holds a word longer than 100 characters, which nen never splits/);
+    expect(code.err.join("\n")).not.toMatch(/no break within/);
+    const data = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--trailer", `Refs=${TOKEN}`], false, repoWithCommitlint(CONVENTIONAL_RC));
+    expect(data.code).toBe(2);
+    expect(data.err.join("\n")).toMatch(/'footer-max-line-length' allows .*it holds a word longer than 100 characters/);
   });
 });

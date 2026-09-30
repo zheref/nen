@@ -411,3 +411,130 @@ describe("nen commit write -- declared-rule outcomes at the verb: exit code, lin
     if (gitRan) expect(result.out).toEqual(["committed newsha00: fix: Start the timer"]);
   });
 });
+
+describe("nen commit write -- the body's line length, validated and never rewrapped (zheref/nen#290)", () => {
+  /** A checkout root holding message.txt and these commitlint files. */
+  function widthRepo(message: string, files: Record<string, string>): string {
+    const root = repo({ message });
+    mkdirSync(join(root, ".git"));
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(root, name), text, "utf8");
+    return root;
+  }
+  const CONVENTIONAL = { ".commitlintrc.json": JSON.stringify({ extends: ["@commitlint/config-conventional"] }) };
+  const KRO_PWA = { "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\nthrow new Error('nen executed the repository config')\n" };
+  const LONG =
+    "This rebuilds the capture prompt so that endeavor pills are rendered inline and the pane-hosted Inbox triage keeps its selection across reloads.";
+
+  it("refuses a body line over a level-2 rule at exit 2, naming the line, before any git call", async () => {
+    const root = widthRepo(`fix(capture): rebuild the prompt\n\n${LONG}\n\nHatsu-Agent: kurapika\n`, CONVENTIONAL);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/the message does not have the shape 'nen commit format' enforces/);
+    expect(err).toMatch(/line 3 is 144 characters, over the 100 that this repository's commitlint rule 'body-max-line-length' allows .*break it at a space so no line is over 100 characters/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("accepts what 'commit format' emits for the same body -- the one check, on one message", async () => {
+    const root = widthRepo("placeholder\n", CONVENTIONAL);
+    const out: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (): void => {} };
+    const formatted = await runFamily(commitCommand, ["commit", "format", "--type", "fix", "--subject", "rebuild the prompt", "--body", LONG], root, false, io, new ScriptedSeams([]));
+    expect(formatted).toBe(0);
+    writeFileSync(join(root, "message.txt"), `${out.join("\n")}\n`, "utf8");
+    const result = await capture(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([]);
+  });
+
+  it("does NOT rewrap the file: a level-1 break warns, and the message goes to git exactly as written", async () => {
+    const message = `fix: x\n\n${LONG}\n`;
+    const root = widthRepo(message, { ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": [1, "always", 100] } }) });
+    const result = await capture(root, ["--message-file", "message.txt", "--dry-run"], [STAGED]);
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: warning: line 3 is 144 characters, .*The rule is at level 1/)]);
+    expect(result.out).toContain(`  ${LONG}`);
+  });
+
+  it("REFUSES a body line over 100 under a code config it never executes, with nothing declared -- the ruling -- before git", async () => {
+    const root = widthRepo(`fix: x\n\n${LONG}\n`, KRO_PWA);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/line 3 is 144 characters, over the 100 nen holds the body to because 'body-max-line-length' could not be read \(.*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute\)/);
+    expect(err).toMatch(/nen: note: 'body-max-line-length' NOT read: /);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("commits it under a declared commits.bodyMaxLineLength of 150, naming the declaration", async () => {
+    const root = widthRepo(`fix: x\n\n${LONG}\n`, KRO_PWA);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { bodyMaxLineLength: 150 } }));
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toMatch(/nen: note: body-max-line-length checked against commits\.bodyMaxLineLength in .*, 150; nen applies it because /);
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { bodyMaxLineLength: 0 } }));
+    const malformed = await capture(root, ["--message-file", "message.txt"], [STAGED]);
+    expect(malformed.code).toBe(1);
+    expect(malformed.err.join("\n")).toMatch(/at commits\.bodyMaxLineLength, the declared body width must be a whole number of at least 1/);
+  });
+
+  it("exempts a URL-bearing line, and says nothing with no commitlint config -- the verb is unchanged there", async () => {
+    const url = `fix: x\n\nsee https://github.com/zheref/nen/issues/290 ${"and more ".repeat(15)}\n`;
+    const exempt = await capture(widthRepo(url, CONVENTIONAL), ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(exempt.code).toBe(0);
+    expect(exempt.err).toEqual([]);
+    const none = await capture(widthRepo(`fix: x\n\n${LONG}\n`, {}), ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(none.code).toBe(0);
+    expect(none.err).toEqual([]);
+  });
+
+  it("commits a subject-only message under a width commitlint accepts -- \"100\" or none at all -- as origin/main did (review M1)", async () => {
+    for (const width of [[2, "always", "100"], [2, "always"], [2, "always", 0]]) {
+      const root = widthRepo("fix: x\n", { ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": width } }) });
+      const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+      expect(result.code, JSON.stringify(width)).toBe(0);
+      expect(result.err, JSON.stringify(width)).toEqual([]);
+    }
+  });
+
+  it("exits 1 on a line-length rule of a shape commitlint rejects, naming it -- and names it beside a broken nen/workflow.json", async () => {
+    const files = { ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": [2, "always", 100, "extra"] } }) };
+    const result = await capture(widthRepo("fix: x\n", files), ["--message-file", "message.txt"], [STAGED]);
+    expect(result.code).toBe(1);
+    expect(result.err).toEqual([expect.stringMatching(/could not be read for its commitlint 'body-max-line-length' rule: .*nen will not call a message well-formed under a body-max-line-length rule it could not read/)]);
+    const root = widthRepo("fix: x\n", files);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "workflow.json"), '{"coverage":{"minimum":95,"ideal":10}}');
+    const both = await capture(root, ["--message-file", "message.txt"], [STAGED]);
+    expect(both.code).toBe(1);
+    expect(both.err.join("\n")).toContain("does not ascend");
+    expect(both.err.join("\n")).toContain("'body-max-line-length' rule");
+  });
+});
+
+describe("nen commit write -- every line before the trailer block is held to the ruled width (review F1)", () => {
+  const TOKEN = "w".repeat(120);
+  const KRO_PWA = { "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" };
+  function codeRepo(message: string): string {
+    const root = repo({ message });
+    mkdirSync(join(root, ".git"));
+    for (const [name, text] of Object.entries(KRO_PWA)) writeFileSync(join(root, name), text, "utf8");
+    return root;
+  }
+
+  it("refuses at exit 2 a prose line after a 'Note:' paragraph, before git", async () => {
+    const root = codeRepo(`fix: a subject\n\nNote: the cache is now keyed by path.\n\nThe trace is at ${TOKEN}\n\nHatsu-Agent: kurapika\n`);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/line 5 is 136 characters, over the 100 nen holds every line before the trailer block/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("commits the same message hand-wrapped, and only warns for a trailer over 100", async () => {
+    const root = codeRepo(`fix: a subject\n\nNote: the cache is now keyed by path.\n\nThe trace is at\n${"w".repeat(90)}\n\nRefs: ${TOKEN}\n`);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toMatch(/nen: warning: line 8 is 126 characters: 'footer-max-line-length' NOT checked/);
+  });
+});

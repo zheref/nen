@@ -340,12 +340,14 @@ describe("refusedTrailerKeys / trailerRefusal / trailerAdmitted", () => {
     forbiddenTrailers: readonly string[];
     runTrailer: string | null;
     subjectCase: null;
+    bodyMaxLineLength: null;
     raw: Readonly<Record<string, unknown>>;
   } => ({
     allowedAttributionTrailers,
     forbiddenTrailers,
     runTrailer: null,
     subjectCase: null,
+    bodyMaxLineLength: null,
     raw: {},
   });
 
@@ -492,6 +494,33 @@ describe("commits.subjectCase -- the commitlint subject-case rule, declared as d
     const error = refusal({ commits: { subjectcase: "config-conventional" } });
     expect(error.pointer).toBe("commits.subjectcase");
     expect(error.message).toContain("one letter away from 'subjectCase'");
+  });
+});
+
+describe("commits.bodyMaxLineLength -- the body width, declared as data (zheref/nen#290)", () => {
+  it("is null when absent or null -- no default width is nen's to invent", () => {
+    expect(loadWorkflow(tempRoot()).workflow.commits.bodyMaxLineLength).toBeNull();
+    expect(loadWorkflow(repoWith({ commits: { allowedAttributionTrailers: ["X-Agent"] } })).workflow.commits.bodyMaxLineLength).toBeNull();
+    expect(loadWorkflow(repoWith({ commits: { bodyMaxLineLength: null } })).workflow.commits.bodyMaxLineLength).toBeNull();
+  });
+
+  it("reads a positive whole number, beside the other commits keys", () => {
+    const commits = loadWorkflow(repoWith({ commits: { subjectCase: "config-conventional", bodyMaxLineLength: 150 } })).workflow.commits;
+    expect(commits.bodyMaxLineLength).toBe(150);
+    expect(commits.subjectCase?.form).toBe("config-conventional");
+    expect(loadWorkflow(repoWith({ commits: { bodyMaxLineLength: 1 } })).workflow.commits.bodyMaxLineLength).toBe(1);
+  });
+
+  it.each([[0], [-72], [72.5], ["100"], [[100]], [{ width: 100 }], [true]])("refuses %j by pointer, naming what it takes", (value) => {
+    const error = refusal({ commits: { bodyMaxLineLength: value } });
+    expect(error.pointer).toBe("commits.bodyMaxLineLength");
+    expect(error.message).toMatch(/the declared body width must be a whole number of at least 1 -- the longest body line the repository allows.*, got /);
+  });
+
+  it("refuses a near-miss of the key rather than preserving it unread", () => {
+    const error = refusal({ commits: { bodyMaxLinelength: 100 } });
+    expect(error.pointer).toBe("commits.bodyMaxLinelength");
+    expect(error.message).toContain("'bodyMaxLineLength'");
   });
 });
 
