@@ -6,8 +6,16 @@
 // happened to be handed a mutating command would otherwise repeat it every
 // interval, which is izanagi's shape wearing izanami's name -- so this verb
 // refuses, by name, exactly as the skill's §2 requires.
+//
+// AND IT SPAWNS EXACTLY THE ARGV THAT WAS CLASSIFIED (zheref/nen#288). Through
+// v0.17.0 this file split the line on `\s+` itself, AFTER the classifier had
+// read it another way -- so a `|` inside a quoted `--jq` refused at the
+// classifier's joined-line scan, and a `--jq '.number'` the classifier
+// certified reached jq with its quotes still on. classifyWatchCommand now
+// tokenises once, with ../parse/command-line.ts, and hands back the argv its
+// verdict is about; there is no split in this file to disagree with it.
 
-import { classifyCommand } from "../parse/izanami.js";
+import { classifyWatchCommand } from "../parse/izanami.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { CommandResult } from "../seam/exec.js";
 import { watchUntil, type WatchResult } from "./until.js";
@@ -30,6 +38,22 @@ usage:
                   shell builtin ('type', or 'cat'/'test' outside Git Bash's
                   own bin directory) fails at spawn on every observation and
                   the watch stops on the error streak instead of watching.
+                  The line is split into arguments with a POSIX shell's
+                  QUOTING -- '...' literal, "..." with \\ escaping $ \` " \\,
+                  a bare \\ escaping one character -- and nothing expands,
+                  and the classifier decides about exactly the arguments that
+                  are spawned. So a pipe INSIDE one argument does not refuse
+                  by itself: gh pr view 1 --jq '.a[]|.b' and gh api <path>
+                  --jq "[.a[]|select(.b)]" are reads. A read whose verdict
+                  scans every argument (git log/diff/show/fetch/branch/remote,
+                  nen's gated verbs) still refuses an argument carrying one.
+                  A | ; & < > ( ) or backtick a shell would ACT on (unquoted),
+                  a backtick or $( inside "...", a %, a newline, a NUL byte,
+                  an unclosed quote or a trailing \\ refuses, exit 2. ON
+                  WINDOWS a metacharacter still refuses wherever it sits,
+                  quoted or not, as before: a .cmd/.bat target is re-parsed by
+                  cmd.exe, and whether the spawn can resolve one has not been
+                  verified there.
   --true-pattern  a regex tested against the command's stdout. Omit to treat
                   exit code 0 as true (the default a check-style command uses).
                   WHEN GIVEN, a non-zero exit is treated as an OBSERVATION
@@ -79,18 +103,19 @@ export const watchCommand: Command = {
       throw new VerbUsageError("--command '<bin> <args...>' is required.");
     }
 
-    const classification = classifyCommand(commandText);
-    if (classification.classification !== "read-only") {
+    // The host that will spawn the argv decides how far the seam may trust a
+    // quote -- see classifyWatchCommand's Windows paragraph.
+    const verdict = classifyWatchCommand(commandText, context.seams.platform);
+    if (verdict.argv === undefined) {
+      const { classification } = verdict;
       context.io.err(
         `nen: '${commandText}' classifies as ${classification.classification} (${classification.reason}). izanami watches only; a command that writes needs 'nen parse izanagi <task> until <condition> up to <N>' instead.`,
       );
       return 2;
     }
 
-    const parts = commandText.trim().split(/\s+/);
-    const bin = parts[0];
+    const [bin, ...args] = verdict.argv;
     if (bin === undefined) throw new VerbUsageError("--command is empty.");
-    const args = parts.slice(1);
 
     const truePattern = context.args.values["true-pattern"];
     const regex = truePattern === undefined ? null : new RegExp(truePattern);

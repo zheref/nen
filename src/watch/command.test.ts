@@ -9,9 +9,11 @@ import { noPortProbe } from "../seam/scripted.js";
 // ("pending", then "ALL_GREEN"), which a match-by-argv stub cannot express.
 class QueueSeams implements Seams {
   private readonly queue: CommandResult[];
+  /** Every spawn, as (command, args) -- so a test can assert the EXACT argv the watch ran (zheref/nen#288). */
+  readonly calls: { readonly command: string; readonly args: readonly string[] }[] = [];
   readonly now = (): Date => new Date("2026-01-01T00:00:00Z");
   readonly env = {};
-  readonly platform: NodeJS.Platform = "linux";
+  readonly platform: NodeJS.Platform;
   probePort: Seams["probePort"] = noPortProbe;
   runInteractive: Seams["runInteractive"] = (): never => {
     throw new Error("watch until never spawns an interactive child -- it observes");
@@ -19,10 +21,12 @@ class QueueSeams implements Seams {
   runStreamed: Seams["runStreamed"] = (): never => {
     throw new Error("watch until never spawns a watched child -- it observes");
   };
-  constructor(queue: readonly CommandResult[]) {
+  constructor(queue: readonly CommandResult[], platform: NodeJS.Platform = "linux") {
     this.queue = [...queue];
+    this.platform = platform;
   }
-  run: Seams["run"] = (): CommandResult => {
+  run: Seams["run"] = (command, args): CommandResult => {
+    this.calls.push({ command, args: [...args] });
     const next = this.queue.shift();
     if (next === undefined) throw new Error("QueueSeams ran out of scripted results");
     return next;
@@ -141,6 +145,181 @@ describe("nen watch until -- CLI wiring", () => {
       expect(result.code, command).toBe(2);
       expect(result.err.join("\n"), command).toMatch(/classifies as mutating/);
     }
+  });
+
+  // zheref/nen#288, the issue's own acceptance criterion: a jq filter's
+  // internal pipe, inside a quoted --jq value, is ONE argument to gh -- no
+  // shell ever sees it -- so the watch accepts the line, spawns exactly the
+  // argv a shell would have built, and exits on its CONDITION (0 here), never
+  // 2 for a metacharacter that never reaches a shell.
+  it("accepts a quoted --jq filter's internal pipe and spawns it as ONE argument (#288)", async () => {
+    const seams = new QueueSeams([OK('["cursor"]\n')]);
+    const result = await capture(
+      [
+        "watch",
+        "until",
+        "--command",
+        'gh pr view 295 --repo zheref/nen --json reviews --jq "[.reviews[]|select(.commit.oid|startswith(\\"ecc420c\\"))|.author.login]"',
+        "--true-pattern",
+        '"cursor"',
+        "--interval-ms",
+        "0",
+      ],
+      seams,
+    );
+    expect(result.code).toBe(0);
+    expect(seams.calls).toEqual([
+      {
+        command: "gh",
+        args: [
+          "pr",
+          "view",
+          "295",
+          "--repo",
+          "zheref/nen",
+          "--json",
+          "reviews",
+          "--jq",
+          '[.reviews[]|select(.commit.oid|startswith("ecc420c"))|.author.login]',
+        ],
+      },
+    ]);
+  });
+
+  it("exits 1 on its condition, not 2, when the quoted-pipe read is simply not true yet (#288)", async () => {
+    const result = await capture(
+      ["watch", "until", "--command", "gh pr view 1 --json reviews --jq '.reviews[]|.author.login'", "--true-pattern", "someone", "--max-iterations", "1", "--interval-ms", "0"],
+      new QueueSeams([OK("nobody\n")]),
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/--max-iterations bound/);
+  });
+
+  // The latent twin of #288: the #78 fold CERTIFIED a single-quoted gh api
+  // --jq, and v0.17.0 then spawned `line.split(/\s+/)` -- so jq received
+  // `'.number'` with its quotes on and failed to parse it on every
+  // observation. One tokeniser for both halves is what closes it.
+  it("spawns a single-quoted --jq value WITHOUT its quotes (#288)", async () => {
+    const seams = new QueueSeams([OK("295\n")]);
+    const result = await capture(
+      ["watch", "until", "--command", "gh api repos/zheref/nen/pulls/295 --jq '.number'", "--true-pattern", "^295", "--interval-ms", "0"],
+      seams,
+    );
+    expect(result.code).toBe(0);
+    expect(seams.calls).toEqual([{ command: "gh", args: ["api", "repos/zheref/nen/pulls/295", "--jq", ".number"] }]);
+  });
+
+  it("still refuses a genuine two-command line with the existing message, before ever spawning (#288)", async () => {
+    for (const command of [
+      "gh pr view 1 | tee leak.txt",
+      "gh pr view 1; git push",
+      'gh pr view "$(git push)"',
+      'gh pr view "`git push`"',
+      'gh pr view 1 --jq [.a[]|select(.b|startswith("x"))]',
+    ]) {
+      const seams = new QueueSeams([]);
+      const result = await capture(["watch", "until", "--command", command], seams);
+      expect(result.code, command).toBe(2);
+      expect(result.err.join("\n"), command).toMatch(/classifies as unknown \(a shell metacharacter/);
+      expect(seams.calls, command).toEqual([]);
+    }
+  });
+
+  // The Windows gate, at the verb: the platform comes from the SEAMS, so this
+  // lane proves the win32 branch on every host. A `.cmd`/`.bat` target would
+  // be re-parsed by cmd.exe, so there the quoted pipe keeps v0.17.0's refusal
+  // -- while the quote-stripping half of the fix still applies.
+  it("keeps the whole-line refusal for a quoted pipe on win32, and still spawns stripped quotes there (#288)", async () => {
+    const refused = new QueueSeams([], "win32");
+    const refusal = await capture(["watch", "until", "--command", "gh pr view 1 --jq '.a|.b'"], refused);
+    expect(refusal.code).toBe(2);
+    expect(refusal.err.join("\n")).toMatch(/classifies as unknown \(a shell metacharacter/);
+    expect(refused.calls).toEqual([]);
+
+    const spawned = new QueueSeams([OK("1\n")], "win32");
+    const read = await capture(
+      ["watch", "until", "--command", "gh api repos/o/r/pulls/1 --jq '.number'", "--interval-ms", "0"],
+      spawned,
+    );
+    expect(read.code).toBe(0);
+    expect(spawned.calls).toEqual([{ command: "gh", args: ["api", "repos/o/r/pulls/1", "--jq", ".number"] }]);
+  });
+
+  // #288's REVIEW, SEC-7, at the verb: each of these reached `gh` in round one
+  // of this fix as an argv gh 2.100.0 sends as a DELETE or a POST (`-q''` is a
+  // bare `-q`, which takes the next argument as its value; `-q=` is the value
+  // "=", which does not). The watch now walks the argv it would spawn, sees
+  // the write, and never spawns.
+  it("refuses all ten SEC-7 write spellings at exit 2 on every host and spawns nothing (#288 review)", async () => {
+    // The review's four, then the six found settling it -- the same ten
+    // ../parse/izanami.gh-api.test.ts pins at the classifier, driven here
+    // through the verb on each host the watch distinguishes.
+    for (const command of [
+      "gh api repos/o/r/issues/1 -q'' -H -XDELETE",
+      "gh api repos/o/r/issues/1 -q'' -H -ftitle=x",
+      "gh api repos/o/r/issues/1 -q'' -H --method=DELETE",
+      "gh api repos/o/r/issues -q'' -p --input=/etc/hosts",
+      'gh api repos/o/r/issues/1 -q"" -H -XDELETE',
+      "gh api repos/o/r/issues/1 -q= -XDELETE",
+      "gh api repos/o/r/issues/1 -H= --method=DELETE",
+      "gh api repos/o/r/issues/1 -p= -ftitle=x",
+      "gh api repos/o/r/issues/1 -t= --input=body.json",
+      "gh api repos/o/r/issues/1 -iq= -XDELETE",
+    ]) {
+      for (const platform of ["linux", "darwin", "win32"] as const) {
+        const seams = new QueueSeams([], platform);
+        const result = await capture(["watch", "until", "--command", command], seams);
+        expect(result.code, `${platform}: ${command}`).toBe(2);
+        expect(result.err.join("\n"), `${platform}: ${command}`).toMatch(/classifies as mutating/);
+        expect(seams.calls, `${platform}: ${command}`).toEqual([]);
+      }
+    }
+  });
+
+  it("spawns a double-quoted gh api --jq as the one argument gh receives (#288 review)", async () => {
+    const seams = new QueueSeams([OK("[1]\n")]);
+    const result = await capture(
+      ["watch", "until", "--command", 'gh api repos/o/r/pulls --jq "[.[]|.number]"', "--interval-ms", "0"],
+      seams,
+    );
+    expect(result.code).toBe(0);
+    expect(seams.calls).toEqual([{ command: "gh", args: ["api", "repos/o/r/pulls", "--jq", "[.[]|.number]"] }]);
+  });
+
+  // #288 review, round three: round two's rendering quoted `[`, `]` and `!`,
+  // so this exact watch -- read at exit 0 by 0.15.1 and by round one -- exited
+  // 2. It is a plain read again, on every host, and spawns the argv as typed.
+  it("watches a [ ... ] and a test ! read again, on every host (#288 review)", async () => {
+    for (const [command, argv] of [
+      ["[ -e /etc/hosts ]", ["-e", "/etc/hosts", "]"]],
+      ["[ ! -e /nonexistent ]", ["!", "-e", "/nonexistent", "]"]],
+    ] as const) {
+      for (const platform of ["linux", "darwin", "win32"] as const) {
+        const seams = new QueueSeams([OK()], platform);
+        const result = await capture(["watch", "until", "--command", command, "--interval-ms", "0"], seams);
+        expect(result.code, `${platform}: ${command}`).toBe(0);
+        expect(seams.calls, `${platform}: ${command}`).toEqual([{ command: "[", args: argv }]);
+      }
+    }
+    const seams = new QueueSeams([OK()]);
+    expect((await capture(["watch", "until", "--command", "test ! -e /nonexistent", "--interval-ms", "0"], seams)).code).toBe(0);
+    expect(seams.calls).toEqual([{ command: "test", args: ["!", "-e", "/nonexistent"] }]);
+  });
+
+  it("refuses a NUL byte at exit 2 rather than spawning an argument the OS would cut short (#288 review)", async () => {
+    const seams = new QueueSeams([]);
+    const result = await capture(["watch", "until", "--command", "gh pr view 1\u0000x"], seams);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/a NUL byte at offset 12/);
+    expect(seams.calls).toEqual([]);
+  });
+
+  it("refuses an unterminated quote at exit 2 rather than spawning a guessed argv (#288)", async () => {
+    const seams = new QueueSeams([]);
+    const result = await capture(["watch", "until", "--command", "gh pr view 1 --jq '.a|.b"], seams);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/quote at offset 18 is never closed/);
+    expect(seams.calls).toEqual([]);
   });
 
   it("exits 0 the moment exit-code-0 is reached, with no --true-pattern given", async () => {
