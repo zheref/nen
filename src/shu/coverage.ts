@@ -39,8 +39,8 @@
 // then does the refusal go on propagating -- so `nen shu coverage` prints on
 // that path exactly what `nen shu build` prints on it.
 
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { GIT, must } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
@@ -65,8 +65,10 @@ import {
   type TouchedArtifact,
 } from "./coverage/report.js";
 import { rebaseRows, resolveRoot, rootCandidates } from "./coverage/roots.js";
+import { joinSourceFiles } from "./coverage/files.js";
 import { bandRows } from "./coverage/ladder.js";
 import {
+  expectedGrainOf,
   filterTouchedGroups,
   grainOf,
   type CoverageGrain,
@@ -364,6 +366,113 @@ function fileExists(repoRoot: string): (repoRelative: string) => boolean {
   };
 }
 
+/**
+ * Every spelling of the repository root: as nen was given it, and as the
+ * filesystem resolves it, when the two differ (zheref/nen#296 review, F2).
+ *
+ * A TOOL WRITES WHAT `getcwd` RETURNED, and that is the RESOLVED path: a
+ * coverage run inside a checkout reached through `/tmp` (macOS: `/private/tmp`),
+ * a `mktemp` directory (`/var` -> `/private/var`), a symlinked workspace, or a
+ * Windows 8.3 short name writes a `<source>` that no longer starts with the
+ * `--repo` nen was handed -- and anchoring only that spelling turned the same
+ * report into exit 0 through one path and exit 6 through the other.
+ */
+export function repoRootSpellings(repoRoot: string): readonly string[] {
+  let real: string;
+  try {
+    real = realpathSync.native(repoRoot);
+  } catch {
+    return [repoRoot];
+  }
+  return stripTrailingSlash(toSlashes(real)) === stripTrailingSlash(toSlashes(repoRoot)) ? [repoRoot] : [repoRoot, real];
+}
+
+/**
+ * `fileExists`, answering with the path's ON-DISK spelling (zheref/nen#296
+ * review, F3) -- or null when it is not a file.
+ *
+ * ON A CASE-INSENSITIVE FILESYSTEM (macOS, Windows) `core/models/a.cs` EXISTS
+ * when the file is `Core/Models/A.cs`, and a row kept under the report's
+ * spelling then matched no touched path -- git names the file as it is on
+ * disk -- while the account still counted it as found. So the answer is the
+ * real path's tail, adopted ONLY when it is the same path in another letter
+ * case: a real path that differs any other way went through a symlink, and
+ * a link's target is not the name git gives the file. On a case-sensitive
+ * filesystem the two never differ, and the answer is the question.
+ *
+ * ONLY THE LETTER CASE IS TAKEN FROM DISK, NEVER THE UNICODE FORM (review
+ * round 3). macOS keeps a name in whatever composition it was created in --
+ * `Café.cs` may sit on disk DECOMPOSED (NFD) -- while git, with
+ * `core.precomposeUnicode` (its default there), names it COMPOSED (NFC).
+ * Adopting the real path's tail verbatim turned a report and a diff that both
+ * said `Café.cs` into a row named with the NFD bytes, which matched nothing.
+ * So the adopted spelling is put back into NFC: the case the disk has, in the
+ * form git uses. When the real tail is byte-identical to the question the
+ * question is returned untouched, so a name that is NFD in git and on disk
+ * (a Linux checkout) is never rewritten.
+ */
+export function fileLocator(repoRoot: string): (repoRelative: string) => string | null {
+  const exists = fileExists(repoRoot);
+  let realRoot: string | null | undefined;
+  return (repoRelative: string): string | null => {
+    if (!exists(repoRelative)) return null;
+    if (realRoot === undefined) {
+      try {
+        realRoot = realpathSync.native(repoRoot);
+      } catch {
+        /* c8 ignore next -- the root was just statted through; a failure here is a race */
+        realRoot = null;
+      }
+    }
+    if (realRoot === null) return repoRelative;
+    let real: string;
+    try {
+      real = realpathSync.native(join(repoRoot, repoRelative));
+    } catch {
+      /* c8 ignore next -- statted a moment ago */
+      return repoRelative;
+    }
+    const tail = toSlashes(relativiseName(realRoot, real));
+    return tail !== repoRelative && foldCase(tail) === foldCase(repoRelative) ? tail.normalize("NFC") : repoRelative;
+  };
+}
+
+/**
+ * What an ABSOLUTE path outside the repository is on this machine -- a file or
+ * a directory, with its real path -- or null (zheref/nen#296, review round 3).
+ *
+ * ./coverage/roots.ts asks this about a `<source>` a report states outside the
+ * repository (coverage.py's site-packages) and about `<source>/<name>` under
+ * it, so that a same-named file there counts as a second answer instead of
+ * letting the union of both files' lines be credited to the one inside. It is
+ * a `stat` and a `realpath`: nothing is opened or read. A path that is not
+ * absolute on THIS platform (`D:\...` on POSIX) is not asked at all -- `stat`
+ * would resolve it against the process's own directory.
+ */
+export function pathProbe(absolute: string): { readonly kind: "file" | "directory"; readonly real: string } | null {
+  if (!isAbsolute(absolute)) return null;
+  try {
+    const stats = statSync(absolute);
+    const kind = stats.isFile() ? "file" : stats.isDirectory() ? "directory" : null;
+    if (kind === null) return null;
+    let real: string;
+    try {
+      real = realpathSync.native(absolute);
+    } catch {
+      /* c8 ignore next -- statted a moment ago */
+      real = absolute;
+    }
+    return { kind, real };
+  } catch {
+    return null;
+  }
+}
+
+/** Letter case and Unicode composition set aside -- what a case-insensitive filesystem compares. */
+function foldCase(value: string): string {
+  return value.normalize("NFC").toLowerCase();
+}
+
 interface TouchedSources {
   readonly groups: readonly TouchedGroup[];
   readonly artifacts: readonly TouchedArtifact[];
@@ -397,6 +506,8 @@ function readTouchedSources(
 ): TouchedSources {
   const laneCwd = laneCwdRelative(repoRoot, run.cwd);
   const exists = fileExists(repoRoot);
+  const locate = fileLocator(repoRoot);
+  const repoRoots = repoRootSpellings(repoRoot);
   const groups: TouchedGroup[] = [];
   const artifacts: TouchedArtifact[] = [];
   for (const artifact of chooseArtifacts(run.artifacts)) {
@@ -419,6 +530,29 @@ function readTouchedSources(
         continue;
       }
       raw = fileGrainRows(absolute, artifact.value, parsed);
+    }
+    // A REPORT THAT NAMES ITS FILES IS MATCHED BY FILE (zheref/nen#296).
+    // Cobertura's own rows are packages, but every `<class>` names the file
+    // it came from; ./coverage/files.ts resolves those names against the
+    // report's `<source>` roots and the usual candidates, one name at a time,
+    // and hands back FILE rows under their on-disk spelling. A name that is
+    // ambiguous or resolves nowhere is never matched -- its touched file is
+    // `unmatched`, never credited to another file or its package, and the
+    // account says why -- and a view that cannot be measured is this report's
+    // `error`, exit 1, exactly like an unreadable report.
+    const view = parsed.coverage.files;
+    if (view !== undefined) {
+      const joined = joinSourceFiles(view, {
+        repoRoots,
+        artifactPath: artifact.value,
+        format: parsed.format.id,
+        laneCwd,
+        locate,
+        probe: pathProbe,
+      });
+      if (joined.group !== null) groups.push(joined.group);
+      artifacts.push(joined.artifact);
+      continue;
     }
     const grain = grainOf(parsed.format.id);
     if (grain === "package") {
@@ -832,6 +966,12 @@ function unjoinedSentence(
 ): string | null {
   if (files.length === 0 || filter.matched.length > 0) return null;
   const rows = parsed.groups.flatMap((group): readonly CoverageTarget[] => group.rows);
+  // A per-file view's UNRESOLVED names are shown beside the rows: when a
+  // Cobertura report resolved nothing, they are the only path shape the
+  // report used, and "(none)" would hide exactly what went wrong.
+  const unresolved = parsed.artifacts.flatMap((entry): readonly string[] =>
+    (entry.unresolved ?? []).map((name): string => name.name),
+  );
   const sample = (values: readonly string[]): string =>
     values.length === 0 ? "(none)" : values.slice(0, 2).map((value): string => `'${value}'`).join(", ");
   const roots = parsed.artifacts
@@ -841,7 +981,11 @@ function unjoinedSentence(
         : `${entry.path} -> root ${entry.root ?? "(package rows, no root)"}`,
     )
     .join("; ");
-  return `--touched joined 0 of ${files.length} touched file${files.length === 1 ? "" : "s"} to the ${rows.length} row${rows.length === 1 ? "" : "s"} nen read, so NOTHING was measured -- exit ${EXIT_COVERAGE_UNJOINED}, not 0. Path shape SEEN in the report rows: ${sample(rows.map((row): string => row.name))}. Path shape EXPECTED, as git names the touched files (repo-relative): ${sample(files)}. Roots used: ${roots === "" ? "(none)" : roots}. If the two shapes should meet, the report was written from a root nen did not infer -- declare the artifact under the directory its tool ran in (e.g. '<package>/coverage/lcov.info'), or have the tool write repo-relative paths. If they should not -- the change touches no file any test measures -- this is still not a pass: nen cannot tell 'nothing to measure' from 'could not join' by looking.`;
+  const unresolvedNote =
+    unresolved.length === 0
+      ? ""
+      : ` (plus ${unresolved.length} file name${unresolved.length === 1 ? "" : "s"} a report stated that resolved to no file in this tree, never matched)`;
+  return `--touched joined 0 of ${files.length} touched file${files.length === 1 ? "" : "s"} to the ${rows.length} row${rows.length === 1 ? "" : "s"} nen read${unresolvedNote}, so NOTHING was measured -- exit ${EXIT_COVERAGE_UNJOINED}, not 0. Path shape SEEN in the report rows: ${sample([...rows.map((row): string => row.name), ...unresolved])}. Path shape EXPECTED, as git names the touched files (repo-relative): ${sample(files)}. Roots used: ${roots === "" ? "(none)" : roots}. If the two shapes should meet, the report was written from a root nen did not infer -- declare the artifact under the directory its tool ran in (e.g. '<package>/coverage/lcov.info'), or have the tool write repo-relative paths. If they should not -- the change touches no file any test measures -- this is still not a pass: nen cannot tell 'nothing to measure' from 'could not join' by looking.`;
 }
 
 /**
@@ -890,7 +1034,10 @@ function computeTouched(
  * as it always has.
  */
 function touchedGrain(parsed: Parsed): CoverageGrain | null {
-  if (parsed.groups.length === 0) return parsed.source === null ? "file" : grainOf(parsed.source.format);
+  // BEFORE ANY REPORT IS READ, cobertura's grain is not the format's to say:
+  // its bytes decide (file rows whenever its classes name files), so a
+  // preview carries no "BY PACKAGE" note for it (zheref/nen#296).
+  if (parsed.groups.length === 0) return parsed.source === null ? "file" : expectedGrainOf(parsed.source.format);
   const grains = new Set(parsed.groups.map((group): CoverageGrain => group.grain));
   return grains.size === 1 ? (parsed.groups[0]?.grain ?? "file") : null;
 }

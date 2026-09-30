@@ -15,7 +15,7 @@
 //   3. a dry run that parses the report sitting on disk from a previous run.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -31,7 +31,7 @@ import {
 } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { coverageAdvisories } from "./coverage-defaults.js";
-import { parseThreshold, relativiseName } from "./coverage.js";
+import { fileLocator, parseThreshold, relativiseName, repoRootSpellings } from "./coverage.js";
 import { advisoryFor } from "./coverage/advisory.js";
 import { COVERAGE_CONTRACT, thresholdMet } from "./coverage/report.js";
 import { counts, measure } from "./coverage/shape.js";
@@ -903,7 +903,11 @@ describe("--touched --base <ref>", () => {
     expect(result.err.join("\n")).toMatch(/git diff --name-only nope\.\.\.HEAD.*exited 128/);
   });
 
-  it("package grain (cobertura): a touched file under the package is kept, text says 'BY PACKAGE'", async () => {
+  it("package grain (a cobertura report naming NO file): a touched file under the package is kept, text says 'BY PACKAGE'", async () => {
+    // THE ONE PACKAGE FALLBACK LEFT (zheref/nen#296): its classes state no
+    // `filename`, so there is no file to match and the package is the finest
+    // grain the report offers. A report that names files is matched by file --
+    // see the #296 block below.
     const repo = withProject({
       lanes: { only: { stack: "nextjs", cwd: "." } },
       defaultLane: "only",
@@ -912,7 +916,7 @@ describe("--touched --base <ref>", () => {
     try {
       writeFileSync(
         join(repo, "coverage.cobertura.xml"),
-        '<coverage line-rate="1" lines-covered="4" lines-valid="4"><packages><package name="Placeholder.Core"><classes><class name="C" filename="Core/Store.cs"><lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="1"/><line number="4" hits="1"/></lines></class></classes></package></packages></coverage>',
+        '<coverage line-rate="1" lines-covered="4" lines-valid="4"><packages><package name="Placeholder.Core"><classes><class name="C"><lines><line number="1" hits="1"/><line number="2" hits="1"/><line number="3" hits="1"/><line number="4" hits="1"/></lines></class></classes></package></packages></coverage>',
       );
       const result = await capture(["coverage", "--touched", "--base", "main"], {
         repo,
@@ -922,8 +926,10 @@ describe("--touched --base <ref>", () => {
         ],
       });
       expect(result.code).toBe(0);
-      expect(result.out.join("\n")).toContain("Placeholder.Core");
-      expect(result.out.join("\n")).toMatch(/matched BY PACKAGE/);
+      const text = result.out.join("\n");
+      expect(text).toContain("Placeholder.Core");
+      expect(text).toMatch(/matched BY PACKAGE/);
+      expect(text).toContain("rows are packages, matched anywhere under a touched path");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -970,6 +976,413 @@ describe("--touched --base <ref>", () => {
       rmSync(repo, { recursive: true, force: true });
     }
   });
+});
+
+// ── zheref/nen#296: a Cobertura report is matched by FILE ────────────────────
+//
+// Each class names the file it came from, and `--touched` asks about files. The
+// report here is coverlet-shaped: backslash filenames, a space in a directory
+// name, one file written as two <class> entries that repeat a line, and a
+// <source> that is this repository's own root (spelled with backslashes).
+
+describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
+  const diff = (base: string): string => `git diff --name-only ${base}...HEAD`;
+  const REPORT = "TestResults/core.cobertura.xml";
+
+  function coberturaRepo(): string {
+    return withProject({
+      lanes: { core: { stack: "dotnet-winui", cwd: "." } },
+      defaultLane: "core",
+      verbs: { core: { coverage: { exe: "x", argv: ["y"], artifacts: [REPORT] } } },
+    });
+  }
+
+  function writeTree(repo: string, files: readonly string[]): void {
+    for (const file of files) {
+      mkdirSync(join(repo, file, ".."), { recursive: true });
+      writeFileSync(join(repo, file), "namespace Placeholder;\n");
+    }
+  }
+
+  function writeReport(repo: string, xml: string): void {
+    mkdirSync(join(repo, "TestResults"), { recursive: true });
+    writeFileSync(join(repo, REPORT), xml);
+  }
+
+  const line = (number: number, hits: number, condition?: string): string =>
+    `<line number="${number}" hits="${hits}"${condition === undefined ? "" : ` branch="true" condition-coverage="${condition}"`}/>`;
+
+  it("two touched files in ONE package: a row each, banded separately, the test file unmatched", async () => {
+    const repo = coberturaRepo();
+    try {
+      writeTree(repo, ["Core/Models/Order.cs", "Core/Models/Status.cs", "Core/View Models/OrderVm.cs"]);
+      const source = `${repo.replace(/\//g, "\\")}\\`;
+      writeReport(
+        repo,
+        `<coverage line-rate="0.7" lines-covered="14" lines-valid="20" branches-covered="3" branches-valid="6"><sources><source>${source}</source></sources><packages><package name="Core"><classes>` +
+          // Order.cs as two entries: 10 distinct lines, 7 covered (line 16 only
+          // in the closure), and line 14's fuller condition figure (2/2).
+          `<class name="Core.Models.Order" filename="Core\\Models\\Order.cs"><lines>${line(10, 1)}${line(11, 1)}${line(12, 1, "50% (1/2)")}${line(13, 1)}${line(14, 1, "50% (1/2)")}${line(15, 1)}${line(16, 0)}${line(17, 0)}${line(18, 0)}${line(19, 0)}</lines></class>` +
+          `<class name="Core.Models.Order/&lt;&gt;c__DisplayClass0_0" filename="Core\\Models\\Order.cs"><lines>${line(14, 2, "100% (2/2)")}${line(16, 3)}</lines></class>` +
+          `<class name="Core.Models.Status" filename="Core\\Models\\Status.cs"><lines>${line(5, 1)}${line(6, 1)}${line(7, 1)}${line(8, 1)}</lines></class>` +
+          `<class name="Core.ViewModels.OrderVm" filename="Core\\View Models\\OrderVm.cs"><lines>${line(20, 1)}${line(21, 1)}${line(22, 1)}${line(23, 1)}${line(24, 0)}</lines></class>` +
+          `</classes></package></packages></coverage>`,
+      );
+      const touched = "Core/Models/Order.cs\nCore/Models/Status.cs\nCore/View Models/OrderVm.cs\nCore.Tests/OrderTests.cs\n";
+      const json = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: touched } }],
+      });
+      expect(json.code).toBe(0);
+      const parsed = document(json);
+      expect(parsed.targets.map((row) => [row.name, row.lines.percent, row.band])).toEqual([
+        ["Core/Models/Order.cs", 70, "under-minimum"],
+        ["Core/Models/Status.cs", 100, "ideal"],
+        ["Core/View Models/OrderVm.cs", 80, "minimum"],
+      ]);
+      // Never the package: no row named after it, and none carrying its sum.
+      expect(parsed.targets.some((row) => row.name === "Core")).toBe(false);
+      expect(parsed.touched?.matched).toEqual(["Core/Models/Order.cs", "Core/Models/Status.cs", "Core/View Models/OrderVm.cs"]);
+      expect(parsed.touched?.unmatched).toEqual(["Core.Tests/OrderTests.cs"]);
+      expect(parsed.touched?.artifacts).toEqual([
+        { path: REPORT, format: "cobertura", root: ".", basis: "source", rows: 3, onDisk: 3, error: null, unresolved: [] },
+      ]);
+      // A plain run's total is still the writer's own.
+      expect(parsed.total?.lines).toEqual({ covered: 14, total: 20, percent: 70 });
+
+      const text = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: touched } }],
+      });
+      const out = text.out.join("\n");
+      expect(out).toMatch(/^ {2}70\.00% \(7\/10\)\s+75\.00% \(3\/4\)\s+under-minimum\s+Core\/Models\/Order\.cs$/m);
+      expect(out).toContain(`from: ${REPORT} (cobertura) -- 3 rows, root . [source], 3 on disk`);
+      expect(out).not.toMatch(/BY PACKAGE/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a class filename that resolves NOWHERE is unmatched -- never credited to its package -- and nothing joined is exit 6", async () => {
+    const repo = coberturaRepo();
+    try {
+      // The file IS in this tree, and the package `Core` sits in its path: the
+      // package fallback would have matched it. But the report names it by a
+      // CI runner's absolute path, which is no path here.
+      writeTree(repo, ["Core/Store.cs"]);
+      writeReport(
+        repo,
+        `<coverage line-rate="1" lines-covered="1" lines-valid="1"><sources><source>D:\\agent\\_work\\1\\s\\</source></sources><packages><package name="Core"><classes><class name="Core.Store" filename="D:\\agent\\_work\\1\\s\\Core\\Store.cs"><lines>${line(1, 1)}</lines></class></classes></package></packages></coverage>`,
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Store.cs\n" } }],
+      });
+      expect(result.code).toBe(6);
+      const out = result.out.join("\n");
+      expect(out).toContain("targets:       (no touched file matched a report row)");
+      expect(out).toContain(`from: ${REPORT} (cobertura) -- 1 row, root . [lane-cwd], 0 on disk, 1 unresolved (never matched)`);
+      expect(out).toContain("    unresolved: D:/agent/_work/1/s/Core/Store.cs -- is an absolute path outside this repository");
+      expect(out).toContain("unmatched: Core/Store.cs");
+      expect(out).not.toMatch(/BY PACKAGE/);
+      const err = result.err.join("\n");
+      expect(err).toContain("plus 1 file name a report stated that resolved to no file in this tree, never matched");
+      expect(err).toContain("SEEN in the report rows: 'D:/agent/_work/1/s/Core/Store.cs'");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a dry run carries no 'BY PACKAGE' note for cobertura -- its bytes decide, and none were read", async () => {
+    const repo = coberturaRepo();
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--dry-run"], {
+        repo,
+        script: [{ match: diff("main"), result: { code: 0, stdout: "Core/Store.cs\n" } }],
+      });
+      expect(result.code).toBe(0);
+      const out = result.out.join("\n");
+      expect(out).toMatch(/^touched: +base main: 1 file \(0 matched, 1 unmatched\)$/m);
+      expect(out).not.toMatch(/BY PACKAGE/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a line stating more conditions covered than it has is the report's error, exit 1 -- never the package row instead", async () => {
+    const repo = coberturaRepo();
+    try {
+      writeTree(repo, ["Core/A.cs", "Core/B.cs"]);
+      // The PACKAGE row adds up (5 of 6), so the plain parse accepts the file;
+      // the per-file view is where a.cs's 5-of-2 is impossible.
+      writeReport(
+        repo,
+        `<coverage line-rate="1" lines-covered="2" lines-valid="2" branches-covered="5" branches-valid="6"><packages><package name="Core"><classes>` +
+          `<class name="A" filename="Core\\A.cs"><lines>${line(1, 1, "250% (5/2)")}</lines></class>` +
+          `<class name="B" filename="Core\\B.cs"><lines>${line(1, 1, "0% (0/4)")}</lines></class>` +
+          `</classes></package></packages></coverage>`,
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/A.cs\n" } }],
+      });
+      expect(result.code).toBe(1);
+      const parsed = document(result);
+      expect(parsed.targets).toEqual([]);
+      expect(parsed.touched?.unmatched).toEqual(["Core/A.cs"]);
+      expect(parsed.touched?.artifacts?.[0]).toMatchObject({ path: REPORT, root: null, rows: 0 });
+      expect(parsed.touched?.artifacts?.[0]?.error).toMatch(
+        /^TestResults\/core\.cobertura\.xml: Core\/A\.cs, line 1: states 5 of 2 conditions covered/,
+      );
+      expect(result.err.join("\n")).toContain("TestResults/core.cobertura.xml: Core/A.cs, line 1: states 5 of 2 conditions covered");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("review F1: a name under TWO stated roots is ambiguous -- unmatched with both paths named, never the first root's file", async () => {
+    const repo = coberturaRepo();
+    try {
+      writeTree(repo, ["pkgA/utils.py", "pkgB/utils.py", "pkgA/other.py"]);
+      // coverage.py's shape: one <source> per package, every top-level file in
+      // package ".", and pkgA's utils.py at 0 of 2 beside pkgB's at 2 of 2.
+      writeReport(
+        repo,
+        `<coverage line-rate="0.66" lines-covered="4" lines-valid="6"><sources><source>${repo}/pkgA</source><source>${repo}/pkgB</source></sources><packages><package name="."><classes>` +
+          `<class name="utils.py" filename="utils.py"><lines>${line(1, 0)}${line(2, 0)}</lines></class>` +
+          `<class name="utils.py" filename="utils.py"><lines>${line(1, 3)}${line(2, 3)}</lines></class>` +
+          `<class name="other.py" filename="other.py"><lines>${line(1, 1)}${line(2, 1)}</lines></class>` +
+          `</classes></package></packages></coverage>`,
+      );
+      const touched = "pkgA/utils.py\npkgB/utils.py\npkgA/other.py\n";
+      const json = await capture(["coverage", "--touched", "--base", "main", "--threshold", "80", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: touched } }],
+      });
+      expect(json.code).toBe(0);
+      const parsed = document(json);
+      // The 0% file is NOT reported at 100%: neither utils.py is a row.
+      expect(parsed.targets.map((row) => [row.name, row.lines.percent, row.met])).toEqual([["pkgA/other.py", 100, true]]);
+      expect(parsed.touched?.unmatched).toEqual(["pkgA/utils.py", "pkgB/utils.py"]);
+      expect(parsed.touched?.artifacts?.[0]).toMatchObject({ rows: 2, onDisk: 1, error: null });
+      const reason = (parsed.touched?.artifacts?.[0] as { unresolved?: readonly { name: string; reason: string }[] })
+        .unresolved;
+      expect(reason).toEqual([
+        {
+          name: "utils.py",
+          reason:
+            "is ambiguous: it exists as 'pkgA/utils.py' and 'pkgB/utils.py', under different roots the report states, and nothing in the report says which of them these lines measured",
+        },
+      ]);
+
+      const text = await capture(["coverage", "--touched", "--base", "main", "--threshold", "80"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: touched } }],
+      });
+      expect(text.out.join("\n")).toContain("    unresolved: utils.py -- is ambiguous: it exists as 'pkgA/utils.py' and 'pkgB/utils.py'");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("review F2: a SYMLINKED --repo still anchors a <source> the tool wrote through the real path", async () => {
+    const repo = coberturaRepo();
+    const link = join(mkdtempSync(join(tmpdir(), "nen-shu-coverage-link-")), "checkout");
+    try {
+      writeTree(repo, ["Core/Order.cs"]);
+      // The tool ran inside the checkout and wrote what `getcwd` returned --
+      // the REAL path, not the symlink nen is about to be handed.
+      const real = realpathSync.native(repo);
+      writeReport(
+        repo,
+        `<coverage line-rate="1" lines-covered="1" lines-valid="1"><sources><source>${real}</source></sources><packages><package name="Core"><classes><class name="Core.Order" filename="Core\\Order.cs"><lines>${line(1, 1)}</lines></class></classes></package></packages></coverage>`,
+      );
+      symlinkSync(repo, link, "junction");
+      expect(repoRootSpellings(link)).toEqual([link, real]);
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo: link,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Order.cs\n" } }],
+      });
+      expect(result.code).toBe(0);
+      const parsed = document(result);
+      expect(parsed.targets.map((row) => row.name)).toEqual(["Core/Order.cs"]);
+      expect(parsed.touched?.artifacts?.[0]).toMatchObject({ root: ".", basis: "source", onDisk: 1 });
+    } finally {
+      rmSync(join(link, ".."), { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("review F3: a report spelling in another letter case is reported under the ON-DISK spelling where the filesystem folds case", async () => {
+    const repo = coberturaRepo();
+    try {
+      writeTree(repo, ["Core/Models/Order.cs"]);
+      writeReport(
+        repo,
+        `<coverage line-rate="1" lines-covered="1" lines-valid="1"><packages><package name="Core"><classes><class name="Core.Order" filename="core\\models\\order.cs"><lines>${line(1, 1)}</lines></class></classes></package></packages></coverage>`,
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Models/Order.cs\n" } }],
+      });
+      const parsed = document(result);
+      if (existsSync(join(repo, "CORE", "MODELS", "ORDER.CS"))) {
+        // macOS, Windows: the file IS there under the report's spelling, and
+        // the row carries the name git uses -- so it matches, and the account
+        // agrees with the table.
+        expect(result.code).toBe(0);
+        expect(parsed.targets.map((row) => row.name)).toEqual(["Core/Models/Order.cs"]);
+        expect(parsed.touched?.matched).toEqual(["Core/Models/Order.cs"]);
+      } else {
+        // Linux: that spelling names no file, and the account says so.
+        expect(result.code).toBe(6);
+        expect(parsed.touched?.unmatched).toEqual(["Core/Models/Order.cs"]);
+        expect(parsed.touched?.artifacts?.[0]).toMatchObject({ onDisk: 0 });
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("review round 3 (N1): probeF1b -- a <source> OUTSIDE the repo holding the same name makes it ambiguous, never pkgA's 0% at 100%", async () => {
+    const repo = coberturaRepo();
+    const sitePackages = mkdtempSync(join(tmpdir(), "nen-shu-coverage-site-"));
+    try {
+      writeTree(repo, ["pkgA/utils.py", "pkgA/other.py"]);
+      writeFileSync(join(sitePackages, "utils.py"), "x = 2\n");
+      // coverage.py for a package installed non-editable: its <source> is the
+      // site-packages directory, outside the checkout, and its utils.py is
+      // named exactly like the checkout's. 0 of 2 in pkgA, 2 of 2 outside.
+      writeReport(
+        repo,
+        `<coverage line-rate="0.66" lines-covered="4" lines-valid="6"><sources><source>${repo}/pkgA</source><source>${sitePackages}</source></sources><packages><package name="."><classes>` +
+          `<class name="utils.py" filename="utils.py"><lines>${line(1, 0)}${line(2, 0)}</lines></class>` +
+          `<class name="utils.py" filename="utils.py"><lines>${line(1, 3)}${line(2, 3)}</lines></class>` +
+          `<class name="other.py" filename="other.py"><lines>${line(1, 1)}${line(2, 1)}</lines></class>` +
+          `</classes></package></packages></coverage>`,
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "pkgA/utils.py\npkgA/other.py\n" } }],
+      });
+      expect(result.code).toBe(0);
+      const parsed = document(result);
+      expect(parsed.targets.map((row) => row.name)).toEqual(["pkgA/other.py"]);
+      expect(parsed.touched?.unmatched).toEqual(["pkgA/utils.py"]);
+      const unresolved = (parsed.touched?.artifacts?.[0] as { unresolved?: readonly { name: string; reason: string }[] })
+        .unresolved;
+      expect(unresolved?.map((entry) => entry.name)).toEqual(["utils.py"]);
+      expect(unresolved?.[0]?.reason).toContain(
+        `is ambiguous: it exists as 'pkgA/utils.py' and '${sitePackages.replace(/\\/g, "/")}/utils.py'`,
+      );
+    } finally {
+      rmSync(sitePackages, { recursive: true, force: true });
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("review round 3 (N1): the outside <source> is not on THIS machine -- a 2-entry name in a 2-root report is unverifiable", async () => {
+    const repo = coberturaRepo();
+    try {
+      writeTree(repo, ["pkgA/utils.py", "pkgA/other.py"]);
+      writeReport(
+        repo,
+        `<coverage line-rate="0.66" lines-covered="4" lines-valid="6"><sources><source>${repo}/pkgA</source><source>/nonexistent-nen-e12-runner/site-packages</source></sources><packages><package name="."><classes>` +
+          `<class name="utils.py" filename="utils.py"><lines>${line(1, 0)}${line(2, 0)}</lines></class>` +
+          `<class name="utils.py" filename="utils.py"><lines>${line(1, 3)}${line(2, 3)}</lines></class>` +
+          `<class name="other.py" filename="other.py"><lines>${line(1, 1)}${line(2, 1)}</lines></class>` +
+          `</classes></package></packages></coverage>`,
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "pkgA/utils.py\npkgA/other.py\n" } }],
+      });
+      expect(result.code).toBe(0);
+      const out = result.out.join("\n");
+      expect(out).toMatch(/^ {2}100\.00% \(2\/2\)\s+ideal\s+pkgA\/other\.py$/m);
+      // No TABLE row for it (a row starts with its percentage).
+      expect(out).not.toMatch(/^ {2}[\d.]+% .*pkgA\/utils\.py$/m);
+      expect(out).toContain(
+        "    unresolved: utils.py -- cannot be verified: the report names it in 2 entries and states 2 roots, and '/nonexistent-nen-e12-runner/site-packages' is not a directory on this machine",
+      );
+      expect(out).toContain("unmatched: pkgA/utils.py");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("review round 3 (N2): a file DECOMPOSED (NFD) on disk that git and the report name COMPOSED (NFC) matches under the NFC name", async () => {
+    const repo = coberturaRepo();
+    const nfc = "Core/Café.cs";
+    try {
+      mkdirSync(join(repo, "Core"), { recursive: true });
+      writeFileSync(join(repo, "Core", "Café.cs"), "class Cafe {}\n");
+      writeReport(
+        repo,
+        `<coverage line-rate="1" lines-covered="2" lines-valid="2"><sources><source>${repo}</source></sources><packages><package name="Core"><classes><class name="Core.Cafe" filename="Core\\Café.cs"><lines>${line(1, 1)}${line(2, 1)}</lines></class></classes></package></packages></coverage>`,
+      );
+      const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: `${nfc}\n` } }],
+      });
+      const parsed = document(result);
+      if (existsSync(join(repo, "Core", "Café.cs"))) {
+        // macOS: the NFC name finds the NFD file. The row must carry the NFC
+        // name git uses -- not the NFD bytes the real path returns.
+        expect(result.code).toBe(0);
+        expect(parsed.targets.map((row) => row.name)).toEqual([nfc]);
+        expect(parsed.targets[0]?.name.normalize("NFC")).toBe(parsed.targets[0]?.name);
+        expect(parsed.touched?.matched).toEqual([nfc]);
+      } else {
+        // Linux, Windows: the NFC name names no file; the account says so.
+        expect(result.code).toBe(6);
+        expect(parsed.touched?.unmatched).toEqual([nfc]);
+        expect(parsed.touched?.artifacts?.[0]).toMatchObject({ onDisk: 0 });
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("review round 3 (LOW): a PLAIN run refuses a line's impossible figure too -- (5/2) beside (0/4) is exit 1, not 5 of 6", async () => {
+    const repo = coberturaRepo();
+    try {
+      writeReport(
+        repo,
+        `<coverage line-rate="1" lines-covered="2" lines-valid="2"><packages><package name="Core"><classes>` +
+          `<class name="A" filename="Core\\A.cs"><lines>${line(1, 1, "250% (5/2)")}</lines></class>` +
+          `<class name="B" filename="Core\\B.cs"><lines>${line(1, 1, "0% (0/4)")}</lines></class>` +
+          `</classes></package></packages></coverage>`,
+      );
+      const result = await capture(["coverage", "--json"], { repo, script: [ok("x y")] });
+      expect(result.code).toBe(1);
+      expect(document(result).total).toBeNull();
+      expect(result.err.join("\n")).toContain(
+        "TestResults/core.cobertura.xml: Core/A.cs, line 1: states 5 of 2 conditions covered",
+      );
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "fileLocator keeps a SYMLINKED file's own name -- a link's target is not the name git gives it",
+    () => {
+      const repo = mkdtempSync(join(tmpdir(), "nen-shu-coverage-locate-"));
+      try {
+        mkdirSync(join(repo, "src"));
+        writeFileSync(join(repo, "src", "real.cs"), "x\n");
+        symlinkSync("real.cs", join(repo, "src", "alias.cs"));
+        const locate = fileLocator(repo);
+        expect(locate("src/alias.cs")).toBe("src/alias.cs");
+        expect(locate("src/real.cs")).toBe("src/real.cs");
+        expect(locate("src/missing.cs")).toBeNull();
+        expect(locate("src")).toBeNull();
+      } finally {
+        rmSync(repo, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 // ── zheref/nen#236: each report against its OWN root ────────────────────────
@@ -1216,9 +1629,11 @@ describe("--touched resolves each declared report against its own root (zheref/n
         },
       },
     });
+    // A cobertura report that names NO file, so it is still package-grain
+    // beside the lcov report's file rows (zheref/nen#296).
     writeFileSync(
       join(repo, "coverage.cobertura.xml"),
-      '<coverage line-rate="1" lines-covered="1" lines-valid="1"><packages><package name="Placeholder.Core"><classes><class name="C" filename="Core/Store.cs"><lines><line number="1" hits="1"/></lines></class></classes></package></packages></coverage>',
+      '<coverage line-rate="1" lines-covered="1" lines-valid="1"><packages><package name="Placeholder.Core"><classes><class name="C"><lines><line number="1" hits="1"/></lines></class></classes></package></packages></coverage>',
     );
     mkdirSync(join(repo, "web", "coverage"), { recursive: true });
     writeFileSync(join(repo, "web", "coverage", "lcov.info"), "SF:src/a.ts\nDA:1,1\nend_of_record\n");
