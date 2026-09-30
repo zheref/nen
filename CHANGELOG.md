@@ -2,6 +2,26 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.18.1 — 2026-09-30
+
+Release unit for `v0.18.0..v0.18.1`, the hardening of the host script `nen runner script` renders:
+- the delivery: [#313](https://github.com/zheref/nen/pull/313), which closes [#312](https://github.com/zheref/nen/issues/312) — Feitan's three security findings from Hatsu's review of `hatsu:jusshin`.
+
+The compatibility floor stays `0.18`.
+
+### Fixed
+
+- **runner** — **Security** ([#312](https://github.com/zheref/nen/issues/312), [#313](https://github.com/zheref/nen/pull/313)). The rendered Windows script passed the service-account password and the registration token on `config.cmd`'s argv, a batch file cmd.exe re-parses: `& | < > ^ %` split the argument, expanded `%PATHEXT%` and ran `|whoami`, and `Hide-Secret` masked only the whole secret, so fragments were replayed into the `register-*.log` the caller reads; both secrets also sat on the process command line. Now both reach the runner through its own environment inputs, `ACTIONS_RUNNER_INPUT_TOKEN` and `ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD` (`actions/runner` `CommandSettings.cs`, `ACTIONS_RUNNER_INPUT_<ARG>`, secrets masked and the variables removed from the listener's environment), set just before the call and cleared in its `finally`; `config.cmd`'s output is discarded and never replayed; a password that is empty, has leading or trailing whitespace, or carries `& | < > ^ % " '` or a line break is refused before first use, at exit 1, naming the rule. On Linux and macOS the token takes the same environment path (a pipe read by the service user's shell on Linux, where `sudo` would strip an inherited variable).
+- **runner** — **Security** ([#312](https://github.com/zheref/nen/issues/312), [#313](https://github.com/zheref/nen/pull/313)). The runner root an unelevated session created inherited `Authenticated Users: Modify` from `C:\`, so a pool's own service account could swap the `.ps1` before UAC, the zip after its one hash check, or `config.cmd` before it ran. The elevated script now locks the root down first, before the transcript, `gh` and any download — owner Administrators, inheritance removed, `SYSTEM` and `Administrators` full control, the package directory admin-only, the elevated user read on `_jusshin` — re-hashes the archive immediately before every `Expand-Archive` (and every `tar` on Linux and macOS), and empties a pending `Runner<N>` folder before extraction. The service account keeps `(RX)` on the root and project folder only.
+- **runner** — `nen runner script` refuses an `--out` at or under the plan's runner root at exit 2, naming `%LOCALAPPDATA%
+en\jusshin\` (Windows) or `~/.local/state/nen/jusshin/` (Linux, macOS) instead; every host script writes the one summary line, and only that line, to `_jusshin/register-<ts>.summary`; `--json` gains the additive `scriptSha256` and `summary` keys. Flags and exit codes are otherwise unchanged.
+
+### Breaking / consumer notes
+
+This release declares **no breaking consumer note**, and under the rule [#200](https://github.com/zheref/nen/pull/200) landed that is a decision rather than an absence: it is what leaves `COMPATIBLE_MINOR_FLOOR` at `0.18`, and therefore what keeps every `"0.18"` pin already written valid against a v0.18.1 binary. The section is still here, and still carries exactly one bullet, because [the release-time floor step](docs/USAGE.md#the-release-time-floor-step) requires the cut to STATE the outcome either way.
+
+- **No repin: the compatibility floor stays `0.18`.** A repository pinned `minimum: "0.18"` needs no change to read this build. `pinned_ref` SHOULD move to `v0.18.1` on a repository whose skills render the Windows host script: that is how a host picks up the secret-path and root-lockdown fixes above, and the `--out` refusal is the one new exit-2 a caller can meet.
+
 ## v0.18.0 — 2026-09-30
 
 Release unit for `v0.17.0..v0.18.0`, the `nen runner` family that `hatsu:jusshin` executes:
