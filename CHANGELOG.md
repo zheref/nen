@@ -6,6 +6,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 Release unit for `v0.18.0..v0.18.1`, the hardening of the host script `nen runner script` renders:
 - the delivery: [#313](https://github.com/zheref/nen/pull/313), which closes [#312](https://github.com/zheref/nen/issues/312) — Feitan's three security findings from Hatsu's review of `hatsu:jusshin`.
+- [#314](https://github.com/zheref/nen/pull/314), the release proposal.
 
 The compatibility floor stays `0.18`.
 
