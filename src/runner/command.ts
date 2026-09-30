@@ -34,6 +34,7 @@
 // is the reason for the split: a write that silently took the working
 // directory's remote is how a mutating run lands on the wrong repository.
 
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 import {
@@ -56,9 +57,9 @@ import { VERSION } from "../version.js";
 import { enablePool, renderEnable, VARIABLE_VALUE } from "./enable.js";
 import { realSleep, RunnerFailure, type Sleep } from "./github.js";
 import { assembleInventory, fetchDownloads, fetchRunners, renderInventory } from "./inventory.js";
-import { computePlan, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan } from "./plan.js";
+import { computePlan, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
 import { renderPreflight, runPreflight } from "./preflight.js";
-import { launchLine, renderScript } from "./script.js";
+import { launchLine, renderScript, summaryGlob } from "./script.js";
 import { renderVerify, verifyRunners } from "./verify.js";
 import { differingLines, renderWorkflow, workflowValues } from "./workflow.js";
 
@@ -129,7 +130,10 @@ plan       Which runners to add: the lowest free slots for --machine-code and
            (contract nen.runner.plan/v0.1).
 script     Render the plan's host script: PowerShell 5.1 (Windows), bash
            (Linux, run with sudo; macOS, run as yourself). --json names the one
-           launch line. Refuses a plan whose identity is still 'ask'.
+           launch line, the script's scriptSha256 and the summary file glob.
+           Refuses a plan whose identity is still 'ask', and an --out under
+           the plan's root: write it to %LOCALAPPDATA%\\nen\\jusshin\\ (Windows)
+           or ~/.local/state/nen/jusshin/ (Linux, macOS).
 verify     Poll the runners list every 10s for up to --wait seconds (default
            0: once) until every --expect name is present, online and carries
            every --labels label. Never exits 0 on a partial pass.
@@ -226,6 +230,27 @@ function writeOut(path: string, text: string): void {
   writeFileSync(path, text, "utf8");
 }
 
+/** Where a host script belongs: the maintainer's own profile, never the runner root (#312). */
+const OUT_HOME: Readonly<Record<RunnerPlan["os"], string>> = {
+  Windows: "%LOCALAPPDATA%\\nen\\jusshin\\",
+  Linux: "~/.local/state/nen/jusshin/",
+  macOS: "~/.local/state/nen/jusshin/",
+};
+
+/**
+ * Whether `path` is `dir` or lies under it, compared the way the runner host's
+ * file system compares: case-blind on Windows and macOS, `\` and `/` alike.
+ */
+export function isUnder(path: string, dir: string, os: RunnerPlan["os"]): boolean {
+  const fold = (value: string): string => {
+    const slashed = value.replace(/\\/g, "/").replace(/\/+$/, "");
+    return os === "Linux" ? slashed : slashed.toLowerCase();
+  };
+  const child = fold(path);
+  const parent = fold(dir);
+  return child === parent || child.startsWith(`${parent}/`);
+}
+
 export interface RunnerDeps {
   readonly sleep: Sleep;
   readonly version: string;
@@ -301,6 +326,11 @@ function script(context: CommandContext, deps: RunnerDeps): number {
   if (planned.os === "Windows" && (!/\.ps1$/i.test(out) || /[\s'"]/.test(out))) {
     throw new VerbUsageError(`--out '${out}' must end in .ps1 and carry no space or quote: 'powershell -File' runs only a .ps1, and the launch line passes the path inside a quoted Start-Process argument list.`);
   }
+  if (isUnder(out, planned.root, planned.os) || isUnder(outFlag, planned.root, planned.os)) {
+    throw new VerbUsageError(
+      `--out '${out}' is under the plan's runner root '${planned.root}'. Write the script where only you can change it before it runs elevated -- ${OUT_HOME[planned.os]} -- never inside the root the runners' own service account can reach.`,
+    );
+  }
   const rendered = renderScript(planned, deps.version);
   if (context.args.booleans.has("dry-run") !== true) writeOut(out, rendered.text);
   const result = {
@@ -311,9 +341,12 @@ function script(context: CommandContext, deps: RunnerDeps): number {
     needsElevation: rendered.needsElevation,
     launch: launchLine(planned.os, out),
     written: !context.args.booleans.has("dry-run"),
+    scriptSha256: createHash("sha256").update(rendered.text, "utf8").digest("hex"),
+    summary: summaryGlob(planned),
   };
   emit(context.io, context.json, result, [
     `${result.written ? "wrote" : "(dry run) would write"} ${out} -- ${planned.os} host script for ${result.runners.join(", ")} as ${planned.identity}`,
+    `sha256 ${result.scriptSha256}; the run leaves its one summary line in ${result.summary}`,
     `launch${result.needsElevation ? " (elevated)" : ""}: ${result.launch}`,
   ]);
   return 0;

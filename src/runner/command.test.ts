@@ -2,6 +2,7 @@
 // table, the declaration read from a scratch --repo, and files written where
 // the flags say. Every gh answer is scripted; no test here opens a socket.
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
 import { findCommand } from "../cli/registry.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
-import { makeRunnerCommand, RUNNER_SUBCOMMANDS, RUNNER_SUBCOMMAND_FLAGS } from "./command.js";
+import { isUnder, makeRunnerCommand, RUNNER_SUBCOMMANDS, RUNNER_SUBCOMMAND_FLAGS } from "./command.js";
 import { defaultBranchArgv } from "./preflight.js";
 import { FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET } from "./testkit.js";
 import { runnersArgv } from "./inventory.js";
@@ -170,12 +171,30 @@ describe("nen runner script", () => {
     const result = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1", "--json"]);
     expect(result.code, result.err).toBe(0);
     const report = JSON.parse(result.out);
-    expect(Object.keys(report)).toEqual(["os", "out", "runners", "identity", "needsElevation", "launch", "written"]);
+    expect(Object.keys(report)).toEqual(["os", "out", "runners", "identity", "needsElevation", "launch", "written", "scriptSha256", "summary"]);
     expect(report).toMatchObject({ os: "Windows", runners: ["NZ-NNR1", "NZ-NNR2", "NZ-NNR3"], identity: ".\\lordzheref", needsElevation: true, written: true });
     expect(report.launch).toBe(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${report.out}'"`);
-    expect(readFileSync(join(root, "register.ps1"), "utf8")).toBe(
-      readFileSync(join(FIXTURES, "register.windows.golden.ps1"), "utf8").replace(/\r\n/g, "\n"),
-    );
+    const golden = readFileSync(join(FIXTURES, "register.windows.golden.ps1"), "utf8").replace(/\r\n/g, "\n");
+    expect(readFileSync(join(root, "register.ps1"), "utf8")).toBe(golden);
+    // Additive (#312): the rendered bytes' SHA-256, and where the run leaves its one summary line.
+    expect(report.scriptSha256).toBe(createHash("sha256").update(golden, "utf8").digest("hex"));
+    expect(report.summary).toBe("C:\\GithubRunners\\nen-runners\\_jusshin\\register-*.summary");
+  });
+
+  it("refuses an --out under the plan's runner root at exit 2, naming the profile location instead (#312)", async () => {
+    const root = consumer();
+    await planned(root);
+    for (const out of ["C:\\GithubRunners\\nen-runners\\_jusshin\\register.ps1", "c:/githubrunners/register.ps1"]) {
+      const refused = await run(["script", "--repo", root, "--plan", "plan.json", "--out", out]);
+      expect(refused.code, out).toBe(2);
+      expect(refused.err).toContain("under the plan's runner root 'C:\\GithubRunners'");
+      expect(refused.err).toContain("%LOCALAPPDATA%\\nen\\jusshin\\");
+    }
+    expect(isUnder("C:\\GithubRunnersX\\register.ps1", "C:\\GithubRunners", "Windows")).toBe(false);
+    expect(isUnder("/opt/actions-runners/nen-runners/register.sh", "/opt/actions-runners", "Linux")).toBe(true);
+    expect(isUnder("/opt/Actions-Runners/register.sh", "/opt/actions-runners", "Linux")).toBe(false);
+    expect(isUnder("/Users/me/Actions-Runners/register.sh", "/Users/me/actions-runners", "macOS")).toBe(true);
+    expect(isUnder("/home/me/.local/state/nen/jusshin/register.sh", "/opt/actions-runners", "Linux")).toBe(false);
   });
 
   it("writes nothing under --dry-run", async () => {

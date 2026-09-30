@@ -13,11 +13,13 @@
 # config.sh runs as the service user (it refuses root), gh runs as YOU
 # (SUDO_USER, with your own sign-in), and svc.sh installs the systemd unit as
 # root. The registration token is minted per runner into a variable that is
-# never printed.
+# never printed, and reaches config.sh through its environment, never argv.
+# Keep this file outside the runner root (e.g. ~/.local/state/nen/jusshin/).
 #
 # Exit codes: 0 every planned runner's service is running; 1 anything else;
 # 3 run as the wrong user; 5 gh missing or not signed in; 6 the runner
-# package failed its SHA-256 check (the file is deleted).
+# package failed its SHA-256 check (the file is deleted). The one summary
+# line is also written to $PROJECT_DIR/_jusshin/register-<ts>.summary.
 set -euo pipefail
 
 TARGET='zheref/nen'
@@ -38,9 +40,15 @@ WORK_DIR="$PROJECT_DIR/_jusshin"
 registered=0
 skipped=0
 failed=0
+stamp="$(date +%Y%m%d-%H%M%S)"
+summary_file=""
 
+# The summary file carries the ONE summary line and nothing else: it is what
+# the caller reads. The log is the maintainer's.
 finish() {
-  echo "jusshin: ${registered} registered, ${skipped} skipped, ${failed} failed"
+  summary="jusshin: ${registered} registered, ${skipped} skipped, ${failed} failed"
+  echo "$summary"
+  if [ -n "$summary_file" ]; then printf '%s\n' "$summary" > "$summary_file" || true; fi
   exit "$1"
 }
 
@@ -75,7 +83,8 @@ fi
 
 mkdir -p "$ROOT" "$PROJECT_DIR" "$WORK_DIR"
 chmod 0755 "$ROOT" "$PROJECT_DIR"
-log="$WORK_DIR/register-$(date +%Y%m%d-%H%M%S).log"
+log="$WORK_DIR/register-$stamp.log"
+summary_file="$WORK_DIR/register-$stamp.summary"
 exec > >(tee -a "$log") 2>&1
 echo "jusshin: ${#RUNNERS[@]} runner(s) for $TARGET; log $log"
 
@@ -118,6 +127,12 @@ for entry in "${pending[@]+"${pending[@]}"}"; do
   dir="${entry#*|}"
   echo "jusshin: registering $name in $dir"
   install -d -o "$SERVICE_USER" -m 0755 "$dir"
+  # Re-hashed immediately before EVERY extraction, not only after the download.
+  if ! verify_archive; then
+    rm -f "$archive"
+    echo "jusshin: $ARCHIVE no longer matches sha256 $SHA256 -- deleted; nothing extracted into $dir."
+    finish 6
+  fi
   sudo -u "$SERVICE_USER" tar xzf "$archive" -C "$dir"
   token="$(as_invoker gh api -X POST "repos/$TARGET/actions/runners/registration-token" --jq .token 2>/dev/null)" || token=""
   if [ -z "$token" ]; then
@@ -125,7 +140,12 @@ for entry in "${pending[@]+"${pending[@]}"}"; do
     failed=$((failed + 1))
     continue
   fi
-  if ! (cd "$dir" && sudo -u "$SERVICE_USER" ./config.sh --unattended --url "$REPO_URL" --token "$token" --name "$name" --labels "$LABELS" --work _work); then
+  # NO TOKEN ON A COMMAND LINE (/proc/<pid>/cmdline is world-readable): it
+  # reaches config.sh as ACTIONS_RUNNER_INPUT_TOKEN, which actions/runner reads
+  # as its --token input. printf is a builtin (no argv), and the service user's
+  # shell reads it from stdin into its own environment -- sudo would strip an
+  # inherited variable, and 'env VAR=...' would put it back on argv.
+  if ! (cd "$dir" && printf '%s\n' "$token" | sudo -u "$SERVICE_USER" bash -c 'IFS= read -r ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_TOKEN; exec ./config.sh --unattended --url "$1" --name "$2" --labels "$3" --work _work' jusshin "$REPO_URL" "$name" "$LABELS"); then
     token=""
     echo "jusshin: config.sh failed for $name."
     failed=$((failed + 1))

@@ -9,15 +9,22 @@
 # package:  actions-runner-win-x64-2.337.0.zip (runner 2.337.0)
 #
 # Windows PowerShell 5.1. Run it ELEVATED: 'nen runner script --json' prints
-# the one launch line, which opens it through a UAC prompt. It asks ONCE for
-# the service account's password. That password, and every registration
-# token this script mints with gh, live only in this process: never echoed,
-# never written to a file, and the transcript is stopped around the one
-# config.cmd call that carries them.
+# the one launch line, which opens it through a UAC prompt. Keep this file
+# OUTSIDE the runner root (e.g. %LOCALAPPDATA%\nen\jusshin\), where only you
+# can change it before UAC. It asks ONCE for the service account's password.
+# That password, and every registration token this script mints with gh,
+# live only in this process: never on a command line (config.cmd reads them
+# from ACTIONS_RUNNER_INPUT_* environment inputs), never echoed, never
+# written to a file, and config.cmd's output is never replayed.
 #
-# Exit codes: 0 every planned runner's service is Running; 1 anything else;
-# 3 not elevated; 5 gh missing or not signed in; 6 the runner package failed
-# its SHA-256 check (the file is deleted).
+# The runner root is locked down FIRST: owner Administrators, inherited
+# entries removed, SYSTEM and Administrators full control. The package lives
+# in an admin-only _jusshin\pkg and is re-hashed before every extraction.
+# The one summary line is also written to _jusshin\register-<ts>.summary.
+#
+# Exit codes: 0 every planned runner's service is Running; 1 anything else
+# (a refused password included); 3 not elevated; 5 gh missing or not signed
+# in; 6 the runner package failed its SHA-256 check (the file is deleted).
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -33,6 +40,7 @@ $DownloadUrl = 'https://github.com/actions/runner/releases/download/v2.337.0/act
 $ZipName = 'actions-runner-win-x64-2.337.0.zip'
 $Sha256 = '1150692AFA94E71F872017E254EA55B6EECE1EECE3FE7E3A6D4C93D0A1B85CFC'
 $ServicePrefix = 'actions.runner.zheref-nen.'
+$PasswordRule = '& | < > ^ % " '' or a line break'
 $Runners = @(
     @{ Name = 'NZ-NNR1'; Dir = 'C:\GithubRunners\nen-runners\Runner1' },
     @{ Name = 'NZ-NNR2'; Dir = 'C:\GithubRunners\nen-runners\Runner2' },
@@ -40,15 +48,31 @@ $Runners = @(
 )
 
 $WorkDir = Join-Path $ProjectDir '_jusshin'
+$PkgDir = Join-Path $WorkDir 'pkg'
+# Well-known SIDs, so the grants read the same in every display language.
+$SystemSid = '*S-1-5-18'
+$AdminsSid = '*S-1-5-32-544'
 $script:Registered = 0
 $script:Skipped = 0
 $script:Failed = 0
 $script:Transcribing = $false
+$script:Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:LogPath = $null
+$script:SummaryPath = $null
 
 function Close-Run {
     param([int]$Code)
-    Write-Host ('jusshin: {0} registered, {1} skipped, {2} failed' -f $script:Registered, $script:Skipped, $script:Failed)
+    $summary = 'jusshin: {0} registered, {1} skipped, {2} failed' -f $script:Registered, $script:Skipped, $script:Failed
+    Write-Host $summary
+    # The summary file carries that ONE line and nothing else: it is what the
+    # caller reads. The transcript is the maintainer's.
+    if ($null -ne $script:SummaryPath) {
+        try {
+            Set-Content -LiteralPath $script:SummaryPath -Value $summary -Encoding Ascii
+        } catch {
+            Write-Host ('jusshin: could not write {0}.' -f $script:SummaryPath)
+        }
+    }
     if ($script:Transcribing) {
         Stop-Transcript | Out-Null
         $script:Transcribing = $false
@@ -73,13 +97,32 @@ function Invoke-Quiet {
     }
 }
 
-# Replace every secret in a line with ***. An empty secret replaces nothing.
-function Hide-Secret {
-    param([string]$Text, [string[]]$Secrets)
-    foreach ($secret in $Secrets) {
-        if (-not [string]::IsNullOrEmpty($secret)) { $Text = $Text.Replace($secret, '***') }
+# One icacls call; any failure stops the run before the root is used.
+function Invoke-Icacls {
+    param([string[]]$ArgumentList)
+    $code = Invoke-Quiet 'icacls' $ArgumentList
+    if ($code -ne 0) {
+        Write-Host ('jusshin: icacls {0} failed (exit {1}); the runner root is not locked down, so nothing is downloaded or run.' -f ($ArgumentList -join ' '), $code)
+        Close-Run 1
     }
-    return $Text
+}
+
+# Why a password is refused, or $null. The rule: none of the characters
+# cmd.exe or PowerShell read as syntax, and no leading or trailing whitespace
+# (the runner trims an environment input). Checked BEFORE the first use.
+function Test-Password {
+    param([string]$Plain)
+    if ([string]::IsNullOrEmpty($Plain)) { return 'it is empty' }
+    if ($Plain -match '[&|<>^%"''\r\n]') { return 'it carries a refused character' }
+    if ($Plain -cne $Plain.Trim()) { return 'it begins or ends with whitespace' }
+    return $null
+}
+
+# Whether the package on disk is the one the plan names, hashed NOW.
+function Test-Package {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    return ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -eq $Sha256)
 }
 
 function Start-Log {
@@ -101,10 +144,31 @@ try {
         Close-Run 3
     }
 
-    foreach ($dir in @($Root, $ProjectDir, $WorkDir)) {
+    # LOCK THE ROOT DOWN before anything is downloaded, extracted or run from it.
+    # A root an unelevated session created inherits 'Authenticated Users: Modify'
+    # from the drive: any signed-in principal -- the pool's own service account
+    # included -- could swap the package or config.cmd under this process. The
+    # root: owner Administrators, inherited entries removed, SYSTEM and
+    # Administrators full control inherited by everything below (explicit grants
+    # other projects' accounts hold on it are kept). The project folders: owner
+    # Administrators, their own explicit entries reset. The package folder: no
+    # inheritance at all. You (the elevated user) may READ _jusshin, where the
+    # transcript and the summary file land.
+    $Me = '*' + [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if (-not (Test-Path -LiteralPath $Root)) { New-Item -ItemType Directory -Path $Root | Out-Null }
+    Invoke-Icacls @($Root, '/setowner', $AdminsSid)
+    Invoke-Icacls @($Root, '/inheritance:r', '/grant:r', ($SystemSid + ':(OI)(CI)F'), ($AdminsSid + ':(OI)(CI)F'))
+    foreach ($dir in @($ProjectDir, $WorkDir, $PkgDir)) {
         if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        Invoke-Icacls @($dir, '/setowner', $AdminsSid)
+        Invoke-Icacls @($dir, '/reset')
     }
-    $script:LogPath = Join-Path $WorkDir ('register-{0}.log' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    Invoke-Icacls @($PkgDir, '/inheritance:r', '/grant:r', ($SystemSid + ':(OI)(CI)F'), ($AdminsSid + ':(OI)(CI)F'))
+    Invoke-Icacls @($WorkDir, '/grant', ($Me + ':(OI)(CI)RX'))
+    Write-Host ('jusshin: {0} locked down (owner Administrators; SYSTEM and Administrators full control; no inherited entries).' -f $Root)
+
+    $script:LogPath = Join-Path $WorkDir ('register-{0}.log' -f $script:Stamp)
+    $script:SummaryPath = Join-Path $WorkDir ('register-{0}.summary' -f $script:Stamp)
     Start-Log
     Write-Host ('jusshin: {0} runner(s) for {1}; transcript {2}' -f $Runners.Count, $Target, $script:LogPath)
 
@@ -152,13 +216,24 @@ try {
     $secure = $null
     if ($pending.Count -gt 0 -and $Account -ne '') {
         $secure = Read-Host -AsSecureString ('Password for {0} (asked once; never shown, never written)' -f $Identity)
+        $refusal = $null
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try {
+            $refusal = Test-Password ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr))
+        } finally {
+            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+        if ($null -ne $refusal) {
+            $secure.Dispose()
+            Write-Host ('jusshin: the password for {0} is refused: {1}. The rule: a service-account password carries none of {2}, and no leading or trailing whitespace. Change the account''s password and re-run.' -f $Identity, $refusal, $PasswordRule)
+            $script:Failed += $pending.Count
+            Close-Run 1
+        }
     }
 
-    $zip = Join-Path $WorkDir $ZipName
+    $zip = Join-Path $PkgDir $ZipName
     if ($pending.Count -gt 0) {
-        $have = $false
-        if (Test-Path -LiteralPath $zip) { $have = ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -eq $Sha256) }
-        if (-not $have) {
+        if (-not (Test-Package $zip)) {
             [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
             Write-Host ('jusshin: downloading {0}' -f $ZipName)
             Invoke-WebRequest -Uri $DownloadUrl -OutFile $zip -UseBasicParsing
@@ -176,7 +251,16 @@ try {
         $name = $runner.Name
         $dir = $runner.Dir
         Write-Host ('jusshin: registering {0} in {1}' -f $name, $dir)
-        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+        # A pending folder holds no configured runner (.runner is absent), so
+        # anything in it predates this run's lockdown: it is emptied, never trusted.
+        if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        # Re-hashed immediately before EVERY extraction, not only after the download.
+        if (-not (Test-Package $zip)) {
+            Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+            Write-Host ('jusshin: {0} no longer matches sha256 {1} -- deleted; nothing extracted into {2}.' -f $ZipName, $Sha256, $dir)
+            Close-Run 6
+        }
         Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
 
         # A fresh registration token, minted NOW (it lives about an hour), into a
@@ -198,42 +282,45 @@ try {
             continue
         }
 
-        $configArgs = @('--unattended', '--url', $RepoUrl, '--token', $token, '--name', $name, '--labels', $Labels, '--work', '_work', '--runasservice')
+        # NO SECRET ON THE COMMAND LINE: config.cmd is a batch file, and cmd.exe
+        # re-parses & | < > ^ % in its arguments. The token and the password reach
+        # the runner as ACTIONS_RUNNER_INPUT_TOKEN and
+        # ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD, which actions/runner reads as
+        # its --token and --windowslogonpassword inputs, masks, and removes from
+        # its own environment. They exist in this process only for the call, and
+        # config.cmd's output is DISCARDED: the log gets its exit code and a fixed
+        # line, never a replay. The transcript is stopped around it all the same.
+        $configArgs = @('--unattended', '--url', $RepoUrl, '--name', $name, '--labels', $Labels, '--work', '_work', '--runasservice')
         if ($Account -ne '') { $configArgs += @('--windowslogonaccount', $Identity) }
-        $plain = $null
         $bstr = [IntPtr]::Zero
-        $lines = @()
         $code = 1
-        # The transcript stops HERE: the argument list below carries the token and
-        # the password. It restarts after, and config.cmd's output is replayed into
-        # it with both replaced by ***.
         Stop-Log
         try {
+            $env:ACTIONS_RUNNER_INPUT_TOKEN = $token
             if ($Account -ne '') {
                 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-                $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-                $configArgs += @('--windowslogonpassword', $plain)
+                $env:ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
             }
             Push-Location -LiteralPath $dir
             $previous = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             try {
-                $lines = @(& .\config.cmd @configArgs 2>&1 | ForEach-Object { Hide-Secret ([string]$_) @($token, $plain) })
+                & .\config.cmd @configArgs *> $null
                 $code = $LASTEXITCODE
             } finally {
                 $ErrorActionPreference = $previous
                 Pop-Location
             }
         } finally {
+            [Environment]::SetEnvironmentVariable('ACTIONS_RUNNER_INPUT_TOKEN', $null, 'Process')
+            [Environment]::SetEnvironmentVariable('ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD', $null, 'Process')
             if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-            $plain = $null
             $token = $null
             $configArgs = $null
             Start-Log
         }
-        foreach ($line in $lines) { Write-Host ('  config: {0}' -f $line) }
         if ($code -ne 0) {
-            Write-Host ('jusshin: config.cmd exited {0} for {1}.' -f $code, $name)
+            Write-Host ('jusshin: config.cmd exited {0} for {1}; its own (masked) log is under {2}\_diag.' -f $code, $name, $dir)
             $script:Failed++
             continue
         }
