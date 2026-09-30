@@ -10,7 +10,15 @@
 // way a subject the rule refuses is refused HERE, at the same exit as every
 // other shape violation, before the commit exists; ./commitlint.ts's header
 // states the precedence between the two. With neither, the verb is
-// unchanged.
+// unchanged. The third (zheref/nen#290) is the same config's
+// `body-max-line-length` and `footer-max-line-length` -- or the body width
+// nen/workflow.json's `commits.bodyMaxLineLength` declares, under
+// `subjectCase`'s precedence: --body is WRAPPED to that width (config-
+// conventional's 100 where no readable rule or declaration states one), and
+// a line the wrap cannot shorten is refused under a level-2 rule, the
+// declared width, or the 100 assumed for a config nen cannot read (the
+// maintainer's ruling), rather than left for the commit-msg hook.
+// ./bodywidth.ts's header states how.
 //
 // nen/workflow.json IS THEREFORE READ ON EVERY INVOCATION, not only when a
 // --trailer is carried: `commits.subjectCase` can refuse any subject, so no
@@ -41,6 +49,7 @@ import { proofRelativePath } from "../shu/proof.js";
 import { readTextFile } from "../cli/inputs.js";
 import { runCheck } from "./check.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
+import { declaredBodyWidth, lineLengthFindings, readLineLengthRules, wrapFormatBody } from "./bodywidth.js";
 import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
 import {
   COMMIT_TYPES,
@@ -80,13 +89,16 @@ usage:
   --body      one paragraph. Repeat --body is not supported by this parser
               (see cli/args.ts's header); pass one paragraph and add more with
               blank lines inside it if your shell allows a multi-line value.
+              A line over the repository's commitlint line length is WRAPPED
+              at spaces -- see BODY LINE LENGTH below.
   --trailer   comma-separated key=value pairs, e.g. 'Closes=#12'. Trailer KEYS
               are the caller's data, never a literal baked in here -- see
               src/commit/format.ts's header for why.
   --repo      the repository whose ${WORKFLOW_FILE} states the trailer policy
-              and commits.subjectCase, and whose commitlint config states
-              'subject-case' -- both read on every invocation. Defaults to the
-              current directory.
+              and commits.subjectCase / commits.bodyMaxLineLength, and whose
+              commitlint config states 'subject-case' and the line lengths --
+              both read on every invocation. Defaults to the current
+              directory.
 
 Validates shape (a declared type, a non-empty subject under 72 characters, no
 trailing punctuation) -- never content. What changed and why stays yours to
@@ -122,6 +134,37 @@ for reference, at exit 0, and commitlint can still refuse AFTER the commit
 exists. With no config, nothing declared, and no .git entry under --repo, a
 warning says so and names --repo.
 
+BODY LINE LENGTH (zheref/nen#290). The same commitlint config is read for
+'body-max-line-length' and 'footer-max-line-length': an explicit rule, or
+config-conventional's [2, "always", 100] when it is extended. Its width is
+read as commitlint reads it ("100" is 100; none is 0) and never refused; only
+a tuple of the wrong shape is exit 1. The BODY width can also be DECLARED in
+${WORKFLOW_FILE}'s 'commits.bodyMaxLineLength' (a whole number >= 1), with
+commits.subjectCase's precedence: a readable data config decides and the key
+beside it is reported as not applied; the key binds where the config is code
+or unreadable, or absent. With neither, an unreadable config means 100,
+ASSUMED AND BINDING (the maintainer's ruling) -- on every line before the
+trailer block, prose commitlint reads as footer included. The trailer block
+has no declared form: under an unreadable config it is judged against 100
+for reference only.
+
+'format' WRAPS every --body line the rule would refuse to that width -- 100
+where no readable rule or declaration states one, and not at all under a rule
+turned off -- breaking only at spaces and tabs: never inside a word or URL,
+keeping the whitespace between words on one line, each line's own terminator,
+blank-line paragraphs, a list item's marker (continuations hang under its
+text) and preformatted lines (four spaces or a tab) as they are. It never
+changes how commitlint reads the message: no line it makes starts with '#',
+'gpg:', a footer token or a note, and a line that opens the footer still
+does. A --trailer is never wrapped. Each rewrapped line is named in a 'note:'.
+A message within its limits is emitted byte for byte. Then the whole message
+is judged as commitlint splits it (body, then footer from the first footer
+token on; a line holding an http(s) URL is exempt): a line over a level-2
+rule, the declared width or the assumed 100 is refused at exit 2, naming it;
+level 1 is a 'warning:'. With no config and nothing declared, no such rule,
+or the rule off, nothing is judged; a line 'format' could not wrap is a
+'warning:'. A malformed commits.bodyMaxLineLength is exit 1, by pointer.
+
 TRAILER POLICY, WHEN THE REPOSITORY STATES ONE. If ${WORKFLOW_FILE} is present
 under --repo, a --trailer whose key is ATTRIBUTION-shaped and is not listed in
 its 'commits.allowedAttributionTrailers' is refused at exit 2, naming the
@@ -153,8 +196,10 @@ ref moves. Read the code and decide, as with 'shu coverage --threshold'.
 'write' COMMITS THE INDEX with a message file, validated whole under the SAME
 rules 'format' applies (the Conventional Commits shape, this repository's
 attribution-trailer policy, and its 'subject-case' rule -- commitlint's own or
-the one commits.subjectCase declares, under the same precedence -- one
-validator, never a second copy of it).
+the one commits.subjectCase declares, under the same precedence -- and its
+body/footer line lengths; one validator, never a second copy of it). 'write'
+does NOT wrap: an over-long line is refused (level 2) or warned about, and
+the file is committed as written or not at all.
 
   --message-file <path>   the message; relative paths resolve against --repo.
   --trailer <Key: value>  appended to the message's trailer block, in order;
@@ -187,7 +232,7 @@ composed message is written there and removed afterwards. --json's contract is
  * subject's case.
  */
 function policyFailure(error: SchemaError, act: "shape a message" | "commit"): string {
-  return `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states the commit policy -- which attribution trailers a commit may carry, and commits.subjectCase -- and nen will not ${act} under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`;
+  return `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states the commit policy -- which attribution trailers a commit may carry, commits.subjectCase and commits.bodyMaxLineLength -- and nen will not ${act} under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`;
 }
 
 /**
@@ -229,7 +274,8 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
  * nothing more about it -- ./commitlint.ts decides which files can raise it.
  */
 function commitlintFailure(error: CommitlintConfigError): string {
-  return `nen: ${error.message}. nen will not call a subject well-formed under a subject-case rule it could not read: fix the file, then run this again.`;
+  const what = error.rule === "subject-case" ? "a subject" : "a message";
+  return `nen: ${error.message}. nen will not call ${what} well-formed under a ${error.rule} rule it could not read: fix the file, then run this again.`;
 }
 
 function runWrite(context: CommandContext): number {
@@ -299,11 +345,11 @@ export const commitCommand: Command = {
       trailers: parseTrailers(context.args.lists["trailer"]),
     };
 
-    // SHAPE FIRST, POLICY SECOND, SUBJECT-CASE THIRD, AND ALL ARE REPORTED
-    // TOGETHER when more than one has something to say: a message with a
-    // 90-character header AND a refused trailer AND a capitalized subject is
-    // one invocation with three problems, and naming one of them is the round
-    // trip this CLI reports whole runs to avoid.
+    // SHAPE FIRST, POLICY SECOND, SUBJECT-CASE THIRD, LINE LENGTH FOURTH,
+    // AND ALL ARE REPORTED TOGETHER when more than one has something to say:
+    // a message with a 90-character header AND a refused trailer AND a
+    // capitalized subject is one invocation with three problems, and naming
+    // one of them is the round trip this CLI reports whole runs to avoid.
     const refusals = [...validateCommitMessage(input)];
     const failures: string[] = [];
     // An --repo that does not exist is a RepoRootError, exit 2: both reads
@@ -324,23 +370,37 @@ export const commitCommand: Command = {
       if (!(error instanceof SchemaError)) throw error;
       failures.push(policyFailure(error, "shape a message"));
     }
+    let message = formatCommitMessage(input);
     try {
       if (loaded === null) {
         // The declaration could not be read, so no verdict is given -- but a
         // broken commitlint config is still named beside the broken policy,
         // two problems in one pass.
         readSubjectCaseRule(root);
+        readLineLengthRules(root, null);
       } else {
         // The header exactly as it will be committed -- the first line of the
         // formatted message -- because commitlint's parser finds the subject
         // in the header, not in the flag.
-        const header = formatCommitMessage(input).split("\n")[0] ?? "";
+        const header = message.split("\n")[0] ?? "";
         const found = subjectCaseFindings(root, header, declaredSubjectCase(loaded));
         refusals.push(...found.refusals);
         // Warnings and notes print whatever else happens: they are facts about
         // the subject and its rule, not about whether this run succeeded.
         for (const warning of found.warnings) context.io.err(`nen: warning: ${warning}`);
         for (const note of found.notes) context.io.err(`nen: note: ${note}`);
+        // THE BODY, WRAPPED TO THE WIDTH commitlint WILL HOLD IT TO, then the
+        // whole message judged as it will be committed (zheref/nen#290): a
+        // line the wrap could not shorten -- one unbroken word, preformatted
+        // text -- or a --trailer over the footer's width is named here, never
+        // left for the commit-msg hook. ./bodywidth.ts's header has the rules.
+        const rules = readLineLengthRules(root, declaredBodyWidth(loaded));
+        const wrapped = wrapFormatBody(input.body, rules);
+        message = formatCommitMessage({ ...input, body: wrapped.body });
+        const width = lineLengthFindings(message, rules);
+        refusals.push(...width.refusals);
+        for (const warning of [...width.warnings, ...wrapped.warnings]) context.io.err(`nen: warning: ${warning}`);
+        for (const note of [...wrapped.notes, ...width.notes]) context.io.err(`nen: note: ${note}`);
       }
     } catch (error) {
       if (!(error instanceof CommitlintConfigError)) throw error;
@@ -359,7 +419,6 @@ export const commitCommand: Command = {
       for (const refusal of refusals) context.io.err(`nen: ${refusal}`);
       return 2;
     }
-    const message = formatCommitMessage(input);
     if (context.json) {
       context.io.out(JSON.stringify({ message }, null, 2));
       return 0;

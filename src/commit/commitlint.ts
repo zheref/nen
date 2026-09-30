@@ -34,12 +34,15 @@
 // reference, at exit 0; a caller gating on the exit code alone is not
 // protected there, which is exactly what the declaration exists to close.
 //
-// SCOPE: `subject-case`, AND NOTHING ELSE commitlint checks. This is not a
-// commitlint reimplementation; nen's own shape rules (./format.ts) are
+// SCOPE: `subject-case` -- and, through ./bodywidth.ts, the two line-length
+// rules zheref/nen#290 added -- AND NOTHING ELSE commitlint checks. This is
+// not a commitlint reimplementation; nen's own shape rules (./format.ts) are
 // unchanged and are not reconciled with the repository's other commitlint
 // rules. ./case.ts holds the rule's semantics, ./rule.ts the tuple both places
 // state it in; this module finds the rule and the subject commitlint would
-// hand it.
+// hand it. Finding the config (locateCommitlintConfig) and following its
+// `extends` (ruleInConfig) are shared with ./bodywidth.ts, so every rule nen
+// reads comes from the same file, resolved the same way.
 //
 // WHERE COMMITLINT LOOKS, AND WHERE NEN DOES. @commitlint/load 21.2.3
 // (src/utils/load-config.ts) asks cosmiconfig 9 for the first of
@@ -211,13 +214,20 @@ export function commitlintSubject(header: string, grammar: HeaderGrammar): strin
   return null;
 }
 
-/** A config nen cannot read the rule from: a .commitlintrc that will not parse, or one commitlint would reject. The verbs turn it into exit 1. */
+/**
+ * A config nen cannot read a rule from: a .commitlintrc that will not parse,
+ * or one commitlint would reject. The verbs turn it into exit 1. `rule` is
+ * the rule nen was reading when it failed -- 'subject-case' unless
+ * ./bodywidth.ts was reading a line-length rule (zheref/nen#290).
+ */
 export class CommitlintConfigError extends Error {
   readonly file: string;
-  constructor(file: string, reason: string) {
-    super(`${file} could not be read for its commitlint 'subject-case' rule: ${reason}`);
+  readonly rule: string;
+  constructor(file: string, reason: string, rule = "subject-case") {
+    super(`${file} could not be read for its commitlint '${rule}' rule: ${reason}`);
     this.name = "CommitlintConfigError";
     this.file = file;
+    this.rule = rule;
   }
 }
 
@@ -315,42 +325,110 @@ function parseExplicitRule(file: string, value: unknown, grammar: HeaderGrammar)
   return { kind: "rule", file, origin: "rules", ...parsed.spec, grammar };
 }
 
-/** The subject-case rule one loaded config states, following the `extends` merge as far as data allows. */
-function resolveRule(file: string, config: unknown): SubjectCaseRule {
-  if (!isRecord(config)) throw new CommitlintConfigError(file, `a commitlint config is an object, and this is ${JSON.stringify(config)}`);
-  if (Object.hasOwn(config, "$import")) {
-    return {
-      kind: "unreadable",
-      file,
-      reason: `${file} pulls part of itself in through cosmiconfig's '$import', which nen does not follow -- declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
-      cause: `${file} uses cosmiconfig's '$import', which nen does not follow`,
-    };
-  }
+/** How one rule resolves in a data config: its own `rules` entry, config-conventional's default, none, or a reason nen cannot say. */
+export type ConfigRule =
+  | { readonly kind: "explicit"; readonly value: unknown }
+  | { readonly kind: "conventional" }
+  | { readonly kind: "none" }
+  | { readonly kind: "import" }
+  | { readonly kind: "unresolved"; readonly preset: string };
+
+/**
+ * How ONE rule resolves in a loaded data config, following commitlint's
+ * `extends` merge as far as data can see (this module's header). Shared by
+ * subject-case here and the line-length rules in ./bodywidth.ts
+ * (zheref/nen#290), so both read a config's structure -- and refuse a
+ * malformed one -- the same way; `presets` is the `extends` list, which
+ * subject-case also needs to know which header grammar applies.
+ *
+ * THROWS CommitlintConfigError, naming `rule`, for a config commitlint
+ * itself would reject: not an object, an `extends` that is not a string or a
+ * list of strings, `rules` that is not an object.
+ */
+export function ruleInConfig(file: string, config: unknown, rule: string): { readonly presets: readonly string[]; readonly resolved: ConfigRule } {
+  if (!isRecord(config)) throw new CommitlintConfigError(file, `a commitlint config is an object, and this is ${JSON.stringify(config)}`, rule);
+  if (Object.hasOwn(config, "$import")) return { presets: [], resolved: { kind: "import" } };
   const extended = config["extends"];
   let presets: readonly string[] = [];
   if (typeof extended === "string") presets = [extended];
   else if (Array.isArray(extended) && extended.every((entry): boolean => typeof entry === "string")) presets = extended as string[];
-  else if (extended !== undefined) throw new CommitlintConfigError(file, `'extends' must be a string or a list of strings, and it is ${JSON.stringify(extended)}`);
-  // commitlint's default parser is used only when nothing names another: no
-  // parserPreset here, and no preset extended that could supply one.
-  const grammar: HeaderGrammar = config["parserPreset"] === undefined && presets.length === 0 ? "default" : "conventionalcommits";
+  else if (extended !== undefined) throw new CommitlintConfigError(file, `'extends' must be a string or a list of strings, and it is ${JSON.stringify(extended)}`, rule);
   const rules = config["rules"];
   if (rules !== undefined) {
-    if (!isRecord(rules)) throw new CommitlintConfigError(file, `'rules' must be an object, and it is ${JSON.stringify(rules)}`);
-    if (Object.hasOwn(rules, "subject-case")) return parseExplicitRule(file, rules["subject-case"], grammar);
+    if (!isRecord(rules)) throw new CommitlintConfigError(file, `'rules' must be an object, and it is ${JSON.stringify(rules)}`, rule);
+    if (Object.hasOwn(rules, rule)) return { presets, resolved: { kind: "explicit", value: rules[rule] } };
   }
   const lastConventional = presets.lastIndexOf(CONFIG_CONVENTIONAL);
   const unresolved = presets.slice(lastConventional + 1)[0];
-  if (unresolved !== undefined) {
-    return {
-      kind: "unreadable",
-      file,
-      reason: `${file} extends '${unresolved}', a shareable config nen cannot resolve (it is a JavaScript package, and nen does not execute one), and it may set the rule. Stating 'subject-case' under the file's own 'rules' makes it decisive, and nen then checks it -- or declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
-      cause: `${file} extends '${unresolved}', which nen cannot resolve`,
-    };
+  if (unresolved !== undefined) return { presets, resolved: { kind: "unresolved", preset: unresolved } };
+  return { presets, resolved: lastConventional === -1 ? { kind: "none" } : { kind: "conventional" } };
+}
+
+/** The subject-case rule one loaded config states, following the `extends` merge as far as data allows. */
+function resolveRule(file: string, config: unknown): SubjectCaseRule {
+  const { presets, resolved } = ruleInConfig(file, config, "subject-case");
+  switch (resolved.kind) {
+    case "import":
+      return {
+        kind: "unreadable",
+        file,
+        reason: `${file} pulls part of itself in through cosmiconfig's '$import', which nen does not follow -- declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
+        cause: `${file} uses cosmiconfig's '$import', which nen does not follow`,
+      };
+    case "explicit": {
+      // commitlint's default parser is used only when nothing names another:
+      // no parserPreset here, and no preset extended that could supply one.
+      const grammar: HeaderGrammar = (config as Record<string, unknown>)["parserPreset"] === undefined && presets.length === 0 ? "default" : "conventionalcommits";
+      return parseExplicitRule(file, resolved.value, grammar);
+    }
+    case "unresolved":
+      return {
+        kind: "unreadable",
+        file,
+        reason: `${file} extends '${resolved.preset}', a shareable config nen cannot resolve (it is a JavaScript package, and nen does not execute one), and it may set the rule. Stating 'subject-case' under the file's own 'rules' makes it decisive, and nen then checks it -- or declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
+        cause: `${file} extends '${resolved.preset}', which nen cannot resolve`,
+      };
+    case "none":
+      return { kind: "none", file };
+    case "conventional":
+      return { kind: "rule", file, origin: "extends", ...CONVENTIONAL_SUBJECT_CASE, grammar: "conventionalcommits" };
   }
-  if (lastConventional === -1) return { kind: "none", file };
-  return { kind: "rule", file, origin: "extends", ...CONVENTIONAL_SUBJECT_CASE, grammar: "conventionalcommits" };
+}
+
+/** What stands at the first search place that holds a config: nothing, code, an unparseable package key, or data, loaded. */
+export type LocatedConfig =
+  | { readonly kind: "absent" }
+  | { readonly kind: "code"; readonly file: string }
+  | { readonly kind: "unparsed-package"; readonly file: string; readonly reason: string }
+  | { readonly kind: "data"; readonly file: string; readonly config: unknown };
+
+/**
+ * The config at the first of COMMITLINT_SEARCH_PLACES that holds one -- the
+ * one commitlint would load from `root` -- under the rules this module's
+ * header states. Shared by every rule nen reads (zheref/nen#290), so each
+ * reads the same file.
+ *
+ * THROWS CommitlintConfigError, naming `rule`, when that place is a
+ * .commitlintrc nen cannot parse.
+ */
+export function locateCommitlintConfig(root: string, rule: string): LocatedConfig {
+  for (const place of COMMITLINT_SEARCH_PLACES) {
+    const file = join(root, place);
+    const text = readIfPresent(file);
+    if (text === null || text.trim() === "") continue;
+    if (CODE_CONFIG.test(place)) return { kind: "code", file };
+    const isPackage = PACKAGE_PLACES.has(place);
+    if (isPackage && !COMMITLINT_KEY.test(text)) continue;
+    const loaded = loadData(place, text);
+    if (!loaded.ok) {
+      if (!isPackage) throw new CommitlintConfigError(file, loaded.reason, rule);
+      return { kind: "unparsed-package", file, reason: loaded.reason };
+    }
+    const config = isPackage ? (isRecord(loaded.value) ? loaded.value["commitlint"] : undefined) : loaded.value;
+    if (config === undefined || config === null) continue;
+    return { kind: "data", file, config };
+  }
+  return { kind: "absent" };
 }
 
 /**
@@ -361,35 +439,27 @@ function resolveRule(file: string, config: unknown): SubjectCaseRule {
  * or a config commitlint itself would reject.
  */
 export function readSubjectCaseRule(root: string): SubjectCaseRule {
-  for (const place of COMMITLINT_SEARCH_PLACES) {
-    const file = join(root, place);
-    const text = readIfPresent(file);
-    if (text === null || text.trim() === "") continue;
-    if (CODE_CONFIG.test(place)) {
+  const located = locateCommitlintConfig(root, "subject-case");
+  switch (located.kind) {
+    case "absent":
+      return { kind: "absent" };
+    case "code":
       return {
         kind: "unreadable",
-        file,
-        reason: `${file} is a JavaScript/TypeScript commitlint config, and nen does not execute a repository's code to read one. Declare the rule as data in nen/workflow.json's commits.subjectCase ('config-conventional' or a commitlint rule tuple) and nen checks it`,
-        cause: `${file} is a JavaScript/TypeScript commitlint config nen does not execute`,
+        file: located.file,
+        reason: `${located.file} is a JavaScript/TypeScript commitlint config, and nen does not execute a repository's code to read one. Declare the rule as data in nen/workflow.json's commits.subjectCase ('config-conventional' or a commitlint rule tuple) and nen checks it`,
+        cause: `${located.file} is a JavaScript/TypeScript commitlint config nen does not execute`,
       };
-    }
-    const isPackage = PACKAGE_PLACES.has(place);
-    if (isPackage && !COMMITLINT_KEY.test(text)) continue;
-    const loaded = loadData(place, text);
-    if (!loaded.ok) {
-      if (!isPackage) throw new CommitlintConfigError(file, loaded.reason);
+    case "unparsed-package":
       return {
         kind: "unreadable",
-        file,
-        reason: `${file} carries a 'commitlint' key, but nen could not parse the file (${loaded.reason}), so it could not read the rule there -- fix the file, or declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
-        cause: `${file} carries a 'commitlint' key but will not parse`,
+        file: located.file,
+        reason: `${located.file} carries a 'commitlint' key, but nen could not parse the file (${located.reason}), so it could not read the rule there -- fix the file, or declare the rule in nen/workflow.json's commits.subjectCase and nen checks it`,
+        cause: `${located.file} carries a 'commitlint' key but will not parse`,
       };
-    }
-    const config = isPackage ? (isRecord(loaded.value) ? loaded.value["commitlint"] : undefined) : loaded.value;
-    if (config === undefined || config === null) continue;
-    return resolveRule(file, config);
+    case "data":
+      return resolveRule(located.file, located.config);
   }
-  return { kind: "absent" };
 }
 
 /** A `commits.subjectCase` a repository declared, with the file it came from. */

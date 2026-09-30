@@ -31,6 +31,18 @@
 // is asked here rather than in ../wc/messagefile.ts because that reader is
 // `wc squash`'s too, and this change is scoped to the two `commit` verbs.
 //
+// AND THE REPOSITORY'S LINE-LENGTH RULES (zheref/nen#290) --
+// commitlint's `body-max-line-length` and `footer-max-line-length`, read by
+// ./bodywidth.ts from the same config -- through `lineLengthFindings`, the
+// check `commit format` runs on the message it emits, with the body width
+// nen/workflow.json's `commits.bodyMaxLineLength` declares under the same
+// precedence. A level-2 rule, the declared width, and the 100 assumed for a
+// body whose config nen cannot read join the shape reasons (exit 2, naming
+// the line); level 1, and an unreadable footer (for reference only), are
+// warnings. `format` WRAPS --body to the width first; this verb
+// does not rewrite the caller's file -- it validates it, as it validates
+// every other part of it.
+//
 // A BROKEN CONFIG IS REPORTED FIRST, AND WHOLE, EXACTLY AS `commit format`
 // REPORTS IT. A nen/workflow.json that will not load and a .commitlintrc
 // nen cannot read are both named -- one does not hide the other -- and
@@ -59,6 +71,7 @@ import { parseCommitMessageFile } from "../wc/messagefile.js";
 import { validateCommitMessage, type Trailer } from "./format.js";
 import { proofVerdict } from "./check.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
+import { declaredBodyWidth, lineLengthFindings, readLineLengthRules } from "./bodywidth.js";
 import { SchemaError } from "../schema/errors.js";
 import { attributionRefusalMessages, loadWorkflow, type LoadedWorkflow } from "../schema/workflow.js";
 
@@ -167,12 +180,21 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
       // header has no subject -- but a broken .commitlintrc is still named
       // beside everything else, as `commit format` names it.
       readSubjectCaseRule(root);
+      readLineLengthRules(root, null);
     } else {
       reasons.push(...attributionRefusalMessages(loaded, parsed.value.input.trailers.map((trailer): string => trailer.key)));
       const found = subjectCaseFindings(root, message.split("\n")[0] ?? "", declaredSubjectCase(loaded));
       for (const warning of found.warnings) options.warn(warning);
       for (const note of found.notes) options.note(note);
       reasons.push(...found.refusals);
+      // The body's and footer's line lengths (zheref/nen#290), judged by the
+      // one check `commit format` runs -- on the composed message as it will
+      // be committed. This verb does NOT wrap: the file is the caller's
+      // message, committed as written or refused, never rewritten.
+      const width = lineLengthFindings(message, readLineLengthRules(root, declaredBodyWidth(loaded)));
+      for (const warning of width.warnings) options.warn(warning);
+      for (const note of width.notes) options.note(note);
+      reasons.push(...width.refusals);
     }
   } catch (error) {
     if (!(error instanceof CommitlintConfigError)) throw error;
