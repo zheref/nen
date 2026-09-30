@@ -580,8 +580,8 @@ retryable exit `4` ([#228](https://github.com/zheref/nen/issues/228)). Fetch
 the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.18.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.18.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.18.1/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.18.1
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -589,7 +589,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.18.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.18.1)"
 "$nen" --version
 ```
 
@@ -9280,10 +9280,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.18.0 --source zheref/nen
+nen bootstrap --ref v0.18.1 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/zheref_nen/v0.18.0/nen-linux-x64
+/home/me/.cache/nen/zheref_nen/v0.18.1/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -11405,8 +11405,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.18.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.18.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.18.1/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.18.1)"
 "$nen" --version
 ```
 
@@ -11417,7 +11417,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.18.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.18.1 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash
