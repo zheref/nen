@@ -1189,6 +1189,23 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
+  // THE RUNNER FAMILY'S HOST ACT IS NEVER A ROW HERE, because nen never
+  // performs it: `script` writes a file and prints a launch line, and running
+  // that line (elevated) is the maintainer's. `verify` polls reads only.
+  // `preflight` dispatches a workflow run and `enable` sets a repository
+  // variable, each unless `--dry-run` -- whose forms still READ GitHub (the
+  // default branch; the run `enable` certifies) and write nothing.
+  runner: {
+    subcommands: {
+      inventory: RO("lists a repository's self-hosted runners and runner downloads -- gh api GET reads only"),
+      plan: GATED(["--out"], "computes a registration plan from gh reads; --out writes it to a file"),
+      script: DRY("writes the rendered host script to --out unless --dry-run is given; never runs it"),
+      verify: RO("polls the runners list -- gh api GET reads only"),
+      workflow: DRY("writes the rendered preflight workflow into the checkout unless --dry-run is given"),
+      preflight: DRY("dispatches a workflow run (gh workflow run) unless --dry-run is given"),
+      enable: DRY("sets a repository variable (gh variable set) unless --dry-run is given"),
+    },
+  },
   // BOTH ROWS MOVED FROM `MUT` TO `DRY` WHEN THE FLAG ARRIVED, and the move is
   // an argument rather than a convenience. `label apply` stays `MUT` despite
   // having `--run` because its ledger line is written on EVERY call, dry run

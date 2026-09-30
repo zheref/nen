@@ -1,0 +1,8 @@
+{
+  "total_count": 3,
+  "runners": [
+    {"id": 21, "name": "RJ2-NNR1", "os": "macOS", "status": "online", "busy": false, "version": "2.337.0", "labels": [{"id": 0, "name": "self-hosted", "type": "read-only"}, {"id": 0, "name": "macOS", "type": "read-only"}, {"id": 0, "name": "ARM64", "type": "read-only"}]},
+    {"id": 22, "name": "RJ2-NNR2", "os": "macOS", "status": "online", "busy": false, "version": "2.337.0", "labels": [{"id": 0, "name": "self-hosted", "type": "read-only"}, {"id": 0, "name": "macOS", "type": "read-only"}, {"id": 0, "name": "ARM64", "type": "read-only"}]},
+    {"id": 23, "name": "RJ2-NNR3", "os": "macOS", "status": "online", "busy": false, "version": "2.337.0", "labels": [{"id": 0, "name": "self-hosted", "type": "read-only"}, {"id": 0, "name": "macOS", "type": "read-only"}, {"id": 0, "name": "ARM64", "type": "read-only"}]}
+  ]
+}
