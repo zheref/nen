@@ -9,6 +9,7 @@ import { EXECUTING_VERBS, SHU_SUBCOMMANDS } from "../shu/command.js";
 import {
   classifyCommand,
   classifyInvocation,
+  classifyWatchCommand,
   isScanFaithfulLine,
   isScanFaithfulToken,
   NEN_PRE_REGISTRY_TABLE,
@@ -161,6 +162,23 @@ describe("classifyCommand -- plain file reads (#31)", () => {
     // An unrecognized predicate shape falls through to unknown, never guessed.
     expect(classifyCommand("test somefile.txt = other.txt").classification).toBe("unknown");
     expect(classifyCommand("[ -f somefile.txt").classification).toBe("unknown");
+  });
+
+  // #288 review round two: the watch path's rows read a RENDERING of the
+  // spawned argv, and rendering `[`, `]` and `!` single-quoted (they sit
+  // outside the scan-safe set) broke these two rows' literal match -- every
+  // `[ ... ]` and `test ! ...` read went `unknown` on `nen watch until` while
+  // this table still read it. Pinned on every host the watch distinguishes.
+  it("reads the same test/[ forms on the watch path, on every host", () => {
+    for (const line of ["[ -f somefile.txt ]", "[ ! -f somefile.txt ]", "test ! -f somefile.txt", "[ -e 'a b' ]"]) {
+      for (const platform of ["linux", "darwin", "win32"] as const) {
+        const verdict = classifyWatchCommand(line, platform);
+        expect(verdict.classification.classification, `${platform}: ${line}`).toBe("read-only");
+        expect(verdict.classification, `${platform}: ${line}`).toEqual(classifyCommand(line));
+      }
+    }
+    expect(classifyWatchCommand("[ ! -f somefile.txt ]", "linux").argv).toEqual(["[", "!", "-f", "somefile.txt", "]"]);
+    expect(classifyWatchCommand("[ -f somefile.txt", "linux").classification.classification).toBe("unknown");
   });
 
   // `cat > file` is how a shell WRITES a file: the utility is a pure read,

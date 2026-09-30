@@ -178,8 +178,13 @@
 //
 //   1. ../cli/args.ts -- ALWAYS, and on one path it is the ONLY reader. A
 //      `nen watch until --command "..."` value never meets a shell at all:
-//      ../watch/command.ts classifies the string, splits it on whitespace and
-//      SPAWNS the binary directly. Round four's blocker lived exactly there.
+//      ../watch/command.ts classifies the string, tokenises it with
+//      ./command-line.ts and SPAWNS that argv directly (zheref/nen#288 -- a
+//      whitespace split through v0.17.0). Round four's blocker lived exactly
+//      there. Because that path has no shell, it is also the one path whose
+//      metacharacter seam may reason over the tokeniser's argv rather than the
+//      joined line -- on a POSIX host; see classifyWatchCommand for why not
+//      yet on Windows.
 //      args.ts strips ONE OR TWO leading dashes (`token.replace(/^--?/, "")`),
 //      so `-run` IS `--run` to nen's own parser, while this module's flag scan
 //      matched only `--run`/`--run=`. Every write flag in the table below was
@@ -282,6 +287,8 @@
 // position (see isScanFaithfulToken). Everything else, INCLUDING characters
 // nobody has enumerated yet, lands on the refusing side by default -- which
 // is the entire point of writing the guard this way round.
+
+import { renderCommandLine, tokenizeCommandLine, type TokenizeRefusal, type TokenizeResult } from "./command-line.js";
 
 export interface IzanamiInvocation {
   readonly commands: readonly string[];
@@ -543,12 +550,21 @@ const GH_API_GRAPHQL = /\bgraphql\b/i;
  */
 type GhApiFlagKind = "boolean" | "value" | "method" | "post-forcing";
 
-// Exactly the flags `gh api --help` lists on gh 2.92.0, plus the one inherited
-// flag it names (`--help`). A flag gh adds tomorrow is NOT here, so a line
+// Exactly the flags `gh api --help` lists on gh 2.100.0, plus the one inherited
+// flag it names (`--help`). A flag a newer gh adds is NOT here, so a line
 // carrying it refuses rather than being assumed inert -- which is the
 // fail-closed direction and the reason this is a table rather than a
 // blocklist of the three dangerous ones.
+//
+// The table was read from gh 2.92.0 until #288's review; 2.100.0 adds exactly
+// one flag, `--allow-escape-sequences`, entered as a no-value "boolean" after
+// verifying against the real gh 2.100.0 (GH_DEBUG=api, unresolvable host) that
+// it is one: it never takes the next argument (`--allow-escape-sequences
+// -XDELETE` still sent DELETE; `... extra` failed "accepts 1 arg(s), received
+// 2"), and it never changes the request (GET stayed GET, `-f` still POSTed).
+// It only lets the response printer emit terminal escape sequences.
 const GH_API_LONG_FLAGS: Readonly<Record<string, GhApiFlagKind>> = {
+  "allow-escape-sequences": "boolean",
   cache: "value",
   field: "post-forcing",
   header: "value",
@@ -612,10 +628,16 @@ const PLAIN_READ_PATTERNS: readonly RegExp[] = [
 // substitution -- and the line separators themselves, because an embedded
 // newline or CR IS a second command in every shell (`cat a.txt\ngit push`).
 // Unreachable as an execution vector through this binary (`parse izanami`
-// splits on newlines before classifying, and `watch until` tokenizes on
-// whitespace and spawns without a shell), but this classification is also
-// consumed by the skill side, which may hand the string to a real shell --
+// splits on newlines before classifying, and `watch until` tokenizes with
+// ./command-line.ts and spawns without a shell), but this classification is
+// also consumed by the skill side, which may hand the string to a real shell --
 // belt and braces, per the #31 review.
+//
+// THIS EXPRESSION IS THE RAW-LINE SEAM (classifyCommand). `nen watch until`
+// asks the same question through the tokeniser instead and, on a POSIX host,
+// refuses these characters only where a shell would act on them
+// (zheref/nen#288) -- see classifyWatchCommand for why that path, and no
+// other, may, and why Windows keeps this expression there too.
 //
 // APPLIED TO EVERY ROW SINCE zheref/nen#70, at classifyCommand's seam. It was
 // #31's own rows only until then, which is what left `git log > out.txt`
@@ -2008,7 +2030,9 @@ const JQ_FLAGS: ReadonlySet<string> = new Set(["--jq", "-q"]);
  *
  * Applied to the `gh api` row's own copy of the line, never to the general
  * classifier's: a quoted span elsewhere is a different question with a
- * different answer.
+ * different answer. And only on the reader-agnostic path (`parse izanami`):
+ * `nen watch until` walks the argv it spawns (classifyGhApiArgv), where a
+ * `--jq` value is simply the next element and there is nothing to fold.
  */
 export function foldQuotedJqValue(line: string): string {
   const parts = line.split(/([ \t]+)/);
@@ -2021,7 +2045,19 @@ export function foldQuotedJqValue(line: string): string {
     // to a shell, an unknown long flag rather than a flag and its value, and
     // still refuses -- while `-q'.name'` is `-q.name`, which pflag reads as
     // `-q` carrying `.name`, exactly as the unquoted form already does here.
-    const inline = /^(--jq=|-q=|-q)('[^'\n\r]*')$/.exec(token);
+    //
+    // THE VALUE MUST BE NON-EMPTY (zheref/nen#288 review, SEC-7). An EMPTY
+    // attached value is not the same shape at all: a shell turns `-q''` into
+    // a BARE `-q`, and a bare value shorthand takes the NEXT argument as its
+    // value, dashed or not. Folded, it read as `-q` carrying the placeholder,
+    // so the walk let the next token through as a flag of its own -- and
+    // `gh api repos/o/r/issues/1 -q'' -H -XDELETE` classified [read-only]
+    // while gh 2.100.0 sent `DELETE /repos/o/r/issues/1` (GH_DEBUG=api,
+    // against an unresolvable host): `-q` ate `-H`, and `-XDELETE` was the
+    // method. Left unfolded, the quote keeps the line unfaithful and it
+    // refuses. The `=` spellings are required non-empty too: an empty filter
+    // is never worth a fold, and one rule is easier to audit than two.
+    const inline = /^(--jq=|-q=|-q)('[^'\n\r]+')$/.exec(token);
     if (inline !== null) {
       parts[index] = `${inline[1] ?? ""}${JQ_PLACEHOLDER}`;
       continue;
@@ -2072,15 +2108,60 @@ function findQuoteClose(parts: readonly string[], from: number): number | undefi
   return undefined;
 }
 
+/**
+ * `gh api`'s verdict over a LINE -- the reader-agnostic path, `nen parse
+ * izanami`'s. The line's whitespace split is walked, and its read-only answer
+ * is gated on that split being faithful to every reader (see the gate at the
+ * end of walkGhApiArguments).
+ */
 function classifyGhApi(scanLine: string, faithful: boolean): ClassifyResult {
+  // `gh` and `api` are the two tokens GH_API already matched. A trimmed line's
+  // split carries no empty token; the filter keeps it that way if that ever
+  // changes, because to pflag an empty ARGUMENT is a positional (see below).
+  const tokens = scanLine.split(SCAN_SPLIT).slice(2).filter((token): boolean => token !== "");
+  return walkGhApiArguments(tokens, faithful, scanLine);
+}
+
+/**
+ * `gh api`'s verdict over the ARGUMENT VECTOR the watch will spawn
+ * (zheref/nen#288 review, SEC-7) -- exported so its own test can drive it
+ * against the argv classifyWatchCommand returns.
+ *
+ * WHY NOT THE LINE. The watch spawns an argv, and gh's pflag reads exactly that
+ * argv; a verdict computed from anything else is a verdict about a different
+ * request. Round one of #288 moved only the metacharacter seam onto the argv
+ * and left this row reading the joined line through foldQuotedJqValue -- so
+ * `-q''` folded to `-q` carrying a placeholder while the spawn handed gh a
+ * BARE `-q`, which took `-H` as its value and left `-XDELETE` to be the
+ * method. Walking the argv itself retires that whole class: there is no fold
+ * to get wrong, a `--jq` value is simply the element after `--jq`, and the
+ * walk's tokens ARE gh's arguments -- so the faithfulness gate is satisfied by
+ * construction rather than by a character scan.
+ *
+ * argv[1] must be exactly `api`: the line GH_API matched could carry
+ * `gh api'x' ...`, which is `gh apix` to the spawn -- not this row's command.
+ */
+export function classifyGhApiArgv(argv: readonly string[]): ClassifyResult {
+  if (argv[1] !== "api") {
+    return {
+      classification: "unknown",
+      reason: `the argument after 'gh' is '${argv[1] ?? ""}', not 'api' -- the line reads as gh api, but the argument vector it spawns does not, so this row does not apply`,
+    };
+  }
+  return walkGhApiArguments(argv.slice(2), true, argv.join(" "));
+}
+
+/**
+ * The pflag-faithful walk both entries share: `args` are everything after `gh
+ * api`, `faithful` says whether they are provably the arguments gh will
+ * receive, and `haystack` is what the whole-command graphql check reads.
+ */
+function walkGhApiArguments(tokens: readonly string[], faithful: boolean, haystack: string): ClassifyResult {
   const unresolved = (reason: string): ClassifyResult => ({ classification: "unknown", reason });
-  // `gh` and `api` are the two tokens GH_API already matched.
-  const tokens = scanLine.split(SCAN_SPLIT).slice(2);
   let positionals = 0;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] ?? "";
-    if (token === "") continue;
 
     if (token === "--" || token === "-") {
       return unresolved(
@@ -2095,7 +2176,7 @@ function classifyGhApi(scanLine: string, faithful: boolean): ClassifyResult {
       const kind = GH_API_LONG_FLAGS[name];
       if (kind === undefined) {
         return unresolved(
-          `'--${name}' is not a flag this gh api row classifies (the table carries exactly what 'gh api --help' lists on gh 2.92.0) -- an unclassified flag is never assumed inert`,
+          `'--${name}' is not a flag this gh api row classifies (the table carries exactly what 'gh api --help' lists on gh 2.100.0; a flag a newer gh adds refuses until it is classified) -- an unclassified flag is never assumed inert`,
         );
       }
       if (kind === "post-forcing") {
@@ -2138,12 +2219,26 @@ function classifyGhApi(scanLine: string, faithful: boolean): ClassifyResult {
           return { classification: "mutating", reason: GH_API_POST_FORCING_REASON };
         }
         if (kind === "method" || kind === "value") {
-          // pflag takes the REST of the cluster as the value, dropping one
-          // optional `=`; an empty rest takes the next token instead.
+          // pflag's OWN ORDER (parseSingleShortArg), and it is not "drop an
+          // optional `=`": `-X=v` -- an `=` with something after it -- takes
+          // v; any other attached rest, a BARE `=` included, IS the value; and
+          // only an EMPTY rest takes the next argument, whatever it looks like.
+          //
+          // The bare `=` is a live fail-open this replaced (zheref/nen#288
+          // review, found while settling SEC-7, and older than #288: v0.15.1
+          // answers the same). Stripping it left an empty rest, so the walk
+          // took the NEXT token as this flag's value -- while pflag gives `-q=`
+          // the value "=" and parses the next token as a flag of its own.
+          // `gh api repos/o/r/issues/1 -q= -XDELETE` classified [read-only],
+          // on a scan-faithful line, and gh 2.100.0 sent DELETE (GH_DEBUG=api,
+          // unresolvable host); `-p= -ftitle=x` is the POST twin.
           const rest = token.slice(cursor + 1);
-          const attached = rest.startsWith("=") ? rest.slice(1) : rest;
-          let value: string | undefined = attached;
-          if (attached === "") {
+          let value: string | undefined;
+          if (rest.length > 1 && rest.startsWith("=")) {
+            value = rest.slice(1);
+          } else if (rest !== "") {
+            value = rest;
+          } else {
             index += 1;
             value = tokens[index];
           }
@@ -2169,10 +2264,10 @@ function classifyGhApi(scanLine: string, faithful: boolean): ClassifyResult {
     }
   }
 
-  // Kept as a whole-line check rather than an endpoint check: it only ever
+  // Kept as a whole-command check rather than an endpoint check: it only ever
   // over-refuses (a `--jq .graphql` read refuses with it), and a query and a
   // mutation are indistinguishable from the CLI form either way.
-  if (GH_API_GRAPHQL.test(scanLine)) {
+  if (GH_API_GRAPHQL.test(haystack)) {
     return { classification: "mutating", reason: "gh api graphql -- a query and a mutation are indistinguishable from the CLI form" };
   }
 
@@ -2188,7 +2283,272 @@ function classifyGhApi(scanLine: string, faithful: boolean): ClassifyResult {
   return { classification: "read-only", reason: "gh api with no write method, no field flags, and not graphql -- GET by default" };
 }
 
+/**
+ * The metacharacter seam's question, asked of one line: undefined when the
+ * line may go on to the read-only rows, a refusal when it may not.
+ */
+type MetacharSeam = (command: string) => ClassifyResult | undefined;
+
+/**
+ * One classification path: the TWO answers that depend on who will read the
+ * command. Every row, every named refusal and every scan-faithfulness gate is
+ * the same code on both paths; these two are not.
+ *
+ *   * `seam` -- the metacharacter seam's answer for the caller's RAW command
+ *     (the raw-line scan, or the tokeniser's -- see classifyWatchCommand).
+ *   * `ghApi` -- the gh api row's verdict, asked only when GH_API routes the
+ *     line there: a walk of the folded line, or of the spawned argv itself
+ *     (zheref/nen#288 review, SEC-7 -- see classifyGhApiArgv).
+ */
+interface ClassifyPath {
+  readonly seam: () => ClassifyResult | undefined;
+  readonly ghApi: (scanLine: string) => ClassifyResult;
+}
+
+/**
+ * The seam every caller that cannot name its reader gets: a metacharacter
+ * ANYWHERE on the line refuses, quoted or not, because the line may yet be
+ * handed to a shell this module has only partly swept (see the header's
+ * reader list -- in cmd.exe a single quote quotes nothing, so `'a|b'` is a
+ * pipe there).
+ */
+const rawLineSeam: MetacharSeam = (command) =>
+  SHELL_METACHARS.test(command) ? { classification: "unknown", reason: shellMetacharRefusal(command) } : undefined;
+
+/**
+ * gh api over a LINE: the #78 fold, then the walk, gated on the folded line's
+ * faithfulness -- the reader-agnostic answer.
+ */
+function ghApiOverLine(scanLine: string): ClassifyResult {
+  const folded = foldQuotedJqValue(scanLine);
+  return classifyGhApi(folded, isScanFaithfulLine(folded));
+}
+
 export function classifyCommand(command: string): ClassifyResult {
+  return classifyWithSeam(command, { seam: () => rawLineSeam(command), ghApi: ghApiOverLine });
+}
+
+// ---------------------------------------------------------------------------
+// `nen watch until`'s own path (zheref/nen#288).
+//
+// THE WATCH HAS ONE READER, AND IT IS nen. Every other caller of this module
+// hands the classified line on to a skill-side shell -- bash, PowerShell or
+// cmd.exe, the header's reader list -- and so has to refuse a metacharacter
+// wherever it sits: a quote that protects a `|` from bash protects nothing from
+// cmd.exe. `nen watch until` hands the line to nobody. It tokenises the string
+// with ./command-line.ts and spawns that argv with no shell at all -- so the
+// only question a `|` inside `--jq "[.a[]|.b]"` raises is the one the
+// tokeniser already answers: is it inside a quote, or escaped? If it is, it
+// is one character of one argument to gh, and refusing it (as the raw-line
+// seam did through v0.17.0) refused jq's own pipe operator on a plain read.
+//
+// ONE TOKENISER, AND EVERY VERDICT IS ABOUT ITS ARGV. The seam, the rows and
+// the spawn in ../watch/command.ts do not merely call the same function: this
+// module tokenises once, decides about that argv, and returns it; the watch
+// spawns exactly that array. v0.17.0 lacked this twice over (its seam scanned
+// the joined line, and its spawn split on `\s+` and kept every quote, so a
+// `--jq '.number'` the #78 fold certified reached jq as `'.number'`) -- and
+// #288's round one still lacked it for the ROWS, which read the caller's own
+// line. The review proved what that costs (SEC-7): the gh api row folded
+// `-q''` into `-q` carrying a placeholder, the spawn handed gh a BARE `-q`,
+// and `gh api repos/o/r/issues/1 -q'' -H -XDELETE` -- [read-only] here --
+// sent a DELETE. So, on this path:
+//
+//   * the SEAM reads the caller's line through the tokeniser (it is the one
+//     question about the line itself: would a shell act on it?);
+//   * the GH API ROW walks the argv directly (classifyGhApiArgv) -- no fold,
+//     no split, gh's own arguments;
+//   * EVERY OTHER ROW reads ./command-line.ts's renderCommandLine of the argv:
+//     scan-safe elements bare, everything else single-quoted. It tokenises
+//     back to exactly the argv (checked below, before any row reads it), so a
+//     row's head words ARE the spawned head words, and a row that scans
+//     arguments sees a quote wherever an element is not scan-safe and refuses
+//     exactly as it always has.
+//
+// WHAT THE WATCH SEAM STILL REFUSES, WORD FOR WORD AS BEFORE: a metacharacter a
+// shell would act on -- unquoted `| & ; < > ( )` or backtick, and a backtick or
+// `$(` inside double quotes, where a shell still substitutes -- and a newline
+// or CR anywhere. Each gets shellMetacharRefusal, the same sentence the raw
+// seam prints, because it is the same fact: at a terminal this line runs a
+// second command, and a watch vouches for one.
+//
+// ON WINDOWS THE RAW SEAM STAYS, BECAUSE THE PREMISE IS UNPROVEN THERE. "No
+// shell reads the argv" holds outright on a POSIX host: ../seam/exec.ts's
+// spawnSync passes no `shell` option, and execve hands every element over as
+// it is -- nothing re-parses it. It is NOT established on Windows. There a
+// `.cmd`/`.bat` target runs THROUGH cmd.exe, which re-parses the whole command
+// line by its own rules, and an element such as `a|b` carries no space, so an
+// argv quoter following the C runtime's rules leaves it bare: a pipe (the
+// "BatBadBut" class). Every row below that can answer read-only pins argv[0]
+// to a bare name (`gh`, `git`, `nen`, `cat`, `head`, `tail`, `wc`, `stat`,
+// `test`, `[`, `type`), so the open question is whether the runtime's path
+// search can resolve such a name to a batch shim -- a `gh.cmd` an old npm
+// package left ahead of gh.exe on PATH, say. Node's libuv search tries only the
+// literal name, `.com` and `.exe`; this binary runs on Bun, whose Windows
+// resolution this change has NOT examined. Resolve or refuse, never guess: on
+// `win32` the watch seam applies the raw-line scan as well, so a Windows watch
+// refuses a quoted metacharacter exactly as v0.17.0 did. It still spawns the
+// tokeniser's argv -- quotes stripped, which adds no cmd.exe construct, since
+// every character cmd.exe could start a second command with stays refused
+// there. Lifting it is one Windows-host verification away, and it is the
+// maintainer's call rather than this module's.
+//
+// `%` IS REFUSED ANYWHERE, QUOTED OR NOT, ON EVERY PLATFORM -- UNCHANGED. Its
+// reason is cmd.exe's `%VAR%`, which expands before cmd reads a quote at all.
+// A POSIX host has no cmd.exe, which is an argument for relaxing `%` there --
+// but #288 names the pipe, not the percent, and a relaxation of a command-
+// safety seam should be no wider than the defect it fixes.
+//
+// THREE REFUSALS THE RAW SEAM NEVER NEEDED, because it never built an argv:
+// an unterminated quote, a trailing backslash, and whitespace other than ASCII
+// space and tab. Each makes the argument vector a guess -- see watchSeam.
+// ---------------------------------------------------------------------------
+
+/**
+ * What `nen watch until` spawns, decided once: the classification, and -- only
+ * when that classification is read-only -- the exact argv it was decided
+ * about. `argv` is undefined on every other verdict, so a caller cannot spawn
+ * a line the classifier did not vouch for.
+ */
+export type WatchCommandVerdict =
+  | { readonly classification: ClassifyResult & { readonly classification: "read-only" }; readonly argv: readonly string[] }
+  | { readonly classification: ClassifyResult; readonly argv: undefined };
+
+// The characters the watch seam refuses wherever they sit, quoted or not: the
+// line separators (see ./command-line.ts's header) and `%` (see above). Tested
+// against the RAW line, before tokenising, for the reason the raw seam is:
+// a guard whose input a trim can launder is not a guard.
+const WATCH_ANYWHERE = /[%\n\r]/;
+
+/**
+ * The refusal for each tokeniser failure that is NOT a metacharacter. Every
+ * one names the fact and the fix, in this module's idiom -- a refusal a caller
+ * does not understand is a refusal they route around.
+ */
+function tokenizeRefusalReason(refusal: TokenizeRefusal, command: string): string {
+  switch (refusal.kind) {
+    case "shell-active":
+    case "line-separator":
+      return shellMetacharRefusal(command);
+    case "unterminated-quote":
+      return `the ${refusal.quote === "'" ? "single" : "double"} quote at offset ${refusal.index} is never closed, so where this line's last argument ends is a guess -- a shell would wait for more input, and this watch spawns no shell to ask. Close the quote`;
+    case "trailing-backslash":
+      return `the line ends in a backslash that escapes nothing (offset ${refusal.index}) -- a shell would read it as a line continuation and wait for more input, so the last argument is a guess. Drop it, or write '\\\\' for a literal backslash`;
+    case "nul-byte":
+      return `a NUL byte at offset ${refusal.index} can be no part of any argument -- the operating system ends an argument at the first NUL, so the argv the classifier would read is not the one a program would receive. Remove it`;
+    case "exotic-whitespace":
+      return `U+${refusal.codePoint.toString(16).toUpperCase().padStart(4, "0")} at offset ${refusal.index} is whitespace other than a space or a tab -- an ordinary character to a POSIX shell but a word boundary to PowerShell and to this classifier's own row patterns, so the argument vector is not provable. Retype it as a plain space`;
+  }
+}
+
+/**
+ * The watch path's seam: refuse what a shell would act on, and what makes the
+ * argv a guess -- and let a metacharacter through only where the tokeniser
+ * proved it is one literal character of one argument, on a host where nothing
+ * re-parses that argument (see the Windows paragraph above).
+ */
+function watchSeam(command: string, tokens: TokenizeResult, platform: NodeJS.Platform): ClassifyResult | undefined {
+  if (WATCH_ANYWHERE.test(command)) return { classification: "unknown", reason: shellMetacharRefusal(command) };
+  if (platform === "win32") {
+    const raw = rawLineSeam(command);
+    if (raw !== undefined) return raw;
+  }
+  if (!tokens.ok) return { classification: "unknown", reason: tokenizeRefusalReason(tokens.refusal, command) };
+  return undefined;
+}
+
+/**
+ * Classify a `nen watch until --command` line, and return the argv to spawn
+ * alongside the verdict (zheref/nen#288).
+ *
+ * Same table, same named refusals, same scan-faithfulness gates as
+ * classifyCommand -- but every one of them is asked about the argv the watch
+ * will spawn, not about the caller's spelling of it (see the block above
+ * WatchCommandVerdict for how, and for why this path, and only this path, may
+ * let a quoted metacharacter through). `nen parse izanami` keeps
+ * classifyCommand: its verdict is handed to a skill-side shell this module
+ * cannot name.
+ *
+ * `platform` is the host that will SPAWN the argv -- the caller's
+ * `Seams.platform`, injected rather than read from `process` so both branches
+ * are provable on every CI lane. It is required, with no default, because
+ * the answer differs by host and a defaulted host is a guessed one.
+ */
+export function classifyWatchCommand(command: string, platform: NodeJS.Platform): WatchCommandVerdict {
+  const tokens = tokenizeCommandLine(command);
+  const seam = (): ClassifyResult | undefined => watchSeam(command, tokens, platform);
+  if (!tokens.ok) {
+    // No argv, so nothing will be spawned: the rows read the caller's line
+    // only so a named refusal (`git push 'x` -> mutating) keeps its name. The
+    // seam refuses this line whatever they say, so no read-only can come back.
+    return { classification: classifyWithSeam(command, { seam, ghApi: ghApiOverLine }), argv: undefined };
+  }
+  const { argv } = tokens;
+  const { faithful, line: rendered } = renderArgvForRows(argv);
+  if (!faithful) {
+    return {
+      classification: {
+        classification: "unknown",
+        reason: `the argument vector this line spawns could not be rendered as a line that reads back to itself ('${rendered}'), so no row of the table can be shown to read the command that would run. That is a defect in nen's own renderer, not in the command -- report it`,
+      },
+      argv: undefined,
+    };
+  }
+  const classification = classifyWithSeam(rendered, { seam, ghApi: () => classifyGhApiArgv(argv) });
+  if (classification.classification !== "read-only") return { classification, argv: undefined };
+  return { classification: { ...classification, classification: "read-only" }, argv };
+}
+
+/**
+ * Which spawned elements the watch path's rendering may write BARE (#288
+ * review round two).
+ *
+ * The scan-safe tokens, AND the three words `[`, `]` and `!`. Round two of the
+ * review rendered with isScanFaithfulToken alone, which quotes those three --
+ * and the `test`/`[` plain-read rows match them LITERALLY (`[ -e x ]`, `test !
+ * -e x`), so every such read became `unknown` on the watch while `parse
+ * izanami` still read it: `watch until --command '[ -e /etc/hosts ]'` exited
+ * 2 where 0.15.1 watched it. They are the only words any read-only row matches
+ * outside the scan-safe set, and writing them bare is safe on both halves of
+ * the contract: the tokeniser reads each as an ordinary character (none of
+ * them is a quote, an escape, a blank or an operator), so the round trip
+ * holds; and isScanFaithfulLine still rejects all three, so no row that scans
+ * its arguments starts accepting a line that carries one.
+ */
+const RENDER_BARE_WORDS: ReadonlySet<string> = new Set(["[", "]", "!"]);
+
+function renderBare(argument: string): boolean {
+  return isScanFaithfulToken(argument) || RENDER_BARE_WORDS.has(argument);
+}
+
+/**
+ * The line the watch path's rows read for `argv`, and whether it is FAITHFUL
+ * -- whether it tokenises back to exactly `argv`, the round trip every row's
+ * verdict rests on (see ./command-line.ts's renderCommandLine). An unfaithful
+ * rendering is refused by classifyWatchCommand, never classified.
+ *
+ * `bare` defaults to this path's own predicate; it is a parameter so the
+ * refusing branch -- unreachable with a truthful predicate -- has a negative
+ * test of its own (a predicate that lies about a blank must come back
+ * unfaithful).
+ */
+export function renderArgvForRows(
+  argv: readonly string[],
+  bare: (argument: string) => boolean = renderBare,
+): { readonly faithful: boolean; readonly line: string } {
+  const line = renderCommandLine(argv, bare);
+  const reread = tokenizeCommandLine(line);
+  const faithful =
+    reread.ok && reread.argv.length === argv.length && reread.argv.every((element, at): boolean => element === argv[at]);
+  return { faithful, line };
+}
+
+/**
+ * The shared body of both paths. `command` is the line the ROWS read -- the
+ * caller's own on the reader-agnostic path, the argv's rendering on the watch
+ * path -- while `path.seam` answers for the caller's raw command either way.
+ */
+function classifyWithSeam(command: string, path: ClassifyPath): ClassifyResult {
   const trimmed = command.trim();
   // The line the scan-dependent gates below answer against -- ASCII-trimmed,
   // never String.trim()'d, for the reason asciiTrim states. `trimmed` keeps
@@ -2217,10 +2577,10 @@ export function classifyCommand(command: string): ClassifyResult {
   // value is provably one inert word, so replacing it with a readable token
   // makes the line provable without weakening what is proven -- see
   // foldQuotedJqValue for why that is sound and why it is this narrow.
-  const ghApiLine = GH_API.test(trimmed) ? foldQuotedJqValue(scanLine) : scanLine;
-  const ghApi = GH_API.test(trimmed)
-    ? classifyGhApi(ghApiLine, isScanFaithfulLine(ghApiLine))
-    : undefined;
+  //
+  // WHAT the row reads is the path's to say (zheref/nen#288 review): the folded
+  // line on the reader-agnostic path, the spawned argv on the watch path.
+  const ghApi = GH_API.test(trimmed) ? path.ghApi(scanLine) : undefined;
   if (ghApi?.classification === "mutating") return ghApi;
 
   // THE METACHARACTER SEAM (zheref/nen#70). ONE guard, ahead of every branch
@@ -2245,9 +2605,14 @@ export function classifyCommand(command: string): ClassifyResult {
   // now, and `classifyCommand("git log\n")` is the test that kills the
   // `trimmed` mutant (zheref/nen#70 round two -- round one argued this in
   // prose and pinned nothing, and the mutant survived the whole suite).
-  if (SHELL_METACHARS.test(command)) {
-    return { classification: "unknown", reason: shellMetacharRefusal(command) };
-  }
+  //
+  // WHICH seam depends on the caller (zheref/nen#288): the raw-line scan for
+  // every caller that hands the line on to a shell, the tokeniser for the
+  // watch that spawns it with none. Both answer for the caller's RAW command,
+  // for the reason above -- the path captured it, because on the watch path
+  // `command` in this function is the argv's rendering, not the caller's line.
+  const refused = path.seam();
+  if (refused !== undefined) return refused;
 
   if (ghApi !== undefined) return ghApi;
 
