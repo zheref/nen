@@ -3610,7 +3610,7 @@ was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--command "<bin> <args...>"` | yes | The read-only observation to repeat. | Spawned directly, no shell — `<bin>` must be a real executable on PATH (a shell builtin fails at spawn). Classified before the first run; a mutating command refuses at exit 2. |
+| `--command "<bin> <args...>"` | yes | The read-only observation to repeat. | Spawned directly, no shell — `<bin>` must be a real executable on PATH (a shell builtin fails at spawn). Split into arguments with a POSIX shell's *quoting* and nothing else (see [quoting](#watch-until-quoting) below). Classified before the first run; a mutating command refuses at exit 2. |
 | `--true-pattern <regex>` | no | Regex tested against the command's stdout. | Omit to treat exit code 0 as true. When given, a non-zero exit is an OBSERVATION ERROR, not a false reading. |
 | `--interval-ms <n>` | no | Pace between observations. | Default 5000. |
 | `--max-iterations <n>` | no | A safety bound, not izanagi's mandatory cap. | Omit for an unbounded watch; an error streak still stops it. |
@@ -3621,7 +3621,56 @@ was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 final line naming the outcome. `--json` prints `{ outcome, iterations }`, each iteration carrying
 `{ iteration, conditionTrue, errored, message }`. Exit 0 when the condition became true; exit 1 on an
 error streak or a bound reached; exit 2 when `--command` is missing/empty, or it classifies as
-mutating.
+mutating or unknown — which includes a metacharacter a shell would act on, an unclosed quote, a
+trailing backslash, whitespace other than a space or a tab, and a NUL byte (below).
+
+<a id="watch-until-quoting"></a>
+
+**Quoting — one tokeniser, classified and spawned ([#288](https://github.com/zheref/nen/issues/288)).**
+The `--command` line is split into arguments exactly as a POSIX shell would *quote* it — `'...'` is
+literal, `"..."` is literal except that `\` escapes `$`, `` ` ``, `"` and `\`, a bare `\` escapes one
+character, adjacent pieces join (`a'|'b` is one argument, `a|b`) — and then spawned with no shell, so
+nothing is expanded: a `$VAR`, a glob, a `~` or a `#` reaches the command as typed. Every verdict is
+computed from the **same** argument vector the spawn uses: the metacharacter check asks of your line
+only whether a shell would act on a character; the `gh api` row walks the argument vector itself, the
+way gh's own flag parser will; and every other row reads a rendering of it (plain elements bare, the
+rest single-quoted) that splits back into exactly that vector. So a metacharacter *inside* one argument
+is just a character of it — a `gh pr`/`gh issue`/`gh run`/`gh repo` read, a plain file read (`cat`,
+`[ -e … ]`, `test ! -f …`), a read-only nen verb and `gh api` all accept it — while a read whose
+verdict scans every argument
+(`git log`/`diff`/`show`/`fetch`/`branch`/`remote`, nen's gated verbs) still refuses an argument
+outside its safe set, as before. That is what makes the ordinary jq idiom a plain read:
+
+```bash
+nen watch until \
+  --command 'gh pr view 295 --repo zheref/nen --json reviews --jq "[.reviews[]|select(.commit.oid|startswith(\"ecc420c\"))|.author.login]"' \
+  --true-pattern '"cursor"'
+```
+```text
+[1] condition is true (exit 0)
+condition became true after 1 observation(s)
+```
+(run for real against [zheref/nen#295](https://github.com/zheref/nen/pull/295))
+
+What still refuses at exit 2, with the same message as before: a `|`, `;`, `&` (so `&&`), `<`, `>`,
+`(`, `)` or backtick a shell would **act on** — unquoted and unescaped — and a backtick or `$(` inside
+`"..."`, where a shell still substitutes; a newline or a CR anywhere; and a `%` anywhere, quoted or not
+(cmd.exe's `%VAR%` rule, unchanged). Four refusals are new, because a split with no shell has to
+refuse wherever the argument vector would be a guess: an unclosed `'` or `"` and a trailing unquoted
+`\` (a shell would wait for more input), whitespace other than a space or a tab (a word boundary to
+some readers and not to others), and a NUL byte (the operating system ends an argument there, so the
+program would receive a different one). Through v0.17.0 the classifier scanned the joined line — so
+the jq example above refused on its `|` — and the spawn split on whitespace and kept every quote, so a
+`--jq '.number'` the classifier accepted reached jq as `'.number'` and failed to parse; both halves
+now read one argument vector. [`nen parse izanami`](#nen-parse-izanami) keeps the whole-line check:
+its verdict goes to a skill-side shell, and in cmd.exe a single quote quotes nothing.
+
+**On Windows the whole-line check stays for the watch too, for now.** A `.cmd`/`.bat` target is run
+through cmd.exe, which re-parses the arguments by its own rules — an argument such as `a|b` reaches it
+as a bare pipe — and whether the spawn can resolve a bare `gh` to such a shim ahead of `gh.exe` has not
+been verified on a Windows host. So on Windows a metacharacter refuses wherever it sits, quoted or not,
+exactly as through v0.17.0; the quote-stripping half applies everywhere (`--jq '.number'` reaches jq as
+`.number` on every host).
 
 **Example**
 
@@ -9152,6 +9201,8 @@ cap: 3
 
 Parses the READ-ONLY loop's grammar (`<task> until <condition>`, no cap -- izanami needs none) and classifies every command in the task against izanami's own allow/refuse table. Refuses the WHOLE run (exit 1) the moment any one command classifies as mutating or unknown, rather than only flagging the offending step.
 
+A shell metacharacter anywhere on a command line refuses it here, **quoted or not** -- `gh pr view 1 --jq '.a|.b'` is `[unknown]` -- because this verdict is handed to whatever shell the skill side runs, and in cmd.exe a single quote quotes nothing. [`nen watch until`](#nen-watch-until) is the one path that may be narrower ([#288](https://github.com/zheref/nen/issues/288)): it spawns with no shell, so on a POSIX host it refuses a metacharacter only where a shell would act on it -- see its [quoting](#watch-until-quoting) note, which also says why Windows keeps this check for now.
+
 **Usage**
 
 ```text
@@ -10829,15 +10880,23 @@ nen watch until --command "gh pr checks 112" --true-pattern "All checks were suc
 
 The command is spawned directly with no shell and is classified against
 izanami's read-only table *before the first run*, so a mutating command is
-refused outright rather than run once and then reported on. Three consecutive
+refused outright rather than run once and then reported on. It is split with a
+POSIX shell's quoting, and every verdict is computed from that same argument
+vector — so on a POSIX host a quoted `--jq "[.a[]|.b]"` on a `gh pr view` or a
+`gh api` read is one argument and a watchable read, a read whose verdict scans
+every argument (`git log`, nen's gated verbs) still refuses an argument outside
+its safe set, and an unquoted `|` still refuses ([quoting](#watch-until-quoting)). Three consecutive
 observation errors stop the watch regardless of `--max-iterations`: a
 permanently broken observation (bad usage, no auth, no such binary) must never
 masquerade as "not yet true".
 
-The allowlist is deliberately literal about what it can prove. The scan walks
-whitespace tokens, and a quoted or escaped argument is one word to that walk and
-something else to a real shell (`-X 'DELETE'` is the worked example), so a line
-it cannot read faithfully is refused rather than assumed to be a GET.
+Under `parse izanami` the allowlist is deliberately literal about what it can
+prove. The scan walks whitespace tokens, and a quoted or escaped argument is one
+word to that walk and something else to a real shell (`-X 'DELETE'` is the worked
+example), so a line it cannot read faithfully is refused rather than assumed to be
+a GET. `watch until` does not face that question: it walks the argument vector it
+will spawn, so `-X 'DELETE'` there is the method `DELETE`, named as mutating, and
+a quoted value is simply the argument after its flag.
 
 **A single-quoted `--jq` is the one exception, and it reads** — the commonest
 `gh api` read spelling there is ([#78](https://github.com/zheref/nen/issues/78)):
@@ -10853,22 +10912,33 @@ every shell this table has been checked against, and its content is literal — 
 expansion, no substitution, no word splitting. So the row folds it into one
 inert placeholder before scanning, which changes neither the argument vector's
 length nor any other word in it: the gate is not weakened, the line is made
-provable. `--jq='<expr>'`, `-q '<expr>'`, `-q='<expr>'`, the attached `-q'<expr>'`
-and a value containing spaces all fold the same way -- pflag takes a shorthand
-value three ways and all three are the same safe shape.
+provable. A **non-empty** `'<expr>'` folds the same way in `--jq='<expr>'`,
+`-q '<expr>'`, `-q='<expr>'` and the attached `-q'<expr>'`, and so does a value
+containing spaces. An **empty** attached value is not that shape: a shell turns
+`-q''` into a bare `-q`, which takes the *next* argument as its value — so
+`gh api <path> -q'' -H -XDELETE` is a DELETE (`-q` takes `-H`). It is not folded,
+and refuses ([#288](https://github.com/zheref/nen/issues/288)'s review).
+
+**A shorthand's attached value is read in gh's own order.** `-X=v` takes `v`; any
+other attached text, a bare `=` included, *is* the value; only nothing attached
+takes the next argument. Through v0.17.0 a bare `=` was dropped, so
+`gh api <path> -q= -XDELETE` read as a GET under both `parse izanami` and
+`watch until` while gh sent a DELETE (`-q=` is the value `=`, and `-XDELETE` stays
+a flag). Both verbs name it as mutating now.
 
 Three shapes still refuse, each for its own reason:
 
 | shape | why |
 |---|---|
-| `--jq ".name"` | double quotes expand `$x`, a backtick and `\` — one word, but not an *inert* one, and inertness is the whole claim. **Respell it with single quotes**, or watch the bare read and apply `jq` to its output downstream — the refusal now says both. |
+| `--jq ".name"` | under `parse izanami`: double quotes expand `$x`, a backtick and `\` — one word, but not an *inert* one, and inertness is the whole claim. **Respell it with single quotes**, or watch the bare read and apply `jq` to its output downstream — the refusal now says both. Under **`watch until`** it reads: the walk takes the spawned argument after `--jq`, whatever quoted it. |
 | `--jq'.name'` | `--jq.name` to a shell: one word, an unknown long flag, not a flag and its value. |
-| `--jq '.a \| .b'` | a metacharacter is refused by the whole-line seam that runs *before* any row vouches for anything, and this fold deliberately does not reach past its own row to move it. |
+| `--jq '.a \| .b'` | under `parse izanami`, a metacharacter is refused by the whole-line seam that runs *before* any row vouches for anything, and this fold deliberately does not reach past its own row to move it. Under **`watch until`** on a POSIX host it reads ([#288](https://github.com/zheref/nen/issues/288)): that path spawns with no shell, so its seam refuses a metacharacter only where a shell would act on it, and a single-quoted `\|` is one character of one argument -- see [quoting](#watch-until-quoting). |
 
-A quoted **method** (`-X 'DELETE'`) is still `unknown`, unchanged: the fold is
-scoped to `--jq` precisely so the adversarial repro
+Under `parse izanami` a quoted **method** (`-X 'DELETE'`) is still `unknown`,
+unchanged: the fold is scoped to `--jq` precisely so the adversarial repro
 [#70](https://github.com/zheref/nen/issues/70) pinned stays where its own review
-put it.
+put it. Under `watch until` it is `mutating`: the walk reads the spawned argument
+`DELETE`.
 
 ```bash
 # 3. Check a skill invocation against its published grammar, before running it.
