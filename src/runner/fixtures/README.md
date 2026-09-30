@@ -9,3 +9,6 @@
   carries the renderer; the template ships in Hatsu.
 - `*.golden*` -- byte-for-byte renderings, versioned `0.0.0-test` so a release
   does not move them. Regenerate with `NEN_UPDATE_GOLDEN=1 bunx vitest run src/runner`.
+  The two bash renderings end `.txt`, not `.sh`: AK-11 (`src/pipeline.test.ts`)
+  admits exactly one shell file in the repository, `bootstrap/nen.sh`, and a
+  golden file is data, never a script anything runs.

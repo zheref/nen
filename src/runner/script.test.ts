@@ -40,12 +40,12 @@ describe("renderScript -- golden files, one per host OS", () => {
 
   it("renders the Linux bash script", () => {
     expect(linux.needsElevation).toBe(true);
-    golden("register.linux.golden.sh", linux.text);
+    golden("register.linux.golden.txt", linux.text);
   });
 
   it("renders the macOS bash script", () => {
     expect(mac.needsElevation).toBe(false);
-    golden("register.macos.golden.sh", mac.text);
+    golden("register.macos.golden.txt", mac.text);
   });
 
   it("is deterministic: the same plan renders the same bytes", () => {
