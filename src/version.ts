@@ -53,7 +53,7 @@ export const VERSION = "0.18.0";
 // release that declares breaking notes has not moved this to its own minor, so
 // the duplication costs one test and can never ship out of step with the prose
 // it summarises. Set it in the SAME commit as `VERSION` whenever it moves.
-export const COMPATIBLE_MINOR_FLOOR = "0.17";
+export const COMPATIBLE_MINOR_FLOOR = "0.18";
 
 // The binary's own name, used in usage text, error prefixes and the octokit
 // user-agent. Not a persona and not taxonomy: it is this executable's identity,

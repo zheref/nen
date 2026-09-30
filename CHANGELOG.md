@@ -8,7 +8,7 @@ Release unit for `v0.17.0..v0.18.0`, the `nen runner` family that `hatsu:jusshin
 - the deliveries: [#297](https://github.com/zheref/nen/pull/297), [#301](https://github.com/zheref/nen/pull/301), [#302](https://github.com/zheref/nen/pull/302), [#303](https://github.com/zheref/nen/pull/303), [#305](https://github.com/zheref/nen/pull/305) and [#306](https://github.com/zheref/nen/pull/306);
 - [#308](https://github.com/zheref/nen/pull/308), the release proposal.
 
-The compatibility floor stays `0.17`.
+The compatibility floor moves to `0.18`.
 
 ### Added
 
@@ -62,15 +62,15 @@ The compatibility floor stays `0.17`.
 
 ### Breaking / consumer notes
 
-This release declares **no breaking consumer note**, and under [the release-time floor step](docs/USAGE.md#the-release-time-floor-step) that is what leaves `COMPATIBLE_MINOR_FLOOR` at `0.17`. Everything in `### Added` is a verb, a block or a key that did not exist, and a repository that declares no `runners` block reads one more `nen schema check` row, `none declared`. The exit-code changes below correct a verdict that was wrong, and they change behaviour in place, so they are named here as well as under `### Fixed`, the way v0.15.1 named its in-place changes under an unmoved floor.
-
-- **No repin: the compatibility floor stays `0.17`.** A repository pinned `minimum: "0.17"` needs no change to read this build, and `nen shu tools` reports the row `present-and-matching` against a v0.18.0 binary. A pin below the floor is still refused by name: a `minimum` under `0.17` is `present-but-wrong-version` at exit **5** until it repins to `0.17`. `pinned_ref` SHOULD move to `v0.18.0` on any host that feeds agent-composed `gh api` lines to `nen parse izanami` or `nen watch until`, because that is how it picks up the security fix above; a host that leaves it at `v0.17.0` keeps working but stays exposed. **Six behaviours change in place:**
-  - **commit** — under a commitlint config nen cannot read (code, unreadable, or none), every line of a message's own prose over 100 characters is refused at exit `2` by `commit format` and `commit write`, where it was a warning at exit `0` ([#302](https://github.com/zheref/nen/pull/302)). Declare `"commits": { "bodyMaxLineLength": <n> }` to allow another width. A repository with no commitlint config and no key, which v0.17.0's `commit format` left untouched, now gets `--body` wrapped at 100 with a stderr note. #302 itself calls this breaking for those consumers.
-  - **shu** — a `--touched` run whose Cobertura report joins no touched file exits `6` where it exited `0` on package rows ([#301](https://github.com/zheref/nen/pull/301)). A gate that passed on the package figure now stops, with the reason on stderr and in `--json`. v0.17.0's USAGE already stated that 0 matched against a non-empty touched set is exit 6; the package rows hid that case.
-  - **shu** — a Cobertura line stating more conditions covered than it has exits `1` on a plain run where it was summed at exit `0` ([#301](https://github.com/zheref/nen/pull/301)).
-  - **canon** — `canon mirror check --markdown-out` exits `2`, where it exited `1`, when the report cannot be written; exit 1 now means drift and nothing else ([#297](https://github.com/zheref/nen/pull/297)). A missing parent directory is now created instead of failing.
-  - **watch** — `watch until` exits `2` on an unclosed quote, a trailing `\`, non-ASCII whitespace or a NUL byte, where v0.17.0 split the line on whitespace and spawned it; it now accepts a quoted metacharacter on macOS and Linux that v0.17.0 refused at `2` ([#303](https://github.com/zheref/nen/pull/303)).
-  - **watch** / **parse** — a `gh api` line carrying a bare-`=` or empty value on a value shorthand is classified mutating, where v0.17.0 certified it read-only ([#303](https://github.com/zheref/nen/pull/303)).
+- **Repin: `"0.17"` → `"0.18"`, and `v0.17.0` → `v0.18.0`.** The maintainer moved the floor for this release, because #302's new exit 2 is breaking. A repository whose `dependency.minimum` is below `0.18` is refused by this build at exit 5 and must raise its minimum and repin. zheref/hatsu declares `0.16`, pinned `v0.16.0`; its repin PR is authored.
+- **commit** — under a commitlint config nen cannot read (code, unreadable, or none), every line of a message's own prose over 100 characters is refused at exit `2` by `commit format` and `commit write`, where it was a warning at exit `0` ([#302](https://github.com/zheref/nen/pull/302)).
+  - Declare `"commits": { "bodyMaxLineLength": <n> }` to allow another width.
+  - A repository with no commitlint config and no key, which v0.17.0's `commit format` left untouched, now gets `--body` wrapped at 100 with a stderr note.
+- **shu** — a `--touched` run whose Cobertura report joins no touched file exits `6` where it exited `0` on package rows ([#301](https://github.com/zheref/nen/pull/301)). A gate that passed on the package figure now stops, with the reason on stderr and in `--json`. v0.17.0's USAGE already stated that 0 matched against a non-empty touched set is exit 6; the package rows hid that case.
+- **shu** — a Cobertura line stating more conditions covered than it has exits `1` on a plain run where it was summed at exit `0` ([#301](https://github.com/zheref/nen/pull/301)).
+- **canon** — `canon mirror check --markdown-out` exits `2`, where it exited `1`, when the report cannot be written; exit 1 now means drift and nothing else ([#297](https://github.com/zheref/nen/pull/297)). A missing parent directory is now created instead of failing.
+- **watch** — `watch until` exits `2` on an unclosed quote, a trailing `\`, non-ASCII whitespace or a NUL byte, where v0.17.0 split the line on whitespace and spawned it; it now accepts a quoted metacharacter on macOS and Linux that v0.17.0 refused at `2` ([#303](https://github.com/zheref/nen/pull/303)).
+- **watch** / **parse** — a `gh api` line carrying a bare-`=` or empty value on a value shorthand is classified mutating, where v0.17.0 certified it read-only ([#303](https://github.com/zheref/nen/pull/303)). Moving `pinned_ref` to `v0.18.0` is how a host picks up this security fix.
 
 ## v0.17.0 — 2026-09-29
 
