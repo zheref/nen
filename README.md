@@ -351,7 +351,7 @@ that repository's `nen/` directory at the path given by `--repo`
 | `nen/colors.yml` | The status-color precedence for board rendering |
 | `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check |
 | `nen/contract.json` | Optional. What this repository needs *from* Nen (`dependency`), and the stack declaration Nen reads *about* it (`project`). Parsed, validated and reported; nothing acts on it yet |
-| `nen/workflow.json` | Optional, and its absence is a full policy of defaults rather than none. The delivery loop's parameters: the branch template and trunk, the iteration checks, the coverage ladder, which attribution trailers a commit may carry, the reports directory, the model matrix. Read by `nen commit format` and baked into the hooks `nen scaffold init` generates |
+| `nen/workflow.json` | Optional, and its absence is a full policy of defaults rather than none. The delivery loop's parameters: the branch template and trunk, the iteration checks, the coverage ladder, which attribution trailers a commit may carry, the reports directory, the model matrix, the self-hosted runner pools. Read by `nen commit format` and `nen runner`, and baked into the hooks `nen scaffold init` generates |
 
 `nen/` is committed configuration only. Generated output goes to a
 dot-prefixed, gitignored `.nen/` — the one-character difference is deliberate,
@@ -407,10 +407,10 @@ offline or saturated, its job queues; there is no hosted fallback.
 
 ## The verb surface
 
-`nen --help` lists every command family (40); each
+`nen --help` lists every command family (41); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-111 verbs outside the binary — each one's purpose, arguments, exit codes and
+118 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -442,6 +442,11 @@ they compose into. The families group roughly as:
 - **Surfaces** — `surface` (`mirror generate`, `mirror check`): one skills
   directory rendered into another agent surface's own layout, and the drift
   check that says whether the committed copy is still an image of it
+- **Self-hosted runners** — `runner` (`inventory`, `plan`, `script`, `verify`,
+  `workflow`, `preflight`, `enable`): a repository's runner pools, declared in
+  `nen/workflow.json`'s `runners` block, registered by a host script nen renders
+  and never runs, proved by a preflight job running as the service, and
+  switched on only after that job is green
 
 Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a

@@ -30,6 +30,7 @@ import {
   describeReviewScopes,
   describeSections,
   describeProfile,
+  describeRunners,
   describeWorkflow,
   loadWorkflow,
   WORKFLOW_FILE,
@@ -375,6 +376,9 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // runs under, and which it may be asked for. Defaults apply when absent,
     // so this row reads the default rather than `none declared`.
     pointerCheck(root, "profile", describeProfile),
+    // ...and the `runners` row: the self-hosted pools `nen runner` acts on.
+    // No default, so an absent block reads `none declared`.
+    pointerCheck(root, "runners", describeRunners),
     // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

@@ -34,5 +34,30 @@
       "code": { "persona": "nobunaga", "tier": "deep", "budget": 2, "paths": ["**"] },
       "security": { "persona": "feitan", "tier": "deep", "budget": 1, "paths": ["src/pr/**", "bootstrap/**", ".github/workflows/**", "**/*auth*", "**/*secret*", "**/*credential*", "**/*token*"] }
     }
+  },
+  "runners": {
+    "$comment": "Self-hosted runner policy hatsu:jusshin executes. naming is the runner-name template; each pool is one label set a workflow of this repository targets, the repository variable that switches its jobs on, the tools a job on it invokes, and the preflight workflow that proves it. windows-x64 is ci.yml's check-windows leg, gated on NEN_WINDOWS_RUNNER; macos-arm64 carries the check and compile jobs and is not variable-gated. Each pool names its own preflight file: the file is rendered for one pool's runs-on, and a green run of it is what 'nen runner enable' accepts as proof of that pool.",
+    "naming": "{machine}-{consumer}R{slot}",
+    "pools": [
+      {
+        "id": "windows-x64",
+        "os": "Windows",
+        "arch": "X64",
+        "labels": ["self-hosted", "Windows", "X64"],
+        "enableVariable": "NEN_WINDOWS_RUNNER",
+        "tools": ["git", "bash", "gh"],
+        "preflightWorkflow": "runner-preflight-windows-x64.yml",
+        "root": { "windows": "C:\\GithubRunners", "linux": "/opt/actions-runners", "darwin": "~/actions-runners" }
+      },
+      {
+        "id": "macos-arm64",
+        "os": "macOS",
+        "arch": "ARM64",
+        "labels": ["self-hosted", "macOS", "ARM64"],
+        "tools": ["git", "bash", "gh"],
+        "preflightWorkflow": "runner-preflight-macos-arm64.yml",
+        "root": { "windows": "C:\\GithubRunners", "linux": "/opt/actions-runners", "darwin": "~/actions-runners" }
+      }
+    ]
   }
 }

@@ -51,6 +51,7 @@ import { repoCommand } from "../repo/command.js";
 import { reportCommand } from "../report/command.js";
 import { reviewCommand } from "../review/command.js";
 import { runCommand } from "../run/command.js";
+import { runnerCommand } from "../runner/command.js";
 import { scaffoldCommand } from "../scaffold/command.js";
 import { shuCommand } from "../shu/command.js";
 import { splitCommand } from "../split/command.js";
@@ -91,6 +92,7 @@ export const COMMANDS: readonly Command[] = [
   reportCommand,
   reviewCommand,
   runCommand,
+  runnerCommand,
   scaffoldCommand,
   shuCommand,
   splitCommand,

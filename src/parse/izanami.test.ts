@@ -789,6 +789,7 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "canon mirror check": "nen canon mirror check --rules-dir r",
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
     "epic next-wave": "nen epic next-wave --body-file b.md",
+    "runner plan": "nen runner plan --target o/r --pool p --machine-code NZ --count 1",
     "shu detect": "nen shu detect",
     // `--target` is mandatory on this verb, so the base line carries it: a
     // base that could never run would prove the coupling against a command

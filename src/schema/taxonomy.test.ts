@@ -89,6 +89,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#reports.sections",
       "nen/workflow.json#review.scopes",
       "nen/workflow.json#profile",
+      "nen/workflow.json#runners",
       "nen/decisions.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
@@ -111,6 +112,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#reports.sections",
       "nen/workflow.json#review.scopes",
       "nen/workflow.json#profile",
+      "nen/workflow.json#runners",
       "nen/colors.yml",
       "nen/decisions.json",
     ];

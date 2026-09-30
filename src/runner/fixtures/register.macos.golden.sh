@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# jusshin — register self-hosted GitHub Actions runners as launchd agents.
+# rendered by nen 0.0.0-test runner script — do not edit; re-run nen runner script
+#
+# target:   zheref/nen
+# pool:     macos-arm64 (self-hosted,macOS,ARM64)
+# runners:  NZ-NNR1, NZ-NNR2, NZ-NNR3
+# identity: invoking-user
+# root:     /Users/runner-host/actions-runners
+# package:  actions-runner-osx-arm64-2.337.0.tar.gz (runner 2.337.0)
+#
+# Run it as YOURSELF, not with sudo: bash <this file>. A macOS runner is a
+# LaunchAgent of the user who installs it. The registration token is minted
+# per runner into a variable that is never printed.
+#
+# Exit codes: 0 every planned runner's service is running; 1 anything else;
+# 3 run as the wrong user; 5 gh missing or not signed in; 6 the runner
+# package failed its SHA-256 check (the file is deleted).
+set -euo pipefail
+
+TARGET='zheref/nen'
+REPO_URL='https://github.com/zheref/nen'
+LABELS='self-hosted,macOS,ARM64'
+ROOT='/Users/runner-host/actions-runners'
+PROJECT_DIR='/Users/runner-host/actions-runners/nen-runners'
+DOWNLOAD_URL='https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-osx-arm64-2.337.0.tar.gz'
+ARCHIVE='actions-runner-osx-arm64-2.337.0.tar.gz'
+SHA256='5a2cd92908a93d7276a194e1de6008099f3e7946f3f8e14aa7a1a7b4a31fdec2'
+SERVICE_PREFIX='actions.runner.zheref-nen.'
+RUNNERS=(
+  'NZ-NNR1|/Users/runner-host/actions-runners/nen-runners/Runner1'
+  'NZ-NNR2|/Users/runner-host/actions-runners/nen-runners/Runner2'
+  'NZ-NNR3|/Users/runner-host/actions-runners/nen-runners/Runner3'
+)
+WORK_DIR="$PROJECT_DIR/_jusshin"
+registered=0
+skipped=0
+failed=0
+
+finish() {
+  echo "jusshin: ${registered} registered, ${skipped} skipped, ${failed} failed"
+  exit "$1"
+}
+
+# Whether a runner directory is already configured as NAME (idempotent re-run).
+configured_as() {
+  [ -f "$1/.runner" ] && grep -q "\"agentName\": *\"$2\"" "$1/.runner"
+}
+
+if [ "$(id -u)" -eq 0 ]; then
+  echo "jusshin: run as yourself, not root -- a macOS runner is a LaunchAgent of the user who installs it."
+  finish 3
+fi
+if ! gh --version >/dev/null 2>&1; then
+  echo "jusshin: gh is not on PATH. Install the GitHub CLI and re-run."
+  finish 5
+fi
+if ! gh auth status >/dev/null 2>&1; then
+  echo "jusshin: 'gh auth status' failed. Run 'gh auth login' and re-run."
+  finish 5
+fi
+
+mkdir -p "$ROOT" "$PROJECT_DIR" "$WORK_DIR"
+log="$WORK_DIR/register-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "$log") 2>&1
+echo "jusshin: ${#RUNNERS[@]} runner(s) for $TARGET; log $log"
+
+pending=()
+for entry in "${RUNNERS[@]}"; do
+  name="${entry%%|*}"
+  dir="${entry#*|}"
+  if configured_as "$dir" "$name"; then
+    echo "jusshin: $name is already configured in $dir -- skipped."
+    skipped=$((skipped + 1))
+    continue
+  fi
+  if [ -f "$dir/.runner" ]; then
+    echo "jusshin: $dir holds a runner configured as another name, not $name -- left untouched."
+    failed=$((failed + 1))
+    continue
+  fi
+  pending+=("$entry")
+done
+
+archive="$WORK_DIR/$ARCHIVE"
+verify_archive() {
+  echo "$SHA256  $archive" | shasum -a 256 -c - >/dev/null 2>&1
+}
+if [ "${#pending[@]}" -gt 0 ]; then
+  if [ ! -f "$archive" ] || ! verify_archive; then
+    echo "jusshin: downloading $ARCHIVE"
+    curl -fsSL -o "$archive" "$DOWNLOAD_URL"
+    if ! verify_archive; then
+      rm -f "$archive"
+      echo "jusshin: $ARCHIVE failed its SHA-256 check (expected $SHA256) -- deleted."
+      finish 6
+    fi
+  fi
+  echo "jusshin: $ARCHIVE verified (sha256 $SHA256)."
+fi
+
+for entry in "${pending[@]+"${pending[@]}"}"; do
+  name="${entry%%|*}"
+  dir="${entry#*|}"
+  echo "jusshin: registering $name in $dir"
+  mkdir -p "$dir"
+  tar xzf "$archive" -C "$dir"
+  token="$(gh api -X POST "repos/$TARGET/actions/runners/registration-token" --jq .token 2>/dev/null)" || token=""
+  if [ -z "$token" ]; then
+    echo "jusshin: could not mint a registration token for $name; the gh user must be an admin of $TARGET."
+    failed=$((failed + 1))
+    continue
+  fi
+  if ! (cd "$dir" && ./config.sh --unattended --url "$REPO_URL" --token "$token" --name "$name" --labels "$LABELS" --work _work); then
+    token=""
+    echo "jusshin: config.sh failed for $name."
+    failed=$((failed + 1))
+    continue
+  fi
+  token=""
+  if ! (cd "$dir" && ./svc.sh install && ./svc.sh start); then
+    echo "jusshin: svc.sh could not install or start the LaunchAgent for $name."
+    failed=$((failed + 1))
+    continue
+  fi
+  registered=$((registered + 1))
+done
+
+# Background Task Management: a LaunchAgent macOS has not approved is loaded
+# with no PID ('-' in launchctl list). It is held pending approval under
+# System Settings > General > Login Items; this script never approves it.
+down=0
+for entry in "${RUNNERS[@]}"; do
+  name="${entry%%|*}"
+  label="${SERVICE_PREFIX}${name}"
+  launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E "^[[:space:]]*(state|pid) =" || true
+  pid="$(launchctl list | while read -r p _ l; do if [ "$l" = "$label" ]; then echo "$p"; fi; done)"
+  if [ -z "$pid" ] || [ "$pid" = "-" ]; then
+    echo "jusshin: $label has no PID -- if it is listed, it is held pending approval under System Settings > General > Login Items (approve it there; nen never does)."
+    down=$((down + 1))
+  fi
+done
+
+if [ "$down" -eq 0 ] && [ "$failed" -eq 0 ]; then finish 0; fi
+finish 1
