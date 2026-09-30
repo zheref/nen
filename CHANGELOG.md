@@ -2,6 +2,62 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.18.0 — 2026-09-30
+
+Release unit for `v0.17.0..v0.18.0`, the `nen runner` family that `hatsu:jusshin` executes:
+- the deliveries: [#297](https://github.com/zheref/nen/pull/297), [#301](https://github.com/zheref/nen/pull/301), [#303](https://github.com/zheref/nen/pull/303) and [#305](https://github.com/zheref/nen/pull/305);
+- [#308](https://github.com/zheref/nen/pull/308), the release proposal.
+
+The compatibility floor stays `0.17`.
+
+### Added
+
+- **runner** ([#305](https://github.com/zheref/nen/pull/305)) — `nen runner`, seven verbs that raise a repository's self-hosted runner pools. Every step that can be decided is a verb; every human step is asked. Every GitHub call goes through the `gh` seam.
+  - `inventory` lists every runner (every page) and the runner downloads, parses each name or marks it runner 0, and groups runners by pool on a label superset.
+  - `plan` picks the lowest free slots per machine and consumer, the root in the host's separators, the identity (`ask` when none is named) and the package with its SHA-256. Its output is the contract `nen.runner.plan/v0.1`.
+  - `script` renders the host script — PowerShell 5.1, Linux bash (`sudo`) or macOS bash (run as yourself) — and prints one launch line. It never runs the script. The Windows script asserts elevation and `gh auth status`, grants `icacls … (RX)` on the root and project folder only, asks for the password once as a secure string, mints each registration token itself, keeps both secrets out of the transcript, verifies the SHA-256, and requires every service to be `Running`.
+  - `verify` never passes on a partial result.
+  - `workflow` renders a caller's `@@NAME@@` template. A leftover placeholder or invalid YAML is exit 1.
+  - `preflight` dispatches the pool's preflight workflow, finds its run by id difference rather than by clock, waits, and names a queued job for what it is.
+  - `enable` re-reads the run, requires a green run of *this pool's* preflight before `gh variable set`, then reads the value back.
+  - Exit codes: `0`, `1` (the family's own failure, a GitHub refusal included), `2` (usage, or a missing or malformed `runners` block) and `5` (`gh` could not be started). Under `--dry-run`, `script` and `workflow` write nothing, and `preflight` and `enable` read GitHub but dispatch or set nothing. `preflight` and `enable` require `--target`; the other four fall back to `--repo`'s `origin`.
+  - Izanami's table classifies the family: `inventory` and `verify` read-only, `plan` gated on `--out`, the other four `dry-run-gated`.
+  - Not in this release: runner removal, `--ephemeral`, a shared actions cache and runner groups. The Windows ARM64 and Linux ARM64 scripts are rendered but have never been executed.
+- **workflow** ([#305](https://github.com/zheref/nen/pull/305)) — an optional `runners` block in `nen/workflow.json`, the policy `nen runner` acts on. It has no default: absent, every `runner` verb that needs it refuses at exit 2 naming the key.
+  - `naming` is exactly `{machine}-{consumer}R{slot}`; any other template is refused, naming this one.
+  - Each pool states `id`, `os` (`Linux`/`macOS`/`Windows`) and `arch` (`X64`/`ARM64`) in GitHub's case; `windows`, `x64`, `darwin` and `amd64` are refused, naming the canonical spelling. `labels` must be exactly `["self-hosted", os, arch]`. `enableVariable` is optional, `tools` must be non-empty and shell-safe, `preflightWorkflow` is a `.yml` basename, and `root` holds quote-free per-OS defaults.
+  - Two pools may not share a label set, and each pool names its own preflight file, because the file is rendered for one pool's `runs-on` and `enable` must not accept one pool's run as proof of another.
+  - `nen schema check` gains a `nen/workflow.json#runners` row.
+  - This repository declares two pools: `windows-x64` (the `check` leg's Windows runners, gated on `NEN_WINDOWS_RUNNER`, preflight `runner-preflight-windows-x64.yml`) and `macos-arm64` (the `check` and `compile` jobs, not variable-gated, preflight `runner-preflight-macos-arm64.yml`).
+
+### Fixed
+
+- **watch** ([#288](https://github.com/zheref/nen/issues/288)) — `nen watch until` refused the ordinary jq idiom `--jq "[.reviews[]|select(...)|.author.login]"` at exit 2, because it scanned the joined line for metacharacters that never reach a shell. It also classified one argument list and spawned another, so a single-quoted `--jq '.number'` reached jq with its quotes on and failed on every poll.
+  - The `--command` line is now tokenised once with POSIX shell quoting (`src/parse/command-line.ts`), and the verdict and the spawn read that one argument list.
+  - On macOS and Linux, a metacharacter inside one quoted or escaped argument is accepted. A metacharacter a shell would act on, any metacharacter on Windows, and every `nen parse izanami` verdict still refuse with the same message.
+  - A write hidden behind quoting (`git branch '-D' x`, `gh api … -X 'DELETE'`) is now named mutating instead of unknown.
+  - New exit-2 refusals: an unclosed quote, a trailing `\`, whitespace other than space and tab, and a NUL byte.
+- **watch** / **parse** — **Security.** Two `gh api` spellings were certified read-only while gh sends a write.
+  - A bare `=` on a value shorthand (`-q=`, `-H=`, `-p=`, `-t=`), e.g. `gh api repos/o/r/issues/1 -q= -XDELETE`: gh gives `-q` the value `=` and sends DELETE. This affected `nen parse izanami` and `nen watch until` in **every release from v0.2.0 through v0.17.0**, v0.15.1 included; the watch spawned the line itself on every interval.
+  - An empty attached value `-q''`, e.g. `gh api repos/o/r/issues/1 -q'' -H -XDELETE`: a shell hands gh a bare `-q`, which takes `-H` as its value and leaves `-XDELETE` as the method. This affected `nen parse izanami` in v0.7.0 through v0.17.0 wherever a skill-side shell ran the certified line.
+  - The `gh api` row now walks the spawned argument list the way gh's flag parser does. Over a 2,223-line adversarial corpus checked against real gh 2.100.0, v0.17.0 made 27 read-only verdicts on requests gh sends as writes; v0.18.0 makes 0.
+  - Until a host runs v0.18.0, do not pass either verb a `gh api` line whose value flag carries an empty or bare-`=` value.
+- **shu** ([#296](https://github.com/zheref/nen/issues/296)) — `nen shu coverage --touched` credited every touched Cobertura file with its package's figure, matched by path against package names, so a per-file floor could not be read (four changed C# files collapsed into one `KroCore 61.18%` row). A name that resolved nowhere, or to more than one file, was silently credited to something.
+  - Rows, `targets`, `met` and `band` are now per source file, under its on-disk spelling, resolved against every stated `<source>` root, the artifact, the lane cwd and the repository root.
+  - A file named by several `<class>` entries is the union of their lines; each line keeps one condition figure, never a sum.
+  - Every name that cannot be placed is listed in `touched.artifacts[].unresolved` as `{name, reason}` (ambiguous, unverifiable, outside the repository only, a URL, another machine's path, not found) and printed under the `from:` line. A per-file Cobertura artifact also carries `root`, `basis` (which may read `source`) and `onDisk`. LCOV and JaCoCo entries keep their seven keys.
+  - A Cobertura report none of whose names joins a touched file now exits **6**, nothing measured, where it passed at exit 0 on package rows. It stays exit 0 whenever any declared report joins a touched file.
+  - A Cobertura line stating more conditions covered than it has is now exit **1** on plain runs too, naming the file and the line.
+- **canon** ([#292](https://github.com/zheref/nen/issues/292)) — `nen canon mirror check --markdown-out <path>` did not create the report's parent directory, and the raw `ENOENT` exited **1**, the code reserved for drift, so a clean mirror whose report could not be written read as drifting.
+  - The parent is now created, resolved against `--repo` like every own-path flag.
+  - Any remaining write failure (a parent that is a file, a path that is a directory, no permission, any other errno) is exit **2**, naming the value as typed, the resolved path, the errno and the verdict reached, with nothing on stdout. Exit 1 now means drift in a completed run and nothing else.
+
+### Breaking / consumer notes
+
+This release declares **no breaking consumer note**, and under [the release-time floor step](docs/USAGE.md#the-release-time-floor-step) that is what leaves `COMPATIBLE_MINOR_FLOOR` at `0.17`. Everything in `### Added` is a verb, a block or a schema row that did not exist, and a repository that declares no `runners` block reads one more `ok` row. The exit-code changes under `### Fixed` correct a verdict that was wrong — a report that could not be written read as drift, a Cobertura gate passed on a package figure that was not the file's, a watch refused a line it could run — and each now gives its code the meaning the documented exit-code table already stated. They are listed there, with the old and the new code, so a caller that relied on the wrong verdict can find it.
+
+- **No repin: the compatibility floor stays `0.17`.** A repository pinned `minimum: "0.17"` needs no change to read this build, and `nen shu tools` reports the row `present-and-matching` against a v0.18.0 binary. `pinned_ref` MAY move to `v0.18.0` — that chooses which binary a fresh `bash nen-bootstrap.sh` installs, and it is how a host picks up the `gh api` security fix above — but a repository that leaves it at `v0.17.0` goes on working exactly as it does today. A pin below the floor is still refused by name: a `minimum` under `0.17` is `present-but-wrong-version` at exit **5** until it repins to `0.17`.
+
 ## v0.17.0 — 2026-09-29
 
 Release unit for `v0.16.0..v0.17.0`, the `hatsu:futon nen@bug` run:
