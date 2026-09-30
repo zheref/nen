@@ -296,6 +296,22 @@ function parseRollupEntry(raw: unknown, path: string): ParseResult<RollupEntry> 
   );
 }
 
+// `gh pr view --json statusCheckRollup` serializes a pending CheckRun's unset
+// conclusion as `""`, not `null` (zheref/nen#304: KWI-PR-#90 while its checks
+// ran). That `""` is the SAME fact as the null this module already models --
+// a run still deciding -- so it is read as unset, and CON-32(a) goes on reading
+// it as not green. The normalization is exactly that narrow: only `""`, and only
+// on a run whose status is present and is not COMPLETED. A completed run with
+// `""`, a run with no status at all (which ../gates/predicates.ts reads as
+// completed), or any other unknown string still fails loudly at its path below.
+function pendingConclusionUnset(
+  record: Record<string, unknown>,
+  status: CheckStatus | null,
+): Record<string, unknown> {
+  if (record["conclusion"] !== "" || status === null || status === "COMPLETED") return record;
+  return { ...record, conclusion: null };
+}
+
 function parseCheckRun(
   record: Record<string, unknown>,
   path: string,
@@ -305,7 +321,7 @@ function parseCheckRun(
   const status = optionalEnum<CheckStatus>(record, "status", path, CHECK_STATUSES);
   if (!status.ok) return fail(status.error.path, status.error.message);
   const conclusion = optionalEnum<CheckConclusion>(
-    record,
+    pendingConclusionUnset(record, status.value),
     "conclusion",
     path,
     CHECK_CONCLUSIONS,

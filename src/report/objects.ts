@@ -758,8 +758,9 @@ export async function assembleObjects(
  * because a readiness verdict computed from a rollup nobody could read is the
  * worst thing this CLI can produce. That rule is right THERE and wrong HERE. A
  * register is a DISPLAY, and routing it through a fail-closed parser meant one
- * in-flight check run whose `conclusion` came back as `""` -- an ordinary,
- * momentary GitHub state -- deleted the entire pull request the caller had
+ * check rollup that would not validate -- first seen as an in-flight run's
+ * `conclusion` of `""`, an ordinary GitHub state the parser reads as unset
+ * since #304 -- deleted the entire pull request the caller had
  * named by number, at exit 0, with an empty `objects: []` and a warning nobody
  * reads in a report. The register LOST AN OBJECT IT WAS ASKED FOR, which is a
  * worse failure than any field being wrong.
@@ -936,8 +937,9 @@ function readReviewRequests(value: unknown, note: (line: string) => void): reado
  * the case that is not broken.
  *
  * THE LENIENT PATH IS A FALLBACK, NOT A REPLACEMENT. It runs only when the
- * strict parse refused, counts every entry it can make sense of, and puts
- * anything it cannot into `pending` -- never into `green`. That direction is
+ * strict parse refused, counts every entry it can make sense of, puts an
+ * entry with no readable conclusion or state into `pending` and one with an
+ * unrecognised conclusion into `red` -- never into `green`. That direction is
  * not arbitrary: an entry nobody could read has not reported success, and the
  * one bucket it must never land in is the one a reader treats as "done".
  */
@@ -945,7 +947,7 @@ function countRollup(value: unknown, note: (line: string) => void): ObjectChecks
   const parsed = parseCheckRollup(value);
   if (parsed.ok) return countChecks(parsed.value);
   note(
-    `the check rollup did not validate (${parsed.error.path} -- ${parsed.error.message}), so its counts are read leniently and anything unreadable is counted pending, never green`,
+    `the check rollup did not validate (${parsed.error.path} -- ${parsed.error.message}), so its counts are read leniently: an entry with no readable conclusion counts pending, an unrecognised one red, and none counts green`,
   );
   if (!Array.isArray(value)) return { total: 0, green: 0, red: 0, pending: 0 };
   let green = 0;

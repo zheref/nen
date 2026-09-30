@@ -9541,13 +9541,16 @@ that is **always `null`** — CON-32 is a statement about a pull request — and
 `notes[]`.
 
 **A FIELD degrades; an OBJECT does not go missing.** Each field of a pull
-request is read on its own: a check rollup GitHub sent with an in-flight
-`conclusion` of `""` is counted leniently (anything unreadable counted
-`pending`, never `green`), `mergeStateStatus` is carried verbatim, an
-unreadable thread walk is `0/0`, and **every degradation is named in that
-row's `notes[]` and on stderr**. What is *not* tolerated is losing an object
-you asked for: a `--prs`/`--issues` number that cannot be read at all, or a
-`--backlog` fetch that hits its pagination ceiling, is **exit 1 naming it** —
+request is read on its own: a check rollup that will not validate (an unknown
+`conclusion`, say) is counted leniently: an entry with no readable
+conclusion or state counts `pending`, one with an unrecognised conclusion
+counts `red`, and none counts `green`. An in-flight run's `conclusion` of
+`""` is simply unset since #304 and counts `pending` without degrading.
+`mergeStateStatus` is carried verbatim, an unreadable thread walk is
+`0/0`, and **every degradation is named in that row's `notes[]` and on
+stderr**. What is *not* tolerated is losing an object you asked for: a
+`--prs`/`--issues` number that cannot be read at all, or a `--backlog`
+fetch that hits its pagination ceiling, is **exit 1 naming it** —
 because a short `objects[]` at exit 0 says "that is the whole register" about
 a register that is not. (Routing the register through the readiness gate's
 fail-closed parser is what used to delete a named pull request outright.)
