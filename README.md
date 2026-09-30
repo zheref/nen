@@ -307,13 +307,19 @@ nen watch until --command "gh pr checks 42 --json bucket" --true-pattern "pass" 
 ```
 
 The command is classified against izanami's read-only table before the first
-run and spawned with no shell, so a mutating one is refused outright. A quoted
-or metacharacter-bearing argument refuses too (exit 2) — it reads as one word
-to the classifier's scan and something else to a real shell:
+run and spawned with no shell, so a mutating one is refused outright. It is
+split with a POSIX shell's quoting, and every verdict is computed from that same
+argument vector — so a pipe *inside* a quoted `--jq` on a `gh pr` or `gh api`
+read is one argument and watchable (on macOS and Linux; Windows keeps the
+whole-line check for now), while a metacharacter a shell would act on still
+refuses (exit 2):
 
 ```
-$ nen watch until --command "gh api repos/owner/name/pulls --jq '.[].number'" --max-iterations 1
-nen: 'gh api repos/owner/name/pulls --jq '.[].number'' classifies as unknown ...
+# watched: the pipe is inside one quoted argument
+$ nen watch until --command "gh pr view 42 --json reviews --jq '.reviews[]|.author.login'" --true-pattern someone
+# refused: unquoted, a shell would pipe it
+$ nen watch until --command "gh pr view 42 --json reviews --jq .reviews[]|.author.login" --max-iterations 1
+nen: 'gh pr view 42 --json reviews --jq .reviews[]|.author.login' classifies as unknown (a shell metacharacter ...
 ```
 
 [`docs/USAGE.md`](docs/USAGE.md) has every verb's arguments, exit codes and
