@@ -20,7 +20,7 @@
 // THE DRIFT IS GUARDED, NOT TRUSTED. version.test.ts reads package.json from the
 // repo root and asserts the two agree, so the duplication costs one test and can
 // never ship out of step. Bump BOTH in the same commit.
-export const VERSION = "0.16.0";
+export const VERSION = "0.17.0";
 
 // THE LOWEST `dependency.minimum` PIN THIS BUILD SATISFIES -- `MAJOR.MINOR`,
 // spelled the way a declaration spells the pin it is compared against.
@@ -53,7 +53,7 @@ export const VERSION = "0.16.0";
 // release that declares breaking notes has not moved this to its own minor, so
 // the duplication costs one test and can never ship out of step with the prose
 // it summarises. Set it in the SAME commit as `VERSION` whenever it moves.
-export const COMPATIBLE_MINOR_FLOOR = "0.7";
+export const COMPATIBLE_MINOR_FLOOR = "0.17";
 
 // The binary's own name, used in usage text, error prefixes and the octokit
 // user-agent. Not a persona and not taxonomy: it is this executable's identity,
