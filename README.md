@@ -493,7 +493,19 @@ bun install --frozen-lockfile
 bun run typecheck && bun run lint && bun run test   # or: bun src/index.ts dev test
 ```
 
-Tests live beside their sources (`src/**/*.test.ts`). `bun run build:linux-x64`
+Tests live beside their sources (`src/**/*.test.ts`). `bun run test` runs them
+under vitest, the declared harness and the only runner CI runs. Bun's own
+`bun test` runs the same files, and the two report the same count, file for
+file. Nothing runs `bun test` automatically, so it stays green only if you run
+it before opening a PR ([#280](https://github.com/zheref/nen/issues/280)).
+Three bun differences have broken it:
+- bun's `vi` has no `advanceTimersByTimeAsync`;
+- bun's fake timers fake `Date`, whatever `toFake` says;
+- bun counts the tests of a test file that another test file imports
+  differently from vitest. Share a helper through a module that is not a test,
+  as `src/shu/fixtures/toolchain.ts` does.
+
+`bun run build:linux-x64`
 (and the `darwin-arm64` / `windows-x64` siblings) cross-compile the release
 binaries from any one host — `build:darwin-arm64` then ad-hoc-signs its output
 through `src/dev/sign.ts` where `codesign` exists, because bun's linker
