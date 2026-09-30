@@ -709,7 +709,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
 | [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), and the package with its SHA-256 -- the `nen.runner.plan/v0.1` contract, `--out` writes it | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET); writes --out only | yes |
-| [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; asks the password once, mints each token itself, transcript stopped around config.cmd), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
+| [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled; never exits 0 on a partial pass | github (gh api GET runners) | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
@@ -10593,28 +10593,72 @@ paths, the identity, the package URL — only an `actions/runner` release asset
 — and its SHA-256), so a hand-edited plan cannot put a quote into a
 PowerShell string; a file that is not a plan this build wrote is exit 2.
 
+**Where the script goes.** `--out` belongs in **your own profile**, outside
+the runner root — `%LOCALAPPDATA%\nen\jusshin\` on Windows,
+`~/.local/state/nen/jusshin/` on Linux and macOS — where only you (and an
+administrator) can change it between rendering and the elevated run. An
+`--out` at or under the plan's `root` is **refused, exit 2**: a root the
+runners' own service account can reach is a root a CI job could rewrite the
+script in before UAC. `--json`'s `scriptSha256` is the SHA-256 of the bytes
+written, for a caller that re-checks the file (`Get-FileHash`) right before
+it launches it. (The script does not hash itself: a check inside a file that
+was swapped is swapped with it.)
+
+**The secrets never touch a command line.** The registration token is minted
+inside the script, per runner, into a variable that is never printed; the
+Windows service-account password is typed once into `Read-Host
+-AsSecureString`. Neither is ever passed as an argument: `config.cmd` is a
+batch file `cmd.exe` re-parses, so `& | < > ^ %` in an argument split it,
+expanded it or ran a command, and any argument is visible to
+process-creation auditing. Both reach the runner through its own
+environment inputs — `ACTIONS_RUNNER_INPUT_TOKEN` and
+`ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD`, which `actions/runner`'s
+`CommandSettings` reads as `--token` and `--windowslogonpassword`, registers
+with its secret masker and removes from its own environment — set only
+around the one call and cleared in a `finally`.
+
 - **Windows** — a Windows PowerShell **5.1** script (no `&&`, no `??`, no
   ternary; ASCII only). It asserts elevation (exit **3**, "run elevated"),
-  that `gh` resolves and `gh auth status` succeeds (exit **5**), creates the
-  root, project and `_jusshin` directories, starts a transcript at
-  `<projectDir>\_jusshin\register-<yyyyMMdd-HHmmss>.log`, and for a local
-  account grants it `(RX)` on the root and the project directory with
-  `icacls` — **this folder only, not recursive**: `config.cmd` grants the leaf
-  `Runner<N>` folders itself. It asks **once**, with `Read-Host
-  -AsSecureString`, for the account's password (only if a runner still needs
-  registering), downloads the package once to `_jusshin` unless a copy with
-  the planned SHA-256 is already there, and deletes it on a mismatch (exit
-  **6**). Per runner: skip when `<installDir>\.runner` already names it,
-  otherwise `Expand-Archive`, mint a registration token **now** with `gh api -X
-  POST repos/<owner>/<repo>/actions/runners/registration-token --jq .token`
-  into a variable, and run `config.cmd --unattended --url ... --token ...
-  --name <name> --labels self-hosted,<OS>,<ARCH> --work _work --runasservice
-  --windowslogonaccount .\<account> --windowslogonpassword ...` (no account
-  flags for `network-service`). **The transcript is stopped around that one
-  call** — its argument list carries the token and the password — and
-  restarted after it; `config.cmd`'s own output is replayed into it with both
-  replaced by `***`, and both variables are cleared. Every planned service
-  must then be `Running` (a stopped one is started once); the
+  then **locks the runner root down before anything is downloaded or run
+  from it**, in this order, with well-known SIDs so it reads the same in
+  every display language: the root's owner becomes Administrators
+  (`icacls <root> /setowner *S-1-5-32-544`); its inherited entries are
+  removed and SYSTEM and Administrators get full control inherited by
+  everything below (`/inheritance:r /grant:r *S-1-5-18:(OI)(CI)F
+  *S-1-5-32-544:(OI)(CI)F` — a root an unelevated session created inherits
+  `Authenticated Users: Modify` from the drive, and that entry is what goes;
+  explicit grants other projects' accounts hold on the root are kept); the
+  project, `_jusshin` and `_jusshin\pkg` directories are created or re-owned
+  by Administrators and `/reset` to inherit only that; `_jusshin\pkg` then
+  drops inheritance too (SYSTEM and Administrators only); and the elevated
+  user gets `(OI)(CI)RX` on `_jusshin` to read the transcript and summary.
+  A failed `icacls` stops the run (exit 1). Then it starts a transcript at
+  `<projectDir>\_jusshin\register-<yyyyMMdd-HHmmss>.log`, checks that `gh`
+  resolves and `gh auth status` succeeds (exit **5**), and for a local
+  account grants it `(RX)` on the root and the project directory — **this
+  folder only, not inherited**: `config.cmd` grants the leaf `Runner<N>`
+  folders itself, and nothing else grants the service account Modify. It
+  asks **once** for the account's password (only if a runner still needs
+  registering) and **refuses it before its first use**, exit 1, when it is
+  empty, begins or ends with whitespace (the runner trims an environment
+  input), or carries any of `& | < > ^ % " '` or a line break — the message
+  names that rule. It downloads the package once into the admin-only
+  `_jusshin\pkg` unless a copy with the planned SHA-256 is already there,
+  and deletes it on a mismatch (exit **6**). Per runner: skip when
+  `<installDir>\.runner` already names it; otherwise empty the folder (it
+  holds no configured runner, so nothing in it predates the lockdown
+  worth trusting), **re-hash the package immediately before `Expand-Archive`**
+  (a mismatch deletes it, exit 6), mint a registration token **now** with
+  `gh api -X POST repos/<owner>/<repo>/actions/runners/registration-token
+  --jq .token`, and run `config.cmd --unattended --url ... --name <name>
+  --labels self-hosted,<OS>,<ARCH> --work _work --runasservice
+  --windowslogonaccount .\<account>` (no account flag for
+  `network-service`) with the token and password in the environment as
+  above. **`config.cmd`'s output is discarded, never replayed**: the
+  transcript (stopped around the call all the same) records only its exit
+  code and the fixed line `config.cmd exited <code> for <name>; its own
+  (masked) log is under <installDir>\_diag`. Every planned service must then
+  be `Running` (a stopped one is started once); the
   `Get-Service actions.runner.<owner>-<repo>.*` table is printed, then the one
   summary line `jusshin: <n> registered, <m> skipped, <k> failed`. The window
   stays open on a failure only when it is an interactive console. Exit 0 only
@@ -10624,12 +10668,30 @@ PowerShell string; a file that is not a plan this build wrote is exit 2.
   runs `gh` as that account (`SUDO_USER`, with its own sign-in), `config.sh`
   as the service user (it refuses root), then `svc.sh install <user>`,
   `svc.sh start` and `svc.sh status`; `curl -fsSL` and `sha256sum -c` for the
-  package; a `systemctl list-units` table at the end.
-- **macOS** — bash, run as **yourself** (root is exit 3): `config.sh`, then
-  `svc.sh install` and `svc.sh start`; then, per runner, `launchctl print
-  gui/<uid>/<label>` and the PID check — a LaunchAgent with no PID is held
-  pending **Background Task Management** approval under System Settings →
-  General → Login Items, which the script prints and never approves.
+  package, re-checked before every `tar` extraction; a `systemctl list-units`
+  table at the end. `config.sh` is a bash script and its arguments are
+  quoted, so the token was never re-parsed — but it sat on `argv`, readable
+  by every local user through `/proc/<pid>/cmdline`. It now reaches
+  `config.sh` as `ACTIONS_RUNNER_INPUT_TOKEN`: the builtin `printf` writes it
+  into a pipe, and the service user's `bash -c` reads it from stdin into its
+  own environment before `exec ./config.sh` (`sudo` would strip an inherited
+  variable, and `env VAR=...` would put it back on `argv`).
+- **macOS** — bash, run as **yourself** (root is exit 3): `config.sh` (the
+  token as a `ACTIONS_RUNNER_INPUT_TOKEN="$token"` prefix assignment, never
+  an argument), then `svc.sh install` and `svc.sh start`; the package is
+  re-checked with `shasum -a 256 -c` before every extraction; then, per
+  runner, `launchctl print gui/<uid>/<label>` and the PID check — a
+  LaunchAgent with no PID is held pending **Background Task Management**
+  approval under System Settings → General → Login Items, which the script
+  prints and never approves.
+
+**The summary file.** Every script — Windows, Linux and macOS — also writes
+the one summary line, and **nothing else**, to
+`<projectDir>/_jusshin/register-<yyyyMMdd-HHmmss>.summary` (backslashes on
+Windows) beside its log, so a caller reads the outcome without reading the
+transcript, which is the maintainer's. It is written from the point the
+script has its `_jusshin` directory (after the lockdown on Windows): a run
+that stopped before that — not elevated, wrong user — leaves none.
 
 The header carries the target, pool, names, identity, root and package as
 comments, and the line `# rendered by nen <version> runner script — do not
@@ -10647,20 +10709,24 @@ nen runner script --plan <plan.json> --out <file> [--repo <path>] [--dry-run] [-
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--plan <plan.json>` | yes | what [`runner plan --out`](#nen-runner-plan) wrote | resolved against `--repo`; unreadable or not a plan is exit 2 |
-| `--out <file>` | yes | where the script is written | its directory is created. On Windows it must end `.ps1` and carry no space or quote — the launch line passes it inside a quoted argument list |
+| `--out <file>` | yes | where the script is written | its directory is created. Outside the plan's `root` (exit 2 otherwise) — `%LOCALAPPDATA%\nen\jusshin\` on Windows, `~/.local/state/nen/jusshin/` elsewhere. On Windows it must end `.ps1` and carry no space or quote — the launch line passes it inside a quoted argument list |
 | `--dry-run` | no | render and validate, write nothing | — |
 | `--json` | no | the result | — |
 
-**Output and exit codes** — human: the file line and the launch line.
+**Output and exit codes** — human: the file line, the `sha256 ...; the run
+leaves its one summary line in ...` line, and the launch line.
 `--json` top-level keys: `os`, `out`, `runners[]` (names), `identity`,
 `needsElevation` (Windows and Linux `true`), `launch` — Windows
 `powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process
 powershell -Verb RunAs -Wait -ArgumentList
 '-NoProfile','-ExecutionPolicy','Bypass','-File','<out>'"`, Linux `sudo bash
-<out>`, macOS `bash <out>` — and `written`. Exit 0; 2 for a plan that is not
-one, an identity still `ask`, or a Windows `--out` that is not a plain `.ps1`.
-The script's own exit codes (`0`, `1`, `3`, `5`, `6`) are its own, listed
-above, and are never this verb's.
+<out>`, macOS `bash <out>` — `written`, and (additive in 0.18.1)
+`scriptSha256` (lowercase hex SHA-256 of the rendered bytes) and `summary`
+(the glob `<projectDir>\_jusshin\register-*.summary` the run's summary file
+matches; the newest is this run's). Exit 0; 2 for a plan that is not one, an
+identity still `ask`, a Windows `--out` that is not a plain `.ps1`, or an
+`--out` under the plan's root. The script's own exit codes (`0`, `1`, `3`,
+`5`, `6`) are its own, listed above, and are never this verb's.
 
 **Example**
 
@@ -10668,10 +10734,20 @@ above, and are never this verb's.
 nen runner script --plan plan.json --out 'C:\GithubRunners\nen-runners\_jusshin\register.ps1' --dry-run
 ```
 ```text
-(dry run) would write C:\GithubRunners\nen-runners\_jusshin\register.ps1 -- Windows host script for NZ-NNR1, NZ-NNR2, NZ-NNR3 as .\lordzheref
-launch (elevated): powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\GithubRunners\nen-runners\_jusshin\register.ps1'"
+nen runner: --out 'C:\GithubRunners\nen-runners\_jusshin\register.ps1' is under the plan's runner root 'C:\GithubRunners'. Write the script where only you can change it before it runs elevated -- %LOCALAPPDATA%\nen\jusshin\ -- never inside the root the runners' own service account can reach.
+Run 'nen runner --help'.
 ```
-(run for real on the plan above; the rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
+(exit 2)
+
+```bash
+nen runner script --plan plan.json --out 'C:\Users\maintainer\AppData\Local\nen\jusshin\register.ps1' --dry-run
+```
+```text
+(dry run) would write C:\Users\maintainer\AppData\Local\nen\jusshin\register.ps1 -- Windows host script for NZ-NNR1, NZ-NNR2, NZ-NNR3 as .\lordzheref
+sha256 28e57708069963439e7f51ec799140ef96c7873f76732a193c7e3779264ebdb0; the run leaves its one summary line in C:\GithubRunners\nen-runners\_jusshin\register-*.summary
+launch (elevated): powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\Users\maintainer\AppData\Local\nen\jusshin\register.ps1'"
+```
+(run for real on the plan above, the profile's user name replaced with `maintainer`; the rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
 
 ### `nen runner verify`
 

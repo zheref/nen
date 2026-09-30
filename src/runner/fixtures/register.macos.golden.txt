@@ -11,11 +11,14 @@
 #
 # Run it as YOURSELF, not with sudo: bash <this file>. A macOS runner is a
 # LaunchAgent of the user who installs it. The registration token is minted
-# per runner into a variable that is never printed.
+# per runner into a variable that is never printed, and reaches config.sh
+# through its environment, never argv. Keep this file outside the runner root
+# (e.g. ~/.local/state/nen/jusshin/).
 #
 # Exit codes: 0 every planned runner's service is running; 1 anything else;
 # 3 run as the wrong user; 5 gh missing or not signed in; 6 the runner
-# package failed its SHA-256 check (the file is deleted).
+# package failed its SHA-256 check (the file is deleted). The one summary
+# line is also written to $PROJECT_DIR/_jusshin/register-<ts>.summary.
 set -euo pipefail
 
 TARGET='zheref/nen'
@@ -36,9 +39,15 @@ WORK_DIR="$PROJECT_DIR/_jusshin"
 registered=0
 skipped=0
 failed=0
+stamp="$(date +%Y%m%d-%H%M%S)"
+summary_file=""
 
+# The summary file carries the ONE summary line and nothing else: it is what
+# the caller reads. The log is the maintainer's.
 finish() {
-  echo "jusshin: ${registered} registered, ${skipped} skipped, ${failed} failed"
+  summary="jusshin: ${registered} registered, ${skipped} skipped, ${failed} failed"
+  echo "$summary"
+  if [ -n "$summary_file" ]; then printf '%s\n' "$summary" > "$summary_file" || true; fi
   exit "$1"
 }
 
@@ -61,7 +70,8 @@ if ! gh auth status >/dev/null 2>&1; then
 fi
 
 mkdir -p "$ROOT" "$PROJECT_DIR" "$WORK_DIR"
-log="$WORK_DIR/register-$(date +%Y%m%d-%H%M%S).log"
+log="$WORK_DIR/register-$stamp.log"
+summary_file="$WORK_DIR/register-$stamp.summary"
 exec > >(tee -a "$log") 2>&1
 echo "jusshin: ${#RUNNERS[@]} runner(s) for $TARGET; log $log"
 
@@ -104,6 +114,12 @@ for entry in "${pending[@]+"${pending[@]}"}"; do
   dir="${entry#*|}"
   echo "jusshin: registering $name in $dir"
   mkdir -p "$dir"
+  # Re-hashed immediately before EVERY extraction, not only after the download.
+  if ! verify_archive; then
+    rm -f "$archive"
+    echo "jusshin: $ARCHIVE no longer matches sha256 $SHA256 -- deleted; nothing extracted into $dir."
+    finish 6
+  fi
   tar xzf "$archive" -C "$dir"
   token="$(gh api -X POST "repos/$TARGET/actions/runners/registration-token" --jq .token 2>/dev/null)" || token=""
   if [ -z "$token" ]; then
@@ -111,7 +127,10 @@ for entry in "${pending[@]+"${pending[@]}"}"; do
     failed=$((failed + 1))
     continue
   fi
-  if ! (cd "$dir" && ./config.sh --unattended --url "$REPO_URL" --token "$token" --name "$name" --labels "$LABELS" --work _work); then
+  # NO TOKEN ON A COMMAND LINE: it reaches config.sh as ACTIONS_RUNNER_INPUT_TOKEN,
+  # which actions/runner reads as its --token input; a prefix assignment is
+  # never part of argv.
+  if ! (cd "$dir" && ACTIONS_RUNNER_INPUT_TOKEN="$token" ./config.sh --unattended --url "$REPO_URL" --name "$name" --labels "$LABELS" --work _work); then
     token=""
     echo "jusshin: config.sh failed for $name."
     failed=$((failed + 1))
