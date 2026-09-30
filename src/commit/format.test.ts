@@ -61,6 +61,14 @@ describe("validateCommitMessage -- shape only, never content", () => {
     expect(refusals.some((r): boolean => r.includes("72-character"))).toBe(true);
   });
 
+  it("refuses a 75-character header and passes one of exactly 72 -- the regression zheref/nen#290 names", () => {
+    // `feat(capture): ` is 15 characters.
+    const at75 = validateCommitMessage(input({ scope: "capture", subject: "s".repeat(60) }));
+    expect(at75).toEqual([`header line is 75 characters, over the 72-character convention: 'feat(capture): ${"s".repeat(60)}'`]);
+    expect(validateCommitMessage(input({ scope: "capture", subject: "s".repeat(57) }))).toEqual([]);
+    expect(validateCommitMessage(input({ scope: "capture", subject: "s".repeat(58) }))).toHaveLength(1);
+  });
+
   it("refuses a subject ending in punctuation", () => {
     expect(validateCommitMessage(input({ subject: "add a thing." })).length).toBeGreaterThan(0);
   });

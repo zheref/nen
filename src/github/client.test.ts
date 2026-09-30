@@ -37,6 +37,102 @@ import {
 } from "./graphql.js";
 import { PROGRAM, VERSION } from "../version.js";
 
+// ── ONE FAKE CLOCK, SET IN THE PAST, FOR EVERY TEST IN THIS FILE ────────────
+//
+// octokit's throttling plugin sends every request through Bottleneck limiters.
+// It builds them ONCE per process and every client shares them. The GraphQL
+// limiter spaces POSTs at least 1s apart, so on a real clock each GraphQL case
+// after the first waits a second. GitHubClient passes no `throttle` option
+// through, and a test should not widen its surface to get one. Fake timers
+// release the limiters without changing a byte of what is requested or how the
+// answer is mapped, which is all this suite asserts.
+//
+// A limiter records its next free slot as an ABSOLUTE time, read off `Date`.
+// That is the trap every clock choice here has to avoid. A slot left AHEAD of
+// the real clock makes the next real-clock call in the process wait out the
+// difference -- it did, as a 5s timeout. The previous design faked the timers
+// and never `Date`, which holds under vitest only: `bun test`'s fake timers fake
+// `Date` whatever `toFake` says. Each case then started its fake clock at the
+// real time, inherited the last case's slot, and pushed it a second further,
+// so the clock drifted ahead case by case. The REST cases share the same
+// limiters on the real clock, and they then waited that drift out for real.
+//
+// So both runners get the same regime, and it cannot drift ahead:
+//   * `Date` is faked in both, starting at `FAKE_EPOCH`, an instant long past.
+//     A slot recorded on this clock is years BEHIND the real one, so no
+//     real-clock caller anywhere in the process ever waits on it.
+//   * The clock CONTINUES from case to case (`fakeClock`), rather than
+//     restarting, so a case never inherits a slot ahead of its own clock.
+//   * EVERY test in this file runs on it, so no limiter ever records a
+//     real-clock slot that this clock would then have to jump to. That is why
+//     the REST cases go through `drive` too.
+const FAKE_EPOCH = Date.UTC(2020, 0, 1);
+let fakeClock = FAKE_EPOCH;
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], now: fakeClock });
+});
+
+afterEach(() => {
+  fakeClock = Date.now();
+  vi.useRealTimers();
+});
+
+/**
+ * Settle a client call on the fake clock.
+ *
+ * ONE STEP IS ONE REAL MACROTASK, THEN AT MOST ONE TIMER. `setImmediate` is not
+ * faked in either runner. Awaiting it lets every microtask the call has queued
+ * run first, so on return the call is either settled or parked on a timer, and
+ * `vi.advanceTimersToNextTimer()` then fires exactly that timer. It moves the
+ * clock only as far as the limiter asked, where a fixed tick would overshoot.
+ * Both runners implement it the same way. `vi.advanceTimersByTimeAsync` did the
+ * same job before this, but `bun test`'s `vi` lacks it and 7 tests here failed
+ * on its absence.
+ */
+async function drive<T>(pending: Promise<T>): Promise<T> {
+  // BOTH handlers are attached before any time is advanced, so a call that
+  // REJECTS while the loop is still stepping is never an unhandled rejection --
+  // an earlier `finally`-derived copy was, and vitest failed the whole run on it.
+  const settled: { outcome?: { ok: true; value: T } | { ok: false; error: unknown } } = {};
+  pending.then(
+    (value): void => {
+      settled.outcome = { ok: true, value };
+    },
+    (error: unknown): void => {
+      settled.outcome = { ok: false, error };
+    },
+  );
+  for (let step = 0; step < 1000 && settled.outcome === undefined; step += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (settled.outcome === undefined) vi.advanceTimersToNextTimer();
+  }
+  const outcome = settled.outcome;
+  if (outcome === undefined) throw new Error("the client call did not settle within 1000 steps of the fake clock");
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
+}
+
+/**
+ * The error a client call rejects with, once `drive` has settled it.
+ *
+ * SETTLE FIRST, ASSERT SECOND. Given a promise that `drive` was still stepping,
+ * `bun test`'s `expect(...).rejects` stalled past its 5s timeout, though the
+ * call itself settled within a dozen steps. Given an already-settled promise,
+ * the same matcher returned at once. That cost the three failure cases in this
+ * file a 6-7s stall each. vitest behaves the same either way. So the error is
+ * collected here and the case asserts on it synchronously. A call that
+ * RESOLVES fails the case, as `.rejects` would have failed it.
+ */
+async function rejection(pending: Promise<unknown>): Promise<unknown> {
+  try {
+    await drive(pending);
+  } catch (error: unknown) {
+    return error;
+  }
+  throw new Error("the client call resolved, and this case expects it to reject");
+}
+
 describe("tokenFromEnv", () => {
   it("reads the variable the caller names", () => {
     const result = tokenFromEnv("BANKAI_APP_TOKEN", { BANKAI_APP_TOKEN: "ghs_x" });
@@ -118,7 +214,7 @@ describe("GitHubClient.timeline -- the issue timeline, paginated, raw", () => {
     };
     const client = new GitHubClient("ghs_x", { request: { fetch: fetchStub } });
 
-    const events = await client.timeline({ owner: "zheref", repo: "nen" }, 9);
+    const events = await drive(client.timeline({ owner: "zheref", repo: "nen" }, 9));
 
     // Both pages came back, in order -- proof `paginate` (not a single
     // request) drove this call.
@@ -200,7 +296,7 @@ describe("GitHubClient.pullRequestCommits -- the PR's commits, paginated (E7 opt
         : { body: [{ sha: "c3" }] },
     );
 
-    const commits = await clientWith(stub).pullRequestCommits(REPO, 279);
+    const commits = await drive(clientWith(stub).pullRequestCommits(REPO, 279));
 
     expect(commits).toEqual([{ sha: "c1" }, { sha: "c2" }, { sha: "c3" }]);
     expect(calls.map((call) => call.method)).toEqual(["GET", "GET"]);
@@ -223,7 +319,7 @@ describe("GitHubClient.pullRequestCommits -- the PR's commits, paginated (E7 opt
       return { body: pageOf(200, 50) };
     });
 
-    const commits = await clientWith(stub).pullRequestCommits(REPO, 9);
+    const commits = await drive(clientWith(stub).pullRequestCommits(REPO, 9));
 
     expect(commits).toHaveLength(250);
     expect(commits[0]).toEqual({ sha: "c0" });
@@ -238,7 +334,7 @@ describe("GitHubClient.pullRequestCommits -- the PR's commits, paginated (E7 opt
       body: { message: "Resource not accessible by integration" },
     }));
 
-    await expect(clientWith(stub).pullRequestCommits(REPO, 9)).rejects.toMatchObject({ status: 403 });
+    expect(await rejection(clientWith(stub).pullRequestCommits(REPO, 9))).toMatchObject({ status: 403 });
   });
 });
 
@@ -253,7 +349,7 @@ describe("GitHubClient.commitCheckRuns -- ONE page of a commit's check runs, raw
   it("GETs commits/{sha}/check-runs with per_page:100 and returns the RAW { total_count, check_runs } payload", async () => {
     const { fetch: stub, calls } = recordingFetch(() => ({ body: payload }));
 
-    const result = await clientWith(stub).commitCheckRuns(REPO, "2851d2e");
+    const result = await drive(clientWith(stub).commitCheckRuns(REPO, "2851d2e"));
 
     // Raw, so the walk can see `total_count` (L1's truncation warning) and
     // each run's `pull_requests` (H1's attribution).
@@ -270,7 +366,7 @@ describe("GitHubClient.commitCheckRuns -- ONE page of a commit's check runs, raw
       link: '<https://api.github.com/repositories/1/commits/2851d2e/check-runs?per_page=100&page=2>; rel="next"',
     }));
 
-    await clientWith(stub).commitCheckRuns(REPO, "2851d2e");
+    await drive(clientWith(stub).commitCheckRuns(REPO, "2851d2e"));
 
     expect(calls).toHaveLength(1);
   });
@@ -278,7 +374,7 @@ describe("GitHubClient.commitCheckRuns -- ONE page of a commit's check runs, raw
   it("propagates a failed read -- the walk turns the throw into 'nothing further counted'", async () => {
     const { fetch: stub } = recordingFetch(() => ({ status: 404, body: { message: "No commit found for SHA" } }));
 
-    await expect(clientWith(stub).commitCheckRuns(REPO, "deadbeef")).rejects.toMatchObject({ status: 404 });
+    expect(await rejection(clientWith(stub).commitCheckRuns(REPO, "deadbeef"))).toMatchObject({ status: 404 });
   });
 });
 
@@ -293,7 +389,7 @@ describe("GitHubClient.reviews -- REST, because commit_id is what CON-16 turns o
         : { body: [{ user: { login: "zheref", type: "User" }, state: "COMMENTED", commit_id: "faaa4ff" }] },
     );
 
-    const reviews = await clientWith(stub).reviews(REPO, 278);
+    const reviews = await drive(clientWith(stub).reviews(REPO, 278));
 
     expect(reviews).toEqual([
       { user: { login: "cursor[bot]", type: "Bot" }, state: "COMMENTED", commit_id: "0a77992" },
@@ -305,52 +401,7 @@ describe("GitHubClient.reviews -- REST, because commit_id is what CON-16 turns o
   });
 });
 
-/**
- * Settle a client call while FAKE timers stand in for the clock.
- *
- * octokit's throttling plugin spaces every GraphQL POST at least 1s after the
- * previous one, through a Bottleneck limiter it builds ONCE per process and
- * shares across every client -- so on a real clock each GraphQL case after the
- * first costs a second of waiting, and GitHubClient passes no `throttle`
- * option through (nor should a test widen its surface to get one). Advancing
- * fake time releases the limiter without changing a byte of what is requested
- * or how the answer is mapped, which is all this suite asserts.
- *
- * ONLY the timers are faked, never `Date`. The limiter records its next free
- * slot as an absolute time; a faked, fast-forwarded `Date` would leave that
- * slot seconds ahead of the real clock, and the next REAL-timer test in this
- * process would sit out the difference (it did: a 5s timeout).
- */
-async function drive<T>(pending: Promise<T>): Promise<T> {
-  // BOTH handlers are attached before any time is advanced, so a call that
-  // REJECTS while the loop is still ticking is never an unhandled rejection --
-  // an earlier `finally`-derived copy was, and vitest failed the whole run on it.
-  const settled: { outcome?: { ok: true; value: T } | { ok: false; error: unknown } } = {};
-  pending.then(
-    (value): void => {
-      settled.outcome = { ok: true, value };
-    },
-    (error: unknown): void => {
-      settled.outcome = { ok: false, error };
-    },
-  );
-  for (let tick = 0; tick < 20 && settled.outcome === undefined; tick += 1) {
-    await vi.advanceTimersByTimeAsync(1000);
-  }
-  const outcome = settled.outcome;
-  if (outcome === undefined) throw new Error("the client call did not settle within 20 fake seconds");
-  if (!outcome.ok) throw outcome.error;
-  return outcome.value;
-}
-
 describe("GitHubClient -- the GraphQL reads: one POST each, the query and variables asserted, the answer mapped", () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  });
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   const PR_RESPONSE = {
     data: {
       repository: {
@@ -438,7 +489,9 @@ describe("GitHubClient -- the GraphQL reads: one POST each, the query and variab
       body: { data: null, errors: [{ type: "NOT_FOUND", message: "Could not resolve to a Repository" }] },
     }));
 
-    await expect(drive(clientWith(stub).pullRequestSnapshot(REPO, 1))).rejects.toThrow(/Could not resolve to a Repository/);
+    const error = await rejection(clientWith(stub).pullRequestSnapshot(REPO, 1));
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/Could not resolve to a Repository/);
   });
 
   it("reviewThreadsPage POSTs REVIEW_THREADS_QUERY, defaults the cursor to null, and maps nodes and pageInfo", async () => {
@@ -542,7 +595,7 @@ describe("GitHubClient -- the identity and the endpoint every call carries", () 
       request: { fetch: stub },
     });
 
-    await client.reviews(REPO, 1);
+    await drive(client.reviews(REPO, 1));
 
     expect(calls[0]?.url.startsWith("https://ghe.example.test/api/v3/repos/zheref/nen/pulls/1/reviews")).toBe(true);
     expect(calls[0]?.headers["authorization"]).toBe("token ghs_explicit");

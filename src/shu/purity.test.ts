@@ -25,7 +25,7 @@
 //     reference pack, and ../profiles/inertness.test.ts is what holds it to
 //     spawning nothing.
 //   * `*.test.ts` and `fixtures/` are not shipped code. A test naming a tool is
-//     how the rule is PROVED (this file names twenty-six of them), and a
+//     how the rule is PROVED (./fixtures/toolchain.ts names twenty-eight), and a
 //     fixture naming one is test data.
 //   * `install.ts` NAMES THE ONE INSTALLER NEN IMPLEMENTS, and it is the only
 //     exclusion added since this sweep was written. `nen shu tools --install`
@@ -73,6 +73,10 @@ import { loadProfilesPack, PLACEHOLDERS, profileById, verbCell } from "../profil
 import { INSTALLERS, type Installer } from "../schema/contract.js";
 import { ENABLED_INSTALLERS } from "./install.js";
 import { REFUSED_PLACEHOLDERS } from "./render.js";
+// The toolchain list and its matcher live in a module rather than here, so
+// that ./detect.test.ts can share them without importing a test file (see
+// that module's header for why that silently dropped this file under bun).
+import { TOKEN_SPLIT, toolsNamedIn } from "./fixtures/toolchain.js";
 
 const SHU = join(process.cwd(), "src", "shu");
 
@@ -113,69 +117,6 @@ function shuModules(directory: string, found: string[] = []): string[] {
 }
 
 const EXECUTION_PATH: readonly string[] = shuModules(SHU);
-
-/**
- * Toolchain EXECUTABLES. The match is a WHOLE TOKEN inside a quoted literal,
- * not a whole literal and not a bare substring, and the difference is the
- * finding this rule was rewritten for: `"android/gradlew"` is a wrapper path
- * spelled inside a longer string, and the old whole-literal form passed it
- * while the header claimed no false negatives.
- *
- * A SUBSTRING RULE WOULD BE THE OTHER MISTAKE -- `next.config.mjs` is a
- * FILENAME and `const next = ...` is an identifier, and reporting either proves
- * nothing. So a literal is split on the characters that separate tokens in a
- * path, an argv or a flag, and each piece is compared whole.
- */
-const TOOLCHAIN: readonly string[] = [
-  "xcodebuild",
-  "xcrun",
-  "gradle",
-  "gradlew",
-  "gradlew.bat",
-  "fastlane",
-  "expo",
-  "eas",
-  "next",
-  "gatsby",
-  "vercel",
-  "gh-pages",
-  "npx",
-  "npm",
-  "yarn",
-  "pnpm",
-  "corepack",
-  "turbo",
-  "swiftlint",
-  "biome",
-  "vitest",
-  "playwright",
-  "maestro",
-  "storybook",
-  "dotnet",
-  "msbuild",
-  "pod",
-  "cocoapods",
-];
-
-const TOOLS: ReadonlySet<string> = new Set(TOOLCHAIN);
-
-/** Every quoted literal on a line: single, double and backtick alike. */
-const QUOTED = /"([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`/g;
-
-/** The separators between tokens in a path, an argv, a flag or a sentence. */
-const TOKEN_SPLIT = /[\s/\\=,:;()[\]{}<>|&"'`]+/;
-
-/** Every toolchain name a line spells as a whole token inside a quote. */
-export function toolsNamedIn(line: string): readonly string[] {
-  const found: string[] = [];
-  for (const match of line.matchAll(QUOTED)) {
-    const content = match[1] ?? match[2] ?? match[3] ?? "";
-    for (const token of content.split(TOKEN_SPLIT)) {
-      if (TOOLS.has(token.toLowerCase())) found.push(token);
-    }
-  }
-  return found;
-}
 
 describe("§3 for the shu family: the executor decides with no toolchain name", () => {
   it("sweeps the files it claims to, and every exclusion names a real file", () => {
@@ -349,5 +290,36 @@ describe("the executor refuses exactly the reference pack's placeholder tokens",
 
   it("is a set, not a list with a duplicate in it", () => {
     expect(new Set(REFUSED_PLACEHOLDERS).size).toBe(REFUSED_PLACEHOLDERS.length);
+  });
+});
+
+// ── a test file is an entry point, never a dependency ───────────────────────
+
+describe("no test file imports another test file", () => {
+  // #280. ./detect.test.ts once took `toolsNamedIn` from this file, and each
+  // runner registered this file's tests a second time in its own way. vitest
+  // ran all 11 twice. `bun test` ran them once, filed under detect.test.ts,
+  // and filed nothing under this file. The totals differed by 11, and the two
+  // suites could not be compared test for test. A helper that two test files
+  // share belongs in a module that is not a test, as ./fixtures/toolchain.ts
+  // is now. This case keeps it that way everywhere under `src/`, not just here.
+  it("finds no import of a *.test module anywhere under src/", () => {
+    const offences: string[] = [];
+    const walk = (directory: string): void => {
+      for (const entry of readdirSync(directory).sort()) {
+        const path = join(directory, entry);
+        if (statSync(path).isDirectory()) {
+          if (entry !== "fixtures" && entry !== "node_modules") walk(path);
+          continue;
+        }
+        if (!entry.endsWith(".ts")) continue;
+        const source = readFileSync(path, "utf8");
+        for (const match of source.matchAll(/\bfrom\s*["']([^"']+\.test(?:\.[jt]s)?)["']|\bimport\s*\(\s*["']([^"']+\.test(?:\.[jt]s)?)["']\s*\)/g)) {
+          offences.push(`${relative(process.cwd(), path).split(sep).join("/")}: ${match[1] ?? match[2] ?? ""}`);
+        }
+      }
+    };
+    walk(join(process.cwd(), "src"));
+    expect(offences).toEqual([]);
   });
 });
