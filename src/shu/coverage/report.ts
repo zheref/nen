@@ -94,16 +94,52 @@ export interface TouchedArtifact {
    * resolved against (`.` for the repository root), or null: a package-grain
    * report (its rows are packages, not paths, and are never rebased), or a
    * report that could not be read.
+   *
+   * FOR A PER-FILE VIEW (cobertura, zheref/nen#296) each file name is resolved
+   * on its own -- the report states its roots and never says which name is
+   * under which -- so this is the root MOST of its files resolved under
+   * (./files.ts).
    */
   readonly root: string | null;
-  /** Which candidate `root` came from: `artifact`, `lane-cwd` or `repo-root`; null exactly when `root` is. */
+  /**
+   * Which candidate `root` came from: `source` (a root the report itself
+   * stated -- Cobertura's `<source>`), `artifact`, `lane-cwd` or `repo-root`;
+   * null exactly when `root` is.
+   */
   readonly basis: string | null;
-  /** Rows this report contributed before the touched filter. 0 when unread. */
+  /**
+   * Rows this report contributed before the touched filter -- for a per-file
+   * view, the distinct file names it states. 0 when unread.
+   */
   readonly rows: number;
-  /** Of its RELATIVE row names, how many name a file on disk under `root`; null exactly when `root` is. */
+  /**
+   * Of its RELATIVE row names, how many name a file on disk under `root`; null
+   * exactly when `root` is. FOR A PER-FILE VIEW, how many of its file names
+   * resolved to a file under ANY root it was tried against -- and `rows -
+   * onDisk` are UNRESOLVED names, which are never matched (a touched file
+   * among them is `unmatched`, never credited to its package).
+   */
   readonly onDisk: number | null;
   /** Why it could not be read, or null. A non-null error makes the run exit 1. */
   readonly error: string | null;
+  /**
+   * PER-FILE VIEWS ONLY (cobertura read by file, zheref/nen#296): every file
+   * name the report states that resolved to NO file here, each with the
+   * reason -- ambiguous under two stated roots, a URL, outside the
+   * repository, or nowhere nen looked. ABSENT (not empty) for every other
+   * report, so an LCOV or JaCoCo entry keeps exactly the seven keys it had;
+   * EMPTY when a per-file view resolved every name. Its length is always
+   * `rows - onDisk`, and none of these names is ever matched.
+   */
+  readonly unresolved?: readonly UnresolvedName[];
+}
+
+/** A file name a report stated that nen could not place in the tree, and why. */
+export interface UnresolvedName {
+  /** As the report wrote it, `/`-separated. */
+  readonly name: string;
+  /** A clause completing "<name> ...": "is ambiguous: ...", "names no file in this tree (...)". */
+  readonly reason: string;
 }
 
 /**
@@ -414,6 +450,7 @@ export function renderCoverage(
     );
     for (const artifact of t.artifacts) {
       lines.push(`  from: ${describeArtifact(artifact)}`);
+      for (const line of unresolvedLines(artifact)) lines.push(line);
     }
     if (t.unmatched.length > 0) {
       lines.push(`  unmatched: ${t.unmatched.join(", ")}`);
@@ -436,6 +473,39 @@ function describeArtifact(artifact: TouchedArtifact): string {
   const root =
     artifact.root === null
       ? "rows are packages, matched anywhere under a touched path"
-      : `root ${artifact.root} [${artifact.basis ?? "?"}], ${artifact.onDisk ?? 0} on disk`;
+      : `root ${artifact.root} [${artifact.basis ?? "?"}], ${artifact.onDisk ?? 0} on disk${unresolvedNote(artifact)}`;
   return `${artifact.path} (${artifact.format ?? "?"}) -- ${rows}, ${root}`;
+}
+
+/**
+ * `, 2 unresolved (never matched)` -- for a per-file view only.
+ *
+ * ONLY THERE, because only there does "not on disk" mean "not matched": an
+ * LCOV row that is not on disk is still rebased under the chosen root and
+ * matched by name, while a Cobertura file name that resolves nowhere is kept
+ * out of matching altogether (./files.ts) -- and a reader weighing `matched`
+ * against `rows` needs to know which of the two they are looking at.
+ */
+function unresolvedNote(artifact: TouchedArtifact): string {
+  const count = artifact.unresolved?.length ?? 0;
+  return count === 0 ? "" : `, ${count} unresolved (never matched)`;
+}
+
+/** How many unresolved names the text rendering spells out per report before summarising. */
+const UNRESOLVED_SHOWN = 3;
+
+/**
+ * `    unresolved: utils.py -- is ambiguous: ...`, one per name, capped.
+ *
+ * CAPPED BECAUSE THE WORST CASE IS EVERY FILE: a source-link report names
+ * each file by URL and resolves none, and a table of three hundred identical
+ * reasons buries the one line that says why. `--json` lists every one.
+ */
+function unresolvedLines(artifact: TouchedArtifact): readonly string[] {
+  const unresolved = artifact.unresolved ?? [];
+  const shown = unresolved
+    .slice(0, UNRESOLVED_SHOWN)
+    .map((entry): string => `    unresolved: ${entry.name} -- ${entry.reason}`);
+  const rest = unresolved.length - shown.length;
+  return rest > 0 ? [...shown, `    ... and ${rest} more unresolved (--json lists every one)`] : shown;
 }

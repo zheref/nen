@@ -7409,7 +7409,7 @@ caught:
 |---|---|---|
 | `istanbul-summary` | the Istanbul/Vitest JSON summary; rows are files | `coverage-summary.json` |
 | `xccov-report` | the JSON an `xccov view --report --json` step writes to a file; rows are build targets, and there is **no branch figure** — the key is omitted rather than zeroed | no convention: name the path in the step, and in `artifacts` |
-| `cobertura` | Cobertura XML (coverlet and others); rows are packages | `coverage.cobertura.xml` |
+| `cobertura` | Cobertura XML (coverlet and others); rows are packages — under `--touched`, **files**, from each `<class filename>` ([below](#coverage-touched-cobertura)) | `coverage.cobertura.xml` |
 | `jacoco` | JaCoCo XML, and Kover's compatible form; rows are packages | the plugin's own path |
 | `lcov` | the LCOV tracefile, the common fallback; rows are files | `lcov.info` |
 
@@ -7426,7 +7426,11 @@ is exit 1 naming the `SF:` it stopped inside, rather than a total quietly missin
 a row (that format's total *is* the sum of its rows, so a dropped row reads as a
 smaller project, not as a broken file). A report stating more covered lines than
 it has lines is refused with both counts, rather than printed as `117.65%` or
-clamped to 100%.
+clamped to 100%. A Cobertura line stating more conditions covered than it has
+(`condition-coverage="250% (5/2)"`) is refused the same way, naming the file and
+the line. That holds on a plain run and under `--touched` alike, and whatever
+sits beside it: `(5/2)` next to `(0/4)` would otherwise add up to a plausible
+5 of 6.
 
 **`--threshold` reports and never gates.** `met` is `true`, `false`, or `null`
 when there was no number to compare. The exit code is the **run's**, in both
@@ -7469,14 +7473,77 @@ The match depends on what a row **is**:
 
 - **File-grain formats** (`istanbul-summary`, `lcov`) match a touched path by
   plain equality against the row's own (already repo-relative) name.
-- **Package-grain formats** (`cobertura`, `jacoco`) name a row after a
+- **Package-grain formats** (`jacoco`, and a `cobertura` report whose classes
+  name **no** file) name a row after a
   *package*, not a file, so a touched file matches when its own path contains
   that package's segments, in order, with the file itself left over —
   "this touched file sits **under** that package". The text rendering says so
   (`-- rows matched BY PACKAGE, not by file`) when every report read is
   package-grain, and omits the note when reports of both grains were read —
-  each report's own `from:` line says which it is; `--json` does not carry the
-  grain, because it already follows from each `touched.artifacts[].format`.
+  each report's own `from:` line says which it is (`rows are packages` for a
+  package-grain one); `--json` carries no grain key — a package-grain report
+  is the one whose `touched.artifacts[]` entry has `root: null` and
+  `error: null`.
+- <a id="coverage-touched-cobertura"></a>**`cobertura`** is read at **file**
+  grain whenever its classes name files — every coverlet report does
+  ([#296](https://github.com/zheref/nen/issues/296)). Its own rows are
+  packages, and a plain run keeps printing them, but a package's number is
+  neither any touched file's coverage nor their average, so under `--touched`
+  nen reads each `<class filename>` instead (`\` read as `/`, spaces kept) and
+  resolves it **per file**:
+  - **The report's own `<sources><source>` roots come first, and nen looks in
+    every one of them.** If exactly one holds the file inside the repository,
+    that is the file. If two **different** stated roots each hold a file of
+    that name, the name is **ambiguous**, and nen never guesses. coverage.py
+    writes one `<source>` per measured package, so `pkgA/utils.py` and
+    `pkgB/utils.py` are both `filename="utils.py"`, and taking the first root
+    would report one file's lines as the other's.
+  - **A stated root outside the repository still counts.** nen looks in it if
+    it exists on this machine (coverage.py states a package installed into
+    site-packages this way). A file found there beside one in the repository
+    makes the name ambiguous. A file found only there is outside the
+    repository, so no touched file is credited with its lines.
+  - **Some stated roots can't be checked:** an absolute root that is not a
+    directory on this machine, like a CI runner's path in a report read
+    locally. In a report stating **two or more** roots, a name its report wrote
+    as **two or more** `<class>` entries is **unverifiable**. Those entries may
+    be two files whose lines were already unioned, so it is never matched.
+    A single-entry name still resolves, and so does every name in a report
+    stating a single root. A coverlet report written on CI with one foreign
+    drive-root `<source>` therefore resolves as before.
+  - **Only when no stated root holds the file** are the three candidates below
+    tried, in order.
+  - **Absolute paths are anchored under both spellings of the repository
+    root:** the path you gave, and the one the filesystem resolves it to. A
+    tool writes the resolved one (a symlinked checkout, macOS `/tmp` →
+    `/private/tmp`). A Windows-shaped root (a drive letter or UNC share) is
+    compared without regard to letter case.
+  - **A file found under another letter case** (a case-insensitive
+    filesystem) is reported with the **letter case it has on disk**, in
+    Unicode **NFC** — the form git names it in on macOS, where a file may sit
+    on disk decomposed (NFD). Two spellings of one file are one row.
+
+  A file several `<class>` entries name — a partial class, a nested or
+  compiler-generated one (`<>c__DisplayClass…`) — is **one** row. Its lines
+  are the **union** of theirs: a line counts once, covered if any entry ran
+  it. Each line keeps **one** condition figure — the entry stating the most
+  conditions, then the most covered — never a sum. (A line stating more
+  conditions covered than it has is refused outright: see *A report that is
+  damaged* above.)
+
+  A name that cannot be placed is **never matched**, and its touched file
+  stays `unmatched`, never credited to its package or to a same-named file.
+  That covers:
+  - an ambiguous name;
+  - an unverifiable name;
+  - a file only outside the repository;
+  - another machine's absolute path;
+  - a generated file that is not on disk.
+
+  coverlet's `UseSourceLink` writes every filename as a **URL**, which never
+  resolves, so every file of that report is unmatched. The run exits 6 unless
+  another declared report joins a touched file. Only a report in which no
+  class names a file at all falls back to package matching.
 - **`xccov-report`** is read at **file** grain here only: nen descends
   `targets[].files[]` instead of stopping at the target row, because "this
   whole app/framework was touched" is true of nearly every diff and would
@@ -7521,16 +7588,30 @@ says `SF:src/utils/q.ts` — while git names the same file
   single-package repository, where all three candidates are one directory,
   is resolved exactly as it always was. Absolute row names are relativised
   as above and never rebased; a relative name that would climb out of the
-  repository is left as written; package-grain rows (`cobertura`, `jacoco`)
-  are never rebased, because they are package names rather than paths.
+  repository is left as written; package-grain rows (`jacoco`, and a
+  `cobertura` report that names no file) are never rebased, because they are
+  package names rather than paths. A `cobertura` report's file names are
+  resolved **one at a time** instead, because the report states its roots and
+  never says which name is under which (above).
 
 `touched.artifacts` carries one `{ path, format, root, basis, rows, onDisk,
 error }` per report, so the join is auditable without re-deriving it: `root`
 is the repo-relative directory the report's paths were resolved against (`.`
 for the repository root; `null` for package rows or an unread report),
-`basis` is which candidate it was, and `onDisk` how many of its relative
-paths name a file there. The text rendering prints the same as one `from:`
-line per report. `total`, `report` and the aggregate `threshold.met` stay the
+`basis` is which candidate it was — `artifact`, `lane-cwd`, `repo-root`, or
+`source` for a root the report itself stated — and `onDisk` how many of its
+relative paths name a file there. For a `cobertura` report read by file,
+`rows` is the number of distinct file names it states, `root`/`basis` the root
+**most** of them resolved under, `onDisk` how many resolved anywhere — and
+`rows − onDisk` are the unresolved names. Such an entry carries an eighth key,
+`unresolved: [{ name, reason }]` (empty when every name resolved; absent on
+every other report). Each `reason` says why its name could not be placed:
+ambiguous (naming both paths), unverifiable (naming the root nen could not
+check), present only outside the repository (naming where), a URL, an absolute
+path outside the repository, or not found (naming where nen looked). A report
+whose measurement was refused keeps the key too. The text rendering prints the same as one `from:`
+line per report (`, 1 unresolved (never matched)`), followed by up to three
+`unresolved: <name> -- <reason>` lines. `total`, `report` and the aggregate `threshold.met` stay the
 **first** report's — exactly what a run without `--touched` reports — so
 `--threshold`'s meaning does not move.
 

@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A coverlet-shaped Cobertura report for zheref/nen#296: SEVERAL FILES IN ONE
+     PACKAGE, each at its own line rate, which is the shape `--touched` used to
+     collapse into one package row.
+
+     What each part is for:
+
+     - `PlaceholderCore\Models\Order.cs` is TWO <class> entries: the type itself and
+       the compiler-generated closure class coverlet reports as a type of its
+       own under the same filename. The closure repeats lines 14, 16 and 17 of
+       the outer entry. Per file, the lines are the UNION: 10 distinct lines,
+       7 covered (70%) -- line 16 is uncovered in the outer entry and covered
+       in the closure, so it counts once, as covered. Summing the entries would
+       say 8 of 13. Line 14 states `(1/2)` in one entry and `(2/2)` in the
+       other: one figure per line, the fuller one, so branches are 3 of 4.
+     - `PlaceholderCore\Models\OrderStatusMetadata.cs` is 4 of 4 (100%): the second
+       touched file in the SAME package, at a different rate.
+     - `PlaceholderCore\View Models\OrderViewModel.cs` has a SPACE in a directory
+       name: 4 of 5 (80%).
+     - `PlaceholderCore\Services\Clock.cs` is 1 of 3 and is never touched.
+     - `D:\agent\_work\1\s\PlaceholderCore\Legacy\Old.cs` is ANOTHER MACHINE'S absolute
+       path: it resolves to nothing in any tree but that runner's, so a touched
+       `PlaceholderCore/Legacy/Old.cs` must be reported unmatched -- never credited to
+       the `PlaceholderCore` package row.
+     - `PlaceholderApp` is a second package, so a plain run is seen to keep printing
+       PACKAGE rows.
+
+     The root's own counts are the writer's sum over its entries (20 of 29, 4
+     of 6), which is what a plain run reports and keeps reporting. The package
+     row `PlaceholderCore` is 19 of 27 (70.37%): the number every touched file in it
+     used to be given. The <source> is the repository root on the Windows
+     machine that wrote the report, with a space in it. -->
+<coverage line-rate="0.6896" branch-rate="0.6666" version="1.9" timestamp="1767225600" lines-covered="20" lines-valid="29" branches-covered="4" branches-valid="6">
+  <sources>
+    <source>C:\work\Placeholder Repo\</source>
+  </sources>
+  <packages>
+    <package name="PlaceholderCore" line-rate="0.7037" branch-rate="0.6666" complexity="9">
+      <classes>
+        <class name="PlaceholderCore.Models.Order" filename="PlaceholderCore\Models\Order.cs" line-rate="0.6" branch-rate="0.5" complexity="4">
+          <methods>
+            <method name="Describe" signature="()" line-rate="1" branch-rate="1">
+              <lines>
+                <line number="10" hits="1" branch="false" />
+                <line number="11" hits="1" branch="false" />
+              </lines>
+            </method>
+          </methods>
+          <lines>
+            <line number="10" hits="1" branch="false" />
+            <line number="11" hits="1" branch="false" />
+            <line number="12" hits="1" branch="true" condition-coverage="50% (1/2)" />
+            <line number="13" hits="1" branch="false" />
+            <line number="14" hits="1" branch="true" condition-coverage="50% (1/2)" />
+            <line number="15" hits="1" branch="false" />
+            <line number="16" hits="0" branch="false" />
+            <line number="17" hits="0" branch="false" />
+            <line number="18" hits="0" branch="false" />
+            <line number="19" hits="0" branch="false" />
+          </lines>
+        </class>
+        <class name="PlaceholderCore.Models.Order/&lt;&gt;c__DisplayClass0_0" filename="PlaceholderCore\Models\Order.cs" line-rate="0.6666" branch-rate="1" complexity="2">
+          <lines>
+            <line number="14" hits="2" branch="true" condition-coverage="100% (2/2)" />
+            <line number="16" hits="3" branch="false" />
+            <line number="17" hits="0" branch="false" />
+          </lines>
+        </class>
+        <class name="PlaceholderCore.Models.OrderStatusMetadata" filename="PlaceholderCore\Models\OrderStatusMetadata.cs" line-rate="1" branch-rate="1" complexity="1">
+          <lines>
+            <line number="5" hits="4" branch="false" />
+            <line number="6" hits="4" branch="false" />
+            <line number="7" hits="1" branch="false" />
+            <line number="8" hits="1" branch="false" />
+          </lines>
+        </class>
+        <class name="PlaceholderCore.ViewModels.OrderViewModel" filename="PlaceholderCore\View Models\OrderViewModel.cs" line-rate="0.8" branch-rate="1" complexity="1">
+          <lines>
+            <line number="20" hits="1" branch="false" />
+            <line number="21" hits="1" branch="false" />
+            <line number="22" hits="1" branch="false" />
+            <line number="23" hits="1" branch="false" />
+            <line number="24" hits="0" branch="false" />
+          </lines>
+        </class>
+        <class name="PlaceholderCore.Services.Clock" filename="PlaceholderCore\Services\Clock.cs" line-rate="0.3333" branch-rate="1" complexity="1">
+          <lines>
+            <line number="3" hits="1" branch="false" />
+            <line number="4" hits="0" branch="false" />
+            <line number="5" hits="0" branch="false" />
+          </lines>
+        </class>
+        <class name="PlaceholderCore.Legacy.Old" filename="D:\agent\_work\1\s\PlaceholderCore\Legacy\Old.cs" line-rate="1" branch-rate="1" complexity="1">
+          <lines>
+            <line number="1" hits="1" branch="false" />
+            <line number="2" hits="1" branch="false" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+    <package name="PlaceholderApp" line-rate="0.5" branch-rate="1" complexity="1">
+      <classes>
+        <class name="PlaceholderApp.App" filename="PlaceholderApp\App.xaml.cs" line-rate="0.5" branch-rate="1" complexity="1">
+          <lines>
+            <line number="8" hits="1" branch="false" />
+            <line number="9" hits="0" branch="false" />
+          </lines>
+        </class>
+      </classes>
+    </package>
+  </packages>
+</coverage>

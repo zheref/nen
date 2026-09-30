@@ -79,6 +79,178 @@ export type CoverageBand = "under-minimum" | "minimum" | "recommended" | "ideal"
 export interface ParsedCoverage {
   readonly total: CoverageMeasure;
   readonly targets: readonly CoverageTarget[];
+  /**
+   * The report's own per-SOURCE-FILE view, where its rows are something else,
+   * or ABSENT.
+   *
+   * WHY IT EXISTS -- zheref/nen#296. A Cobertura report's rows are PACKAGES,
+   * and that is what a plain `nen shu coverage` prints; but every `<class>` in
+   * it also names the file it came from (`filename="Core\Models\A.cs"`),
+   * and `--touched` asks about FILES. Matching a touched file to its package
+   * row credited it with the package's number -- a figure that is neither that
+   * file's coverage nor any touched file's -- so ../../coverage.ts reads this
+   * view instead, under `--touched` only, and resolves each name against the
+   * tree (./files.ts).
+   *
+   * ABSENT RATHER THAN EMPTY, AND THE ABSENCE MEANS ONE THING: the format has
+   * no such view, or this report states no file name at all. That is the only
+   * case `--touched` falls back to matching by package. A report that states
+   * file names nen cannot resolve is NOT that case -- its files are reported
+   * unmatched, never credited to a package.
+   *
+   * NEVER RENDERED. It is not a key of any document; `targets` stays exactly
+   * what the format's own rows are.
+   */
+  readonly files?: SourceFiles;
+}
+
+/**
+ * A report's per-source-file lines, and the roots it says the names are
+ * relative to.
+ */
+export interface SourceFiles {
+  /**
+   * The directories the report states its file names are relative to --
+   * Cobertura's `<sources><source>` -- trimmed, in document order, blanks
+   * dropped. Exactly as written: absolute, relative, or another machine's.
+   */
+  readonly roots: readonly string[];
+  /** One entry per distinct file name, sorted by name. */
+  readonly files: readonly SourceFile[];
+}
+
+/** One source file: its name as the report wrote it (`/`-separated), and its lines. */
+export interface SourceFile {
+  readonly name: string;
+  readonly lines: LineFacts;
+  /**
+   * How many report entries (Cobertura `<class>` elements) named it -- and so
+   * were unioned into `lines` before anything was resolved.
+   *
+   * WHY IT IS KEPT (zheref/nen#296, review round 3): two entries with one name
+   * are ONE file only if they sit under one root. In a report that states
+   * several roots, some of which nen cannot check on this machine, a
+   * multi-entry name may be two different files merged, and ./roots.ts refuses
+   * to place it rather than credit the union to whichever file it finds.
+   */
+  readonly entries: number;
+}
+
+/** What a report states about one executable line. */
+export interface LineFact {
+  /** Whether any report entry saw it run (a positive hit count). */
+  readonly hit: boolean;
+  /** The line's condition figure, or null when the report states none. */
+  readonly branches: { readonly covered: number; readonly total: number } | null;
+}
+
+/** A file's executable lines, keyed by line number. */
+export type LineFacts = ReadonlyMap<number, LineFact>;
+
+/**
+ * Two statements about ONE line, made one -- the aggregation rule for a file
+ * several report entries describe (zheref/nen#296).
+ *
+ * WHY THIS IS A UNION AND NOT A SUM. One C# source file routinely appears as
+ * several `<class>` entries: a partial class split across entries, a nested
+ * class, and the classes the compiler generates for lambdas and async methods
+ * (`Foo/<>c__DisplayClass0_0`, `Foo/<Bar>d__3`), which coverlet reports as
+ * types of their own under the SAME filename -- and a lambda's line is also its
+ * enclosing method's line, so the same line number arrives twice. Summing the
+ * entries counts that line twice and turns a 10-line file into a 13-line one.
+ * So, per line number:
+ *
+ *   - LINES: the line exists once, and it is COVERED if any entry saw it run.
+ *     A line is one physical thing; "it ran" in any context is "it ran".
+ *   - BRANCHES: the line keeps ONE condition figure -- the statement with the
+ *     LARGER total, and on a tie the larger covered count -- never a sum of two
+ *     entries' figures and never covered taken from one entry beside total from
+ *     another. Two entries naming the same line's conditions are describing the
+ *     same conditions (adding them double-counts), and a counts-only report
+ *     cannot say WHICH branches each entry saw, so pairing one entry's covered
+ *     with another's total would report a combination nobody observed. The
+ *     chosen figure is always one an entry actually stated, which can only
+ *     under-credit a line, never over-credit it. The one exception to "the
+ *     fuller statement wins": an IMPOSSIBLE statement (more covered than
+ *     total) always survives the union, so `measureLines` refuses it instead
+ *     of letting a sound neighbour hide it.
+ *
+ * The file's own figure is then the sum over its (distinct) lines: see
+ * `measureLines` below.
+ */
+export function unionLine(existing: LineFact | undefined, next: LineFact): LineFact {
+  if (existing === undefined) return next;
+  return { hit: existing.hit || next.hit, branches: largerBranches(existing.branches, next.branches) };
+}
+
+function largerBranches(left: LineFact["branches"], right: LineFact["branches"]): LineFact["branches"] {
+  if (left === null) return right;
+  if (right === null) return left;
+  // AN IMPOSSIBLE STATEMENT IS NEVER OUTVOTED. `(5/2)` beside `(1/4)` would
+  // otherwise lose to the larger total and vanish -- a damaged report quietly
+  // read as a sound one, which is the one outcome `counts` exists to refuse.
+  // Keeping it is what lets `measureLines` refuse it, whatever sits beside it.
+  if (impossible(left)) return left;
+  if (impossible(right)) return right;
+  if (right.total !== left.total) return right.total > left.total ? right : left;
+  return right.covered > left.covered ? right : left;
+}
+
+function impossible(branches: NonNullable<LineFact["branches"]>): boolean {
+  return branches.covered > branches.total;
+}
+
+/**
+ * The ONE refusal for a line that states more conditions covered than it has
+ * -- raised by the plain Cobertura parse (./formats/cobertura.ts) and by
+ * `measureLines` alike, so a plain run and `--touched` refuse the same report
+ * with the same sentence. `where` is the file the line belongs to, as the
+ * report names it; `line` is null for a line with no readable number.
+ */
+export function impossibleConditions(
+  where: string,
+  line: number | null,
+  covered: number,
+  total: number,
+): CoverageReportError {
+  return new CoverageReportError(
+    `${where}, ${line === null ? "an unnumbered line" : `line ${line}`}: states ${covered} of ${total} conditions covered, which is more covered than there is to cover. nen neither clamps it nor lets a neighbouring figure outvote or absorb it: a line that says this came out of a damaged or merged report, and nothing measured from it can be trusted.`,
+  );
+}
+
+/** `unionLine` over every line of `from`, into `into`. */
+export function unionLines(into: Map<number, LineFact>, from: LineFacts): void {
+  for (const [number, fact] of from) into.set(number, unionLine(into.get(number), fact));
+}
+
+/**
+ * One file's row: lines = its distinct line numbers and how many ran;
+ * branches = the sum of each line's one condition figure, present only when
+ * some line states one (../shape.ts's own rule: "not measured" is not "0 of 0").
+ *
+ * THROWS `CoverageReportError` when ANY line states more conditions covered
+ * than it has -- checked PER LINE, not on the file's sum: `(5/2)` on one line
+ * and `(0/4)` on the next add up to a plausible 5 of 6, and a refusal that
+ * depended on what happened to sit beside the damage would not be a rule. The
+ * message names the file and the line; the caller prefixes the report's path.
+ */
+export function measureLines(name: string, lines: LineFacts): CoverageTarget {
+  let hit = 0;
+  let branchCovered = 0;
+  let branchTotal = 0;
+  let anyBranches = false;
+  for (const [number, fact] of lines) {
+    if (fact.hit) hit += 1;
+    if (fact.branches !== null) {
+      if (impossible(fact.branches)) {
+        throw impossibleConditions(name, number < 0 ? null : number, fact.branches.covered, fact.branches.total);
+      }
+      anyBranches = true;
+      branchCovered += fact.branches.covered;
+      branchTotal += fact.branches.total;
+    }
+  }
+  return target(name, counts(hit, lines.size), anyBranches ? counts(branchCovered, branchTotal) : null);
 }
 
 /**
