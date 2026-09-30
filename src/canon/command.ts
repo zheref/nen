@@ -26,8 +26,8 @@
 // pin a reader of the marker can reason about, and "cut the tag before
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
-import { existsSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
 import { loadRepoRegistry } from "../schema/repos.js";
@@ -144,16 +144,22 @@ ${SURFACE_LIST}
                          [--surfaces <a,b,...>] [--scenario <name>]
                          [--not-mirrored <a,b>] [--markdown-out <path>] [--json]
       Renders the same mirror in memory and diffs every surface's committed
-      copy against it, writing nothing (the CI half). Per surface, a file is
-      ok, MISSING (canon has it, the mirror does not), EXTRA (marked, no canon
-      source -- an orphan), STALE (its marker names another source, ref or
-      scenario: generated, but never regenerated after the pin moved), or
-      HAND-EDITED (marked for this pin, bytes differ -- or no marker at all);
-      an unmarked sourceless file is FOREIGN and is not drift. On a document
-      surface the block's sections are classified one canon file at a time; a
-      block with a broken marker pair reads hand-edited whole, and a document
-      with no block reads missing whole. Exit 1 iff any surface has drift.
-      --markdown-out also writes the drift as a table (Surface | File | Issue).`;
+      copy against it, writing nothing but the --markdown-out table (the CI
+      half). Per surface, a file is ok, MISSING (canon has it, the mirror does
+      not), EXTRA (marked, no canon source -- an orphan), STALE (its marker
+      names another source, ref or scenario: generated, but never regenerated
+      after the pin moved), or HAND-EDITED (marked for this pin, bytes differ
+      -- or no marker at all); an unmarked sourceless file is FOREIGN and is
+      not drift. On a document surface the block's sections are classified one
+      canon file at a time; a block with a broken marker pair reads
+      hand-edited whole, and a document with no block reads missing whole.
+      Exit 1 iff any surface has drift and the run completed.
+      --markdown-out also writes the drift as a table (Surface | File | Issue),
+      creating its parent directory; a relative path resolves against --repo,
+      never the current directory. A table that cannot be written (a parent
+      that is a file, a path that is a directory, no permission, or any other
+      write failure) is exit 2 whatever the verdict, with nothing on stdout --
+      never 1, which is drift.`;
 
 export const canonCommand: Command = {
   name: "canon",
@@ -557,6 +563,74 @@ function generate(context: CommandContext, inputs: MirrorInputs): number {
   return 0;
 }
 
+/**
+ * A failed report write in words: the errno as the filesystem raised it, then
+ * what it means for the path the caller named. An error with no errno (never
+ * expected from `mkdirSync`/`writeFileSync`, but not this function's to rule
+ * out) is carried by its own message rather than dropped.
+ */
+export function describeWriteFailure(error: unknown): string {
+  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  if (code === undefined) return error instanceof Error ? error.message : String(error);
+  switch (code) {
+    // `mkdir -p a/b` raises EEXIST when `a/b` itself is a file and ENOTDIR
+    // when `a` is; `open` raises ENOTDIR for either. One fact, two codes.
+    case "EEXIST":
+    case "ENOTDIR":
+      return `${code}: a component of its parent path exists and is not a directory`;
+    case "EISDIR":
+      return `${code}: that path is a directory`;
+    case "EACCES":
+    case "EPERM":
+      return `${code}: permission denied`;
+    default:
+      return `${code}: the file system refused the write`;
+  }
+}
+
+/**
+ * Write the `--markdown-out` drift table, creating its parent directory.
+ *
+ * THE PARENT IS CREATED (zheref/nen#292). The flag names a report file, and a
+ * report file's directory is routinely one nobody has made yet -- `.nen/`, a
+ * CI artifacts folder. `nen report render --out` and `nen stop --mark` already
+ * create theirs; this one did not, so the `ENOENT` escaped as an uncaught
+ * error at exit 1.
+ *
+ * AND EXIT 1 IS DRIFT'S. That is the defect the missing `mkdir` exposed rather
+ * than the defect itself: every write failure -- a parent that is a file, a
+ * path that is a directory, a directory with no write bit -- wore the one code
+ * this verb reserves for "the mirror has drifted", so a CI step could not tell
+ * "your mirror is stale" from "I could not write your report", and a CLEAN
+ * mirror exited 1. Any failure that remains after the `mkdir` is refused here
+ * at exit 2, the code this family already gives a caller-named path it cannot
+ * use (an unreadable `--canon-values` is exit 2 for the same reason: a typo
+ * and a finding must stay distinguishable by exit code alone, zheref/nen#101).
+ *
+ * WHATEVER THE VERDICT. A clean mirror whose table could not be written is a
+ * failed run too: a report the caller asked for and did not get is not a pass.
+ * The refusal is raised BEFORE the verdict is printed, so stdout carries no
+ * `drift: none` document beside an exit 2 for a caller who parses one and not
+ * the other; the verdict is still named in the refusal on stderr, because the
+ * check did run and a human reading the refusal should not have to rerun it.
+ *
+ * RELATIVE TO `--repo`, like every own-path flag (zheref/nen#100): the refusal
+ * names the value as typed AND the path it resolved to, because the trap this
+ * issue records is a caller who ran `mkdir -p .nen` in the process's directory
+ * and could not see why the report still failed in another one.
+ */
+function writeDriftTable(root: string, flagValue: string, table: string, drift: boolean): void {
+  const path = resolveAgainstRepo(root, flagValue);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, table, "utf8");
+  } catch (error) {
+    throw new VerbUsageError(
+      `--markdown-out '${flagValue}' resolves to '${path}', which could not be written (${describeWriteFailure(error)}). The check itself ran (drift: ${drift ? "yes" : "none"}), but the drift table was not written, so this run is refused at exit 2 -- never exit 1, which means the mirror has drifted. Point --markdown-out at a writable file; a relative path resolves against --repo, not the current directory.`,
+    );
+  }
+}
+
 function check(context: CommandContext, inputs: MirrorInputs): number {
   const reports: SurfaceCheckReport[] = inputs.renderings.map((rendering): SurfaceCheckReport =>
     checkSurface(inputs.root, rendering, inputs.pin, inputs.sources),
@@ -565,7 +639,7 @@ function check(context: CommandContext, inputs: MirrorInputs): number {
   const markdownOut = context.args.values["markdown-out"];
   if (markdownOut !== undefined) {
     if (markdownOut.trim() === "") throw new VerbUsageError("--markdown-out was given an empty value. Omit it, or name the file to write the drift table to.");
-    writeFileSync(resolveAgainstRepo(inputs.root, markdownOut), renderReportMarkdown(reports), "utf8");
+    writeDriftTable(inputs.root, markdownOut, renderReportMarkdown(reports), drift);
   }
   const lines: string[] = [pinLine(inputs.pin), `root: ${inputs.root}`];
   for (const report of reports) {

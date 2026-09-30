@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
-import { canonCommand, CHECK_CONTRACT, GENERATE_CONTRACT, PIN_CONTRACT } from "./command.js";
+import { canonCommand, CHECK_CONTRACT, describeWriteFailure, GENERATE_CONTRACT, PIN_CONTRACT } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { fileMarker } from "./mirror.js";
 
@@ -589,6 +589,134 @@ describe("nen canon mirror check -- CLI wiring", () => {
     const fx = fixture("");
     expect((await capture(mirrorArgs("generate", fx, ["--surfaces", ALL]), fx.root)).code).toBe(0);
     expect((await capture(mirrorArgs("check", fx, ["--surfaces", ALL]), fx.root)).code).toBe(0);
+  });
+});
+
+describe("nen canon mirror check --markdown-out -- the parent is created, and a failed write never wears drift's exit 1 (zheref/nen#292)", () => {
+  /** A consumer whose mirror was just generated, so `check` at v1.2.0 is CLEAN and at v1.3.0 DRIFTS (every file stale). */
+  async function generated(): Promise<Fixture> {
+    const fx = fixture();
+    expect((await capture(mirrorArgs("generate", fx), fx.root)).code).toBe(0);
+    return fx;
+  }
+  const clean = (fx: Fixture, extra: readonly string[]): string[] => mirrorArgs("check", fx, extra);
+  const drifting = (fx: Fixture, extra: readonly string[]): string[] =>
+    mirrorArgs("check", fx, extra).map((arg): string => (arg === "v1.2.0" ? "v1.3.0" : arg));
+
+  it("creates a missing parent on a CLEAN mirror and exits 0 -- it used to exit 1 on ENOENT, reading as drift", async () => {
+    const fx = await generated();
+    expect(existsSync(join(fx.root, "a"))).toBe(false);
+    const result = await capture(clean(fx, ["--markdown-out", "a/b/c.md"]), fx.root);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    expect(result.out.at(-1)).toBe("drift: none");
+    expect(readFileSync(join(fx.root, "a", "b", "c.md"), "utf8")).toBe("No drift -- every mirror file on every surface matches a fresh rendering.\n");
+  });
+
+  it("creates a missing parent on a DRIFTING mirror and exits 1 -- drift, with the table written", async () => {
+    const fx = await generated();
+    const result = await capture(drifting(fx, ["--markdown-out", "a/b/c.md"]), fx.root);
+    expect(result.code, result.err.join("\n")).toBe(1);
+    expect(result.out.at(-1)).toBe("drift: yes");
+    const table = readFileSync(join(fx.root, "a", "b", "c.md"), "utf8");
+    expect(table).toContain("| Surface | File | Issue |");
+    expect(table).toContain("| `codex` | `01-a.md` | stale (generated for another pin) |");
+  });
+
+  it("uses an absolute --markdown-out as-is, creating its parent too", async () => {
+    const fx = await generated();
+    const elsewhere = join(mkdtempSync(join(tmpdir(), "nen-canon-report-")), "deep", "er", "drift.md");
+    const result = await capture(clean(fx, ["--markdown-out", elsewhere]), fx.root);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    expect(existsSync(elsewhere)).toBe(true);
+  });
+
+  it("resolves a relative --markdown-out against --repo, not the process's directory -- run from somewhere else", async () => {
+    // The issue's trap: `mkdir -p .nen` in the shell's directory creates it in
+    // the WRONG tree. Standing the process in a decoy directory is the only way
+    // to tell the two bases apart (see ../cli/path-base.test.ts's header).
+    const fx = await generated();
+    const cwd = mkdtempSync(join(tmpdir(), "nen-canon-cwd-"));
+    const previous = process.cwd();
+    let result;
+    try {
+      process.chdir(cwd);
+      result = await capture(drifting(fx, ["--markdown-out", ".nen/canon-drift.md"]), fx.root);
+    } finally {
+      process.chdir(previous);
+    }
+    expect(result.code, result.err.join("\n")).toBe(1);
+    expect(readFileSync(join(fx.root, ".nen", "canon-drift.md"), "utf8")).toContain("| Surface | File | Issue |");
+    expect(existsSync(join(cwd, ".nen"))).toBe(false);
+  });
+
+  it("refuses a parent that is a FILE at exit 2 on a clean mirror AND a drifting one, naming the typed and resolved path", async () => {
+    const fx = await generated();
+    writeFileSync(join(fx.root, "blocker"), "a file where a directory has to go\n");
+    // `blocker/c.md`: mkdir -p of `blocker` itself raises EEXIST; `blocker/x/c.md`: ENOTDIR. One fact, both spellings.
+    for (const target of ["blocker/c.md", "blocker/x/c.md"]) {
+      for (const [verdict, argv] of [
+        ["none", clean(fx, ["--markdown-out", target, "--json"])],
+        ["yes", drifting(fx, ["--markdown-out", target, "--json"])],
+      ] as const) {
+        const result = await capture(argv, fx.root);
+        const err = result.err.join("\n");
+        expect(result.code, `${target} drift ${verdict}: ${err}`).toBe(2);
+        expect(err).toContain(`--markdown-out '${target}' resolves to '${join(fx.root, ...target.split("/"))}', which could not be written`);
+        expect(err).toMatch(/\((EEXIST|ENOTDIR): a component of its parent path exists and is not a directory\)/);
+        expect(err).toContain(`The check itself ran (drift: ${verdict})`);
+        expect(err).toMatch(/refused at exit 2 -- never exit 1, which means the mirror has drifted/);
+        // No verdict document on stdout beside an exit 2: a caller parsing --json must not read "drift: false" off a failed run.
+        expect(result.out).toEqual([]);
+      }
+    }
+  });
+
+  it("refuses a --markdown-out that IS a directory at exit 2 (EISDIR), not 1", async () => {
+    const fx = await generated();
+    mkdirSync(join(fx.root, "reports"));
+    const result = await capture(clean(fx, ["--markdown-out", "reports"]), fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(`'${join(fx.root, "reports")}', which could not be written (EISDIR: that path is a directory)`);
+    expect(result.out).toEqual([]);
+  });
+
+  it("refuses an unwritable parent at exit 2 (EACCES), not 1, on a drifting mirror", async () => {
+    const fx = await generated();
+    const locked = join(fx.root, "locked");
+    mkdirSync(locked);
+    chmodSync(locked, 0o555);
+    // Skipped where the permission bit is not enforced (root, or a filesystem
+    // that ignores it) rather than asserted into a platform-dependent failure --
+    // the same guard ../changelog/command.test.ts uses for its EACCES case.
+    let enforced = true;
+    try {
+      writeFileSync(join(locked, "probe"), "");
+      enforced = false;
+    } catch {
+      // still locked, as expected
+    }
+    try {
+      if (enforced) {
+        const result = await capture(drifting(fx, ["--markdown-out", "locked/drift.md"]), fx.root);
+        expect(result.code).toBe(2);
+        expect(result.err.join("\n")).toMatch(/locked\/drift\.md', which could not be written \((EACCES|EPERM): permission denied\)/);
+        expect(result.err.join("\n")).toContain("The check itself ran (drift: yes)");
+      }
+    } finally {
+      chmodSync(locked, 0o755); // restore so the temp-dir cleanup can traverse it
+    }
+  });
+
+  it("describes every write failure it can meet, and carries an errno-less one by its own message", () => {
+    const errno = (code: string): Error => Object.assign(new Error(`${code}: raw`), { code });
+    expect(describeWriteFailure(errno("EEXIST"))).toBe("EEXIST: a component of its parent path exists and is not a directory");
+    expect(describeWriteFailure(errno("ENOTDIR"))).toBe("ENOTDIR: a component of its parent path exists and is not a directory");
+    expect(describeWriteFailure(errno("EISDIR"))).toBe("EISDIR: that path is a directory");
+    expect(describeWriteFailure(errno("EACCES"))).toBe("EACCES: permission denied");
+    expect(describeWriteFailure(errno("EPERM"))).toBe("EPERM: permission denied");
+    expect(describeWriteFailure(errno("ENOSPC"))).toBe("ENOSPC: the file system refused the write");
+    expect(describeWriteFailure(new Error("no errno here"))).toBe("no errno here");
+    expect(describeWriteFailure("a thrown string")).toBe("a thrown string");
   });
 });
 
