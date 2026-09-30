@@ -538,3 +538,24 @@ describe("nen commit write -- every line before the trailer block is held to the
     expect(result.err.join("\n")).toMatch(/nen: warning: line 8 is 126 characters: 'footer-max-line-length' NOT checked/);
   });
 });
+
+describe("nen commit write -- a whitespace-only line after the trailers moves no trailer into the prose (PR #302 review)", () => {
+  const TOKEN = "t".repeat(120);
+  function codeRepo(message: string): string {
+    const root = repo({ message });
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, "commitlint.config.cjs"), "module.exports = { extends: ['@commitlint/config-conventional'] }\n", "utf8");
+    return root;
+  }
+
+  it.each([
+    ["spaces-only", "   "],
+    ["tab-only", "\t"],
+  ])("warns for the long trailer and commits, with a %s line after it", async (_name, tail) => {
+    const root = codeRepo(`fix: x\n\nshort prose.\n\nRefs: ${TOKEN}\n${tail}\n`);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toMatch(/nen: warning: line 5 is 126 characters: 'footer-max-line-length' NOT checked/);
+    expect(result.err.join("\n")).not.toMatch(/nen holds every line before the trailer block/);
+  });
+});

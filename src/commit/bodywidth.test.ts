@@ -403,3 +403,38 @@ describe("the message's own prose, wherever commitlint places it (review F1)", (
     expect(found).toEqual({ refusals: [], warnings: [], notes: [] });
   });
 });
+
+describe("the trailer block is the reader's own, whatever whitespace follows it (PR #302 review)", () => {
+  const TOKEN = "t".repeat(120);
+  const code = (): LineLengthRules => readLineLengthRules(repo(KRO_PWA), null);
+  /** The one reference warning a long trailer on line 5 gets, and no refusal. */
+  const trailerOnly = (message: string): void => {
+    const found = lineLengthFindings(message, code());
+    expect(found.refusals, JSON.stringify(message)).toEqual([]);
+    expect(found.warnings, JSON.stringify(message)).toEqual([expect.stringMatching(/^line 5 is 126 characters: 'footer-max-line-length' NOT checked/)]);
+  };
+
+  it.each([
+    ["a spaces-only line", `fix: x\n\nshort prose.\n\nRefs: ${TOKEN}\n   \n`],
+    ["a tab-only line", `fix: x\n\nshort prose.\n\nRefs: ${TOKEN}\n\t\n`],
+    ["CRLF and a mixed whitespace line", `fix: x\r\n\r\nshort prose.\r\n\r\nRefs: ${TOKEN}\r\n \t \r\n`],
+    ["several whitespace lines, no final newline", `fix: x\n\nshort prose.\n\nRefs: ${TOKEN}\n  \n\t\n  `],
+  ])("keeps a long trailer in the trailer block when %s follows it", (_name, message) => {
+    trailerOnly(message);
+  });
+
+  it("marks every trailer of a multi-line block, not the whitespace line and the last one", () => {
+    trailerOnly(`fix: x\n\nshort prose.\n\nRefs: ${TOKEN}\nHatsu-Agent: kurapika\n  \n`);
+  });
+
+  it("never marks the prose above the block as a trailer: a long prose line is still refused", () => {
+    const found = lineLengthFindings(`fix: x\n\n${"p".repeat(120)}\n\nRefs: #1\n   \n   \n`, code());
+    expect(found.refusals).toEqual([expect.stringMatching(/^line 3 is 120 characters, over the 100 nen holds the body to/)]);
+  });
+
+  it("finds a block that follows the header with no blank line, and never counts the header into it", () => {
+    const found = lineLengthFindings(`fix: x\nRefs: ${TOKEN}\n \n`, code());
+    expect(found.refusals).toEqual([]);
+    expect(found.warnings).toEqual([expect.stringMatching(/^line 2 is 126 characters: 'footer-max-line-length' NOT checked/)]);
+  });
+});

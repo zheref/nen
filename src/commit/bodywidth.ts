@@ -460,14 +460,35 @@ function bindsProse(rules: LineLengthRules): boolean {
  * every line of it is a `Key: value` trailer, as ../wc/messagefile.ts's
  * parseCommitMessageFile -- the reader `commit write` and `wc squash` use --
  * decides it. Empty when the message ends in prose, or does not parse.
+ *
+ * THE LINES ARE FOUND BY THE READER'S OWN RULES, NOT COUNTED FROM THE END.
+ * The reader treats a line of only spaces or tabs as a paragraph break, the
+ * same as an empty one, and never counts the header into a paragraph; a count
+ * back from the last non-empty line lands on a trailing whitespace-only line
+ * instead, and marks the wrong lines -- a long trailer was then held as prose
+ * and refused (PR #302's review). So the paragraph is located here with the
+ * reader's rules -- skip the blank-or-whitespace lines at the end, take the run
+ * of lines above them down to, never into, the header -- and it counts only if
+ * it IS the reader's trailer block, key for key; anything else is no block at
+ * all, never a guess.
  */
 function trailerBlock(message: string): ReadonlySet<number> {
   const parsed = parseCommitMessageFile(message);
-  const count = parsed.ok ? parsed.value.input.trailers.length : 0;
+  const trailers = parsed.ok ? parsed.value.input.trailers : [];
+  if (trailers.length === 0) return new Set();
+  // The reader's split: CRLF normalised, then LF -- the same lines, numbered
+  // as commitlintSections numbers them.
   const lines = message.split(/\r?\n/);
-  let last = lines.length;
-  while (last > 0 && lines[last - 1] === "") last -= 1;
-  return new Set(Array.from({ length: count }, (_, index): number => last - count + 1 + index));
+  const blank = (index: number): boolean => (lines[index] ?? "").trim() === "";
+  let end = lines.length;
+  while (end > 1 && blank(end - 1)) end -= 1;
+  let start = end;
+  while (start > 1 && !blank(start - 1)) start -= 1;
+  const block = lines.slice(start, end);
+  const same = block.length === trailers.length && block.every((line, index): boolean => line.startsWith(`${trailers[index]?.key ?? ""}:`));
+  /* c8 ignore next -- the reader's last paragraph is its trailer block whenever it reports trailers */
+  if (!same) return new Set();
+  return new Set(block.map((_, index): number => start + index + 1));
 }
 
 /**

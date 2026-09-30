@@ -777,3 +777,19 @@ describe("nen commit format -- --body prose commitlint reads as footer is held t
     expect(data.err.join("\n")).toMatch(/'footer-max-line-length' allows .*it holds a word longer than 100 characters/);
   });
 });
+
+describe("nen commit format -- cannot end its message in a whitespace-only line, so its trailer block never shifts (PR #302 review)", () => {
+  it("trims --body and renders --trailer last: a long trailer after a spaces-only --body line is still only warned", async () => {
+    const TOKEN = "t".repeat(120);
+    const root = repoWithCommitlint({ "commitlint.config.cjs": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" });
+    for (const argv of [
+      ["--body", `short prose.\n\nRefs: ${TOKEN}\n   `],
+      ["--body", "short prose.\n   ", "--trailer", `Refs=${TOKEN}`],
+    ]) {
+      const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", ...argv], false, root);
+      expect(result.code, JSON.stringify(argv)).toBe(0);
+      expect(result.out.join("\n").endsWith(`Refs: ${TOKEN}`), JSON.stringify(argv)).toBe(true);
+      expect(result.err.join("\n"), JSON.stringify(argv)).toMatch(/nen: warning: line 5 is 126 characters: 'footer-max-line-length' NOT checked/);
+    }
+  });
+});
