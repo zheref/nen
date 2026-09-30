@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from "vitest";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { toolsNamedIn } from "./purity.test.js";
+import { toolsNamedIn } from "./fixtures/toolchain.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -4282,13 +4282,27 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
       "         </TestableReference>",
     ].join("\n");
 
-  /** Extra native targets in the lane's own project, beside the fixture's `Placeholder`. */
+  /**
+   * Extra native targets in the lane's own project, beside the fixture's `Placeholder`.
+   *
+   * IT PROVES ITS OWN EDIT BEFORE ANY CASE READS A NOTE. A `replace` that finds
+   * no marker returns its input unchanged, and the old helper wrote that input
+   * back without a word. A missing edit then showed up only in the note, as the
+   * scheme's targets reported missing, which reads like a defect in `detect`.
+   * #280 reported exactly that note from this helper's two callers, and the
+   * report took it for reworded prose and a possible MacroExpansion regression.
+   * The read-back uses the same delimiters `readTargets` reads, so a failure
+   * here is about the fixture and a failure after it is about `detect`.
+   */
   const declare = (dir: string, targets: readonly string[]): void => {
     const pbxproj = join(dir, "ios", "Placeholder.xcodeproj", "project.pbxproj");
+    const end = "/* End PBXNativeTarget section */";
+    const before = readFileSync(pbxproj, "utf8");
+    expect(before, `declare(): ${pbxproj} has no '${end}' to insert before`).toContain(end);
     writeFileSync(
       pbxproj,
-      readFileSync(pbxproj, "utf8").replace(
-        "/* End PBXNativeTarget section */",
+      before.replace(
+        end,
         [
           ...targets.flatMap((target, index): readonly string[] => [
             `\t\tFACE000${index} /* ${target} */ = {`,
@@ -4296,10 +4310,47 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
             `\t\t\tname = ${target};`,
             "\t\t};",
           ]),
-          "/* End PBXNativeTarget section */",
+          end,
         ].join("\n"),
       ),
       "utf8",
+    );
+    const section =
+      /\/\* Begin PBXNativeTarget section \*\/([\s\S]*?)\/\* End PBXNativeTarget section \*\//.exec(
+        readFileSync(pbxproj, "utf8"),
+      )?.[1] ?? "";
+    for (const target of targets) {
+      expect(
+        section,
+        `declare(): '${target}' is not in the copied project's native-target section after the edit -- the FIXTURE precondition failed, which says nothing about detect`,
+      ).toContain(`name = ${target};`);
+    }
+  };
+
+  /**
+   * Each (target, product) pair a note's BROKEN finding names, in the order it
+   * names them. The product is the first item in the parentheses, or "" when
+   * the reference carried none.
+   *
+   * THE PAIRING AS DATA, NOT AS A SENTENCE. One substring cannot tell three
+   * failures apart: a wrong pairing, an extra name in the list, and a reworded
+   * frame. #280 read an extra-names failure as a reworded one. A list of pairs
+   * shows which of the three failed, and the frame stays pinned by the cases
+   * that assert the sentence on purpose.
+   */
+  const namedPairs = (note: string): readonly (readonly [string, string])[] => {
+    const finding =
+      note.split(" -- ").find((clause): boolean => clause.includes("BROKEN ON A CLEAN CHECKOUT")) ?? "";
+    const list = /\) names (.*?) in its test action/.exec(finding)?.[1] ?? "";
+    return [...list.matchAll(/'([^']*)'(?: \(([^)]*)\))?/g)].map(
+      (match): readonly [string, string] => {
+        // `testTargetLabel` writes the product first when there is one, then
+        // the file that named it, then the skip. The first item is the product
+        // unless it is one of those two annotations.
+        const first = (match[2] ?? "").split(", ")[0] ?? "";
+        const annotation = /^(?:named by |skipped by the scheme$|off in that plan$)/.test(first);
+        return [match[1] ?? "", annotation ? "" : first];
+      },
     );
   };
 
@@ -4340,9 +4391,14 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
       ["PlaceholderTests", "PlaceholderSnapshotTests"],
       (note): void => {
         expect(note).toMatch(/TEST ACTION IS BROKEN ON A CLEAN CHECKOUT/);
-        expect(note, "the missing blueprint, with the product ITS reference names").toContain(
-          "names 'PlaceholderUITests' (PlaceholderTests.xctest) in its test action",
-        );
+        // THE PAIRING, AND ONLY THE PAIRING. The one blueprint the project does
+        // not declare, with the product its own reference names. The two
+        // declared targets are not in the finding at all. The index mutant
+        // turns this pair into (PlaceholderUITests, PlaceholderSnapshotTests.xctest).
+        // A declared target that leaked into the finding would lengthen the list.
+        expect(namedPairs(note), "the missing blueprint, with the product ITS reference names").toEqual([
+          ["PlaceholderUITests", "PlaceholderTests.xctest"],
+        ]);
         // The product of a target the project HAS must not be dragged into a
         // finding about a target it has not.
         expect(note, "a bundle no missing reference named").not.toContain(
@@ -4405,10 +4461,24 @@ describe("nen shu detect -- the Apple lane's scheme, read against the project's 
         ),
         "utf8",
       );
+      // The same silent `replace` guard `declare` carries. Without it, a
+      // missed marker leaves no macro expansion to read, and this case passes
+      // without testing what its name says.
+      expect(readFileSync(scheme, "utf8"), "the scheme carries the macro expansion").toContain(
+        "<MacroExpansion>",
+      );
       declare(dir, ["PlaceholderTests"]);
       const note = iosNote(dir, "test");
-      expect(note, "the one real testable resolves").not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
+      // THE ORDER TELLS THE CAUSES APART, and #280 is why. The `not.toMatch(BROKEN)`
+      // assertion fails for two different reasons. Either the macro's `Ghost` was
+      // read as a test target (the regression this case exists for), or
+      // `PlaceholderTests` was missing from the target list. When it ran first, the
+      // assertion that separates the two never got to run. So `declare` has already
+      // proved the target is in the file. Next the `Ghost` assertion catches the
+      // regression by name. Only then can a BROKEN finding be about the
+      // target-list reader.
       expect(note, "a macro expansion is not a target the scheme tests").not.toContain("Ghost");
+      expect(note, "the one real testable resolves").not.toMatch(/BROKEN ON A CLEAN CHECKOUT/);
       // The rest of the reason is untouched -- this withholds nothing. And
       // because the cross-check now PASSES, `{scheme}` is answered rather than
       // named: the token leaves the leftover list, which is the strongest form
