@@ -467,6 +467,8 @@ export interface Workflow {
   readonly profile: ProfilePolicy;
   readonly release: ReleasePolicy;
   readonly futon: FutonPolicy;
+  /** `runners` -- the self-hosted runner policy, or null when none is declared. No default. */
+  readonly runners: RunnersPolicy | null;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -558,6 +560,8 @@ export function defaultWorkflow(): Workflow {
     profile: { default: DEFAULT_PROFILE, allowed: PROFILE_NAMES, raw: empty },
     release: { unitPaths: null, raw: empty },
     futon: { advanceGo: emptyRecord<readonly AdvanceGoKind[]>(), raw: empty },
+    // NO DEFAULT POOL, EVER -- see RunnersPolicy.
+    runners: null,
     raw: empty,
   };
 }
@@ -580,6 +584,7 @@ const ROOT_KEYS: readonly string[] = [
   "profile",
   "release",
   "futon",
+  "runners",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -1283,6 +1288,326 @@ function parseFutonPolicy(path: string, value: unknown): FutonPolicy {
   return { advanceGo, raw };
 }
 
+// ── runners (hatsu:jusshin) ─────────────────────────────────────────────────
+
+/** The three operating systems a self-hosted pool may run, in GitHub's own label case. */
+export const RUNNER_OSES = ["Linux", "macOS", "Windows"] as const;
+export type RunnerOs = (typeof RUNNER_OSES)[number];
+/** The two architectures a pool may declare, in GitHub's own label case. */
+export const RUNNER_ARCHES = ["X64", "ARM64"] as const;
+export type RunnerArch = (typeof RUNNER_ARCHES)[number];
+
+/**
+ * The one runner-name template this release accepts.
+ *
+ * A TEMPLATE WITH ONE ACCEPTED VALUE IS STILL A KEY, because the declaration
+ * is where a repository says which convention its runner list is read by --
+ * and `nen runner inventory` parses every registered name against it. A
+ * second template would need a second parser, and a parser nen does not have
+ * for a template a repository wrote is a runner list read wrong without a
+ * word said, so every other string is refused naming this one.
+ */
+export const RUNNER_NAMING = "{machine}-{consumer}R{slot}";
+
+/**
+ * A tool name a pool declares. It is interpolated, space-separated, into a
+ * `run:` step of the rendered preflight workflow (`nen runner workflow`'s
+ * `@@TOOLS@@`), so it is held to a word no shell reads twice: letters, digits,
+ * `.`, `_`, `+` and `-`, starting with a letter or digit.
+ */
+export const RUNNER_TOOL = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
+
+/** A repository variable name, as GitHub accepts one and a workflow's `vars.<X>` reads it. */
+export const RUNNER_VARIABLE = /^[A-Z][A-Z0-9_]*$/;
+
+/** A workflow file's own basename: the push path filter and `gh workflow run` both name it. */
+export const RUNNER_WORKFLOW_FILE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.yml$/;
+
+/**
+ * A runner root. It leaves this file TWICE -- into the PowerShell and bash host
+ * scripts `nen runner script` renders, inside single quotes -- so it is held
+ * to characters no quoting in either language can be broken out of: no quote,
+ * no `$`, no backtick, no `;`/`&`/`|`, no `%`, no newline. `~` is allowed
+ * (`nen runner plan` expands it at run time; it is never stored expanded) and
+ * so are spaces and parentheses (`C:\Program Files (x86)` is a real root).
+ */
+export const RUNNER_ROOT = /^[A-Za-z0-9 _.:\\/~()-]+$/;
+
+/** The per-host-OS root keys a pool may default, as `process.platform` spells them. */
+const RUNNER_ROOT_KEYS: readonly string[] = ["windows", "linux", "darwin"];
+const RUNNERS_KEYS: readonly string[] = ["naming", "pools"];
+const RUNNER_POOL_KEYS: readonly string[] = [
+  "id",
+  "os",
+  "arch",
+  "labels",
+  "enableVariable",
+  "tools",
+  "preflightWorkflow",
+  "root",
+];
+
+export interface RunnerPoolRoot {
+  readonly windows: string | null;
+  readonly linux: string | null;
+  readonly darwin: string | null;
+}
+
+/**
+ * One pool: the label set a workflow of this repository targets, the variable
+ * that switches its jobs on, the tools a job there invokes, and the preflight
+ * workflow that proves it. See `parseRunners`.
+ */
+export interface RunnerPool {
+  readonly id: string;
+  readonly os: RunnerOs;
+  readonly arch: RunnerArch;
+  /** Always exactly `["self-hosted", os, arch]`: the policy refuses anything else. */
+  readonly labels: readonly string[];
+  /** Absent when this pool's jobs are not variable-gated; `runner enable` then has nothing to set. */
+  readonly enableVariable: string | null;
+  readonly tools: readonly string[];
+  readonly preflightWorkflow: string;
+  readonly root: RunnerPoolRoot;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * `runners` -- the self-hosted runner policy `hatsu:jusshin` executes.
+ *
+ * NO DEFAULT, EVER, the way `models` and `review.scopes` have none: a default
+ * pool would be nen inventing a label set, a variable name and a toolchain for
+ * somebody else's CI. An absent block is `null`, and every `nen runner` verb
+ * that needs one refuses at exit 2 naming the key.
+ */
+export interface RunnersPolicy {
+  readonly naming: string;
+  readonly pools: readonly RunnerPool[];
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * A closed, case-sensitive vocabulary whose near-spellings are refused naming
+ * the canonical one. GitHub matches labels case-insensitively, but a workflow's
+ * `runs-on` and this repository's own runner-policy guard compare them as
+ * strings -- so `windows` is refused as "write 'Windows'" rather than accepted
+ * and then failing a string comparison three files away.
+ */
+function requireCanonical<T extends string>(
+  path: string,
+  pointer: string,
+  value: unknown,
+  allowed: readonly T[],
+  aliases: Readonly<Record<string, T>>,
+  what: string,
+): T {
+  const text = requireString(path, pointer, value);
+  if ((allowed as readonly string[]).includes(text)) return text as T;
+  const meant =
+    allowed.find((candidate): boolean => candidate.toLowerCase() === text.toLowerCase()) ??
+    aliases[text.toLowerCase()];
+  throw new SchemaError(
+    path,
+    pointer,
+    meant === undefined
+      ? `'${text}' is not ${what} a self-hosted pool can declare. The ${allowed.length} are ${allowed.join(", ")}, in GitHub's own label case`
+      : `'${text}' is spelled '${meant}' here -- GitHub's own label case, which a workflow's runs-on and the runner-policy guard compare as a string. Write '${meant}'`,
+  );
+}
+
+const OS_ALIASES: Readonly<Record<string, RunnerOs>> = {
+  ubuntu: "Linux",
+  darwin: "macOS",
+  osx: "macOS",
+  mac: "macOS",
+  win: "Windows",
+  win32: "Windows",
+};
+const ARCH_ALIASES: Readonly<Record<string, RunnerArch>> = {
+  amd64: "X64",
+  x86_64: "X64",
+  aarch64: "ARM64",
+};
+
+function parseRunnerRoot(path: string, pointer: string, value: unknown): RunnerPoolRoot {
+  const raw = block(path, pointer, value, RUNNER_ROOT_KEYS, "A pool's root defaults are keyed by host OS:");
+  const one = (key: string): string | null => {
+    const entry = raw[key];
+    if (entry === undefined || entry === null) return null;
+    const text = requireString(path, `${pointer}.${key}`, entry);
+    if (!RUNNER_ROOT.test(text)) {
+      throw new SchemaError(
+        path,
+        `${pointer}.${key}`,
+        `'${text}' is not a root nen can render into a host script. It is written into PowerShell and bash inside single quotes, so it may carry letters, digits, spaces, and . _ : \\ / ~ ( ) - only -- never a quote, '$', a backtick, ';', '&', '|', '%' or a newline`,
+      );
+    }
+    return text;
+  };
+  return { windows: one("windows"), linux: one("linux"), darwin: one("darwin") };
+}
+
+function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerPool {
+  const raw = block(path, pointer, value, RUNNER_POOL_KEYS, "A runner pool's keys are");
+  if (raw["id"] === undefined) {
+    throw new SchemaError(path, `${pointer}.id`, "is required: a pool is named on the command line by its id (--pool <id>)");
+  }
+  const id = requireString(path, `${pointer}.id`, raw["id"]);
+  requirePolicyName(path, `${pointer}.id`, id, "a pool id");
+  const os = requireCanonical(path, `${pointer}.os`, raw["os"], RUNNER_OSES, OS_ALIASES, "an operating system");
+  const arch = requireCanonical(path, `${pointer}.arch`, raw["arch"], RUNNER_ARCHES, ARCH_ALIASES, "an architecture");
+  const expected = ["self-hosted", os, arch];
+  const labels = requireArray(path, `${pointer}.labels`, raw["labels"]).map((item, index): string =>
+    requireString(path, `${pointer}.labels[${index}]`, item),
+  );
+  if (labels.length !== expected.length || labels.some((label, index): boolean => label !== expected[index])) {
+    throw new SchemaError(
+      path,
+      `${pointer}.labels`,
+      `is ${JSON.stringify(labels)}, and a pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', then its os, then its arch, in GitHub's case. An extra label is refused: the runner-policy guard in this repository family admits a job only on one of the canonical three-label sets, so a pool carrying a fourth is a pool no guarded workflow can target, and a bare 'self-hosted' would match every runner the repository has`,
+    );
+  }
+  const variableRaw = raw["enableVariable"];
+  let enableVariable: string | null = null;
+  if (variableRaw !== undefined && variableRaw !== null) {
+    enableVariable = requireString(path, `${pointer}.enableVariable`, variableRaw);
+    if (!RUNNER_VARIABLE.test(enableVariable)) {
+      throw new SchemaError(
+        path,
+        `${pointer}.enableVariable`,
+        `'${enableVariable}' is not a repository variable name a workflow's 'vars.<NAME>' can read under this policy: an upper-case letter, then upper-case letters, digits and underscores`,
+      );
+    }
+  }
+  const tools = requireArray(path, `${pointer}.tools`, raw["tools"]).map((item, index): string => {
+    const tool = requireString(path, `${pointer}.tools[${index}]`, item);
+    if (!RUNNER_TOOL.test(tool)) {
+      throw new SchemaError(
+        path,
+        `${pointer}.tools[${index}]`,
+        `'${tool}' is not a tool name the preflight workflow can check. It is written into a bash step as one word, so it may carry letters, digits, '.', '_', '+' and '-' only, starting with a letter or digit`,
+      );
+    }
+    return tool;
+  });
+  if (tools.length === 0) {
+    throw new SchemaError(
+      path,
+      `${pointer}.tools`,
+      "is empty. The preflight proves a pool by running every tool a job on it invokes; a pool that declares none is proved by nothing but the runner answering, which is registration, not capability",
+    );
+  }
+  const seenTools = new Set<string>();
+  for (const [index, tool] of tools.entries()) {
+    if (seenTools.has(tool)) throw new SchemaError(path, `${pointer}.tools[${index}]`, `repeats '${tool}'. Each tool is checked once`);
+    seenTools.add(tool);
+  }
+  if (raw["preflightWorkflow"] === undefined) {
+    throw new SchemaError(
+      path,
+      `${pointer}.preflightWorkflow`,
+      "is required: 'nen runner enable' switches a pool on only after a green run of this workflow, so a pool without one could never be enabled",
+    );
+  }
+  const preflightWorkflow = requireString(path, `${pointer}.preflightWorkflow`, raw["preflightWorkflow"]);
+  if (!RUNNER_WORKFLOW_FILE.test(preflightWorkflow)) {
+    throw new SchemaError(
+      path,
+      `${pointer}.preflightWorkflow`,
+      `'${preflightWorkflow}' is not a workflow basename. It names a file under .github/workflows/ -- no directory, ending '.yml' -- because 'gh workflow run' and the rendered workflow's own push path filter both name it by that basename`,
+    );
+  }
+  return {
+    id,
+    os,
+    arch,
+    labels,
+    enableVariable,
+    tools,
+    preflightWorkflow,
+    root: parseRunnerRoot(path, `${pointer}.root`, raw["root"]),
+    raw,
+  };
+}
+
+/**
+ * `runners` -- the naming template and the pools. SHAPE AND VOCABULARY ONLY:
+ * whether a pool's runners exist, and whether its preflight is green, are the
+ * `nen runner` verbs' questions, asked against GitHub, never this loader's.
+ */
+export function parseRunners(path: string, value: unknown): RunnersPolicy | null {
+  if (value === undefined || value === null) return null;
+  const raw = block(path, "runners", value, RUNNERS_KEYS, "A runners policy's two keys are");
+  const namingRaw = raw["naming"];
+  const naming =
+    namingRaw === undefined || namingRaw === null ? RUNNER_NAMING : requireString(path, "runners.naming", namingRaw);
+  if (naming !== RUNNER_NAMING) {
+    throw new SchemaError(
+      path,
+      "runners.naming",
+      `'${naming}' is not a naming template this release accepts. The one template is '${RUNNER_NAMING}' -- <MachineCode>-<ConsumerCode>R<N>, the three placeholders all required -- and 'nen runner inventory' parses every registered runner name against it; a second template would need a second parser this binary does not have. Write '${RUNNER_NAMING}', or drop the key to use it`,
+    );
+  }
+  const poolsRaw = requireArray(path, "runners.pools", raw["pools"]);
+  if (poolsRaw.length === 0) {
+    throw new SchemaError(
+      path,
+      "runners.pools",
+      "is empty. A runners block that declares no pool gives every 'nen runner' verb nothing to act on -- drop the block entirely, or declare at least one pool",
+    );
+  }
+  const pools = poolsRaw.map((entry, index): RunnerPool => parseRunnerPool(path, `runners.pools[${index}]`, entry));
+  const seen = new Map<string, number>();
+  for (const [index, pool] of pools.entries()) {
+    const first = seen.get(pool.id);
+    if (first !== undefined) {
+      throw new SchemaError(
+        path,
+        `runners.pools[${index}].id`,
+        `repeats '${pool.id}', already the id of runners.pools[${first}]. --pool <id> names exactly one pool`,
+      );
+    }
+    seen.set(pool.id, index);
+    // TWO POOLS WITH ONE LABEL SET ARE ONE POOL WITH TWO NAMES: a runner
+    // matches both, a job targets both, and `runner inventory` would count
+    // every runner twice. Refused rather than resolved by order.
+    const twin = pools.findIndex((other): boolean => other.labels.join(",") === pool.labels.join(","));
+    if (twin !== index) {
+      throw new SchemaError(
+        path,
+        `runners.pools[${index}].labels`,
+        `are the same label set as runners.pools[${twin}] ('${pools[twin]?.id ?? "?"}'). A pool IS its label set -- a runner and a job both match it by labels alone -- so two ids for one set would count every runner twice`,
+      );
+    }
+    // ONE PREFLIGHT FILE PER POOL, because the file is RENDERED per pool
+    // (`nen runner workflow` substitutes this pool's runs-on) and `nen runner
+    // enable` reads a green run of it as proof of THIS pool. Two pools sharing
+    // one basename would overwrite each other's file, and a green run on one
+    // pool would read as proof of the other.
+    const sharer = pools.findIndex((other): boolean => other.preflightWorkflow === pool.preflightWorkflow);
+    if (sharer !== index) {
+      throw new SchemaError(
+        path,
+        `runners.pools[${index}].preflightWorkflow`,
+        `'${pool.preflightWorkflow}' is already runners.pools[${sharer}]'s preflight workflow. The file is rendered for ONE pool's runs-on, and a green run of it is what 'nen runner enable' accepts as proof of that pool -- so each pool names its own, e.g. 'runner-preflight-${pool.id}.yml'`,
+      );
+    }
+  }
+  return { naming, pools, raw };
+}
+
+/** The `runners` row `nen schema check` prints. See `describeSections`. */
+export function describeRunners(workflow: Workflow): string {
+  const runners = workflow.runners;
+  if (runners === null) return "none declared";
+  return `${runners.pools.length} pool(s): ${runners.pools
+    .map(
+      (pool): string =>
+        `${pool.id} [${pool.labels.join(", ")}]${pool.enableVariable === null ? "" : ` via ${pool.enableVariable}`}`,
+    )
+    .join("; ")}`;
+}
+
 function parseNotifications(path: string, value: unknown): NotificationsPolicy {
   const raw = block(
     path,
@@ -1514,7 +1839,7 @@ function parseProfile(path: string, value: unknown): ProfilePolicy {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's fourteen blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's fifteen blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -1534,6 +1859,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     profile: parseProfile(path, raw["profile"]),
     release: parseReleasePolicy(path, raw["release"]),
     futon: parseFutonPolicy(path, raw["futon"]),
+    runners: parseRunners(path, raw["runners"]),
     raw,
   };
 }

@@ -12,10 +12,12 @@ import {
   DEFAULT_BASE,
   DEFAULT_BRANCH_TEMPLATE,
   PROFILE_NAMES,
+  RUNNER_NAMING,
   WORKFLOW_FILE,
   defaultWorkflow,
   describeProfile,
   describeReviewScopes,
+  describeRunners,
   describeSections,
   describeWorkflow,
   loadWorkflow,
@@ -800,9 +802,9 @@ describe("futon.advanceGo -- duplicate names after namespace normalization are r
   });
 });
 
-describe("a workflow's FOURTEEN blocks", () => {
-  it("says fourteen, now that release and futon are two of them", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's fourteen blocks are/);
+describe("a workflow's FIFTEEN blocks", () => {
+  it("says fifteen, now that runners is one of them", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's fifteen blocks are/);
   });
 });
 
@@ -916,5 +918,139 @@ describe("a name that is a slug and is not a key", () => {
     // `toString` is a prototype METHOD but not a prototype KEY: assigning it
     // creates an own property, so it is a name a repository may use.
     expect(workflow.reports.sections["turn-fast"]?.blocks).toEqual(["lastTurn", "toString"]);
+  });
+});
+
+// ── runners (hatsu:jusshin) ─────────────────────────────────────────────────
+
+const WINDOWS_POOL = {
+  id: "windows-x64",
+  os: "Windows",
+  arch: "X64",
+  labels: ["self-hosted", "Windows", "X64"],
+  enableVariable: "NEN_WINDOWS_RUNNER",
+  tools: ["git", "bash", "gh"],
+  preflightWorkflow: "runner-preflight-windows-x64.yml",
+  root: { windows: "C:\\GithubRunners", linux: "/opt/actions-runners", darwin: "~/actions-runners" },
+};
+
+/** A pool with one key dropped. */
+const without = (pool: Record<string, unknown>, key: string): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(pool).filter(([name]) => name !== key));
+
+const runnersWith = (pool: Record<string, unknown>, extra: Record<string, unknown> = {}): unknown => ({
+  runners: { naming: "{machine}-{consumer}R{slot}", pools: [pool], ...extra },
+});
+
+describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () => {
+  it("has no default: an absent block is null, and says so in schema check", () => {
+    expect(defaultWorkflow().runners).toBeNull();
+    expect(parseWorkflow("<doc>", {}).runners).toBeNull();
+    expect(parseWorkflow("<doc>", { runners: null }).runners).toBeNull();
+    expect(describeRunners(parseWorkflow("<doc>", {}))).toBe("none declared");
+  });
+
+  it("reads a whole pool, keeping $comment and the raw block", () => {
+    const workflow = parseWorkflow("<doc>", runnersWith(WINDOWS_POOL, { $comment: "why" }));
+    const pool = workflow.runners?.pools[0];
+    expect(workflow.runners?.naming).toBe(RUNNER_NAMING);
+    expect(pool).toMatchObject({
+      id: "windows-x64",
+      os: "Windows",
+      arch: "X64",
+      labels: ["self-hosted", "Windows", "X64"],
+      enableVariable: "NEN_WINDOWS_RUNNER",
+      tools: ["git", "bash", "gh"],
+      preflightWorkflow: "runner-preflight-windows-x64.yml",
+      root: { windows: "C:\\GithubRunners", linux: "/opt/actions-runners", darwin: "~/actions-runners" },
+    });
+    expect((workflow.raw["runners"] as Record<string, unknown>)["$comment"]).toBe("why");
+    expect(describeRunners(workflow)).toBe("1 pool(s): windows-x64 [self-hosted, Windows, X64] via NEN_WINDOWS_RUNNER");
+  });
+
+  it("takes enableVariable and root as optional, and naming as defaulting to the one template", () => {
+    const bare = without(without(WINDOWS_POOL, "enableVariable"), "root");
+    const workflow = parseWorkflow("<doc>", { runners: { pools: [bare] } });
+    expect(workflow.runners?.naming).toBe(RUNNER_NAMING);
+    expect(workflow.runners?.pools[0]?.enableVariable).toBeNull();
+    expect(workflow.runners?.pools[0]?.root).toEqual({ windows: null, linux: null, darwin: null });
+    expect(describeRunners(workflow)).toBe("1 pool(s): windows-x64 [self-hosted, Windows, X64]");
+  });
+
+  it("accepts the one naming template and refuses every other, naming it", () => {
+    expect(() => parseWorkflow("<doc>", runnersWith(WINDOWS_POOL, { naming: "{machine}-{slot}" }))).toThrow(
+      /runners\.naming.*'\{machine\}-\{slot\}' is not a naming template this release accepts\. The one template is '\{machine\}-\{consumer\}R\{slot\}'/,
+    );
+  });
+
+  it("refuses an os or arch outside GitHub's label case, naming the canonical spelling", () => {
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, os: "windows" }))).toThrow(/runners\.pools\[0\]\.os.*'windows' is spelled 'Windows'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, os: "win32" }))).toThrow(/'win32' is spelled 'Windows'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, os: "darwin" }))).toThrow(/'darwin' is spelled 'macOS'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, os: "BeOS" }))).toThrow(/'BeOS' is not an operating system.*Linux, macOS, Windows/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, arch: "x64" }))).toThrow(/runners\.pools\[0\]\.arch.*'x64' is spelled 'X64'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, arch: "amd64" }))).toThrow(/'amd64' is spelled 'X64'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, arch: "aarch64" }))).toThrow(/'aarch64' is spelled 'ARM64'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, arch: "ARM" }))).toThrow(/'ARM' is not an architecture.*X64, ARM64/);
+  });
+
+  it("refuses labels that are not exactly self-hosted, os, arch -- an extra label, a missing one, a bare self-hosted", () => {
+    for (const labels of [
+      ["self-hosted", "Windows", "X64", "gpu"],
+      ["self-hosted", "Windows"],
+      ["self-hosted"],
+      ["Windows", "self-hosted", "X64"],
+      ["self-hosted", "Linux", "X64"],
+    ]) {
+      expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, labels }))).toThrow(
+        /runners\.pools\[0\]\.labels.*a pool's labels are exactly \["self-hosted","Windows","X64"\]/,
+      );
+    }
+  });
+
+  it("refuses a malformed enableVariable, tool, preflightWorkflow or root by pointer", () => {
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, enableVariable: "nen_windows" }))).toThrow(/enableVariable.*not a repository variable name/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, tools: [] }))).toThrow(/tools.*is empty/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, tools: ["git", "rm -rf /"] }))).toThrow(/tools\[1\].*not a tool name/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, tools: ["git", "git"] }))).toThrow(/tools\[1\].*repeats 'git'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, preflightWorkflow: ".github/workflows/x.yml" }))).toThrow(/preflightWorkflow.*not a workflow basename/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, preflightWorkflow: "x.yaml" }))).toThrow(/preflightWorkflow.*not a workflow basename/);
+    const noPreflight = without(WINDOWS_POOL, "preflightWorkflow");
+    expect(() => parseWorkflow("<doc>", runnersWith(noPreflight))).toThrow(/preflightWorkflow.*is required/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, root: { windows: "C:\\Runners'; rm" } }))).toThrow(/root\.windows.*not a root nen can render/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, root: { windows: "C:\\$env:x" } }))).toThrow(/root\.windows.*not a root nen can render/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, root: { linx: "/x" } }))).toThrow(/is one letter away from 'linux'/);
+  });
+
+  it("refuses a pool without an id, an id that is not a slug, and a repeated id", () => {
+    const noId = without(WINDOWS_POOL, "id");
+    expect(() => parseWorkflow("<doc>", runnersWith(noId))).toThrow(/pools\[0\]\.id.*is required/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, id: "Windows_X64" }))).toThrow(/pools\[0\]\.id/);
+    const mac = { ...WINDOWS_POOL, os: "macOS", arch: "ARM64", labels: ["self-hosted", "macOS", "ARM64"], preflightWorkflow: "b.yml" };
+    expect(() => parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, mac] } })).toThrow(/pools\[1\]\.id.*repeats 'windows-x64'/);
+  });
+
+  it("refuses two pools with one label set, and two pools sharing a preflight file", () => {
+    const twin = { ...WINDOWS_POOL, id: "windows-two", preflightWorkflow: "other.yml" };
+    expect(() => parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, twin] } })).toThrow(/pools\[1\]\.labels.*same label set as runners\.pools\[0\]/);
+    const mac = { ...WINDOWS_POOL, id: "macos-arm64", os: "macOS", arch: "ARM64", labels: ["self-hosted", "macOS", "ARM64"] };
+    expect(() => parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, mac] } })).toThrow(
+      /pools\[1\]\.preflightWorkflow.*already runners\.pools\[0\]'s preflight workflow.*runner-preflight-macos-arm64\.yml/,
+    );
+  });
+
+  it("refuses an empty pool list, a non-list, and a near-miss key at every level", () => {
+    expect(() => parseWorkflow("<doc>", { runners: { pools: [] } })).toThrow(/runners\.pools.*is empty/);
+    expect(() => parseWorkflow("<doc>", { runners: { pools: {} } })).toThrow(/runners\.pools/);
+    expect(() => parseWorkflow("<doc>", { runners: { pool: [] } })).toThrow(/is one letter away from 'pools'/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, tool: ["git"] }))).toThrow(/is one letter away from 'tools'/);
+    expect(() => parseWorkflow("<doc>", { runner: {} })).toThrow(/is one letter away from 'runners'/);
+  });
+
+  it("is what this repository's own nen/workflow.json declares, and it loads", () => {
+    const loaded = loadWorkflow(process.cwd());
+    expect(loaded.workflow.runners?.pools.map((pool): string => pool.id)).toEqual(["windows-x64", "macos-arm64"]);
+    expect(loaded.workflow.runners?.pools[0]?.enableVariable).toBe("NEN_WINDOWS_RUNNER");
+    expect(loaded.workflow.runners?.pools[1]?.enableVariable).toBeNull();
   });
 });
