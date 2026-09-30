@@ -27,6 +27,20 @@ export interface XmlElement {
   readonly attributes: Readonly<Record<string, string>>;
   /** Enclosing tag names, outermost first. The parent is the last entry. */
   readonly ancestors: readonly string[];
+  /**
+   * The character data written straight after this start tag, up to the next
+   * markup of any kind, entity-decoded and NOT trimmed -- `""` for a
+   * self-closing tag.
+   *
+   * THE LEADING RUN ONLY, NOT THE ELEMENT'S WHOLE TEXT CONTENT. The one caller
+   * that needs text at all is Cobertura's `<source>/repo</source>`, a leaf
+   * whose whole content IS that run; an element with children gets the
+   * whitespace before its first child, which nobody reads. A CDATA section or a
+   * comment ends the run rather than being folded into it -- this reader skips
+   * both, and a `<source>` written as CDATA reads as empty, which its caller
+   * treats as "no root stated" rather than as a root.
+   */
+  readonly text: string;
 }
 
 const ENTITIES: Readonly<Record<string, string>> = {
@@ -124,10 +138,12 @@ export function scanXml(text: string): readonly XmlElement[] {
     const inner = selfClosing ? body.slice(0, -1) : body;
     const name = /^[^\s/>]+/.exec(inner)?.[0];
     if (name === undefined) continue;
+    const next = text.indexOf("<", index);
     elements.push({
       name,
       attributes: readAttributes(inner.slice(name.length)),
       ancestors: [...open],
+      text: selfClosing ? "" : decodeEntities(text.slice(index, next === -1 ? text.length : next)),
     });
     if (!selfClosing) open.push(name);
   }

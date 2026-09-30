@@ -24,6 +24,7 @@ claim this verb makes.
 | `root-counts.cobertura.xml` | " | the root's counts and the rows' sum **disagree** (an empty `<classes/>` package) — the only shape that can prove nen reports the writer's total rather than its own |
 | `empty.cobertura.xml` | " | `lines-valid="0"`, no packages |
 | `malformed.cobertura.xml` | " | a `<coverage>` root stating no line figure at all |
+| `per-file.cobertura.xml` | " | **not** one of the 14-of-17 happy fixtures: the coverlet shape `--touched` used to collapse ([#296](https://github.com/zheref/nen/issues/296)) — several files in one package at **different** rates, one file written as **two `<class>` entries that repeat lines** (the union is 7 of 10; a sum would say 8 of 13), backslash filenames, a **space** in a directory name, a `<source>` on a Windows drive, and one filename from **another machine** that must resolve to nothing |
 | `jacocoTestReport.xml` | JaCoCo XML | happy path; counters at four nesting levels, only two of which are read |
 | `jacoco-aggregate.xml` | " | the multi-module `<group>` shape: **one package name in two groups** (rows must add up, not overwrite) and a package whose class counters deliberately do not sum to it |
 | `jacoco-empty.xml` | " | a report-level `LINE` counter at 0/0 |

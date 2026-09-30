@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { counts, target } from "./shape.js";
-import { filterTouched, grainOf, touchedByPackage } from "./touched.js";
+import { expectedGrainOf, filterTouched, grainOf, touchedByPackage } from "./touched.js";
 
 describe("grainOf", () => {
   it("is 'package' for cobertura and jacoco, 'file' for everything else", () => {
@@ -160,5 +160,18 @@ describe("filterTouched", () => {
     const result = filterTouched([FILE_ROW], ["packages/core/src/index.ts"], "file", 80);
     expect(Object.keys(result.rows[0] ?? {})).toEqual(["name", "lines", "branches", "met"]);
     expect(result.rows[0]?.branches).toEqual({ covered: 3, total: 4, percent: 75 });
+  });
+});
+
+describe("expectedGrainOf -- the grain a run is expected to match at before a report is read (zheref/nen#296)", () => {
+  it("is null for cobertura: its bytes decide (file rows when classes name files, packages only when none does)", () => {
+    expect(expectedGrainOf("cobertura")).toBeNull();
+  });
+
+  it("is grainOf for every other format", () => {
+    expect(expectedGrainOf("jacoco")).toBe("package");
+    expect(expectedGrainOf("lcov")).toBe("file");
+    expect(expectedGrainOf("istanbul-summary")).toBe("file");
+    expect(expectedGrainOf("xccov-report")).toBe("file");
   });
 });

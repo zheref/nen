@@ -17,29 +17,61 @@
 // jacoco name a row after a PACKAGE or namespace -- a directory of files, not
 // one -- so a touched file matches such a row when the file's own path
 // contains that package's segments, in order, with at least one segment left
-// over afterwards for the file itself. Neither grain is asked of the
-// declaration or the report: it follows from `report.format`, which
-// ../coverage.ts already carries.
+// over afterwards for the file itself. The grain is never asked of the
+// declaration. For every format but one it follows from `report.format`,
+// which ../coverage.ts already carries; for cobertura it also depends on what
+// the report says, as the next paragraph explains.
+//
+// COBERTURA IS MATCHED BY FILE WHENEVER IT NAMES FILES (zheref/nen#296). Its
+// own rows are packages -- `grainOf` still says so, and a plain run still
+// prints them -- but every `<class>` names a `filename`, and matching a
+// touched file to its package credited it with a number that is neither its
+// own nor any touched file's. So under `--touched`, ../coverage.ts reads the
+// report's per-file view (./shape.ts's `SourceFiles`) and ./files.ts resolves
+// it into FILE rows; package matching is left for the one report that names
+// no file at all. `expectedGrainOf` is the grain a run is expected to match at
+// before any report has been read.
 
 import { thresholdMet } from "./report.js";
 import type { CoverageTarget } from "./shape.js";
 
 export type CoverageGrain = "file" | "package";
 
-/** Formats whose rows are packages/namespaces rather than files. */
+/** Formats whose own `parse()` rows are packages/namespaces rather than files. */
 const PACKAGE_GRAIN_FORMATS: ReadonlySet<string> = new Set(["cobertura", "jacoco"]);
 
 /**
- * The grain a format's rows are in, for touched-matching.
+ * Formats that ALSO state a per-file view beside their package rows, which
+ * `--touched` matches at instead (./shape.ts's `ParsedCoverage.files`).
+ */
+const FILE_VIEW_FORMATS: ReadonlySet<string> = new Set(["cobertura"]);
+
+/**
+ * The grain a format's OWN rows (its `parse()` targets) are in.
  *
  * EVERY OTHER FORMAT ID DEFAULTS TO "file", xccov-report included: under
  * `--touched`, ../coverage.ts replaces xccov's own target-level rows with the
  * descended file-level ones (`targets[].files[]`) before this module ever sees
  * them, so by the time a row reaches here it already IS a file row -- exactly
- * like istanbul's or lcov's.
+ * like istanbul's or lcov's. cobertura's own rows are packages, and that is
+ * the grain its FALLBACK is matched at: a report that names no file.
  */
 export function grainOf(formatId: string): CoverageGrain {
   return PACKAGE_GRAIN_FORMATS.has(formatId) ? "package" : "file";
+}
+
+/**
+ * The grain a `--touched` run is expected to match a format at BEFORE its
+ * report is read -- a dry run, or a run whose tool failed -- or null when the
+ * report decides.
+ *
+ * NULL FOR COBERTURA, NOT "package": it matches by file whenever its classes
+ * name files, which every writer in the field does, and by package only when
+ * none does -- a fact about the bytes, not the format. A preview that said
+ * "rows matched BY PACKAGE" would be describing the fallback as the rule.
+ */
+export function expectedGrainOf(formatId: string): CoverageGrain | null {
+  return FILE_VIEW_FORMATS.has(formatId) ? null : grainOf(formatId);
 }
 
 function toPosix(value: string): string {

@@ -478,10 +478,23 @@ flags:
                    stay the FIRST report's, exactly as without --touched.
                    A file-grain report (istanbul-summary,
                    lcov) matches a touched path by equality; a package-grain
-                   one (cobertura, jacoco) matches when a touched path
+                   one (jacoco) matches when a touched path
                    contains the package's own segments, in order, with the
                    file itself left over -- 'the touched file sits under this
-                   package'. xccov-report is read at FILE grain here only:
+                   package'. cobertura is read at FILE grain whenever its
+                   classes name files (zheref/nen#296): each <class filename>
+                   is resolved on its own: the report's <source> roots first
+                   ('source') -- one holding the file resolves it, two
+                   holding different files make it AMBIGUOUS -- then the
+                   three above, to the first place it EXISTS, under its
+                   on-disk spelling. A file several <class> entries name is
+                   ONE row, the union of their lines. A name that is
+                   ambiguous or resolves nowhere is never matched: its
+                   touched file stays unmatched rather than credited to
+                   another file or its package, and
+                   'artifacts[].unresolved' says why. Only a cobertura
+                   report naming NO file is matched by package.
+                   xccov-report is read at FILE grain here only:
                    nen descends 'targets[].files[]' instead of stopping at
                    the target row, because "this whole app was touched" is
                    true of nearly every diff. REQUIRES --base; given without

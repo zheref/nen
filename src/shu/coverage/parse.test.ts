@@ -32,7 +32,7 @@ import {
   recognisedByName,
   supportedFormats,
 } from "./parse.js";
-import { counts, CoverageReportError, percentOf, sum, type CoverageFormat } from "./shape.js";
+import { counts, CoverageReportError, measureLines, percentOf, sum, type CoverageFormat } from "./shape.js";
 
 function fixture(name: string): string {
   return readFileSync(coverageReport(name), "utf8");
@@ -666,5 +666,134 @@ describe("the arithmetic", () => {
       "lines",
       "branches",
     ]);
+  });
+});
+
+describe("xml: the text a leaf element carries (zheref/nen#296)", () => {
+  it("reads a <source>'s text, entity-decoded and untrimmed; a self-closing tag has none", () => {
+    const elements = scanXml(
+      "<sources><source> /repo/a </source><source>C:\\work\\My &amp; Repo\\</source><source/></sources>",
+    );
+    expect(elements.map((element): string => element.text)).toEqual(["", " /repo/a ", "C:\\work\\My & Repo\\", ""]);
+  });
+
+  it("stops at the next markup: a CDATA section is not folded in", () => {
+    const [, source] = scanXml("<s><source><![CDATA[/x]]></source></s>");
+    expect(source?.text).toBe("");
+  });
+});
+
+describe("cobertura: the per-file view beside the package rows (zheref/nen#296)", () => {
+  const perFile = COBERTURA.parse(fixture("per-file.cobertura.xml"), "per-file.cobertura.xml");
+
+  it("a PLAIN parse is unchanged: the writer's own total, and PACKAGE rows", () => {
+    expect(perFile.total.lines).toEqual({ covered: 20, total: 29, percent: 68.97 });
+    expect(perFile.total.branches).toEqual({ covered: 4, total: 6, percent: 66.67 });
+    expect(perFile.targets.map((row): string => row.name)).toEqual(["PlaceholderApp", "PlaceholderCore"]);
+    // The number every touched file in the package used to be given.
+    expect(perFile.targets[1]?.lines).toEqual({ covered: 19, total: 27, percent: 70.37 });
+  });
+
+  it("states its <source> roots and one entry per distinct filename, '\\' read as '/', sorted", () => {
+    expect(perFile.files?.roots).toEqual(["C:\\work\\Placeholder Repo\\"]);
+    expect(perFile.files?.files.map((file): string => file.name)).toEqual([
+      "D:/agent/_work/1/s/PlaceholderCore/Legacy/Old.cs",
+      "PlaceholderApp/App.xaml.cs",
+      "PlaceholderCore/Models/Order.cs",
+      "PlaceholderCore/Models/OrderStatusMetadata.cs",
+      "PlaceholderCore/Services/Clock.cs",
+      "PlaceholderCore/View Models/OrderViewModel.cs",
+    ]);
+  });
+
+  it("two <class> entries naming one file are that file's UNION -- and <method> lines are not counted again", () => {
+    const order = perFile.files?.files.find((file): boolean => file.name === "PlaceholderCore/Models/Order.cs");
+    expect(order).toBeDefined();
+    const row = measureLines(order?.name ?? "", order?.lines ?? new Map());
+    expect(row.lines).toEqual({ covered: 7, total: 10, percent: 70 });
+    expect(row.branches).toEqual({ covered: 3, total: 4, percent: 75 });
+  });
+
+  it("the existing happy fixture's view agrees with its package rows -- one class per file, nothing merged", () => {
+    const happy = COBERTURA.parse(fixture("coverage.cobertura.xml"), "x");
+    expect(happy.files?.roots).toEqual(["/repo"]);
+    const rows = (happy.files?.files ?? []).map((file) => measureLines(file.name, file.lines));
+    expect(rows.map((row) => [row.name, row.lines.covered, row.lines.total])).toEqual([
+      ["App/Program.cs", 3, 4],
+      ["Core/Store.cs", 11, 13],
+    ]);
+    expect(rows[1]?.branches).toEqual({ covered: 3, total: 4, percent: 75 });
+  });
+
+  it("the root-counts fixture still reports the WRITER'S total, whatever the view holds", () => {
+    const parsed = COBERTURA.parse(fixture("root-counts.cobertura.xml"), "x");
+    expect(parsed.total.lines).toEqual({ covered: 14, total: 17, percent: 82.35 });
+    expect(parsed.files?.files.map((file) => file.name)).toEqual(["Core/Store.cs"]);
+  });
+
+  it("a report whose classes name NO file has no view at all -- the one package fallback", () => {
+    const parsed = COBERTURA.parse(
+      '<coverage line-rate="1" lines-covered="2" lines-valid="2"><packages><package name="P"><classes><class name="C"><lines><line number="1" hits="1"/><line number="2" hits="1"/></lines></class></classes></package></packages></coverage>',
+      "x",
+    );
+    expect(parsed.files).toBeUndefined();
+    expect(Object.keys(parsed)).toEqual(["total", "targets"]);
+    expect(parsed.targets.map((row) => row.name)).toEqual(["P"]);
+  });
+
+  it("a class with no filename in a report that has others: counted in the total, credited to no file", () => {
+    const parsed = COBERTURA.parse(
+      '<coverage line-rate="1"><packages><package name="P"><classes>' +
+        '<class name="A" filename="a.cs"><lines><line number="1" hits="1"/></lines></class>' +
+        '<class name="B" filename=" "><lines><line number="9" hits="1"/></lines></class>' +
+        '</classes></package></packages></coverage>',
+      "x",
+    );
+    expect(parsed.total.lines.total).toBe(2);
+    expect(parsed.files?.files.map((file) => [file.name, file.lines.size])).toEqual([["a.cs", 1]]);
+  });
+
+  it("a line with no readable number is its own line, never merged with another", () => {
+    const parsed = COBERTURA.parse(
+      '<coverage line-rate="1"><packages><package name="P"><classes>' +
+        '<class name="A" filename="a.cs"><lines><line hits="1"/><line hits="0"/><line number="3" hits="0"/></lines></class>' +
+        '<class name="A2" filename="a.cs"><lines><line number="3" hits="2"/></lines></class>' +
+        '</classes></package></packages></coverage>',
+      "x",
+    );
+    const file = parsed.files?.files[0];
+    expect(measureLines("a.cs", file?.lines ?? new Map()).lines).toEqual({ covered: 2, total: 3, percent: 66.67 });
+  });
+});
+
+describe("cobertura: round 3 of the #296 review", () => {
+  it("counts the <class> entries each file name was merged from (Order.cs is two)", () => {
+    const parsed = COBERTURA.parse(fixture("per-file.cobertura.xml"), "x");
+    expect(parsed.files?.files.map((file) => [file.name, file.entries])).toEqual([
+      ["D:/agent/_work/1/s/PlaceholderCore/Legacy/Old.cs", 1],
+      ["PlaceholderApp/App.xaml.cs", 1],
+      ["PlaceholderCore/Models/Order.cs", 2],
+      ["PlaceholderCore/Models/OrderStatusMetadata.cs", 1],
+      ["PlaceholderCore/Services/Clock.cs", 1],
+      ["PlaceholderCore/View Models/OrderViewModel.cs", 1],
+    ]);
+  });
+
+  it("refuses a line's impossible condition figure on the PLAIN parse -- a neighbour's (0/4) cannot absorb (5/2) into 5 of 6", () => {
+    const xml =
+      '<coverage line-rate="1" lines-covered="2" lines-valid="2"><packages><package name="P"><classes>' +
+      '<class name="A" filename="Core\\A.cs"><lines><line number="1" hits="1" branch="true" condition-coverage="250% (5/2)"/></lines></class>' +
+      '<class name="B" filename="Core\\B.cs"><lines><line number="1" hits="1" branch="true" condition-coverage="0% (0/4)"/></lines></class>' +
+      "</classes></package></packages></coverage>";
+    expect(() => COBERTURA.parse(xml, "r.xml")).toThrow(
+      /^r\.xml: Core\/A\.cs, line 1: states 5 of 2 conditions covered/,
+    );
+    // A class with no filename is named by its class name instead.
+    expect(() =>
+      COBERTURA.parse(
+        '<coverage line-rate="1"><packages><package name="P"><classes><class name="Anon"><lines><line hits="1" condition-coverage="(3/1)"/></lines></class></classes></package></packages></coverage>',
+        "r.xml",
+      ),
+    ).toThrow(/^r\.xml: class 'Anon', an unnumbered line: states 3 of 1 conditions covered/);
   });
 });
