@@ -2,6 +2,31 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.18.2 — 2026-09-30
+
+Release unit for `v0.18.1..v0.18.2`, two fixes from `hatsu:futon nen@bug` and the Windows runner proof:
+- [#315](https://github.com/zheref/nen/pull/315), which closes [#304](https://github.com/zheref/nen/issues/304): a pending check's empty conclusion.
+- [#316](https://github.com/zheref/nen/pull/316), which closes [#307](https://github.com/zheref/nen/issues/307): a finished rebase read as in progress.
+- [#318](https://github.com/zheref/nen/pull/318): the `windows-x64` runner preflight workflow.
+- [#322](https://github.com/zheref/nen/pull/322), the release proposal.
+
+The compatibility floor stays `0.18`.
+
+### Fixed
+
+- **pr** ([#304](https://github.com/zheref/nen/issues/304), [#315](https://github.com/zheref/nen/pull/315)). `gh pr view --json statusCheckRollup` writes `conclusion: ""` for a CheckRun that is still running, and the rollup parser refused it, so `nen pr fetch` and `nen pr next-blocker` exited 1 on every pull request with a pending check. A `""` conclusion on a run whose status is present and is not `COMPLETED` now reads as unset (`null`), and CON-32(a) still reads it as not green. A completed run with `""`, a run with no status, and any unknown non-empty conclusion are still refused at their path. `nen pr ready` reads GraphQL, where the value is already `null`, and was never affected. `nen report data`'s register counts such a check pending with no degradation note; its lenient fallback's note now says an unrecognised conclusion counts red, as it always did.
+- **shu, wc** ([#307](https://github.com/zheref/nen/issues/307), [#316](https://github.com/zheref/nen/pull/316)). `nen shu warmup` read a rebase as in progress whenever `REBASE_HEAD` resolved, and git leaves that ref behind after a rebase completes, so warmup refused a clean checkout after `nen wc catch-up` finished a conflicted rebase. Warmup and catch-up now share one reading of `git rebase --show-current-patch`: exit 0 is a rebase stopped on a patch, 1 one paused at a `break` or a failed `exec` line, 128 no rebase once `git rev-parse --git-dir` shows git can answer in the repository, and anything else (a signal included) unanswered. `MERGE_HEAD` and `CHERRY_PICK_HEAD` keep their ref checks.
+
+### Added
+
+- **ci** ([#318](https://github.com/zheref/nen/pull/318)). `.github/workflows/runner-preflight-windows-x64.yml`, rendered by `nen runner workflow --pool windows-x64`: the proof `nen runner enable` needs before the `check-windows` leg runs on the self-hosted Windows pool. No verb or flag changes.
+
+### Breaking / consumer notes
+
+This release declares **no breaking consumer note**, which is what leaves `COMPATIBLE_MINOR_FLOOR` at `0.18`. The section still states the outcome, as [the release-time floor step](docs/USAGE.md#the-release-time-floor-step) requires.
+
+- **No repin: the compatibility floor stays `0.18`.** A repository pinned `minimum: "0.18"` needs no change. Three refusals are new, each where the old reading was wrong rather than a changed contract: `nen shu warmup` refuses a rebase paused at a `break` or a failed `exec` (exit 2), which it used to warm through; `nen wc catch-up` refuses that paused rebase instead of merging inside it, with `--abort` still backing it out (exit 2); and both refuse a rebase probe git did not answer (exit 2). `pinned_ref` SHOULD move to `v0.18.2` on a repository whose skills drive `pr fetch`, `pr next-blocker` or a warm-up after a catch-up.
+
 ## v0.18.1 — 2026-09-30
 
 Release unit for `v0.18.0..v0.18.1`, the hardening of the host script `nen runner script` renders:
