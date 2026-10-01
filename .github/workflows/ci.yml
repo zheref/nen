@@ -156,6 +156,16 @@ jobs:
             runner: '["self-hosted","Windows","X64"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
+    # Every run: step here is bash, the shell the windows-x64 pool's preflight proves
+    # (nen/workflow.json -> runners.pools[windows-x64].tools: git bash gh). Without it the
+    # runner writes each step to a .ps1 and runs it under Windows PowerShell as the service
+    # account, which refused it on the first live run (2026-10-01, run 36802734735:
+    # 'running scripts is disabled on this system'); the pool's declared toolchain never
+    # included PowerShell (zheref/nen#318's review row recorded the push-back this
+    # run overturned). src/ci/runner-policy.test.ts pins this default.
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Check out
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
