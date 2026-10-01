@@ -104,9 +104,9 @@ function argvOf(seams: ScriptedSeams): readonly string[] {
 const BRANCH = "my-idea";
 const HEAD = "git branch --show-current";
 const ORPHANS = "git rev-list --count HEAD --not --branches --remotes";
-const IN_PROGRESS = "git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD";
+const IN_PROGRESS = "git rev-list --ignore-missing -1 MERGE_HEAD CHERRY_PICK_HEAD";
+const REBASING = "git rebase --show-current-patch";
 const MERGE_REF = "git rev-parse --verify --quiet MERGE_HEAD";
-const REBASE_REF = "git rev-parse --verify --quiet REBASE_HEAD";
 const PICK_REF = "git rev-parse --verify --quiet CHERRY_PICK_HEAD";
 const STATUS = "git -c core.quotePath=false status --porcelain=v1 -z -uall";
 const RESET = "git reset --hard";
@@ -157,6 +157,7 @@ const WT_HERE = `worktree ${SHU_REPO}\nHEAD 111111111111111111111111111111111111
 const CLEAN_ORDER: readonly string[] = [
   HEAD,
   IN_PROGRESS,
+  REBASING,
   STATUS,
   REMOTES,
   TRUNK_REF,
@@ -185,7 +186,8 @@ function happyPath(overrides: readonly ScriptedCall[] = []): readonly ScriptedCa
     // the answer and not a failure -- so the default fixture says "none of the
     // three is here", and a test about one of them overrides just that one.
     { match: MERGE_REF, result: { code: 1 } },
-    { match: REBASE_REF, result: { code: 1 } },
+    // git's own "no rebase in progress" (exit 128) -- the answer, not a failure (#307).
+    { match: REBASING, result: { code: 128, stderr: "fatal: no rebase in progress" } },
     { match: PICK_REF, result: { code: 1 } },
     ok(STATUS),
     ok(REMOTES, "origin\n"),
@@ -410,14 +412,68 @@ describe("a working copy in the middle of an operation", () => {
 
   it("names a rebase and a cherry-pick by their own aborts", async () => {
     const rebase = await capture(["warmup", "--branch", BRANCH], {
-      script: happyPath([ok(IN_PROGRESS, "abc\n"), ok(REBASE_REF, "abc\n")]),
+      script: happyPath([ok(REBASING, "the stopped patch\n")]),
     });
+    expect(rebase.code).toBe(2);
+    expect(rebase.err.join("\n")).toMatch(/in the middle of an operation \(a rebase is stopped\)/);
     expect(rebase.err.join("\n")).toMatch(/git rebase --abort/);
 
     const pick = await capture(["warmup", "--branch", BRANCH], {
       script: happyPath([ok(IN_PROGRESS, "abc\n"), ok(PICK_REF, "abc\n")]),
     });
     expect(pick.err.join("\n")).toMatch(/git cherry-pick --abort/);
+  });
+
+  it("refuses a rebase PAUSED with no current patch (a break or failed exec, exit 1)", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH, "--discard"], {
+      script: happyPath([{ match: REBASING, result: { code: 1, stderr: "fatal: bad revision 'REBASE_HEAD'" } }]),
+    });
+    expect(result.code).toBe(2);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/\(a rebase is paused with no current patch\)/);
+    expect(said).toMatch(/git rebase --abort/);
+    expect(argvOf(result.seams)).not.toContain(RESET);
+  });
+
+  it("refuses a rebase probe killed by a signal rather than reading its code 1 as a paused rebase", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([{ match: REBASING, result: { code: 1, signal: "SIGTERM" } }]),
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+    expect(result.err.join("\n")).toMatch(/was killed by SIGTERM before it answered/);
+    expect(result.err.join("\n")).not.toMatch(/answered exit 1/);
+  });
+
+  it("refuses rather than reading an unanswerable rebase probe as a 'no'", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([{ match: REBASING, result: { code: 129, stderr: "usage" } }]),
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+    expect(argvOf(result.seams)).not.toContain(STATUS);
+  });
+
+  it("names both when a merge ref and a stopped rebase answer together", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([ok(IN_PROGRESS, "abc\n"), ok(MERGE_REF, "abc\n"), ok(REBASING, "patch\n")]),
+    });
+    expect(result.code).toBe(2);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/\(MERGE_HEAD exists; a rebase is stopped\)/);
+    expect(said).toMatch(/git merge --abort/);
+    expect(said).toMatch(/git rebase --abort/);
+  });
+
+  it("does NOT read a finished rebase's leftover REBASE_HEAD as one in progress (#307)", async () => {
+    // The rev-list no longer lists REBASE_HEAD, and git's own rebase state
+    // answers "no rebase in progress": the warm-up goes on to the status read.
+    const result = await capture(["warmup", "--branch", BRANCH, "--dry-run"], { script: happyPath() });
+    expect(result.code).toBe(0);
+    const clean = await capture(["warmup", "--branch", BRANCH], { script: happyPath() });
+    expect(clean.err.join("\n")).not.toMatch(/in the middle of an operation/);
+    expect(argvOf(clean.seams).slice(0, 4)).toEqual([HEAD, IN_PROGRESS, REBASING, STATUS]);
+    expect(argvOf(clean.seams)).not.toContain("git rev-parse --verify --quiet REBASE_HEAD");
   });
 
   it("still refuses when the probes disagree with the detector, pointing at git status", async () => {
@@ -433,7 +489,7 @@ describe("a working copy in the middle of an operation", () => {
       script: happyPath([{ match: IN_PROGRESS, result: { code: 128, stderr: "fatal" } }]),
     });
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/could not tell whether a merge, rebase or cherry-pick is in progress/);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a merge or cherry-pick is in progress/);
   });
 });
 
@@ -454,7 +510,7 @@ describe("a dirty working copy", () => {
     expect(said).toMatch(/\?\? \.env {2}\[secret-shape\]/);
     expect(said).toMatch(/\?\? notes\.md/);
     expect(said).toMatch(/pass --discard/);
-    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, STATUS]);
+    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, REBASING, STATUS]);
   });
 
   it("flags a local-config path on the list of work about to be lost", async () => {
@@ -500,6 +556,7 @@ describe("a dirty working copy", () => {
     expect(argvOf(result.seams)).toEqual([
       HEAD,
       IN_PROGRESS,
+      REBASING,
       STATUS,
       REMOTES,
       TRUNK_REF,
@@ -650,7 +707,7 @@ describe("every refusal is exit 2 with the evidence, and the document follows th
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toMatch(/no remote named 'origin'/);
     expect(result.err.join("\n")).toMatch(/it knows: upstream, fork/);
-    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, STATUS, REMOTES]);
+    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, REBASING, STATUS, REMOTES]);
   });
 
   it("refuses an unreadable remote list rather than treating it as absent", async () => {
@@ -752,7 +809,7 @@ describe("every refusal is exit 2 with the evidence, and the document follows th
     });
     expect(result.code).toBe(2);
     expect(result.out).toEqual([]);
-    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, STATUS, REMOTES, TRUNK_REF, WORKTREES, NAME_OK]);
+    expect(argvOf(result.seams)).toEqual([HEAD, IN_PROGRESS, REBASING, STATUS, REMOTES, TRUNK_REF, WORKTREES, NAME_OK]);
     expect(argvOf(result.seams)).not.toContain(RESET);
     expect(argvOf(result.seams)).not.toContain(CLEAN);
     expect(argvOf(result.seams)).not.toContain(FETCH);
@@ -1277,6 +1334,7 @@ describe("--dry-run", () => {
     HEAD,
     ORPHANS,
     IN_PROGRESS,
+    REBASING,
     STATUS,
     REMOTES,
     TRUNK_REF,
@@ -1324,10 +1382,11 @@ describe("--dry-run", () => {
     });
     const report = JSON.parse(result.out.join("\n")) as { steps: readonly { argv: string[] }[] };
     const printed = report.steps.map((step): string => step.argv.join(" "));
-    expect(printed.slice(0, 12)).toEqual([
+    expect(printed.slice(0, 13)).toEqual([
       HEAD,
       ORPHANS,
       IN_PROGRESS,
+      REBASING,
       STATUS,
       REMOTES,
       TRUNK_REF,

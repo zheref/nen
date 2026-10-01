@@ -439,6 +439,7 @@ const FETCH_MAIN = "git fetch --end-of-options origin refs/heads/main:refs/remot
 const NOTHING_PENDING: readonly ScriptedCall[] = [
   BASE_OK,
   { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: no rebase in progress" } },
+  { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } },
   { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 1 } },
 ];
 const FETCHED = { match: FETCH_MAIN, result: { code: 0 } };
@@ -692,6 +693,8 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       BASE_OK,
       { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: no rebase in progress" } },
+      { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } },
+  { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } },
       { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 0, stdout: "abc\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "after000\n" } },
@@ -752,10 +755,67 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(result.err.join("\n")).toMatch(/a rebase is in progress here and --strategy merge/);
   });
 
+  it("refuses a rebase PAUSED with no current patch, naming --continue and --abort, and never fetches or merges (#307)", async () => {
+    const result = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
+      BASE_OK,
+      { match: "git rebase --show-current-patch", result: { code: 1, stderr: "fatal: bad revision 'REBASE_HEAD'" } },
+    ]);
+    expect(result.code).toBe(2);
+    const said = result.err.join("\n");
+    expect(said).toMatch(/a rebase is paused here with no current patch/);
+    expect(said).toMatch(/git rebase --continue/);
+    expect(said).toMatch(/git rebase --abort/);
+    expect(gitCalls(result.seams)).not.toContain(FETCH_MAIN);
+  });
+
+  it("--abort backs out a PAUSED rebase (#307)", async () => {
+    const dry = await capture(["wc", "catch-up", "--base", "main", "--abort", "--dry-run"], [
+      BASE_OK,
+      { match: "git rebase --show-current-patch", result: { code: 1 } },
+      { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
+    ]);
+    expect(dry.code).toBe(0);
+    expect(dry.out).toContain("would run: git rebase --abort");
+  });
+
+  it("never runs --abort on a probe killed by a signal, though the runner reports it as code 1 (#307)", async () => {
+    const result = await capture(["wc", "catch-up", "--base", "main", "--abort"], [
+      BASE_OK,
+      { match: "git rebase --show-current-patch", result: { code: 1, signal: "SIGTERM" } },
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+    expect(gitCalls(result.seams)).not.toContain("git rebase --abort");
+  });
+
+  it("does not read a 128 as 'no rebase' where git cannot answer at all, so --abort reports no false 'nothing to back out of' (#307)", async () => {
+    const result = await capture(["wc", "catch-up", "--base", "main", "--abort"], [
+      BASE_OK,
+      { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: not a git repository" } },
+      { match: "git rev-parse --git-dir", result: { code: 128, stderr: "fatal: not a git repository" } },
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+    expect(result.err.join("\n")).not.toMatch(/nothing to back out of/);
+    expect(result.err.join("\n")).toMatch(/git rev-parse --git-dir' then failed/);
+  });
+
+  it("refuses an unanswered rebase probe rather than reading it as nothing in progress (#307)", async () => {
+    const result = await capture(["wc", "catch-up", "--base", "main"], [
+      BASE_OK,
+      { match: "git rebase --show-current-patch", result: { code: 129, stderr: "usage" } },
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+    expect(gitCalls(result.seams)).not.toContain(FETCH_MAIN);
+  });
+
   it("--abort backs out the in-progress operation and reports aborted: true; refused when nothing is in progress", async () => {
     const result = await captureJson(["wc", "catch-up", "--base", "main", "--abort"], [
       BASE_OK,
       { match: "git rebase --show-current-patch", result: { code: 128, stderr: "fatal: no rebase in progress" } },
+      { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } },
+  { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } },
       { match: "git rev-parse --verify --quiet MERGE_HEAD", result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "mid00000\n" } },
       { match: "git rev-parse HEAD", result: { stdout: "before00\n" } },

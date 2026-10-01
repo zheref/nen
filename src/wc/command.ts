@@ -155,7 +155,10 @@ MERGE_HEAD) and
 continues it -- 'git rebase --continue' under GIT_EDITOR=true, or 'git
 commit --no-edit' -- reporting resumed: true; unmerged paths or leftover
 conflict markers still staged are reported as conflicted[] again at exit 1
-and nothing is continued over them.
+and nothing is continued over them. Only a rebase stopped ON A PATCH is
+continued: one paused at a 'break' or a failed 'exec' line is refused at
+exit 2 naming 'git rebase --continue' / '--abort', and only --abort acts on
+it; a probe git does not answer is refused at exit 2 too.
 
 --json's contract is '${CATCH_UP_CONTRACT}': { contract, base, strategy
 (the one that ran), before, after (null on a dry run or a conflict),

@@ -1,0 +1,55 @@
+/**
+ * Is git stopped in the middle of a rebase? ONE reading for every verb that
+ * asks (zheref/nen#307): `nen wc catch-up` and `nen shu warmup` used to ask
+ * two different questions of the same checkout and could disagree.
+ *
+ * The question is asked of git, never of `.git/` directly -- and asked as
+ * `git rebase --show-current-patch`, NOT as the `REBASE_HEAD` ref: git (2.50
+ * and 2.54 measured) leaves that ref behind after a rebase completes, so a
+ * check on it reads a FINISHED rebase as one still in progress. Warmup did
+ * exactly that, refusing a clean checkout and naming `git rebase --abort` for
+ * a rebase that no longer existed.
+ *
+ * The exit code answers, with no stderr text and so no locale (git 2.54
+ * measured, merge backend):
+ *
+ *   0    a rebase is stopped ON A PATCH -- a conflict, or an `edit` stop.
+ *   1    a rebase is paused with NO current patch -- a `break` line or a
+ *        failed `exec` line. The rebase state exists; `git show REBASE_HEAD`,
+ *        which the option runs, is what failed. The `REBASE_HEAD` check this
+ *        replaces missed this stop too.
+ *   128  no rebase git will name ("fatal: no rebase in progress") -- but ONLY
+ *        once the caller has shown git can answer in this repository at all.
+ *        128 is git's generic die() code: "not a git repository" and any
+ *        setup fatal answer it too, so the caller passes `repoAnswered`,
+ *        and a 128 without it is unanswered. A `git am` session in
+ *        progress also answers 128 ("It looks like 'git am' is in
+ *        progress"); this reading says nothing about `am`.
+ *
+ * Anything else is an unanswered question, which a caller must never read as
+ * "no". So is a git killed by a SIGNAL: the default runner reports that child
+ * as code 1, which would otherwise read as "paused", and a caller would then
+ * act on a rebase git never said exists -- so the signal is passed in too.
+ */
+
+/**
+ * The argv, after `git`, that shows git can answer in this repository at all:
+ * exit 0 inside a repository, 128 outside one. A caller with no other proof
+ * runs it before it reads a 128 above as "no rebase".
+ */
+export const REPO_ANSWERS_ARGV: readonly string[] = ["rev-parse", "--git-dir"];
+
+/** The argv, after `git`, that asks the question. */
+export const REBASE_IN_PROGRESS_ARGV: readonly string[] = ["rebase", "--show-current-patch"];
+
+/** What the answer means. */
+export type RebaseState = "on-patch" | "paused" | "none" | "unknown";
+
+/** How the exit code reads. */
+export function rebaseState(exitCode: number | null, signal: string | null, repoAnswered: boolean): RebaseState {
+  if (signal !== null) return "unknown";
+  if (exitCode === 0) return "on-patch";
+  if (exitCode === 1) return "paused";
+  if (exitCode === 128) return repoAnswered ? "none" : "unknown";
+  return "unknown";
+}
