@@ -435,6 +435,14 @@ describe("a working copy in the middle of an operation", () => {
     expect(argvOf(result.seams)).not.toContain(RESET);
   });
 
+  it("refuses a rebase probe killed by a signal rather than reading its code 1 as a paused rebase", async () => {
+    const result = await capture(["warmup", "--branch", BRANCH], {
+      script: happyPath([{ match: REBASING, result: { code: 1, signal: "SIGTERM" } }]),
+    });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+  });
+
   it("refuses rather than reading an unanswerable rebase probe as a 'no'", async () => {
     const result = await capture(["warmup", "--branch", BRANCH], {
       script: happyPath([{ match: REBASING, result: { code: 129, stderr: "usage" } }]),

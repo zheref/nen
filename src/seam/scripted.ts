@@ -212,6 +212,8 @@ export class ScriptedSeams implements Seams {
       stdout: found.stdout ?? "",
       stderr: found.stderr ?? "",
       spawnFailed: found.spawnFailed ?? false,
+      // Named only when a script names it, so no existing script changes shape.
+      ...(found.signal === undefined ? {} : { signal: found.signal }),
     };
   };
 

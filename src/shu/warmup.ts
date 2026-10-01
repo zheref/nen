@@ -1149,7 +1149,7 @@ async function performWarmup(
     ]);
   }
   const rebaseProbe = git.run(REBASE_IN_PROGRESS_ARGV, null);
-  const rebase = rebaseState(rebaseProbe.code);
+  const rebase = rebaseState(rebaseProbe.code, rebaseProbe.signal ?? null);
   if (rebase === "unknown") {
     return refuseHere([
       `could not tell whether a rebase is in progress here ('git rebase --show-current-patch' answered ${why(rebaseProbe)}).`,

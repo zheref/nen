@@ -67,10 +67,15 @@ const WHO = ["-c", "user.name=nen test", "-c", "user.email=nen@example.invalid",
 const PINNED = ["-c", "core.autocrlf=false", "-c", "protocol.file.allow=always"];
 
 function git(cwd: string, args: readonly string[]): { code: number; stdout: string; stderr: string } {
+  // The host's editors never decide a fixture: GIT_EDITOR and
+  // GIT_SEQUENCE_EDITOR outrank the -c core.editor / sequence.editor the
+  // rebase fixtures pass, so the first is pinned and the second removed.
+  const env: Record<string, string | undefined> = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_EDITOR: "true" };
+  delete env["GIT_SEQUENCE_EDITOR"];
   const result = spawnSync("git", [...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    env,
   });
   return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }

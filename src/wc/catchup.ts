@@ -106,6 +106,7 @@ interface GitCall {
   readonly code: number;
   readonly stdout: string;
   readonly spawnFailed: boolean;
+  readonly signal: string | null;
   readonly error: string;
 }
 
@@ -115,6 +116,7 @@ function runGit(seams: Seams, cwd: string, args: readonly string[], env?: Readon
     code: result.code,
     stdout: result.stdout,
     spawnFailed: result.spawnFailed,
+    signal: result.signal ?? null,
     error: outputLines(result.stderr).join(" ") || `exit ${result.code}`,
   };
 }
@@ -150,7 +152,8 @@ function mustHead(seams: Seams, cwd: string, what: string): string {
 export type InProgress = Strategy | "rebase-paused" | "unanswered" | null;
 
 export function inProgress(seams: Seams, cwd: string): InProgress {
-  const rebase = rebaseState(runGit(seams, cwd, REBASE_IN_PROGRESS_ARGV).code);
+  const probe = runGit(seams, cwd, REBASE_IN_PROGRESS_ARGV);
+  const rebase = rebaseState(probe.code, probe.signal);
   if (rebase === "on-patch") return "rebase";
   if (rebase === "paused") return "rebase-paused";
   if (rebase === "unknown") return "unanswered";

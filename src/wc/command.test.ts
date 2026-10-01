@@ -775,6 +775,16 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(dry.out).toContain("would run: git rebase --abort");
   });
 
+  it("never runs --abort on a probe killed by a signal, though the runner reports it as code 1 (#307)", async () => {
+    const result = await capture(["wc", "catch-up", "--base", "main", "--abort"], [
+      BASE_OK,
+      { match: "git rebase --show-current-patch", result: { code: 1, signal: "SIGTERM" } },
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+    expect(gitCalls(result.seams)).not.toContain("git rebase --abort");
+  });
+
   it("refuses an unanswered rebase probe rather than reading it as nothing in progress (#307)", async () => {
     const result = await capture(["wc", "catch-up", "--base", "main"], [
       BASE_OK,

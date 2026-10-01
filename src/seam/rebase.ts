@@ -24,8 +24,10 @@
  *        reading says nothing about `am`; a caller that must refuse one asks
  *        about it separately.
  *
- * Anything else, including a git killed by a signal (`null`), is an
- * unanswered question, which a caller must never read as "no".
+ * Anything else is an unanswered question, which a caller must never read as
+ * "no". So is a git killed by a SIGNAL: the default runner reports that child
+ * as code 1, which would otherwise read as "paused", and a caller would then
+ * act on a rebase git never said exists -- so the signal is passed in too.
  */
 
 /** The argv, after `git`, that asks the question. */
@@ -35,7 +37,8 @@ export const REBASE_IN_PROGRESS_ARGV: readonly string[] = ["rebase", "--show-cur
 export type RebaseState = "on-patch" | "paused" | "none" | "unknown";
 
 /** How the exit code reads. */
-export function rebaseState(exitCode: number | null): RebaseState {
+export function rebaseState(exitCode: number | null, signal: string | null = null): RebaseState {
+  if (signal !== null) return "unknown";
   if (exitCode === 0) return "on-patch";
   if (exitCode === 1) return "paused";
   if (exitCode === 128) return "none";

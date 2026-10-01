@@ -12,6 +12,12 @@ describe("rebaseState (#307)", () => {
     expect(rebaseState(128)).toBe("none");
   });
 
+  it("reads a signal-killed probe as unanswered, never as the 'paused' its code 1 would mean", () => {
+    expect(rebaseState(1, "SIGTERM")).toBe("unknown");
+    expect(rebaseState(0, "SIGKILL")).toBe("unknown");
+    expect(rebaseState(1, null)).toBe("paused");
+  });
+
   it("reads anything else, a signal included, as unanswered -- never as 'no'", () => {
     expect(rebaseState(null)).toBe("unknown");
     expect(rebaseState(129)).toBe("unknown");

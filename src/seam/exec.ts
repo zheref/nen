@@ -104,6 +104,14 @@ export interface CommandResult {
    * installed" rather than "reported a failure".
    */
   readonly spawnFailed: boolean;
+  /**
+   * The signal that killed the child, or null when it exited on its own. The
+   * default runner reports it; `code` alone cannot, because a signal-killed
+   * child is reported as code 1 below. Optional so a scripted or hand-built
+   * result need not name it (zheref/nen#307: a killed `git rebase
+   * --show-current-patch` must not read as a paused rebase).
+   */
+  readonly signal?: string | null;
 }
 
 export type Runner = (
@@ -384,6 +392,7 @@ export const spawnRunner: Runner = (command, args, options = {}): CommandResult 
     stdout: normalizeEol(result.stdout ?? ""),
     stderr: normalizeEol(result.stderr ?? ""),
     spawnFailed: false,
+    signal: result.signal ?? null,
   };
 };
 
