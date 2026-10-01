@@ -161,7 +161,8 @@ jobs:
     # runner writes each step to a .ps1 and runs it under Windows PowerShell as the service
     # account, which refused it on the first live run (2026-10-01, run 36802734735:
     # 'running scripts is disabled on this system'); the pool's declared toolchain never
-    # included PowerShell. Reviewed as Nobunaga's N4 on zheref/nen#318.
+    # included PowerShell (zheref/nen#318's review row recorded the push-back this
+    # run overturned). src/ci/runner-policy.test.ts pins this default.
     defaults:
       run:
         shell: bash
