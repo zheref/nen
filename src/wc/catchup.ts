@@ -56,7 +56,7 @@
 import { plainBlock, plainLine } from "../cli/plain.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
-import { REBASE_IN_PROGRESS_ARGV, rebaseState } from "../seam/rebase.js";
+import { REBASE_IN_PROGRESS_ARGV, rebaseState, REPO_ANSWERS_ARGV } from "../seam/rebase.js";
 import { endOfOptionsRefusal, fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
 import { findPublishedCommit, parseFolded, SquashStateError } from "./squash.js";
 
@@ -153,7 +153,12 @@ export type InProgress = Strategy | "rebase-paused" | "unanswered" | null;
 
 export function inProgress(seams: Seams, cwd: string): InProgress {
   const probe = runGit(seams, cwd, REBASE_IN_PROGRESS_ARGV);
-  const rebase = rebaseState(probe.code, probe.signal);
+  // A 128 means "no rebase" only where git can answer at all: nothing before
+  // this call has asked git anything of the repository, so ask now.
+  const repoAnswered = probe.code === 128 && probe.signal === null
+    ? runGit(seams, cwd, REPO_ANSWERS_ARGV).code === 0
+    : true;
+  const rebase = rebaseState(probe.code, probe.signal, repoAnswered);
   if (rebase === "on-patch") return "rebase";
   if (rebase === "paused") return "rebase-paused";
   if (rebase === "unknown") return "unanswered";

@@ -18,17 +18,26 @@
  *        failed `exec` line. The rebase state exists; `git show REBASE_HEAD`,
  *        which the option runs, is what failed. The `REBASE_HEAD` check this
  *        replaces missed this stop too.
- *   128  no rebase git will name ("fatal: no rebase in progress"). 128 is
- *        git's generic die() code, so it is ALSO what a `git am` session in
- *        progress answers ("It looks like 'git am' is in progress"). This
- *        reading says nothing about `am`; a caller that must refuse one asks
- *        about it separately.
+ *   128  no rebase git will name ("fatal: no rebase in progress") -- but ONLY
+ *        once the caller has shown git can answer in this repository at all.
+ *        128 is git's generic die() code: "not a git repository" and any
+ *        setup fatal answer it too, so the caller passes `repoAnswered`,
+ *        and a 128 without it is unanswered. A `git am` session in
+ *        progress also answers 128 ("It looks like 'git am' is in
+ *        progress"); this reading says nothing about `am`.
  *
  * Anything else is an unanswered question, which a caller must never read as
  * "no". So is a git killed by a SIGNAL: the default runner reports that child
  * as code 1, which would otherwise read as "paused", and a caller would then
  * act on a rebase git never said exists -- so the signal is passed in too.
  */
+
+/**
+ * The argv, after `git`, that shows git can answer in this repository at all:
+ * exit 0 inside a repository, 128 outside one. A caller with no other proof
+ * runs it before it reads a 128 above as "no rebase".
+ */
+export const REPO_ANSWERS_ARGV: readonly string[] = ["rev-parse", "--git-dir"];
 
 /** The argv, after `git`, that asks the question. */
 export const REBASE_IN_PROGRESS_ARGV: readonly string[] = ["rebase", "--show-current-patch"];
@@ -37,10 +46,10 @@ export const REBASE_IN_PROGRESS_ARGV: readonly string[] = ["rebase", "--show-cur
 export type RebaseState = "on-patch" | "paused" | "none" | "unknown";
 
 /** How the exit code reads. */
-export function rebaseState(exitCode: number | null, signal: string | null = null): RebaseState {
+export function rebaseState(exitCode: number | null, signal: string | null, repoAnswered: boolean): RebaseState {
   if (signal !== null) return "unknown";
   if (exitCode === 0) return "on-patch";
   if (exitCode === 1) return "paused";
-  if (exitCode === 128) return "none";
+  if (exitCode === 128) return repoAnswered ? "none" : "unknown";
   return "unknown";
 }

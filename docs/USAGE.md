@@ -2537,7 +2537,9 @@ A rebase **paused with no current patch** (a `break` or a failed `exec`
 line; `--show-current-patch` exits 1) is not one this verb started, so it is
 refused at exit 2 naming `git rebase --continue` / `--abort`, and only
 `--abort` acts on it. A probe git does not answer with 0, 1 or 128 is
-refused at exit 2, never read as "nothing in progress" (#307).
+refused at exit 2, never read as "nothing in progress". A 128 counts as
+"no rebase" only once `git rev-parse --git-dir` shows git can answer in the
+repository at all, since git exits 128 on any fatal (#307).
 
 **`--json`** — `nen.wc.catch-up/v0.1`: `{ contract, base, strategy, before,
 after, behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
