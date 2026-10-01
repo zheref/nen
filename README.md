@@ -396,8 +396,10 @@ built-in default that would belong to some other project.
 Nen behaves identically on macOS, Linux and Windows under Git Bash: one
 binary, plus `git` and `gh` on `PATH`. There is no `make`, no
 `bats`/`pytest`, no runtime Python, and no `jq`/`yq` anywhere Nen's own
-tooling runs — CI runs the whole test suite on all three platforms on every
-change for exactly this reason. Where Windows cannot hold the POSIX form — a
+tooling runs — CI runs the whole test suite for exactly this reason: on Linux
+and macOS on every change, and on Windows on every change while the pool is
+declared online (`NEN_WINDOWS_RUNNER` is `online`; skipped otherwise, see the
+runner boundary below). Where Windows cannot hold the POSIX form — a
 path is spelled with backslashes, and NTFS has no executable bit — the
 behaviour is defined, not skipped; [docs/USAGE.md § Platform
 parity](docs/USAGE.md#platform-parity) lists both.

@@ -561,15 +561,18 @@ but never fires an OS notification, and why [`watch until`](#nen-watch-until)
 spawns its command directly with no shell (a shell builtin fails at spawn, and
 a pipeline is not a command it can classify).
 
-The whole test suite runs on all three on every change — the Windows leg on the
-self-hosted pool, under Git Bash — so "identically" is a checked claim. Two
-things are defined differently on Windows because the host cannot hold the
-POSIX form, and each verb says so where it applies:
+The whole test suite runs on Linux and macOS on every change, and on Windows —
+the self-hosted pool, under Git Bash — on every change while the pool is
+declared online (the repository variable `NEN_WINDOWS_RUNNER` is `online`); with
+the variable unset or anything else, the Windows leg is skipped. So
+"identically" is a checked claim whenever the pool is online. Two things are
+defined differently on Windows because the host cannot hold the POSIX form, and
+each verb says so where it applies:
 
 - **Paths a message names are the host's own.** A note or refusal that names a
-  file by absolute path prints it as the host spells it — `C:Users…
-enworkflow.json`
-  on Windows — so it can be pasted back into that host's tools.
+  file by absolute path prints it as the host spells it —
+  `C:\Users\me\work\repo\nen\workflow.json` on Windows — so it can be pasted
+  back into that host's tools.
 - **No executable bit.** NTFS holds only a read-only attribute, so a hook
   script's declared mode is compared in those terms
   ([`surface mirror generate`](#nen-surface-mirror-generate)), and a
