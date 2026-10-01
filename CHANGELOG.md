@@ -5,9 +5,14 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 ## v0.18.3 — 2026-10-01
 
 Release unit for `v0.18.2..v0.18.3`, the Windows pool's first live runs after `hatsu:jusshin` brought it back:
-- the deliveries: [#323](https://github.com/zheref/nen/pull/323) and [#324](https://github.com/zheref/nen/pull/324).
+- the deliveries: [#320](https://github.com/zheref/nen/pull/320), [#321](https://github.com/zheref/nen/pull/321), [#323](https://github.com/zheref/nen/pull/323) and [#324](https://github.com/zheref/nen/pull/324).
 
 The compatibility floor stays `0.18`.
+
+### Added
+
+- **gates** ([#321](https://github.com/zheref/nen/pull/321)) — this repository's own `nen/gates.json` declares the reviewer-round caps Hatsu reads: `round_policy.stallMinutes` 30 (nen's, equal to the built-in default, so no `pr ready` verdict changes), `minRounds` 1 and `maxRounds` 3 (Hatsu's, read by `sharingan` § 6). Without them a Hatsu run driving a nen pull request had no ceiling and re-requested Copilot past Hatsu's own cap (four rounds on #316).
+- **ci** ([#320](https://github.com/zheref/nen/pull/320)) — `.github/workflows/runner-preflight-windows-x64.yml` re-rendered from Hatsu's fixed template (zheref/hatsu#177, #178, #179): the Windows step classifies each tool's first `where.exe` match, searched on PATH only (`$PATH:<tool>`, never the fresh checkout's directory), fails anything under the service user's profile or an `AppData` segment, prints verdicts and never a path, and its remedy names no install location. The push ran it green on the pool (run 36802460051, `NZ-NNR2`); `nen runner enable` then set `NEN_WINDOWS_RUNNER=online` on the run dispatched from `main` (36802783501).
 
 ### Fixed
 
