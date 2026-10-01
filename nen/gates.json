@@ -41,6 +41,12 @@
     ],
     "minimum": 1
   },
+  "round_policy": {
+    "$comment": "Maintainer's request of 2026-10-01: the same reviewer-round caps Hatsu declares in its own nen/gates.json. stallMinutes is nen's (pr ready reads a pending request to a bounded_policy_exempt reviewer, copilot here, older than it as stalled). minRounds and maxRounds are Hatsu's keys, read by sharingan § 6 and preserved here as raw data until zheref/nen#240 counts them in pr ready --explain: a round is requested only while this PR's requested rounds are under maxRounds AND its resolved rounds are under minRounds, so once one round stands resolved no further round is requested.",
+    "stallMinutes": 30,
+    "minRounds": 1,
+    "maxRounds": 3
+  },
   "delivery": {
     "$comment": "Current local delivery branches use the Codex prefix and the maintainer credentials.",
     "author_pattern": {
