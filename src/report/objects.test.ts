@@ -438,14 +438,16 @@ describe("the live register", () => {
   });
 
   it("KEEPS THE ROW when the rollup will not validate, and names the degradation (N2)", async () => {
-    // The reproducer: an in-flight check run whose `conclusion` came back as
-    // the empty string deleted the whole pull request the caller had named,
-    // at exit 0, with an empty register.
+    // The original reproducer was an in-flight run whose `conclusion` came
+    // back as "", which deleted the whole pull request the caller had named,
+    // at exit 0, with an empty register. Since #304 that "" is read as unset
+    // (the next test), so an unknown NON-empty conclusion stands in for a
+    // rollup that will not validate.
     const captured = await live(LIVE_PR, [
       viewCall({
         statusCheckRollup: [
           { __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
-          { __typename: "CheckRun", name: "flight", status: "IN_PROGRESS", conclusion: "", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
+          { __typename: "CheckRun", name: "flight", status: "IN_PROGRESS", conclusion: "NOT_A_CONCLUSION", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
         ],
       }),
       checkRunsCall([readinessRun()]),
@@ -457,14 +459,32 @@ describe("the live register", () => {
     expect(objects).toHaveLength(1);
     const row = objects[0] as unknown as Record<string, unknown>;
     expect(row["number"]).toBe(217);
-    // ...its unreadable field degrades, with the unreadable entry counted
-    // pending and never green...
-    expect(row["checks"]).toEqual({ total: 2, green: 1, red: 0, pending: 1 });
+    // ...its unreadable field degrades, and the unknown conclusion is counted
+    // red by the lenient path (an empty one would be pending), never green...
+    expect(row["checks"]).toEqual({ total: 2, green: 1, red: 1, pending: 0 });
     // ...and the degradation is named in the row AND on stderr.
     expect((row["notes"] as string[])[0]).toMatch(/check rollup did not validate/);
     expect(captured.err.join("\n")).toMatch(/check rollup did not validate/);
     // Everything else is untouched.
     expect(row["readiness"]).toEqual({ verdict: "ready", reason: "ready", source: "check" });
+  });
+
+  it("reads a pending run's empty conclusion as pending, with no degradation (#304)", async () => {
+    const captured = await live(LIVE_PR, [
+      viewCall({
+        statusCheckRollup: [
+          { __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
+          { __typename: "CheckRun", name: "flight", status: "IN_PROGRESS", conclusion: "", startedAt: "2026-09-20T10:00:00Z", completedAt: null, detailsUrl: null },
+        ],
+      }),
+      checkRunsCall([readinessRun()]),
+      threadsCall(THREAD_NODES),
+    ]);
+    expect(captured.code).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
+    expect(row["checks"]).toEqual({ total: 2, green: 1, red: 0, pending: 1 });
+    expect((row["notes"] as string[]).join(" ")).not.toMatch(/check rollup did not validate/);
+    expect(captured.err.join("\n")).not.toMatch(/check rollup did not validate/);
   });
 
   it("degrades the thread counts to 0/0 and says they mean 'not read'", async () => {

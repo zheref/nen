@@ -134,6 +134,29 @@ describe("fetchPullRequest -- one typed snapshot from three gh calls", () => {
     expect(() => fetchPullRequest(seams, TARGET, 9, { maxReviewThreadPages: 1 })).toThrow(/pagination cap/);
   });
 
+  it("returns a typed snapshot for gh's pending CheckRun shape, its empty conclusion unset (#304)", () => {
+    // KWI-PR-#90's shape from `gh pr view --json statusCheckRollup` while the run was in flight.
+    const seams = scriptedFetch({
+      view: {
+        statusCheckRollup: [
+          {
+            __typename: "CheckRun",
+            name: "build",
+            workflowName: "ci",
+            status: "IN_PROGRESS",
+            conclusion: "",
+            startedAt: "2026-09-30T10:00:00Z",
+            completedAt: "0001-01-01T00:00:00Z",
+            detailsUrl: "https://x/runs/1",
+          },
+        ],
+      },
+    });
+    const snapshot = fetchPullRequest(seams, TARGET, 9);
+    expect(snapshot.checks).toHaveLength(1);
+    expect(snapshot.checks[0]).toMatchObject({ status: "IN_PROGRESS", conclusion: null });
+  });
+
   it("throws a named FetchError rather than reading a malformed rollup as empty", () => {
     const seams = scriptedFetch({ view: { statusCheckRollup: [{ bogus: true }] } });
     expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(FetchError);

@@ -468,6 +468,22 @@ describe("evaluateReady -- CON-32(a), transcribed reason strings", () => {
     expect(evaluation.line).toBe("not-ready: required checks reported but are not all green (CON-32a)");
   });
 
+  it("a PENDING run whose conclusion gh wrote as \"\" is judged, and never ready (zheref/nen#304)", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        checks: [greenCheck("ci / lint"), { name: "ci / build", status: "IN_PROGRESS", conclusion: "" }],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("checks-green");
+    // Judged, not unreadable: the normalization reaches the gate as a run
+    // still deciding, never as a parse failure and never as green.
+    expect(evaluation.line).not.toMatch(/could not be read/);
+    expect(evaluation.line).toMatch(/\(CON-32a\)/);
+  });
+
   it("a CANCELLED latest run is named separately -- needs a re-run, not a fix", () => {
     const evaluation = evaluateReady(
       IDENTITIES,

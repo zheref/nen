@@ -48,6 +48,19 @@ function expectError<T>(result: ParseResult<T>): { path: string; message: string
 // --- check rollup ------------------------------------------------------------
 
 describe("parseCheckRollup", () => {
+  it("passes every supported conclusion on a COMPLETED run through unchanged (#304 AC4)", () => {
+    const all = ["ACTION_REQUIRED", "CANCELLED", "FAILURE", "NEUTRAL", "SKIPPED", "STALE", "STARTUP_FAILURE", "SUCCESS", "TIMED_OUT"];
+    for (const conclusion of all) {
+      const entries = expectOk(parseCheckRollup([{ name: "c", status: "COMPLETED", conclusion }]));
+      expect(entries[0]).toMatchObject({ kind: "check_run", conclusion });
+    }
+  });
+
+  it("still refuses an empty conclusion on a CheckRun that carries no status (#304 scope)", () => {
+    const error = expectError(parseCheckRollup([{ __typename: "CheckRun", name: "c", conclusion: "" }]));
+    expect(error.path).toBe("$.statusCheckRollup[0].conclusion");
+  });
+
   it("parses a completed CheckRun", () => {
     const entries = expectOk(
       parseCheckRollup([
@@ -92,6 +105,50 @@ describe("parseCheckRollup", () => {
     );
 
     expect(entries[0]).toMatchObject({ conclusion: null });
+  });
+
+  it("reads a PENDING CheckRun's empty-string conclusion as unset -- gh's shape while it runs (zheref/nen#304)", () => {
+    // `gh pr view --json statusCheckRollup` writes `conclusion: ""` for a run
+    // still deciding (KWI-PR-#90). It is the same fact as null: parsed, typed,
+    // and still not green.
+    for (const status of ["IN_PROGRESS", "QUEUED", "PENDING"]) {
+      const entries = expectOk(
+        parseCheckRollup([
+          {
+            __typename: "CheckRun",
+            name: "ci / build",
+            status,
+            conclusion: "",
+            startedAt: "2026-09-30T10:00:00Z",
+            completedAt: "0001-01-01T00:00:00Z",
+            detailsUrl: "https://github.com/o/r/actions/runs/1/job/2",
+          },
+        ]),
+      );
+
+      expect(entries[0]).toMatchObject({ kind: "check_run", status, conclusion: null });
+      expect(checksAllGreen(entries)).toBe(false);
+    }
+  });
+
+  it("still REFUSES an empty conclusion on a run that says it COMPLETED -- a finished run owes a verdict", () => {
+    const error = expectError(
+      parseCheckRollup([{ name: "ci / build", status: "COMPLETED", conclusion: "" }]),
+    );
+
+    expect(error.path).toBe("$.statusCheckRollup[0].conclusion");
+  });
+
+  it("still REFUSES an unknown non-empty conclusion on a pending run, at its path", () => {
+    const error = expectError(
+      parseCheckRollup([
+        { name: "ci / build", status: "IN_PROGRESS", conclusion: "" },
+        { name: "ci / lint", status: "IN_PROGRESS", conclusion: "BLOWN_UP" },
+      ]),
+    );
+
+    expect(error.path).toBe("$.statusCheckRollup[1].conclusion");
+    expect(error.message).toContain("BLOWN_UP");
   });
 
   it("parses a legacy StatusContext, which carries .state and .targetUrl and never .conclusion", () => {
