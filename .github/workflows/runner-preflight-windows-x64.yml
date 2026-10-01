@@ -20,15 +20,18 @@
 # Nen refuses a rendering with any placeholder left standing (exit 1, named)
 # and one that does not parse as YAML.
 #
-# `actions/checkout` is pinned by TAG, because the pin a consumer's policy wants
-# is not knowable here: a consumer whose policy requires SHA pins re-pins that
-# one line in the pull request that adds the rendering.
+# `actions/checkout` is pinned by commit SHA, its tag as a trailing comment:
+# the job runs on a persistent physical host with a GITHUB_TOKEN, so a movable
+# tag is not acceptable, and a rendering is never hand-edited. A consumer moves
+# the pin by re-rendering after this template is bumped.
 #
 # Its safety properties -- the trigger set, the repository binding, runs-on,
-# the read-only token, the unpersisted credential, the time bound -- are held
-# by scripts/runner_preflight_fixture_check.sh, on this file and on a
-# rendering of it. The body is not byte-identical to nen's own test template:
-# the job never prints an account name or a resolved tool path.
+# the read-only token, the unpersisted credential, the SHA-pinned checkout, the
+# time bound, the AppData matcher -- are held on this template by
+# zheref/hatsu:scripts/runner_preflight_fixture_check.sh; a consumer's copy
+# carries no such guard, which is why it is re-rendered and never edited. The
+# body is not byte-identical to nen's own test template: the job never prints
+# an account name or a resolved tool path.
 #
 # runner-preflight -- proves the self-hosted windows-x64 pool can RUN a job,
 # not merely that it is registered. Rendered by nen 0.18.1 runner workflow for
@@ -84,10 +87,10 @@ jobs:
     timeout-minutes: 5
     steps:
       # Checkout shells out to git, so a host without a working git fails
-      # here -- already a finding. A consumer whose policy requires SHA pins
-      # re-pins this line in the pull request that adds the file.
+      # here -- already a finding. Pinned by SHA (see the header): re-render to
+      # move it, never edit it in place.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -110,7 +113,8 @@ jobs:
       # 126 is not 127. 127 = not on the service's PATH (a LOCATION problem);
       # 126 = found, and refused on exec (a PERMISSION problem -- the ACL on the
       # file the PATH entry resolves to). Every PATH-shaped check passes during
-      # a 126, so the two are named apart. Bash built-ins only: this step
+      # a 126, so the two are named apart. Every tool is tried and named; the
+      # step exits with the first non-zero code. Bash built-ins only: this step
       # diagnoses a broken toolchain and must not depend on one.
       - name: Host toolchain -- every tool a job on this pool invokes
         shell: bash
@@ -124,12 +128,13 @@ jobs:
             "$tool" --version || rc=$?
             case "$rc" in
               0) ;;
-              126) echo "::error::'$tool' resolves on the PATH but the runner service account cannot EXECUTE it (exit 126). An ACL problem, not a PATH problem: grant Users read-and-execute on the file it resolves to, then restart the runner services."; status=$rc ;;
-              127) echo "::error::'$tool' is not on the runner service's PATH (exit 127). Install it machine-wide, put its directory on the MACHINE PATH, then restart the runner services."; status=$rc ;;
-              *) echo "::error::'$tool --version' exited $rc -- found and executed, so neither a PATH (127) nor an ACL (126) problem. Read the output above."; status=$rc ;;
+              126) echo "::error::'$tool' resolves on the PATH but the runner service account cannot EXECUTE it (exit 126). An ACL problem, not a PATH problem: grant Users read-and-execute on the file it resolves to, then restart the runner services." ;;
+              127) echo "::error::'$tool' is not on the runner service's PATH (exit 127). Install it machine-wide, put its directory on the MACHINE PATH, then restart the runner services." ;;
+              *) echo "::error::'$tool --version' exited $rc -- found and executed, so neither a PATH (127) nor an ACL (126) problem. Read the output above." ;;
             esac
-            if [ "$status" -ne 0 ]; then exit "$status"; fi
+            if [ "$rc" -ne 0 ] && [ "$status" -eq 0 ]; then status=$rc; fi
           done
+          exit "$status"
 
       # A Windows service runs with the MACHINE environment. A tool installed for
       # the maintainer's user resolves in their shell and is invisible here, so
@@ -152,7 +157,7 @@ jobs:
             [ -z "$resolved" ] && verdict="not found"
             while IFS= read -r line; do
               [ -z "$line" ] && continue
-              norm="${line//\//}"
+              norm="${line//\\//}"
               if [[ "$norm" == */appdata/* ]]; then verdict="per-user (AppData)"; fi
             done <<< "$resolved"
             echo "$tool: $verdict"
