@@ -182,7 +182,7 @@ jobs:
             fi
             echo "$tool: $verdict"
             if [ "$verdict" != "machine-wide" ]; then
-              echo "::error::'$tool' is $verdict -- the runner service cannot rely on it. Install it machine-wide, under C:\\Program Files\\$tool, put that directory on the MACHINE PATH, and restart the runner services."
+              echo "::error::'$tool' is $verdict -- the runner service cannot rely on it. Install it machine-wide, put its directory on the MACHINE PATH, then restart the runner services."
               bad=1
             fi
           done
