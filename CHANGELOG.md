@@ -2,6 +2,26 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.18.3 — 2026-10-01
+
+Release unit for `v0.18.2..v0.18.3`, the Windows pool's first live runs after `hatsu:jusshin` brought it back:
+- the deliveries: [#323](https://github.com/zheref/nen/pull/323) and [#324](https://github.com/zheref/nen/pull/324).
+
+The compatibility floor stays `0.18`.
+
+### Fixed
+
+- **ci** ([#323](https://github.com/zheref/nen/pull/323)) — `check-windows` runs its `run:` steps under bash, job-wide (`defaults.run.shell`). On the leg's first live run (ci run 36802734735, runner `NZ-NNR1`) the shell-less steps were written to `.ps1` files and executed under Windows PowerShell as the runner's service account, which refused them ("running scripts is disabled on this system") before `bun install`; the pool's declared toolchain (`nen/workflow.json` → `runners.pools[windows-x64].tools`: `git bash gh`) never included PowerShell, and its preflight proves bash. `src/ci/runner-policy.test.ts` pins the default.
+- **surface** ([#324](https://github.com/zheref/nen/pull/324)) — `surface mirror generate` and `surface mirror check` read file modes for what NTFS can hold of them. Node and Bun on win32 report `0o666` for a writable file and `0o444` for a read-only one whatever mode was declared, so on Windows every `generate` re-chmodded every hook script and reported it `written`, and every `check` reported every hook script `hand-edited` at exit 1 (the false red zheref/hatsu saw on this pool). A new `hostMode(declared, platform)` maps a declared mode to the host's at the two comparison sites: a fresh mirror now checks `ok` on Windows; a script made read-only by hand still reads `hand-edited`, and a regenerate repairs it. POSIX is unchanged. Where the executable bit matters, git records it (`git update-index --chmod=+x`); USAGE says so under `surface mirror generate` and in the drift table's `hand-edited` row.
+- **test** ([#324](https://github.com/zheref/nen/pull/324)) — the suite is green on Windows under Git Bash (ci run 36810142678: `Test Files 225 passed`, `Tests 6638 passed | 7 skipped`): eight `commit format`/`commit write` tests accept the host's own path spelling (`nen[\/]workflow\.json`), the `--hooks-root` round-trip test passes a forward-slash drive path on win32 (`rebaseCommand` refuses a backslash by design), and the mode tests take their expected and "wrong" modes from the platform. No `it.skip` was added.
+- **docs** ([#324](https://github.com/zheref/nen/pull/324)) — README § Platform parity and § CI runner boundary, and USAGE § Platform parity, say what is true: the suite runs on Linux and macOS on every change, and on Windows while `NEN_WINDOWS_RUNNER` is `online` (skipped otherwise); the two host-wide Windows rules (native path spelling, no executable bit) are defined once, with links to the verbs that also behave differently (`shu tools --install`, `watch until`, `shu detect`'s `dotnet-winui`).
+
+### Breaking / consumer notes
+
+This release declares **no breaking consumer note**, and under the rule [#200](https://github.com/zheref/nen/pull/200) landed that is a decision rather than an absence: it is what leaves `COMPATIBLE_MINOR_FLOOR` at `0.18`, and therefore what keeps every `"0.18"` pin already written valid against a v0.18.3 binary. The section is still here, and still carries exactly one bullet, because [the release-time floor step](docs/USAGE.md#the-release-time-floor-step) requires the cut to STATE the outcome either way.
+
+- **No repin: the compatibility floor stays `0.18`.** A repository pinned `minimum: "0.18"` needs no change to read this build. `pinned_ref` SHOULD move to `v0.18.3` on a repository whose `surface mirror check` runs on a Windows host: that is how the false `hand-edited` red on hook scripts goes away.
+
 ## v0.18.2 — 2026-09-30
 
 Release unit for `v0.18.1..v0.18.2`, two fixes from `hatsu:futon nen@bug` and the Windows runner proof:
