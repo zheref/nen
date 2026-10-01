@@ -441,6 +441,8 @@ describe("a working copy in the middle of an operation", () => {
     });
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
+    expect(result.err.join("\n")).toMatch(/was killed by SIGTERM before it answered/);
+    expect(result.err.join("\n")).not.toMatch(/answered exit 1/);
   });
 
   it("refuses rather than reading an unanswerable rebase probe as a 'no'", async () => {

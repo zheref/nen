@@ -1152,7 +1152,9 @@ async function performWarmup(
   const rebase = rebaseState(rebaseProbe.code, rebaseProbe.signal ?? null);
   if (rebase === "unknown") {
     return refuseHere([
-      `could not tell whether a rebase is in progress here ('git rebase --show-current-patch' answered ${why(rebaseProbe)}).`,
+      `could not tell whether a rebase is in progress here ('git rebase --show-current-patch' ${
+        (rebaseProbe.signal ?? null) === null ? `answered ${why(rebaseProbe)}` : `was killed by ${rebaseProbe.signal ?? ""} before it answered`
+      }).`,
       `Refusing to treat an unanswered question as a "no" -- warming a working copy in the middle of a rebase carries it onto the new branch.`,
     ]);
   }

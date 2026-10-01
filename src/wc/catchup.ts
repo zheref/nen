@@ -268,7 +268,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
   const lines: string[] = [];
   const found = inProgress(seams, cwd);
   if (found === "unanswered") {
-    return { kind: "refused", reason: "could not tell whether a rebase is in progress here ('git rebase --show-current-patch' answered with neither 0, 1 nor 128). Refusing to read an unanswered question as \"nothing in progress\"." };
+    return { kind: "refused", reason: "could not tell whether a rebase is in progress here ('git rebase --show-current-patch' was killed by a signal, or answered with neither 0, 1 nor 128). Refusing to read an unanswered question as \"nothing in progress\"." };
   }
   if (found === "rebase-paused" && !options.abort) {
     return { kind: "refused", reason: "a rebase is paused here with no current patch (a 'break' or a failed 'exec' line). This verb resumes only a rebase it stopped on a patch itself: finish it with 'git rebase --continue', or back it out with 'git rebase --abort' (or this verb's --abort)." };
