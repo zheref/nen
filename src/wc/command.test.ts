@@ -797,6 +797,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/could not tell whether a rebase is in progress/);
     expect(result.err.join("\n")).not.toMatch(/nothing to back out of/);
+    expect(result.err.join("\n")).toMatch(/git rev-parse --git-dir' then failed/);
   });
 
   it("refuses an unanswered rebase probe rather than reading it as nothing in progress (#307)", async () => {
