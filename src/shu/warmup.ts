@@ -77,6 +77,7 @@ import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import type { Io } from "../index.js";
 import { GIT, outputLines, ToolError, type CommandResult } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
+import { REBASE_IN_PROGRESS_ARGV, rebaseState } from "../seam/rebase.js";
 import { parseStatusPorcelain, triageStage, type FlagReason, type StatusEntry } from "../stage/triage.js";
 import { PROGRAM } from "../version.js";
 import { openDeclaration, type OpenedDeclaration } from "./declaration.js";
@@ -165,21 +166,30 @@ export function trunkWorktree(porcelain: string, trunk: string): TrunkWorktree |
 }
 
 /**
- * The three pseudo-refs that mean "git is half-way through something".
+ * The two pseudo-refs that mean "git is half-way through something".
  *
  * A working copy in the middle of a merge, a rebase or a cherry-pick is not an
  * ordinary dirty tree: `git checkout -- .` answers "path is unmerged" on it,
  * `git switch -c` refuses or carries the operation onto the new branch, and the
  * way out is that operation's own `--abort` rather than anything this verb does.
+ *
+ * A REBASE IS NOT ASKED THROUGH ITS REF. git leaves `REBASE_HEAD` behind after
+ * a rebase completes, so reading it refused a finished checkout and named an
+ * abort for a rebase that no longer existed (zheref/nen#307). The rebase half
+ * is ../seam/rebase.ts's predicate, the one `nen wc catch-up` asks too. git
+ * removes `MERGE_HEAD` and `CHERRY_PICK_HEAD` when those operations finish
+ * (git 2.54 measured), so the two refs still answer truthfully.
  */
-export const IN_PROGRESS_REFS: readonly string[] = ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD"];
+export const IN_PROGRESS_REFS: readonly string[] = ["MERGE_HEAD", "CHERRY_PICK_HEAD"];
 
 /** The `git <op> --abort` that ends each of them. */
 const ABORT_FOR: Readonly<Record<string, string>> = {
   MERGE_HEAD: "git merge --abort",
-  REBASE_HEAD: "git rebase --abort",
   CHERRY_PICK_HEAD: "git cherry-pick --abort",
 };
+
+/** The abort a stopped rebase names. */
+const REBASE_ABORT = "git rebase --abort";
 
 export type WarmupStepKind = "git" | "build" | "test";
 
@@ -872,7 +882,11 @@ async function planWarmup(
   );
   plan(
     ["rev-list", "--ignore-missing", "-1", ...IN_PROGRESS_REFS],
-    `is git half-way through something? Any output means a merge, a rebase or a cherry-pick is in progress, and that refuses at exit 2 naming its own --abort: such a tree is not an ordinary dirty one${options.discard ? ", and --discard does not end one" : ""}`,
+    `is git half-way through something? Any output means a merge or a cherry-pick is in progress, and that refuses at exit 2 naming its own --abort: such a tree is not an ordinary dirty one${options.discard ? ", and --discard does not end one" : ""}`,
+  );
+  plan(
+    REBASE_IN_PROGRESS_ARGV,
+    `is a rebase in progress? Exit 0 (stopped on a patch) or 1 (paused at a break or failed exec) refuses at exit 2 naming '${REBASE_ABORT}'; 128 is the answer "no rebase" (git also answers 128 during a git am session, which this step does not detect); any other exit refuses as unanswered -- asked this way and not through REBASE_HEAD, which git leaves behind after a rebase finishes`,
   );
   plan(
     ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "-uall"],
@@ -1130,21 +1144,46 @@ async function performWarmup(
   const inProgress = git.run(["rev-list", "--ignore-missing", "-1", ...IN_PROGRESS_REFS], null);
   if (inProgress.code !== 0) {
     return refuseHere([
-      `could not tell whether a merge, rebase or cherry-pick is in progress here ('git rev-list' answered ${why(inProgress)}).`,
+      `could not tell whether a merge or cherry-pick is in progress here ('git rev-list' answered ${why(inProgress)}).`,
       `Refusing to treat an unanswered question as a "no" -- warming a working copy in the middle of one of those is how a half-finished merge ends up on a new branch.`,
     ]);
   }
-  if (inProgress.stdout.trim() !== "") {
-    const which: string[] = [];
-    for (const ref of IN_PROGRESS_REFS) {
-      const probe = git.run(["rev-parse", "--verify", "--quiet", ref], null);
-      if (probe.code === 0) which.push(ref);
-    }
+  const rebaseProbe = git.run(REBASE_IN_PROGRESS_ARGV, null);
+  const rebase = rebaseState(rebaseProbe.code);
+  if (rebase === "unknown") {
     return refuseHere([
-      `this working copy is in the middle of an operation${which.length === 0 ? "" : ` (${which.join(", ")} ${which.length === 1 ? "exists" : "exist"})`}, and warmup does not finish or abandon one.`,
-      ...which.map((ref): string => `  end it with '${ABORT_FOR[ref] ?? "git status"}', or complete it.`),
-      which.length === 0 ? `  'git status' says which one it is.` : `  'git status' says where it got to.`,
-      `This is not an ordinary dirty tree and --discard does not clear it: 'git reset --hard' would drop the conflict resolution without ending the operation, and the new branch would inherit it.`,
+      `could not tell whether a rebase is in progress here ('git rebase --show-current-patch' answered ${why(rebaseProbe)}).`,
+      `Refusing to treat an unanswered question as a "no" -- warming a working copy in the middle of a rebase carries it onto the new branch.`,
+    ]);
+  }
+  const rebasing = rebase !== "none";
+  git.annotate(
+    rebase === "on-patch"
+      ? "a rebase is stopped here, on a patch"
+      : rebase === "paused"
+        ? "a rebase is paused here with no current patch (a break or a failed exec line)"
+        : "no rebase git will name -- exit 128 is the answer, not a failure, whatever REBASE_HEAD says",
+  );
+  if (inProgress.stdout.trim() !== "" || rebasing) {
+    const which: string[] = [];
+    if (inProgress.stdout.trim() !== "") {
+      for (const ref of IN_PROGRESS_REFS) {
+        const probe = git.run(["rev-parse", "--verify", "--quiet", ref], null);
+        if (probe.code === 0) which.push(ref);
+      }
+    }
+    const named = [
+      ...(which.length === 0 ? [] : [`${which.join(", ")} ${which.length === 1 ? "exists" : "exist"}`]),
+      ...(rebase === "on-patch" ? ["a rebase is stopped"] : rebase === "paused" ? ["a rebase is paused with no current patch"] : []),
+    ];
+    const aborts = [...which.map((ref): string => ABORT_FOR[ref] ?? "git status"), ...(rebasing ? [REBASE_ABORT] : [])];
+    return refuseHere([
+      `this working copy is in the middle of an operation${named.length === 0 ? "" : ` (${named.join("; ")})`}, and warmup does not finish or abandon one.`,
+      ...aborts.map((abort): string => `  end it with '${abort}', or complete it.`),
+      named.length === 0 ? `  'git status' says which one it is.` : `  'git status' says where it got to.`,
+      rebase === "paused" && which.length === 0
+        ? `This is not an ordinary dirty tree and --discard does not clear it: 'git reset --hard' would not end the rebase, and the new branch would inherit it.`
+        : `This is not an ordinary dirty tree and --discard does not clear it: 'git reset --hard' would drop the conflict resolution without ending the operation, and the new branch would inherit it.`,
     ]);
   }
 

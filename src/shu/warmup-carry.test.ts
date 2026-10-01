@@ -56,9 +56,9 @@ function argvOf(seams: ScriptedSeams): readonly string[] {
 
 const BRANCH = "carry-idea";
 const HEAD = "git branch --show-current";
-const IN_PROGRESS = "git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD";
+const IN_PROGRESS = "git rev-list --ignore-missing -1 MERGE_HEAD CHERRY_PICK_HEAD";
+const REBASING = "git rebase --show-current-patch";
 const MERGE_REF = "git rev-parse --verify --quiet MERGE_HEAD";
-const REBASE_REF = "git rev-parse --verify --quiet REBASE_HEAD";
 const PICK_REF = "git rev-parse --verify --quiet CHERRY_PICK_HEAD";
 const STATUS = "git -c core.quotePath=false status --porcelain=v1 -z -uall";
 const REMOTES = "git remote";
@@ -97,7 +97,8 @@ function carryHappyPath(overrides: readonly ScriptedCall[] = []): readonly Scrip
     ok(HEAD, "some-branch\n"),
     ok(IN_PROGRESS),
     { match: MERGE_REF, result: { code: 1 } },
-    { match: REBASE_REF, result: { code: 1 } },
+    // git's own "no rebase in progress" (exit 128) -- the answer, not a failure (#307).
+    { match: REBASING, result: { code: 128, stderr: "fatal: no rebase in progress" } },
     { match: PICK_REF, result: { code: 1 } },
     ok(STATUS, DIRTY),
     ok(REMOTES, "origin\n"),

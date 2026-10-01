@@ -49,6 +49,7 @@ import { join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
+import { inProgress } from "../wc/catchup.js";
 import { shuCommand } from "./command.js";
 
 /** The identity every commit below is made with. Nobody's, and never read back. */
@@ -375,6 +376,65 @@ describe.skipIf(!HAVE_GIT)("nen shu warmup, against the real git", () => {
     expect(result.err.join("\n")).toMatch(/in the middle of an operation \(MERGE_HEAD exists\)/);
     expect(result.err.join("\n")).toContain("git merge --abort");
     expect(git(conflicted, ["show-ref", "--verify", "--quiet", "refs/heads/never-cut"]).code).toBe(1);
+  });
+
+  it("refuses a rebase stopped on a conflict, and warms once it finishes though git leaves REBASE_HEAD behind (#307)", async () => {
+    const rebasing = join(root, "rebasing");
+    mustGit(root, [...PINNED, "clone", "--quiet", upstream, rebasing]);
+    pinLineEndings(rebasing);
+    // Rebase a topic onto a side branch, never onto main, so the trunk stays
+    // equal to origin/main and the warm-up after the rebase has nothing to refuse.
+    mustGit(rebasing, ["checkout", "--quiet", "-b", "side"]);
+    writeFileSync(join(rebasing, "README.md"), "side\n");
+    mustGit(rebasing, ["add", "README.md"]);
+    mustGit(rebasing, [...WHO, "commit", "--quiet", "-m", "side"]);
+    mustGit(rebasing, ["checkout", "--quiet", "-b", "topic", "main"]);
+    writeFileSync(join(rebasing, "README.md"), "topic\n");
+    mustGit(rebasing, ["add", "README.md"]);
+    mustGit(rebasing, [...WHO, "commit", "--quiet", "-m", "topic"]);
+    // The merge backend, pinned: under rebase.backend=apply git leaves no stale
+    // REBASE_HEAD, and the host's config must not decide what this test proves.
+    expect(git(rebasing, [...WHO, "-c", "rebase.backend=merge", "rebase", "side"]).code).not.toBe(0);
+
+    // Stopped on the conflict: a real rebase, and both verbs say so.
+    expect(inProgress(defaultSeams(), rebasing)).toBe("rebase");
+    const stopped = await warmup(["warmup", "--repo", rebasing, "--branch", "never-cut", "--discard"]);
+    expect(stopped.code).toBe(2);
+    expect(stopped.err.join("\n")).toMatch(/in the middle of an operation \(a rebase is stopped\)/);
+    expect(stopped.err.join("\n")).toContain("git rebase --abort");
+    expect(git(rebasing, ["show-ref", "--verify", "--quiet", "refs/heads/never-cut"]).code).toBe(1);
+
+    // Resolve and finish it. git keeps REBASE_HEAD, the stale ref #307 is about.
+    writeFileSync(join(rebasing, "README.md"), "both\n");
+    mustGit(rebasing, ["add", "README.md"]);
+    mustGit(rebasing, [...WHO, "-c", "core.editor=true", "rebase", "--continue"]);
+    expect(git(rebasing, ["rev-parse", "--verify", "--quiet", "REBASE_HEAD"]).code).toBe(0);
+
+    // Finished: both verbs agree nothing is in progress, and warmup cuts its branch.
+    expect(inProgress(defaultSeams(), rebasing)).toBeNull();
+    const warmed = await warmup(["warmup", "--repo", rebasing, "--branch", "after-rebase"]);
+    expect(warmed.err.join("\n")).not.toMatch(/in the middle of an operation/);
+    expect(warmed.code).toBe(0);
+    expect(mustGit(rebasing, ["branch", "--show-current"])).toBe("after-rebase");
+  });
+
+  it("refuses a rebase paused at a break line, where no patch is current (#307)", async () => {
+    const paused = join(root, "paused");
+    mustGit(root, [...PINNED, "clone", "--quiet", upstream, paused]);
+    pinLineEndings(paused);
+    mustGit(paused, ["checkout", "--quiet", "-b", "topic"]);
+    writeFileSync(join(paused, "note.txt"), "topic\n");
+    mustGit(paused, ["add", "note.txt"]);
+    mustGit(paused, [...WHO, "commit", "--quiet", "-m", "topic"]);
+    // The todo list is replaced by a single 'break': the rebase pauses before any patch.
+    mustGit(paused, [...WHO, "-c", "rebase.backend=merge", "-c", "sequence.editor=printf 'break\\n' >", "rebase", "-i", "HEAD~1"]);
+    expect(git(paused, ["rebase", "--show-current-patch"]).code).toBe(1);
+
+    const result = await warmup(["warmup", "--repo", paused, "--branch", "never-cut", "--discard"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/a rebase is paused with no current patch/);
+    expect(result.err.join("\n")).toContain("git rebase --abort");
+    expect(git(paused, ["show-ref", "--verify", "--quiet", "refs/heads/never-cut"]).code).toBe(1);
   });
 
   it("refuses a DIVERGED trunk rather than dropping the commits only the local one has", async () => {

@@ -56,6 +56,7 @@
 import { plainBlock, plainLine } from "../cli/plain.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
+import { REBASE_IN_PROGRESS_ARGV, rebaseState } from "../seam/rebase.js";
 import { endOfOptionsRefusal, fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
 import { findPublishedCommit, parseFolded, SquashStateError } from "./squash.js";
 
@@ -134,16 +135,25 @@ function mustHead(seams: Seams, cwd: string, what: string): string {
 }
 
 /**
- * Which of the two operations git says is in progress, or null. Asked of
- * git, never of `.git/` directly -- and asked as `git rebase
- * --show-current-patch`, NOT as `REBASE_HEAD`: git (2.50 measured) leaves
- * that ref behind after a rebase completes, so a check on it would read the
- * finished rebase this verb just continued as one still in progress, and the
- * next run would try to continue it again. `--show-current-patch` answers
- * from the rebase state itself: exit 0 mid-rebase, 128 otherwise.
+ * What git says is in progress, read through ../seam/rebase.ts's one reading
+ * of the rebase state -- the same one `nen shu warmup` asks (zheref/nen#307):
+ * not `REBASE_HEAD`, which git leaves behind after a rebase completes, so a
+ * check on it would read the finished rebase this verb just continued as one
+ * still in progress, and the next run would try to continue it again.
+ *
+ * `rebase` is a rebase stopped ON A PATCH, the one this verb stops itself and
+ * resumes. `rebase-paused` is one paused at a `break` or a failed `exec`
+ * line, which this verb did not start and will not continue -- only `--abort`
+ * may back it out. `unanswered` is a probe git did not answer, never read as
+ * "nothing in progress".
  */
-export function inProgress(seams: Seams, cwd: string): Strategy | null {
-  if (runGit(seams, cwd, ["rebase", "--show-current-patch"]).code === 0) return "rebase";
+export type InProgress = Strategy | "rebase-paused" | "unanswered" | null;
+
+export function inProgress(seams: Seams, cwd: string): InProgress {
+  const rebase = rebaseState(runGit(seams, cwd, REBASE_IN_PROGRESS_ARGV).code);
+  if (rebase === "on-patch") return "rebase";
+  if (rebase === "paused") return "rebase-paused";
+  if (rebase === "unknown") return "unanswered";
   if (runGit(seams, cwd, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).code === 0) return "merge";
   return null;
 }
@@ -253,7 +263,14 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
   if (badBase !== null) return { kind: "refused", reason: badBase };
   const remoteBase = `${REMOTE}/${base}`;
   const lines: string[] = [];
-  const pending = inProgress(seams, cwd);
+  const found = inProgress(seams, cwd);
+  if (found === "unanswered") {
+    return { kind: "refused", reason: "could not tell whether a rebase is in progress here ('git rebase --show-current-patch' answered with neither 0, 1 nor 128). Refusing to read an unanswered question as \"nothing in progress\"." };
+  }
+  if (found === "rebase-paused" && !options.abort) {
+    return { kind: "refused", reason: "a rebase is paused here with no current patch (a 'break' or a failed 'exec' line). This verb resumes only a rebase it stopped on a patch itself: finish it with 'git rebase --continue', or back it out with 'git rebase --abort' (or this verb's --abort)." };
+  }
+  const pending: Strategy | null = found === "rebase-paused" ? "rebase" : found;
 
   // ── --abort: back out whatever is in progress, and nothing else ──────────
   if (options.abort) {

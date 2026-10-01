@@ -2533,6 +2533,11 @@ conflict marker, are reported as `conflicted[]` again at exit 1 with the
 abort line, and nothing is continued over them; a continued rebase that
 conflicts on a *later* commit reports that conflict the same way. A
 `--strategy` that disagrees with what is in progress is refused at exit 2.
+A rebase **paused with no current patch** (a `break` or a failed `exec`
+line; `--show-current-patch` exits 1) is not one this verb started, so it is
+refused at exit 2 naming `git rebase --continue` / `--abort`, and only
+`--abort` acts on it. A probe git does not answer with 0, 1 or 128 is
+refused at exit 2, never read as "nothing in progress" (#307).
 
 **`--json`** — `nen.wc.catch-up/v0.1`: `{ contract, base, strategy, before,
 after, behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
@@ -8574,7 +8579,8 @@ that is not a local branch, a name git will not accept, a name that is already a
 |---|---|---|
 | 1 | `git branch --show-current` | it cannot be read at all. Empty output means a **detached HEAD**, which is *reported*, not an error |
 | 1a | `git rev-list --count HEAD --not --branches --remotes` | *(only on a detached HEAD)* the count is non-zero (exit 2, naming it): `git switch -c` would orphan exactly those commits, and the only record of them afterwards is the reflog, which expires. A count that cannot be read refuses too — it is never answered "none" |
-| 1b | `git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD` | anything comes back: a merge, rebase or cherry-pick is in progress (exit 2). Nen then asks `git rev-parse --verify --quiet` per ref to name which, and quotes that operation's own `--abort`. This is **not** an ordinary dirty tree and `--discard` does not clear it |
+| 1b | `git rev-list --ignore-missing -1 MERGE_HEAD CHERRY_PICK_HEAD` | anything comes back: a merge or cherry-pick is in progress (exit 2). Nen then asks `git rev-parse --verify --quiet` per ref to name which, and quotes that operation's own `--abort`. This is **not** an ordinary dirty tree and `--discard` does not clear it |
+| 1c | `git rebase --show-current-patch` | it exits 0 (a rebase stopped on a patch) or 1 (a rebase paused with no current patch, at a `break` or a failed `exec` line): exit 2, naming `git rebase --abort`. Exit 128 is the answer "no rebase". git also exits 128 while a `git am` session is in progress, which this step does not detect. Any other exit refuses as unanswered. A rebase is **not** read through `REBASE_HEAD`, which git leaves behind after a rebase completes; this is the same reading [`wc catch-up`](#nen-wc-catch-up) asks, and catch-up refuses a paused or unanswered rebase too (#307) |
 | 2 | `git -c core.quotePath=false status --porcelain=v1 -z -uall` | the tree is dirty and there is no `--discard` (exit 2, every path listed, with a [`stage triage`](#nen-stage-triage) flag beside a filename shaped like a secret or a binary). An **unreadable** status refuses too — it is never read as a clean one |
 | 3 | `git remote` | `origin` is not among them (exit 2, listing what is) |
 | 4 | `git show-ref --verify --quiet refs/heads/<trunk>` | there is no such local branch (exit 2, naming `--from`). A code *above* 1 is git failing to answer and is reported as that, never as "absent" |
@@ -8731,7 +8737,8 @@ discard:       no -- a dirty working copy refuses
 lane:          web
 would run:     git branch --show-current
 would run:     git rev-list --count HEAD --not --branches --remotes
-would run:     git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD
+would run:     git rev-list --ignore-missing -1 MERGE_HEAD CHERRY_PICK_HEAD
+would run:     git rebase --show-current-patch
 would run:     git -c core.quotePath=false status --porcelain=v1 -z -uall
 would run:     git remote
 would run:     git show-ref --verify --quiet refs/heads/main
@@ -8772,7 +8779,9 @@ discard:       no -- a dirty working copy refuses
 lane:          (none -- no declaration, so build/test verification was skipped)
 ran:           git branch --show-current  -- exit 0 in 13ms
                on 'my-idea-holder'
-ran:           git rev-list --ignore-missing -1 MERGE_HEAD REBASE_HEAD CHERRY_PICK_HEAD  -- exit 0 in 14ms
+ran:           git rev-list --ignore-missing -1 MERGE_HEAD CHERRY_PICK_HEAD  -- exit 0 in 14ms
+ran:           git rebase --show-current-patch  -- exit 128 in 11ms
+               no rebase git will name -- exit 128 is the answer, not a failure, whatever REBASE_HEAD says
 ran:           git -c core.quotePath=false status --porcelain=v1 -z -uall  -- exit 0 in 14ms
                clean -- nothing staged, modified or untracked
 ran:           git remote  -- exit 0 in 12ms
