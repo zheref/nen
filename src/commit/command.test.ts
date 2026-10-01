@@ -417,7 +417,7 @@ describe("nen commit format -- commits.subjectCase in nen/workflow.json, the rul
     expect(result.out).toEqual([]);
     expect(result.err).toEqual([
       expect.stringMatching(
-        /^nen: subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen\/workflow\.json, 'config-conventional'.*nen applies it because .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute\): subject must not be sentence-case\./,
+        /^nen: subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen[\\/]workflow\.json, 'config-conventional'.*nen applies it because .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute\): subject must not be sentence-case\./,
       ),
     ]);
   });
@@ -434,7 +434,7 @@ describe("nen commit format -- commits.subjectCase in nen/workflow.json, the rul
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "escape closes it"], true, root);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out.join("\n"))).toEqual({ message: "fix: escape closes it" });
-    expect(result.err).toEqual([expect.stringMatching(/^nen: note: subject-case checked against commits\.subjectCase in .*nen\/workflow\.json/)]);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: note: subject-case checked against commits\.subjectCase in .*nen[\\/]workflow\.json/)]);
   });
 
   it("applies an explicit tuple: [2, 'always', 'lower-case'] refuses a capitalized subject", async () => {
@@ -450,7 +450,7 @@ describe("nen commit format -- commits.subjectCase in nen/workflow.json, the rul
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["fix: start the timer"]);
     expect(result.err).toEqual([
-      expect.stringMatching(/^nen: note: commits\.subjectCase in .*nen\/workflow\.json is not applied, and it DIFFERS: .*\.commitlintrc\.json states .*, the declaration states \[2,"always",\["upper-case"\]\]; nen follows .*\.commitlintrc\.json, which is what commitlint runs/),
+      expect.stringMatching(/^nen: note: commits\.subjectCase in .*nen[\\/]workflow\.json is not applied, and it DIFFERS: .*\.commitlintrc\.json states .*, the declaration states \[2,"always",\["upper-case"\]\]; nen follows .*\.commitlintrc\.json, which is what commitlint runs/),
     ]);
     // An agreeing declaration is only redundant, and says so.
     const agreeing = repoWithCommitlint(CONVENTIONAL_RC, { subjectCase: "config-conventional" });
@@ -717,7 +717,7 @@ describe("nen commit format -- the maintainer's ruling on #290: refuse at 100, d
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", `see ${TOKEN}`], false, root);
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toBe(`fix: x\n\nsee ${TOKEN}`);
-    expect(result.err.join("\n")).toMatch(/nen: note: body-max-line-length checked against commits\.bodyMaxLineLength in .*nen\/workflow\.json, 150; nen applies it because .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute -- keep the two in step/);
+    expect(result.err.join("\n")).toMatch(/nen: note: body-max-line-length checked against commits\.bodyMaxLineLength in .*nen[\\/]workflow\.json, 150; nen applies it because .*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute -- keep the two in step/);
     const over = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", "w".repeat(160)], false, root);
     expect(over.code).toBe(2);
     expect(over.err.join("\n")).toMatch(/^nen: line 3 is 160 characters, over the body width this repository declares \(commits\.bodyMaxLineLength in .*, 150;/m);
@@ -734,7 +734,7 @@ describe("nen commit format -- the maintainer's ruling on #290: refuse at 100, d
     const root = repoWithCommitlint(KRO_PWA, { bodyMaxLineLength: "150" });
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "x"], false, root);
     expect(result.code).toBe(1);
-    expect(result.err).toEqual([expect.stringMatching(/^nen: .*nen\/workflow\.json: at commits\.bodyMaxLineLength, the declared body width must be a whole number of at least 1/)]);
+    expect(result.err).toEqual([expect.stringMatching(/^nen: .*nen[\\/]workflow\.json: at commits\.bodyMaxLineLength, the declared body width must be a whole number of at least 1/)]);
   });
 
   it("lets a readable data config decide, with a note that the declaration differs", async () => {
@@ -742,7 +742,7 @@ describe("nen commit format -- the maintainer's ruling on #290: refuse at 100, d
     const result = await capture(["commit", "format", "--type", "fix", "--subject", "x", "--body", `see ${TOKEN}`], false, root);
     expect(result.code).toBe(2);
     const err = result.err.join("\n");
-    expect(err).toMatch(/nen: note: commits\.bodyMaxLineLength in .*nen\/workflow\.json is not applied, and it DIFFERS: .*\.commitlintrc\.json states \[2, "always", 100\].*the declaration states 150; nen follows/);
+    expect(err).toMatch(/nen: note: commits\.bodyMaxLineLength in .*nen[\\/]workflow\.json is not applied, and it DIFFERS: .*\.commitlintrc\.json states \[2, "always", 100\].*the declaration states 150; nen follows/);
     expect(err).toMatch(/^nen: line 4 is 120 characters, over the 100 that this repository's commitlint rule 'body-max-line-length' allows/m);
   });
 });

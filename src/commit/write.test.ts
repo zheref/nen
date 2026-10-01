@@ -318,7 +318,7 @@ describe("nen commit write -- commits.subjectCase in nen/workflow.json, agreeing
     const written = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
     expect(written.code).toBe(2);
     expect(written.seams.calls).toEqual([]);
-    expect(written.err.join("\n")).toMatch(/subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen\/workflow\.json/);
+    expect(written.err.join("\n")).toMatch(/subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen[\\/]workflow\.json/);
     const err: string[] = [];
     const io: Io = { out: (): void => {}, err: (line): void => void err.push(line) };
     const formatted = await runFamily(commitCommand, ["commit", "format", "--type", "fix", "--subject", "Escape closes it"], root, false, io, new ScriptedSeams([]));
