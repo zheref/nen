@@ -19,6 +19,7 @@ import {
   firstSentence,
   generateSurfaceMirror,
   generateSurfaceMirrorReport,
+  hostMode,
   markerFor,
   markerText,
   mirrorReportOk,
@@ -703,24 +704,56 @@ describe("hook scripts: symlinks and modes (S4, N6)", () => {
     expect(existsSync(join(out, "alpha", "SKILL.md"))).toBe(false);
   });
 
+  // What the host holds for the declared 0o755, and a mode a hand can leave
+  // that differs from it: 0o644 on POSIX; on win32 -- where the read-only
+  // attribute is the one mode bit there is (hostMode) -- a read-only script.
+  const WIN32 = process.platform === "win32";
+  const declared = WIN32 ? 0o666 : 0o755;
+  const wrong = WIN32 ? 0o444 : 0o644;
+
   it("re-applies a declared mode on unchanged bytes, and check calls a wrong mode hand-edited", () => {
     const out = tempDir();
     const files = withHooks();
     writeSurfaceMirror(out, files, row("antigravity"));
     const script = join(out, "hooks", "bell.hook");
-    expect(statSync(script).mode & 0o777).toBe(0o755);
-    chmodSync(script, 0o644);
+    expect(statSync(script).mode & 0o777).toBe(declared);
+    // Freshly written, it checks clean and regenerates as unchanged -- on win32
+    // too, where the 0o755 it declares cannot be held.
+    expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
+    expect(writeSurfaceMirror(out, files, row("antigravity")).unchanged).toContain("hooks/bell.hook");
+    chmodSync(script, wrong);
     const drifted = checkSurfaceMirror(out, files, row("antigravity"));
     expect(drifted.handEdited).toEqual(["hooks/bell.hook"]);
     // A regenerate repairs the mode without rewriting the bytes, and reports the file written.
     const repaired = writeSurfaceMirror(out, files, row("antigravity"));
     expect(repaired.written).toEqual(["hooks/bell.hook"]);
-    expect(statSync(script).mode & 0o777).toBe(0o755);
+    expect(statSync(script).mode & 0o777).toBe(declared);
     expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
     // --dry-run reports it and touches nothing.
-    chmodSync(script, 0o644);
+    chmodSync(script, wrong);
     expect(writeSurfaceMirror(out, files, row("antigravity"), true).written).toEqual(["hooks/bell.hook"]);
-    expect(statSync(script).mode & 0o777).toBe(0o644);
+    expect(statSync(script).mode & 0o777).toBe(wrong);
+    // Leave it writable, so the temp directory's cleanup can remove it on win32.
+    chmodSync(script, 0o644);
+  });
+
+  it("compares a declared mode in the terms the host can hold: the mode itself on POSIX, the read-only attribute alone on win32", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(hostMode(0o755, platform)).toBe(0o755);
+      expect(hostMode(0o644, platform)).toBe(0o644);
+      expect(hostMode(0o100755, platform)).toBe(0o755);
+    }
+    // NTFS holds no executable bit: chmod keeps only the owner-write bit, as
+    // the read-only attribute, and stat reports 0o666 or 0o444 from it.
+    expect(hostMode(0o755, "win32")).toBe(0o666);
+    expect(hostMode(0o644, "win32")).toBe(0o666);
+    expect(hostMode(0o555, "win32")).toBe(0o444);
+    expect(hostMode(0o444, "win32")).toBe(0o444);
+    // And that is what this host really does with the one mode generate declares.
+    const file = join(tempDir(), "probe");
+    writeFileSync(file, "x");
+    chmodSync(file, 0o755);
+    expect(statSync(file).mode & 0o777).toBe(hostMode(0o755));
   });
 });
 
