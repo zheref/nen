@@ -27,11 +27,11 @@
 #
 # Its safety properties -- the trigger set, the repository binding, runs-on,
 # the read-only token, the unpersisted credential, the SHA-pinned checkout, the
-# time bound, the AppData matcher -- are held on this template by
-# zheref/hatsu:scripts/runner_preflight_fixture_check.sh; a consumer's copy
-# carries no such guard, which is why it is re-rendered and never edited. The
-# body is not byte-identical to nen's own test template: the job never prints
-# an account name or a resolved tool path.
+# time bound, the first-match profile/AppData classifier -- are held on this
+# template by zheref/hatsu:scripts/runner_preflight_fixture_check.sh; a
+# consumer's copy carries no such guard, which is why it is re-rendered and
+# never edited. The body is not byte-identical to nen's own test template: the
+# job never prints an account name, a profile or a resolved tool path.
 #
 # runner-preflight -- proves the self-hosted windows-x64 pool can RUN a job,
 # not merely that it is registered. Rendered by nen 0.18.1 runner workflow for
@@ -138,9 +138,21 @@ jobs:
 
       # A Windows service runs with the MACHINE environment. A tool installed for
       # the maintainer's user resolves in their shell and is invisible here, so
-      # an AppData hit fails the run. Each tool's NAME and verdict are printed,
-      # never the path it resolved to: a path under the Users folder carries an
-      # account name, and on a public repository this log is public.
+      # a per-user resolution fails the run. where.exe prints every match in
+      # PATH order and a job runs only the FIRST, so only the first is
+      # classified: no match is not found; an \AppData\ segment is per-user
+      # (AppData); anywhere else under the service user's profile ($USERPROFILE
+      # -- scoop shims, a profile bin) is per-user (profile); the rest is
+      # machine-wide. Every tool is classified before the step fails on any.
+      # where.exe is called as `$PATH:<tool>` (the dollar escaped from bash):
+      # a bare `where.exe <tool>` searches the CURRENT DIRECTORY first, and the
+      # job has just checked the repository out there, so a same-named file in
+      # it would become the first match and hide a per-user one. The form
+      # searches the PATH directories only -- the service's PATH, which is what
+      # a machine-located tool (W1) has to be on.
+      # Each tool's NAME and verdict are printed, never the path it resolved to
+      # nor the profile: either carries an account name, and on a public
+      # repository this log is public. Bash built-ins only.
       - name: Resolution must be machine-wide (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -150,19 +162,27 @@ jobs:
           set -uo pipefail
           bad=0
           shopt -s nocasematch
+          profile="${USERPROFILE:-}"
+          profile="${profile//\\//}"
+          profile="${profile%/}"
           for tool in $TOOLS; do
-            resolved="$(where.exe "$tool" 2>/dev/null || true)"
-            resolved="${resolved//$'\r'/}"
-            verdict="machine-wide"
-            [ -z "$resolved" ] && verdict="not found"
-            while IFS= read -r line; do
-              [ -z "$line" ] && continue
-              norm="${line//\\//}"
-              if [[ "$norm" == */appdata/* ]]; then verdict="per-user (AppData)"; fi
-            done <<< "$resolved"
+            resolved="$(where.exe "\$PATH:$tool" 2>/dev/null || true)"
+            first=""
+            IFS= read -r first <<< "$resolved" || true
+            first="${first//$'\r'/}"
+            norm="${first//\\//}"
+            if [ -z "$norm" ]; then
+              verdict="not found"
+            elif [[ "$norm" == */appdata/* ]]; then
+              verdict="per-user (AppData)"
+            elif [ -n "$profile" ] && [[ "$norm" == "$profile"/* ]]; then
+              verdict="per-user (profile)"
+            else
+              verdict="machine-wide"
+            fi
             echo "$tool: $verdict"
             if [ "$verdict" != "machine-wide" ]; then
-              echo "::error::'$tool' is $verdict -- the runner service cannot rely on it. Install it machine-wide and restart the runner services."
+              echo "::error::'$tool' is $verdict -- the runner service cannot rely on it. Install it machine-wide, under C:\\Program Files\\$tool, put that directory on the MACHINE PATH, and restart the runner services."
               bad=1
             fi
           done
