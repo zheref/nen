@@ -423,7 +423,7 @@ describe("commits.subjectCase -- the rule declared in nen/workflow.json, and its
     const off = repo({ ".commitlintrc.json": explicit([0], { extends: [CONFIG_CONVENTIONAL] }) });
     const offFound = subjectCaseFindings(off, "fix: Start the timer", declare(off, "config-conventional"));
     expect(offFound.refusals).toEqual([]);
-    expect(offFound.notes).toEqual([expect.stringMatching(/^commits\.subjectCase in .*nen\/workflow\.json is not applied, and it DIFFERS/)]);
+    expect(offFound.notes).toEqual([expect.stringMatching(/^commits\.subjectCase in .*nen[\\/]workflow\.json is not applied, and it DIFFERS/)]);
     // The data config refuses; the declaration would allow. Still the data config.
     const lower = repo({ ".commitlintrc.json": explicit([2, "always", "upper-case"]) });
     const lowerFound = subjectCaseFindings(lower, "fix: start the timer", declare(lower, [2, "always", "lower-case"]));

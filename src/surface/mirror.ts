@@ -916,6 +916,28 @@ function modeOf(path: string): number {
   return statSync(path).mode & 0o777;
 }
 
+/**
+ * The permission bits a file declaring `declared` holds on `platform` once
+ * `chmodSync(path, declared)` has run -- what generate leaves and what check
+ * compares a file's mode against.
+ *
+ * ON win32 THERE IS NO EXECUTABLE BIT TO HOLD. NTFS stores no POSIX mode; Node
+ * and Bun map it from the one attribute it does carry, read-only: `stat`
+ * reports 0o666 for a writable file and 0o444 for a read-only one, and
+ * `chmod` sets or clears that attribute from the owner-write bit (0o200) and
+ * ignores every other bit. So a declared 0o755 lands as 0o666, every time.
+ * Comparing against 0o755 there made every generate rewrite every hook script
+ * and every check call it hand-edited, forever; comparing against what the
+ * host CAN hold keeps the one drift that still means something on Windows --
+ * a script whose read-only attribute was set by hand -- and nothing else. The
+ * executable bit itself is git's to carry on Windows (`core.fileMode` is
+ * false there; `git update-index --chmod=+x` records it), not the file's.
+ */
+export function hostMode(declared: number, platform: NodeJS.Platform = process.platform): number {
+  if (platform === "win32") return (declared & 0o200) !== 0 ? 0o666 : 0o444;
+  return declared & 0o777;
+}
+
 export interface WriteResult {
   readonly written: readonly string[];
   readonly unchanged: readonly string[];
@@ -977,7 +999,7 @@ export function writeSurfaceMirror(
       // Unchanged BYTES; the mode is still applied when the file declares one
       // (Nobunaga N6), because a script somebody chmod'ed to 0644 is a hook
       // the surface cannot run, and `check` calls that hand-edited.
-      if (file.mode !== undefined && modeOf(path) !== file.mode) {
+      if (file.mode !== undefined && modeOf(path) !== hostMode(file.mode)) {
         if (!dryRun) chmodSync(path, file.mode);
         written.push(file.path);
         continue;
@@ -1097,7 +1119,7 @@ export function checkSurfaceMirror(
     } else if (withoutStamp(existing) !== withoutStamp(file.content)) handEdited.push(file.path);
     // The same bytes under a different mode is a hand edit too (N6): a hook
     // script at 0644 is one the surface cannot run.
-    else if (file.mode !== undefined && modeOf(path) !== file.mode) handEdited.push(file.path);
+    else if (file.mode !== undefined && modeOf(path) !== hostMode(file.mode)) handEdited.push(file.path);
     else ok.push(file.path);
   }
 

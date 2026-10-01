@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { splitDocument } from "./frontmatter.js";
 import {
   compareVersions,
@@ -176,16 +176,20 @@ describe("hooks", () => {
     const script = join(dir, "hooks", "x.sh");
     writeFileSync(script, '#!/bin/sh\nprintf "%s|" "$@"\n');
     chmodSync(script, 0o755);
+    // The root as the surface's sh spells it. On win32 that sh is Git Bash's,
+    // which takes a drive path with forward slashes (C:/Users/...); the native
+    // spelling carries a backslash, which the wrapper refuses by design (S3).
+    const root = process.platform === "win32" ? dir.split(sep).join("/") : dir;
     const run = (command: string, env: Record<string, string> = {}): string => {
       const result = spawnSync("sh", ["-c", command], { encoding: "utf8", env: { ...process.env, ...env } });
       return `${result.status}:${result.stdout}`;
     };
     // The root has a space: quoted inside the command, the whole thing wrapped.
-    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh --mode fast", dir))).toBe("0:--mode|fast|");
+    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh --mode fast", root))).toBe("0:--mode|fast|");
     // The root is an expression the surface's shell has to expand.
-    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh one $TWO", "${DEMO_ROOT:-/nowhere}"), { DEMO_ROOT: dir, TWO: "two" })).toBe("0:one|two|");
+    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh one $TWO", "${DEMO_ROOT:-/nowhere}"), { DEMO_ROOT: root, TWO: "two" })).toBe("0:one|two|");
     // The single-quote rule survives the shell: a quoted argument arrives whole.
-    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh 'a b' $C", "${DEMO_ROOT}"), { DEMO_ROOT: dir, C: "c" })).toBe("0:a b|c|");
+    expect(run(rebaseCommand("${CLAUDE_PLUGIN_ROOT}/hooks/x.sh 'a b' $C", "${DEMO_ROOT}"), { DEMO_ROOT: root, C: "c" })).toBe("0:a b|c|");
   });
 
   it("renders the verbatim row's manifest byte for byte", () => {

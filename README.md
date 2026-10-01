@@ -393,10 +393,17 @@ built-in default that would belong to some other project.
 
 ## Platform parity
 
-Nen behaves identically on macOS and on Windows under Git Bash: one binary,
-plus `git` and `gh` on `PATH`. There is no `make`, no `bats`/`pytest`, no
-runtime Python, and no `jq`/`yq` anywhere Nen's own tooling runs — CI
-exercises all three platforms on every change for exactly this reason.
+Nen behaves identically on macOS, Linux and Windows under Git Bash: one
+binary, plus `git` and `gh` on `PATH`. There is no `make`, no
+`bats`/`pytest`, no runtime Python, and no `jq`/`yq` anywhere Nen's own
+tooling runs — CI runs the whole test suite for exactly this reason: on Linux
+and macOS on every change, and on Windows on every change while the pool is
+declared online (`NEN_WINDOWS_RUNNER` is `online`; skipped otherwise, see the
+runner boundary below). Where Windows cannot hold the POSIX form — a
+path is spelled with backslashes, and NTFS has no executable bit — the
+behaviour is defined, not skipped. [docs/USAGE.md § Platform
+parity](docs/USAGE.md#platform-parity) defines those two host-wide rules and
+points to the few verbs that also behave differently on Windows.
 
 ### CI runner boundary
 
@@ -408,8 +415,11 @@ Fork workflow runs must never be approved under the repository's
 
 The Linux parity lane may use GitHub-hosted Ubuntu until a real self-hosted
 Linux pool exists. macOS, Windows, release, and portable compile jobs select
-the standard self-hosted OS and architecture labels. If one of those pools is
-offline or saturated, its job queues; there is no hosted fallback.
+the standard self-hosted OS and architecture labels, and there is no hosted
+fallback: a saturated pool's job queues. The Windows leg is gated besides: it
+runs only while the repository variable `NEN_WINDOWS_RUNNER` is `online`,
+and is skipped otherwise — a job queued on a pool with no runner never fails,
+it stays pending and holds every pull request's checks with it.
 
 ## The verb surface
 
