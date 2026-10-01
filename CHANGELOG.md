@@ -8,6 +8,7 @@ Release unit for `v0.18.1..v0.18.2`, two fixes from `hatsu:futon nen@bug` and th
 - [#315](https://github.com/zheref/nen/pull/315), which closes [#304](https://github.com/zheref/nen/issues/304): a pending check's empty conclusion.
 - [#316](https://github.com/zheref/nen/pull/316), which closes [#307](https://github.com/zheref/nen/issues/307): a finished rebase read as in progress.
 - [#318](https://github.com/zheref/nen/pull/318): the `windows-x64` runner preflight workflow.
+- [#322](https://github.com/zheref/nen/pull/322), the release proposal.
 
 The compatibility floor stays `0.18`.
 
