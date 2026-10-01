@@ -6,6 +6,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 Release unit for `v0.18.2..v0.18.3`, the Windows pool's first live runs after `hatsu:jusshin` brought it back:
 - the deliveries: [#320](https://github.com/zheref/nen/pull/320), [#321](https://github.com/zheref/nen/pull/321), [#323](https://github.com/zheref/nen/pull/323) and [#324](https://github.com/zheref/nen/pull/324).
+- [#325](https://github.com/zheref/nen/pull/325), the release proposal.
 
 The compatibility floor stays `0.18`.
 
