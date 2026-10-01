@@ -1,0 +1,191 @@
+# runner-preflight.yml — RENDERED BY `nen runner workflow`, which hatsu:jusshin
+# runs, from `templates/runner-preflight.yml` in the Hatsu plugin root. One
+# rendering per pool a consumer's `nen/workflow.json` → `runners.pools[]`
+# declares, landed at `.github/workflows/<the pool's preflightWorkflow>`
+# through mukai. Re-render it; do not hand-edit a rendering.
+#
+# NEN CARRIES THE RENDERER, HATSU THE TEMPLATE -- the split tenkai's
+# `pr-readiness.yml` already has. The whole file is rendered, this block
+# included, so the seven placeholders are named here WITHOUT their two pairs of
+# at-signs; each is filled from the pool's declaration:
+#
+#   REPO_SLUG      the consumer repository (owner/name) the job is bound to
+#   RUNS_ON        the pool's labels, exactly -- never a bare self-hosted
+#   OS             the pool's OS in GitHub's own case: Windows, Linux, macOS
+#   TOOLS          the pool's tools[], space-separated, each run with --version
+#   POOL_ID        the pool's id
+#   WORKFLOW_FILE  the pool's preflightWorkflow file name
+#   RENDERED_BY    the nen build and verb that rendered it
+#
+# Nen refuses a rendering with any placeholder left standing (exit 1, named)
+# and one that does not parse as YAML.
+#
+# `actions/checkout` is pinned by commit SHA, its tag as a trailing comment:
+# the job runs on a persistent physical host with a GITHUB_TOKEN, so a movable
+# tag is not acceptable, and a rendering is never hand-edited. A consumer moves
+# the pin by re-rendering after this template is bumped.
+#
+# Its safety properties -- the trigger set, the repository binding, runs-on,
+# the read-only token, the unpersisted credential, the SHA-pinned checkout, the
+# time bound, the AppData matcher -- are held on this template by
+# zheref/hatsu:scripts/runner_preflight_fixture_check.sh; a consumer's copy
+# carries no such guard, which is why it is re-rendered and never edited. The
+# body is not byte-identical to nen's own test template: the job never prints
+# an account name or a resolved tool path.
+#
+# runner-preflight -- proves the self-hosted windows-x64 pool can RUN a job,
+# not merely that it is registered. Rendered by nen 0.18.1 runner workflow for
+# zheref/nen; re-render it rather than editing it.
+#
+# WHY IT EXISTS. A runner GitHub shows as Idle proves the runner PROCESS works.
+# It says nothing about whether the HOST carries the tools a job invokes, or
+# whether the SERVICE ACCOUNT may execute them. A runner service resolves
+# commands on the MACHINE PATH, as a plain local account with no interactive
+# profile: every tool must be machine-LOCATED (on that PATH) and
+# machine-READABLE (an ACE that lets the account execute the file the PATH
+# entry resolves to). Nothing observable from the maintainer's own shell tells
+# the two apart; only a job running as the service does. This is that job.
+# Run it green BEFORE the pool's enable variable is set -- enabling first
+# leaves every gated job queued on a pool that cannot run it.
+#
+#   nen runner preflight --target zheref/nen --workflow runner-preflight-windows-x64.yml
+#
+# FORK SAFETY. This job runs arbitrary steps on a physical machine, so the
+# trigger set is the control. `push` fires only in the repository the push
+# landed in and `workflow_dispatch` needs write access; `pull_request` is
+# deliberately absent, because its workflow definition -- `if:` included --
+# comes from the PR head, which a fork controls. The job-level `if:` binds the
+# canonical repository so a fork that enables Actions on its copy skips before
+# a runner is ever assigned.
+#
+# `push` is path-filtered to this file: it costs nothing on any other change
+# and still proves itself on the branch that changes it.
+name: runner-preflight-windows-x64
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/runner-preflight-windows-x64.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-preflight-windows-x64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    if: github.repository == 'zheref/nen'
+    # Exactly the pool's labels. A job queues until a runner carrying all of
+    # them is free; it never falls back to another pool.
+    runs-on: [self-hosted, Windows, X64]
+    # Bounds the RUN, not the wait: a job queues indefinitely when every slot
+    # is busy or offline, and a preflight that never starts is itself the
+    # answer ('nen runner preflight' names it).
+    timeout-minutes: 5
+    steps:
+      # Checkout shells out to git, so a host without a working git fails
+      # here -- already a finding. Pinned by SHA (see the header): re-render to
+      # move it, never edit it in place.
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Confirm this landed on the Windows pool
+        shell: bash
+        env:
+          EXPECTED_OS: 'Windows'
+        run: |
+          echo "runner name : ${RUNNER_NAME:-<unset>}"
+          echo "runner os   : ${RUNNER_OS:-<unset>}"
+          # Whether an account is set, never its name: on a public repository
+          # this log is public.
+          if [ -n "${USERNAME:-${USER:-${LOGNAME:-}}}" ]; then echo "service acct: set"; else echo "service acct: unset"; fi
+          if [ "${RUNNER_OS:-}" != "$EXPECTED_OS" ]; then
+            echo "::error::Preflight landed on '${RUNNER_OS:-<unset>}', not $EXPECTED_OS -- it proves nothing about the windows-x64 pool. Check runs-on and that a runner of this pool was free."
+            exit 1
+          fi
+
+      # 126 is not 127. 127 = not on the service's PATH (a LOCATION problem);
+      # 126 = found, and refused on exec (a PERMISSION problem -- the ACL on the
+      # file the PATH entry resolves to). Every PATH-shaped check passes during
+      # a 126, so the two are named apart. Every tool is tried and named; the
+      # step exits with the first non-zero code. Bash built-ins only: this step
+      # diagnoses a broken toolchain and must not depend on one.
+      - name: Host toolchain -- every tool a job on this pool invokes
+        shell: bash
+        env:
+          TOOLS: 'git bash gh'
+        run: |
+          set -uo pipefail
+          status=0
+          for tool in $TOOLS; do
+            rc=0
+            "$tool" --version || rc=$?
+            case "$rc" in
+              0) ;;
+              126) echo "::error::'$tool' resolves on the PATH but the runner service account cannot EXECUTE it (exit 126). An ACL problem, not a PATH problem: grant Users read-and-execute on the file it resolves to, then restart the runner services." ;;
+              127) echo "::error::'$tool' is not on the runner service's PATH (exit 127). Install it machine-wide, put its directory on the MACHINE PATH, then restart the runner services." ;;
+              *) echo "::error::'$tool --version' exited $rc -- found and executed, so neither a PATH (127) nor an ACL (126) problem. Read the output above." ;;
+            esac
+            if [ "$rc" -ne 0 ] && [ "$status" -eq 0 ]; then status=$rc; fi
+          done
+          exit "$status"
+
+      # A Windows service runs with the MACHINE environment. A tool installed for
+      # the maintainer's user resolves in their shell and is invisible here, so
+      # an AppData hit fails the run. Each tool's NAME and verdict are printed,
+      # never the path it resolved to: a path under the Users folder carries an
+      # account name, and on a public repository this log is public.
+      - name: Resolution must be machine-wide (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          TOOLS: 'git bash gh'
+        run: |
+          set -uo pipefail
+          bad=0
+          shopt -s nocasematch
+          for tool in $TOOLS; do
+            resolved="$(where.exe "$tool" 2>/dev/null || true)"
+            resolved="${resolved//$'\r'/}"
+            verdict="machine-wide"
+            [ -z "$resolved" ] && verdict="not found"
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              norm="${line//\\//}"
+              if [[ "$norm" == */appdata/* ]]; then verdict="per-user (AppData)"; fi
+            done <<< "$resolved"
+            echo "$tool: $verdict"
+            if [ "$verdict" != "machine-wide" ]; then
+              echo "::error::'$tool' is $verdict -- the runner service cannot rely on it. Install it machine-wide and restart the runner services."
+              bad=1
+            fi
+          done
+          exit "$bad"
+
+      # A launchd agent (macOS) or a systemd service (Linux) can see a tool in a
+      # user-scope directory, so a hit there is a WARNING, not a failure: it
+      # works for this account and would not survive a change of service user.
+      # As on Windows, the verdict is printed and the path is not.
+      - name: Resolution outside the home directory (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          TOOLS: 'git bash gh'
+        run: |
+          set -uo pipefail
+          for tool in $TOOLS; do
+            path="$(command -v "$tool" || true)"
+            case "$path" in
+              "") echo "$tool: not found" ;;
+              "$HOME"/.local/*|"$HOME"/bin/*)
+                echo "$tool: user-scope"
+                echo "::warning::'$tool' resolves in a user-scope directory under the service user's home. It works for this service user and would not survive another one." ;;
+              *) echo "$tool: machine-scope" ;;
+            esac
+          done
