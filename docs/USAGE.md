@@ -565,19 +565,28 @@ The whole test suite runs on Linux and macOS on every change, and on Windows —
 the self-hosted pool, under Git Bash — on every change while the pool is
 declared online (the repository variable `NEN_WINDOWS_RUNNER` is `online`); with
 the variable unset or anything else, the Windows leg is skipped. So
-"identically" is a checked claim whenever the pool is online. Two things are
-defined differently on Windows because the host cannot hold the POSIX form, and
-each verb says so where it applies:
+"identically" is a checked claim whenever the pool is online.
+
+Two host-wide rules are defined here, because the host cannot hold the POSIX
+form:
 
 - **Paths a message names are the host's own.** A note or refusal that names a
   file by absolute path prints it as the host spells it —
   `C:\Users\me\work\repo\nen\workflow.json` on Windows — so it can be pasted
-  back into that host's tools.
+  back into that host's tools. This holds for every verb (the
+  [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write)
+  commit-policy notes among them), and no verb section repeats it.
 - **No executable bit.** NTFS holds only a read-only attribute, so a hook
   script's declared mode is compared in those terms
   ([`surface mirror generate`](#nen-surface-mirror-generate)), and a
   `--hooks-root` is given in the form the surface's `sh` reads — a drive path
   with forward slashes, `C:/Users/…` — since a backslash is refused there.
+
+Other Windows-specific behaviour is a single verb's, and is documented with
+that verb: [`shu tools --install`](#nen-shu-tools) refuses the `corepack`
+install on `win32`, [`watch until`](#watch-until-quoting) keeps the whole-line
+metacharacter check on Windows, and the `dotnet-winui` stack of
+[`shu detect`](#nen-shu-detect) declares `win32` as its only host.
 
 ### Getting the binary
 

@@ -401,8 +401,9 @@ and macOS on every change, and on Windows on every change while the pool is
 declared online (`NEN_WINDOWS_RUNNER` is `online`; skipped otherwise, see the
 runner boundary below). Where Windows cannot hold the POSIX form — a
 path is spelled with backslashes, and NTFS has no executable bit — the
-behaviour is defined, not skipped; [docs/USAGE.md § Platform
-parity](docs/USAGE.md#platform-parity) lists both.
+behaviour is defined, not skipped. [docs/USAGE.md § Platform
+parity](docs/USAGE.md#platform-parity) defines those two host-wide rules and
+points to the few verbs that also behave differently on Windows.
 
 ### CI runner boundary
 

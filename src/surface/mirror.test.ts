@@ -721,20 +721,24 @@ describe("hook scripts: symlinks and modes (S4, N6)", () => {
     // too, where the 0o755 it declares cannot be held.
     expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
     expect(writeSurfaceMirror(out, files, row("antigravity")).unchanged).toContain("hooks/bell.hook");
-    chmodSync(script, wrong);
-    const drifted = checkSurfaceMirror(out, files, row("antigravity"));
-    expect(drifted.handEdited).toEqual(["hooks/bell.hook"]);
-    // A regenerate repairs the mode without rewriting the bytes, and reports the file written.
-    const repaired = writeSurfaceMirror(out, files, row("antigravity"));
-    expect(repaired.written).toEqual(["hooks/bell.hook"]);
-    expect(statSync(script).mode & 0o777).toBe(declared);
-    expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
-    // --dry-run reports it and touches nothing.
-    chmodSync(script, wrong);
-    expect(writeSurfaceMirror(out, files, row("antigravity"), true).written).toEqual(["hooks/bell.hook"]);
-    expect(statSync(script).mode & 0o777).toBe(wrong);
-    // Leave it writable, so the temp directory's cleanup can remove it on win32.
-    chmodSync(script, 0o644);
+    try {
+      chmodSync(script, wrong);
+      const drifted = checkSurfaceMirror(out, files, row("antigravity"));
+      expect(drifted.handEdited).toEqual(["hooks/bell.hook"]);
+      // A regenerate repairs the mode without rewriting the bytes, and reports the file written.
+      const repaired = writeSurfaceMirror(out, files, row("antigravity"));
+      expect(repaired.written).toEqual(["hooks/bell.hook"]);
+      expect(statSync(script).mode & 0o777).toBe(declared);
+      expect(mirrorReportOk(checkSurfaceMirror(out, files, row("antigravity")))).toBe(true);
+      // --dry-run reports it and touches nothing.
+      chmodSync(script, wrong);
+      expect(writeSurfaceMirror(out, files, row("antigravity"), true).written).toEqual(["hooks/bell.hook"]);
+      expect(statSync(script).mode & 0o777).toBe(wrong);
+    } finally {
+      // Leave it writable even when an assertion fails, so the temp directory's
+      // cleanup can remove it on win32 (a read-only file there refuses delete).
+      chmodSync(script, 0o644);
+    }
   });
 
   it("compares a declared mode in the terms the host can hold: the mode itself on POSIX, the read-only attribute alone on win32", () => {
