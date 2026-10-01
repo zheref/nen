@@ -114,6 +114,11 @@ describe("GitHub Actions runner policy", () => {
     // skips instead of holding every PR's check rollup pending.
     const windows = (ci.jobs as Row)["check-windows"] as Row;
     expect(windows.if).toBe("github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online'");
+  // The leg's steps run under bash, job-wide. Without this default the runner writes each
+  // run: step to a .ps1 and executes it under Windows PowerShell as the service account,
+  // which refused it on the first live run (ci run 36802734735, 2026-10-01: "running
+  // scripts is disabled on this system"). The pool's declared toolchain is git, bash, gh.
+  expect(windows.defaults).toEqual({ run: { shell: "bash" } });
     expect(windows.name).toBe("check");
     expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64"]']);
   });
