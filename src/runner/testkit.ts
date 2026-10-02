@@ -10,6 +10,7 @@ import type { Target } from "../github/target.js";
 import { parseRunners, type RunnerPool } from "../schema/workflow.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { downloadsArgv, fetchDownloads, fetchRunners, runnersArgv } from "./inventory.js";
+import { windowsServicesArgv } from "./neighbours.js";
 import { computePlan, type RunnerPlan } from "./plan.js";
 
 export const FIXTURES = join(process.cwd(), "src", "runner", "fixtures");
@@ -69,6 +70,14 @@ export function inventoryCalls(runnersJson = RUNNERS_JSON, downloadsJson = DOWNL
     { match: `gh ${runnersArgv(TARGET, 1).join(" ")}`, result: { stdout: runnersJson } },
     { match: `gh ${downloadsArgv(TARGET).join(" ")}`, result: { stdout: downloadsJson } },
   ];
+}
+
+/** This host's runner services as `runner plan` reads them on Windows (#330); none by default. */
+export function windowsServicesCall(services: readonly { Name: string; StartName: string; Sid?: string }[] = []): ScriptedCall {
+  return {
+    match: `powershell ${windowsServicesArgv().join(" ")}`,
+    result: { stdout: services.length === 0 ? "" : JSON.stringify(services.length === 1 ? services[0] : services) },
+  };
 }
 
 /** A runners answer built from rows, for the cases the recording does not cover. */

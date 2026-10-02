@@ -57,6 +57,7 @@ import { VERSION } from "../version.js";
 import { CertificationRefusal, enablePool, renderEnable, VARIABLE_VALUE, type EnableReport } from "./enable.js";
 import { realSleep, RunnerFailure, type Sleep } from "./github.js";
 import { assembleInventory, fetchDownloads, fetchRunners, renderInventory } from "./inventory.js";
+import { checkNeighbours, renderNeighbours } from "./neighbours.js";
 import { computePlan, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
 import { renderPreflight, runPreflight } from "./preflight.js";
 import { launchLine, renderScript, summaryGlob } from "./script.js";
@@ -127,7 +128,10 @@ plan       Which runners to add: the lowest free slots for --machine-code and
            the service identity (--service-account; 'network-service' only by
            that explicit word on Windows; macOS takes none), and the runner
            package with its SHA-256. --count 1..16. --out writes the plan JSON
-           (contract nen.runner.plan/v0.1).
+           (contract nen.runner.plan/v0.1). On the pool's own host it reads
+           the existing runner services, read-only, and warns on stderr (exit
+           0) when the account already serves a repository of different
+           visibility, recommending a per-repository account (#330).
 script     Render the plan's host script: PowerShell 5.1 (Windows), bash
            (Linux, run with sudo; macOS, run as yourself). --json names the one
            launch line, the script's scriptSha256 and the summary file glob.
@@ -296,6 +300,10 @@ function plan(context: CommandContext): number {
   const out = context.args.values["out"];
   if (out !== undefined) writeOut(resolveAgainstRepo(root, out), `${JSON.stringify(result, null, 2)}\n`);
   emit(context.io, context.json, result, [...renderPlan(result), ...(out === undefined ? [] : [`wrote ${resolveAgainstRepo(root, out)}`])]);
+  // #330: on stderr, at exit 0, so the plan's own contract (stdout, --out) is unchanged.
+  for (const line of renderNeighbours(checkNeighbours(context.seams, target, result.os, result.identity), target, result.identity)) {
+    context.io.err(`nen runner plan: ${line}`);
+  }
   return 0;
 }
 

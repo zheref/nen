@@ -735,7 +735,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
-| [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), and the package with its SHA-256 -- the `nen.runner.plan/v0.1` contract, `--out` writes it | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET); writes --out only | yes |
+| [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), and the package with its SHA-256 -- the `nen.runner.plan/v0.1` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
 | [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled; never exits 0 on a partial pass | github (gh api GET runners) | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
@@ -10582,6 +10582,57 @@ install` takes (never `root`); on macOS none (a LaunchAgent runs as the user
 who installs it, stored `invoking-user`). Unnamed, it is `ask`, and
 [`runner script`](#nen-runner-script) refuses to render it.
 
+**One account is one trust domain (#330).** Every runner service that logs on
+as the same account can rewrite every other one's binaries and `_work` (on
+Windows, `config.cmd` gives the account's `GITHUB_ActionsRunner_*` group full
+control of each `Runner<N>`), so a public repository's CI — one compromised
+dependency — could persist into a private repository's jobs and their token.
+So when this verb runs **on the pool's own OS** (Windows or Linux) with a
+named account, it reads this host's existing `actions.runner.*` services,
+read-only, with these tools:
+- Windows: `Get-CimInstance Win32_Service` returns each service's `Name`,
+  `StartName` and the account's SID. Windows PowerShell is started by its
+  full path under `%SystemRoot%`.
+- Linux: `systemctl list-units`, then `systemctl show -p Id -p User`.
+
+It resolves **every** service's repository from its service name
+(`gh api --method GET repos/<owner>/<repo>`). No prefix is trusted:
+`actions.runner.zheref-nen.docs.R1` is `zheref/nen.docs`. Splits are tried
+from the last dot first and with the target's owner first, and the first split
+GitHub answers for wins. A name that no split resolves (actions/runner shortens
+long ones on Windows) is reported as unresolved, as is one that `gh` could not
+read. Visibility here means `public`, `private` or `internal`. It then
+**warns, on stderr, at exit 0**, about two things:
+- **The planned account is shared.** Services that log on as the planned
+  account and serve another repository whose visibility differs from the
+  target's, or cannot be determined, are named with their repositories. How the
+  account is matched:
+  - Windows: `.\name` or `<COMPUTERNAME>\name`, ignoring case and spaces.
+    `network-service` matches SID `S-1-5-20` or the spelling `NT AUTHORITY\NETWORK SERVICE`
+    that actions/runner writes, which is localized on a non-English host.
+  - Linux: the user name, matched exactly.
+
+  The warning recommends a per-repository account: `runner-<repo>`, else
+  `runner-<owner>-<repo>`, else `runner-<repo>-2`, `-3` and so on, each
+  trimmed to what the OS accepts (Windows 20 characters, Linux 32). It picks
+  the first name that no other repository's runner service on this host
+  already logs on as, so two owners' `shared` repositories, or a long name
+  shortened, never end up recommended into one account. A service row the read
+  cannot vouch for (no name, no logon account) makes the whole read a `note:`.
+- **The target's own runners keep a shared account.** A new account moves
+  only the runners this plan adds. The target's existing services on another
+  account that also serves a repository of different or unknown visibility
+  are named. They keep that account until they are removed and registered
+  again under the new one.
+
+**You** create the account; nen never creates an account or handles its
+password. nen still accepts a shared account (the maintainer's ruling on #330:
+warn and recommend, never refuse). The plan itself, on stdout under `--json`
+and in `--out`, is unchanged. Off the pool's OS the check cannot see the host,
+so it prints a `note:` saying it did not run. A failed host read is also a
+`note:`, never an exit. macOS is not checked: a LaunchAgent runs as the
+installing user, so there is no account to choose.
+
 **Usage**
 
 ```text
@@ -10635,6 +10686,33 @@ project dir: C:\GithubRunners\nen-runners
 already registered for NZ/NN: (none)
 ```
 (run for real against zheref/nen, 2026-09-30)
+
+```bash
+nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code NZ --count 1 --service-account lordzheref
+```
+```text
+plan: 1 runner(s) for zheref/nen, pool windows-x64
+...
+nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for repositories whose visibility differs from zheref/nen's (public) or cannot be told -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
+nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
+...
+nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- zheref/KroWindows, private
+nen runner plan: recommended: a local account for zheref/nen alone, e.g. --service-account runner-nen (create it yourself first; nen never creates an account or handles its password).
+```
+(run for real on the maintainer's Windows host, 2026-10-02: exit 0; the plan
+and nine of the eleven service lines abridged)
+
+```bash
+nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code NZ --count 1 --service-account runner-nen
+```
+```text
+...
+nen runner plan: warning: zheref/nen's existing runner service(s) actions.runner.zheref-nen.NZ-NNR1, actions.runner.zheref-nen.NZ-NNR2, actions.runner.zheref-nen.NZ-NNR3 log on as .\lordzheref, which also serves repositories whose visibility differs or cannot be told; a new account moves only the runners this plan adds -- these keep .\lordzheref until they are removed and registered again under the new account (#330):
+nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
+...
+```
+(the same host, following the recommendation: exit 0; the plan and all but the
+first of the eleven shared services abridged)
 
 ### `nen runner script`
 
