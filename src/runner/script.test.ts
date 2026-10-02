@@ -306,7 +306,9 @@ describe("the interactive Windows script -- a logon task in a desktop session, n
   });
 
   it("installs no service and asks no password: config runs without --runasservice or a logon account", () => {
-    expect(code.join("\n")).not.toMatch(/--runasservice|--windowslogonaccount|WINDOWSLOGONPASSWORD|Read-Host -AsSecureString|Test-Password|Start-Service|Get-Service/);
+    expect(code.join("\n")).not.toMatch(/--runasservice|--windowslogonaccount|WINDOWSLOGONPASSWORD|Read-Host -AsSecureString|Test-Password|Start-Service|\$secure/);
+    // Get-Service appears once: the guard against a runner an earlier run installed as a service.
+    expect(code.filter((line) => line.includes("Get-Service"))).toEqual(["        if ($null -ne (Get-Service -Name $taskName -ErrorAction SilentlyContinue)) {"]);
     expect(code).toContain("        $configArgs = @('--unattended', '--url', $RepoUrl, '--name', $name, '--labels', $Labels, '--work', '_work')");
     expect(code).toContain("            $env:ACTIONS_RUNNER_INPUT_TOKEN = $token");
     expect(code).toContain("            [Environment]::SetEnvironmentVariable('ACTIONS_RUNNER_INPUT_TOKEN', $null, 'Process')");
@@ -336,13 +338,19 @@ describe("the interactive Windows script -- a logon task in a desktop session, n
     expect(code.filter((line) => /\(OI\)\(CI\)M/.test(line))).toHaveLength(1);
     expect(code).toContain("            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser");
     expect(code).toContain("            $principal = New-ScheduledTaskPrincipal -UserId $TaskUser -LogonType Interactive -RunLevel Limited");
-    expect(code.join("\n")).toMatch(/New-ScheduledTaskSettingsSet -ExecutionTimeLimit \(\[TimeSpan\]::Zero\) -RestartCount 999 -RestartInterval \(New-TimeSpan -Minutes 1\) -MultipleInstances IgnoreNew/);
+    expect(code.join("\n")).toMatch(
+      /New-ScheduledTaskSettingsSet -ExecutionTimeLimit \(\[TimeSpan\]::Zero\) -RestartCount 255 -RestartInterval \(New-TimeSpan -Minutes 1\) -MultipleInstances IgnoreNew -Priority 4 /,
+    );
     expect(code.join("\n")).toMatch(/New-ScheduledTaskAction -Execute \(Join-Path \$runner\.Dir 'run\.cmd'\) -WorkingDirectory \$runner\.Dir/);
     expect(desktop.text).toContain("$TaskPrefix = 'actions.runner.zheref-nen.'");
   });
 
   it("starts the task only where the identity is signed in, and otherwise says the runners wait for its logon", () => {
     expect(code.join("\n")).toMatch(/Win32_Process -Filter "Name = 'explorer\.exe'"/);
+    expect(code.join("\n")).toMatch(/\$_\.User -eq \$Account -and \$_\.Domain -eq \$env:COMPUTERNAME/);
+    expect(desktop.text).toContain("could not tell whether {0} is signed in ({1}); the logon tasks are registered but not started.");
+    expect(code).toContain("    if ($waiting -gt 0 -and $probed) {");
+    expect(desktop.text).toContain("jusshin: WARNING -- {0} is the account running this script");
     expect(code).toContain("        if (-not $signedIn) {");
     expect(code).toContain("                Start-ScheduledTask -TaskName $taskName -TaskPath '\\'");
     expect(desktop.text).toContain("the runners come online when {0} signs in to the desktop (or is auto-logged on; this script never configures that)");

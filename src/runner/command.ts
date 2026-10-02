@@ -57,7 +57,7 @@ import { VERSION } from "../version.js";
 import { enablePool, renderEnable, VARIABLE_VALUE } from "./enable.js";
 import { realSleep, RunnerFailure, type Sleep } from "./github.js";
 import { assembleInventory, fetchDownloads, fetchRunners, renderInventory } from "./inventory.js";
-import { computePlan, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
+import { computePlan, isDailyAccount, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
 import { renderPreflight, runPreflight } from "./preflight.js";
 import { launchLine, renderScript, summaryGlob } from "./script.js";
 import { renderVerify, verifyRunners } from "./verify.js";
@@ -324,7 +324,12 @@ function script(context: CommandContext, deps: RunnerDeps): number {
   } catch (error) {
     throw new VerbUsageError(`--plan '${planPath}' could not be read as JSON (${error instanceof Error ? error.message : String(error)}).`);
   }
-  const planned = validatePlan(raw, `--plan '${planPath}'`);
+  const stored = validatePlan(raw, `--plan '${planPath}'`);
+  // The stored flag, OR'd with a check made now: a plan computed on another
+  // host (or edited) says false, and this process may be the daily account.
+  const planned: RunnerPlan = stored.dailyAccount
+    ? stored
+    : { ...stored, dailyAccount: isDailyAccount(stored.os, stored.mode, stored.identity, context.seams.platform, context.seams.env) };
   if (planned.identity === "ask") {
     throw new VerbUsageError(
       `the plan's identity is 'ask': nobody named the account the ${planned.os} services run as. Re-run 'nen runner plan' with --service-account <name>${planned.os === "Windows" ? " (a LOCAL account; 'network-service' only by explicit choice)" : ""}.`,
@@ -332,7 +337,7 @@ function script(context: CommandContext, deps: RunnerDeps): number {
   }
   if (planned.dailyAccount && context.args.booleans.has("accept-daily-account") !== true) {
     throw new VerbUsageError(
-      `the plan runs pool ${planned.pool}'s interactive runners as ${planned.identity}, the account that computed it -- your own daily account. Every UI job would run in your desktop session, with your profile and your credentials. Re-plan with a dedicated local account (--service-account), or pass --accept-daily-account to render it anyway.`,
+      `the plan runs pool ${planned.pool}'s interactive runners as ${planned.identity}, the account that computed or is rendering it -- your own daily account. Every job it takes would run in your desktop session, with your profile and your credentials. Re-plan with a dedicated local account (--service-account), or pass --accept-daily-account to render it anyway.`,
     );
   }
   if (planned.os === "Windows" && (!/\.ps1$/i.test(out) || /[\s'"]/.test(out))) {

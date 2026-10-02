@@ -1313,8 +1313,9 @@ export const DEFAULT_RUNNER_MODE: Readonly<Record<RunnerOs, RunnerMode>> = {
 };
 /**
  * The fourth label an interactive Windows pool carries, and only that pool. A
- * job that needs a desktop asks for it, and a service pool's label set never
- * equals it.
+ * job that needs a desktop asks for it, so only this pool's runners take that
+ * job. The converse does not hold: a runner carrying it also matches every job
+ * aimed at the plain [self-hosted, Windows, arch] set, the way GitHub matches.
  */
 export const DESKTOP_LABEL = "desktop";
 
@@ -1523,7 +1524,7 @@ function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerP
       path,
       `${pointer}.labels`,
       expected.length === 4
-        ? `is ${JSON.stringify(labels)}, and an interactive Windows pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', its os, its arch, then '${DESKTOP_LABEL}', in GitHub's case. '${DESKTOP_LABEL}' is what a job that needs a signed-in desktop asks for, and it keeps this pool's label set apart from a service pool's on the same host`
+        ? `is ${JSON.stringify(labels)}, and an interactive Windows pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', its os, its arch, then '${DESKTOP_LABEL}', in GitHub's case. '${DESKTOP_LABEL}' is what a job that needs a signed-in desktop asks for, so only this pool's runners take it`
         : `is ${JSON.stringify(labels)}, and a pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', then its os, then its arch, in GitHub's case. An extra label is refused: the runner-policy guard in this repository family admits a job only on one of the canonical label sets, so a pool carrying another is a pool no guarded workflow can target, and a bare 'self-hosted' would match every runner the repository has${
             os === "Windows" && labels.includes(DESKTOP_LABEL) ? `. '${DESKTOP_LABEL}' is an interactive pool's fourth label: declare "mode": "interactive"` : ""
           }`,

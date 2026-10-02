@@ -184,6 +184,10 @@ describe("identity, codes and version", () => {
     expect(() => resolveIdentity("macOS", "someone")).toThrow(/does not apply to a macOS pool/);
     expect(resolveIdentity("Windows", "kwidesktop", "interactive")).toBe(".\\kwidesktop");
     expect(() => resolveIdentity("Windows", "network-service", "interactive")).toThrow(/cannot log on interactively/);
+    for (const builtIn of ["SYSTEM", "LocalSystem", "localservice", "NetworkService", ".\\networkservice"]) {
+      expect(() => resolveIdentity("Windows", builtIn, "interactive"), builtIn).toThrow(/built-in service identity, and it cannot log on interactively/);
+    }
+    expect(resolveIdentity("Windows", "LocalService")).toBe(".\\LocalService");
   });
 
   it("derives the consumer code from product_codes, or refuses naming the flag", () => {

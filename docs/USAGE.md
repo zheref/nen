@@ -175,8 +175,9 @@ change from a compatible one.
 [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
 here is the ruling rather than the silence. A `contract` field is **earned by a
 shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. Twenty-two shapes
-qualify today and declare one:
+document half-understood is worse than not reading it at all. Twenty-nine shapes
+qualify today and declare one (thirty-one ids: `nen.stop.mark` and
+`nen.runner.plan` each have two versions):
 
 `nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.1` ·
 `nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ready/v0.1` ·
@@ -736,7 +737,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
 | [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET); writes --out only | yes |
-| [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
+| [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv; an interactive Windows plan asks no password and registers logon tasks instead of services), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled; never exits 0 on a partial pass | github (gh api GET runners) | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
@@ -10586,17 +10587,31 @@ who installs it, stored `invoking-user`). Unnamed, it is `ask`, and
 signed-in desktop session, started at its identity's logon, never a service.
 Its identity must be an account that can log on interactively: a LOCAL
 account, stored `.\<name>` (for a Microsoft account, the local account
-Windows created for it, as `whoami` prints it after the backslash);
-`network-service` is refused, exit 2 — it has no desktop session, so the
-logon task would never fire. Every rendering of the plan says what that
+Windows created for it, as `whoami` prints it after the backslash). The
+built-in service identities — `network-service`, `NetworkService`,
+`LocalService`, `LocalSystem`, `SYSTEM`, in any case — are refused, exit 2:
+they have no desktop session, so the logon task would never fire. Whether the
+named account exists and is enabled is the host's to answer, and the
+rendered script checks it there; whether it holds *Allow log on locally* is
+checked by nobody. Every rendering of the plan says what that
 costs: the runner is **online only while that account is signed in** (or
 auto-logged on, which nen never configures), and every job it takes runs with
-that account's profile and credentials. When the identity is **the account
+that account's profile and credentials — and that is **every** job such a
+runner takes, not only the ones asking for `desktop`: GitHub gives a job to
+any runner carrying all of its labels, so a runner labelled
+`[self-hosted, Windows, X64, desktop]` also takes every job aimed at
+`[self-hosted, Windows, X64]` on that repository ([`runner
+inventory`](#nen-runner-inventory) counts it in both pools for that reason).
+A UI job also needs that session **active and unlocked**, with `run.cmd`'s
+console window open: a locked screen or a disconnected session still has a
+non-zero session id, which the preflight probe accepts. When the identity is **the account
 computing the plan** — `USERNAME`, compared without regard to case, and only
 when the plan is computed on Windows — the plan prints a `warning:` naming it
 as your own daily account and records `dailyAccount: true`;
 [`runner script`](#nen-runner-script) then renders it only with
-`--accept-daily-account`. Use a dedicated local account instead.
+`--accept-daily-account`, and makes the same check again itself when it runs
+on Windows, so a plan computed on another host is caught where it is
+rendered. Use a dedicated local account instead.
 
 **Usage**
 
@@ -10741,7 +10756,8 @@ around the one call and cleared in a `finally`.
   up to registration, with the same root lockdown, transcript, `gh` checks,
   package hash and token handling, and four differences. It checks that the
   identity is an **enabled local account** on the host (`Get-LocalUser`;
-  exit 1 otherwise, naming it). It asks **no password**: `config.cmd` runs
+  exit 1 otherwise, naming it), and prints a `WARNING` when it is the account
+  running the script. It asks **no password**: `config.cmd` runs
   without `--runasservice` and without a logon account, so only
   `ACTIONS_RUNNER_INPUT_TOKEN` is set around the call. It grants the identity
   `(OI)(CI)M` on its own `Runner<N>` folder and nothing wider, because
@@ -10752,13 +10768,18 @@ around the one call and cleared in a `finally`.
   folder, trigger at logon of `<COMPUTERNAME>\<account>`, principal that
   account with an **interactive token** (`-LogonType Interactive`, so the
   task runs only in its desktop session and stores no password), run level
-  Limited, no execution time limit, restarted every minute on failure (up to
-  999 times), one instance at a time, `-Force` to replace an earlier
-  registration. **It never installs a service.** If the identity is signed in
-  now (it owns an `explorer.exe`), each task is started and must reach
-  `Running` within 30 s. Otherwise the tasks wait, and the script says the
-  runners come online when that account signs in (or is auto-logged on,
-  which the script never configures). A table of the tasks and the one
+  Limited, priority 4 (normal — Task Scheduler's default 7 is below normal,
+  and every job would inherit it), no execution time limit, restarted every
+  minute (up to 255 times) when the task ends in failure — a sign-out is not
+  a failure — one instance at a time, `-Force` to replace an earlier
+  registration. **It never installs a service**, and a runner folder an
+  earlier service-mode run left installed as the service of the same name is
+  refused (no task beside it; exit 1). If the identity is signed in now (it
+  owns an `explorer.exe` on this computer), each task is started and must
+  reach `Running` within 30 s. Otherwise the tasks wait, and the script says
+  the runners come online when that account signs in (or is auto-logged on,
+  which the script never configures); when it cannot tell, it says so and
+  starts none. A table of the tasks and the one
   summary line follow. Exit 0 when every task is registered, and running
   wherever the identity is signed in, and nothing failed.
 - **Linux** — bash, run by the maintainer as `sudo bash <file>`: it refuses

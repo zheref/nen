@@ -213,7 +213,7 @@ describe("nen runner script", () => {
 
     const refused = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1"]);
     expect(refused.code).toBe(2);
-    expect(refused.err).toMatch(/as \.\\Zhere, the account that computed it -- your own daily account\..*--accept-daily-account/);
+    expect(refused.err).toMatch(/as \.\\Zhere, the account that computed or is rendering it -- your own daily account..*--accept-daily-account/);
     expect(existsSync(join(root, "register.ps1"))).toBe(false);
 
     const accepted = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1", "--accept-daily-account", "--json"]);
@@ -222,6 +222,17 @@ describe("nen runner script", () => {
     const text = readFileSync(join(root, "register.ps1"), "utf8");
     expect(text).toContain("Register-ScheduledTask");
     expect(text).not.toContain("'--runasservice'");
+  });
+
+  it("re-checks the daily account at render time: a plan computed elsewhere is refused on the identity's own Windows session", async () => {
+    const root = consumer({ ...POLICY_BODY, pools: [...POLICY_BODY.pools, DESKTOP_POOL_BODY] });
+    const argv = ["plan", "--target", "zheref/nen", "--pool", "windows-x64-desktop", "--machine-code", "NZ", "--count", "1", "--repo", root, "--service-account", "zhere", "--out", "plan.json"];
+    expect((await run(argv, inventoryCalls(), "win32", {})).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(root, "plan.json"), "utf8"))).toMatchObject({ dailyAccount: false });
+    const refused = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1"], [], "win32", { USERNAME: "ZHERE" });
+    expect(refused.code).toBe(2);
+    expect(refused.err).toMatch(/your own daily account/);
+    expect((await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1"], [], "win32", { USERNAME: "someone" })).code).toBe(0);
   });
 
   it("refuses --accept-daily-account on any other runner verb", async () => {
