@@ -81,7 +81,9 @@ read_listed() {
 
 # Stop and uninstall a stale runner's service from its own directory.
 remove_service() {
-  (cd "$1" && { ./svc.sh stop || true; } && ./svc.sh uninstall)
+  # A stop that fails is a failure: deleting a directory under a live listener
+  # is the one thing this must not do.
+  (cd "$1" && ./svc.sh stop && ./svc.sh uninstall)
 }
 
 if [ "$(id -u)" -eq 0 ]; then
@@ -89,7 +91,7 @@ if [ "$(id -u)" -eq 0 ]; then
   finish 3
 fi
 gh_run() { gh "$@"; }
-service_present() { [ -f "$HOME/Library/LaunchAgents/${SERVICE_PREFIX}$1.plist" ]; }
+service_present() { if [ -f "$HOME/Library/LaunchAgents/${SERVICE_PREFIX}$1.plist" ]; then echo 1; else echo 0; fi; }
 if ! gh --version >/dev/null 2>&1; then
   echo "jusshin: gh is not on PATH. Install the GitHub CLI and re-run."
   finish 5
@@ -120,8 +122,11 @@ for entry in "${RUNNERS[@]}"; do
       failed=$((failed + 1))
       continue
     fi
-    has_service=0
-    if service_present "$name"; then has_service=1; fi
+    if ! has_service="$(service_present "$name")"; then
+      echo "jusshin: the service state of $name could not be read, so $dir cannot be told live from stale -- left untouched."
+      failed=$((failed + 1))
+      continue
+    fi
     reason="$(stale_reason "$name" "$has_service" "$listed")"
     if [ -z "$reason" ]; then
       echo "jusshin: $name is already configured in $dir -- skipped."
@@ -130,11 +135,17 @@ for entry in "${RUNNERS[@]}"; do
     fi
     echo "jusshin: $name in $dir is stale ($reason) -- emptied and re-registered."
     if [ "$has_service" = 1 ] && ! remove_service "$dir"; then
-      echo "jusshin: svc.sh could not uninstall the stale service for $name; $dir left untouched."
+      echo "jusshin: svc.sh could not stop or uninstall the stale service for $name; $dir left untouched."
       failed=$((failed + 1))
       continue
     fi
-    rm -rf "$dir"
+    # Under set -e a bare rm that fails would end the run with no summary: a
+    # directory that cannot be emptied fails this runner alone.
+    if ! rm -rf "$dir"; then
+      echo "jusshin: could not empty $dir for $name."
+      failed=$((failed + 1))
+      continue
+    fi
     # A stale runner GitHub still lists is replaced under its own name.
     if grep -Fxq -- "$name" <<<"$listed"; then replace_names="$replace_names$name "; fi
     pending+=("$entry")

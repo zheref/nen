@@ -405,13 +405,19 @@ describe("the bash scripts -- Linux under sudo, macOS as the user", () => {
   });
 
   it("treats a configured directory with no service, or no registration, as stale on both (#319)", () => {
-    expect(linux.text).toContain('service_present() { [ -n "$(systemctl list-unit-files "${SERVICE_PREFIX}$1.service" --no-legend 2>/dev/null)" ]; }');
+    expect(linux.text).toContain('  state="$(systemctl show -p LoadState --value "${SERVICE_PREFIX}$1.service" 2>/dev/null)" || return 1');
     expect(linux.text).toContain('gh_run() { as_invoker gh "$@"; }');
-    expect(mac.text).toContain('service_present() { [ -f "$HOME/Library/LaunchAgents/${SERVICE_PREFIX}$1.plist" ]; }');
+    expect(mac.text).toContain('service_present() { if [ -f "$HOME/Library/LaunchAgents/${SERVICE_PREFIX}$1.plist" ]; then echo 1; else echo 0; fi; }');
     expect(mac.text).toContain('gh_run() { gh "$@"; }');
     for (const text of [linux.text, mac.text]) {
       expect(text).toContain('reason="$(stale_reason "$name" "$has_service" "$listed")"');
       expect(text).toContain('case "$replace_names" in *" $name "*) replace=(--replace) ;; esac');
+      // Fail closed (PR #334 review): an unreadable service state, a stop that fails, or a
+      // directory rm cannot empty each fails that runner, never deletes under a live one or ends the run.
+      expect(text).toContain('    if ! has_service="$(service_present "$name")"; then');
+      expect(text).toContain('  (cd "$1" && ./svc.sh stop && ./svc.sh uninstall)');
+      expect(text).toMatch(/ {4}if ! rm -rf "\$dir"; then\n[^\n]*could not empty[^\n]*\n {6}failed=\$\(\(failed \+ 1\)\)\n {6}continue/);
+      expect(text).not.toContain("|| true; } && ./svc.sh uninstall");
       // The skip is reached only after the stale check, and an unreadable runner list never skips.
       expect(text).toMatch(/if \[ "\$listed_ok" != 1 \]; then[\s\S]*?failed=\$\(\(failed \+ 1\)\)[\s\S]*?if \[ -z "\$reason" \]; then[\s\S]*?skipped=\$\(\(skipped \+ 1\)\)/);
     }
@@ -440,6 +446,18 @@ describe("the bash scripts -- Linux under sudo, macOS as the user", () => {
       "GitHub no longer lists its registration",
       "<stands>",
     ]);
+  });
+
+  it("reads a Linux unit as present, absent, or unreadable -- never unreadable as absent, where there is a bash (#319)", () => {
+    if (!hasTool("bash", ["-c", "exit 0"])) return;
+    const start = linux.text.indexOf("service_present() {");
+    const fn = linux.text.slice(start, linux.text.indexOf("\n}\n", start) + 3);
+    const probe = (systemctl: string): string =>
+      spawnSync("bash", ["-c", `SERVICE_PREFIX=actions.runner.zheref-nen.\nsystemctl() { ${systemctl}; }\n${fn}\nif out="$(service_present NZ-NNR1)"; then echo "ok:$out"; else echo unreadable; fi`], { encoding: "utf8" }).stdout.trim();
+    expect(probe("echo loaded")).toBe("ok:1");
+    expect(probe("echo not-found")).toBe("ok:0");
+    expect(probe("return 1")).toBe("unreadable");
+    expect(probe("echo -n")).toBe("unreadable");
   });
 
   it("passes --replace to config.sh only for a stale runner GitHub still lists, where there is a bash (#319)", () => {

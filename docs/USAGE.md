@@ -10750,11 +10750,16 @@ around the one call and cleared in a `finally`.
   prints and never approves.
 - **Stale directories on Linux and macOS** follow the Windows rule above: a
   `.runner` naming the planned runner stands only while its service exists
-  (Linux: `systemctl list-unit-files <prefix><name>.service`; macOS:
+  (Linux: `systemctl show -p LoadState --value <prefix><name>.service`, where
+  only `not-found` means absent; macOS:
   `~/Library/LaunchAgents/<prefix><name>.plist`) and GitHub lists the
   registration. A stale one has its service removed with `svc.sh stop` and
   `svc.sh uninstall`, the directory is deleted, and `config.sh` re-registers
-  it (`--replace` when GitHub still lists the name).
+  it (`--replace` when GitHub still lists the name). Each step fails closed,
+  counting that runner failed and moving to the next: a service state
+  `systemctl` cannot read leaves the directory untouched, as does a stop or
+  uninstall that fails, and a directory `rm -rf` cannot empty never ends the
+  run (`set -e`) without its summary line.
 
 **The summary file.** Every script — Windows, Linux and macOS — also writes
 the one summary line, and **nothing else**, to
