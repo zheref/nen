@@ -55,6 +55,9 @@ $AdminsSid = '*S-1-5-32-544'
 $script:Registered = 0
 $script:Skipped = 0
 $script:Failed = 0
+$script:Listed = @()
+$script:ListOk = $false
+$script:ListRead = $false
 $script:Transcribing = $false
 $script:Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $script:LogPath = $null
@@ -123,6 +126,35 @@ function Test-Package {
     param([string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     return ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash -eq $Sha256)
+}
+
+# Why a folder configured as $Name is stale, or $null when it stands: its
+# service is absent, or GitHub no longer lists its registration (#319).
+function Get-StaleReason {
+    param([string]$Name, [bool]$HasService, [string[]]$Listed)
+    $reasons = @()
+    if (-not $HasService) { $reasons += 'its service is absent' }
+    if ($Listed -notcontains $Name) { $reasons += 'GitHub no longer lists its registration' }
+    if ($reasons.Count -eq 0) { return $null }
+    return ($reasons -join ' and ')
+}
+
+# The names GitHub lists for the repository's runners, read once into
+# $script:Listed; $script:ListOk says whether the read succeeded.
+function Read-ListedRunners {
+    if ($script:ListRead) { return }
+    $script:ListRead = $true
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $names = @(& gh api --paginate ('repos/{0}/actions/runners' -f $Target) --jq '.runners[].name' 2> $null)
+        if ($LASTEXITCODE -eq 0) {
+            $script:Listed = [string[]]$names
+            $script:ListOk = $true
+        }
+    } finally {
+        $ErrorActionPreference = $previous
+    }
 }
 
 function Start-Log {
@@ -202,8 +234,35 @@ try {
             $agent = $null
             try { $agent = (Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).agentName } catch { $agent = $null }
             if ($agent -eq $runner.Name) {
-                Write-Host ('jusshin: {0} is already configured in {1} -- skipped.' -f $runner.Name, $runner.Dir)
-                $script:Skipped++
+                # Configured is not standing (#319): a failed service install leaves
+                # .runner behind with no service, and a removed registration leaves
+                # one GitHub no longer lists. Either is stale -- emptied and
+                # re-registered, never counted as skipped.
+                Read-ListedRunners
+                if (-not $script:ListOk) {
+                    Write-Host ('jusshin: could not list the runners of {0}, so {1} in {2} cannot be told live from stale -- left untouched.' -f $Target, $runner.Name, $runner.Dir)
+                    $script:Failed++
+                    continue
+                }
+                $serviceName = $ServicePrefix + $runner.Name
+                $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                $stale = Get-StaleReason $runner.Name ($null -ne $service) $script:Listed
+                if ($null -eq $stale) {
+                    Write-Host ('jusshin: {0} is already configured in {1} -- skipped.' -f $runner.Name, $runner.Dir)
+                    $script:Skipped++
+                    continue
+                }
+                Write-Host ('jusshin: {0} in {1} is stale ({2}) -- emptied and re-registered.' -f $runner.Name, $runner.Dir, $stale)
+                if ($null -ne $service) {
+                    Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+                    $code = Invoke-Quiet 'sc.exe' @('delete', $serviceName)
+                    if ($code -ne 0) {
+                        Write-Host ('jusshin: sc.exe delete {0} failed (exit {1}); {2} left untouched.' -f $serviceName, $code, $runner.Dir)
+                        $script:Failed++
+                        continue
+                    }
+                }
+                $pending += @{ Name = $runner.Name; Dir = $runner.Dir; Replace = ($script:Listed -contains $runner.Name) }
                 continue
             }
             Write-Host ('jusshin: {0} holds a runner configured as {1}, not {2} -- left untouched.' -f $runner.Dir, $agent, $runner.Name)
@@ -251,8 +310,9 @@ try {
         $name = $runner.Name
         $dir = $runner.Dir
         Write-Host ('jusshin: registering {0} in {1}' -f $name, $dir)
-        # A pending folder holds no configured runner (.runner is absent), so
-        # anything in it predates this run's lockdown: it is emptied, never trusted.
+        # A pending folder holds no configured runner (.runner is absent) or a
+        # stale one, so anything in it predates this run's lockdown: it is
+        # emptied, never trusted.
         if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
         New-Item -ItemType Directory -Path $dir | Out-Null
         # Re-hashed immediately before EVERY extraction, not only after the download.
@@ -292,6 +352,8 @@ try {
         # line, never a replay. The transcript is stopped around it all the same.
         $configArgs = @('--unattended', '--url', $RepoUrl, '--name', $name, '--labels', $Labels, '--work', '_work', '--runasservice')
         if ($Account -ne '') { $configArgs += @('--windowslogonaccount', $Identity) }
+        # A stale runner GitHub still lists is replaced under its own name.
+        if ($runner.Replace) { $configArgs += '--replace' }
         $bstr = [IntPtr]::Zero
         $code = 1
         Stop-Log

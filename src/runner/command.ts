@@ -54,7 +54,7 @@ import { SchemaError } from "../schema/errors.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { loadWorkflow, WORKFLOW_FILE, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
 import { VERSION } from "../version.js";
-import { enablePool, renderEnable, VARIABLE_VALUE } from "./enable.js";
+import { CertificationRefusal, enablePool, renderEnable, VARIABLE_VALUE, type EnableReport } from "./enable.js";
 import { realSleep, RunnerFailure, type Sleep } from "./github.js";
 import { assembleInventory, fetchDownloads, fetchRunners, renderInventory } from "./inventory.js";
 import { computePlan, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
@@ -148,9 +148,12 @@ preflight  gh workflow run <workflow> on --ref (default: the default branch),
            the ref is exit 2: merge it first.
 enable     Re-read --after-run and require it to be a completed, successful run
            of the pool's own preflight workflow whose jobs asked for the pool's
-           labels; then gh variable set <enableVariable> --body <--value,
-           default online> and read it back. A pool with no enableVariable is
-           exit 2: nothing to enable.
+           labels, dispatched (workflow_dispatch) on the default branch, with
+           the workflow's blob at its head_sha equal to the default branch's;
+           then gh variable set <enableVariable> --body <--value, default
+           online> and read it back. A run that fails any check is exit 1, and
+           --json names each check that refused it (event, branch, blob, ...).
+           A pool with no enableVariable is exit 2: nothing to enable.
 
 Exit codes: 0 success; 1 the verb's own failure (GitHub refused or answered
 something unreadable, a planned name taken, a leftover placeholder, a run that
@@ -425,7 +428,17 @@ function enable(context: CommandContext): number {
   if (!/^[1-9][0-9]*$/.test(runRaw)) throw new VerbUsageError(`--after-run takes a workflow run id, got '${runRaw}'.`);
   const value = context.args.values["value"] ?? "online";
   if (!VARIABLE_VALUE.test(value)) throw new VerbUsageError(`--value '${value}' is not a value this verb sets: 1 to 32 of a-z, 0-9 and '-'.`);
-  const report = enablePool(context.seams, target, { ...pool, enableVariable: pool.enableVariable }, Number.parseInt(runRaw, 10), value, context.args.booleans.has("dry-run"));
+  const runId = Number.parseInt(runRaw, 10);
+  let report: EnableReport;
+  try {
+    report = enablePool(context.seams, target, { ...pool, enableVariable: pool.enableVariable }, runId, value, context.args.booleans.has("dry-run"));
+  } catch (error) {
+    // --json names WHICH checks refused the run (#319); the message still goes to stderr at exit 1.
+    if (error instanceof CertificationRefusal && context.json) {
+      emit(context.io, true, { target: target.slug, pool: pool.id, runId, refused: true, problems: error.problems }, []);
+    }
+    throw error;
+  }
   emit(context.io, context.json, report, renderEnable(report));
   return 0;
 }

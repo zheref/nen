@@ -740,7 +740,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled; never exits 0 on a partial pass | github (gh api GET runners) | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
-| [`runner`](#family-runner) | [`nen runner enable`](#nen-runner-enable) | set a pool's enable variable only after re-reading a completed, successful run of its own preflight whose jobs asked for its labels; read back, idempotent | nen/workflow.json (runners), github (gh api GET runs/jobs, gh variable get; gh variable set unless --dry-run) | yes |
+| [`runner`](#family-runner) | [`nen runner enable`](#nen-runner-enable) | set a pool's enable variable only after re-reading a completed, successful run of its own preflight whose jobs asked for its labels, dispatched on the default branch with the default branch's own workflow blob; read back, idempotent | nen/workflow.json (runners), github (gh api GET runs/jobs/contents, gh repo view, gh variable get; gh variable set unless --dry-run) | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
@@ -10698,9 +10698,20 @@ around the one call and cleared in a `finally`.
   names that rule. It downloads the package once into the admin-only
   `_jusshin\pkg` unless a copy with the planned SHA-256 is already there,
   and deletes it on a mismatch (exit **6**). Per runner: skip when
-  `<installDir>\.runner` already names it; otherwise empty the folder (it
-  holds no configured runner, so nothing in it predates the lockdown
-  worth trusting), **re-hash the package immediately before `Expand-Archive`**
+  `<installDir>\.runner` already names it **and** its service
+  `actions.runner.<owner>-<repo>.<name>` exists **and** GitHub still lists
+  the registration (`gh api --paginate repos/<owner>/<repo>/actions/runners`,
+  read once). A folder that names it but fails either check is **stale**
+  (#319 — a failed service install leaves `.runner` with no service; a
+  removed registration leaves one GitHub no longer lists): the line
+  `<name> in <dir> is stale (<reason>) -- emptied and re-registered.` is
+  printed, a leftover service is stopped and `sc.exe delete`d, and the runner
+  is registered like a fresh one — with `--replace` when GitHub still lists
+  the name — so the summary counts it **registered**, never skipped. A
+  runner list `gh` cannot read leaves such a folder untouched and counts it
+  failed: live and stale cannot be told apart. Otherwise empty the folder (it
+  holds no configured runner, or a stale one, so nothing in it predates the
+  lockdown worth trusting), **re-hash the package immediately before `Expand-Archive`**
   (a mismatch deletes it, exit 6), mint a registration token **now** with
   `gh api -X POST repos/<owner>/<repo>/actions/runners/registration-token
   --jq .token`, and run `config.cmd --unattended --url ... --name <name>
@@ -10737,6 +10748,13 @@ around the one call and cleared in a `finally`.
   LaunchAgent with no PID is held pending **Background Task Management**
   approval under System Settings → General → Login Items, which the script
   prints and never approves.
+- **Stale directories on Linux and macOS** follow the Windows rule above: a
+  `.runner` naming the planned runner stands only while its service exists
+  (Linux: `systemctl list-unit-files <prefix><name>.service`; macOS:
+  `~/Library/LaunchAgents/<prefix><name>.plist`) and GitHub lists the
+  registration. A stale one has its service removed with `svc.sh stop` and
+  `svc.sh uninstall`, the directory is deleted, and `config.sh` re-registers
+  it (`--replace` when GitHub still lists the name).
 
 **The summary file.** Every script — Windows, Linux and macOS — also writes
 the one summary line, and **nothing else**, to
@@ -10800,7 +10818,7 @@ nen runner script --plan plan.json --out 'C:\Users\maintainer\AppData\Local\nen\
 sha256 28e57708069963439e7f51ec799140ef96c7873f76732a193c7e3779264ebdb0; the run leaves its one summary line in C:\GithubRunners\nen-runners\_jusshin\register-*.summary
 launch (elevated): powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\Users\maintainer\AppData\Local\nen\jusshin\register.ps1'"
 ```
-(run for real on the plan above, the profile's user name replaced with `maintainer`; the rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
+(run for real on the plan above with v0.18.3, the profile's user name replaced with `maintainer`; #319's stale-slot check changed the script's bytes, so a later build prints another `sha256`. The rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
 
 ### `nen runner verify`
 
@@ -10953,12 +10971,21 @@ dry-run: runner-preflight-windows-x64.yml on zheref/nen@main -- would run: gh wo
 The fail-closed switch. It reads the pool's `enableVariable` (a pool that
 declares none is exit 2 — "not variable-gated; nothing to enable"), re-reads
 run `--after-run` from GitHub and **requires** all of: a run of the pool's own
-`preflightWorkflow` (the run's `path`), `completed`, concluded `success`, and
-every job in it asked for this pool's labels and concluded `success` — so a
-green run of another workflow, or of the same file rendered for another pool,
-is refused by name. Only then `gh variable set <NAME> --body <value> --repo
-<target>`, and the variable is read back; a read that disagrees is exit 1.
-Idempotent: a variable already holding the value is not written.
+`preflightWorkflow` (the run's `path`), `completed`, concluded `success`,
+every job in it asked for this pool's labels and concluded `success`, and
+(#319) **the default branch's own proof**: the run's `event` is
+`workflow_dispatch` (what [`runner preflight`](#nen-runner-preflight)
+starts), its `head_branch` is the target's default branch, and the
+workflow's blob at the run's `head_sha` is the blob the default branch
+carries now (`gh api --method GET repos/<target>/contents/<path>?ref=...`,
+read for its `sha`). So a green run of another workflow, of the same file
+rendered for another pool, of a `push` on an unmerged branch, or of an
+edited copy of the preflight (steps removed, `TOOLS` emptied, `runs-on`
+kept) is refused by name — and a run made before the default branch's
+preflight last changed no longer certifies: dispatch it again. Only then
+`gh variable set <NAME> --body <value> --repo <target>`, and the variable is
+read back; a read that disagrees is exit 1. Idempotent: a variable already
+holding the value is not written.
 
 **Usage**
 
@@ -10983,6 +11010,11 @@ previous value and run. `--json` top-level keys: `target`, `pool`,
 `dryRun`. Exit 0; 1 when the run is not a green preflight of this pool (each
 reason named, **nothing set**), GitHub refused, or the read-back disagrees; 2
 on usage, an ungated pool or a missing `runners` block; 5 without `gh`.
+**A refusal under `--json`** prints, on stdout, `{ target, pool, runId,
+refused: true, problems[] }`, each problem `{ check, detail }` with `check`
+one of `workflow`, `status`, `conclusion`, `jobs`, `labels`,
+`job-conclusion`, `event`, `branch`, `blob` — the same reasons the stderr
+line names, in the same order, still at exit 1.
 
 **Example**
 
@@ -10990,9 +11022,29 @@ on usage, an ungated pool or a missing `runners` block; 5 without `gh`.
 nen runner enable --target zheref/nen --repo . --pool windows-x64 --after-run 36740464215 --dry-run
 ```
 ```text
-nen runner enable: run 36740464215 on zheref/nen is not a green preflight of pool windows-x64: it is a run of '.github/workflows/ci.yml', not .github/workflows/runner-preflight-windows-x64.yml; job 'compile' did not ask for pool windows-x64's labels (missing Windows, X64); ... Nothing was set -- run 'nen runner preflight' and pass the run id it reports.
+nen runner enable: run 36740464215 on zheref/nen is not a green preflight of pool windows-x64: it is a run of '.github/workflows/ci.yml', not .github/workflows/runner-preflight-windows-x64.yml; job 'compile' did not ask for pool windows-x64's labels (missing Windows, X64); ... Nothing was set -- run 'nen runner preflight' (it dispatches on the default branch) and pass the run id it reports.
 ```
 (run for real with a `ci.yml` run id: exit 1, nothing set; the job list is abridged here)
+
+```bash
+nen runner enable --target zheref/nen --repo . --pool windows-x64 --after-run 36791237018 --dry-run --json
+```
+```text
+{
+  "target": "zheref/nen",
+  "pool": "windows-x64",
+  "runId": 36791237018,
+  "refused": true,
+  "problems": [
+    { "check": "event", "detail": "it was triggered by 'push', not workflow_dispatch" },
+    { "check": "branch", "detail": "it ran on 'fable/kurapika/runner-preflight-windows-x64', not the default branch 'main'" },
+    { "check": "blob", "detail": ".github/workflows/runner-preflight-windows-x64.yml at 5903e47a5a6a is blob d9f6a577051f, not the default branch's blob e2375dfe87a2" }
+  ]
+}
+```
+(run for real on the green `push` run that certified this repository's own
+pool before #319: exit 1, nothing set, the stderr line omitted; the JSON is
+re-indented here)
 
 ## Developer workflows
 

@@ -211,6 +211,41 @@ describe("the Windows script -- PowerShell 5.1, and the secrets never leave the 
     expect(windows.text).toContain("if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }");
   });
 
+  it("treats a configured folder with no service, or no registration, as stale: emptied, re-registered, never skipped (#319)", () => {
+    expect(windows.text).toContain("$stale = Get-StaleReason $runner.Name ($null -ne $service) $script:Listed");
+    expect(windows.text).toContain("$pending += @{ Name = $runner.Name; Dir = $runner.Dir; Replace = ($script:Listed -contains $runner.Name) }");
+    expect(windows.text).toContain("$code = Invoke-Quiet 'sc.exe' @('delete', $serviceName)");
+    expect(windows.text).toContain("if ($runner.Replace) { $configArgs += '--replace' }");
+    // The skip is reached only after the stale check, and an unreadable runner list never skips.
+    expect(windows.text).toMatch(/if \(-not \$script:ListOk\) \{[\s\S]*?\$script:Failed\+\+[\s\S]*?if \(\$null -eq \$stale\) \{[\s\S]*?\$script:Skipped\+\+/);
+    if (!hasTool("powershell", ["-NoProfile", "-Command", "exit 0"])) return;
+    const start = windows.text.indexOf("function Get-StaleReason {");
+    const fn = windows.text.slice(start, windows.text.indexOf("\n}\n", start) + 3);
+    const dir = mkdtempSync(join(tmpdir(), "nen-runner-stale-"));
+    const path = join(dir, "stale.ps1");
+    writeFileSync(
+      path,
+      [
+        fn,
+        "$cases = @(",
+        "    (Get-StaleReason 'NZ-NNR1' $true @('NZ-NNR1', 'NZ-NNR2')),",
+        "    (Get-StaleReason 'NZ-NNR1' $false @('nz-nnr1')),",
+        "    (Get-StaleReason 'NZ-NNR1' $true @('NZ-NNR2')),",
+        "    (Get-StaleReason 'NZ-NNR1' $false @())",
+        ")",
+        "foreach ($case in $cases) { if ($null -eq $case) { Write-Output '<stands>' } else { Write-Output $case } }",
+      ].join("\n"),
+    );
+    const result = spawnSync("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split(/\r?\n/)).toEqual([
+      "<stands>",
+      "its service is absent",
+      "GitHub no longer lists its registration",
+      "its service is absent and GitHub no longer lists its registration",
+    ]);
+  });
+
   it("grants the service account read-and-execute on the root and project folder only, never inherited", () => {
     expect(windows.text).toContain("foreach ($dir in @($Root, $ProjectDir))");
     expect(windows.text).toContain("('{0}:(RX)' -f $Account)");
@@ -296,7 +331,7 @@ describe("the bash scripts -- Linux under sudo, macOS as the user", () => {
     expect(linux.text).toContain("SERVICE_USER='runner'");
     // The token reaches config.sh through the service user's environment, fed by a builtin over stdin (#312).
     expect(linux.text).toContain(
-      `printf '%s\\n' "$token" | sudo -u "$SERVICE_USER" bash -c 'IFS= read -r ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_TOKEN; exec ./config.sh --unattended --url "$1" --name "$2" --labels "$3" --work _work' jusshin "$REPO_URL" "$name" "$LABELS"`,
+      `printf '%s\\n' "$token" | sudo -u "$SERVICE_USER" bash -c 'IFS= read -r ACTIONS_RUNNER_INPUT_TOKEN; export ACTIONS_RUNNER_INPUT_TOKEN; exec ./config.sh --unattended --url "$1" --name "$2" --labels "$3" --work _work "\${@:4}"' jusshin "$REPO_URL" "$name" "$LABELS" \${replace[@]+"\${replace[@]}"}`,
     );
     expect(linux.text).toContain('token="$(as_invoker gh api -X POST "repos/$TARGET/actions/runners/registration-token" --jq .token 2>/dev/null)"');
     expect(linux.text).toContain('./svc.sh install "$SERVICE_USER" && ./svc.sh start && ./svc.sh status');
@@ -363,6 +398,51 @@ describe("the bash scripts -- Linux under sudo, macOS as the user", () => {
     const result = spawnSync("bash", ["-c", `${finish}\nregistered=2; skipped=1; failed=0; summary_file=${JSON.stringify(file)}; finish 0`], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(file, "utf8")).toBe("jusshin: 2 registered, 1 skipped, 0 failed\n");
+  });
+
+  it("treats a configured directory with no service, or no registration, as stale on both (#319)", () => {
+    expect(linux.text).toContain('service_present() { [ -n "$(systemctl list-unit-files "${SERVICE_PREFIX}$1.service" --no-legend 2>/dev/null)" ]; }');
+    expect(linux.text).toContain('gh_run() { as_invoker gh "$@"; }');
+    expect(mac.text).toContain('service_present() { [ -f "$HOME/Library/LaunchAgents/${SERVICE_PREFIX}$1.plist" ]; }');
+    expect(mac.text).toContain('gh_run() { gh "$@"; }');
+    for (const text of [linux.text, mac.text]) {
+      expect(text).toContain('reason="$(stale_reason "$name" "$has_service" "$listed")"');
+      expect(text).toContain('case "$replace_names" in *" $name "*) replace=(--replace) ;; esac');
+      // The skip is reached only after the stale check, and an unreadable runner list never skips.
+      expect(text).toMatch(/if \[ "\$listed_ok" != 1 \]; then[\s\S]*?failed=\$\(\(failed \+ 1\)\)[\s\S]*?if \[ -z "\$reason" \]; then[\s\S]*?skipped=\$\(\(skipped \+ 1\)\)/);
+    }
+    if (!hasTool("bash", ["-c", "exit 0"])) return;
+    const start = linux.text.indexOf("stale_reason() {");
+    const fn = linux.text.slice(start, linux.text.indexOf("\n}\n", start) + 3);
+    const probe = [
+      fn,
+      'listed="$(printf "NZ-NNR1\\nNZ-NNR2")"',
+      'for args in "NZ-NNR1 1" "NZ-NNR1 0" "NZ-NNR3 1" "NZ-NNR3 0"; do set -- $args; r="$(stale_reason "$1" "$2" "$listed")"; echo "${r:-<stands>}"; done',
+      'echo "$(stale_reason NZ-NNR1 1 "")"',
+    ].join("\n");
+    const result = spawnSync("bash", ["-c", probe], { encoding: "utf8" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n")).toEqual([
+      "<stands>",
+      "its service is absent",
+      "GitHub no longer lists its registration",
+      "its service is absent and GitHub no longer lists its registration",
+      "GitHub no longer lists its registration",
+    ]);
+  });
+
+  it("passes --replace to config.sh only for a stale runner GitHub still lists, where there is a bash (#319)", () => {
+    if (!hasTool("bash", ["-c", "exit 0"])) return;
+    const dir = mkdtempSync(join(tmpdir(), "nen-runner-replace-"));
+    writeFileSync(join(dir, "config.sh"), '#!/usr/bin/env bash\nprintf "argv=%s\\n" "$*"\n');
+    const lines = mac.text.split("\n");
+    const at = lines.findIndex((candidate) => candidate.includes('ACTIONS_RUNNER_INPUT_TOKEN="$token" ./config.sh'));
+    const call = (lines[at] ?? "").replace(/^ {2}if ! /, "").replace(/; then$/, "");
+    const pick = [lines[at - 2], lines[at - 1]].join("\n");
+    const script = (replaceNames: string): string =>
+      `set -u; dir=${JSON.stringify(dir.replace(/\\/g, "/"))}; token=t; REPO_URL=u; name=NZ-NNR1; LABELS=l; replace_names=${JSON.stringify(replaceNames)}; chmod +x "$dir/config.sh"\n${pick}\n${call}`;
+    expect(spawnSync("bash", ["-c", script(" NZ-NNR1 ")], { encoding: "utf8" }).stdout.trim()).toBe("argv=--unattended --url u --name NZ-NNR1 --labels l --work _work --replace");
+    expect(spawnSync("bash", ["-c", script(" ")], { encoding: "utf8" }).stdout.trim()).toBe("argv=--unattended --url u --name NZ-NNR1 --labels l --work _work");
   });
 
   it("parses under bash -n, where there is a bash", () => {

@@ -85,6 +85,11 @@ export function jobsArgv(target: Target, runId: number): readonly string[] {
   return ["api", "--method", "GET", `repos/${target.slug}/actions/runs/${runId}/jobs?per_page=100`];
 }
 
+/** A file's contents entry at one ref -- read for its blob `sha`, never its body. */
+export function contentsArgv(target: Target, path: string, ref: string): readonly string[] {
+  return ["api", "--method", "GET", `repos/${target.slug}/contents/${path}?ref=${ref}`];
+}
+
 export function defaultBranch(seams: Seams, target: Target): string {
   const answer = asRecord(ghJson<unknown>(seams, defaultBranchArgv(target), target, "reading the default branch"));
   const name = asRecord(answer?.["defaultBranchRef"])?.["name"];
@@ -123,7 +128,9 @@ export interface RunState {
   readonly status: string;
   readonly conclusion: string | null;
   readonly path: string;
+  readonly event: string;
   readonly headBranch: string;
+  readonly headSha: string;
   readonly jobs: readonly PreflightJob[];
 }
 
@@ -141,7 +148,9 @@ export function readRun(seams: Seams, target: Target, runId: number): RunState {
     status: text(run, "status") ?? "",
     conclusion: text(run, "conclusion"),
     path: text(run, "path") ?? "",
+    event: text(run, "event") ?? "",
     headBranch: text(run, "head_branch") ?? "",
+    headSha: text(run, "head_sha") ?? "",
     jobs: jobsRaw.map((entry): PreflightJob => {
       const job = asRecord(entry);
       return {
