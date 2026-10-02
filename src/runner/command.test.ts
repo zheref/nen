@@ -313,4 +313,34 @@ describe("nen runner preflight and enable -- the two writes", () => {
     expect((await run(["enable", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--after-run", "latest"])).code).toBe(2);
     expect((await run(["enable", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--after-run", "901", "--value", "ONLINE!"])).code).toBe(2);
   });
+
+  // #319's second reproduction (zheref/KroWindows run 36958789239): a green
+  // `push` run of the pool's own preflight, on a branch that was never merged,
+  // certified the pool under --dry-run. The workflow file is byte-identical to
+  // the default branch's here, so only the event and the branch can refuse it.
+  it("refuses a green push run on an unmerged branch, naming the event and the branch, and sets nothing (#319)", async () => {
+    const file = ".github/workflows/runner-preflight-windows-x64.yml";
+    const result = await run(["enable", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64", "--after-run", "901", "--dry-run", "--json"], [
+      {
+        match: "gh api --method GET repos/zheref/nen/actions/runs/901",
+        result: { stdout: JSON.stringify({ status: "completed", conclusion: "success", path: file, event: "push", head_branch: "codex/kurapika/runner-preflight", head_sha: "b".repeat(40), html_url: "u" }) },
+      },
+      {
+        match: "gh api --method GET repos/zheref/nen/actions/runs/901/jobs?per_page=100",
+        result: { stdout: JSON.stringify({ jobs: [{ name: "preflight", status: "completed", conclusion: "success", runner_name: "NZ-NNR4", labels: ["self-hosted", "Windows", "X64"] }] }) },
+      },
+      { match: `gh ${defaultBranchArgv(TARGET).join(" ")}`, result: { stdout: '{"defaultBranchRef":{"name":"main"}}' } },
+      { match: `gh api --method GET repos/zheref/nen/contents/${file}?ref=${"b".repeat(40)}`, result: { stdout: '{"sha":"1111"}' } },
+      { match: `gh api --method GET repos/zheref/nen/contents/${file}?ref=main`, result: { stdout: '{"sha":"1111"}' } },
+      { match: "gh variable get NEN_WINDOWS_RUNNER --repo zheref/nen", result: { code: 1, stderr: "variable NEN_WINDOWS_RUNNER was not found" } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/run 901 on zheref\/nen is not a green preflight of pool windows-x64/);
+    expect(result.err).toMatch(/it was triggered by 'push', not workflow_dispatch/);
+    expect(result.err).toMatch(/it ran on 'codex\/kurapika\/runner-preflight', not the default branch 'main'/);
+    const report = JSON.parse(result.out);
+    expect(report).toMatchObject({ target: "zheref/nen", pool: "windows-x64", runId: 901, refused: true });
+    expect(report.problems.map((problem: { check: string }) => problem.check)).toEqual(["event", "branch"]);
+    expect(result.seams.calls.some((call) => call.args[0] === "variable" && call.args[1] === "set")).toBe(false);
+  });
 });
