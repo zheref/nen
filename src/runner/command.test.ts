@@ -12,7 +12,7 @@ import { findCommand } from "../cli/registry.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { isUnder, makeRunnerCommand, RUNNER_SUBCOMMANDS, RUNNER_SUBCOMMAND_FLAGS } from "./command.js";
 import { defaultBranchArgv } from "./preflight.js";
-import { FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET } from "./testkit.js";
+import { FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET, windowsServicesCall } from "./testkit.js";
 import { runnersArgv } from "./inventory.js";
 
 const COMMAND = makeRunnerCommand({ sleep: () => {}, version: "0.0.0-test" });
@@ -65,7 +65,7 @@ describe("nen runner -- the family", () => {
 describe("nen runner inventory", () => {
   it("groups the recorded runners by the declared pools under --json", async () => {
     const root = consumer();
-    const result = await run(["inventory", "--target", "zheref/nen", "--repo", root, "--json"], inventoryCalls());
+    const result = await run(["inventory", "--target", "zheref/nen", "--repo", root, "--json"], [...inventoryCalls(), windowsServicesCall()]);
     expect(result.code).toBe(0);
     const report = JSON.parse(result.out);
     expect(Object.keys(report)).toEqual(["target", "runners", "downloads", "pools", "unpooled"]);
@@ -113,7 +113,7 @@ describe("nen runner plan", () => {
 
   it("derives the consumer code from repos.json, writes --out, and prints the plan", async () => {
     const root = consumer();
-    const result = await run([...flags, "--repo", root, "--out", "plan.json", "--json"], inventoryCalls());
+    const result = await run([...flags, "--repo", root, "--out", "plan.json", "--json"], [...inventoryCalls(), windowsServicesCall()]);
     expect(result.code, result.err).toBe(0);
     const plan = JSON.parse(result.out);
     expect(plan.contract).toBe("nen.runner.plan/v0.1");
@@ -145,10 +145,30 @@ describe("nen runner plan", () => {
       [[...flags, "--repo", root].map((token) => (token === "windows-x64" ? "gpu-x64" : token)), /no pool 'gpu-x64'.*windows-x64, macos-arm64, linux-x64/],
       [[...flags, "--repo", consumer(null)], /declares no 'runners' block/],
     ] as const) {
-      const result = await run(argv, inventoryCalls());
+      const result = await run(argv, [...inventoryCalls(), windowsServicesCall()]);
       expect(result.code, result.err).toBe(2);
       expect(result.err).toMatch(pattern);
     }
+  });
+
+  it("warns on stderr, at exit 0, when the account already serves a repository of different visibility -- the plan unchanged (#330)", async () => {
+    const root = consumer();
+    const result = await run([...flags, "--repo", root, "--out", "plan.json", "--json"], [
+      ...inventoryCalls(),
+      windowsServicesCall([{ Name: "actions.runner.zheref-KroWindows.NZ-KWIR1", StartName: ".\\lordzheref" }]),
+      { match: "gh api --method GET repos/zheref/nen", result: { stdout: '{"full_name":"zheref/nen","visibility":"public"}' } },
+      { match: "gh api --method GET repos/zheref/KroWindows", result: { stdout: '{"full_name":"zheref/KroWindows","visibility":"private"}' } },
+    ]);
+    expect(result.code).toBe(0);
+    const plan = JSON.parse(result.out);
+    expect(plan.identity).toBe(".\\lordzheref");
+    expect(Object.keys(plan)).not.toContain("warnings");
+    expect(JSON.parse(readFileSync(join(root, "plan.json"), "utf8"))).toEqual(plan);
+    expect(result.err.split("\n")).toEqual([
+      expect.stringMatching(/^nen runner plan: warning: \.\\lordzheref already runs 1 runner service\(s\) on this host for a repository whose visibility differs from zheref\/nen's \(public\)/),
+      "nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR1 -- zheref/KroWindows, private",
+      expect.stringMatching(/^nen runner plan: recommended: a local account for zheref\/nen alone, e.g\. --service-account runner-nen /),
+    ]);
   });
 
   it("asks for --consumer-code when the registry does not name the target", async () => {
@@ -162,7 +182,7 @@ describe("nen runner script", () => {
   async function planned(root: string, account: string | null = "lordzheref"): Promise<void> {
     const argv = ["plan", "--target", "zheref/nen", "--pool", "windows-x64", "--machine-code", "NZ", "--count", "3", "--repo", root, "--out", "plan.json"];
     if (account !== null) argv.push("--service-account", account);
-    expect((await run(argv, inventoryCalls())).code).toBe(0);
+    expect((await run(argv, [...inventoryCalls(), windowsServicesCall()])).code).toBe(0);
   }
 
   it("writes the Windows script and names the elevated launch line", async () => {
