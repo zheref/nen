@@ -87,7 +87,7 @@ export function jobsArgv(target: Target, runId: number): readonly string[] {
 
 /** A file's contents entry at one ref -- read for its blob `sha`, never its body. */
 export function contentsArgv(target: Target, path: string, ref: string): readonly string[] {
-  return ["api", "--method", "GET", `repos/${target.slug}/contents/${path}?ref=${ref}`];
+  return ["api", "--method", "GET", `repos/${target.slug}/contents/${path}?ref=${encodeURIComponent(ref)}`];
 }
 
 export function defaultBranch(seams: Seams, target: Target): string {

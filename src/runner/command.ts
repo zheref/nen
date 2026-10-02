@@ -145,7 +145,8 @@ preflight  gh workflow run <workflow> on --ref (default: the default branch),
            find the run it created, and wait up to --wait (default 600) for
            its conclusion. Exit 0 only on success; a job still queued at the
            deadline is named: no free runner picked it up. A workflow not on
-           the ref is exit 2: merge it first.
+           the ref is exit 2: merge it first. Only a run on the default
+           branch can certify a pool; another --ref is a rehearsal.
 enable     Re-read --after-run and require it to be a completed, successful run
            of the pool's own preflight workflow whose jobs asked for the pool's
            labels, dispatched (workflow_dispatch) on the default branch, with

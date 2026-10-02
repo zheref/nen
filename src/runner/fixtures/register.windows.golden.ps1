@@ -134,7 +134,8 @@ function Get-StaleReason {
     param([string]$Name, [bool]$HasService, [string[]]$Listed)
     $reasons = @()
     if (-not $HasService) { $reasons += 'its service is absent' }
-    if ($Listed -notcontains $Name) { $reasons += 'GitHub no longer lists its registration' }
+    # Case-sensitive, as the bash scripts' grep -Fx is: one listing, one verdict on every OS.
+    if ($Listed -cnotcontains $Name) { $reasons += 'GitHub no longer lists its registration' }
     if ($reasons.Count -eq 0) { return $null }
     return ($reasons -join ' and ')
 }
@@ -240,7 +241,7 @@ try {
                 # re-registered, never counted as skipped.
                 Read-ListedRunners
                 if (-not $script:ListOk) {
-                    Write-Host ('jusshin: could not list the runners of {0}, so {1} in {2} cannot be told live from stale -- left untouched.' -f $Target, $runner.Name, $runner.Dir)
+                    Write-Host ('jusshin: could not list the runners of {0}, so {1} in {2} cannot be told live from stale -- left untouched (the gh user must be an admin of {0}).' -f $Target, $runner.Name, $runner.Dir)
                     $script:Failed++
                     continue
                 }
@@ -254,7 +255,16 @@ try {
                 }
                 Write-Host ('jusshin: {0} in {1} is stale ({2}) -- emptied and re-registered.' -f $runner.Name, $runner.Dir, $stale)
                 if ($null -ne $service) {
+                    # sc.exe delete only MARKS a running service: it must be stopped first,
+                    # or its listener keeps the folder's files open and config.cmd meets
+                    # a service still marked for deletion.
                     Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+                    $state = (Get-Service -Name $serviceName -ErrorAction SilentlyContinue).Status
+                    if ($null -ne $state -and $state -ne 'Stopped') {
+                        Write-Host ('jusshin: {0} did not stop (it is {1}); {2} left untouched.' -f $serviceName, $state, $runner.Dir)
+                        $script:Failed++
+                        continue
+                    }
                     $code = Invoke-Quiet 'sc.exe' @('delete', $serviceName)
                     if ($code -ne 0) {
                         Write-Host ('jusshin: sc.exe delete {0} failed (exit {1}); {2} left untouched.' -f $serviceName, $code, $runner.Dir)
@@ -262,7 +272,7 @@ try {
                         continue
                     }
                 }
-                $pending += @{ Name = $runner.Name; Dir = $runner.Dir; Replace = ($script:Listed -contains $runner.Name) }
+                $pending += @{ Name = $runner.Name; Dir = $runner.Dir; Replace = ($script:Listed -ccontains $runner.Name) }
                 continue
             }
             Write-Host ('jusshin: {0} holds a runner configured as {1}, not {2} -- left untouched.' -f $runner.Dir, $agent, $runner.Name)
@@ -313,7 +323,16 @@ try {
         # A pending folder holds no configured runner (.runner is absent) or a
         # stale one, so anything in it predates this run's lockdown: it is
         # emptied, never trusted.
-        if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+        if (Test-Path -LiteralPath $dir) {
+            # One folder a process still holds fails that runner alone, never the run.
+            try {
+                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop
+            } catch {
+                Write-Host ('jusshin: could not empty {0} for {1}: {2}' -f $dir, $name, $_.Exception.Message)
+                $script:Failed++
+                continue
+            }
+        }
         New-Item -ItemType Directory -Path $dir | Out-Null
         # Re-hashed immediately before EVERY extraction, not only after the download.
         if (-not (Test-Package $zip)) {

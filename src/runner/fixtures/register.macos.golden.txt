@@ -62,7 +62,9 @@ configured_as() {
 stale_reason() {
   local reasons=""
   if [ "$2" != 1 ]; then reasons="its service is absent"; fi
-  if ! printf '%s\n' "$3" | grep -Fxq -- "$1"; then
+  # A here-string, never a pipe: under pipefail, grep -q exiting on an early
+  # match would SIGPIPE a long printf and read a listed name as unlisted.
+  if ! grep -Fxq -- "$1" <<<"$3"; then
     reasons="${reasons:+$reasons and }GitHub no longer lists its registration"
   fi
   printf '%s' "$reasons"
@@ -114,7 +116,7 @@ for entry in "${RUNNERS[@]}"; do
     # longer lists. Either is stale -- emptied and re-registered, never skipped.
     read_listed
     if [ "$listed_ok" != 1 ]; then
-      echo "jusshin: could not list the runners of $TARGET, so $name in $dir cannot be told live from stale -- left untouched."
+      echo "jusshin: could not list the runners of $TARGET, so $name in $dir cannot be told live from stale -- left untouched (the gh user must be an admin of $TARGET)."
       failed=$((failed + 1))
       continue
     fi
@@ -134,7 +136,7 @@ for entry in "${RUNNERS[@]}"; do
     fi
     rm -rf "$dir"
     # A stale runner GitHub still lists is replaced under its own name.
-    if printf '%s\n' "$listed" | grep -Fxq -- "$name"; then replace_names="$replace_names$name "; fi
+    if grep -Fxq -- "$name" <<<"$listed"; then replace_names="$replace_names$name "; fi
     pending+=("$entry")
     continue
   fi

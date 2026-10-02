@@ -10940,7 +10940,7 @@ nen runner preflight --target <owner/name> --workflow <basename> [--ref <branch>
 |---|---|---|---|
 | `--target <owner/name>` | **yes** | the repository | this verb writes (a dispatch), so it never falls back to a remote |
 | `--workflow <basename>` | yes | the preflight file | a basename ending `.yml` |
-| `--ref <branch>` | no | the branch to run on | default: the default branch |
+| `--ref <branch>` | no | the branch to run on | default: the default branch. Only a run on the default branch can certify a pool: [`runner enable`](#nen-runner-enable) refuses any other ref's run (#319), so another `--ref` is a rehearsal, never the proof |
 | `--wait <seconds>` | no | how long to wait for the conclusion | default `600` |
 | `--dry-run` | no | resolve the ref and print the dispatch, send nothing | **still reads GitHub** for the default branch |
 | `--json` | no | the report | — |

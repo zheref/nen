@@ -208,13 +208,17 @@ describe("the Windows script -- PowerShell 5.1, and the secrets never leave the 
   });
 
   it("empties a pending runner folder before extracting into it: nothing that predates the lockdown is trusted", () => {
-    expect(windows.text).toContain("if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }");
+    expect(windows.text).toContain("                Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction Stop");
+    // A folder still held open fails that runner alone, never the whole run (#319 review).
+    expect(windows.text).toMatch(/Remove-Item -LiteralPath \$dir -Recurse -Force -ErrorAction Stop\n {12}\} catch \{\n[^\n]*could not empty[^\n]*\n {16}\$script:Failed\+\+\n {16}continue/);
   });
 
   it("treats a configured folder with no service, or no registration, as stale: emptied, re-registered, never skipped (#319)", () => {
     expect(windows.text).toContain("$stale = Get-StaleReason $runner.Name ($null -ne $service) $script:Listed");
-    expect(windows.text).toContain("$pending += @{ Name = $runner.Name; Dir = $runner.Dir; Replace = ($script:Listed -contains $runner.Name) }");
+    expect(windows.text).toContain("$pending += @{ Name = $runner.Name; Dir = $runner.Dir; Replace = ($script:Listed -ccontains $runner.Name) }");
     expect(windows.text).toContain("$code = Invoke-Quiet 'sc.exe' @('delete', $serviceName)");
+    // sc.exe delete only marks a running service: a stop that did not take fails the runner first.
+    expect(windows.text).toMatch(/if \(\$null -ne \$state -and \$state -ne 'Stopped'\) \{[\s\S]*?\$script:Failed\+\+[\s\S]*?Invoke-Quiet 'sc\.exe'/);
     expect(windows.text).toContain("if ($runner.Replace) { $configArgs += '--replace' }");
     // The skip is reached only after the stale check, and an unreadable runner list never skips.
     expect(windows.text).toMatch(/if \(-not \$script:ListOk\) \{[\s\S]*?\$script:Failed\+\+[\s\S]*?if \(\$null -eq \$stale\) \{[\s\S]*?\$script:Skipped\+\+/);
@@ -229,7 +233,7 @@ describe("the Windows script -- PowerShell 5.1, and the secrets never leave the 
         fn,
         "$cases = @(",
         "    (Get-StaleReason 'NZ-NNR1' $true @('NZ-NNR1', 'NZ-NNR2')),",
-        "    (Get-StaleReason 'NZ-NNR1' $false @('nz-nnr1')),",
+        "    (Get-StaleReason 'NZ-NNR1' $false @('NZ-NNR1')),",
         "    (Get-StaleReason 'NZ-NNR1' $true @('NZ-NNR2')),",
         "    (Get-StaleReason 'NZ-NNR1' $false @())",
         ")",
@@ -419,6 +423,11 @@ describe("the bash scripts -- Linux under sudo, macOS as the user", () => {
       'listed="$(printf "NZ-NNR1\\nNZ-NNR2")"',
       'for args in "NZ-NNR1 1" "NZ-NNR1 0" "NZ-NNR3 1" "NZ-NNR3 0"; do set -- $args; r="$(stale_reason "$1" "$2" "$listed")"; echo "${r:-<stands>}"; done',
       'echo "$(stale_reason NZ-NNR1 1 "")"',
+      // Case-sensitive, as Windows' -cnotcontains is.
+      'echo "$(stale_reason NZ-NNR1 1 "nz-nnr1")"',
+      // A listing far past any pipe buffer, the name on its first line: under
+      // pipefail a printf | grep -q pipe would SIGPIPE and call it unlisted.
+      'set -o pipefail; big="$(printf "NZ-NNR1\\n"; seq 1 40000 | sed "s/^/X-/")"; r="$(stale_reason NZ-NNR1 1 "$big")"; echo "${r:-<stands>}"',
     ].join("\n");
     const result = spawnSync("bash", ["-c", probe], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
@@ -428,6 +437,8 @@ describe("the bash scripts -- Linux under sudo, macOS as the user", () => {
       "GitHub no longer lists its registration",
       "its service is absent and GitHub no longer lists its registration",
       "GitHub no longer lists its registration",
+      "GitHub no longer lists its registration",
+      "<stands>",
     ]);
   });
 
