@@ -72,7 +72,7 @@ import { referencedIssueNumbers, fetchPaginated } from "../backlog/fetch.js";
 import type { Target } from "../github/target.js";
 import { rollupEntryStatus, type RollupEntry } from "../github/types.js";
 import { parseCheckRollup } from "../github/parse.js";
-import { checksAllGreen, latestChecks } from "../gates/predicates.js";
+import { checkAdmissible, latestChecks } from "../gates/predicates.js";
 import { viewArgv } from "../pr/fetch.js";
 import { listThreads } from "../pr/threads.js";
 import { GH, outputLines, type Seams } from "../seam/exec.js";
@@ -1024,8 +1024,10 @@ function readThreadCounts(
  * `//`-chain lesson ../github/types.ts's header records: an entry still in
  * flight has said nothing, and folding "nothing" into the success bucket is how
  * a register prints "4/4 green" about a run that has not finished. The green
- * set is the gate's own `GREEN_STATUSES`, read through `checksAllGreen`'s
- * sibling rather than restated here.
+ * set is the gate's own `GREEN_STATUSES`, read one entry at a time through
+ * `checkAdmissible` rather than restated here. A SKIPPED entry lands in the
+ * green column; whether a head of nothing but skips is READY is the gate's
+ * call (zheref/nen#331), not a display count's.
  */
 export function countChecks(entries: readonly RollupEntry[]): ObjectChecks {
   const latest = latestChecks(entries);
@@ -1035,7 +1037,7 @@ export function countChecks(entries: readonly RollupEntry[]): ObjectChecks {
   for (const entry of latest) {
     const status = rollupEntryStatus(entry);
     if (status === null) pending += 1;
-    else if (checksAllGreen([entry])) green += 1;
+    else if (checkAdmissible(entry)) green += 1;
     else if (status === "PENDING" || status === "EXPECTED") pending += 1;
     else red += 1;
   }

@@ -1164,6 +1164,8 @@ export async function fetchPrState(
     warnings: [...threads.warnings, ...earlier.warnings],
     state: {
       mergeable,
+      // CON-42/1's draft clause (zheref/nen#331): a draft is never ready.
+      is_draft: node.isDraft === true,
       head_sha: head,
       // The FULLY PAGINATED rollup -- see the pagination block above. Never
       // `snapshot.checkRollup`, which is page one only.

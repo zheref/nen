@@ -182,6 +182,16 @@ function checkRunConclusion(entry: RollupEntry): CheckConclusion | null {
 // `("anon-" + (.key|tostring))`. Groups are emitted in sorted key order, as
 // jq's `group_by` does, so the reduction is deterministic for any caller that
 // names checks in a message.
+// gh renders a GraphQL `startedAt: null` as Go's zero time; both mean "no
+// runner has picked this up yet".
+const ZERO_TIME_PREFIX = "0001-01-01";
+
+function notYetStarted(entry: RollupEntry): boolean {
+  if (lifecycleStatus(entry) === "COMPLETED") return false;
+  const started = entry.startedAt;
+  return started === null || started === "" || started.startsWith(ZERO_TIME_PREFIX);
+}
+
 export function latestChecks(entries: readonly RollupEntry[]): RollupEntry[] {
   interface Positioned {
     readonly entry: RollupEntry;
@@ -198,7 +208,17 @@ export function latestChecks(entries: readonly RollupEntry[]): RollupEntry[] {
 
   // The ordering key jq's `sort_by(.startedAt // "", .completedAt // "", .key)`
   // builds: an absent timestamp sorts as "", i.e. before every real one.
+  //
+  // ONE EXCEPTION, ahead of the timestamps (zheref/nen#317): a run that has NOT
+  // STARTED -- still in flight, with no start time or gh's zero time -- is the
+  // latest of its name. A queued re-run carries no `startedAt` until a runner
+  // picks it up, so the plain key sorted it BEFORE the older SUCCESS it is
+  // re-running, and CON-32(a) read that superseded SUCCESS as the verdict while
+  // the re-run was still waiting. A run that has not started cannot be older
+  // than one that has, and the gate must wait for it either way.
   const later = (a: Positioned, b: Positioned): Positioned => {
+    const aWaiting = notYetStarted(a.entry);
+    if (aWaiting !== notYetStarted(b.entry)) return aWaiting ? a : b;
     const byStart = compareStrings(
       a.entry.startedAt ?? "",
       b.entry.startedAt ?? "",
@@ -228,8 +248,9 @@ export function latestChecks(entries: readonly RollupEntry[]): RollupEntry[] {
 }
 
 // --- checksAllGreen ----------------------------------------------------------
-// CON-32(a). True iff the rollup is NON-EMPTY and every entry's effective status
-// on the LATEST run per name is SUCCESS / NEUTRAL / SKIPPED.
+// CON-32(a). True iff the rollup is NON-EMPTY, every entry's effective status on
+// the LATEST run per name is SUCCESS / NEUTRAL / SKIPPED, AND AT LEAST ONE of
+// them is SUCCESS.
 //
 // AN EMPTY ARRAY IS NEVER GREEN (bankai-core#671). "No reported check" is not
 // evidence that checks passed -- it is no signal at all, and it is a DIFFERENT
@@ -239,6 +260,13 @@ export function latestChecks(entries: readonly RollupEntry[]): RollupEntry[] {
 // either: its effective status is `null`, which is a run still deciding, not a
 // pass (bankai-core#727).
 //
+// A SKIP IS NOT A BUILD (zheref/nen#331, the maintainer's ruling of
+// 2026-10-02). SKIPPED and NEUTRAL stay admissible -- a path-filtered or
+// conditional job that did not apply is not a failure -- but only BESIDE a
+// SUCCESS. A head whose every check skipped or concluded neutral ran nothing,
+// and reading it green turned an unperformed build into a verified one.
+// `uncheckedChecks()` names the admitted ones so the gate can say so.
+//
 // The reduction is applied INSIDE, as in the shell -- that is this predicate's
 // contract and its callers rely on it.
 const GREEN_STATUSES: ReadonlySet<string> = new Set([
@@ -247,12 +275,32 @@ const GREEN_STATUSES: ReadonlySet<string> = new Set([
   "SKIPPED",
 ]);
 
+/** One latest entry, read alone: SUCCESS, NEUTRAL or SKIPPED. Never the verdict. */
+export function checkAdmissible(entry: RollupEntry): boolean {
+  const status = rollupEntryStatus(entry);
+  return status !== null && GREEN_STATUSES.has(status);
+}
+
 export function checksAllGreen(entries: readonly RollupEntry[]): boolean {
   const latest = latestChecks(entries);
   if (latest.length === 0) return false;
-  return latest.every((entry): boolean => {
+  return (
+    latest.every(checkAdmissible) &&
+    latest.some((entry): boolean => rollupEntryStatus(entry) === "SUCCESS")
+  );
+}
+
+/**
+ * The latest entries admitted WITHOUT succeeding, as `name (SKIPPED)` /
+ * `name (NEUTRAL)`, in latestChecks() order -- what `--explain` names instead of
+ * calling them green without qualification (zheref/nen#331).
+ */
+export function uncheckedChecks(entries: readonly RollupEntry[]): string[] {
+  return latestChecks(entries).flatMap((entry): string[] => {
     const status = rollupEntryStatus(entry);
-    return status !== null && GREEN_STATUSES.has(status);
+    return status === "SKIPPED" || status === "NEUTRAL"
+      ? [`${rollupEntryLabel(entry) ?? "(unnamed)"} (${status})`]
+      : [];
   });
 }
 

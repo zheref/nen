@@ -64,6 +64,18 @@ describe("nextBlocker -- the FIRST condition, fixed order, and nothing past it",
     expect(result.kind).toBe("red-check");
   });
 
+  it("a head of nothing but SKIPPED checks is a red-check blocker that says nothing ran (zheref/nen#331)", () => {
+    const result = nextBlocker(
+      IDENTITIES,
+      snapshot({
+        checks: [{ kind: "check_run", name: "windows", status: "COMPLETED", conclusion: "SKIPPED", startedAt: null, completedAt: null, detailsUrl: null }],
+      }),
+    );
+    expect(result.kind).toBe("red-check");
+    expect(result.detail).toContain("no latest check succeeded");
+    expect(result.detail).toContain("windows=SKIPPED");
+  });
+
   it("an owed reviewer round blocks once checks are green", () => {
     const checks = [
       { kind: "check_run" as const, name: "ci", status: "COMPLETED" as const, conclusion: "SUCCESS" as const, startedAt: null, completedAt: null, detailsUrl: null },

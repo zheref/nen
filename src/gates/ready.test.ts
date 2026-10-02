@@ -503,6 +503,57 @@ describe("evaluateReady -- CON-32(a), transcribed reason strings", () => {
   });
 });
 
+describe("evaluateReady -- skipped checks and drafts (zheref/nen#331, ruling 2026-10-02)", () => {
+  const skipped = (name: string): Record<string, unknown> => ({
+    name,
+    status: "COMPLETED",
+    conclusion: "SKIPPED",
+  });
+  const row = (evaluation: ReturnType<typeof evaluateReady>, id: ConjunctId): Conjunct | undefined =>
+    evaluation.conjuncts.find((c): boolean => c.id === id);
+
+  it("ONLY SKIPPED checks at head is not-ready, and the reason names each one instead of calling it green", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [skipped("readiness"), skipped("snapshots"), skipped("windows")] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("checks-green");
+    expect(evaluation.line).toMatch(/^not-ready: no check SUCCEEDED at head \(CON-32a\)/);
+    expect(evaluation.line).toContain("readiness (SKIPPED), snapshots (SKIPPED), windows (SKIPPED)");
+  });
+
+  it("ONE SUCCESS beside ONE SKIPPED is ready, and the row's note names the skipped check", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [greenCheck(), skipped("windows")] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(row(evaluation, "checks-green")?.note).toBe(
+      "admitted beside a SUCCESS, not verified: windows (SKIPPED)",
+    );
+  });
+
+  it("an all-SUCCESS head carries no note", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState(), OPTIONS);
+    expect(row(evaluation, "checks-green")?.note).toBeNull();
+  });
+
+  it("a DRAFT is never ready, even MERGEABLE with every other row passing", () => {
+    const evaluation = evaluateReady(IDENTITIES, readyState({ is_draft: true }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("mergeable");
+    expect(evaluation.line).toMatch(/^not-ready: the PR is a DRAFT \(CON-42\/1\)/);
+  });
+
+  it("is_draft false or absent leaves row 1 to mergeable alone", () => {
+    expect(evaluateReady(IDENTITIES, readyState({ is_draft: false }), OPTIONS).ready).toBe(true);
+    expect(evaluateReady(IDENTITIES, readyState(), OPTIONS).ready).toBe(true);
+  });
+});
+
 describe("evaluateReady -- --exclude-check (zheref/hatsu#81)", () => {
   it("with no exclusion, an all-green rollup that includes the consumer's own check reads ready", () => {
     const evaluation = evaluateReady(

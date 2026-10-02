@@ -905,6 +905,35 @@ round is also an owed one, so rows 3 and 4 both fail and the line is row 3's.
 CON-30's carve-out is read whenever the rollup is readable, rather than only
 after row 2 passed.
 
+**A skip is not a build, and a draft is never ready (zheref/nen#331; the
+maintainer's ruling of 2026-10-02).** CON-32(a) reads each check name's
+latest run. `SUCCESS`, `NEUTRAL` and `SKIPPED` are admissible, so a
+path-filtered or conditional job that did not apply is not a failure. A
+`SKIPPED` or `NEUTRAL` check is admissible **only beside at least one
+`SUCCESS`**:
+
+| Latest runs at head | Row 2 (CON-32(a)) |
+|---|---|
+| every one `SUCCESS` | `ready`, no note |
+| at least one `SUCCESS`, the rest `SKIPPED`/`NEUTRAL` | `ready`, with the note `admitted beside a SUCCESS, not verified: <name> (SKIPPED), …` |
+| every one `SKIPPED` or `NEUTRAL` | FAILED: `not-ready: no check SUCCEEDED at head (CON-32a) — every latest check was skipped or neutral, so nothing was verified: <name> (SKIPPED), …` |
+| any absent, pending, failed, cancelled or unknown | FAILED, unchanged |
+
+A draft pull request fails row 1 (CON-42/1) with `not-ready: the PR is a DRAFT
+(CON-42/1) — a draft cannot be merged; mark it ready for review first`, even
+when GitHub reports it `MERGEABLE`. An intentional-skip exception is never
+inferred from branch protection. A repository that wants one must declare it
+(zheref/nen#249's excluded checks, or `--exclude-check`).
+
+**A re-run that has not started is the latest run of its name
+(zheref/nen#317).** A queued re-run carries no `startedAt` until a runner
+picks it up: GraphQL answers `null`, and gh renders that as
+`0001-01-01T00:00:00Z`. The latest-run-per-name reduction used to sort it
+*before* the older `SUCCESS` it re-runs, so row 2 read that superseded success.
+Now a run that is still in flight with no start time is the latest of its
+name, and row 2 waits for it. A completed run without a `startedAt` sorts as
+before.
+
 **Which head the verdict is about (zheref/nen#245).** The verdict concerns
 **GitHub's current head** for the pull request at the moment the verb reads
 it. That is not necessarily your local commit. On zheref/KroApple#577 a `ready`

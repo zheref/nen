@@ -21,6 +21,7 @@
 // must still read the diff by eye. See src/pr/verb.ts's usage text.
 
 import {
+  checkAdmissible,
   checksAllGreen,
   defaultReviewers,
   latestChecks,
@@ -74,7 +75,12 @@ export function nextBlocker(
       .join(", ");
     return {
       kind: "red-check",
-      detail: latest.length === 0 ? "no checks have reported yet" : `not every latest check is green: ${summary}`,
+      detail:
+        latest.length === 0
+          ? "no checks have reported yet"
+          : latest.every(checkAdmissible)
+            ? `no latest check succeeded -- every one skipped or concluded neutral, so nothing was verified: ${summary}`
+            : `not every latest check is green: ${summary}`,
     };
   }
 
