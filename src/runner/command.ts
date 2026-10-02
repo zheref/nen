@@ -54,9 +54,10 @@ import { SchemaError } from "../schema/errors.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { loadWorkflow, WORKFLOW_FILE, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
 import { VERSION } from "../version.js";
-import { enablePool, renderEnable, VARIABLE_VALUE } from "./enable.js";
+import { CertificationRefusal, enablePool, renderEnable, VARIABLE_VALUE, type EnableReport } from "./enable.js";
 import { realSleep, RunnerFailure, type Sleep } from "./github.js";
 import { assembleInventory, fetchDownloads, fetchRunners, renderInventory } from "./inventory.js";
+import { checkNeighbours, renderNeighbours } from "./neighbours.js";
 import { computePlan, isDailyAccount, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
 import { renderPreflight, runPreflight } from "./preflight.js";
 import { launchLine, renderScript, summaryGlob } from "./script.js";
@@ -132,6 +133,10 @@ plan       Which runners to add: the lowest free slots for --machine-code and
            dailyAccount when that account is the one computing the plan.
            --count 1..16. --out writes the plan JSON (contract
            nen.runner.plan/v0.2; a v0.1 plan still reads, as a service plan).
+           On the pool's own host it reads the existing runner services,
+           read-only, and warns on stderr (exit 0) when the account already
+           serves a repository of different visibility, recommending a
+           per-repository account (#330).
 script     Render the plan's host script: PowerShell 5.1 (Windows), bash
            (Linux, run with sudo; macOS, run as yourself). --json names the one
            launch line, the script's scriptSha256 and the summary file glob.
@@ -152,12 +157,16 @@ preflight  gh workflow run <workflow> on --ref (default: the default branch),
            find the run it created, and wait up to --wait (default 600) for
            its conclusion. Exit 0 only on success; a job still queued at the
            deadline is named: no free runner picked it up. A workflow not on
-           the ref is exit 2: merge it first.
+           the ref is exit 2: merge it first. Only a run on the default
+           branch can certify a pool; another --ref is a rehearsal.
 enable     Re-read --after-run and require it to be a completed, successful run
            of the pool's own preflight workflow whose jobs asked for the pool's
-           labels; then gh variable set <enableVariable> --body <--value,
-           default online> and read it back. A pool with no enableVariable is
-           exit 2: nothing to enable.
+           labels, dispatched (workflow_dispatch) on the default branch, with
+           the workflow's blob at its head_sha equal to the default branch's;
+           then gh variable set <enableVariable> --body <--value, default
+           online> and read it back. A run that fails any check is exit 1, and
+           --json names each check that refused it (event, branch, blob, ...).
+           A pool with no enableVariable is exit 2: nothing to enable.
 
 Exit codes: 0 success; 1 the verb's own failure (GitHub refused or answered
 something unreadable, a planned name taken, a leftover placeholder, a run that
@@ -299,6 +308,10 @@ function plan(context: CommandContext): number {
   const out = context.args.values["out"];
   if (out !== undefined) writeOut(resolveAgainstRepo(root, out), `${JSON.stringify(result, null, 2)}\n`);
   emit(context.io, context.json, result, [...renderPlan(result), ...(out === undefined ? [] : [`wrote ${resolveAgainstRepo(root, out)}`])]);
+  // #330: on stderr, at exit 0, so the plan's own contract (stdout, --out) is unchanged.
+  for (const line of renderNeighbours(checkNeighbours(context.seams, target, result.os, result.identity), target, result.identity)) {
+    context.io.err(`nen runner plan: ${line}`);
+  }
   return 0;
 }
 
@@ -444,7 +457,17 @@ function enable(context: CommandContext): number {
   if (!/^[1-9][0-9]*$/.test(runRaw)) throw new VerbUsageError(`--after-run takes a workflow run id, got '${runRaw}'.`);
   const value = context.args.values["value"] ?? "online";
   if (!VARIABLE_VALUE.test(value)) throw new VerbUsageError(`--value '${value}' is not a value this verb sets: 1 to 32 of a-z, 0-9 and '-'.`);
-  const report = enablePool(context.seams, target, { ...pool, enableVariable: pool.enableVariable }, Number.parseInt(runRaw, 10), value, context.args.booleans.has("dry-run"));
+  const runId = Number.parseInt(runRaw, 10);
+  let report: EnableReport;
+  try {
+    report = enablePool(context.seams, target, { ...pool, enableVariable: pool.enableVariable }, runId, value, context.args.booleans.has("dry-run"));
+  } catch (error) {
+    // --json names WHICH checks refused the run (#319); the message still goes to stderr at exit 1.
+    if (error instanceof CertificationRefusal && context.json) {
+      emit(context.io, true, { target: target.slug, pool: pool.id, runId, refused: true, problems: error.problems }, []);
+    }
+    throw error;
+  }
   emit(context.io, context.json, report, renderEnable(report));
   return 0;
 }

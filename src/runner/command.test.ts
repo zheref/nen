@@ -12,7 +12,7 @@ import { findCommand } from "../cli/registry.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { isUnder, makeRunnerCommand, RUNNER_SUBCOMMANDS, RUNNER_SUBCOMMAND_FLAGS } from "./command.js";
 import { defaultBranchArgv } from "./preflight.js";
-import { DESKTOP_POOL_BODY, FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET } from "./testkit.js";
+import { DESKTOP_POOL_BODY, FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET, windowsServicesCall } from "./testkit.js";
 import { runnersArgv } from "./inventory.js";
 
 const COMMAND = makeRunnerCommand({ sleep: () => {}, version: "0.0.0-test" });
@@ -118,7 +118,7 @@ describe("nen runner plan", () => {
 
   it("derives the consumer code from repos.json, writes --out, and prints the plan", async () => {
     const root = consumer();
-    const result = await run([...flags, "--repo", root, "--out", "plan.json", "--json"], inventoryCalls());
+    const result = await run([...flags, "--repo", root, "--out", "plan.json", "--json"], [...inventoryCalls(), windowsServicesCall()]);
     expect(result.code, result.err).toBe(0);
     const plan = JSON.parse(result.out);
     expect(plan.contract).toBe("nen.runner.plan/v0.2");
@@ -156,6 +156,26 @@ describe("nen runner plan", () => {
     }
   });
 
+  it("warns on stderr, at exit 0, when the account already serves a repository of different visibility -- the plan unchanged (#330)", async () => {
+    const root = consumer();
+    const result = await run([...flags, "--repo", root, "--out", "plan.json", "--json"], [
+      ...inventoryCalls(),
+      windowsServicesCall([{ Name: "actions.runner.zheref-KroWindows.NZ-KWIR1", StartName: ".\\lordzheref" }]),
+      { match: "gh api --method GET repos/zheref/nen", result: { stdout: '{"full_name":"zheref/nen","visibility":"public"}' } },
+      { match: "gh api --method GET repos/zheref/KroWindows", result: { stdout: '{"full_name":"zheref/KroWindows","visibility":"private"}' } },
+    ]);
+    expect(result.code).toBe(0);
+    const plan = JSON.parse(result.out);
+    expect(plan.identity).toBe(".\\lordzheref");
+    expect(Object.keys(plan)).not.toContain("warnings");
+    expect(JSON.parse(readFileSync(join(root, "plan.json"), "utf8"))).toEqual(plan);
+    expect(result.err.split("\n")).toEqual([
+      expect.stringMatching(/^nen runner plan: warning: \.\\lordzheref already runs 1 runner service\(s\) on this host for repositories whose visibility differs from zheref\/nen's \(public\) or cannot be told/),
+      "nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR1 -- zheref/KroWindows, private",
+      expect.stringMatching(/^nen runner plan: recommended: a local account for zheref\/nen alone, e.g\. --service-account runner-nen /),
+    ]);
+  });
+
   it("asks for --consumer-code when the registry does not name the target", async () => {
     const result = await run(["plan", "--target", "zheref/other", "--pool", "windows-x64", "--machine-code", "NZ", "--count", "1", "--repo", consumer()]);
     expect(result.code).toBe(2);
@@ -167,7 +187,7 @@ describe("nen runner script", () => {
   async function planned(root: string, account: string | null = "lordzheref"): Promise<void> {
     const argv = ["plan", "--target", "zheref/nen", "--pool", "windows-x64", "--machine-code", "NZ", "--count", "3", "--repo", root, "--out", "plan.json"];
     if (account !== null) argv.push("--service-account", account);
-    expect((await run(argv, inventoryCalls())).code).toBe(0);
+    expect((await run(argv, [...inventoryCalls(), windowsServicesCall()])).code).toBe(0);
   }
 
   it("writes the Windows script and names the elevated launch line", async () => {
@@ -205,7 +225,7 @@ describe("nen runner script", () => {
   it("plans an interactive pool as the daily account, then renders it only with --accept-daily-account (#333)", async () => {
     const root = consumer({ ...POLICY_BODY, pools: [...POLICY_BODY.pools, DESKTOP_POOL_BODY] });
     const argv = ["plan", "--target", "zheref/nen", "--pool", "windows-x64-desktop", "--machine-code", "NZ", "--count", "1", "--repo", root, "--service-account", "Zhere", "--out", "plan.json"];
-    const planned = await run(argv, inventoryCalls(), "win32", { USERNAME: "zhere" });
+    const planned = await run(argv, [...inventoryCalls(), windowsServicesCall()], "win32", { USERNAME: "zhere" });
     expect(planned.code, planned.err).toBe(0);
     expect(planned.out).toMatch(/^mode: interactive/m);
     expect(planned.out).toMatch(/warning: \.\\Zhere is the account computing this plan -- your own daily account/);
@@ -227,7 +247,7 @@ describe("nen runner script", () => {
   it("re-checks the daily account at render time: a plan computed elsewhere is refused on the identity's own Windows session", async () => {
     const root = consumer({ ...POLICY_BODY, pools: [...POLICY_BODY.pools, DESKTOP_POOL_BODY] });
     const argv = ["plan", "--target", "zheref/nen", "--pool", "windows-x64-desktop", "--machine-code", "NZ", "--count", "1", "--repo", root, "--service-account", "zhere", "--out", "plan.json"];
-    expect((await run(argv, inventoryCalls(), "win32", {})).code).toBe(0);
+    expect((await run(argv, [...inventoryCalls(), windowsServicesCall()], "win32", {})).code).toBe(0);
     expect(JSON.parse(readFileSync(join(root, "plan.json"), "utf8"))).toMatchObject({ dailyAccount: false });
     const refused = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1"], [], "win32", { USERNAME: "ZHERE" });
     expect(refused.code).toBe(2);
@@ -356,5 +376,35 @@ describe("nen runner preflight and enable -- the two writes", () => {
     expect(ungated.err).toMatch(/not variable-gated, so there is nothing to enable/);
     expect((await run(["enable", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--after-run", "latest"])).code).toBe(2);
     expect((await run(["enable", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--after-run", "901", "--value", "ONLINE!"])).code).toBe(2);
+  });
+
+  // #319's second reproduction (zheref/KroWindows run 36958789239): a green
+  // `push` run of the pool's own preflight, on a branch that was never merged,
+  // certified the pool under --dry-run. The workflow file is byte-identical to
+  // the default branch's here, so only the event and the branch can refuse it.
+  it("refuses a green push run on an unmerged branch, naming the event and the branch, and sets nothing (#319)", async () => {
+    const file = ".github/workflows/runner-preflight-windows-x64.yml";
+    const result = await run(["enable", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64", "--after-run", "901", "--dry-run", "--json"], [
+      {
+        match: "gh api --method GET repos/zheref/nen/actions/runs/901",
+        result: { stdout: JSON.stringify({ status: "completed", conclusion: "success", path: file, event: "push", head_branch: "codex/kurapika/runner-preflight", head_sha: "b".repeat(40), html_url: "u" }) },
+      },
+      {
+        match: "gh api --method GET repos/zheref/nen/actions/runs/901/jobs?per_page=100",
+        result: { stdout: JSON.stringify({ jobs: [{ name: "preflight", status: "completed", conclusion: "success", runner_name: "NZ-NNR4", labels: ["self-hosted", "Windows", "X64"] }] }) },
+      },
+      { match: `gh ${defaultBranchArgv(TARGET).join(" ")}`, result: { stdout: '{"defaultBranchRef":{"name":"main"}}' } },
+      { match: `gh api --method GET repos/zheref/nen/contents/${file}?ref=${"b".repeat(40)}`, result: { stdout: '{"sha":"1111"}' } },
+      { match: `gh api --method GET repos/zheref/nen/contents/${file}?ref=main`, result: { stdout: '{"sha":"1111"}' } },
+      { match: "gh variable get NEN_WINDOWS_RUNNER --repo zheref/nen", result: { code: 1, stderr: "variable NEN_WINDOWS_RUNNER was not found" } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/run 901 on zheref\/nen is not a green preflight of pool windows-x64/);
+    expect(result.err).toMatch(/it was triggered by 'push', not workflow_dispatch/);
+    expect(result.err).toMatch(/it ran on 'codex\/kurapika\/runner-preflight', not the default branch 'main'/);
+    const report = JSON.parse(result.out);
+    expect(report).toMatchObject({ target: "zheref/nen", pool: "windows-x64", runId: 901, refused: true });
+    expect(report.problems.map((problem: { check: string }) => problem.check)).toEqual(["event", "branch"]);
+    expect(result.seams.calls.some((call) => call.args[0] === "variable" && call.args[1] === "set")).toBe(false);
   });
 });

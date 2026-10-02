@@ -736,12 +736,12 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
-| [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET); writes --out only | yes |
+| [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
 | [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv; an interactive Windows plan asks no password and registers logon tasks instead of services), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled; never exits 0 on a partial pass | github (gh api GET runners) | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
-| [`runner`](#family-runner) | [`nen runner enable`](#nen-runner-enable) | set a pool's enable variable only after re-reading a completed, successful run of its own preflight whose jobs asked for its labels; read back, idempotent | nen/workflow.json (runners), github (gh api GET runs/jobs, gh variable get; gh variable set unless --dry-run) | yes |
+| [`runner`](#family-runner) | [`nen runner enable`](#nen-runner-enable) | set a pool's enable variable only after re-reading a completed, successful run of its own preflight whose jobs asked for its labels, dispatched on the default branch with the default branch's own workflow blob; read back, idempotent | nen/workflow.json (runners), github (gh api GET runs/jobs/contents, gh repo view, gh variable get; gh variable set unless --dry-run) | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
@@ -10613,6 +10613,59 @@ as your own daily account and records `dailyAccount: true`;
 on Windows, so a plan computed on another host is caught where it is
 rendered. Use a dedicated local account instead.
 
+**One account is one trust domain (#330).** Every runner service that logs on
+as the same account can rewrite every other one's binaries and `_work` (on
+Windows, `config.cmd` gives the account's `GITHUB_ActionsRunner_*` group full
+control of each `Runner<N>`), so a public repository's CI — one compromised
+dependency — could persist into a private repository's jobs and their token.
+So when this verb runs **on the pool's own OS** (Windows or Linux) with a
+named account, it reads this host's existing `actions.runner.*` services,
+read-only, with these tools:
+- Windows: `Get-CimInstance Win32_Service` returns each service's `Name`,
+  `StartName` and the account's SID. Windows PowerShell is started by its
+  full path under `%SystemRoot%`.
+- Linux: `systemctl list-units`, then `systemctl show -p Id -p User`.
+
+It resolves **every** service's repository from its service name
+(`gh api --method GET repos/<owner>/<repo>`). No prefix is trusted:
+`actions.runner.zheref-nen.docs.R1` is `zheref/nen.docs`. Splits are tried
+from the last dot first and with the target's owner first, and the first split
+GitHub answers for wins. A name that no split resolves (actions/runner shortens
+long ones on Windows) is reported as unresolved, as is one that `gh` could not
+read. Visibility here means `public`, `private` or `internal`. It then
+**warns, on stderr, at exit 0**, about two things:
+- **The planned account is shared.** Services that log on as the planned
+  account and serve another repository whose visibility differs from the
+  target's, or cannot be determined, are named with their repositories. How the
+  account is matched:
+  - Windows: `.\name` or `<COMPUTERNAME>\name`, ignoring case and spaces.
+    `network-service` matches SID `S-1-5-20` or the spelling `NT AUTHORITY\NETWORK SERVICE`
+    that actions/runner writes, which is localized on a non-English host.
+  - Linux: the user name, matched exactly.
+
+  The warning recommends a per-repository account: `runner-<repo>`, else
+  `runner-<owner>-<repo>`, else `runner-<repo>-2`, `-3` and so on, each
+  trimmed to what the OS accepts (Windows 20 characters, Linux 32). It picks
+  the first name that no other repository's runner service on this host
+  already logs on as, so two owners' `shared` repositories, or a long name
+  shortened, never end up recommended into one account. A service row the read
+  cannot vouch for (no name, no logon account) makes the whole read a `note:`.
+- **The target's own runners keep a shared account.** A new account moves
+  only the runners this plan adds. The target's existing services on another
+  account that also serves a repository of different or unknown visibility
+  are named. They keep that account until they are removed and registered
+  again under the new one.
+
+**You** create the account; nen never creates an account or handles its
+password. nen still accepts a shared account (the maintainer's ruling on #330:
+warn and recommend, never refuse). The plan itself, on stdout under `--json`
+and in `--out`, is unchanged. Off the pool's OS the check cannot see the host,
+so it prints a `note:` saying it did not run. A failed host read is also a
+`note:`, never an exit. macOS is not checked: a LaunchAgent runs as the
+installing user, so there is no account to choose. An interactive Windows
+pool's runners are logon tasks, not services, so this read does not see
+them: an account they share is not reported.
+
 **Usage**
 
 ```text
@@ -10671,6 +10724,33 @@ project dir: C:\GithubRunners\nen-runners
 already registered for NZ/NN: (none)
 ```
 (run for real against zheref/nen, 2026-09-30)
+
+```bash
+nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code NZ --count 1 --service-account lordzheref
+```
+```text
+plan: 1 runner(s) for zheref/nen, pool windows-x64
+...
+nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for repositories whose visibility differs from zheref/nen's (public) or cannot be told -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
+nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
+...
+nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- zheref/KroWindows, private
+nen runner plan: recommended: a local account for zheref/nen alone, e.g. --service-account runner-nen (create it yourself first; nen never creates an account or handles its password).
+```
+(run for real on the maintainer's Windows host, 2026-10-02: exit 0; the plan
+and nine of the eleven service lines abridged)
+
+```bash
+nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code NZ --count 1 --service-account runner-nen
+```
+```text
+...
+nen runner plan: warning: zheref/nen's existing runner service(s) actions.runner.zheref-nen.NZ-NNR1, actions.runner.zheref-nen.NZ-NNR2, actions.runner.zheref-nen.NZ-NNR3 log on as .\lordzheref, which also serves repositories whose visibility differs or cannot be told; a new account moves only the runners this plan adds -- these keep .\lordzheref until they are removed and registered again under the new account (#330):
+nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
+...
+```
+(the same host, following the recommendation: exit 0; the plan and all but the
+first of the eleven shared services abridged)
 
 ### `nen runner script`
 
@@ -10734,9 +10814,20 @@ around the one call and cleared in a `finally`.
   names that rule. It downloads the package once into the admin-only
   `_jusshin\pkg` unless a copy with the planned SHA-256 is already there,
   and deletes it on a mismatch (exit **6**). Per runner: skip when
-  `<installDir>\.runner` already names it; otherwise empty the folder (it
-  holds no configured runner, so nothing in it predates the lockdown
-  worth trusting), **re-hash the package immediately before `Expand-Archive`**
+  `<installDir>\.runner` already names it **and** its service
+  `actions.runner.<owner>-<repo>.<name>` exists **and** GitHub still lists
+  the registration (`gh api --paginate repos/<owner>/<repo>/actions/runners`,
+  read once). A folder that names it but fails either check is **stale**
+  (#319 — a failed service install leaves `.runner` with no service; a
+  removed registration leaves one GitHub no longer lists): the line
+  `<name> in <dir> is stale (<reason>) -- emptied and re-registered.` is
+  printed, a leftover service is stopped and `sc.exe delete`d, and the runner
+  is registered like a fresh one — with `--replace` when GitHub still lists
+  the name — so the summary counts it **registered**, never skipped. A
+  runner list `gh` cannot read leaves such a folder untouched and counts it
+  failed: live and stale cannot be told apart. Otherwise empty the folder (it
+  holds no configured runner, or a stale one, so nothing in it predates the
+  lockdown worth trusting), **re-hash the package immediately before `Expand-Archive`**
   (a mismatch deletes it, exit 6), mint a registration token **now** with
   `gh api -X POST repos/<owner>/<repo>/actions/runners/registration-token
   --jq .token`, and run `config.cmd --unattended --url ... --name <name>
@@ -10805,6 +10896,18 @@ around the one call and cleared in a `finally`.
   LaunchAgent with no PID is held pending **Background Task Management**
   approval under System Settings → General → Login Items, which the script
   prints and never approves.
+- **Stale directories on Linux and macOS** follow the Windows rule above: a
+  `.runner` naming the planned runner stands only while its service exists
+  (Linux: `systemctl show -p LoadState --value <prefix><name>.service`, where
+  only `not-found` means absent; macOS:
+  `~/Library/LaunchAgents/<prefix><name>.plist`) and GitHub lists the
+  registration. A stale one has its service removed with `svc.sh stop` and
+  `svc.sh uninstall`, the directory is deleted, and `config.sh` re-registers
+  it (`--replace` when GitHub still lists the name). Each step fails closed,
+  counting that runner failed and moving to the next: a service state
+  `systemctl` cannot read leaves the directory untouched, as does a stop or
+  uninstall that fails, and a directory `rm -rf` cannot empty never ends the
+  run (`set -e`) without its summary line.
 
 **The summary file.** Every script — Windows, Linux and macOS — also writes
 the one summary line, and **nothing else**, to
@@ -10869,7 +10972,7 @@ nen runner script --plan plan.json --out 'C:\Users\maintainer\AppData\Local\nen\
 sha256 28e57708069963439e7f51ec799140ef96c7873f76732a193c7e3779264ebdb0; the run leaves its one summary line in C:\GithubRunners\nen-runners\_jusshin\register-*.summary
 launch (elevated): powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','C:\Users\maintainer\AppData\Local\nen\jusshin\register.ps1'"
 ```
-(run for real on the plan above, the profile's user name replaced with `maintainer`; the rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
+(run for real on the plan above with v0.18.3, the profile's user name replaced with `maintainer`; #319's stale-slot check changed the script's bytes, so a later build prints another `sha256`. The rendered script's bytes are pinned by `src/runner/fixtures/register.windows.golden.ps1`)
 
 ### `nen runner verify`
 
@@ -10993,7 +11096,7 @@ nen runner preflight --target <owner/name> --workflow <basename> [--ref <branch>
 |---|---|---|---|
 | `--target <owner/name>` | **yes** | the repository | this verb writes (a dispatch), so it never falls back to a remote |
 | `--workflow <basename>` | yes | the preflight file | a basename ending `.yml` |
-| `--ref <branch>` | no | the branch to run on | default: the default branch |
+| `--ref <branch>` | no | the branch to run on | default: the default branch. Only a run on the default branch can certify a pool: [`runner enable`](#nen-runner-enable) refuses any other ref's run (#319), so another `--ref` is a rehearsal, never the proof |
 | `--wait <seconds>` | no | how long to wait for the conclusion | default `600` |
 | `--dry-run` | no | resolve the ref and print the dispatch, send nothing | **still reads GitHub** for the default branch |
 | `--json` | no | the report | — |
@@ -11024,12 +11127,21 @@ dry-run: runner-preflight-windows-x64.yml on zheref/nen@main -- would run: gh wo
 The fail-closed switch. It reads the pool's `enableVariable` (a pool that
 declares none is exit 2 — "not variable-gated; nothing to enable"), re-reads
 run `--after-run` from GitHub and **requires** all of: a run of the pool's own
-`preflightWorkflow` (the run's `path`), `completed`, concluded `success`, and
-every job in it asked for this pool's labels and concluded `success` — so a
-green run of another workflow, or of the same file rendered for another pool,
-is refused by name. Only then `gh variable set <NAME> --body <value> --repo
-<target>`, and the variable is read back; a read that disagrees is exit 1.
-Idempotent: a variable already holding the value is not written.
+`preflightWorkflow` (the run's `path`), `completed`, concluded `success`,
+every job in it asked for this pool's labels and concluded `success`, and
+(#319) **the default branch's own proof**: the run's `event` is
+`workflow_dispatch` (what [`runner preflight`](#nen-runner-preflight)
+starts), its `head_branch` is the target's default branch, and the
+workflow's blob at the run's `head_sha` is the blob the default branch
+carries now (`gh api --method GET repos/<target>/contents/<path>?ref=...`,
+read for its `sha`). So a green run of another workflow, of the same file
+rendered for another pool, of a `push` on an unmerged branch, or of an
+edited copy of the preflight (steps removed, `TOOLS` emptied, `runs-on`
+kept) is refused by name — and a run made before the default branch's
+preflight last changed no longer certifies: dispatch it again. Only then
+`gh variable set <NAME> --body <value> --repo <target>`, and the variable is
+read back; a read that disagrees is exit 1. Idempotent: a variable already
+holding the value is not written.
 
 **Usage**
 
@@ -11054,6 +11166,11 @@ previous value and run. `--json` top-level keys: `target`, `pool`,
 `dryRun`. Exit 0; 1 when the run is not a green preflight of this pool (each
 reason named, **nothing set**), GitHub refused, or the read-back disagrees; 2
 on usage, an ungated pool or a missing `runners` block; 5 without `gh`.
+**A refusal under `--json`** prints, on stdout, `{ target, pool, runId,
+refused: true, problems[] }`, each problem `{ check, detail }` with `check`
+one of `workflow`, `status`, `conclusion`, `jobs`, `labels`,
+`job-conclusion`, `event`, `branch`, `blob` — the same reasons the stderr
+line names, in the same order, still at exit 1.
 
 **Example**
 
@@ -11061,9 +11178,29 @@ on usage, an ungated pool or a missing `runners` block; 5 without `gh`.
 nen runner enable --target zheref/nen --repo . --pool windows-x64 --after-run 36740464215 --dry-run
 ```
 ```text
-nen runner enable: run 36740464215 on zheref/nen is not a green preflight of pool windows-x64: it is a run of '.github/workflows/ci.yml', not .github/workflows/runner-preflight-windows-x64.yml; job 'compile' did not ask for pool windows-x64's labels (missing Windows, X64); ... Nothing was set -- run 'nen runner preflight' and pass the run id it reports.
+nen runner enable: run 36740464215 on zheref/nen is not a green preflight of pool windows-x64: it is a run of '.github/workflows/ci.yml', not .github/workflows/runner-preflight-windows-x64.yml; job 'compile' did not ask for pool windows-x64's labels (missing Windows, X64); ... Nothing was set -- run 'nen runner preflight' (it dispatches on the default branch) and pass the run id it reports.
 ```
 (run for real with a `ci.yml` run id: exit 1, nothing set; the job list is abridged here)
+
+```bash
+nen runner enable --target zheref/nen --repo . --pool windows-x64 --after-run 36791237018 --dry-run --json
+```
+```text
+{
+  "target": "zheref/nen",
+  "pool": "windows-x64",
+  "runId": 36791237018,
+  "refused": true,
+  "problems": [
+    { "check": "event", "detail": "it was triggered by 'push', not workflow_dispatch" },
+    { "check": "branch", "detail": "it ran on 'fable/kurapika/runner-preflight-windows-x64', not the default branch 'main'" },
+    { "check": "blob", "detail": ".github/workflows/runner-preflight-windows-x64.yml at 5903e47a5a6a is blob d9f6a577051f, not the default branch's blob e2375dfe87a2" }
+  ]
+}
+```
+(run for real on the green `push` run that certified this repository's own
+pool before #319: exit 1, nothing set, the stderr line omitted; the JSON is
+re-indented here)
 
 ## Developer workflows
 

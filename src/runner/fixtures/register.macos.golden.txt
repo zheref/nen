@@ -56,10 +56,42 @@ configured_as() {
   [ -f "$1/.runner" ] && grep -q "\"agentName\": *\"$2\"" "$1/.runner"
 }
 
+# Why a directory configured as NAME is stale, or nothing when it stands: its
+# service is absent ($2 is not 1), or GitHub no longer lists its registration
+# ($3, one name per line) (#319).
+stale_reason() {
+  local reasons=""
+  if [ "$2" != 1 ]; then reasons="its service is absent"; fi
+  # A here-string, never a pipe: under pipefail, grep -q exiting on an early
+  # match would SIGPIPE a long printf and read a listed name as unlisted.
+  if ! grep -Fxq -- "$1" <<<"$3"; then
+    reasons="${reasons:+$reasons and }GitHub no longer lists its registration"
+  fi
+  printf '%s' "$reasons"
+}
+
+# The names GitHub lists for the repository's runners, read once into
+# $listed; $listed_ok is 1 when the read succeeded.
+listed=""
+listed_ok=""
+read_listed() {
+  if [ -n "$listed_ok" ]; then return 0; fi
+  if listed="$(gh_run api --paginate "repos/$TARGET/actions/runners" --jq '.runners[].name' 2>/dev/null)"; then listed_ok=1; else listed_ok=0; fi
+}
+
+# Stop and uninstall a stale runner's service from its own directory.
+remove_service() {
+  # A stop that fails is a failure: deleting a directory under a live listener
+  # is the one thing this must not do.
+  (cd "$1" && ./svc.sh stop && ./svc.sh uninstall)
+}
+
 if [ "$(id -u)" -eq 0 ]; then
   echo "jusshin: run as yourself, not root -- a macOS runner is a LaunchAgent of the user who installs it."
   finish 3
 fi
+gh_run() { gh "$@"; }
+service_present() { if [ -f "$HOME/Library/LaunchAgents/${SERVICE_PREFIX}$1.plist" ]; then echo 1; else echo 0; fi; }
 if ! gh --version >/dev/null 2>&1; then
   echo "jusshin: gh is not on PATH. Install the GitHub CLI and re-run."
   finish 5
@@ -76,12 +108,47 @@ exec > >(tee -a "$log") 2>&1
 echo "jusshin: ${#RUNNERS[@]} runner(s) for $TARGET; log $log"
 
 pending=()
+replace_names=" "
 for entry in "${RUNNERS[@]}"; do
   name="${entry%%|*}"
   dir="${entry#*|}"
   if configured_as "$dir" "$name"; then
-    echo "jusshin: $name is already configured in $dir -- skipped."
-    skipped=$((skipped + 1))
+    # Configured is not standing (#319): a failed service install leaves .runner
+    # behind with no service, and a removed registration leaves one GitHub no
+    # longer lists. Either is stale -- emptied and re-registered, never skipped.
+    read_listed
+    if [ "$listed_ok" != 1 ]; then
+      echo "jusshin: could not list the runners of $TARGET, so $name in $dir cannot be told live from stale -- left untouched (the gh user must be an admin of $TARGET)."
+      failed=$((failed + 1))
+      continue
+    fi
+    if ! has_service="$(service_present "$name")"; then
+      echo "jusshin: the service state of $name could not be read, so $dir cannot be told live from stale -- left untouched."
+      failed=$((failed + 1))
+      continue
+    fi
+    reason="$(stale_reason "$name" "$has_service" "$listed")"
+    if [ -z "$reason" ]; then
+      echo "jusshin: $name is already configured in $dir -- skipped."
+      skipped=$((skipped + 1))
+      continue
+    fi
+    echo "jusshin: $name in $dir is stale ($reason) -- emptied and re-registered."
+    if [ "$has_service" = 1 ] && ! remove_service "$dir"; then
+      echo "jusshin: svc.sh could not stop or uninstall the stale service for $name; $dir left untouched."
+      failed=$((failed + 1))
+      continue
+    fi
+    # Under set -e a bare rm that fails would end the run with no summary: a
+    # directory that cannot be emptied fails this runner alone.
+    if ! rm -rf "$dir"; then
+      echo "jusshin: could not empty $dir for $name."
+      failed=$((failed + 1))
+      continue
+    fi
+    # A stale runner GitHub still lists is replaced under its own name.
+    if grep -Fxq -- "$name" <<<"$listed"; then replace_names="$replace_names$name "; fi
+    pending+=("$entry")
     continue
   fi
   if [ -f "$dir/.runner" ]; then
@@ -130,7 +197,9 @@ for entry in "${pending[@]+"${pending[@]}"}"; do
   # NO TOKEN ON A COMMAND LINE: it reaches config.sh as ACTIONS_RUNNER_INPUT_TOKEN,
   # which actions/runner reads as its --token input; a prefix assignment is
   # never part of argv.
-  if ! (cd "$dir" && ACTIONS_RUNNER_INPUT_TOKEN="$token" ./config.sh --unattended --url "$REPO_URL" --name "$name" --labels "$LABELS" --work _work); then
+  replace=()
+  case "$replace_names" in *" $name "*) replace=(--replace) ;; esac
+  if ! (cd "$dir" && ACTIONS_RUNNER_INPUT_TOKEN="$token" ./config.sh --unattended --url "$REPO_URL" --name "$name" --labels "$LABELS" --work _work ${replace[@]+"${replace[@]}"}); then
     token=""
     echo "jusshin: config.sh failed for $name."
     failed=$((failed + 1))
