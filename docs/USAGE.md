@@ -10138,6 +10138,12 @@ is none) — inserted right after `description`, and never added over a
 `summary` the source already carries. Each such skill is listed in
 `truncated[]`. `summary` is nen's key, not the surface's: an extra frontmatter
 line the surface ignores, holding the sentence its picker would otherwise cut.
+The sentence is read from the description's **text**: a folded or literal block
+scalar (`>`, `>-`, `|`, `|+2`, …) contributes its lines, never its header. The
+`summary:` value is written plain where YAML allows it, and double-quoted
+otherwise (an opening indicator character, `: `, ` #`, a trailing `:`), so
+every mirror's frontmatter parses (zheref/nen#328). A summary that was already
+a valid plain scalar keeps its bytes.
 
 **Output and exit codes** — prints `surface:`, `out:`, `stamp:` (when given),
 then `written:`, `unchanged:` and `deleted (orphaned):` (each `(none)` when

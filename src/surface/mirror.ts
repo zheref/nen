@@ -388,11 +388,22 @@ export function rewriteInvocations(text: string, row: SurfaceRow, prefix: string
   return text.replace(pattern, (_whole, name: string): string => invocationFor(row, name) ?? _whole);
 }
 
-/** The whole `description:` value -- its own line plus every continuation -- as one space-joined string. */
+// A YAML block scalar's header (zheref/nen#328): `|` or `>`, an optional
+// chomping indicator and an optional indentation indicator in either order,
+// then an optional comment. It introduces the value; it is not part of it.
+const BLOCK_SCALAR_HEADER = /^[|>](?:[+-]?[1-9]?|[1-9]?[+-]?)(?:\s+#.*)?$/;
+
+/**
+ * The whole `description:` value -- its own line plus every continuation -- as
+ * one space-joined string. A block scalar's `>`/`|` header is dropped, so a
+ * folded or literal description reads as its text (zheref/nen#328).
+ */
 export function descriptionText(entries: readonly FrontmatterEntry[]): string {
   const entry = entries.find((candidate): boolean => candidate.key === "description");
   if (entry === undefined) return "";
-  return [inlineValue(entry), ...entry.lines.slice(1).map((line): string => line.trim())]
+  const inline = inlineValue(entry);
+  const head = BLOCK_SCALAR_HEADER.test(inline) ? "" : inline;
+  return [head, ...entry.lines.slice(1).map((line): string => line.trim())]
     .filter((part): boolean => part !== "")
     .join(" ")
     .replace(/\r/g, "");
@@ -411,6 +422,25 @@ export function firstSentence(text: string, budget: number): string {
   const cut = sentence.slice(0, budget);
   const space = cut.lastIndexOf(" ");
   return (space > 0 ? cut.slice(0, space) : cut).trim();
+}
+
+/**
+ * `value` as a YAML scalar that reads back as `value` (zheref/nen#328): plain
+ * where YAML's plain-scalar rules allow it, so every summary that was already
+ * valid keeps its bytes, and double-quoted otherwise. A JSON string literal is
+ * a valid YAML double-quoted scalar. Plain is refused for a value that is
+ * empty, has edge whitespace, opens with an indicator character, or carries
+ * `: ` or ` #` (a mapping value and a comment), or ends with `:`.
+ */
+export function yamlScalar(value: string): string {
+  const plain =
+    value !== "" &&
+    value === value.trim() &&
+    !/^[-?:,[\]{}#&*!|>'"%@`]/.test(value) &&
+    !/: | #/.test(value) &&
+    !value.endsWith(":") &&
+    !/[\x00-\x1f\x7f]/.test(value);
+  return plain ? value : JSON.stringify(value);
 }
 
 /**
@@ -487,7 +517,7 @@ function skillFile(options: GenerateOptions, skill: SourceSkill, truncated: stri
     if (description.length > row.descriptionBudget && !entries.some((entry): boolean => entry.key === "summary")) {
       const summary: FrontmatterEntry = {
         key: "summary",
-        lines: [`summary: ${firstSentence(description, row.descriptionBudget)}`],
+        lines: [`summary: ${yamlScalar(firstSentence(description, row.descriptionBudget))}`],
       };
       const at = entries.findIndex((entry): boolean => entry.key === "description");
       entries = [...entries.slice(0, at + 1), summary, ...entries.slice(at + 1)];

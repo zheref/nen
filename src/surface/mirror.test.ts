@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { parse as parseYaml } from "yaml";
 import { splitDocument } from "./frontmatter.js";
 import {
   checkSurfaceMirror,
@@ -32,6 +33,7 @@ import {
   universeFiles,
   withoutStamp,
   writeSurfaceMirror,
+  yamlScalar,
   type GeneratedFile,
   type SourceAgent,
 } from "./mirror.js";
@@ -817,5 +819,58 @@ describe("the report's not-supported paths", () => {
     expect(() =>
       generateSurfaceMirrorReport({ row: row("codex"), skills: readSourceSkills(SKILLS), agents: [], invocationPrefix: null, models: { target: { frontier: "x" }, surface: "codex", source: null, sourceSurface: "claude", known: ["codex"], surfaces: { codex: { frontier: "x" } } } }),
     ).toThrow(/no 'models\.codex\.fast'/);
+  });
+});
+
+describe("a summary is valid YAML whatever shape the description takes (zheref/nen#328)", () => {
+  // Every description is longer than both budgets, so codex and cursor each add a summary.
+  const tail = " More words follow ".repeat(80).trim();
+  // A block scalar may hold `: ` -- the shape that made the plain summary
+  // unparseable; a plain multi-line source cannot, so it carries none.
+  const sources: readonly (readonly [string, string, string])[] = [
+    ["folded", `description: >\n  Use when warming: a copy. ${tail}`, "Use when warming: a copy."],
+    ["folded-strip", `description: >-\n  Use when warming: a copy. ${tail}`, "Use when warming: a copy."],
+    ["literal", `description: |\n  Use when warming: a copy.\n  ${tail}`, "Use when warming: a copy."],
+    ["literal-keep-indent", `description: |+2 # a comment\n  Use when warming: a copy. ${tail}`, "Use when warming: a copy."],
+    ["plain-multiline", `description: Use when warming a copy.\n  ${tail}`, "Use when warming a copy."],
+  ];
+
+  for (const surface of ["codex", "cursor"]) {
+    for (const [name, description, sentence] of sources) {
+      it(`${surface}: a ${name} description yields a summary that parses back to its first sentence`, () => {
+        const source = tempDir();
+        mkdirSync(join(source, name));
+        writeFileSync(join(source, name, "SKILL.md"), `---\nname: ${name}\n${description}\n---\nbody\n`);
+        const report = generateSurfaceMirrorReport({
+          row: row(surface),
+          skills: readSourceSkills(source),
+          agents: [],
+          invocationPrefix: null,
+        });
+        expect(report.truncated).toEqual([name]);
+        const text = at(report.files, `${name}/SKILL.md`);
+        const front = text.split("\n---\n")[0]?.replace(/^---\n/, "") ?? "";
+        const parsed = parseYaml(front) as Record<string, unknown>;
+        expect(parsed["summary"]).toBe(sentence);
+        expect(String(parsed["description"])).toContain(sentence);
+      });
+    }
+  }
+
+  it("drops a block scalar's header from descriptionText, and keeps a plain value's own text", () => {
+    expect(descriptionText(splitDocument("---\ndescription: >-\n  a\n  b\n---\n").entries)).toBe("a b");
+    expect(descriptionText(splitDocument("---\ndescription: |\n  a\n---\n").entries)).toBe("a");
+    expect(descriptionText(splitDocument("---\ndescription: >2+\n  a\n---\n").entries)).toBe("a");
+    expect(descriptionText(splitDocument("---\ndescription: >a\n---\n").entries)).toBe(">a");
+  });
+
+  it("keeps a plain-safe summary's bytes, and double-quotes only what plain YAML cannot hold", () => {
+    expect(yamlScalar("Warm a working copy and cut")).toBe("Warm a working copy and cut");
+    expect(yamlScalar("Use hatsu:ten first.")).toBe("Use hatsu:ten first.");
+    for (const unsafe of ["a: b", "a #b", ">- text", "- item", "'quoted'", "\"q\"", "ends:", "", " lead", "@at", "`tick`"]) {
+      const scalar = yamlScalar(unsafe);
+      expect(scalar).toBe(JSON.stringify(unsafe));
+      expect(parseYaml(`summary: ${scalar}`)).toEqual({ summary: unsafe });
+    }
   });
 });
