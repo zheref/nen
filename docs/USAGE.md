@@ -10612,8 +10612,13 @@ read. Visibility here means `public`, `private` or `internal`. It then
     that actions/runner writes, which is localized on a non-English host.
   - Linux: the user name, matched exactly.
 
-  The warning recommends a per-repository account, `runner-<repo>` trimmed
-  to what the OS accepts.
+  The warning recommends a per-repository account: `runner-<repo>`, else
+  `runner-<owner>-<repo>`, else `runner-<repo>-2`, `-3` and so on, each
+  trimmed to what the OS accepts (Windows 20 characters, Linux 32). It picks
+  the first name that no other repository's runner service on this host
+  already logs on as, so two owners' `shared` repositories, or a long name
+  shortened, never end up recommended into one account. A service row the read
+  cannot vouch for (no name, no logon account) makes the whole read a `note:`.
 - **The target's own runners keep a shared account.** A new account moves
   only the runners this plan adds. The target's existing services on another
   account that also serves a repository of different or unknown visibility

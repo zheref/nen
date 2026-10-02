@@ -127,14 +127,15 @@ function readWindows(seams: Seams): HostService[] {
   }
   // ConvertTo-Json writes one object, not a list, for a single service.
   const rows = Array.isArray(parsed) ? parsed : [parsed];
-  return rows
-    .map(asRecord)
-    .filter((row): row is Record<string, unknown> => row !== null && typeof row["Name"] === "string")
-    .map((row): HostService => ({
-      name: row["Name"] as string,
-      account: typeof row["StartName"] === "string" ? row["StartName"] : "",
-      sid: typeof row["Sid"] === "string" && row["Sid"] !== "" ? row["Sid"] : null,
-    }));
+  // A row this read cannot vouch for makes the WHOLE read unreadable: dropping
+  // it, or reading a missing account as "", could silence the warning.
+  return rows.map((entry): HostService => {
+    const row = asRecord(entry);
+    if (row === null || typeof row["Name"] !== "string" || typeof row["StartName"] !== "string" || row["StartName"] === "") {
+      throw new HostReadError(`powershell answered a service row without a name and logon account (${JSON.stringify(entry)})`);
+    }
+    return { name: row["Name"], account: row["StartName"], sid: typeof row["Sid"] === "string" && row["Sid"] !== "" ? row["Sid"] : null };
+  });
 }
 
 function readLinux(seams: Seams): HostService[] {
@@ -245,10 +246,30 @@ function lookup(seams: Seams, slug: string, cache: Map<string, Resolved | null>)
   return found;
 }
 
-/** A per-repository account name: `runner-<repo>`, folded to what the OS accepts. */
-export function recommendAccount(os: RunnerOs, target: Target): string {
-  const base = `runner-${target.repo.toLowerCase().replace(/[^a-z0-9-]/g, "-")}`.replace(/-+/g, "-").replace(/-$/, "");
-  return base.slice(0, os === "Windows" ? 20 : 32).replace(/-$/, "");
+/**
+ * A per-repository account name, folded to what the OS accepts (Windows 20
+ * characters, Linux 32): `runner-<repo>`, else `runner-<owner>-<repo>`, else
+ * either with `-2`, `-3`, ... -- the first that no service on this host
+ * serving ANOTHER repository already logs on as (`taken`, bare lower-case
+ * names). A name shared across owners or shortened into a collision is exactly
+ * the shared account this recommendation exists to avoid.
+ */
+export function recommendAccount(os: RunnerOs, target: Target, taken: ReadonlySet<string> = new Set()): string {
+  const limit = os === "Windows" ? 20 : 32;
+  const fold = (text: string): string => text.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  const fit = (base: string, suffix = ""): string => `${base.slice(0, limit - suffix.length).replace(/-$/, "")}${suffix}`;
+  const bases = [fold(`runner-${target.repo}`), fold(`runner-${target.owner}-${target.repo}`)];
+  for (const base of bases) if (!taken.has(fit(base))) return fit(base);
+  for (let n = 2; ; n += 1) {
+    const candidate = fit(bases[0] as string, `-${n}`);
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/** The bare account name a service logs on as (`.\x`, `HOST\x` and `x` are all `x`). */
+function bareAccount(account: string): string {
+  const lower = account.toLowerCase();
+  return lower.slice(lower.lastIndexOf("\\") + 1);
 }
 
 /** Whether a neighbour's visibility is not provably the target's. */
@@ -315,7 +336,10 @@ export function checkNeighbours(seams: Seams, target: Target, os: RunnerOs, iden
     targetVisibility: own?.visibility ?? null,
     mixed,
     stranded,
-    recommendedAccount: mixed.length === 0 ? null : recommendAccount(os, target),
+    recommendedAccount:
+      mixed.length === 0
+        ? null
+        : recommendAccount(os, target, new Set(resolved.filter((row): boolean => !isTarget(row.neighbour)).map((row): string => bareAccount(row.service.account)))),
   };
 }
 

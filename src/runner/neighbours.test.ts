@@ -160,6 +160,11 @@ describe("checkNeighbours -- one account on one host is one trust domain (#330)"
     expect(renderNeighbours(report, TARGET, ".\\lordzheref")[0]).toMatch(/^note: the shared-account check did not run \(powershell could not list services \(Access is denied\.\)\)/);
     const garbled = windowsHost([{ match: `powershell ${windowsServicesArgv().join(" ")}`, result: { stdout: "<xml/>" } }]);
     expect(checkNeighbours(garbled, TARGET, "Windows", ".\\lordzheref").detail).toBe("powershell answered something that is not JSON");
+    // A row it cannot vouch for makes the read unreadable, never a clean read that drops it (#336 review).
+    for (const row of ['{"Name":"actions.runner.zheref-KroWindows.NZ-KWIR1"}', '{"Name":"actions.runner.zheref-KroWindows.NZ-KWIR1","StartName":""}', '[{"Name":"a","StartName":".\\\\x"},42]']) {
+      const partial = windowsHost([{ match: `powershell ${windowsServicesArgv().join(" ")}`, result: { stdout: row } }]);
+      expect(checkNeighbours(partial, TARGET, "Windows", ".\\lordzheref").status, row).toBe("unreadable");
+    }
   });
 
   it("reads a Linux host's units and their User=, and notes a systemctl that fails", () => {
@@ -202,6 +207,32 @@ describe("the pieces", () => {
     expect(recommendAccount("Windows", TARGET)).toBe("runner-nen");
     expect(recommendAccount("Windows", { owner: "zheref", repo: "KroWindows.Very_Long_Name", slug: "zheref/KroWindows.Very_Long_Name" })).toBe("runner-krowindows-ve");
     expect(recommendAccount("Linux", { owner: "zheref", repo: "KroWindows.Very_Long_Name", slug: "zheref/KroWindows.Very_Long_Name" })).toBe("runner-krowindows-very-long-name");
+  });
+
+  it("never recommends an account another repository's runner already logs on as (#336 review)", () => {
+    const shared = { owner: "org-b", repo: "shared", slug: "org-b/shared" };
+    expect(recommendAccount("Windows", shared, new Set(["runner-shared"]))).toBe("runner-org-b-shared");
+    expect(recommendAccount("Windows", shared, new Set(["runner-shared", "runner-org-b-shared"]))).toBe("runner-shared-2");
+    expect(recommendAccount("Windows", shared, new Set(["runner-shared", "runner-org-b-shared", "runner-shared-2"]))).toBe("runner-shared-3");
+    // Truncation that would collide is caught the same way.
+    const long = { owner: "zheref", repo: "KroWindows.Very_Long_Name", slug: "zheref/KroWindows.Very_Long_Name" };
+    expect(recommendAccount("Windows", long, new Set(["runner-krowindows-ve", "runner-zheref-krowin"]))).toBe("runner-krowindows-2");
+    // Through the check: a host where org-a/shared already runs as runner-shared.
+    const seams = new ScriptedSeams(
+      [
+        windowsServicesCall([
+          { Name: "actions.runner.org-a-shared.R1", StartName: ".\\runner-shared" },
+          { Name: "actions.runner.org-a-private.R1", StartName: ".\\lordzheref" },
+        ]),
+        repo("org-b/shared", "public"),
+        repo("org/a-shared", null),
+        repo("org/a-private", null),
+        repo("org-a/shared", "public"),
+        repo("org-a/private", "private"),
+      ],
+      { platform: "win32", env: {} },
+    );
+    expect(checkNeighbours(seams, shared, "Windows", ".\\lordzheref").recommendedAccount).toBe("runner-org-b-shared");
   });
 
   it("starts Windows PowerShell by its full path when the host names its system root", () => {
