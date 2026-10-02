@@ -864,6 +864,36 @@ describe("a summary is valid YAML whatever shape the description takes (zheref/n
     expect(descriptionText(splitDocument("---\ndescription: >a\n---\n").entries)).toBe(">a");
   });
 
+  it("a persona's TOML description reads a block scalar's text, never its header", () => {
+    const agents = tempDir();
+    writeFileSync(join(agents, "folded.md"), "---\nname: folded\ndescription: >-\n  Reads and reports.\nmodel: frontier\n---\n\nprose\n");
+    const report = generateSurfaceMirrorReport({
+      row: row("codex"),
+      skills: readSourceSkills(SKILLS),
+      agents: readSourceAgents(agents),
+      invocationPrefix: null,
+      models: { target: { frontier: "x", fast: "y" }, surface: "codex", source: null, sourceSurface: "claude", known: ["codex"], surfaces: { codex: { frontier: "x", fast: "y" } } },
+    });
+    const toml = report.files.find((file): boolean => file.path.endsWith("folded.toml"))?.content ?? "";
+    expect(toml).toContain('description = "Reads and reports."');
+    expect(toml).not.toContain(">-");
+  });
+
+  it("STALE, never hand-edited: a mirror a build before #328 generated (Nobunaga N1)", () => {
+    const source = tempDir();
+    mkdirSync(join(source, "ten"));
+    writeFileSync(join(source, "ten", "SKILL.md"), `---\nname: ten\ndescription: Satisfy the dependency before work: probe the binary. ${tail}\n---\nbody\n`);
+    const files = generateSurfaceMirror({ row: row("codex"), skills: readSourceSkills(source), agents: [], invocationPrefix: null });
+    const file = files.find((candidate): boolean => candidate.path === "ten/SKILL.md");
+    expect(file?.beforeSummaryQuoting).toContain("summary: Satisfy the dependency before work: probe the binary.");
+    const out = tempDir();
+    mkdirSync(join(out, "ten"));
+    writeFileSync(join(out, "ten", "SKILL.md"), file?.beforeSummaryQuoting ?? "");
+    const report = checkSurfaceMirror(out, files, row("codex"));
+    expect(report.stale).toEqual(["ten/SKILL.md"]);
+    expect(report.handEdited).toEqual([]);
+  });
+
   it("keeps a plain-safe summary's bytes, and double-quotes only what plain YAML cannot hold", () => {
     expect(yamlScalar("Warm a working copy and cut")).toBe("Warm a working copy and cut");
     expect(yamlScalar("Use hatsu:ten first.")).toBe("Use hatsu:ten first.");
@@ -871,6 +901,17 @@ describe("a summary is valid YAML whatever shape the description takes (zheref/n
       const scalar = yamlScalar(unsafe);
       expect(scalar).toBe(JSON.stringify(unsafe));
       expect(parseYaml(`summary: ${scalar}`)).toEqual({ summary: unsafe });
+    }
+    // Values a parser would resolve to something other than a string (N3).
+    for (const typed of ["1.", "1", "true", "No", "yes", "null", "~", "0x1F", ".inf", "2026-10-02", "<<", "="]) {
+      expect(yamlScalar(typed)).toBe(JSON.stringify(typed));
+      expect(parseYaml(`summary: ${yamlScalar(typed)}`)).toEqual({ summary: typed });
+    }
+    // Line breaks and C1 controls are quoted AND escaped (N4).
+    for (const broken of ["a\u2028b", "a\u0085b", "a\u0080b"]) {
+      const scalar = yamlScalar(broken);
+      expect(scalar).toMatch(/^"a\\u00[0-9a-f]{2}b"$|^"a\\u2028b"$/);
+      expect(parseYaml(`summary: ${scalar}`)).toEqual({ summary: broken });
     }
   });
 });
