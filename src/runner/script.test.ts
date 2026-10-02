@@ -336,6 +336,10 @@ describe("the interactive Windows script -- a logon task in a desktop session, n
   it("grants the identity Modify on its own runner folder only, then registers a logon task with no time limit that restarts", () => {
     expect(code).toContain("        $code = Invoke-Quiet 'icacls' @($runner.Dir, '/grant', ('{0}:(OI)(CI)M' -f $Account))");
     expect(code.filter((line) => /\(OI\)\(CI\)M/.test(line))).toHaveLength(1);
+    // The folder is reset to the root's baseline first, so a former identity keeps no Modify.
+    const reset = code.indexOf("        $code = Invoke-Quiet 'icacls' @($runner.Dir, '/reset', '/T', '/C', '/Q')");
+    expect(reset).toBeGreaterThan(-1);
+    expect(code.indexOf("        $code = Invoke-Quiet 'icacls' @($runner.Dir, '/grant', ('{0}:(OI)(CI)M' -f $Account))")).toBeGreaterThan(reset);
     expect(code).toContain("            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser");
     expect(code).toContain("            $principal = New-ScheduledTaskPrincipal -UserId $TaskUser -LogonType Interactive -RunLevel Limited");
     expect(code.join("\n")).toMatch(

@@ -55,7 +55,7 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     // Every run step pins bash: Actions defaults to pwsh on Windows.
     for (const step of steps.filter((candidate) => candidate["run"] !== undefined)) expect(step["shell"]).toBe("bash");
     const env = steps.map((step) => step["env"] as Row | undefined).filter((value): value is Row => value !== undefined);
-    expect(env).toContainEqual({ TOOLS: "git bash gh" });
+    expect(env).toContainEqual({ TOOLS: "git bash gh", MODE: "service" });
     expect(env).toContainEqual({ EXPECTED_OS: "Windows" });
   });
 
@@ -80,6 +80,14 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     expect(probe?.["shell"]).toBe("bash");
     expect(probe?.["run"]).toMatch(/GetCurrentProcess\(\)\.SessionId/);
     expect(probe?.["run"]).toMatch(/if \[ -z "\$session" \] \|\| \[ "\$session" = "0" \]; then/);
+    // Remediation is mode-aware: a logon task is restarted by signing in again, and
+    // an AppData hit is a warning for the account the runner runs as.
+    const steps = job["steps"] as Row[];
+    const toolchain = steps.find((step) => step["name"] === "Host toolchain -- every tool a job on this pool invokes");
+    expect(toolchain?.["env"]).toEqual({ TOOLS: "git bash gh", MODE: "interactive" });
+    expect(toolchain?.["run"]).toMatch(/sign the runner's account \(\$acct\) out and back in, which restarts its logon task/);
+    const appdata = steps.find((step) => step["name"] === "Resolution must be machine-wide (Windows)");
+    expect(appdata?.["run"]).toMatch(/if \[ "\$MODE" = interactive \]; then\n\s+echo "::warning::/);
   });
 
   it("keeps the probe off for a service pool: its condition is false once rendered", () => {

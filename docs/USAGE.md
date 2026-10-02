@@ -10759,8 +10759,10 @@ around the one call and cleared in a `finally`.
   exit 1 otherwise, naming it), and prints a `WARNING` when it is the account
   running the script. It asks **no password**: `config.cmd` runs
   without `--runasservice` and without a logon account, so only
-  `ACTIONS_RUNNER_INPUT_TOKEN` is set around the call. It grants the identity
-  `(OI)(CI)M` on its own `Runner<N>` folder and nothing wider, because
+  `ACTIONS_RUNNER_INPUT_TOKEN` is set around the call. It resets each
+  `Runner<N>` folder to the locked root's inherited baseline (`icacls /reset
+  /T`), so an account an earlier run granted keeps no access, then grants the
+  identity `(OI)(CI)M` there and nothing wider, because
   `run.cmd` runs as the identity and writes `_diag`, `_work` and its own
   updates there. Then, for every planned runner (skipped ones included), it
   registers a **Scheduled Task** named `actions.runner.<owner>-<repo>.<name>`

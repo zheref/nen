@@ -391,7 +391,7 @@ export function renderPlan(plan: RunnerPlan): string[] {
     `download: ${plan.download.filename} (runner ${plan.runnerVersion}, sha256 ${plan.download.sha256_checksum})`,
     `project dir: ${plan.projectDir}`,
     ...renderPipeTable([
-      ["slot", "name", "install dir", isLogonTask(plan) ? "logon task" : "service"],
+      ["slot", "name", "install dir", isLogonTask(plan) ? "logon task" : plan.os === "macOS" ? "launch agent" : "service"],
       ...plan.runners.map((runner): string[] => [String(runner.slot), runner.name, runner.installDir, runner.serviceName]),
     ]),
     `already registered for ${plan.machineCode}/${plan.consumerCode}: ${plan.existing.length === 0 ? "(none)" : plan.existing.join(", ")}`,

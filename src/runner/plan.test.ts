@@ -108,6 +108,7 @@ describe("computePlan -- the NZ-NNR1..3 plan for zheref/nen's windows-x64 pool",
     const mac = computePlan(inputs({ pool: pool("macos-arm64"), serviceAccount: null, count: 1, platform: "darwin", env: { HOME: "/Users/zheref" } }));
     expect(mac.root).toBe("/Users/zheref/actions-runners");
     expect(mac.identity).toBe("invoking-user");
+    expect(renderPlan(mac).join("\n")).toMatch(/\| launch agent +\|/);
     expect(mac.download.filename).toBe("actions-runner-osx-arm64-2.337.0.tar.gz");
     // RJ2-NNR1..3 are this consumer's but another machine's: NZ still starts at 1.
     expect(mac.runners[0]?.name).toBe("NZ-NNR1");
