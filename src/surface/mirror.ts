@@ -296,12 +296,13 @@ export interface GeneratedFile {
    */
   readonly beforeLinkRewrite?: string;
   /**
-   * The bytes a build before zheref/nen#328 generated for this skill -- a
-   * block scalar's header read as text, the summary written unquoted --
-   * present only where that differs. `check` calls a committed file equal to
-   * it STALE, for `beforeLinkRewrite`'s reason.
+   * Every set of bytes a build before zheref/nen#328 generated for this skill
+   * -- a block scalar's header read as text, the summary written unquoted --
+   * with its links re-aimed and, for a build before zheref/nen#270 as well,
+   * verbatim; present only where one differs. `check` calls a committed file
+   * equal to any of them STALE, for `beforeLinkRewrite`'s reason.
    */
-  readonly beforeSummaryQuoting?: string;
+  readonly beforeSummaryQuoting?: readonly string[];
 }
 
 export interface GenerateOptions {
@@ -551,8 +552,14 @@ function skillFile(options: GenerateOptions, skill: SourceSkill, truncated: stri
   // header kept in the description's text, the summary unquoted -- so `check`
   // reads a mirror that build really generated as STALE, never hand-edited
   // (the #270 rule, Nobunaga N1 on this change).
-  const before = render(withSummary(document.entries, row, skill.name, [], false)).content;
-  return before === file.content ? file : { ...file, beforeSummaryQuoting: before };
+  // Both forms that build could have written are kept: with its links re-aimed,
+  // and -- a build before zheref/nen#270 too -- with them verbatim (Copilot on
+  // #343), so an upgrade across both generator changes still reads stale.
+  const old = render(withSummary(document.entries, row, skill.name, [], false));
+  const before = [...new Set([old.content, old.beforeLinkRewrite ?? old.content])].filter(
+    (bytes): boolean => bytes !== file.content,
+  );
+  return before.length === 0 ? file : { ...file, beforeSummaryQuoting: before };
 }
 
 /**
@@ -1186,7 +1193,7 @@ export function checkSurfaceMirror(
     else if (
       file.beforeSummaryQuoting !== undefined &&
       withoutStamp(existing) !== withoutStamp(file.content) &&
-      withoutStamp(existing) === withoutStamp(file.beforeSummaryQuoting)
+      file.beforeSummaryQuoting.some((before): boolean => withoutStamp(existing) === withoutStamp(before))
     )
       stale.push(file.path);
     // Aimed from another location (Nobunaga, the #270 review): the links OUT

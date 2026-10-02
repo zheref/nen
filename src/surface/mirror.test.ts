@@ -885,10 +885,41 @@ describe("a summary is valid YAML whatever shape the description takes (zheref/n
     writeFileSync(join(source, "ten", "SKILL.md"), `---\nname: ten\ndescription: Satisfy the dependency before work: probe the binary. ${tail}\n---\nbody\n`);
     const files = generateSurfaceMirror({ row: row("codex"), skills: readSourceSkills(source), agents: [], invocationPrefix: null });
     const file = files.find((candidate): boolean => candidate.path === "ten/SKILL.md");
-    expect(file?.beforeSummaryQuoting).toContain("summary: Satisfy the dependency before work: probe the binary.");
+    const before = file?.beforeSummaryQuoting ?? [];
+    expect(before[0]).toContain("summary: Satisfy the dependency before work: probe the binary.");
     const out = tempDir();
     mkdirSync(join(out, "ten"));
-    writeFileSync(join(out, "ten", "SKILL.md"), file?.beforeSummaryQuoting ?? "");
+    writeFileSync(join(out, "ten", "SKILL.md"), before[0] ?? "");
+    const report = checkSurfaceMirror(out, files, row("codex"));
+    expect(report.stale).toEqual(["ten/SKILL.md"]);
+    expect(report.handEdited).toEqual([]);
+  });
+
+  it("STALE across BOTH generator changes: an old summary with its links verbatim (#270 and #328, Copilot on #343)", () => {
+    const root = tempDir();
+    const source = join(root, "skills");
+    mkdirSync(join(source, "ten"), { recursive: true });
+    writeFileSync(join(root, "GUIDE.md"), "guide\n");
+    writeFileSync(
+      join(source, "ten", "SKILL.md"),
+      `---\nname: ten\ndescription: Satisfy the dependency before work: probe the binary. ${tail}\n---\nSee [the guide](../../GUIDE.md).\n`,
+    );
+    // One level deeper than the source, so re-aiming really moves the link.
+    const out = join(root, "surfaces", "codex");
+    const files = generateSurfaceMirror({
+      row: row("codex"),
+      skills: readSourceSkills(source),
+      agents: [],
+      invocationPrefix: null,
+      links: { root, sourceDir: source, agentsDir: null, rulesFile: null, outDir: out },
+    });
+    const file = files.find((candidate): boolean => candidate.path === "ten/SKILL.md");
+    const before = file?.beforeSummaryQuoting ?? [];
+    expect(before).toHaveLength(2);
+    const verbatim = before.find((bytes): boolean => bytes.includes("](../../GUIDE.md)"));
+    expect(verbatim).toContain("summary: Satisfy the dependency before work: probe the binary.");
+    mkdirSync(join(out, "ten"), { recursive: true });
+    writeFileSync(join(out, "ten", "SKILL.md"), verbatim ?? "");
     const report = checkSurfaceMirror(out, files, row("codex"));
     expect(report.stale).toEqual(["ten/SKILL.md"]);
     expect(report.handEdited).toEqual([]);
@@ -897,21 +928,29 @@ describe("a summary is valid YAML whatever shape the description takes (zheref/n
   it("keeps a plain-safe summary's bytes, and double-quotes only what plain YAML cannot hold", () => {
     expect(yamlScalar("Warm a working copy and cut")).toBe("Warm a working copy and cut");
     expect(yamlScalar("Use hatsu:ten first.")).toBe("Use hatsu:ten first.");
+    // A plain summary reads back as the same string under YAML 1.1 too.
+    for (const plain of ["Warm a working copy and cut", "Use hatsu:ten first.", "yesterday", "on-call duty"]) {
+      expect(yamlScalar(plain)).toBe(plain);
+      expect(parseYaml(`summary: ${plain}`, { version: "1.1" })).toEqual({ summary: plain });
+    }
     for (const unsafe of ["a: b", "a #b", ">- text", "- item", "'quoted'", "\"q\"", "ends:", "", " lead", "@at", "`tick`"]) {
       const scalar = yamlScalar(unsafe);
       expect(scalar).toBe(JSON.stringify(unsafe));
       expect(parseYaml(`summary: ${scalar}`)).toEqual({ summary: unsafe });
+      expect(parseYaml(`summary: ${scalar}`, { version: "1.1" })).toEqual({ summary: unsafe });
     }
     // Values a parser would resolve to something other than a string (N3).
     for (const typed of ["1.", "1", "true", "No", "yes", "null", "~", "0x1F", ".inf", "2026-10-02", "<<", "="]) {
       expect(yamlScalar(typed)).toBe(JSON.stringify(typed));
       expect(parseYaml(`summary: ${yamlScalar(typed)}`)).toEqual({ summary: typed });
+      expect(parseYaml(`summary: ${yamlScalar(typed)}`, { version: "1.1" })).toEqual({ summary: typed });
     }
     // Line breaks and C1 controls are quoted AND escaped (N4).
     for (const broken of ["a\u2028b", "a\u0085b", "a\u0080b"]) {
       const scalar = yamlScalar(broken);
       expect(scalar).toMatch(/^"a\\u00[0-9a-f]{2}b"$|^"a\\u2028b"$/);
       expect(parseYaml(`summary: ${scalar}`)).toEqual({ summary: broken });
+      expect(parseYaml(`summary: ${scalar}`, { version: "1.1" })).toEqual({ summary: broken });
     }
   });
 });
