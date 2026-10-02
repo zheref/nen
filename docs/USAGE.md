@@ -935,7 +935,11 @@ run and succeed on every head.
 or gh's zero time `0001-01-01T00:00:00Z`) used to sort *before* an older
 `SUCCESS` of the same name, so row 2 read that superseded success. Now a run
 with no verdict and no start time is the latest of its name, and row 2 waits
-for it. That holds even beside a *later* `SUCCESS` of the same name (two
+for it. GitHub's own GraphQL stamps a queued run's `startedAt` when it is
+queued (recorded on zheref/nen#342, 2026-10-02: `compile`, `QUEUED`,
+`startedAt: 2026-10-02T23:02:39Z`), so a live rollup already orders a queued
+re-run after the run it repeats. The precedence is a fail-closed guard for the
+shapes a hand-built state or gh's rendering can carry. That holds even beside a *later* `SUCCESS` of the same name (two
 workflows sharing a job name, or a run stuck behind an offline runner): the
 row stays not-ready until the stuck run starts or is cancelled. A run that
 already has a verdict, or a start time, sorts as before.

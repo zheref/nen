@@ -303,6 +303,23 @@ describe("latestChecks -- a re-run that has not started is the latest (zheref/ne
     expect(latestChecks([undated, older])).toEqual([older]);
   });
 
+  it("RECORDED: GitHub stamps a QUEUED run's startedAt, so the plain ordering already waits for it (NN-PR-#342)", () => {
+    // gh api graphql on zheref/nen#342, head 1e6cb9b, 2026-10-02T23:02:49Z: the
+    // `compile` run was QUEUED with a real startedAt, not null or zero time.
+    // The no-start-time precedence above is therefore defensive, for shapes a
+    // hand-built or gh-rendered rollup can carry.
+    const queued = checkRun({
+      name: "compile",
+      status: "QUEUED",
+      conclusion: null,
+      startedAt: "2026-10-02T23:02:39Z",
+      completedAt: null,
+    });
+    const earlier = checkRun({ name: "compile", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-02T22:10:00Z" });
+    expect(latestChecks([earlier, queued])).toEqual([queued]);
+    expect(checksAllGreen([earlier, queued])).toBe(false);
+  });
+
   it("never pushes a run that already carries a conclusion ahead of a later FAILURE (Feitan F1)", () => {
     const failed = checkRun({ name: "ci / build", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-30T10:00:00Z" });
     const odd = checkRun({ name: "ci / build", status: "QUEUED", conclusion: "SUCCESS", startedAt: null });
