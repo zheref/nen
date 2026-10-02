@@ -157,6 +157,14 @@ describe("fetchPullRequest -- one typed snapshot from three gh calls", () => {
     expect(snapshot.checks[0]).toMatchObject({ status: "IN_PROGRESS", conclusion: null });
   });
 
+  it("refuses a view with no boolean isDraft rather than reading it as not a draft (zheref/nen#331)", () => {
+    for (const isDraft of [null, undefined, "false"]) {
+      const seams = scriptedFetch({ view: { isDraft } });
+      expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(FetchError);
+      expect(() => fetchPullRequest(scriptedFetch({ view: { isDraft } }), TARGET, 9)).toThrow(/no boolean isDraft/);
+    }
+  });
+
   it("throws a named FetchError rather than reading a malformed rollup as empty", () => {
     const seams = scriptedFetch({ view: { statusCheckRollup: [{ bogus: true }] } });
     expect(() => fetchPullRequest(seams, TARGET, 9)).toThrow(FetchError);
