@@ -123,6 +123,24 @@ jobs:
           done <<< "$resolved"
           exit "$bad"
 
+      # An interactive pool (mode @@MODE@@) exists for jobs that drive a real UI,
+      # and only a signed-in desktop session can run them. A runner installed as
+      # a service runs in session 0, which has no desktop, and a UI job there
+      # times out. Rendered for every pool; it runs only for an interactive
+      # Windows one.
+      - name: Desktop session present (interactive Windows pool)
+        if: runner.os == 'Windows' && '@@MODE@@' == 'interactive'
+        shell: bash
+        run: |
+          set -uo pipefail
+          session="$(powershell.exe -NoProfile -NonInteractive -Command '[System.Diagnostics.Process]::GetCurrentProcess().SessionId' | tr -d '\r')"
+          echo "session id  : ${session:-<unknown>}"
+          echo "session name: ${SESSIONNAME:-<unset>}"
+          if [ -z "$session" ] || [ "$session" = "0" ]; then
+            echo "::error::This job runs in session ${session:-<unknown>}, not in a signed-in desktop session. A runner installed as a service (session 0) cannot drive a UI. Register the pool's runners from an interactive plan ('nen runner script' renders a logon task), and sign its account in to the desktop."
+            exit 1
+          fi
+
       # A launchd agent (macOS) or a systemd service (Linux) can see a tool in a
       # user-scope directory, so a hit there is a WARNING, not a failure: it
       # works for this account and would not survive a change of service user.

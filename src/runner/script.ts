@@ -45,8 +45,19 @@
 // `$ErrorActionPreference = 'Continue'` around them, because under 'Stop' a
 // 5.1 host turns any stderr line of a native program into a terminating error.
 
+//
+// AN INTERACTIVE WINDOWS POOL IS A LOGON TASK, NEVER A SERVICE (#333). A
+// service runs in session 0, which has no desktop, so a job that drives a real
+// UI times out there. For `mode: interactive` the script configures the runner
+// WITHOUT `--runasservice`, grants the identity Modify on its own runner folder,
+// and registers a Scheduled Task that starts `run.cmd` at that identity's logon,
+// in its desktop session (interactive token: no password is asked or stored),
+// restarting on failure, with no time limit. Every other guarantee above holds:
+// the locked root, the re-hashed package, the token through the environment,
+// the summary file.
+
 import type { RunnerPlan } from "./plan.js";
-import { NETWORK_SERVICE } from "./plan.js";
+import { isLogonTask, NETWORK_SERVICE } from "./plan.js";
 
 export interface RenderedScript {
   readonly os: RunnerPlan["os"];
@@ -97,6 +108,41 @@ function header(plan: RunnerPlan, version: string, comment: string, dash: string
 
 // ── Windows ─────────────────────────────────────────────────────────────────
 
+/** The service account's password, asked once and checked before its first use. A logon task asks none. */
+const PASSWORD_PROMPT = [
+  "    if ($pending.Count -gt 0 -and $Account -ne '') {",
+  "        $secure = Read-Host -AsSecureString ('Password for {0} (asked once; never shown, never written)' -f $Identity)",
+  "        $refusal = $null",
+  "        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)",
+  "        try {",
+  "            $refusal = Test-Password ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr))",
+  "        } finally {",
+  "            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)",
+  "        }",
+  "        if ($null -ne $refusal) {",
+  "            $secure.Dispose()",
+  "            Write-Host ('jusshin: the password for {0} is refused: {1}. The rule: a service-account password carries none of {2}, and no leading or trailing whitespace. Change the account''s password and re-run.' -f $Identity, $refusal, $PasswordRule)",
+  "            $script:Failed += $pending.Count",
+  "            Close-Run 1",
+  "        }",
+  "    }",
+];
+
+/** Why a password is refused -- the service form's check, rendered only where a password is asked. */
+const TEST_PASSWORD = [
+  "# Why a password is refused, or $null. The rule: none of the characters",
+  "# cmd.exe or PowerShell read as syntax, and no leading or trailing whitespace",
+  "# (the runner trims an environment input). Checked BEFORE the first use.",
+  "function Test-Password {",
+  "    param([string]$Plain)",
+  "    if ([string]::IsNullOrEmpty($Plain)) { return 'it is empty' }",
+  `    if ($Plain -match ${ps(REFUSED_PASSWORD_PATTERN)}) { return 'it carries a refused character' }`,
+  "    if ($Plain -cne $Plain.Trim()) { return 'it begins or ends with whitespace' }",
+  "    return $null",
+  "}",
+  "",
+];
+
 export function renderWindows(plan: RunnerPlan, version: string): string {
   const account = plan.identity === NETWORK_SERVICE ? "" : plan.identity.slice(2);
   const [owner, repo] = plan.target.split("/") as [string, string];
@@ -104,27 +150,62 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     (runner, index): string =>
       `    @{ Name = ${ps(runner.name)}; Dir = ${ps(runner.installDir)} }${index === plan.runners.length - 1 ? "" : ","}`,
   );
+  const task = isLogonTask(plan);
+  const intro = task
+    ? [
+        ...header(plan, version, "#", "--", "as logon tasks in a desktop session"),
+        "#",
+        "# Windows PowerShell 5.1. Run it ELEVATED: 'nen runner script --json' prints",
+        "# the one launch line, which opens it through a UAC prompt. Keep this file",
+        "# OUTSIDE the runner root (e.g. %LOCALAPPDATA%\\nen\\jusshin\\), where only you",
+        "# can change it before UAC.",
+        "#",
+        "# INTERACTIVE, NOT A SERVICE. Each runner is configured without --runasservice",
+        "# and started by a Scheduled Task at the identity's logon, in its desktop",
+        "# session (interactive token: no password is asked, none is stored). A runner",
+        "# is online only while that identity is signed in (or auto-logged on -- this",
+        "# script never configures that), and every job it takes runs with that",
+        "# account's profile and credentials. Every registration token this script",
+        "# mints with gh lives only in this process: never on a command line",
+        "# (config.cmd reads it from ACTIONS_RUNNER_INPUT_TOKEN), never echoed, never",
+        "# written to a file, and config.cmd's output is never replayed.",
+        "#",
+        "# The runner root is locked down FIRST: owner Administrators, inherited",
+        "# entries removed, SYSTEM and Administrators full control. The package lives",
+        "# in an admin-only _jusshin\\pkg and is re-hashed before every extraction.",
+        "# The identity gets Modify on its own Runner<N> folders only.",
+        "# The one summary line is also written to _jusshin\\register-<ts>.summary.",
+        "#",
+        "# Exit codes: 0 every planned runner's logon task is registered, and running",
+        "# wherever the identity is signed in; 1 anything else (an identity that is",
+        "# not a local account included); 3 not elevated; 5 gh missing or not signed",
+        "# in; 6 the runner package failed its SHA-256 check (the file is deleted).",
+        "",
+      ]
+    : [
+        ...header(plan, version, "#", "--", "as Windows services"),
+        "#",
+        "# Windows PowerShell 5.1. Run it ELEVATED: 'nen runner script --json' prints",
+        "# the one launch line, which opens it through a UAC prompt. Keep this file",
+        "# OUTSIDE the runner root (e.g. %LOCALAPPDATA%\\nen\\jusshin\\), where only you",
+        "# can change it before UAC. It asks ONCE for the service account's password.",
+        "# That password, and every registration token this script mints with gh,",
+        "# live only in this process: never on a command line (config.cmd reads them",
+        "# from ACTIONS_RUNNER_INPUT_* environment inputs), never echoed, never",
+        "# written to a file, and config.cmd's output is never replayed.",
+        "#",
+        "# The runner root is locked down FIRST: owner Administrators, inherited",
+        "# entries removed, SYSTEM and Administrators full control. The package lives",
+        "# in an admin-only _jusshin\\pkg and is re-hashed before every extraction.",
+        "# The one summary line is also written to _jusshin\\register-<ts>.summary.",
+        "#",
+        "# Exit codes: 0 every planned runner's service is Running; 1 anything else",
+        "# (a refused password included); 3 not elevated; 5 gh missing or not signed",
+        "# in; 6 the runner package failed its SHA-256 check (the file is deleted).",
+        "",
+      ];
   return [
-    ...header(plan, version, "#", "--", "as Windows services"),
-    "#",
-    "# Windows PowerShell 5.1. Run it ELEVATED: 'nen runner script --json' prints",
-    "# the one launch line, which opens it through a UAC prompt. Keep this file",
-    "# OUTSIDE the runner root (e.g. %LOCALAPPDATA%\\nen\\jusshin\\), where only you",
-    "# can change it before UAC. It asks ONCE for the service account's password.",
-    "# That password, and every registration token this script mints with gh,",
-    "# live only in this process: never on a command line (config.cmd reads them",
-    "# from ACTIONS_RUNNER_INPUT_* environment inputs), never echoed, never",
-    "# written to a file, and config.cmd's output is never replayed.",
-    "#",
-    "# The runner root is locked down FIRST: owner Administrators, inherited",
-    "# entries removed, SYSTEM and Administrators full control. The package lives",
-    "# in an admin-only _jusshin\\pkg and is re-hashed before every extraction.",
-    "# The one summary line is also written to _jusshin\\register-<ts>.summary.",
-    "#",
-    "# Exit codes: 0 every planned runner's service is Running; 1 anything else",
-    "# (a refused password included); 3 not elevated; 5 gh missing or not signed",
-    "# in; 6 the runner package failed its SHA-256 check (the file is deleted).",
-    "",
+    ...intro,
     "$ErrorActionPreference = 'Stop'",
     "$ProgressPreference = 'SilentlyContinue'",
     "",
@@ -138,8 +219,9 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     `$DownloadUrl = ${ps(plan.download.download_url)}`,
     `$ZipName = ${ps(plan.download.filename)}`,
     `$Sha256 = ${ps(plan.download.sha256_checksum.toUpperCase())}`,
-    `$ServicePrefix = ${ps(`actions.runner.${owner}-${repo}.`)}`,
-    `$PasswordRule = ${ps(REFUSED_PASSWORD_CHARACTERS)}`,
+    ...(task
+      ? [`$TaskPrefix = ${ps(`actions.runner.${owner}-${repo}.`)}`]
+      : [`$ServicePrefix = ${ps(`actions.runner.${owner}-${repo}.`)}`, `$PasswordRule = ${ps(REFUSED_PASSWORD_CHARACTERS)}`]),
     "$Runners = @(",
     ...runners,
     ")",
@@ -204,17 +286,7 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "    }",
     "}",
     "",
-    "# Why a password is refused, or $null. The rule: none of the characters",
-    "# cmd.exe or PowerShell read as syntax, and no leading or trailing whitespace",
-    "# (the runner trims an environment input). Checked BEFORE the first use.",
-    "function Test-Password {",
-    "    param([string]$Plain)",
-    "    if ([string]::IsNullOrEmpty($Plain)) { return 'it is empty' }",
-    `    if ($Plain -match ${ps(REFUSED_PASSWORD_PATTERN)}) { return 'it carries a refused character' }`,
-    "    if ($Plain -cne $Plain.Trim()) { return 'it begins or ends with whitespace' }",
-    "    return $null",
-    "}",
-    "",
+    ...(task ? [] : TEST_PASSWORD),
     "# Whether the package on disk is the one the plan names, hashed NOW.",
     "function Test-Package {",
     "    param([string]$Path)",
@@ -237,7 +309,9 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "try {",
     "    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())",
     "    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {",
-    "        Write-Host 'jusshin: run elevated -- this script registers Windows services and grants folder rights.'",
+    task
+      ? "        Write-Host 'jusshin: run elevated -- this script registers Scheduled Tasks for another account and grants folder rights.'"
+      : "        Write-Host 'jusshin: run elevated -- this script registers Windows services and grants folder rights.'",
     "        Close-Run 3",
     "    }",
     "",
@@ -278,9 +352,32 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "        Close-Run 5",
     "    }",
     "",
-    "    # Traverse rights for a local-account service: read-and-execute on the root",
-    "    # and the project folder, THIS FOLDER ONLY (no inheritance). config.cmd grants",
-    "    # the leaf Runner<N> folders itself. icacls /grant is idempotent.",
+    ...(task
+      ? [
+          "    # The logon task belongs to a LOCAL account on this host: one that does not",
+          "    # exist could never sign in, so its task would never fire.",
+          "    $localUser = $null",
+          "    try { $localUser = Get-LocalUser -Name $Account -ErrorAction Stop } catch { $localUser = $null }",
+          "    if ($null -eq $localUser -or -not $localUser.Enabled) {",
+          "        Write-Host ('jusshin: {0} is not an enabled local account on {1}; an interactive runner starts at that account''s logon. Create it (or name another with nen runner plan --service-account) and re-run.' -f $Identity, $env:COMPUTERNAME)",
+          "        Close-Run 1",
+          "    }",
+          "    $TaskUser = '{0}\\{1}' -f $env:COMPUTERNAME, $Account",
+          "",
+        ]
+      : []),
+    ...(task
+      ? [
+          "    # Traverse rights for the identity: read-and-execute on the root and the",
+          "    # project folder, THIS FOLDER ONLY (no inheritance). The leaf Runner<N>",
+          "    # folders are granted below, before each logon task. icacls /grant is",
+          "    # idempotent.",
+        ]
+      : [
+          "    # Traverse rights for a local-account service: read-and-execute on the root",
+          "    # and the project folder, THIS FOLDER ONLY (no inheritance). config.cmd grants",
+          "    # the leaf Runner<N> folders itself. icacls /grant is idempotent.",
+        ]),
     "    if ($Account -ne '') {",
     "        foreach ($dir in @($Root, $ProjectDir)) {",
     "            $code = Invoke-Quiet 'icacls' @($dir, '/grant', ('{0}:(RX)' -f $Account))",
@@ -311,22 +408,7 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "    }",
     "",
     "    $secure = $null",
-    "    if ($pending.Count -gt 0 -and $Account -ne '') {",
-    "        $secure = Read-Host -AsSecureString ('Password for {0} (asked once; never shown, never written)' -f $Identity)",
-    "        $refusal = $null",
-    "        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)",
-    "        try {",
-    "            $refusal = Test-Password ([Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr))",
-    "        } finally {",
-    "            [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)",
-    "        }",
-    "        if ($null -ne $refusal) {",
-    "            $secure.Dispose()",
-    "            Write-Host ('jusshin: the password for {0} is refused: {1}. The rule: a service-account password carries none of {2}, and no leading or trailing whitespace. Change the account''s password and re-run.' -f $Identity, $refusal, $PasswordRule)",
-    "            $script:Failed += $pending.Count",
-    "            Close-Run 1",
-    "        }",
-    "    }",
+    ...(task ? [] : PASSWORD_PROMPT),
     "",
     "    $zip = Join-Path $PkgDir $ZipName",
     "    if ($pending.Count -gt 0) {",
@@ -379,25 +461,42 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "            continue",
     "        }",
     "",
-    "        # NO SECRET ON THE COMMAND LINE: config.cmd is a batch file, and cmd.exe",
-    "        # re-parses & | < > ^ % in its arguments. The token and the password reach",
-    "        # the runner as ACTIONS_RUNNER_INPUT_TOKEN and",
-    "        # ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD, which actions/runner reads as",
-    "        # its --token and --windowslogonpassword inputs, masks, and removes from",
-    "        # its own environment. They exist in this process only for the call, and",
-    "        # config.cmd's output is DISCARDED: the log gets its exit code and a fixed",
-    "        # line, never a replay. The transcript is stopped around it all the same.",
-    "        $configArgs = @('--unattended', '--url', $RepoUrl, '--name', $name, '--labels', $Labels, '--work', '_work', '--runasservice')",
-    "        if ($Account -ne '') { $configArgs += @('--windowslogonaccount', $Identity) }",
-    "        $bstr = [IntPtr]::Zero",
-    "        $code = 1",
-    "        Stop-Log",
-    "        try {",
-    "            $env:ACTIONS_RUNNER_INPUT_TOKEN = $token",
-    "            if ($Account -ne '') {",
-    "                $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)",
-    "                $env:ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)",
-    "            }",
+    ...(task
+      ? [
+          "        # NO SECRET ON THE COMMAND LINE: config.cmd is a batch file, and cmd.exe",
+          "        # re-parses & | < > ^ % in its arguments. The token reaches the runner as",
+          "        # ACTIONS_RUNNER_INPUT_TOKEN, which actions/runner reads as its --token",
+          "        # input, masks, and removes from its own environment. It exists in this",
+          "        # process only for the call, and config.cmd's output is DISCARDED: the log",
+          "        # gets its exit code and a fixed line, never a replay. NO --runasservice:",
+          "        # this runner is started by a logon task, in a desktop session.",
+          "        $configArgs = @('--unattended', '--url', $RepoUrl, '--name', $name, '--labels', $Labels, '--work', '_work')",
+          "        $code = 1",
+          "        Stop-Log",
+          "        try {",
+          "            $env:ACTIONS_RUNNER_INPUT_TOKEN = $token",
+        ]
+      : [
+          "        # NO SECRET ON THE COMMAND LINE: config.cmd is a batch file, and cmd.exe",
+          "        # re-parses & | < > ^ % in its arguments. The token and the password reach",
+          "        # the runner as ACTIONS_RUNNER_INPUT_TOKEN and",
+          "        # ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD, which actions/runner reads as",
+          "        # its --token and --windowslogonpassword inputs, masks, and removes from",
+          "        # its own environment. They exist in this process only for the call, and",
+          "        # config.cmd's output is DISCARDED: the log gets its exit code and a fixed",
+          "        # line, never a replay. The transcript is stopped around it all the same.",
+          "        $configArgs = @('--unattended', '--url', $RepoUrl, '--name', $name, '--labels', $Labels, '--work', '_work', '--runasservice')",
+          "        if ($Account -ne '') { $configArgs += @('--windowslogonaccount', $Identity) }",
+          "        $bstr = [IntPtr]::Zero",
+          "        $code = 1",
+          "        Stop-Log",
+          "        try {",
+          "            $env:ACTIONS_RUNNER_INPUT_TOKEN = $token",
+          "            if ($Account -ne '') {",
+          "                $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)",
+          "                $env:ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)",
+          "            }",
+        ]),
     "            Push-Location -LiteralPath $dir",
     "            $previous = $ErrorActionPreference",
     "            $ErrorActionPreference = 'Continue'",
@@ -410,8 +509,12 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "            }",
     "        } finally {",
     "            [Environment]::SetEnvironmentVariable('ACTIONS_RUNNER_INPUT_TOKEN', $null, 'Process')",
-    "            [Environment]::SetEnvironmentVariable('ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD', $null, 'Process')",
-    "            if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }",
+    ...(task
+      ? []
+      : [
+          "            [Environment]::SetEnvironmentVariable('ACTIONS_RUNNER_INPUT_WINDOWSLOGONPASSWORD', $null, 'Process')",
+          "            if ($bstr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }",
+        ]),
     "            $token = $null",
     "            $configArgs = $null",
     "            Start-Log",
@@ -425,6 +528,18 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "    }",
     "    if ($null -ne $secure) { $secure.Dispose() }",
     "",
+    ...(task ? LOGON_TASKS : SERVICE_CHECK),
+    "} catch {",
+    "    Write-Host ('jusshin: stopped -- {0}' -f $_.Exception.Message)",
+    "    $script:Failed++",
+    "    Close-Run 1",
+    "}",
+    "",
+  ].join("\n");
+}
+
+/** The service form's tail: every planned runner's service Running. */
+const SERVICE_CHECK = [
     "    # Every planned runner's service must be Running -- skipped ones included;",
     "    # a stopped one is started once (a service inherits PATH only at start).",
     "    $down = 0",
@@ -454,14 +569,81 @@ export function renderWindows(plan: RunnerPlan, version: string): string {
     "",
     "    if ($down -eq 0 -and $script:Failed -eq 0) { Close-Run 0 }",
     "    Close-Run 1",
-    "} catch {",
-    "    Write-Host ('jusshin: stopped -- {0}' -f $_.Exception.Message)",
-    "    $script:Failed++",
-    "    Close-Run 1",
-    "}",
-    "",
-  ].join("\n");
-}
+];
+
+/**
+ * The interactive form's tail: for every planned runner, skipped ones included,
+ * the identity's Modify grant on its own folder and its logon task -- then the
+ * task started wherever the identity is already signed in.
+ */
+const LOGON_TASKS = [
+  "    # run.cmd runs AS the identity and writes _diag, _work and its own updates",
+  "    # into its folder: Modify there, on that folder only. icacls /grant and",
+  "    # Register-ScheduledTask -Force are both idempotent.",
+  "    $signedIn = $false",
+  "    try {",
+  "        $owners = Get-CimInstance Win32_Process -Filter \"Name = 'explorer.exe'\" | ForEach-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User }",
+  "        $signedIn = @($owners | Where-Object { $_ -eq $Account }).Count -gt 0",
+  "    } catch {",
+  "        $signedIn = $false",
+  "    }",
+  "    $down = 0",
+  "    $waiting = 0",
+  "    foreach ($runner in $Runners) {",
+  "        $taskName = $TaskPrefix + $runner.Name",
+  "        if (-not (Test-Path -LiteralPath (Join-Path $runner.Dir '.runner'))) {",
+  "            Write-Host ('jusshin: {0} is not configured in {1}; no logon task registered for it.' -f $runner.Name, $runner.Dir)",
+  "            $down++",
+  "            continue",
+  "        }",
+  "        $code = Invoke-Quiet 'icacls' @($runner.Dir, '/grant', ('{0}:(OI)(CI)M' -f $Account))",
+  "        if ($code -ne 0) {",
+  "            Write-Host ('jusshin: icacls could not grant {0} Modify on {1} (exit {2}); no logon task registered.' -f $Account, $runner.Dir, $code)",
+  "            $down++",
+  "            continue",
+  "        }",
+  "        try {",
+  "            # Interactive token: the task runs only in the identity's own desktop",
+  "            # session, so no password is asked or stored. No time limit; restarted",
+  "            # every minute if run.cmd exits with a failure; one instance at a time.",
+  "            $action = New-ScheduledTaskAction -Execute (Join-Path $runner.Dir 'run.cmd') -WorkingDirectory $runner.Dir",
+  "            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser",
+  "            $principal = New-ScheduledTaskPrincipal -UserId $TaskUser -LogonType Interactive -RunLevel Limited",
+  "            $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable",
+  "            Register-ScheduledTask -TaskName $taskName -TaskPath '\\' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description ('GitHub Actions runner {0} for {1}, in {2}''s desktop session. Rendered by nen runner script.' -f $runner.Name, $Target, $Identity) -Force | Out-Null",
+  "        } catch {",
+  "            Write-Host ('jusshin: could not register the logon task {0}: {1}' -f $taskName, $_.Exception.Message)",
+  "            $down++",
+  "            continue",
+  "        }",
+  "        Write-Host ('jusshin: {0} registered (at logon of {1}, {2} Modify on {3}).' -f $taskName, $TaskUser, $Account, $runner.Dir)",
+  "        if (-not $signedIn) {",
+  "            $waiting++",
+  "            continue",
+  "        }",
+  "        if ((Get-ScheduledTask -TaskName $taskName -TaskPath '\\').State -ne 'Running') {",
+  "            try {",
+  "                Start-ScheduledTask -TaskName $taskName -TaskPath '\\'",
+  "            } catch {",
+  "                Write-Host ('jusshin: {0} did not start: {1}' -f $taskName, $_.Exception.Message)",
+  "            }",
+  "            $deadline = (Get-Date).AddSeconds(30)",
+  "            while ((Get-Date) -lt $deadline -and (Get-ScheduledTask -TaskName $taskName -TaskPath '\\').State -ne 'Running') { Start-Sleep -Seconds 2 }",
+  "        }",
+  "        $state = (Get-ScheduledTask -TaskName $taskName -TaskPath '\\').State",
+  "        if ($state -ne 'Running') {",
+  "            Write-Host ('jusshin: {0} is {1} although {2} is signed in.' -f $taskName, $state, $Account)",
+  "            $down++",
+  "        }",
+  "    }",
+  "    Get-ScheduledTask -TaskPath '\\' -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like ($TaskPrefix + '*') } | Sort-Object TaskName | Format-Table -AutoSize TaskName, State | Out-String -Width 200 | Write-Host",
+  "    if ($waiting -gt 0) {",
+  "        Write-Host ('jusshin: {0} is not signed in, so {1} logon task(s) wait: the runners come online when {0} signs in to the desktop (or is auto-logged on; this script never configures that).' -f $Identity, $waiting)",
+  "    }",
+  "",
+  "    if ($down -eq 0 -and $script:Failed -eq 0) { Close-Run 0 }",
+  "    Close-Run 1",
+];
 
 // ── Linux and macOS ─────────────────────────────────────────────────────────
 

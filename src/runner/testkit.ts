@@ -57,8 +57,22 @@ export const POLICY_BODY = {
 
 export const POLICY = parseRunners("<fixture>", POLICY_BODY);
 
+/** An interactive Windows pool (#333), kept out of POLICY so the recorded inventory's pool rows stay as they are. */
+export const DESKTOP_POOL_BODY = {
+  id: "windows-x64-desktop",
+  os: "Windows",
+  arch: "X64",
+  mode: "interactive",
+  labels: ["self-hosted", "Windows", "X64", "desktop"],
+  enableVariable: "KWI_DESKTOP_RUNNER",
+  tools: ["git", "bash", "gh"],
+  preflightWorkflow: "runner-preflight-windows-x64-desktop.yml",
+  root: ROOT,
+};
+const DESKTOP_POLICY = parseRunners("<fixture>", { pools: [DESKTOP_POOL_BODY] });
+
 export function pool(id: string): RunnerPool {
-  const found = POLICY?.pools.find((candidate): boolean => candidate.id === id);
+  const found = [...(POLICY?.pools ?? []), ...(DESKTOP_POLICY?.pools ?? [])].find((candidate): boolean => candidate.id === id);
   if (found === undefined) throw new Error(`no fixture pool ${id}`);
   return found;
 }
@@ -92,7 +106,10 @@ export function lf(text: string): string {
 }
 
 /** A plan computed from the recorded inventory: NZ, NN, 3 runners, per pool. */
-export function planFor(poolId: string, overrides: { serviceAccount?: string | null; count?: number } = {}): RunnerPlan {
+export function planFor(
+  poolId: string,
+  overrides: { serviceAccount?: string | null; count?: number; env?: Readonly<Record<string, string>> } = {},
+): RunnerPlan {
   const seams = new ScriptedSeams(inventoryCalls());
   const chosen = pool(poolId);
   return computePlan({
@@ -106,6 +123,6 @@ export function planFor(poolId: string, overrides: { serviceAccount?: string | n
     runners: fetchRunners(seams, TARGET),
     downloads: fetchDownloads(seams, TARGET),
     platform: chosen.os === "macOS" ? "darwin" : "win32",
-    env: { HOME: "/Users/runner-host" },
+    env: overrides.env ?? { HOME: "/Users/runner-host" },
   });
 }

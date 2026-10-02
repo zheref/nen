@@ -70,7 +70,7 @@ type Subcommand = (typeof RUNNER_SUBCOMMANDS)[number];
 export const RUNNER_SUBCOMMAND_FLAGS: Readonly<Record<Subcommand, readonly string[]>> = {
   inventory: ["target", "pool"],
   plan: ["target", "pool", "machine-code", "count", "root", "service-account", "consumer-code", "out"],
-  script: ["plan", "out", "dry-run"],
+  script: ["plan", "out", "dry-run", "accept-daily-account"],
   verify: ["target", "expect", "labels", "wait"],
   workflow: ["target", "pool", "template", "out", "force", "dry-run"],
   preflight: ["target", "workflow", "ref", "wait", "dry-run"],
@@ -96,11 +96,11 @@ const VALUE_FLAGS = [
   "after-run",
   "value",
 ];
-const BOOLEAN_FLAGS = ["dry-run", "force"];
+const BOOLEAN_FLAGS = ["dry-run", "force", "accept-daily-account"];
 
 const USAGE = `nen runner inventory [--target <owner/name>] [--repo <path>] [--pool <id>] [--json]
 nen runner plan --pool <id> --machine-code <CODE> --count <n> [--target <owner/name>] [--repo <path>] [--root <dir>] [--service-account <name>] [--consumer-code <CODE>] [--out <file>] [--json]
-nen runner script --plan <plan.json> --out <file> [--repo <path>] [--dry-run] [--json]
+nen runner script --plan <plan.json> --out <file> [--repo <path>] [--accept-daily-account] [--dry-run] [--json]
 nen runner verify --expect <name>[,<name>...] [--target <owner/name>] [--labels <a,b,c>] [--wait <seconds>] [--json]
 nen runner workflow --pool <id> --template <path> [--target <owner/name>] [--repo <path>] [--out <path>] [--force] [--dry-run] [--json]
 nen runner preflight --target <owner/name> --workflow <basename> [--ref <branch>] [--wait <seconds>] [--dry-run] [--json]
@@ -125,13 +125,20 @@ plan       Which runners to add: the lowest free slots for --machine-code and
            product_codes key naming the target), the install dirs under the
            root (--root, else the pool's root.<os>, else the built-in default),
            the service identity (--service-account; 'network-service' only by
-           that explicit word on Windows; macOS takes none), and the runner
-           package with its SHA-256. --count 1..16. --out writes the plan JSON
-           (contract nen.runner.plan/v0.1).
+           that explicit word on a Windows service pool; macOS takes none),
+           and the runner package with its SHA-256. The pool's mode (service |
+           interactive) is the plan's: an interactive Windows pool needs a
+           local account, is online only while it is signed in, and is flagged
+           dailyAccount when that account is the one computing the plan.
+           --count 1..16. --out writes the plan JSON (contract
+           nen.runner.plan/v0.2; a v0.1 plan still reads, as a service plan).
 script     Render the plan's host script: PowerShell 5.1 (Windows), bash
            (Linux, run with sudo; macOS, run as yourself). --json names the one
            launch line, the script's scriptSha256 and the summary file glob.
-           Refuses a plan whose identity is still 'ask', and an --out under
+           An interactive Windows plan renders a logon Scheduled Task per
+           runner (run.cmd in the identity's desktop session), never a service.
+           Refuses a plan whose identity is still 'ask', a dailyAccount plan
+           without --accept-daily-account, and an --out under
            the plan's root: write it to %LOCALAPPDATA%\\nen\\jusshin\\ (Windows)
            or ~/.local/state/nen/jusshin/ (Linux, macOS).
 verify     Poll the runners list every 10s for up to --wait seconds (default
@@ -323,6 +330,11 @@ function script(context: CommandContext, deps: RunnerDeps): number {
       `the plan's identity is 'ask': nobody named the account the ${planned.os} services run as. Re-run 'nen runner plan' with --service-account <name>${planned.os === "Windows" ? " (a LOCAL account; 'network-service' only by explicit choice)" : ""}.`,
     );
   }
+  if (planned.dailyAccount && context.args.booleans.has("accept-daily-account") !== true) {
+    throw new VerbUsageError(
+      `the plan runs pool ${planned.pool}'s interactive runners as ${planned.identity}, the account that computed it -- your own daily account. Every UI job would run in your desktop session, with your profile and your credentials. Re-plan with a dedicated local account (--service-account), or pass --accept-daily-account to render it anyway.`,
+    );
+  }
   if (planned.os === "Windows" && (!/\.ps1$/i.test(out) || /[\s'"]/.test(out))) {
     throw new VerbUsageError(`--out '${out}' must end in .ps1 and carry no space or quote: 'powershell -File' runs only a .ps1, and the launch line passes the path inside a quoted Start-Process argument list.`);
   }
@@ -338,6 +350,8 @@ function script(context: CommandContext, deps: RunnerDeps): number {
     out,
     runners: planned.runners.map((runner): string => runner.name),
     identity: planned.identity,
+    mode: planned.mode,
+    dailyAccount: planned.dailyAccount,
     needsElevation: rendered.needsElevation,
     launch: launchLine(planned.os, out),
     written: !context.args.booleans.has("dry-run"),
@@ -374,7 +388,7 @@ function workflow(context: CommandContext, deps: RunnerDeps): number {
   const target = resolveTarget(context, false);
   const rendered = renderWorkflow(template, workflowValues(pool, target, deps.version));
   if (rendered.leftovers.length > 0) {
-    throw new RunnerFailure(1, `the rendered workflow still carries ${rendered.leftovers.join(", ")} -- a placeholder this renderer does not fill. The seven it fills are @@REPO_SLUG@@, @@RUNS_ON@@, @@OS@@, @@TOOLS@@, @@POOL_ID@@, @@WORKFLOW_FILE@@, @@RENDERED_BY@@. Nothing was written.`);
+    throw new RunnerFailure(1, `the rendered workflow still carries ${rendered.leftovers.join(", ")} -- a placeholder this renderer does not fill. The eight it fills are @@REPO_SLUG@@, @@RUNS_ON@@, @@OS@@, @@MODE@@, @@TOOLS@@, @@POOL_ID@@, @@WORKFLOW_FILE@@, @@RENDERED_BY@@. Nothing was written.`);
   }
   if (rendered.yamlError !== null) {
     throw new RunnerFailure(1, `the rendered workflow is not valid YAML (${rendered.yamlError}). Nothing was written.`);

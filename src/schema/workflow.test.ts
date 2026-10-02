@@ -1047,6 +1047,53 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
     expect(() => parseWorkflow("<doc>", { runner: {} })).toThrow(/is one letter away from 'runners'/);
   });
 
+  it("defaults mode by OS: a Windows or Linux pool is a service, a macOS pool is interactive (#333)", () => {
+    const linux = { ...WINDOWS_POOL, id: "linux-x64", os: "Linux", labels: ["self-hosted", "Linux", "X64"], preflightWorkflow: "l.yml" };
+    const mac = { ...WINDOWS_POOL, id: "macos-arm64", os: "macOS", arch: "ARM64", labels: ["self-hosted", "macOS", "ARM64"], preflightWorkflow: "m.yml" };
+    const pools = parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, linux, mac] } }).runners?.pools ?? [];
+    expect(pools.map((pool) => pool.mode)).toEqual(["service", "service", "interactive"]);
+    expect(parseWorkflow("<doc>", runnersWith({ ...mac, mode: "interactive" })).runners?.pools[0]?.mode).toBe("interactive");
+    expect(parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, mode: "service" })).runners?.pools[0]?.mode).toBe("service");
+  });
+
+  it("gives an interactive Windows pool exactly the four labels, desktop last, beside a service pool on one host (#333)", () => {
+    const desktop = {
+      ...WINDOWS_POOL,
+      id: "windows-x64-desktop",
+      mode: "interactive",
+      labels: ["self-hosted", "Windows", "X64", "desktop"],
+      preflightWorkflow: "runner-preflight-windows-x64-desktop.yml",
+    };
+    const workflow = parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, desktop] } });
+    expect(workflow.runners?.pools[1]).toMatchObject({ mode: "interactive", labels: ["self-hosted", "Windows", "X64", "desktop"] });
+    expect(describeRunners(workflow)).toBe(
+      "2 pool(s): windows-x64 [self-hosted, Windows, X64] via NEN_WINDOWS_RUNNER; windows-x64-desktop [self-hosted, Windows, X64, desktop] via NEN_WINDOWS_RUNNER",
+    );
+    for (const labels of [["self-hosted", "Windows", "X64"], ["self-hosted", "Windows", "X64", "gui"], ["self-hosted", "Windows", "desktop", "X64"]]) {
+      expect(() => parseWorkflow("<doc>", runnersWith({ ...desktop, labels }))).toThrow(
+        /pools\[0\]\.labels.*an interactive Windows pool's labels are exactly \["self-hosted","Windows","X64","desktop"\]/,
+      );
+    }
+  });
+
+  it("names the missing mode when a service Windows pool carries desktop, and refuses an unknown mode (#333)", () => {
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, labels: ["self-hosted", "Windows", "X64", "desktop"] }))).toThrow(
+      /'desktop' is an interactive pool's fourth label: declare "mode": "interactive"/,
+    );
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, mode: "desktop" }))).toThrow(
+      /pools\[0\]\.mode.*'desktop' is not a runner mode\. The two are service and interactive; absent means service for a Windows pool/,
+    );
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, mode: 1 }))).toThrow(/pools\[0\]\.mode/);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, mod: "service" }))).toThrow(/is one letter away from 'mode'/);
+  });
+
+  it("refuses a macOS service pool and a Linux interactive one, naming why (#333)", () => {
+    const mac = { ...WINDOWS_POOL, os: "macOS", arch: "ARM64", labels: ["self-hosted", "macOS", "ARM64"] };
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...mac, mode: "service" }))).toThrow(/pools\[0\]\.mode.*launchd LaunchAgent.*nen renders no LaunchDaemon/);
+    const linux = { ...WINDOWS_POOL, os: "Linux", labels: ["self-hosted", "Linux", "X64"] };
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...linux, mode: "interactive" }))).toThrow(/pools\[0\]\.mode.*only as a systemd service/);
+  });
+
   it("is what this repository's own nen/workflow.json declares, and it loads", () => {
     const loaded = loadWorkflow(process.cwd());
     expect(loaded.workflow.runners?.pools.map((pool): string => pool.id)).toEqual(["windows-x64", "macos-arm64"]);
