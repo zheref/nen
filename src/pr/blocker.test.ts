@@ -64,6 +64,12 @@ describe("nextBlocker -- the FIRST condition, fixed order, and nothing past it",
     expect(result.kind).toBe("red-check");
   });
 
+  it("a draft is a blocker of its own, ahead of the checks (zheref/nen#331)", () => {
+    const base = snapshot();
+    const result = nextBlocker(IDENTITIES, { ...base, pr: { ...base.pr, isDraft: true } });
+    expect(result.kind).toBe("draft");
+  });
+
   it("a head of nothing but SKIPPED checks is a red-check blocker that says nothing ran (zheref/nen#331)", () => {
     const result = nextBlocker(
       IDENTITIES,

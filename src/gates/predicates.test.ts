@@ -303,6 +303,26 @@ describe("latestChecks -- a re-run that has not started is the latest (zheref/ne
     expect(latestChecks([undated, older])).toEqual([older]);
   });
 
+  it("never pushes a run that already carries a conclusion ahead of a later FAILURE (Feitan F1)", () => {
+    const failed = checkRun({ name: "ci / build", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-30T10:00:00Z" });
+    const odd = checkRun({ name: "ci / build", status: "QUEUED", conclusion: "SUCCESS", startedAt: null });
+    expect(latestChecks([failed, odd])).toEqual([failed]);
+    expect(checksAllGreen([failed, odd])).toBe(false);
+  });
+
+  it("waits for a run with NO status, no conclusion and no start time (Feitan F2)", () => {
+    const bare = checkRun({ name: "ci / build", status: null, conclusion: null, startedAt: null });
+    expect(latestChecks([older, bare])).toEqual([bare]);
+    expect(checksAllGreen([older, bare])).toBe(false);
+  });
+
+  it("a stuck not-started run holds its name not-ready even beside a LATER SUCCESS -- fail-closed by design", () => {
+    const stuck = checkRun({ name: "ci / build", status: "QUEUED", conclusion: null, startedAt: null });
+    const later = checkRun({ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-01T10:00:00Z" });
+    expect(latestChecks([stuck, later])).toEqual([stuck]);
+    expect(checksAllGreen([stuck, later])).toBe(false);
+  });
+
   it("still orders two not-yet-started runs by their own keys, never dropping both", () => {
     const first = checkRun({ name: "ci / build", status: "QUEUED", startedAt: null, completedAt: null });
     const second = checkRun({ name: "ci / build", status: "WAITING", startedAt: null, completedAt: null });

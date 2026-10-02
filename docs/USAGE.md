@@ -922,17 +922,23 @@ path-filtered or conditional job that did not apply is not a failure. A
 A draft pull request fails row 1 (CON-42/1) with `not-ready: the PR is a DRAFT
 (CON-42/1) — a draft cannot be merged; mark it ready for review first`, even
 when GitHub reports it `MERGEABLE`. An intentional-skip exception is never
-inferred from branch protection. A repository that wants one must declare it
-(zheref/nen#249's excluded checks, or `--exclude-check`).
+inferred from branch protection, and **no mechanism declares one today**:
+`--exclude-check` only removes names, and an all-skipped head with its skips
+excluded is an empty rollup, which also fails. A declared exception is
+zheref/nen#249's to build. **Consumer note:** a repository whose only checks
+are conditional (a job-level `if:` that skips on a docs-only change, or jobs
+gated on a runner variable) now reads not-ready on such a head; make one job
+run and succeed on every head.
 
-**A re-run that has not started is the latest run of its name
-(zheref/nen#317).** A queued re-run carries no `startedAt` until a runner
-picks it up: GraphQL answers `null`, and gh renders that as
-`0001-01-01T00:00:00Z`. The latest-run-per-name reduction used to sort it
-*before* the older `SUCCESS` it re-runs, so row 2 read that superseded success.
-Now a run that is still in flight with no start time is the latest of its
-name, and row 2 waits for it. A completed run without a `startedAt` sorts as
-before.
+**A run that has not started is the latest run of its name
+(zheref/nen#317).** A queued run that carries no `startedAt` (`null`, empty,
+or gh's zero time `0001-01-01T00:00:00Z`) used to sort *before* an older
+`SUCCESS` of the same name, so row 2 read that superseded success. Now a run
+with no verdict and no start time is the latest of its name, and row 2 waits
+for it. That holds even beside a *later* `SUCCESS` of the same name (two
+workflows sharing a job name, or a run stuck behind an offline runner): the
+row stays not-ready until the stuck run starts or is cancelled. A run that
+already has a verdict, or a start time, sorts as before.
 
 **Which head the verdict is about (zheref/nen#245).** The verdict concerns
 **GitHub's current head** for the pull request at the moment the verb reads
@@ -1581,7 +1587,7 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 
 **Output and exit codes** — human lines: `#<pr>: <kind>`, then the detail
 line; `--json` top-level keys: `kind`
-(`conflict`\|`red-check`\|`owed-round`\|`unresolved-thread`\|`missing-body-requirement`\|`none`),
+(`conflict`\|`draft`\|`red-check`\|`owed-round`\|`unresolved-thread`\|`missing-body-requirement`\|`none`),
 `detail`. Exit 0 when `kind` is `none`, exit 1 for any other kind or a
 GitHub/schema-read failure, exit 2 on a bad flag.
 

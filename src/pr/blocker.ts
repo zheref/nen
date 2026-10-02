@@ -36,6 +36,7 @@ import type { PrSnapshot } from "./fetch.js";
 
 export type BlockerKind =
   | "conflict"
+  | "draft"
   | "red-check"
   | "owed-round"
   | "unresolved-thread"
@@ -65,6 +66,15 @@ export function nextBlocker(
     return {
       kind: "conflict",
       detail: `mergeable=${snapshot.pr.mergeable} mergeStateStatus=${snapshot.mergeStateStatus} -- cascade main in before anything else; a conflicted PR gets no checks at all, which reads as clean rather than broken`,
+    };
+  }
+
+  // A draft is never ready (zheref/nen#331): `nen pr ready` refuses it at row
+  // 1, so the next blocker names it before anything a draft can still change.
+  if (snapshot.pr.isDraft) {
+    return {
+      kind: "draft",
+      detail: "the PR is a draft -- mark it ready for review; a draft cannot be merged",
     };
   }
 

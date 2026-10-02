@@ -1140,6 +1140,23 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     expect(out.join("\n")).toContain("What the gate does NOT decide:");
   });
 
+  it("--explain renders the skipped check a SUCCESS admitted, under row 2 (zheref/nen#331)", async () => {
+    const base = await stubSource().pullRequestSnapshot({ owner: "zheref", repo: "example" }, 9);
+    const source = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+        ...base,
+        checkRollup: [
+          { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
+          { name: "windows", status: "COMPLETED", conclusion: "SKIPPED" },
+        ],
+      }),
+    });
+    const { io, out } = capture();
+    await prReady(input({ booleans: new Set(["explain"]) }), io, stubDeps(source));
+    expect(out.join("\n")).toContain("zheref/example#9: ready");
+    expect(out.join("\n")).toContain("admitted beside a SUCCESS, not verified: windows (SKIPPED)");
+  });
+
   it("the plain default is the gate's own quotable line, repo-prefixed", async () => {
     const { io, out } = capture();
     await prReady(input({ booleans: new Set() }), io, stubDeps(stubSource()));

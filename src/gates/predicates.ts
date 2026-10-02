@@ -152,6 +152,21 @@ function checkRunConclusion(entry: RollupEntry): CheckConclusion | null {
   return entry.kind === "check_run" ? entry.conclusion : null;
 }
 
+// A run that has not started yet (step 3 of latestChecks below). gh renders a
+// GraphQL `startedAt: null` as Go's zero time; both mean "no runner has picked
+// this up yet".
+const ZERO_TIME_PREFIX = "0001-01-01";
+
+// Keyed on "no verdict yet" rather than on the lifecycle `status` (Feitan F1,
+// F2 on this change): a run that already carries a conclusion is never pushed
+// ahead of a later verdict, and a run with no status AND no conclusion is
+// still waited for.
+function notYetStarted(entry: RollupEntry): boolean {
+  if (rollupEntryStatus(entry) !== null) return false;
+  const started = entry.startedAt;
+  return started === null || started === "" || started.startsWith(ZERO_TIME_PREFIX);
+}
+
 // --- latestChecks ------------------------------------------------------------
 // Reduce a check rollup to ONE entry per check name.
 //
@@ -169,6 +184,9 @@ function checkRunConclusion(entry: RollupEntry): CheckConclusion | null {
 //   2. Of what remains, take the LATEST by startedAt, then completedAt. An
 //      in-flight rerun therefore correctly supersedes an earlier SUCCESS -- work
 //      is happening now and the gate must wait for it.
+//   3. Ahead of step 2's timestamps, a run with NO VERDICT and NO START TIME
+//      (null, empty or gh's zero time) is the latest (zheref/nen#317). It holds
+//      its name not-ready even beside a later SUCCESS -- fail-closed, by design.
 //
 // Step 1 is not hypothetical and "latest by startedAt" alone is NOT enough:
 // bankai-core#577's own head carried, for `kisuke / probe / probe`, a SUCCESS
@@ -182,16 +200,6 @@ function checkRunConclusion(entry: RollupEntry): CheckConclusion | null {
 // `("anon-" + (.key|tostring))`. Groups are emitted in sorted key order, as
 // jq's `group_by` does, so the reduction is deterministic for any caller that
 // names checks in a message.
-// gh renders a GraphQL `startedAt: null` as Go's zero time; both mean "no
-// runner has picked this up yet".
-const ZERO_TIME_PREFIX = "0001-01-01";
-
-function notYetStarted(entry: RollupEntry): boolean {
-  if (lifecycleStatus(entry) === "COMPLETED") return false;
-  const started = entry.startedAt;
-  return started === null || started === "" || started.startsWith(ZERO_TIME_PREFIX);
-}
-
 export function latestChecks(entries: readonly RollupEntry[]): RollupEntry[] {
   interface Positioned {
     readonly entry: RollupEntry;
@@ -210,7 +218,7 @@ export function latestChecks(entries: readonly RollupEntry[]): RollupEntry[] {
   // builds: an absent timestamp sorts as "", i.e. before every real one.
   //
   // ONE EXCEPTION, ahead of the timestamps (zheref/nen#317): a run that has NOT
-  // STARTED -- still in flight, with no start time or gh's zero time -- is the
+  // STARTED -- no verdict yet, and no start time or gh's zero time -- is the
   // latest of its name. A queued re-run carries no `startedAt` until a runner
   // picks it up, so the plain key sorted it BEFORE the older SUCCESS it is
   // re-running, and CON-32(a) read that superseded SUCCESS as the verdict while
