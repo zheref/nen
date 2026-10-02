@@ -65,7 +65,7 @@ describe("nen runner -- the family", () => {
 describe("nen runner inventory", () => {
   it("groups the recorded runners by the declared pools under --json", async () => {
     const root = consumer();
-    const result = await run(["inventory", "--target", "zheref/nen", "--repo", root, "--json"], [...inventoryCalls(), windowsServicesCall()]);
+    const result = await run(["inventory", "--target", "zheref/nen", "--repo", root, "--json"], inventoryCalls());
     expect(result.code).toBe(0);
     const report = JSON.parse(result.out);
     expect(Object.keys(report)).toEqual(["target", "runners", "downloads", "pools", "unpooled"]);
@@ -145,7 +145,7 @@ describe("nen runner plan", () => {
       [[...flags, "--repo", root].map((token) => (token === "windows-x64" ? "gpu-x64" : token)), /no pool 'gpu-x64'.*windows-x64, macos-arm64, linux-x64/],
       [[...flags, "--repo", consumer(null)], /declares no 'runners' block/],
     ] as const) {
-      const result = await run(argv, [...inventoryCalls(), windowsServicesCall()]);
+      const result = await run(argv, inventoryCalls());
       expect(result.code, result.err).toBe(2);
       expect(result.err).toMatch(pattern);
     }
@@ -165,7 +165,7 @@ describe("nen runner plan", () => {
     expect(Object.keys(plan)).not.toContain("warnings");
     expect(JSON.parse(readFileSync(join(root, "plan.json"), "utf8"))).toEqual(plan);
     expect(result.err.split("\n")).toEqual([
-      expect.stringMatching(/^nen runner plan: warning: \.\\lordzheref already runs 1 runner service\(s\) on this host for a repository whose visibility differs from zheref\/nen's \(public\)/),
+      expect.stringMatching(/^nen runner plan: warning: \.\\lordzheref already runs 1 runner service\(s\) on this host for repositories whose visibility differs from zheref\/nen's \(public\) or cannot be told/),
       "nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR1 -- zheref/KroWindows, private",
       expect.stringMatching(/^nen runner plan: recommended: a local account for zheref\/nen alone, e.g\. --service-account runner-nen /),
     ]);

@@ -10589,23 +10589,44 @@ control of each `Runner<N>`), so a public repository's CI — one compromised
 dependency — could persist into a private repository's jobs and their token.
 So when this verb runs **on the pool's own OS** (Windows or Linux) with a
 named account, it reads this host's existing `actions.runner.*` services,
-read-only — Windows `Get-CimInstance Win32_Service` (`Name`, `StartName`),
-Linux `systemctl list-units` then `systemctl show -p Id -p User` — keeps the
-ones that log on as the planned account (Windows: `.\name`, `<COMPUTERNAME>\name`
-or `NT AUTHORITY\NetworkService` for `network-service`, case-blind; Linux:
-the user, exactly) and serve **another** repository, resolves each one's
-repository from its service name (`gh api --method GET repos/<owner>/<repo>`,
-the target's owner tried first) and **warns, on stderr, at exit 0**, about
-every one whose visibility (`public`/`private`/`internal`) differs from the
-target's, or cannot be told. The warning names each service and its
-repository and recommends a per-repository account, `runner-<repo>` folded to
-what the OS accepts — which **you** create; nen never creates an account or
-handles its password, and still accepts the shared one (the maintainer's
-ruling on #330: warn and recommend, never refuse). The plan itself — stdout
-under `--json`, and `--out` — is unchanged. Off the pool's OS the check
-cannot see the host and prints a `note:` saying it did not run; a host read
-that fails is a `note:` too, never an exit. macOS is not checked: a
-LaunchAgent runs as the installing user, so there is no account to choose.
+read-only, with these tools:
+- Windows: `Get-CimInstance Win32_Service` returns each service's `Name`,
+  `StartName` and the account's SID. Windows PowerShell is started by its
+  full path under `%SystemRoot%`.
+- Linux: `systemctl list-units`, then `systemctl show -p Id -p User`.
+
+It resolves **every** service's repository from its service name
+(`gh api --method GET repos/<owner>/<repo>`). No prefix is trusted:
+`actions.runner.zheref-nen.docs.R1` is `zheref/nen.docs`. Splits are tried
+from the last dot first and with the target's owner first, and the first split
+GitHub answers for wins. A name that no split resolves (actions/runner shortens
+long ones on Windows) is reported as unresolved, as is one that `gh` could not
+read. Visibility here means `public`, `private` or `internal`. It then
+**warns, on stderr, at exit 0**, about two things:
+- **The planned account is shared.** Services that log on as the planned
+  account and serve another repository whose visibility differs from the
+  target's, or cannot be determined, are named with their repositories. How the
+  account is matched:
+  - Windows: `.\name` or `<COMPUTERNAME>\name`, ignoring case and spaces.
+    `network-service` matches SID `S-1-5-20` or the spelling `NT AUTHORITY\NETWORK SERVICE`
+    that actions/runner writes, which is localized on a non-English host.
+  - Linux: the user name, matched exactly.
+
+  The warning recommends a per-repository account, `runner-<repo>` trimmed
+  to what the OS accepts.
+- **The target's own runners keep a shared account.** A new account moves
+  only the runners this plan adds. The target's existing services on another
+  account that also serves a repository of different or unknown visibility
+  are named. They keep that account until they are removed and registered
+  again under the new one.
+
+**You** create the account; nen never creates an account or handles its
+password. nen still accepts a shared account (the maintainer's ruling on #330:
+warn and recommend, never refuse). The plan itself, on stdout under `--json`
+and in `--out`, is unchanged. Off the pool's OS the check cannot see the host,
+so it prints a `note:` saying it did not run. A failed host read is also a
+`note:`, never an exit. macOS is not checked: a LaunchAgent runs as the
+installing user, so there is no account to choose.
 
 **Usage**
 
@@ -10667,7 +10688,7 @@ nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code N
 ```text
 plan: 1 runner(s) for zheref/nen, pool windows-x64
 ...
-nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for a repository whose visibility differs from zheref/nen's (public) -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
+nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for repositories whose visibility differs from zheref/nen's (public) or cannot be told -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
 nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
 ...
 nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- zheref/KroWindows, private
@@ -10675,6 +10696,18 @@ nen runner plan: recommended: a local account for zheref/nen alone, e.g. --servi
 ```
 (run for real on the maintainer's Windows host, 2026-10-02: exit 0; the plan
 and nine of the eleven service lines abridged)
+
+```bash
+nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code NZ --count 1 --service-account runner-nen
+```
+```text
+...
+nen runner plan: warning: zheref/nen's existing runner service(s) actions.runner.zheref-nen.NZ-NNR1, actions.runner.zheref-nen.NZ-NNR2, actions.runner.zheref-nen.NZ-NNR3 log on as .\lordzheref, which also serves repositories whose visibility differs or cannot be told; a new account moves only the runners this plan adds -- these keep .\lordzheref until they are removed and registered again under the new account (#330):
+nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
+...
+```
+(the same host, following the recommendation: exit 0; the plan and all but the
+first of the eleven shared services abridged)
 
 ### `nen runner script`
 

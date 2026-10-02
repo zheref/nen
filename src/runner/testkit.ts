@@ -73,7 +73,7 @@ export function inventoryCalls(runnersJson = RUNNERS_JSON, downloadsJson = DOWNL
 }
 
 /** This host's runner services as `runner plan` reads them on Windows (#330); none by default. */
-export function windowsServicesCall(services: readonly { Name: string; StartName: string }[] = []): ScriptedCall {
+export function windowsServicesCall(services: readonly { Name: string; StartName: string; Sid?: string }[] = []): ScriptedCall {
   return {
     match: `powershell ${windowsServicesArgv().join(" ")}`,
     result: { stdout: services.length === 0 ? "" : JSON.stringify(services.length === 1 ? services[0] : services) },
