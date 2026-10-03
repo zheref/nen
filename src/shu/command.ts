@@ -221,7 +221,9 @@ verbs:
               project.toolchain (and, from a dependency block, nen itself).
               Read-only by default: it runs each declared version probe and
               reports. Exit 5 when anything is missing or is not the pinned
-              version, naming per tool the exact command that fixes it.
+              version, naming per tool the exact command that fixes it; exit
+              7 when everything passes but nen itself is BEHIND the
+              dependency block's pinned_ref (inside its minimum).
               --install acts, and only through the installer ids listed under
               --install below; every other declared installer is verify-only in
               this release. --dry-run prints every command -- probes included
@@ -713,16 +715,30 @@ flags:
                    every report including one whose declaration carries no
                    dependency block -- summary is
                    { checked, satisfied, missing, wrong, notProbed, installed,
-                     refused, notInstallable }
+                     refused, notInstallable, behind }
                    and each tools[] row is
                    { name, required, packMinimum, pinned, versionFrom, probe,
                      found, probeOutput, satisfied, state, installer,
-                     installCommand, remedy, install, why }.
+                     installCommand, remedy, install, why, pinnedRef,
+                     behindPinnedRef }.
                    IT CARRIES EVERY VALUE THE TABLE PRINTS: the table is
                    rendered FROM this object, so the two cannot come apart.
-                   'state' is present-and-matching | present-but-wrong-version
-                   | missing | not-probed -- the last only under --dry-run,
-                   where nothing was looked at and 'satisfied' is null.
+                   'state' is present-and-matching | present-but-behind-pin
+                   | present-but-wrong-version | missing | not-probed -- the
+                   last only under --dry-run, where nothing was looked at and
+                   'satisfied' is null. present-but-behind-pin (text: BEHIND)
+                   is reached only by the dependency row: 'satisfied' is true
+                   -- the host is inside dependency.minimum, whose meaning is
+                   unchanged -- and its version is lower than
+                   dependency.pinned_ref, so the row's remedy names the
+                   'nen bootstrap --ref <pinned_ref>' install. 'pinnedRef' is
+                   that ref verbatim on the dependency row and null on every
+                   toolchain row; 'behindPinnedRef' is true (behind), false (at
+                   or above) or null when NO comparison was made -- no ref,
+                   nothing read, or a pinned_ref that is not a version, which
+                   the table says in a line rather than reading as "at the
+                   pin". summary.behind counts BEHIND rows, which are NOT in
+                   summary.satisfied, so the five state counts sum to checked.
                    'packMinimum' is ADVISORY: the version nen has been tested
                    against, from the bundled profiles pack. It never moves the
                    exit code. 'installCommand' is non-null only for an
@@ -904,8 +920,20 @@ exit codes:
      repo-relative shape git names, and --json's touched.artifacts[].root says
      which root each report was resolved against. An empty touched set is 0.
 
+  7  'tools' CHECK only: every row is satisfied, and the dependency row's
+     host version is BEHIND dependency.pinned_ref while still inside
+     dependency.minimum (zheref/nen#327) -- a BEHIND row. Not 0: the host is
+     not at the ref the repository pins, so a fix that ref ships has not
+     reached it. Not 5: nothing is missing or out of range. Route it to one
+     action, the install of the pinned ref the row's remedy names
+     ('nen bootstrap --ref <pinned_ref> ...'); this verb never performs it.
+     5 wins when a row is also missing or wrong. Never under --install (the
+     row is verify-only) and never under --dry-run (nothing was probed). A
+     pinned_ref that is not a version is not compared and never yields 7.
+
   Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91); 6 is
-  'coverage' --touched's own (zheref/nen#236).
+  'coverage' --touched's own (zheref/nen#236); 7 is the 'tools' check's own
+  (zheref/nen#327).
 
 placeholders:
   Only the reference pack's own tokens are refused -- {pm}, {scheme},
@@ -1087,7 +1115,7 @@ function assessAll(
         : probeTool(context.seams, plan.probe, cwd, plan.versionFrom);
     return {
       plan,
-      assessment: assess(observation, plan.versionFrom, plan.satisfiedBy),
+      assessment: assess(observation, plan.versionFrom, plan.satisfiedBy, plan.behindBy),
       packMinimum: minimums[plan.name] ?? null,
       install: null,
     };
@@ -1128,7 +1156,7 @@ function performInstalls(
     const observation = probeTool(context.seams, entry.plan.probe, cwd, entry.plan.versionFrom);
     return {
       ...entry,
-      assessment: assess(observation, entry.plan.versionFrom, entry.plan.satisfiedBy),
+      assessment: assess(observation, entry.plan.versionFrom, entry.plan.satisfiedBy, entry.plan.behindBy),
       install: outcome,
     };
   });

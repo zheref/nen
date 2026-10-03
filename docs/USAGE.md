@@ -779,7 +779,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code; `--touched --base <ref>` narrows the rows to the files a change touched (a git-diff read after the run) and, with `--threshold` absent, bands each row against `nen/workflow.json`'s coverage ladder -- or, where that file is absent, nen's published 80/85/90 defaults -- instead; never gating either way | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name (and, under `--touched` with no `--threshold`, `nen/workflow.json` through the shared loader) | yes |
 | [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu evidence`](#nen-shu-evidence) | match `git diff --name-status <base>...HEAD` against project.evidence.globs, deriving each survivor's suite/scene and grouping suite -> scenes; empty is exit 0, never an error | git diff (through the seam only -- no declared invocation, no lane); nen/contract.json (project.evidence) | yes |
-| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
+| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong, exit 7 when nen is behind the dependency block's pinned_ref inside its minimum), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
@@ -8336,6 +8336,31 @@ decision, and the row prints the `pinned_ref` its bootstrap would install. A
 `project.toolchain` entry of the same name wins, and the row is then not
 synthesised.
 
+<a id="behind-the-pinned-ref"></a>
+
+**Behind the pinned ref** ([#327](https://github.com/zheref/nen/issues/327)).
+The row is also compared against `dependency.pinned_ref`, as a second fact
+beside the range rather than a narrowing of it: `minimum` still alone decides
+whether the row is satisfied. A host version **inside** the minimum's range
+and **lower** than the pinned ref reads `BEHIND` — state
+`present-but-behind-pin`, `satisfied: true` — with the ref on the row's line
+and a remedy naming the install
+(`nen bootstrap --ref <pinned_ref> [--source <source>] --script <the bootstrap, fetched to a file>`):
+
+```text
+  BEHIND   nen  0.18.1  pinned >=0.18.0 <0.19.0  pinned_ref v0.18.2
+```
+
+A check whose rows are all satisfied and one of them `BEHIND` exits **7**. At
+or above the pin the row is `ok` exactly as before; outside the minimum it is
+`WRONG` and exit 5 exactly as before, whatever the pin says. The comparison is
+full semver precedence with a leading `v` dropped, so `0.18.2-rc.1` is behind
+`v0.18.2`. A `pinned_ref` that is **not a version** (a branch, a SHA) is not
+compared: `behindPinnedRef` is `null`, the table prints a line saying the
+comparison was not made, and the row keeps its other verdict — it is never
+rendered as "at the pin". `shu tools` still installs nothing for this row,
+under `--install` included.
+
 <a id="the-compatibility-floor"></a>
 
 **The `0.x` rule, and the compatibility floor.** Above major zero the
@@ -8389,11 +8414,12 @@ question about nen and not about the declaration that asked. When a `minimum`
 is below the floor the row's `remedy` says so in words and names the repin: no
 version of that binary can satisfy it, whatever the host answers.
 
-**The four row states**
+**The five row states**
 
 | State | Meaning | Exit 5? |
 |---|---|---|
 | `present-and-matching` | Found, and it satisfies the declaration's pin. For a `path-exists` entry: the probe named a path and the path is there — presence is the whole check that member asks for. | no |
+| `present-but-behind-pin` | **The `dependency` row only**: found inside `minimum`'s range — so `satisfied` is `true` — and lower than `dependency.pinned_ref`. Text mark `BEHIND`. | no — exit **7** when no row is missing or wrong |
 | `present-but-wrong-version` | Found, and it does not satisfy the pin. **Also** the case where the probe ran and no `versionFrom` member could read a version out of what it printed — rendered `unknown`, and never satisfied: a comparison nobody made must not render as one that came back clean. | **yes** |
 | `missing` | The probe could not be started at all (the seam's `spawnFailed`), or a `path-exists` probe named nothing that is there. | **yes** |
 | `not-probed` | **Only under `--dry-run`**, where nothing was looked at. `satisfied` is `null`. A tool nobody looked for is not a tool that is absent. | no |
@@ -8442,7 +8468,11 @@ rendered, or when the repository declares no `toolchain` and no `dependency`
 (*"nothing to check"*, pointing at [`shu detect`](#nen-shu-detect)). Exit **5**
 when the CHECK found anything missing or not the pinned version — never 1: a
 missing tool is not a failed build, and a caller retrying a 1 would retry
-forever on a machine that is simply not set up. Exit **2** for an `--only` that
+forever on a machine that is simply not set up. Exit **7** when every row is
+satisfied and the `nen` row is [behind `pinned_ref`](#behind-the-pinned-ref)
+inside its minimum — a distinct code so a consumer's warm-up can route it to an
+install of the pin; 5 wins when a row is also missing or wrong, and neither
+`--install` nor `--dry-run` ever exits 7. Exit **2** for an `--only` that
 names an undeclared tool, a `version` in a form nen cannot evaluate, or a pin
 `--install` will not act on. Exit **3** when `project.hosts` does not name this
 platform — checked **before any probe runs**, so nothing is spawned.
@@ -8474,7 +8504,9 @@ is present on every report, including one whose declaration has no `dependency`
 block.
 
 `summary` is `{ checked, satisfied, missing, wrong, notProbed, installed,
-refused, notInstallable }`. The four state counts always sum to `checked`.
+refused, notInstallable, behind }`. The five state counts — `satisfied`,
+`behind`, `missing`, `wrong`, `notProbed` — always sum to `checked`; `behind`
+counts `present-but-behind-pin` rows, which are **not** in `satisfied`.
 `refused` counts rows carrying a pin this release will not act on;
 **`notInstallable` counts rows that do not pass and that nen has no installer
 for** — the number that explains an `--install` run exiting 0 beside a host that
@@ -8482,7 +8514,7 @@ is still not ready, and the text prints it as a footer for the same reason.
 
 Each `tools[]` row is `{ name, required, packMinimum, pinned, versionFrom,
 probe, found, probeOutput, satisfied, state, installer, installCommand, remedy,
-install, why }`, in that order:
+install, why, pinnedRef, behindPinnedRef }`, in that order:
 
 | Field | Meaning |
 |---|---|
@@ -8492,6 +8524,8 @@ install, why }`, in that order:
 | `probeOutput` | The first line the probe printed, **only** on a row that says "present, version unknown" — the one case where the output is the finding. Null everywhere else, including on satisfied rows, where `found` is the answer. Capped at 200 characters. |
 | `installCommand` | The rendered commands, non-null only for an installer nen runs *and* only when there is something to do. |
 | `remedy` | The way out **in words**, for a row with no command: `verify-only: install by hand — …`, `corepack: REFUSED — …`, `sdkmanager: not enabled in this release — …`, `wrapper: nothing to install — …`. Exactly one of `installCommand` and `remedy` is non-null on a row that needs a way out; both are null on a row that passes. Without it a refused `corepack` row and a `verify-only` row were the same row to a machine reader, because `why` is the *declaration's* reason for the pin and is null on most refusing rows. |
+| `pinnedRef` | `dependency.pinned_ref`, verbatim, on the `dependency` row; `null` on every `project.toolchain` row, which pins a version rather than a ref. |
+| `behindPinnedRef` | The host version against `pinnedRef`: `true` behind it (the `BEHIND` row), `false` at or above it, `null` when **no comparison was made** — no ref on the row, nothing observed or no version read, or a `pinned_ref` that is not a version. `null` never means "not behind". |
 | `install` | What `--install` ran for this row — `{ steps: [{ exe, argv, exitCode, durationMs }], outcome, failure }` — and `null` in every mode that installs nothing. `outcome` is `installed` (every step nen ran exited 0), `failed`, or `skipped` (nen acted on nothing here). It describes the **installer**, never the host: `installed` beside `state: "missing"` is the real finding "it installed somewhere not on this `PATH`", which is why this verb re-probes. There is no `refused` outcome, because a refusal stops the run before the first install and this CLI answers a refusal with a stderr line and exit 2 rather than a document (below). |
 
 **A refusal prints no document.** Every family in this CLI answers exit 2 with a

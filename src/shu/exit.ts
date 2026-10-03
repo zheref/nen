@@ -59,6 +59,23 @@ export const EXIT_TOOL_NOT_INSTALLED = 5;
 export const EXIT_COVERAGE_UNJOINED = 6;
 
 /**
+ * `shu tools` only: every row is satisfied, and the `dependency` row's host
+ * version is BEHIND `dependency.pinned_ref` while still inside `minimum`'s
+ * range (zheref/nen#327).
+ *
+ * NOT 0, because the host is not at the ref the repository pins -- 0 was the
+ * defect: a host on 0.18.1 read `ok` against a `v0.18.2` pin, and the patch
+ * the pin moved to fetch never arrived. NOT 5, because nothing is missing and
+ * nothing is out of range, and a consumer that routes 5 to "this host is not
+ * set up" would treat an up-to-date-enough host as a broken one. A distinct
+ * code lets a warm-up route it to one action: install the pinned ref. 7
+ * because 3-6 are this family's already; the bootstrap family's own 7 (the
+ * wrapper could not run its script) is a different command's contract and
+ * never reaches `nen shu`.
+ */
+export const EXIT_BEHIND_PINNED_REF = 7;
+
+/**
  * A refusal that exits with one of this family's own codes.
  *
  * It is NOT a VerbUsageError subclass on purpose: ../index.ts's `runFamily`

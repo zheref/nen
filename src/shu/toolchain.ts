@@ -44,9 +44,19 @@ import { COMPATIBLE_MINOR_FLOOR, VERSION } from "../version.js";
  * looked for is not a tool that is absent. Reporting an unprobed row as
  * `missing` would be the fail-open version of #83's rule, in the direction that
  * invents a finding rather than the one that hides it.
+ *
+ * `present-but-behind-pin` IS THE ONE STATE THAT IS SATISFIED AND STILL OWES
+ * SOMETHING (zheref/nen#327). Only the `dependency` row can reach it: the host
+ * answered a version inside `minimum`'s range -- so the requirement holds and
+ * `minimum` keeps every meaning it had -- and that version is lower than
+ * `dependency.pinned_ref`, the ref this repository's bootstrap installs. A
+ * patch the pin was moved to fetch (a fix shipped in `0.18.2`) never reaches a
+ * host that reads `ok` on `0.18.1`, so the row says so in a state of its own
+ * rather than hiding behind `present-and-matching`.
  */
 export type ToolState =
   | "present-and-matching"
+  | "present-but-behind-pin"
   | "present-but-wrong-version"
   | "missing"
   | "not-probed";
@@ -520,12 +530,40 @@ export function minimumBelowFloor(floor: Floor, build: Build = thisBuild()): str
   return `minimum '${renderFloor(floor)}' is below this build's compatibility floor '${wanted}' -- the ${wanted} line declared breaking consumer notes, so no ${VERSION} binary satisfies a pin under '${wanted}', whatever the host answers. Repin to '${wanted}'. A pin at or above the floor is satisfied by every later 0.x release that keeps it, so a repin is owed again when the floor moves and not when the minor does.`;
 }
 
+/**
+ * Whether an observed version is LOWER than the ref a bootstrap installs.
+ *
+ * `true` / `false` when both read as versions; `null` WHEN THE COMPARISON WAS
+ * NOT MADE, because `pinned_ref` is not a version (a branch, a SHA) or the
+ * found value is not one. Null is never rendered as "not behind": an
+ * unperformed comparison must not read as one that came back clean
+ * (zheref/nen#83), so the row keeps its other verdict and the report says the
+ * pin was not compared.
+ *
+ * FULL SEMVER PRECEDENCE, both ends: `0.18.2-rc.1` IS behind `v0.18.2` -- a
+ * release candidate is not the release the pin names -- and a leading `v` on
+ * the ref is accepted, which is how every tag this contract pins is spelled.
+ */
+export function behindPinnedRef(pinnedRef: string, found: string): boolean | null {
+  const wanted = parseVersion(pinnedRef);
+  const observed = parseVersion(found);
+  if (wanted === null || observed === null) return null;
+  return compareVersions(observed, wanted) < 0;
+}
+
 /** One row's verdict: the state, whether it counts as satisfied, what was seen. */
 export interface Assessment {
   readonly state: ToolState;
   /** `null` only when nothing was observed -- a dry run. */
   readonly satisfied: boolean | null;
   readonly found: string | null;
+  /**
+   * THE `pinned_ref` COMPARISON, for the one row that carries a ref (the
+   * `dependency` row): `true` behind it, `false` at or above it, `null` when no
+   * comparison was made -- no ref on this row, nothing observed, no version
+   * read, or a ref that is not a version.
+   */
+  readonly behindPinnedRef: boolean | null;
   /**
    * WHAT THE PROBE PRINTED, kept for exactly one row state and null in every
    * other: `present-but-wrong-version` with no `found`, which is the row that
@@ -553,12 +591,13 @@ export function assess(
   observation: Observation,
   versionFrom: VersionFrom,
   isSatisfied: (found: string) => boolean,
+  isBehind: (found: string) => boolean | null = (): null => null,
 ): Assessment {
   if (observation.kind === "not-probed") {
-    return { state: "not-probed", satisfied: null, found: null, probeOutput: null };
+    return { state: "not-probed", satisfied: null, found: null, behindPinnedRef: null, probeOutput: null };
   }
   if (observation.kind === "missing") {
-    return { state: "missing", satisfied: false, found: null, probeOutput: null };
+    return { state: "missing", satisfied: false, found: null, behindPinnedRef: null, probeOutput: null };
   }
   if (observation.version === null) {
     // PRESENCE IS THE WHOLE ANSWER for `path-exists`, because that is what the
@@ -568,21 +607,33 @@ export function assess(
     // null version means the probe answered something no version could be read
     // out of -- present, version unknown, and NOT satisfied.
     return versionFrom === "path-exists"
-      ? { state: "present-and-matching", satisfied: true, found: null, probeOutput: null }
+      ? { state: "present-and-matching", satisfied: true, found: null, behindPinnedRef: null, probeOutput: null }
       : {
           state: "present-but-wrong-version",
           satisfied: false,
           found: null,
+          behindPinnedRef: null,
           // THE ONE ROW THAT QUOTES THE OUTPUT, capped like every other observed
           // string that reaches a report.
           probeOutput: observation.output === null ? null : truncate(observation.output),
         };
   }
   const satisfied = isSatisfied(observation.version);
+  // THE PIN IS COMPARED WHATEVER THE MINIMUM SAID, and reported as a fact on
+  // the row -- but it only ever MOVES THE STATE of a row that satisfies the
+  // minimum. A version outside the range is `present-but-wrong-version`
+  // exactly as before (zheref/nen#327's "unchanged outside the minimum"): the
+  // stronger finding wins, and its way out already names the pinned ref.
+  const behind = isBehind(observation.version);
   return {
-    state: satisfied ? "present-and-matching" : "present-but-wrong-version",
+    state: !satisfied
+      ? "present-but-wrong-version"
+      : behind === true
+        ? "present-but-behind-pin"
+        : "present-and-matching",
     satisfied,
     found: observation.version,
+    behindPinnedRef: behind,
     probeOutput: null,
   };
 }
