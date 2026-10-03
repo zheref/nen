@@ -980,6 +980,17 @@ export async function fetchPrState(
     };
   }
 
+  // CON-42/1's draft clause (zheref/nen#331) reads `isDraft`, and an answer
+  // that is not a boolean is never read as "not a draft" (Feitan F4): GraphQL
+  // types it `Boolean!`, so anything else is not a fact about the PR.
+  if (typeof node.isDraft !== "boolean") {
+    return {
+      ok: false,
+      reason: `the response carried no boolean isDraft for ${repo.owner}/${repo.repo}#${prNumber}, so a draft cannot be ruled out`,
+      remedy: "Ask again; GitHub's GraphQL always answers isDraft, so a missing one is a degraded read.",
+    };
+  }
+
   // Divergence 2 in the header, CORRECTED. `snapshot.checkRollup` reaching
   // here as `undefined` no longer includes "the head commit's own rollup is
   // null" -- ../github/graphql.ts's headCommitCheckRollupPage() now reduces
@@ -1164,6 +1175,8 @@ export async function fetchPrState(
     warnings: [...threads.warnings, ...earlier.warnings],
     state: {
       mergeable,
+      // CON-42/1's draft clause (zheref/nen#331): a draft is never ready.
+      is_draft: node.isDraft,
       head_sha: head,
       // The FULLY PAGINATED rollup -- see the pagination block above. Never
       // `snapshot.checkRollup`, which is page one only.

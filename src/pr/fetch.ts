@@ -282,6 +282,13 @@ export function fetchPullRequest(
     throw new FetchError(`${target.slug}#${prNumber}: gh pr view did not return JSON (${String(error)})`);
   }
 
+  // `isDraft` is in this view's own field list, so an answer without a boolean
+  // one is a degraded read, never "not a draft": parsePullRequest() reads an
+  // absent flag as false, which would let `pr next-blocker` answer `none` for
+  // a draft `pr ready` refuses (zheref/nen#331, Copilot on #342).
+  if (typeof view["isDraft"] !== "boolean") {
+    throw new FetchError(`${target.slug}#${prNumber}: gh pr view answered no boolean isDraft, so a draft cannot be ruled out`);
+  }
   const pr = parsePullRequest(view);
   if (!pr.ok) throw new FetchError(`${target.slug}#${prNumber}: ${pr.error.path} -- ${pr.error.message}`);
   const checks = parseCheckRollup(view["statusCheckRollup"]);

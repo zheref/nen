@@ -21,6 +21,7 @@
 // must still read the diff by eye. See src/pr/verb.ts's usage text.
 
 import {
+  checkAdmissible,
   checksAllGreen,
   defaultReviewers,
   latestChecks,
@@ -35,6 +36,7 @@ import type { PrSnapshot } from "./fetch.js";
 
 export type BlockerKind =
   | "conflict"
+  | "draft"
   | "red-check"
   | "owed-round"
   | "unresolved-thread"
@@ -67,6 +69,15 @@ export function nextBlocker(
     };
   }
 
+  // A draft is never ready (zheref/nen#331): `nen pr ready` refuses it at row
+  // 1, so the next blocker names it before anything a draft can still change.
+  if (snapshot.pr.isDraft) {
+    return {
+      kind: "draft",
+      detail: "the PR is a draft -- mark it ready for review; a draft cannot be merged",
+    };
+  }
+
   if (!checksAllGreen(snapshot.checks)) {
     const latest = latestChecks(snapshot.checks);
     const summary = latest
@@ -74,7 +85,12 @@ export function nextBlocker(
       .join(", ");
     return {
       kind: "red-check",
-      detail: latest.length === 0 ? "no checks have reported yet" : `not every latest check is green: ${summary}`,
+      detail:
+        latest.length === 0
+          ? "no checks have reported yet"
+          : latest.every(checkAdmissible)
+            ? `no latest check succeeded -- every one skipped or concluded neutral, so nothing was verified: ${summary}`
+            : `not every latest check is green: ${summary}`,
     };
   }
 

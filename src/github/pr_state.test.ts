@@ -634,6 +634,40 @@ describe("fetchPrState -- check-rollup pagination is wired in, and fails closed"
   });
 });
 
+describe("fetchPrState -- the draft flag (zheref/nen#331)", () => {
+  it("carries GraphQL's isDraft into the state as is_draft, which row 1 refuses", async () => {
+    const base = snapshot();
+    const node = base.pullRequest;
+    if (node === undefined) throw new Error("unreachable");
+    const source = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+        ...base,
+        pullRequest: { ...node, isDraft: true },
+      }),
+    });
+    const result = await fetchPrState(source, REPO, 7, baseOptions());
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("unreachable");
+    expect(result.state["is_draft"]).toBe(true);
+  });
+
+  it("refuses a non-boolean isDraft as unreadable, never as 'not a draft' (Feitan F4)", async () => {
+    const base = snapshot();
+    const node = base.pullRequest;
+    if (node === undefined) throw new Error("unreachable");
+    const source = stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+        ...base,
+        pullRequest: { ...node, isDraft: null },
+      }),
+    });
+    const result = await fetchPrState(source, REPO, 7, baseOptions());
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.reason).toContain("isDraft");
+  });
+});
+
 describe("fetchPrState -- the happy path's state shape", () => {
   it("assembles the renamed fields (round_policy, stall_requested_at) and the delivery evidence", async () => {
     const source = stubSource({
@@ -646,6 +680,7 @@ describe("fetchPrState -- the happy path's state shape", () => {
     if (!result.ok) throw new Error("unreachable");
     expect(result.state).toMatchObject({
       mergeable: "MERGEABLE",
+      is_draft: false,
       head_sha: "deadbeef",
       unresolved_threads: 0,
       round_policy: "strict",

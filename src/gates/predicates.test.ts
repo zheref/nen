@@ -22,6 +22,7 @@ import type {
 } from "../github/types.js";
 import {
   cancelledLatestReport,
+  checkAdmissible,
   checksAllGreen,
   defaultReviewers,
   excludeCheckNames,
@@ -37,6 +38,7 @@ import {
   reviewsAllApprovedAtHead,
   roundQuorum,
   unapprovedApprovers,
+  uncheckedChecks,
   defaultApprovers,
   type EarlierHeadCheck,
   type OwedRound,
@@ -264,6 +266,87 @@ describe("latestChecks", () => {
 
 // --- checksAllGreen ----------------------------------------------------------
 
+describe("latestChecks -- a re-run that has not started is the latest (zheref/nen#317)", () => {
+  const older = checkRun({
+    name: "ci / build",
+    status: "COMPLETED",
+    conclusion: "SUCCESS",
+    startedAt: "2026-09-30T09:00:00Z",
+    completedAt: "2026-09-30T09:04:00Z",
+  });
+
+  it("keeps a QUEUED re-run with NO startedAt over the older SUCCESS, and CON-32(a) reads not-ready", () => {
+    const queued = checkRun({ name: "ci / build", status: "QUEUED", conclusion: null, startedAt: null });
+    expect(latestChecks([older, queued])).toEqual([queued]);
+    expect(latestChecks([queued, older])).toEqual([queued]);
+    expect(checksAllGreen([older, queued])).toBe(false);
+  });
+
+  it("keeps a QUEUED re-run carrying gh's ZERO TIME over the older SUCCESS", () => {
+    const queued = checkRun({
+      name: "ci / build",
+      status: "QUEUED",
+      conclusion: null,
+      startedAt: "0001-01-01T00:00:00Z",
+    });
+    expect(latestChecks([older, queued])).toEqual([queued]);
+    expect(checksAllGreen([older, queued])).toBe(false);
+  });
+
+  it("keeps a re-run with an EMPTY startedAt and a PENDING status the same way", () => {
+    const pending = checkRun({ name: "ci / build", status: "PENDING", conclusion: null, startedAt: "" });
+    expect(latestChecks([older, pending])).toEqual([pending]);
+  });
+
+  it("leaves a COMPLETED run without a startedAt ordered as before -- before every started run", () => {
+    const undated = checkRun({ name: "ci / build", status: "COMPLETED", conclusion: "FAILURE", startedAt: null });
+    expect(latestChecks([undated, older])).toEqual([older]);
+  });
+
+  it("RECORDED: GitHub stamps a QUEUED run's startedAt, so the plain ordering already waits for it (NN-PR-#342)", () => {
+    // gh api graphql on zheref/nen#342, head 1e6cb9b, 2026-10-02T23:02:49Z: the
+    // `compile` run was QUEUED with a real startedAt, not null or zero time.
+    // The no-start-time precedence above is therefore defensive, for shapes a
+    // hand-built or gh-rendered rollup can carry.
+    const queued = checkRun({
+      name: "compile",
+      status: "QUEUED",
+      conclusion: null,
+      startedAt: "2026-10-02T23:02:39Z",
+      completedAt: null,
+    });
+    const earlier = checkRun({ name: "compile", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-02T22:10:00Z" });
+    expect(latestChecks([earlier, queued])).toEqual([queued]);
+    expect(checksAllGreen([earlier, queued])).toBe(false);
+  });
+
+  it("never pushes a run that already carries a conclusion ahead of a later FAILURE (Feitan F1)", () => {
+    const failed = checkRun({ name: "ci / build", status: "COMPLETED", conclusion: "FAILURE", startedAt: "2026-09-30T10:00:00Z" });
+    const odd = checkRun({ name: "ci / build", status: "QUEUED", conclusion: "SUCCESS", startedAt: null });
+    expect(latestChecks([failed, odd])).toEqual([failed]);
+    expect(checksAllGreen([failed, odd])).toBe(false);
+  });
+
+  it("waits for a run with NO status, no conclusion and no start time (Feitan F2)", () => {
+    const bare = checkRun({ name: "ci / build", status: null, conclusion: null, startedAt: null });
+    expect(latestChecks([older, bare])).toEqual([bare]);
+    expect(checksAllGreen([older, bare])).toBe(false);
+  });
+
+  it("a stuck not-started run holds its name not-ready even beside a LATER SUCCESS -- fail-closed by design", () => {
+    const stuck = checkRun({ name: "ci / build", status: "QUEUED", conclusion: null, startedAt: null });
+    const later = checkRun({ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-01T10:00:00Z" });
+    expect(latestChecks([stuck, later])).toEqual([stuck]);
+    expect(checksAllGreen([stuck, later])).toBe(false);
+  });
+
+  it("still orders two not-yet-started runs by their own keys, never dropping both", () => {
+    const first = checkRun({ name: "ci / build", status: "QUEUED", startedAt: null, completedAt: null });
+    const second = checkRun({ name: "ci / build", status: "WAITING", startedAt: null, completedAt: null });
+    expect(latestChecks([older, first, second])).toEqual([second]);
+  });
+});
+
 describe("checksAllGreen (CON-32a)", () => {
   it("is true when every check is SUCCESS", () => {
     expect(
@@ -282,6 +365,44 @@ describe("checksAllGreen (CON-32a)", () => {
         checkRun({ name: "c", conclusion: "SKIPPED" }),
       ]),
     ).toBe(true);
+  });
+
+  it("is FALSE when every check SKIPPED -- a skip is not a build (zheref/nen#331)", () => {
+    // KWI-PR-#101's head: readiness, snapshots and windows all SKIPPED.
+    expect(
+      checksAllGreen([
+        checkRun({ name: "readiness", status: "COMPLETED", conclusion: "SKIPPED" }),
+        checkRun({ name: "snapshots", status: "COMPLETED", conclusion: "SKIPPED" }),
+        checkRun({ name: "windows", status: "COMPLETED", conclusion: "SKIPPED" }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("is FALSE when every check is SKIPPED or NEUTRAL, with no SUCCESS among them", () => {
+    expect(
+      checksAllGreen([
+        checkRun({ name: "a", conclusion: "NEUTRAL" }),
+        checkRun({ name: "b", conclusion: "SKIPPED" }),
+      ]),
+    ).toBe(false);
+    expect(checksAllGreen([checkRun({ name: "a", conclusion: "NEUTRAL" })])).toBe(false);
+  });
+
+  it("is TRUE for one SUCCESS beside one SKIPPED, and names the skipped one (zheref/nen#331)", () => {
+    const entries = [
+      checkRun({ name: "build", status: "COMPLETED", conclusion: "SUCCESS" }),
+      checkRun({ name: "windows", status: "COMPLETED", conclusion: "SKIPPED" }),
+    ];
+    expect(checksAllGreen(entries)).toBe(true);
+    expect(uncheckedChecks(entries)).toEqual(["windows (SKIPPED)"]);
+  });
+
+  it("keeps failing closed for absent, pending, failed and unknown checks beside a SUCCESS", () => {
+    const ok = checkRun({ name: "a", status: "COMPLETED", conclusion: "SUCCESS" });
+    expect(checksAllGreen([])).toBe(false);
+    expect(checksAllGreen([ok, checkRun({ name: "b", status: "IN_PROGRESS", conclusion: null })])).toBe(false);
+    expect(checksAllGreen([ok, checkRun({ name: "b", status: "COMPLETED", conclusion: "FAILURE" })])).toBe(false);
+    expect(checksAllGreen([ok, checkRun({ name: "b", status: "COMPLETED", conclusion: null })])).toBe(false);
   });
 
   it("reads a legacy StatusContext's .state where a CheckRun has .conclusion", () => {
@@ -2699,5 +2820,26 @@ describe("reviewerRound's bounded earlier-head round-check limb (option B, rulin
   it("a reviewer with no round_check_pattern is untouched by earlier runs of any name", () => {
     const inputs = rounds({ earlierChecks: [cleanEarlier({ name: "copilot" })] });
     expect(roundQuorum(QUORUM, inputs, "headsha", "bounded")?.members[0]?.round).toBeNull();
+  });
+});
+
+describe("checkAdmissible / uncheckedChecks (zheref/nen#331)", () => {
+  it("admits SUCCESS, NEUTRAL and SKIPPED one entry at a time, never a pending or red one", () => {
+    expect(checkAdmissible(checkRun({ name: "a", conclusion: "SKIPPED" }))).toBe(true);
+    expect(checkAdmissible(checkRun({ name: "a", conclusion: "NEUTRAL" }))).toBe(true);
+    expect(checkAdmissible(checkRun({ name: "a", conclusion: "SUCCESS" }))).toBe(true);
+    expect(checkAdmissible(checkRun({ name: "a", conclusion: "FAILURE" }))).toBe(false);
+    expect(checkAdmissible(checkRun({ name: "a", status: "QUEUED", conclusion: null }))).toBe(false);
+  });
+
+  it("names the latest SKIPPED and NEUTRAL entries only, after the per-name reduction", () => {
+    expect(
+      uncheckedChecks([
+        checkRun({ name: "a", conclusion: "SUCCESS" }),
+        checkRun({ name: "b", conclusion: "NEUTRAL" }),
+        checkRun({ name: "c", conclusion: "SKIPPED", startedAt: "2026-10-02T09:00:00Z" }),
+        checkRun({ name: "c", conclusion: "SUCCESS", startedAt: "2026-10-02T10:00:00Z" }),
+      ]),
+    ).toEqual(["b (NEUTRAL)"]);
   });
 });

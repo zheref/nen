@@ -905,6 +905,45 @@ round is also an owed one, so rows 3 and 4 both fail and the line is row 3's.
 CON-30's carve-out is read whenever the rollup is readable, rather than only
 after row 2 passed.
 
+**A skip is not a build, and a draft is never ready (zheref/nen#331; the
+maintainer's ruling of 2026-10-02).** CON-32(a) reads each check name's
+latest run. `SUCCESS`, `NEUTRAL` and `SKIPPED` are admissible, so a
+path-filtered or conditional job that did not apply is not a failure. A
+`SKIPPED` or `NEUTRAL` check is admissible **only beside at least one
+`SUCCESS`**:
+
+| Latest runs at head | Row 2 (CON-32(a)) |
+|---|---|
+| every one `SUCCESS` | `ready`, no note |
+| at least one `SUCCESS`, the rest `SKIPPED`/`NEUTRAL` | `ready`, with the note `admitted beside a SUCCESS, not verified: <name> (SKIPPED), …` |
+| every one `SKIPPED` or `NEUTRAL` | FAILED: `not-ready: no check SUCCEEDED at head (CON-32a) — every latest check was skipped or neutral, so nothing was verified: <name> (SKIPPED), …` |
+| any absent, pending, failed, cancelled or unknown | FAILED, unchanged |
+
+A draft pull request fails row 1 (CON-42/1) with `not-ready: the PR is a DRAFT
+(CON-42/1) — a draft cannot be merged; mark it ready for review first`, even
+when GitHub reports it `MERGEABLE`. An intentional-skip exception is never
+inferred from branch protection, and **no mechanism declares one today**:
+`--exclude-check` only removes names, and an all-skipped head with its skips
+excluded is an empty rollup, which also fails. A declared exception is
+zheref/nen#249's to build. **Consumer note:** a repository whose only checks
+are conditional (a job-level `if:` that skips on a docs-only change, or jobs
+gated on a runner variable) now reads not-ready on such a head; make one job
+run and succeed on every head.
+
+**A run that has not started is the latest run of its name
+(zheref/nen#317).** A queued run that carries no `startedAt` (`null`, empty,
+or gh's zero time `0001-01-01T00:00:00Z`) used to sort *before* an older
+`SUCCESS` of the same name, so row 2 read that superseded success. Now a run
+with no verdict and no start time is the latest of its name, and row 2 waits
+for it. GitHub's own GraphQL stamps a queued run's `startedAt` when it is
+queued (recorded on zheref/nen#342, 2026-10-02: `compile`, `QUEUED`,
+`startedAt: 2026-10-02T23:02:39Z`), so a live rollup already orders a queued
+re-run after the run it repeats. The precedence is a fail-closed guard for the
+shapes a hand-built state or gh's rendering can carry. That holds even beside a *later* `SUCCESS` of the same name (two
+workflows sharing a job name, or a run stuck behind an offline runner): the
+row stays not-ready until the stuck run starts or is cancelled. A run that
+already has a verdict, or a start time, sorts as before.
+
 **Which head the verdict is about (zheref/nen#245).** The verdict concerns
 **GitHub's current head** for the pull request at the moment the verb reads
 it. That is not necessarily your local commit. On zheref/KroApple#577 a `ready`
@@ -1552,7 +1591,7 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 
 **Output and exit codes** — human lines: `#<pr>: <kind>`, then the detail
 line; `--json` top-level keys: `kind`
-(`conflict`\|`red-check`\|`owed-round`\|`unresolved-thread`\|`missing-body-requirement`\|`none`),
+(`conflict`\|`draft`\|`red-check`\|`owed-round`\|`unresolved-thread`\|`missing-body-requirement`\|`none`),
 `detail`. Exit 0 when `kind` is `none`, exit 1 for any other kind or a
 GitHub/schema-read failure, exit 2 on a bad flag.
 

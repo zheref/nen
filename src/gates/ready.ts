@@ -308,6 +308,7 @@ import {
   reviewerReviewCheckPattern,
   roundQuorum,
   unapprovedApprovers,
+  uncheckedChecks,
   unmatchedExcludeCheckNames,
   type EarlierHeadCheck,
   type OwedRound,
@@ -1019,10 +1020,20 @@ export function evaluateReady(
       : null;
 
   // ── row 1: mergeable (CON-42/1) ─────────────────────────────────────────
+  //
+  // A DRAFT IS NEVER READY (zheref/nen#331, the maintainer's ruling of
+  // 2026-10-02). GitHub answers MERGEABLE for a conflict-free draft, yet a draft
+  // cannot be merged until it is marked ready for review, so it fails this row
+  // under its own reason. `is_draft` is read as `=== true`: GitHub's GraphQL
+  // always answers the field, and a hand-built state that omits it predates it.
   const mergeableRow: RowResult =
-    mergeable === "MERGEABLE"
-      ? passed()
-      : failed(`not-ready: mergeable=${mergeable} (expected MERGEABLE — CON-42/1's added predicate)`);
+    state["is_draft"] === true
+      ? failed(
+          "not-ready: the PR is a DRAFT (CON-42/1) — a draft cannot be merged; mark it ready for review first",
+        )
+      : mergeable === "MERGEABLE"
+        ? passed()
+        : failed(`not-ready: mergeable=${mergeable} (expected MERGEABLE — CON-42/1's added predicate)`);
 
   // ── row 2: checks green (CON-32(a)) ─────────────────────────────────────
   const checksRow = ((): RowResult => {
@@ -1032,7 +1043,15 @@ export function evaluateReady(
     // breaking --verdict's always-print contract (Copilot, BC-PR-#745).
     if (!parsedChecks.ok) return failed(unreadable(parsedChecks.error));
     const checksExcluded = excludeCheckNames(checksExcludedByRun, options.excludeCheckNames);
-    if (checksAllGreen(checksExcluded)) return passed();
+    // A green row still names what it admitted without a build (zheref/nen#331).
+    const unchecked = uncheckedChecks(checksExcluded);
+    if (checksAllGreen(checksExcluded)) {
+      return passed(
+        unchecked.length === 0
+          ? null
+          : `admitted beside a SUCCESS, not verified: ${unchecked.join(", ")}`,
+      );
+    }
     // AN EMPTY ROLLUP IS NOT A RED ROLLUP (bankai-core#671). `checksAllGreen`
     // opens with a non-empty test, so "no checks at all" and "a check failed"
     // both arrive here -- and used to leave through ONE string that named both.
@@ -1099,6 +1118,16 @@ export function evaluateReady(
         "not-ready: required checks are not all green (CON-32a) — latest run CANCELLED, no " +
           `verdict (needs a re-run, not a fix): ${cancelledList}` +
           (failingList === "" ? "" : `; failing: ${failingList}`),
+      );
+    }
+    // EVERY CHECK SKIPPED OR NEUTRAL (zheref/nen#331): nothing failed, and
+    // nothing ran either. Its own reason, because the remedy is to make a build
+    // run (or wait for the one that should), never to fix a failure.
+    if (unchecked.length > 0 && unchecked.length === latestChecks(checksExcluded).length) {
+      return failed(
+        "not-ready: no check SUCCEEDED at head (CON-32a) — every latest check was skipped or " +
+          `neutral, so nothing was verified: ${unchecked.join(", ")}. A skip is admitted only ` +
+          "beside a SUCCESS.",
       );
     }
     return failed("not-ready: required checks reported but are not all green (CON-32a)");
