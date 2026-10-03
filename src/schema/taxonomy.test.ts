@@ -207,6 +207,20 @@ describe("checkTaxonomy", () => {
     }
   });
 
+  it("validates checks.excluded (zheref/nen#249): counts a valid one, fails a malformed one", () => {
+    const fixture = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+    const ruling = { name: "check (Windows, x)", reason: "no runner", ruled: "2026-09-22", until: "a runner exists" };
+    const valid = repoWithThreeFiles(JSON.stringify({ ...fixture, checks: { excluded: [ruling] } }));
+    expect(gatesCheck(valid)?.ok).toBe(true);
+    expect(gatesCheck(valid)?.detail).toMatch(/, 1 declared check exclusion$/);
+    const malformed = repoWithThreeFiles(
+      JSON.stringify({ ...fixture, checks: { excluded: [{ ...ruling, ruled: "yesterday" }] } }),
+    );
+    expect(gatesCheck(malformed)?.ok).toBe(false);
+    expect(gatesCheck(malformed)?.detail).toMatch(/checks\.excluded\[0\]\.ruled/);
+    expect(checkTaxonomy({ repoFlag: malformed }).ok).toBe(false);
+  });
+
   it("passes overall for a gates.json that is present and VALID", () => {
     const root = repoWithThreeFiles(
       readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),

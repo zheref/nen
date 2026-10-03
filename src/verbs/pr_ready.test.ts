@@ -585,6 +585,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       excludeRun: null,
       requiredHead: null,
       excludedChecks: [],
+      declaredExclusions: [],
       deliveryPr: false,
       identities: { source: "schema", path: "/repo/nen/gates.json" },
       dependabotCarveOut: false,
@@ -1716,5 +1717,124 @@ describe("prReady -- an unevaluated report never carries an unverified requiredH
     const report = JSON.parse(out.join("\n")) as ReadyReport;
     expect(report.verdict).toBe("unevaluated");
     expect(report.meta.requiredHead).toBeNull();
+  });
+});
+
+describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+  function gatesDeclaring(excluded: Record<string, unknown>[]): string {
+    const raw = JSON.parse(readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8")) as Record<string, unknown>;
+    const dir = mkdtempSync(join(tmpdir(), "nen-249-"));
+    const path = join(dir, "gates.json");
+    writeFileSync(path, JSON.stringify({ ...raw, checks: { excluded } }));
+    return path;
+  }
+  const RULING = {
+    name: "check (Windows*",
+    match: "glob",
+    reason: "no Windows runner exists",
+    ruled: "2024-12-01",
+    until: "2025-06-30",
+  };
+  function withRedWindows(): PrStateSource {
+    return stubSource({
+      pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
+        pullRequest: {
+          number: 9,
+          mergeable: "MERGEABLE",
+          isDraft: false,
+          headRefOid: "cafebabe",
+          headRefName: "feature/x",
+          baseRefName: "main",
+          author: { login: "someone" },
+          labels: [],
+          reviewRequests: [],
+        },
+        defaultBranch: "main",
+        checkRollup: [
+          { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
+          { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
+        ],
+        checkRollupPageInfo: { hasNextPage: false, endCursor: null },
+        reviewRequests: [],
+        reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
+      }),
+    });
+  }
+
+  it("--json: ready, meta.declaredExclusions names the check with its reason, and the row says what it dropped", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, gates: gatesDeclaring([RULING]) } }),
+      io,
+      stubDeps(withRedWindows()),
+    );
+    expect(code).toBe(0);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("ready");
+    expect(report.meta.excludedChecks).toEqual([]);
+    expect(report.meta.declaredExclusions).toEqual([
+      { ...RULING, status: "honoured", matched: [WINDOWS] },
+    ]);
+    const row = report.conjuncts.find((c): boolean => c.id === "checks-green");
+    expect(row?.note).toContain(`excluded by declaration: ${WINDOWS} — no Windows runner exists`);
+  });
+
+  it("undeclared, the same rollup is not-ready", async () => {
+    const { io, out } = capture();
+    expect(await prReady(input(), io, stubDeps(withRedWindows()))).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.meta.declaredExclusions).toEqual([]);
+  });
+
+  it("--explain names the exclusion, its reason and what it removed", async () => {
+    const { io, out } = capture();
+    await prReady(
+      input({ values: { ...input().values, gates: gatesDeclaring([RULING]) }, booleans: new Set(["explain"]) }),
+      io,
+      stubDeps(withRedWindows()),
+    );
+    expect(out.join("\n")).toContain(
+      `declared exclusion: glob 'check (Windows*' — no Windows runner exists (ruled 2024-12-01, until 2025-06-30) · removed from CON-32(a): ${WINDOWS}`,
+    );
+  });
+
+  it("past its until date it is not honoured: not-ready, named EXPIRED in --explain and in meta.warnings", async () => {
+    const expired = { ...RULING, until: "2024-12-31" };
+    const json = capture();
+    expect(
+      await prReady(input({ values: { ...input().values, gates: gatesDeclaring([expired]) } }), json.io, stubDeps(withRedWindows())),
+    ).toBe(1);
+    const report = JSON.parse(json.out.join("\n")) as ReadyReport;
+    expect(report.meta.declaredExclusions[0]?.status).toBe("expired");
+    expect(report.meta.warnings.some((w): boolean => /EXPIRED — until 2024-12-31 has passed/.test(w))).toBe(true);
+    const explain = capture();
+    await prReady(
+      input({ values: { ...input().values, gates: gatesDeclaring([expired]) }, booleans: new Set(["explain"]) }),
+      explain.io,
+      stubDeps(withRedWindows()),
+    );
+    expect(explain.out.join("\n")).toContain(
+      `declared exclusion EXPIRED, not honoured: glob 'check (Windows*' — no Windows runner exists (ruled 2024-12-01, until 2024-12-31) · COUNTED on CON-32(a): ${WINDOWS}`,
+    );
+  });
+
+  it("an unevaluated report still names every declaration, with matched null (the rollup was never read)", async () => {
+    const { io, out } = capture();
+    await prReady(input({ values: { ...input().values, gates: gatesDeclaring([RULING]) } }), io, stubDeps(null));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("unevaluated");
+    expect(report.meta.declaredExclusions).toEqual([{ ...RULING, status: "honoured", matched: null }]);
+  });
+
+  it("a malformed declaration is refused at load, never read as something else", async () => {
+    const { io, err } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, gates: gatesDeclaring([{ ...RULING, reason: undefined }]) } }),
+      io,
+      stubDeps(withRedWindows()),
+    );
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/checks\.excluded\[0\]\.reason/);
   });
 });

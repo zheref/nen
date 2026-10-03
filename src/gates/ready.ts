@@ -304,12 +304,14 @@ import {
   latestChecks,
   normalizeReviewers,
   pendingRounds,
+  resolveDeclaredExclusions,
   reviewsAllApprovedAtHead,
   reviewerReviewCheckPattern,
   roundQuorum,
   unapprovedApprovers,
   uncheckedChecks,
   unmatchedExcludeCheckNames,
+  type DeclaredExclusionOutcome,
   type EarlierHeadCheck,
   type OwedRound,
   type QuorumMember,
@@ -633,6 +635,13 @@ export interface EvaluationContext {
    * hazard the flag exists to close.
    */
   readonly warnings: readonly string[];
+  /**
+   * `nen/gates.json`'s `checks.excluded` (zheref/nen#249), each as applied to
+   * this rollup at `now`: honoured, expired or undecidable, with the labels it
+   * named. Empty when the identities declare none. An exclusion never widens
+   * the verdict silently, so every one is reported whether or not it matched.
+   */
+  readonly declaredExclusions: readonly DeclaredExclusionOutcome[];
 }
 
 export interface EvaluateOptions {
@@ -941,11 +950,44 @@ export function evaluateReady(
   const checksExcludedByRun = parsedChecks.ok
     ? excludeCheckRun(parsedChecks.value, excludeRun)
     : [];
-  const excludeCheckWarnings: readonly string[] = parsedChecks.ok
-    ? unmatchedExcludeCheckNames(checksExcludedByRun, options.excludeCheckNames).map(
-        (name): string => `--exclude-check '${name}' matched no check in the rollup`,
-      )
-    : [];
+  // `checks.excluded` (zheref/nen#249): the file's declared exclusions,
+  // resolved to concrete labels against the SAME post-run set `--exclude-check`
+  // is matched against, and dated against `now`. The honoured labels join the
+  // flag's names in ONE `excludeCheckNames` pass below; an expired one is
+  // counted as an ordinary check and named, never quietly dropped or kept.
+  const declared = resolveDeclaredExclusions(
+    identities.excludedChecks ?? [],
+    checksExcludedByRun,
+    options.now,
+  );
+  const excludeCheckWarnings: readonly string[] = [
+    ...(parsedChecks.ok
+      ? unmatchedExcludeCheckNames(checksExcludedByRun, options.excludeCheckNames).map(
+          (name): string => `--exclude-check '${name}' matched no check in the rollup`,
+        )
+      : []),
+    ...declared.outcomes.flatMap((outcome): string[] => {
+      const counted =
+        outcome.matched.length === 0
+          ? "it names no check at this head"
+          : `counted on CON-32(a): ${outcome.matched.join(", ")}`;
+      if (outcome.status === "expired") {
+        return [
+          `declared exclusion '${outcome.name}' (${identities.path} checks.excluded) EXPIRED — until ${outcome.until} has passed, so it is no longer honoured; ${counted}. Renew the ruling with a new until, or delete the entry.`,
+        ];
+      }
+      if (outcome.status === "unknown-date") {
+        return [
+          `declared exclusion '${outcome.name}' (${identities.path} checks.excluded) NOT honoured — the evaluation time '${options.now}' could not be read as a date, so whether until ${outcome.until} has passed is unknown; ${counted}.`,
+        ];
+      }
+      return [];
+    }),
+  ];
+  const excludedNames: readonly string[] = [
+    ...options.excludeCheckNames,
+    ...declared.labels.filter((label): boolean => !options.excludeCheckNames.includes(label)),
+  ];
 
   // PORT CHANGE (§3): the shell's `// "sasuke,tenma,copilot"` default is the
   // FILE's `base_reviewers`. Reachable only for a hand-built blob -- the
@@ -1042,15 +1084,24 @@ export function evaluateReady(
     // `map(select(...))` aborted the whole script and emitted NO verdict,
     // breaking --verdict's always-print contract (Copilot, BC-PR-#745).
     if (!parsedChecks.ok) return failed(unreadable(parsedChecks.error));
-    const checksExcluded = excludeCheckNames(checksExcludedByRun, options.excludeCheckNames);
-    // A green row still names what it admitted without a build (zheref/nen#331).
+    const checksExcluded = excludeCheckNames(checksExcludedByRun, excludedNames);
+    // A green row still names what it admitted without a build (zheref/nen#331),
+    // and what a DECLARATION dropped from it, with the ruling's reason
+    // (zheref/nen#249): an exclusion never widens the verdict silently.
     const unchecked = uncheckedChecks(checksExcluded);
     if (checksAllGreen(checksExcluded)) {
-      return passed(
-        unchecked.length === 0
-          ? null
-          : `admitted beside a SUCCESS, not verified: ${unchecked.join(", ")}`,
-      );
+      const notes = [
+        ...(unchecked.length === 0
+          ? []
+          : [`admitted beside a SUCCESS, not verified: ${unchecked.join(", ")}`]),
+        ...declared.outcomes
+          .filter((outcome): boolean => outcome.status === "honoured" && outcome.matched.length > 0)
+          .map(
+            (outcome): string =>
+              `excluded by declaration: ${outcome.matched.join(", ")} — ${outcome.reason} (ruled ${outcome.ruled}, until ${outcome.until})`,
+          ),
+      ];
+      return passed(notes.length === 0 ? null : notes.join("; "));
     }
     // AN EMPTY ROLLUP IS NOT A RED ROLLUP (bankai-core#671). `checksAllGreen`
     // opens with a non-empty test, so "no checks at all" and "a check failed"
@@ -1079,10 +1130,12 @@ export function evaluateReady(
       // never `ready`, on the same reasoning: a consumer excluding its OWN
       // readiness check's prior report must not read a false READY off a
       // rollup that, once that name is dropped, has nothing left to judge.
-      if (options.excludeCheckNames.length > 0 && checksExcludedByRun.length > 0) {
+      // A declared exclusion (zheref/nen#249) that dropped everything is the
+      // same finding, and its names join the list.
+      if (excludedNames.length > 0 && checksExcludedByRun.length > 0) {
         return failed(
           "not-ready: no checks reported (after excluding: " +
-            `${options.excludeCheckNames.join(", ")}) (CON-32a) — the rollup held only the ` +
+            `${excludedNames.join(", ")}) (CON-32a) — the rollup held only the ` +
             "excluded name(s), so the gate has no evidence to judge. This is an ABSENT verdict, " +
             "not a red one; ask again once a check outside that exclusion reports.",
         );
@@ -1388,6 +1441,7 @@ export function evaluateReady(
       // CON-32(b) rows are unknown and the carve-out cleared nothing.
       dependabotCarveOut: carveOut && headKnown,
       warnings: excludeCheckWarnings,
+      declaredExclusions: declared.outcomes,
     },
   };
 }

@@ -353,7 +353,12 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     colorsCheck(root),
     run(GATES_FILE, root, false, (): string => {
       const gates = loadGateIdentities(root);
-      return `${gates.reviewers.length} reviewer identities`;
+      // `checks.excluded` (zheref/nen#249) is counted only when declared, so a
+      // file without it reads exactly as it did before the key existed.
+      const excluded = gates.excludedChecks?.length ?? 0;
+      return `${gates.reviewers.length} reviewer identities${
+        excluded === 0 ? "" : `, ${excluded} declared check exclusion${excluded === 1 ? "" : "s"}`
+      }`;
     }),
     // `nen/contract.json` IS OPTIONAL AND ITS ABSENCE IS AN `ok` ROW, not a
     // warning -- unlike gates.json, whose absence is a warning because the

@@ -76,7 +76,11 @@ import {
   type ConjunctId,
   type ReadyEvaluation,
 } from "../gates/ready.js";
-import type { RoundPolicy } from "../gates/predicates.js";
+import {
+  resolveDeclaredExclusions,
+  type DeclaredExclusionOutcome,
+  type RoundPolicy,
+} from "../gates/predicates.js";
 import { createClient, tokenFromEnv } from "../github/client.js";
 import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state.js";
 import { assertRepoRoot } from "../repo/root.js";
@@ -430,6 +434,11 @@ export interface ReadyReport {
   readonly meta: ReadyMeta;
 }
 
+/** One `checks.excluded` entry in `meta.declaredExclusions`. */
+export type DeclaredExclusionReport = Omit<DeclaredExclusionOutcome, "matched"> & {
+  readonly matched: readonly string[] | null;
+};
+
 export interface ReadyMeta {
   /** The ref exactly as the caller typed it. */
   readonly ref: string;
@@ -456,6 +465,18 @@ export interface ReadyMeta {
    * second state worth a second sentinel for.
    */
   readonly excludedChecks: readonly string[];
+  /**
+   * `nen/gates.json`'s `checks.excluded` (zheref/nen#249), every declared
+   * exclusion with its reason, ruling date, `until`, its `status`
+   * (`honoured` | `expired` | `unknown-date`) and the rollup labels it named.
+   * `matched` is `null` on an unevaluated report -- the rollup was never read,
+   * so nothing was matched and "matched nothing" would be a claim about it.
+   * Always the array, empty when the file declares none or identities came
+   * from `--reviewers`. Additive to v0.1. `excludedChecks` above stays the
+   * FLAG's names only; the two sources are reported apart because one is a
+   * per-invocation choice and the other a standing ruling.
+   */
+  readonly declaredExclusions: readonly DeclaredExclusionReport[];
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -1027,6 +1048,32 @@ export function localHeadWarning(report: ReadyReport): string | null {
   );
 }
 
+/**
+ * `checks.excluded` as `--explain` names it (zheref/nen#249): one line per
+ * declared exclusion, its reason verbatim, whether it was honoured, and which
+ * checks it removed -- so a verdict a declaration widened says so on the page.
+ */
+function renderDeclaredExclusions(report: ReadyReport): string[] {
+  return report.meta.declaredExclusions.map((exclusion): string => {
+    const named = exclusion.match === "glob" ? `glob '${exclusion.name}'` : `'${exclusion.name}'`;
+    const matched =
+      exclusion.matched === null
+        ? "rollup not read"
+        : exclusion.matched.length === 0
+          ? "names no check at this head"
+          : exclusion.status === "honoured"
+            ? `removed from CON-32(a): ${exclusion.matched.join(", ")}`
+            : `COUNTED on CON-32(a): ${exclusion.matched.join(", ")}`;
+    const state =
+      exclusion.status === "honoured"
+        ? "declared exclusion"
+        : exclusion.status === "expired"
+          ? "declared exclusion EXPIRED, not honoured"
+          : "declared exclusion NOT honoured (evaluation date unreadable)";
+    return `  ${state}: ${named} — ${exclusion.reason} (ruled ${exclusion.ruled}, until ${exclusion.until}) · ${matched}`;
+  });
+}
+
 export function renderExplain(report: ReadyReport): string[] {
   const lines: string[] = [];
   lines.push(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`);
@@ -1061,6 +1108,7 @@ export function renderExplain(report: ReadyReport): string[] {
   if (report.meta.excludedChecks.length > 0) {
     lines.push(`  excluding checks named: ${report.meta.excludedChecks.join(", ")} (name-based exclusion, zheref/nen#216)`);
   }
+  for (const line of renderDeclaredExclusions(report)) lines.push(line);
   for (const warning of report.meta.warnings) lines.push(`  warning: ${warning}`);
   lines.push("");
   lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
@@ -1419,6 +1467,7 @@ export async function prReady(
       excludeRun: excludeRun === "" ? null : excludeRun,
       requiredHead: requiredHead ?? null,
       excludedChecks: excludeCheckNames,
+      declaredExclusions: evaluation.context.declaredExclusions,
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,
@@ -1531,6 +1580,13 @@ function unevaluatedReport(
       // requested. `requiredHead` means "given AND matched", on every report.
       requiredHead: null,
       excludedChecks: excludeCheckNames,
+      // Dated against `now` so an expired ruling is still named, but never
+      // matched: the rollup was not read.
+      declaredExclusions: resolveDeclaredExclusions(
+        identities.identities.excludedChecks ?? [],
+        [],
+        now,
+      ).outcomes.map((outcome): DeclaredExclusionReport => ({ ...outcome, matched: null })),
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
       // The gate never ran, so it never asked -- `false` here would read as

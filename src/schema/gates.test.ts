@@ -594,3 +594,87 @@ describe("loadGateIdentities -- THIS repository's own nen/gates.json (ruling 202
     }
   });
 });
+
+describe("parseGateIdentities -- checks.excluded (zheref/nen#249)", () => {
+  const at = "/fake/nen/gates.json";
+  const base = {
+    version: 1,
+    reviewers: [{ name: "a", login_pattern: { pattern: "^a$", ignoreCase: true } }],
+    default_approvers: ["a"],
+    base_reviewers: ["a"],
+    delivery: {
+      author_pattern: { pattern: "^bot$", ignoreCase: true },
+      head_ref_prefixes: ["x/"],
+    },
+  };
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+  const entry = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: WINDOWS,
+    reason: "no Windows runner exists",
+    ruled: "2026-09-22",
+    until: "a Windows runner exists",
+    ...overrides,
+  });
+  const withExcluded = (...entries: unknown[]): unknown => ({ ...base, checks: { excluded: entries } });
+
+  it("absent, an absent checks.excluded, and an empty list all read as no exclusion", () => {
+    expect(parseGateIdentities(at, base).excludedChecks).toEqual([]);
+    expect(parseGateIdentities(at, { ...base, checks: {} }).excludedChecks).toEqual([]);
+    expect(parseGateIdentities(at, withExcluded()).excludedChecks).toEqual([]);
+  });
+
+  it("reads a matrix name WHOLE -- commas, brackets and quotes are part of it -- as exact by default", () => {
+    const [only] = parseGateIdentities(at, withExcluded(entry())).excludedChecks ?? [];
+    expect(only).toEqual({
+      name: WINDOWS,
+      match: "exact",
+      reason: "no Windows runner exists",
+      ruled: "2026-09-22",
+      until: "a Windows runner exists",
+      untilDate: null,
+    });
+  });
+
+  it("a date-shaped until is read as the lapse date; a stated glob is kept", () => {
+    const [only] =
+      parseGateIdentities(at, withExcluded(entry({ name: "check (Windows*", match: "glob", until: "2026-12-31" })))
+        .excludedChecks ?? [];
+    expect(only?.match).toBe("glob");
+    expect(only?.untilDate).toBe("2026-12-31");
+  });
+
+  it("refuses every malformed entry by pointer", () => {
+    const refusals: [unknown, RegExp][] = [
+      [{ ...base, checks: [] }, /checks/],
+      [{ ...base, checks: { excluded: {} } }, /checks\.excluded/],
+      [withExcluded("x"), /checks\.excluded\[0\]/],
+      [withExcluded(entry({ name: undefined })), /checks\.excluded\[0\]\.name/],
+      [withExcluded(entry({ reason: undefined })), /checks\.excluded\[0\]\.reason/],
+      [withExcluded(entry({ reason: "  " })), /reason[\s\S]*is blank/],
+      [withExcluded(entry({ ruled: undefined })), /\.ruled/],
+      [withExcluded(entry({ until: undefined })), /\.until/],
+      [withExcluded(entry({ ruled: "22/09/2026" })), /\.ruled[\s\S]*YYYY-MM-DD/],
+      [withExcluded(entry({ ruled: "2026-02-30" })), /\.ruled/],
+      [withExcluded(entry({ until: "2026-13-01" })), /\.until[\s\S]*not a real/],
+      [withExcluded(entry({ until: "2026-09-21" })), /before ruled/],
+      [withExcluded(entry({ name: " check" })), /leading or trailing whitespace/],
+      [withExcluded(entry({ name: "check *" })), /\.match[\s\S]*is required because/],
+      [withExcluded(entry({ name: "*", match: "glob" })), /matches EVERY check/],
+      [withExcluded(entry({ name: "**", match: "glob" })), /matches EVERY check/],
+      [withExcluded(entry({ match: "regex" })), /expected 'exact' or 'glob'/],
+      [withExcluded(entry(), entry({ reason: "again" })), /checks\.excluded\[1\]\.name[\s\S]*duplicates checks\.excluded\[0\]/],
+    ];
+    for (const [file, message] of refusals) {
+      expect(() => parseGateIdentities(at, file), String(message)).toThrow(SchemaError);
+      expect(() => parseGateIdentities(at, file), String(message)).toThrow(message);
+    }
+  });
+
+  it("a literal '*' is admitted when the file says exact, and the same name may be declared once per match", () => {
+    const identities = parseGateIdentities(
+      at,
+      withExcluded(entry({ name: "a*b", match: "exact" }), entry({ name: "a*b", match: "glob" })),
+    );
+    expect(identities.excludedChecks?.map((e): string => e.match)).toEqual(["exact", "glob"]);
+  });
+});

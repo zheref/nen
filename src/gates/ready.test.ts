@@ -101,6 +101,8 @@ describe("evaluateReady -- the ready path", () => {
       // No `--exclude-check <name>` was given, so there is nothing to warn
       // about matching or not matching.
       warnings: [],
+      // The fixture declares no `checks.excluded` (zheref/nen#249).
+      declaredExclusions: [],
     });
   });
 });
@@ -640,6 +642,161 @@ describe("evaluateReady -- --exclude-check (zheref/hatsu#81)", () => {
       "--exclude-check 'does-not-exist' matched no check in the rollup",
     ]);
     expect(evaluation.ready).toBe(true);
+  });
+});
+
+describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
+  // The fixture identities, plus a `checks.excluded` block: the same file a
+  // repository would carry, read through the same loader.
+  const FIXTURE_RAW = JSON.parse(
+    readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
+  ) as Record<string, unknown>;
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+  const RULING = {
+    name: WINDOWS,
+    reason: "the maintainer ruled Windows out of scope until a runner exists",
+    ruled: "2025-05-01",
+    until: "a Windows runner exists",
+  };
+  function declaring(...excluded: Record<string, unknown>[]): ReturnType<typeof parseGateIdentities> {
+    return parseGateIdentities("/fixture/nen/gates.json", { ...FIXTURE_RAW, checks: { excluded } });
+  }
+  const redWindows = { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" };
+
+  it("an excluded RED matrix check still yields ready when every other row passes, and the row names it with its reason", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    const row = evaluation.conjuncts.find((c): boolean => c.id === "checks-green");
+    expect(row?.note).toBe(
+      `excluded by declaration: ${WINDOWS} — ${RULING.reason} (ruled 2025-05-01, until a Windows runner exists)`,
+    );
+    expect(evaluation.context.declaredExclusions).toEqual([
+      { ...RULING, match: "exact", status: "honoured", matched: [WINDOWS] },
+    ]);
+    expect(evaluation.context.warnings).toEqual([]);
+  });
+
+  it("the SAME check undeclared yields not-ready", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("checks-green");
+  });
+
+  it("a check that never starts (queued forever, no runner) is excluded just the same", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({ checks: [greenCheck(), { name: WINDOWS, status: "QUEUED", conclusion: null }] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+  });
+
+  it("a glob drops every matrix leg it names and nothing else", () => {
+    const glob = { ...RULING, name: "check (Windows*", match: "glob" };
+    const legs = [
+      redWindows,
+      { name: "check (Windows, arm64)", status: "COMPLETED", conclusion: "FAILURE" },
+    ];
+    const ready = evaluateReady(declaring(glob), readyState({ checks: [greenCheck(), ...legs] }), OPTIONS);
+    expect(ready.ready).toBe(true);
+    expect(ready.context.declaredExclusions[0]?.matched).toEqual([WINDOWS, "check (Windows, arm64)"]);
+    const linux = evaluateReady(
+      declaring(glob),
+      readyState({
+        checks: [greenCheck(), ...legs, { name: "check (Linux)", status: "COMPLETED", conclusion: "FAILURE" }],
+      }),
+      OPTIONS,
+    );
+    expect(linux.ready).toBe(false);
+  });
+
+  it("an exact name does not match a neighbour that merely contains it", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, name: "check" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.declaredExclusions[0]?.matched).toEqual([]);
+  });
+
+  it("is honoured THROUGH its until date and ignored -- and named EXPIRED -- the day after", () => {
+    const dated = { ...RULING, until: "2025-06-01" };
+    const onTheDay = evaluateReady(declaring(dated), readyState({ checks: [greenCheck(), redWindows] }), {
+      ...OPTIONS,
+      now: "2025-06-01T23:59:59Z",
+    });
+    expect(onTheDay.ready).toBe(true);
+    const after = evaluateReady(declaring(dated), readyState({ checks: [greenCheck(), redWindows] }), {
+      ...OPTIONS,
+      now: "2025-06-02T00:00:00Z",
+    });
+    expect(after.ready).toBe(false);
+    expect(after.firstFailing).toBe("checks-green");
+    expect(after.context.declaredExclusions[0]?.status).toBe("expired");
+    expect(after.context.declaredExclusions[0]?.matched).toEqual([WINDOWS]);
+    expect(after.context.warnings).toEqual([
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) EXPIRED — until 2025-06-01 has passed, so it is no longer honoured; counted on CON-32(a): ${WINDOWS}. Renew the ruling with a new until, or delete the entry.`,
+    ]);
+  });
+
+  it("an expired exclusion is named even when it matches nothing at this head", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, ruled: "2025-04-01", until: "2025-05-15" }),
+      readyState(),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.context.warnings[0]).toMatch(/EXPIRED[\s\S]*it names no check at this head/);
+  });
+
+  it("an unreadable clock honours NO dated exclusion, and says so", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, until: "2099-01-01" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      { ...OPTIONS, now: "not a time" },
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.declaredExclusions[0]?.status).toBe("unknown-date");
+    expect(evaluation.context.warnings[0]).toMatch(/NOT honoured — the evaluation time 'not a time'/);
+  });
+
+  it("a rollup holding only declared-excluded checks keeps the ABSENT finding, naming them", () => {
+    const evaluation = evaluateReady(declaring(RULING), readyState({ checks: [redWindows] }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.line).toMatch(
+      /^not-ready: no checks reported \(after excluding: check \(Windows, \["self-hosted","Windows","X64"\]\)\) \(CON-32a\)/,
+    );
+  });
+
+  it("combines with --exclude-check: both sources drop, and the absent finding names both once", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({ checks: [redWindows, greenCheck("readiness")] }),
+      { ...OPTIONS, excludeCheckNames: ["readiness", WINDOWS] },
+    );
+    expect(evaluation.line).toMatch(/after excluding: readiness, check \(Windows/);
+    expect(evaluation.line.split(WINDOWS).length - 1).toBe(1);
+  });
+
+  it("does not excuse an all-skipped head: a skip beside an excluded check is still nothing verified", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({
+        checks: [redWindows, { name: "ci / build", status: "COMPLETED", conclusion: "SKIPPED" }],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.line).toMatch(/no check SUCCEEDED at head/);
   });
 });
 

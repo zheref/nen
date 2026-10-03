@@ -143,7 +143,10 @@ ready:
                               An opener never closed with a comma after it is
                               refused (exit 2) -- repeat the flag instead. A
                               name with a comma outside every bracket cannot
-                              be named.
+                              be named. Combines with the gates file's
+                              declared checks.excluded (zheref/nen#249): a
+                              standing ruling belongs there, with its reason,
+                              ruling date and until, not in a flag.
   --gates <path>              Read reviewer identities from this gates file
                               instead of the target repo's nen/gates.json.
                               A RELATIVE path is resolved against the --repo

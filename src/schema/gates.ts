@@ -294,7 +294,51 @@ export interface GateIdentities {
    * that builder, and every other caller-built identity set, valid unchanged.
    */
   readonly roundQuorum?: RoundQuorum | null;
+  /**
+   * `checks.excluded` (zheref/nen#249), in the file's order; empty when the
+   * file declares none. OPTIONAL in the type for the reason `roundQuorum` is:
+   * the `--reviewers` identity path names no file and so declares no
+   * exclusion, and every caller-built identity set stays valid unchanged.
+   */
+  readonly excludedChecks?: readonly DeclaredCheckExclusion[];
   reviewer(name: string): ReviewerIdentity | undefined;
+}
+
+/**
+ * One `checks.excluded` entry (zheref/nen#249): a check the maintainer ruled
+ * out of CON-32(a), declared where the verdict already reads its policy rather
+ * than typed per invocation as `--exclude-check`.
+ *
+ * EVERY FIELD IS REQUIRED, because each is part of the binding's condition:
+ * WHICH check (`name`), WHY (`reason`), WHEN it was ruled (`ruled`) and WHEN IT
+ * LAPSES (`until`). An exclusion with no stated lapse is a permanent hole in
+ * the gate that nobody decided to make permanent.
+ *
+ *   name   the check's own rollup label (a CheckRun's name, a StatusContext's
+ *          context), compared WHOLE. A comma, a bracket or a quote inside it is
+ *          part of the name -- the file is JSON, so nothing splits it. Under
+ *          `match: "glob"` a `*` matches any run of characters (including none)
+ *          and NOTHING ELSE is special: `[`, `]`, `?`, `(` and `"` are literal,
+ *          because Actions matrix names carry them (`check (Windows,
+ *          ["self-hosted","Windows","X64"])`). A name containing a `*` MUST
+ *          state `match` -- it has two honest readings, a literal asterisk or a
+ *          wildcard -- and a name with no `*` is the same check under either.
+ *   reason the ruling's reason, reported verbatim beside every check it drops.
+ *   ruled  the ruling's date, `YYYY-MM-DD`.
+ *   until  EITHER a date `YYYY-MM-DD` -- honoured through that UTC day and
+ *          IGNORED (reported as expired) from the next one -- OR a free-text
+ *          condition ("a Windows runner exists"), which nen cannot evaluate and
+ *          so honours until the file is edited, reporting the condition beside
+ *          the exclusion every time it applies.
+ */
+export interface DeclaredCheckExclusion {
+  readonly name: string;
+  readonly match: "exact" | "glob";
+  readonly reason: string;
+  readonly ruled: string;
+  readonly until: string;
+  /** `until` when it is a date, else `null` (a condition nen cannot evaluate). */
+  readonly untilDate: string | null;
 }
 
 function readPattern(
@@ -530,6 +574,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   );
 
   const roundQuorum = readRoundQuorum(path, root["round_quorum"], declared);
+  const excludedChecks = readCheckExclusions(path, root["checks"]);
 
   // `round_policy.stallMinutes` -- OPTIONAL (zheref/nen#214 item 2). A
   // repository that does not declare it gets the caller's own fixed default,
@@ -645,6 +690,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     delivery,
     dependabotCarveOut,
     roundQuorum,
+    excludedChecks,
     reviewer: (name): ReviewerIdentity | undefined => byName.get(name),
   };
 }
@@ -742,6 +788,136 @@ function readRoundQuorum(
     );
   }
   return { anyOf, minimum: rawMinimum };
+}
+
+const ISO_DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
+
+/** Whether `text` is a real calendar date written `YYYY-MM-DD` (no `2026-02-30`). */
+export function isIsoDate(text: string): boolean {
+  const parts = ISO_DATE.exec(text);
+  if (parts === null) return false;
+  const date = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text;
+}
+
+/**
+ * `checks.excluded` -- OPTIONAL, and REFUSED BY POINTER at load when malformed
+ * (zheref/nen#249). An exclusion only ever WIDENS the verdict -- it removes a
+ * check CON-32(a) would otherwise wait on -- so a malformed one must be a loud
+ * refusal, never an entry silently read as something its author did not write.
+ * Each refusal below is named for what it would have done instead:
+ *
+ *   * a missing or blank `name`, `reason`, `ruled` or `until` is a binding
+ *     with part of its condition unstated;
+ *   * a name with a `*` and no `match` has two readings (literal or wildcard)
+ *     and the file has not said which; guessing changes which check is dropped;
+ *   * a glob made only of `*` matches EVERY check -- CON-32(a) retired outright;
+ *   * a name with leading or trailing whitespace matches no label GitHub
+ *     reports, so it would exclude nothing while reading as if it did;
+ *   * a `ruled` or a date-shaped `until` that is not a real calendar date has
+ *     no day it was ruled on or lapses on;
+ *   * an `until` date BEFORE `ruled` is born expired -- a ruling that never
+ *     applied, kept in the file as though it did;
+ *   * the same `name` twice (under the same `match`) is two reasons for one
+ *     exclusion, and the report could quote only one of them.
+ */
+function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion[] {
+  if (raw === undefined || raw === null) return [];
+  const checks = requireRecord(path, "checks", raw);
+  const rawExcluded = checks["excluded"];
+  if (rawExcluded === undefined || rawExcluded === null) return [];
+  const exclusions: DeclaredCheckExclusion[] = [];
+  const seenAt = new Map<string, number>();
+  requireArray(path, "checks.excluded", rawExcluded).forEach((entry, index): void => {
+    const pointer = `checks.excluded[${index}]`;
+    const record = requireRecord(path, pointer, entry);
+    const text = (key: string): string => {
+      const value = requireString(path, `${pointer}.${key}`, record[key]);
+      if (value.trim() === "") {
+        throw new SchemaError(
+          path,
+          `${pointer}.${key}`,
+          "is blank. A declared exclusion states which check, why, when it was ruled and when it lapses -- all four, because each is part of the condition the exclusion binds under.",
+        );
+      }
+      return value;
+    };
+    const name = text("name");
+    if (name !== name.trim()) {
+      throw new SchemaError(
+        path,
+        `${pointer}.name`,
+        `('${name}') has leading or trailing whitespace. Names are compared whole against the check's own label, which carries none, so this entry would exclude nothing while reading as if it did.`,
+      );
+    }
+    const rawMatch = record["match"];
+    let match: "exact" | "glob";
+    if (rawMatch === undefined || rawMatch === null) {
+      if (name.includes("*")) {
+        throw new SchemaError(
+          path,
+          `${pointer}.match`,
+          `is required because name '${name}' contains '*', which reads two ways: a literal asterisk or a wildcard. State "match": "glob" or "match": "exact"; a guess would change which check is dropped.`,
+        );
+      }
+      match = "exact";
+    } else if (rawMatch === "exact" || rawMatch === "glob") {
+      match = rawMatch;
+    } else {
+      throw new SchemaError(
+        path,
+        `${pointer}.match`,
+        `expected 'exact' or 'glob', got ${describeValue(rawMatch)}`,
+      );
+    }
+    if (match === "glob" && /^\**$/.test(name)) {
+      throw new SchemaError(
+        path,
+        `${pointer}.name`,
+        `('${name}') is a glob that matches EVERY check, which retires CON-32(a) outright rather than excluding a check. Name the check.`,
+      );
+    }
+    const reason = text("reason");
+    const ruled = text("ruled");
+    if (!isIsoDate(ruled)) {
+      throw new SchemaError(
+        path,
+        `${pointer}.ruled`,
+        `expected the ruling's date as YYYY-MM-DD, got ${describeValue(ruled)}`,
+      );
+    }
+    const until = text("until");
+    let untilDate: string | null = null;
+    if (ISO_DATE.test(until.trim())) {
+      if (!isIsoDate(until)) {
+        throw new SchemaError(
+          path,
+          `${pointer}.until`,
+          `('${until}') is shaped like a date but is not a real YYYY-MM-DD calendar date, so it has no day it lapses on.`,
+        );
+      }
+      if (until < ruled) {
+        throw new SchemaError(
+          path,
+          `${pointer}.until`,
+          `(${until}) is before ruled (${ruled}): the exclusion lapsed before it was ruled, so it never applied. Delete it, or correct the date.`,
+        );
+      }
+      untilDate = until;
+    }
+    const key = `${match}\u0000${name}`;
+    const previous = seenAt.get(key);
+    if (previous !== undefined) {
+      throw new SchemaError(
+        path,
+        `${pointer}.name`,
+        `duplicates checks.excluded[${previous}].name ('${name}'); two declarations for one exclusion means the report could quote only one reason and one lapse`,
+      );
+    }
+    seenAt.set(key, index);
+    exclusions.push({ name, match, reason, ruled, until, untilDate });
+  });
+  return exclusions;
 }
 
 export function loadGateIdentities(repoRoot: string): GateIdentities {

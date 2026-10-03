@@ -923,10 +923,11 @@ path-filtered or conditional job that did not apply is not a failure. A
 A draft pull request fails row 1 (CON-42/1) with `not-ready: the PR is a DRAFT
 (CON-42/1) — a draft cannot be merged; mark it ready for review first`, even
 when GitHub reports it `MERGEABLE`. An intentional-skip exception is never
-inferred from branch protection, and **no mechanism declares one today**:
-`--exclude-check` only removes names, and an all-skipped head with its skips
-excluded is an empty rollup, which also fails. A declared exception is
-zheref/nen#249's to build. **Consumer note:** a repository whose only checks
+inferred from branch protection, and **no mechanism admits an all-skipped
+head**: both `--exclude-check` and a declared `checks.excluded` entry in
+`nen/gates.json` (zheref/nen#249, below) only *remove* a check, and an
+all-skipped head with its skips excluded is an empty rollup, which also
+fails. **Consumer note:** a repository whose only checks
 are conditional (a job-level `if:` that skips on a docs-only change, or jobs
 gated on a runner variable) now reads not-ready on such a head; make one job
 run and succeed on every head.
@@ -1057,9 +1058,73 @@ its own occurrence instead. (An unclosed opener with no comma after it, such
 as `lint (`, is not ambiguous and is kept as typed; a closer with no opener
 is an ordinary character.) And a name with a comma **outside every bracket**
 (`lint, format`) still splits and cannot be named by this flag — no Actions
-matrix name is shaped that way; a declared, pattern-capable exclusion is
-[zheref/nen#249](https://github.com/zheref/nen/issues/249)'s. The grammar is
+matrix name is shaped that way; the declared, pattern-capable form is
+`nen/gates.json`'s `checks.excluded`, below. The grammar is
 `src/pr/excludecheck.ts`'s header.
+
+**A declared exclusion: `checks.excluded` (zheref/nen#249).** A flag is a
+per-invocation choice every caller has to remember; a maintainer's ruling that
+a check is out of scope belongs in the declaration the verdict already reads.
+`nen/gates.json` may carry an optional `checks.excluded` list:
+
+```json
+"checks": {
+  "excluded": [
+    {
+      "name": "check (Windows, [\"self-hosted\",\"Windows\",\"X64\"])",
+      "reason": "the maintainer ruled Windows out of scope until a runner exists",
+      "ruled": "2026-09-22",
+      "until": "a self-hosted Windows runner is registered"
+    },
+    { "name": "check (Windows*", "match": "glob", "reason": "…", "ruled": "2026-09-22", "until": "2026-12-31" }
+  ]
+}
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | the check's own rollup label (a check run's name, a status's context), compared **whole**. The file is JSON, so a comma, a bracket or a quote is simply part of the name — nothing splits it. |
+| `match` | only when `name` contains `*` | `exact` (the default for a name with no `*`) or `glob`. Under `glob`, `*` matches any run of characters, including none, and **nothing else is special**: `[`, `]`, `?`, `(` and `"` are literal, because matrix names carry them. A name with a `*` and no `match` is refused, since it reads two ways. |
+| `reason` | yes | the ruling's reason, quoted beside every check it drops |
+| `ruled` | yes | the ruling's date, `YYYY-MM-DD` |
+| `until` | yes | when it lapses: **either** a date `YYYY-MM-DD` — honoured through that UTC day, **ignored and reported as expired** from the next — **or** a free-text condition, which nen cannot evaluate and so honours until the file is edited, quoting the condition every time |
+
+What `nen pr ready` does with it:
+
+- Every **honoured** entry is resolved to the rollup labels it names, and those
+  are dropped from CON-32(a) **before** it is evaluated, through the same
+  exclusion `--exclude-check` uses (after `--exclude-run`'s carve-out). The two
+  **combine**: a flag's names and a declaration's labels are dropped together.
+- Nothing is dropped silently. `--json` carries every entry in
+  `meta.declaredExclusions` — `name`, `match`, `reason`, `ruled`, `until`,
+  `status` (`honoured`, `expired`, or `unknown-date` when the evaluation time
+  could not be read as a date, which honours no dated entry) and `matched`, the
+  labels it named (`null` on an unevaluated report, whose rollup was never
+  read). A passing CON-32(a) row's `note` says `excluded by declaration:
+  <labels> — <reason> (ruled <date>, until <until>)`. `--explain` prints one
+  line per entry: `declared exclusion: …`, or `declared exclusion EXPIRED, not
+  honoured: …` with the checks it now **counts**.
+- An **expired** entry is not applied, and is also a `meta.warnings` entry
+  naming the file and saying to renew the ruling with a new `until` or delete
+  it — whether or not it names a check at this head.
+- A rollup that held **only** excluded checks is still
+  `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
+  names from both sources listed once. An exclusion never turns an empty or
+  all-skipped head into a ready one.
+- Like `--exclude-check`, it never changes which reviewers owe a round or
+  whether CON-30's carve-out fires. `meta.excludedChecks` stays the **flag's**
+  names only.
+
+The entry is validated at load, by `nen pr ready` and by `nen schema check`
+(whose `gates.json` row adds `, N declared check exclusion(s)` when there are
+any). A missing or blank field, a `ruled` or date-shaped `until` that is not a
+real calendar date, an `until` date before `ruled`, a name with leading or
+trailing whitespace, a glob made only of `*` (it would match every check), an
+unknown `match`, and the same name declared twice are each refused by pointer
+(`checks.excluded[<i>].<field>`), exit `2` from `pr ready`. **Compatibility:**
+an optional key, so `version` stays `1`; a nen older than the release that
+reads it ignores the block, which leaves the excluded check counted — a
+stricter verdict, never a wider one.
 
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:

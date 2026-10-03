@@ -43,6 +43,8 @@ import {
   type EarlierHeadCheck,
   type OwedRound,
   type RoundInputs,
+  checkExclusionMatches,
+  utcDay,
 } from "./predicates.js";
 import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
@@ -2841,5 +2843,46 @@ describe("checkAdmissible / uncheckedChecks (zheref/nen#331)", () => {
         checkRun({ name: "c", conclusion: "SUCCESS", startedAt: "2026-10-02T10:00:00Z" }),
       ]),
     ).toEqual(["b (NEUTRAL)"]);
+  });
+});
+
+// ADDED (zheref/nen#249): the declared-exclusion matcher. `*` is the only
+// wildcard; every other character -- the brackets, quotes and commas an Actions
+// matrix name carries -- is itself.
+describe("checkExclusionMatches -- declared checks.excluded", () => {
+  const glob = (name: string) =>
+    ({ name, match: "glob", reason: "r", ruled: "2026-01-01", until: "u", untilDate: null }) as const;
+  const exact = (name: string) => ({ ...glob(name), match: "exact" }) as const;
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+
+  it("exact compares the whole label", () => {
+    expect(checkExclusionMatches(exact(WINDOWS), WINDOWS)).toBe(true);
+    expect(checkExclusionMatches(exact("check"), WINDOWS)).toBe(false);
+    expect(checkExclusionMatches(exact("a*b"), "a*b")).toBe(true);
+    expect(checkExclusionMatches(exact("a*b"), "axb")).toBe(false);
+  });
+
+  it("glob: '*' is any run, and brackets, '?' and quotes are literal", () => {
+    expect(checkExclusionMatches(glob("check (Windows*"), WINDOWS)).toBe(true);
+    expect(checkExclusionMatches(glob("*Windows*"), WINDOWS)).toBe(true);
+    expect(checkExclusionMatches(glob('*["self-hosted"*'), WINDOWS)).toBe(true);
+    expect(checkExclusionMatches(glob("check (Linux*"), WINDOWS)).toBe(false);
+    expect(checkExclusionMatches(glob("[ab]"), "a")).toBe(false);
+    expect(checkExclusionMatches(glob("[ab]"), "[ab]")).toBe(true);
+    expect(checkExclusionMatches(glob("a?c"), "abc")).toBe(false);
+    expect(checkExclusionMatches(glob("a*c"), "ac")).toBe(true);
+    expect(checkExclusionMatches(glob("a*b*c"), "aXbYbZc")).toBe(true);
+    expect(checkExclusionMatches(glob("a*b*c"), "aXbYbZ")).toBe(false);
+  });
+
+  it("a long adversarial label cannot hang the matcher", () => {
+    const started = Date.now();
+    expect(checkExclusionMatches(glob("*a*a*a*a*a*b"), "a".repeat(5000))).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it("utcDay reads an ISO instant's UTC day and refuses an unreadable one", () => {
+    expect(utcDay("2026-10-02T23:30:00-05:00")).toBe("2026-10-03");
+    expect(utcDay("nope")).toBeNull();
   });
 });
