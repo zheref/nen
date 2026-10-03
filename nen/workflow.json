@@ -29,11 +29,15 @@
     "roles": { "reviewer": "deep", "worker": "fast", "measurer": "fast", "orchestrator": "frontier" }
   },
   "review": {
-    "$comment": "Maintainer's ruling of 2026-09-26 (set up at mukai under missing-configuration): nen review scopes classifies the branch diff by these rows for hanten. code is Nobunaga's and claims every path; security is Feitan's on the merge, bootstrap, workflow and credential-shaped paths.",
+    "$comment": "Maintainer's ruling of 2026-09-26 (set up at mukai under missing-configuration): nen review scopes classifies the branch diff by these rows for hanten. code is Nobunaga's and claims every path; security is Feitan's on the merge, bootstrap, workflow and credential-shaped paths, and (zheref/nen#311) on the command-classification seams src/parse/** and src/watch/**, where a misread command line is a fail-open (NN-PR-#303: 'gh api -q= -XDELETE' classified read-only).",
     "scopes": {
       "code": { "persona": "nobunaga", "tier": "deep", "budget": 2, "paths": ["**"] },
-      "security": { "persona": "feitan", "tier": "deep", "budget": 1, "paths": ["src/pr/**", "bootstrap/**", ".github/workflows/**", "**/*auth*", "**/*secret*", "**/*credential*", "**/*token*"] }
+      "security": { "persona": "feitan", "tier": "deep", "budget": 1, "paths": ["src/pr/**", "src/parse/**", "src/watch/**", "bootstrap/**", ".github/workflows/**", "**/*auth*", "**/*secret*", "**/*credential*", "**/*token*"] }
     }
+  },
+  "release": {
+    "$comment": "zheref/nen#311: the release unit 'nen release unit-check' and 'nen pr merge --release-unit' bound a release-proposal PR to, read from the PR's base. The shape of NN-PR-#281 and NN-PR-#308: the changelog, the version literal, the pinned-ref docs, and package.json at its version key only. A release that also touches a test (NN-PR-#295's src/shu/tools.test.ts) falls outside it and goes to the maintainer's merge.",
+    "unitPaths": ["CHANGELOG.md", "src/version.ts", "README.md", "docs/USAGE.md", { "path": "package.json", "keys": ["version"] }]
   },
   "runners": {
     "$comment": "Self-hosted runner policy hatsu:jusshin executes. naming is the runner-name template; each pool is one label set a workflow of this repository targets, the repository variable that switches its jobs on, the tools a job on it invokes, and the preflight workflow that proves it. windows-x64 is ci.yml's check-windows leg, gated on NEN_WINDOWS_RUNNER; macos-arm64 carries the check and compile jobs and is not variable-gated. Each pool names its own preflight file: the file is rendered for one pool's runs-on, and a green run of it is what 'nen runner enable' accepts as proof of that pool.",
