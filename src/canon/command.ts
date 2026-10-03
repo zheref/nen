@@ -122,8 +122,12 @@ ${SURFACE_LIST}
       THE MARKER IS THE OWNERSHIP CLAIM. A destination that exists and carries
       no marker was written by hand: the whole run is REFUSED (exit 2) before
       the first byte is written on any surface, naming the file -- move or
-      rename the consumer's own rule, or drop it for the canon one. An
-      unmarked file in a rules directory with no canon source is the
+      rename the consumer's own rule, or drop it for the canon one. A
+      destination holding merge-conflict lines ('<<<<<<<', '=======',
+      '>>>>>>>') where its marker should be -- or a document whose block a
+      conflict split -- is refused the same way, but named as an UNRESOLVED
+      MERGE CONFLICT with the line, never as hand-written: finish the merge,
+      then regenerate. An unmarked file in a rules directory with no canon source is the
       consumer's own: never deleted, listed as 'foreign', never drift.
 
       --repo is REQUIRED: this verb writes into the consumer's tree, and a

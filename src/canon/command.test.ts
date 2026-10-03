@@ -418,6 +418,22 @@ describe("nen canon mirror generate -- CLI wiring", () => {
     expect(existsSync(join(fx.root, "AGENTS.md"))).toBe(false);
   });
 
+  it("names an UNRESOLVED MERGE CONFLICT as the cause, not a hand edit, when a generated file is caught mid-merge (zheref/nen#309)", async () => {
+    const fx = fixture();
+    expect((await capture(mirrorArgs("generate", fx, ["--surfaces", "claude-code"]), fx.root)).code).toBe(0);
+    const generated = join(fx.root, ".claude", "rules", "01-a.md");
+    const ours = readFileSync(generated, "utf8");
+    // A conflicted merge displaces the ownership marker from line 1.
+    writeFileSync(generated, `<<<<<<< HEAD\n${ours}=======\n${ours.replace("Hello", "Hi")}>>>>>>> other-branch\n`);
+    const result = await capture(mirrorArgs("generate", fx, ["--surfaces", "claude-code"]), fx.root);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/claude-code: \.claude\/rules\/01-a\.md has an unresolved merge conflict \(line 1: '<<<<<<< HEAD'\)/);
+    expect(err).not.toMatch(/hand-written|written by hand/);
+    // Still a refusal: the conflicted file is untouched.
+    expect(readFileSync(generated, "utf8").startsWith("<<<<<<< HEAD\n")).toBe(true);
+  });
+
   it("deletes a marked orphan and leaves the consumer's own unmarked file, listing it as foreign", async () => {
     const fx = fixture();
     mkdirSync(join(fx.root, ".claude", "rules"), { recursive: true });

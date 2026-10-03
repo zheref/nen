@@ -252,6 +252,38 @@ export function readFileMarker(text: string): FileMarker | null {
   };
 }
 
+/** A line git writes into a file it could not merge: `<<<<<<<`, `|||||||` (diff3), `=======`, `>>>>>>>`. */
+const CONFLICT_MARKER_RE = /^(?:(?:<{7}|\|{7}|>{7})(?: .*)?|={7})$/;
+
+/** Where an unresolved merge conflict shows in a file: the first conflict-marker line, 1-based. */
+export interface ConflictMarker {
+  readonly line: number;
+  readonly text: string;
+}
+
+/**
+ * The first merge-conflict marker line in `text`, or null when it carries none
+ * (zheref/nen#309).
+ *
+ * WHY THE GUARD ASKS THIS BEFORE IT SAYS "WRITTEN BY HAND". The ownership
+ * marker is read from line 1 only (see readFileMarker), and a conflicted merge
+ * puts `<<<<<<< HEAD` exactly there -- so a file this mirror generated, caught
+ * mid-merge, carried no readable marker and was refused as somebody's own
+ * hand-written rule. The refusal was right; the cause it named sent the reader
+ * looking for a hand edit that did not exist. Only the stated cause changes
+ * here: a conflicted destination is still refused, never regenerated over.
+ */
+export function findConflictMarker(text: string): ConflictMarker | null {
+  const lines = normalizeEol(text).split("\n");
+  const index = lines.findIndex((line): boolean => CONFLICT_MARKER_RE.test(line));
+  if (index === -1) return null;
+  return { line: index + 1, text: lines[index] ?? "" };
+}
+
+function conflictRefusal(path: string, conflict: ConflictMarker): string {
+  return `${path} has an unresolved merge conflict (line ${conflict.line}: '${conflict.text}'), so the ownership marker this mirror reads cannot be trusted and nothing is overwritten. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.`;
+}
+
 function samePin(marker: CanonPin, pin: CanonPin): boolean {
   return marker.source === pin.source && marker.ref === pin.ref && marker.scenario === pin.scenario;
 }
@@ -578,7 +610,13 @@ export function guardSurface(root: string, rendering: SurfaceRendering): readonl
         continue;
       }
       if (!existsSync(path)) continue;
-      if (readFileMarker(readFileSync(path, "utf8")) === null) {
+      const text = readFileSync(path, "utf8");
+      if (readFileMarker(text) === null) {
+        const conflict = findConflictMarker(text);
+        if (conflict !== null) {
+          refusals.push(conflictRefusal(file.path, conflict));
+          continue;
+        }
         refusals.push(
           `${file.path} exists and carries no '${MARKER_PREFIX}...' line, so it was written by hand and is not this mirror's to overwrite. Move or rename the consumer's own rule (a subdirectory of ${rule.dir}/ is left alone), or delete it in favour of the canon file.`,
         );
@@ -598,7 +636,14 @@ export function guardSurface(root: string, rendering: SurfaceRendering): readonl
   const existing = existsSync(path) ? readFileSync(path, "utf8") : null;
   const spliced = spliceBlock(existing, rendering.block ?? "");
   if ("refused" in spliced) {
-    refusals.push(`${rule.file} ${spliced.refused}. Restore the marker pair, or remove the whole block and regenerate.`);
+    // A conflicted merge duplicates or splits the BEGIN/END pair, so the
+    // marker-pair reason below would be true and still the wrong cause.
+    const conflict = existing === null ? null : findConflictMarker(existing);
+    refusals.push(
+      conflict !== null
+        ? conflictRefusal(rule.file, conflict)
+        : `${rule.file} ${spliced.refused}. Restore the marker pair, or remove the whole block and regenerate.`,
+    );
   }
   return refusals;
 }
