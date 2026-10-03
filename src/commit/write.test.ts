@@ -19,6 +19,9 @@ const STAGED = { match: "git diff --cached --quiet", result: { code: 1 } };
 const NOTHING_STAGED = { match: "git diff --cached --quiet", result: { code: 0 } };
 const COMMITTED = { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 0 } };
 const HEAD = { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } };
+/** The read-back of the written commit's trailers (zheref/nen#273); empty unless a test says otherwise. */
+const READ_BACK_CALL = "git log -1 --format=%(trailers:only,unfold) newsha00";
+const READ_BACK = { match: READ_BACK_CALL, result: { stdout: "" } };
 
 interface Captured {
   readonly code: number;
@@ -152,22 +155,51 @@ describe("nen commit write -- the write", () => {
 
   it("commits with git commit -F on the composed file, removes it, and reports nen.commit.write/v0.1", async () => {
     const root = repo({ message: "feat(x): add a thing\n\nWhy.\n\nCloses: #4\n" });
-    const result = await capture(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, COMMITTED, HEAD], true);
+    const readBack = { match: READ_BACK_CALL, result: { stdout: "Closes: #4\nHatsu-Agent: kurapika\n" } };
+    const result = await capture(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, COMMITTED, HEAD, readBack], true);
     expect(result.code).toBe(0);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
-    expect(Object.keys(doc)).toEqual(["contract", "sha", "subject", "trailers", "dryRun"]);
+    expect(Object.keys(doc)).toEqual(["contract", "sha", "subject", "trailers", "injected", "dryRun"]);
     expect(doc).toEqual({
       contract: WRITE_CONTRACT,
       sha: "newsha00",
       subject: "feat(x): add a thing",
       trailers: [{ key: "Closes", value: "#4" }, { key: "Hatsu-Agent", value: "kurapika" }],
+      injected: [],
       dryRun: false,
     });
-    expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet", `git commit -F ${COMMIT_MESSAGE_PATH}`, "git rev-parse HEAD"]);
+    expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet", `git commit -F ${COMMIT_MESSAGE_PATH}`, "git rev-parse HEAD", READ_BACK_CALL]);
     expect(existsSync(join(root, ".nen", "commit", "message.txt"))).toBe(false);
     expect(existsSync(join(root, ".nen", "commit"))).toBe(false);
-    const text = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const text = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(text.out).toEqual(["committed newsha00: feat(x): add a thing"]);
+  });
+
+  it("exit 3 when a hook injected a refused trailer: the commit reported, the key named, nothing amended (zheref/nen#273)", async () => {
+    const root = repo({ message: "feat: x\n", policy: { commits: { allowedAttributionTrailers: ["Hatsu-Agent"] } } });
+    const readBack = { match: READ_BACK_CALL, result: { stdout: "Hatsu-Agent: kurapika\nCo-authored-by: Cursor <cursoragent@cursor.com>\n" } };
+    const result = await capture(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, COMMITTED, HEAD, readBack], true);
+    expect(result.code).toBe(3);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["sha"]).toBe("newsha00");
+    expect(doc["injected"]).toEqual(["Co-authored-by"]);
+    expect(doc["trailers"]).toEqual([{ key: "Hatsu-Agent", value: "kurapika" }, { key: "Co-authored-by", value: "Cursor <cursoragent@cursor.com>" }]);
+    expect(result.err.join("\n")).toMatch(/^nen commit write: the written commit newsha00 carries a trailer .*refuses: 'Co-authored-by'/m);
+    expect(gitCalls(result.seams).filter((call): boolean => call.includes("amend") || call.includes("reset"))).toEqual([]);
+  });
+
+  it("a read-back git cannot answer is exit 1, saying the commit exists and the check was not performed", async () => {
+    const root = repo({ message: "feat: x\n" });
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, { match: READ_BACK_CALL, result: { code: 128, stderr: "fatal: nope" } }]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/committed newsha00.*NOT checked/);
+  });
+
+  it("--dry-run reports injected: null -- nothing was written, so nothing was read back", async () => {
+    const root = repo({ message: "feat: x\n" });
+    const result = await capture(root, ["--message-file", "message.txt", "--dry-run"], [STAGED], true);
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out.join("\n")) as Record<string, unknown>)["injected"]).toBeNull();
   });
 
   it("commits after a green --require-proof", async () => {
@@ -179,6 +211,7 @@ describe("nen commit write -- the write", () => {
       STAGED,
       COMMITTED,
       HEAD,
+      READ_BACK,
     ]);
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["committed newsha00: feat: x"]);
@@ -218,7 +251,7 @@ describe("nen commit write -- the repository's commitlint subject-case rule, thr
 
   it("refuses a level-2 break at exit 2 as a shape reason, before any git call", async () => {
     const root = commitlintRepo("fix(ui): Escape key closes the modal\n", CONVENTIONAL);
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(2);
     const err = result.err.join("\n");
     expect(err).toMatch(/the message does not have the shape 'nen commit format' enforces/);
@@ -248,7 +281,7 @@ describe("nen commit write -- the repository's commitlint subject-case rule, thr
 
   it("commits a lower-case subject as before, and says nothing extra", async () => {
     const root = commitlintRepo("fix: start the timer\n", CONVENTIONAL);
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["committed newsha00: fix: start the timer"]);
     expect(result.err).toEqual([]);
@@ -274,7 +307,7 @@ describe("nen commit write -- the repository's commitlint subject-case rule, thr
 
   it("exits 1 on a .commitlintrc it cannot read, naming the file, and commits nothing", async () => {
     const root = commitlintRepo("fix: start the timer\n", { ".commitlintrc.yaml": "rules: [unclosed\n" });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toContain(join(root, ".commitlintrc.yaml"));
     expect(result.seams.calls).toEqual([]);
@@ -284,7 +317,7 @@ describe("nen commit write -- the repository's commitlint subject-case rule, thr
     const manifests: readonly Record<string, string>[] = [{ "package.json": '{ "name": "x", ' }, { "package.yaml": "defaults: &d\n  node: 20\nengines: *d\n" }];
     for (const files of manifests) {
       const root = commitlintRepo("fix: Start the timer\n", files);
-      const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+      const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
       expect(result.code).toBe(0);
       expect(result.out).toEqual(["committed newsha00: fix: Start the timer"]);
       expect(result.err).toEqual([]);
@@ -294,7 +327,7 @@ describe("nen commit write -- the repository's commitlint subject-case rule, thr
   it("judges the header the file carries, as commitlint's parser splits it", async () => {
     // Greedy scope: commitlint's subject here is 'bar', which is lower-case.
     const greedy = commitlintRepo("fix(a): Foo (b): bar\n", CONVENTIONAL);
-    expect((await capture(greedy, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD])).code).toBe(0);
+    expect((await capture(greedy, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK])).code).toBe(0);
     // A '!' header under a rules-only config: commitlint's default parser gives it no verdict.
     const bang = commitlintRepo("feat!: Foo bar\n", { ".commitlintrc.json": JSON.stringify({ rules: { "subject-case": [2, "never", ["sentence-case"]] } }) });
     const result = await capture(bang, ["--message-file", "message.txt", "--dry-run"], [STAGED]);
@@ -315,7 +348,7 @@ describe("nen commit write -- commits.subjectCase in nen/workflow.json, agreeing
 
   it("refuses 'Escape closes it' at exit 2 before any git call, naming nen/workflow.json -- the same verdict 'commit format' gives", async () => {
     const root = declaredRepo("fix: Escape closes it\n", { subjectCase: "config-conventional" });
-    const written = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const written = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(written.code).toBe(2);
     expect(written.seams.calls).toEqual([]);
     expect(written.err.join("\n")).toMatch(/subject 'Escape closes it' breaks the subject-case rule this repository declares \(commits\.subjectCase in .*nen[\\/]workflow\.json/);
@@ -328,7 +361,7 @@ describe("nen commit write -- commits.subjectCase in nen/workflow.json, agreeing
 
   it("commits a subject the declared rule passes, with the note saying where the rule came from", async () => {
     const root = declaredRepo("fix: escape closes it\n", { subjectCase: [2, "always", "lower-case"] });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["committed newsha00: fix: escape closes it"]);
     expect(result.err).toEqual([expect.stringMatching(/^nen: note: subject-case checked against commits\.subjectCase in .*the rule \[2,"always",\["lower-case"\]\]/)]);
@@ -343,7 +376,7 @@ describe("nen commit write -- commits.subjectCase in nen/workflow.json, agreeing
 
   it("refuses a malformed commits.subjectCase at exit 1 by pointer, even with no --trailer, and commits nothing", async () => {
     const root = declaredRepo("fix: start the timer\n", { subjectCase: [2, "sometimes", "lower-case"] });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toContain("commits.subjectCase[1]");
     expect(result.err.join("\n")).toMatch(/nen will not commit under a policy it could not read/);
@@ -363,7 +396,7 @@ describe("nen commit write -- a broken config is reported first and whole, as 'c
 
   it("names a malformed nen/workflow.json AND the message's own shape fault, policy first, at exit 1, before any git call", async () => {
     const root = brokenRepo(`bogus: ${"x".repeat(80)}\n`, { "nen/workflow.json": "{ not json" });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(1);
     expect(result.seams.calls).toEqual([]);
     expect(result.err[0]).toMatch(/nen\/workflow\.json.*nen will not commit under a policy it could not read/);
@@ -373,7 +406,7 @@ describe("nen commit write -- a broken config is reported first and whole, as 'c
 
   it("names BOTH a malformed nen/workflow.json and a malformed .commitlintrc -- one does not hide the other", async () => {
     const root = brokenRepo("fix: start the timer\n", { "nen/workflow.json": "{ not json", ".commitlintrc.json": "{ nope" });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(1);
     expect(result.seams.calls).toEqual([]);
     expect(result.err).toEqual([
@@ -404,7 +437,7 @@ describe("nen commit write -- declared-rule outcomes at the verb: exit code, lin
     const root = repo({ message: "fix: Start the timer\n", policy: { commits: { subjectCase } } });
     mkdirSync(join(root, ".git"));
     for (const [name, text] of Object.entries(files)) writeFileSync(join(root, name), text as string, "utf8");
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(code);
     expect(result.err.join("\n")).toMatch(line);
     expect(gitCalls(result.seams).some((call): boolean => call.startsWith("git commit"))).toBe(gitRan);
@@ -427,7 +460,7 @@ describe("nen commit write -- the body's line length, validated and never rewrap
 
   it("refuses a body line over a level-2 rule at exit 2, naming the line, before any git call", async () => {
     const root = widthRepo(`fix(capture): rebuild the prompt\n\n${LONG}\n\nHatsu-Agent: kurapika\n`, CONVENTIONAL);
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(2);
     const err = result.err.join("\n");
     expect(err).toMatch(/the message does not have the shape 'nen commit format' enforces/);
@@ -442,7 +475,7 @@ describe("nen commit write -- the body's line length, validated and never rewrap
     const formatted = await runFamily(commitCommand, ["commit", "format", "--type", "fix", "--subject", "rebuild the prompt", "--body", LONG], root, false, io, new ScriptedSeams([]));
     expect(formatted).toBe(0);
     writeFileSync(join(root, "message.txt"), `${out.join("\n")}\n`, "utf8");
-    const result = await capture(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt", "--trailer", "Hatsu-Agent: kurapika"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(0);
     expect(result.err).toEqual([]);
   });
@@ -458,7 +491,7 @@ describe("nen commit write -- the body's line length, validated and never rewrap
 
   it("REFUSES a body line over 100 under a code config it never executes, with nothing declared -- the ruling -- before git", async () => {
     const root = widthRepo(`fix: x\n\n${LONG}\n`, KRO_PWA);
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(2);
     const err = result.err.join("\n");
     expect(err).toMatch(/line 3 is 144 characters, over the 100 nen holds the body to because 'body-max-line-length' could not be read \(.*commitlint\.config\.cjs is a JavaScript\/TypeScript commitlint config nen does not execute\)/);
@@ -470,7 +503,7 @@ describe("nen commit write -- the body's line length, validated and never rewrap
     const root = widthRepo(`fix: x\n\n${LONG}\n`, KRO_PWA);
     mkdirSync(join(root, "nen"), { recursive: true });
     writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { bodyMaxLineLength: 150 } }));
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(0);
     expect(result.err.join("\n")).toMatch(/nen: note: body-max-line-length checked against commits\.bodyMaxLineLength in .*, 150; nen applies it because /);
     writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ commits: { bodyMaxLineLength: 0 } }));
@@ -481,10 +514,10 @@ describe("nen commit write -- the body's line length, validated and never rewrap
 
   it("exempts a URL-bearing line, and says nothing with no commitlint config -- the verb is unchanged there", async () => {
     const url = `fix: x\n\nsee https://github.com/zheref/nen/issues/290 ${"and more ".repeat(15)}\n`;
-    const exempt = await capture(widthRepo(url, CONVENTIONAL), ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const exempt = await capture(widthRepo(url, CONVENTIONAL), ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(exempt.code).toBe(0);
     expect(exempt.err).toEqual([]);
-    const none = await capture(widthRepo(`fix: x\n\n${LONG}\n`, {}), ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const none = await capture(widthRepo(`fix: x\n\n${LONG}\n`, {}), ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(none.code).toBe(0);
     expect(none.err).toEqual([]);
   });
@@ -492,7 +525,7 @@ describe("nen commit write -- the body's line length, validated and never rewrap
   it("commits a subject-only message under a width commitlint accepts -- \"100\" or none at all -- as origin/main did (review M1)", async () => {
     for (const width of [[2, "always", "100"], [2, "always"], [2, "always", 0]]) {
       const root = widthRepo("fix: x\n", { ".commitlintrc.json": JSON.stringify({ rules: { "body-max-line-length": width } }) });
-      const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+      const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
       expect(result.code, JSON.stringify(width)).toBe(0);
       expect(result.err, JSON.stringify(width)).toEqual([]);
     }
@@ -525,7 +558,7 @@ describe("nen commit write -- every line before the trailer block is held to the
 
   it("refuses at exit 2 a prose line after a 'Note:' paragraph, before git", async () => {
     const root = codeRepo(`fix: a subject\n\nNote: the cache is now keyed by path.\n\nThe trace is at ${TOKEN}\n\nHatsu-Agent: kurapika\n`);
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/line 5 is 136 characters, over the 100 nen holds every line before the trailer block/);
     expect(result.seams.calls).toEqual([]);
@@ -533,7 +566,7 @@ describe("nen commit write -- every line before the trailer block is held to the
 
   it("commits the same message hand-wrapped, and only warns for a trailer over 100", async () => {
     const root = codeRepo(`fix: a subject\n\nNote: the cache is now keyed by path.\n\nThe trace is at\n${"w".repeat(90)}\n\nRefs: ${TOKEN}\n`);
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(0);
     expect(result.err.join("\n")).toMatch(/nen: warning: line 8 is 126 characters: 'footer-max-line-length' NOT checked/);
   });
@@ -553,7 +586,7 @@ describe("nen commit write -- a whitespace-only line after the trailers moves no
     ["tab-only", "\t"],
   ])("warns for the long trailer and commits, with a %s line after it", async (_name, tail) => {
     const root = codeRepo(`fix: x\n\nshort prose.\n\nRefs: ${TOKEN}\n${tail}\n`);
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, READ_BACK]);
     expect(result.code).toBe(0);
     expect(result.err.join("\n")).toMatch(/nen: warning: line 5 is 126 characters: 'footer-max-line-length' NOT checked/);
     expect(result.err.join("\n")).not.toMatch(/nen holds every line before the trailer block/);

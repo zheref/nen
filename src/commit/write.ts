@@ -63,6 +63,14 @@
 // nen writes under `.nen/` and removes afterwards -- a deterministic path so
 // a test can name it, under the dot-prefixed directory so it is never
 // committed by accident.
+//
+// AND THEN THE COMMIT IS READ BACK (zheref/nen#273). A hook running inside
+// that `git commit` can append a trailer nen never saw, so on a real write
+// `trailers` is what the WRITTEN commit carries, as git reads it -- no longer
+// the message nen handed over -- and every added key the policy refuses is
+// `injected`, the verb's exit 3, with the commit left in place and never
+// amended. ./readback.ts's header has the rule; an added key the policy does
+// not refuse is a `note`, not a failure.
 
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -70,6 +78,7 @@ import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { parseCommitMessageFile } from "../wc/messagefile.js";
 import { validateCommitMessage, type Trailer } from "./format.js";
 import { proofVerdict } from "./check.js";
+import { addedNote, readBack } from "./readback.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules } from "./bodywidth.js";
 import { SchemaError } from "../schema/errors.js";
@@ -89,8 +98,20 @@ export interface WriteReport {
   /** The new commit, or null on a dry run. */
   readonly sha: string | null;
   readonly subject: string;
-  /** Every trailer the committed message carries -- the file's own and the appended ones, in order. */
+  /**
+   * Every trailer the commit carries, in order. On a real write it is READ
+   * BACK from the written commit (zheref/nen#273), so a trailer a hook added
+   * is here too; on a dry run it is the composed message's -- the file's own,
+   * then the appended ones.
+   */
   readonly trailers: readonly Trailer[];
+  /**
+   * Keys on the written commit that the message nen wrote did not carry AND
+   * this repository's policy refuses -- non-empty is exit 3. `null` on a dry
+   * run: nothing was written, so nothing was read back, and "not checked" is
+   * never rendered as `[]`.
+   */
+  readonly injected: readonly string[] | null;
   readonly dryRun: boolean;
 }
 
@@ -102,7 +123,14 @@ export type WriteOutcome =
   | { readonly kind: "broken"; readonly failures: readonly ConfigFailure[]; readonly reasons: readonly string[] }
   | { readonly kind: "usage"; readonly reasons: readonly string[] }
   | { readonly kind: "refused"; readonly reason: string }
-  | { readonly kind: "done"; readonly report: WriteReport; readonly lines: readonly string[]; readonly message: string };
+  | {
+      readonly kind: "done";
+      readonly report: WriteReport;
+      readonly lines: readonly string[];
+      readonly message: string;
+      /** The policy file the read-back judged against -- named by an exit-3 refusal. */
+      readonly policyPath: string;
+    };
 
 export interface WriteOptions {
   /** The message file's text, already read. */
@@ -225,7 +253,14 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
     return { kind: "refused", reason: "nothing staged: the index equals HEAD, so there is nothing to commit. Stage the change first ('git add'), then run this again." };
   }
 
-  const report = (sha: string | null): WriteReport => ({ contract: WRITE_CONTRACT, sha, subject, trailers, dryRun: options.dryRun });
+  const report = (sha: string | null, written: readonly Trailer[] = trailers, injected: readonly string[] | null = null): WriteReport => ({
+    contract: WRITE_CONTRACT,
+    sha,
+    subject,
+    trailers: written,
+    injected,
+    dryRun: options.dryRun,
+  });
   const messageLines = message.replace(/\n$/, "").split("\n").map((line): string => `  ${line}`);
   if (options.dryRun) {
     return {
@@ -233,6 +268,7 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
       report: report(null),
       message,
       lines: [`would run: git commit -F ${COMMIT_MESSAGE_PATH}`, "message:", ...messageLines],
+      policyPath: loaded?.path ?? "",
     };
   }
 
@@ -260,5 +296,13 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
   const head = seams.run(GIT, ["rev-parse", "HEAD"], { cwd: root });
   if (head.code !== 0) throw new Error(`committed, but could not read the new commit's sha ('git rev-parse HEAD' failed: ${gitError(head.stderr, head.code)}).`);
   const sha = head.stdout.trim();
-  return { kind: "done", report: report(sha), message, lines: [`committed ${sha}: ${subject}`] };
+
+  // 5. THE READ-BACK (zheref/nen#273): what the commit actually carries,
+  // against what nen sent and what the policy refuses. Never an amend.
+  /* c8 ignore next -- `loaded` is null only when a failure returned above */
+  if (loaded === null) throw new Error("the commit policy was not loaded before the write");
+  const back = readBack(seams, root, sha, trailers, loaded);
+  const admitted = back.added.filter((key): boolean => !back.injected.includes(key));
+  if (admitted.length > 0) options.note(addedNote(sha, admitted));
+  return { kind: "done", report: report(sha, back.written, back.injected), message, lines: [`committed ${sha}: ${subject}`], policyPath: loaded.path };
 }

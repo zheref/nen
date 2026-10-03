@@ -17,10 +17,11 @@ import {
 } from "../cli/command.js";
 import { readTextFile } from "../cli/inputs.js";
 import { SchemaError } from "../schema/errors.js";
-import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
+import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
+import { addedNote, injectedMessage, readBack } from "../commit/readback.js";
 import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } from "./catchup.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
-import { messageFileRefusals } from "./messagefile.js";
+import { messageFileRefusals, parseCommitMessageFile } from "./messagefile.js";
 import { looksLikeRefspecOrForce, PUBLISH_CONTRACT, publish } from "./publish.js";
 import { baseNameRefusal, performSquash, planSquash, type FoldedCommit, type SquashBase } from "./squash.js";
 import {
@@ -115,9 +116,25 @@ MECHANISM: 'git reset --soft <merge-base>' then 'git commit -F
 refusal above has passed. Never touches a remote except the read-only fetch
 the upstream check above makes, never pushes, never force-anything.
 
+THEN THE FOLDED COMMIT IS READ BACK (zheref/nen#273): 'git log -1
+--format=%(trailers:only,unfold) <sha>'. A trailer on it that the message
+file did not carry was added by a hook inside 'git commit'; one this
+repository's policy refuses is INJECTED -- exit 3, every key named, the commit
+LEFT IN PLACE, never amended ('git reset --soft ORIG_HEAD' restores the
+unsquashed commits). One the policy admits or never restricts is a 'note:'
+line, exit unchanged. ${WORKFLOW_FILE} is therefore read before anything moves
+on every squash, and a malformed one is exit 1 even with --base and no
+trailer.
+
+Exits: 0 squashed, dry run, or nothing to squash; 1 a git failure or a
+policy nen cannot read; 2 every refusal above; 3 squashed, and a hook
+injected a refused trailer.
+
 --json's contract is '${SQUASH_CONTRACT}': { contract, onto, mergeBase,
-folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...] }. folded is
-oldest-first; newSha is null for a dry run and for 'nothing to squash'.
+folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...], injected:
+[key, ...] }. folded is oldest-first; newSha is null for a dry run and for
+'nothing to squash'; injected is null whenever nothing was written (not
+checked, never []).
 baseRefs are the refs the base check ran against; EMPTY means the check was
 NOT performed (neither ref resolves, or nothing to squash), never that it
 passed. Text output is one line per folded commit (sha and subject), a line
@@ -301,6 +318,7 @@ function squashJson(
   dryRun: boolean,
   base: string,
   baseRefs: readonly string[],
+  injected: readonly string[] | null = null,
 ): Readonly<Record<string, unknown>> {
   return {
     contract: SQUASH_CONTRACT,
@@ -311,6 +329,10 @@ function squashJson(
     dryRun,
     base,
     baseRefs,
+    // zheref/nen#273: keys a hook added to the written commit that the policy
+    // refuses. null when nothing was written (a dry run, nothing to squash) --
+    // not checked, never rendered as [].
+    injected,
   };
 }
 
@@ -377,6 +399,22 @@ function squash(context: CommandContext): number {
     );
   }
 
+  // THE POLICY, LOADED ONCE AND BEFORE ANYTHING MOVES (zheref/nen#273). The
+  // written commit is read back against it after the fold, so a policy nen
+  // cannot read must stop the squash HERE -- after the reset it would be a
+  // check that could not run over a commit that already exists. Exit 1, on
+  // the message-file block's own argument; it also answers branch.base below.
+  let policy: LoadedWorkflow;
+  try {
+    policy = loadWorkflow(root);
+  } catch (error) {
+    if (!(error instanceof SchemaError)) throw error;
+    context.io.err(
+      `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry and names the base whose published commits a squash never folds, and nen will not squash under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`,
+    );
+    return 1;
+  }
+
   // THE BASE WHOSE PUBLISHED COMMITS ARE NEVER FOLDED (zheref/nen#251): --base
   // when given, otherwise the workflow's branch.base, the same key 'wc
   // publish' reads for the trunk. Either name must be a CANONICAL SHORT
@@ -392,19 +430,10 @@ function squash(context: CommandContext): number {
     if (refused !== null) throw new VerbUsageError(refused);
     base = { name: baseFlag, source: "--base" };
   } else {
-    try {
-      const loaded = loadWorkflow(root);
-      base = {
-        name: loaded.workflow.branch.base,
-        source: loaded.present ? `${WORKFLOW_FILE}'s branch.base` : `branch.base's default -- no ${WORKFLOW_FILE}`,
-      };
-    } catch (error) {
-      if (!(error instanceof SchemaError)) throw error;
-      context.io.err(
-        `nen: ${error.message}. This repository's ${WORKFLOW_FILE} names the base whose published commits a squash never folds, and nen will not squash under a policy it could not read. Run 'nen schema check' for the whole file's verdict, or pass --base.`,
-      );
-      return 1;
-    }
+    base = {
+      name: policy.workflow.branch.base,
+      source: policy.present ? `${WORKFLOW_FILE}'s branch.base` : `branch.base's default -- no ${WORKFLOW_FILE}`,
+    };
     // THE POLICY'S NAME IS HELD TO GIT'S RULE TOO. The schema admits names git
     // rejects as branches ('main/', 'foo//bar'); both refs built from one
     // would answer "absent" and the base guard would silently not run. Exit 1,
@@ -456,14 +485,30 @@ function squash(context: CommandContext): number {
   }
 
   const newSha = performSquash(context.seams, root, plan.mergeBase, messageFilePath);
+  // THE READ-BACK (zheref/nen#273; ../commit/readback.ts): the trailers the
+  // folded commit actually carries, against the ones the message file did and
+  // the policy loaded above. Never an amend.
+  const parsedMessage = parseCommitMessageFile(messageText);
+  const sent = parsedMessage.ok ? parsedMessage.value.input.trailers : [];
+  const back = readBack(context.seams, root, newSha, sent, policy);
+  const admitted = back.added.filter((key): boolean => !back.injected.includes(key));
+  if (admitted.length > 0) context.io.err(`nen: note: ${addedNote(newSha, admitted)}`);
   if (context.json) {
     context.io.out(
-      JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false, base.name, plan.baseRefs), null, 2),
+      JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false, base.name, plan.baseRefs, back.injected), null, 2),
     );
   } else {
     printFoldedCommits(context, plan.folded);
     context.io.out(baseCheckLine(base, plan.baseRefs));
     context.io.out(`squashed into ${newSha}`);
+  }
+  // EXIT 3: the fold happened, and a hook put a refused trailer on it. Not 1
+  // (nothing failed to run) and not 2 (no refusal before the write fired).
+  if (back.injected.length > 0) {
+    context.io.err(
+      `nen wc: ${injectedMessage(newSha, back.injected, policy.path, "'git reset --soft ORIG_HEAD' restores the unsquashed commits; the fold changed no file")}`,
+    );
+    return 3;
   }
   return 0;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -271,6 +271,7 @@ describe("nen wc squash -- CLI wiring", () => {
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
+      { match: "git log -1 --format=%(trailers:only,unfold) newsha00", result: { stdout: "" } },
     ];
     const result = await capture(["wc", "squash", "--onto", "main", "--message-file", path], script);
     expect(result.code).toBe(0);
@@ -292,6 +293,7 @@ describe("nen wc squash -- CLI wiring", () => {
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
+      { match: "git log -1 --format=%(trailers:only,unfold) newsha00", result: { stdout: "" } },
     ]);
     const code = await runFamily(wcCommand, ["wc", "squash", "--onto", "main", "--message-file", path], BANKAI_REPO, true, io, seams);
     expect(code).toBe(0);
@@ -304,7 +306,41 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(parsed["dryRun"]).toBe(false);
     expect(parsed["base"]).toBe("main");
     expect(parsed["baseRefs"]).toEqual(["origin/main"]);
-    expect(Object.keys(parsed)).toEqual(["contract", "onto", "mergeBase", "folded", "newSha", "dryRun", "base", "baseRefs"]);
+    expect(parsed["injected"]).toEqual([]);
+    expect(Object.keys(parsed)).toEqual(["contract", "onto", "mergeBase", "folded", "newSha", "dryRun", "base", "baseRefs", "injected"]);
+  });
+
+  it("exit 3 when a hook injected a refused trailer into the fold: newSha reported, injected named, nothing undone (zheref/nen#273)", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "nen-wc-squash-policy-"));
+    mkdirSync(join(repo, "nen"));
+    writeFileSync(join(repo, "nen", "workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: ["Hatsu-Agent"] } }));
+    const path = messageFile("feat: add a thing\n\nHatsu-Agent: kurapika\n");
+    const script = [
+      NAME_OK, CLEAN,
+      MERGE_BASE,
+      ANCESTOR_OK,
+      TWO_COMMITS,
+      NO_UPSTREAM,
+      ...BASE_CLEAR,
+      { match: "git reset --soft base0000", result: { code: 0 } },
+      { match: `git commit -F ${path}`, result: { code: 0 } },
+      { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
+      { match: "git log -1 --format=%(trailers:only,unfold) newsha00", result: { stdout: "Hatsu-Agent: kurapika\nCo-authored-by: Cursor <cursoragent@cursor.com>\n" } },
+    ];
+    const result = await capture(["wc", "squash", "--onto", "main", "--message-file", path], script, repo);
+    expect(result.code).toBe(3);
+    expect(result.out.join("\n")).toContain("squashed into newsha00");
+    expect(result.err.join("\n")).toMatch(/^nen wc: the written commit newsha00 carries a trailer .*refuses: 'Co-authored-by'.*git reset --soft ORIG_HEAD/m);
+  });
+
+  it("a malformed nen/workflow.json is exit 1 BEFORE anything moves, even with --base and no trailer -- the read-back needs it (zheref/nen#273)", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "nen-wc-squash-policy-"));
+    mkdirSync(join(repo, "nen"));
+    writeFileSync(join(repo, "nen", "workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: "not-a-list" } }));
+    const result = await capture(["wc", "squash", "--onto", "main", "--base", "main", "--message-file", messageFile("feat: x\n")], [], repo);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/commits.allowedAttributionTrailers/);
+    expect(result.seams.calls).toEqual([]);
   });
 
   it("names the base check in text output, and says so when it was NOT performed", async () => {

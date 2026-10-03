@@ -689,7 +689,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
-| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
+| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, the folded commit's trailers read back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
@@ -765,7 +765,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) the repository's `subject-case` rule (commitlint's own when readable as data, else `commits.subjectCase`), and its body/footer line lengths, wrapping `--body` to them (commitlint's own when readable as data, else `commits.bodyMaxLineLength`, else 100) -- never its content | on every run: nen/workflow.json under --repo (the attribution-trailer policy, commits.subjectCase and commits.bodyMaxLineLength), and the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
-| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse) | yes |
+| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse, the written commit's trailers read back -- exit 3 on an injected one, #273) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -2482,16 +2482,34 @@ base check ran against (or saying it was **NOT performed** because neither
 `origin/<base>` nor `<base>` resolves), then either the new commit line
 (`squashed into <sha>`) or, for `--dry-run`, the message that would have been
 committed. `--json`'s contract is `nen.wc.squash/v0.1`: `{ contract, onto,
-mergeBase, folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...] }`
+mergeBase, folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...],
+injected: [key, ...] }`
 — `folded` is oldest first; `newSha` is `null` for a dry run and for "nothing
 to squash"; `base` is the base branch's name and `baseRefs` the refs checked,
 **empty meaning the check was not performed** (no ref resolves, or nothing to
-squash), never that it passed. Exit 0 on a
+squash), never that it passed; `injected` is the read-back's verdict below,
+`null` whenever nothing was written (a dry run, nothing to squash). Exit 0 on a
 squash, a dry run, or "nothing to squash"; exit 2 on every refusal above,
 naming it; exit 1 when a git command this verb did not expect to fail fails
-anyway (an unresolvable `--onto`, a fetch that cannot reach the upstream) —
-never folded into one of the exit-2 refusals, exactly as
-[`wc classify`](#nen-wc-classify)'s own git-failure rule.
+anyway (an unresolvable `--onto`, a fetch that cannot reach the upstream, the
+read-back) — never folded into one of the exit-2 refusals, exactly as
+[`wc classify`](#nen-wc-classify)'s own git-failure rule — and when
+`nen/workflow.json` is present and malformed; **exit 3 when the fold landed
+and a hook injected a trailer the policy refuses**.
+
+**The folded commit is read back** ([#273](https://github.com/zheref/nen/issues/273)),
+exactly as [`commit write`](#nen-commit-write) reads its own: `git log -1
+--format=%(trailers:only,unfold) <newSha>`, compared case-insensitively with
+the message file's trailers. A key a hook added inside the verb's `git commit`
+that this repository's policy refuses is named in `injected[]` and on stderr,
+and the verb exits **3** — the squash is **left in place, never amended**;
+`git reset --soft ORIG_HEAD` restores the unsquashed commits (the fold changed
+no file). A key the policy admits or never restricts is a `nen: note:` line,
+exit unchanged; with no `nen/workflow.json` nothing is refused. Because the
+read-back needs the policy, `nen/workflow.json` is now loaded **before
+anything moves on every squash**: a malformed one is exit 1 even with
+`--base` and a message carrying no trailer, where it used to be read only for
+a trailer or for `branch.base`.
 
 **Example**
 
@@ -6419,9 +6437,44 @@ trailer: `--trailer "Signed-off-by: Name <email>"`. Typing `--sign-off`
 anyway is refused as an unknown option at exit 2, and the refusal says
 exactly this (`nen commit --help` does too).
 
+**Then the commit is read back** ([#273](https://github.com/zheref/nen/issues/273)).
+A hook that runs *inside* the verb's own `git commit` — `prepare-commit-msg`,
+`commit-msg`, or a harness's own (Cursor appends `Co-authored-by: Cursor
+<cursoragent@cursor.com>`, [zheref/hatsu#66](https://github.com/zheref/hatsu/issues/66))
+— can add a trailer to a message nen already validated. So after the write the
+verb asks git's own trailer parser what the commit carries (`git log -1
+--format=%(trailers:only,unfold) <sha>`) and compares it with the message it
+wrote, case-insensitively on the key:
+
+- a key the commit carries that the message did not, and that this
+  repository's [`nen/workflow.json`](#nenworkflowjson) refuses (an
+  attribution trailer not in `commits.allowedAttributionTrailers`, or a key in
+  `commits.forbiddenTrailers` — the same `trailerRefusal` `commit format` and
+  the generated hook ask) is **injected**: every such key is named in
+  `injected[]` and on stderr, and the verb exits **3**. The commit is **left in
+  place — never amended**; the line names the way back (`git reset --soft
+  HEAD~1` keeps the change staged).
+- a key a hook added that the policy **admits** (the repository's own
+  `Hatsu-Agent`) or never restricts (`Change-Id`) is not injected: a `nen:
+  note:` line names it and the exit is unchanged.
+- with **no** `nen/workflow.json`, nothing is refused here, exactly as nothing
+  is refused before the write.
+
+A read-back git cannot answer is exit **1**: the commit exists, and the check
+was **not** performed — never rendered as `injected: []`.
+
+**Exit codes** — `0` committed, nothing refused added; `1` a broken config, a
+refused proof, an empty index, a failed `git commit` or read-back; `2` the
+message or a `--trailer` failing the shape; **`3` committed, and a hook
+injected a trailer the policy refuses**.
+
 **`--json`** — `nen.commit.write/v0.1`: `{ contract, sha, subject, trailers:
-[{ key, value }], dryRun }`. `sha` is `null` on a dry run; `trailers` is every
-trailer the committed message carries, the file's own first.
+[{ key, value }], injected: [key, ...], dryRun }`. `sha` is `null` on a dry
+run. On a real write `trailers` is **read back from the written commit**, so a
+trailer a hook added is in it; on a dry run it is the composed message's, the
+file's own first. `injected` is the keys above (`[]` when the read-back found
+none) and **`null` on a dry run** — nothing was written, so nothing was
+checked.
 
 **Example**
 
