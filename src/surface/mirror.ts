@@ -295,6 +295,14 @@ export interface GeneratedFile {
    * would send its maintainer looking for an edit nobody made.
    */
   readonly beforeLinkRewrite?: string;
+  /**
+   * Every set of bytes a build before zheref/nen#328 generated for this skill
+   * -- a block scalar's header read as text, the summary written unquoted --
+   * with its links re-aimed and, for a build before zheref/nen#270 as well,
+   * verbatim; present only where one differs. `check` calls a committed file
+   * equal to any of them STALE, for `beforeLinkRewrite`'s reason.
+   */
+  readonly beforeSummaryQuoting?: readonly string[];
 }
 
 export interface GenerateOptions {
@@ -388,11 +396,27 @@ export function rewriteInvocations(text: string, row: SurfaceRow, prefix: string
   return text.replace(pattern, (_whole, name: string): string => invocationFor(row, name) ?? _whole);
 }
 
-/** The whole `description:` value -- its own line plus every continuation -- as one space-joined string. */
+// A YAML block scalar's header (zheref/nen#328): `|` or `>`, an optional
+// chomping indicator and an optional indentation indicator in either order,
+// then an optional comment. It introduces the value; it is not part of it.
+const BLOCK_SCALAR_HEADER = /^[|>](?:[+-]?[1-9]?|[1-9]?[+-]?)(?:\s+#.*)?$/;
+
+/**
+ * The whole `description:` value -- its own line plus every continuation -- as
+ * one space-joined string. A block scalar's `>`/`|` header is dropped, so a
+ * folded or literal description reads as its text (zheref/nen#328).
+ */
 export function descriptionText(entries: readonly FrontmatterEntry[]): string {
+  return descriptionTextOf(entries, true);
+}
+
+/** `descriptionText`, or -- `dropHeader` false -- the pre-zheref/nen#328 reading that kept a block scalar's header. */
+function descriptionTextOf(entries: readonly FrontmatterEntry[], dropHeader: boolean): string {
   const entry = entries.find((candidate): boolean => candidate.key === "description");
   if (entry === undefined) return "";
-  return [inlineValue(entry), ...entry.lines.slice(1).map((line): string => line.trim())]
+  const inline = inlineValue(entry);
+  const head = dropHeader && BLOCK_SCALAR_HEADER.test(inline) ? "" : inline;
+  return [head, ...entry.lines.slice(1).map((line): string => line.trim())]
     .filter((part): boolean => part !== "")
     .join(" ")
     .replace(/\r/g, "");
@@ -411,6 +435,38 @@ export function firstSentence(text: string, budget: number): string {
   const cut = sentence.slice(0, budget);
   const space = cut.lastIndexOf(" ");
   return (space > 0 ? cut.slice(0, space) : cut).trim();
+}
+
+/**
+ * `value` as a YAML scalar that reads back as the STRING `value`, under YAML
+ * 1.2 and 1.1 alike (zheref/nen#328): plain where that holds, so a summary
+ * that was already safe keeps its bytes, and double-quoted otherwise.
+ *
+ * Plain is refused for a value that is empty, has edge whitespace, opens with
+ * an indicator character, carries `: ` or ` #`, ends with `:`, holds a control
+ * or line-break character (C0, DEL, C1, U+2028/2029, BOM), or would resolve to
+ * something other than a string (a bool -- 1.1's yes/no/on/off too -- null, a
+ * number, a date). The quoted form is a JSON string literal with the same
+ * non-ASCII breaks `\u`-escaped, which YAML's double-quoted style accepts.
+ */
+const YAML_UNSAFE_CHARS = /[\x00-\x1f\x7f-\x9f\u2028\u2029\ufeff]/;
+const YAML_NON_STRING =
+  /^(?:~|null|Null|NULL|true|True|TRUE|false|False|FALSE|y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF|[-+]?(?:\.?[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][-+]?[0-9]+)?|0[xob][0-9a-fA-F_]+|\.(?:inf|Inf|INF)|[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?)|\.(?:nan|NaN|NAN)|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt ].*)?|<<|=)$/;
+
+export function yamlScalar(value: string): string {
+  const plain =
+    value !== "" &&
+    value === value.trim() &&
+    !/^[-?:,[\]{}#&*!|>'"%@`]/.test(value) &&
+    !/: | #/.test(value) &&
+    !value.endsWith(":") &&
+    !YAML_UNSAFE_CHARS.test(value) &&
+    !YAML_NON_STRING.test(value);
+  if (plain) return value;
+  return JSON.stringify(value).replace(
+    /[\x7f-\x9f\u2028\u2029\ufeff]/g,
+    (char): string => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
 }
 
 /**
@@ -481,27 +537,52 @@ function skillFile(options: GenerateOptions, skill: SourceSkill, truncated: stri
   const path = skillPath(row, skill.name);
   if (row.verbatim) return { path, content: skill.text };
 
-  let entries: readonly FrontmatterEntry[] = document.entries;
-  if (row.descriptionBudget !== null) {
-    const description = descriptionText(entries);
-    if (description.length > row.descriptionBudget && !entries.some((entry): boolean => entry.key === "summary")) {
-      const summary: FrontmatterEntry = {
-        key: "summary",
-        lines: [`summary: ${firstSentence(description, row.descriptionBudget)}`],
-      };
-      const at = entries.findIndex((entry): boolean => entry.key === "description");
-      entries = [...entries.slice(0, at + 1), summary, ...entries.slice(at + 1)];
-      truncated.push(skill.name);
-    }
-  }
-  const front = renderFrontmatter(entries, new Set(row.skillKeys));
-  const content = `${front}${markerFor(row.surface, options.stamp ?? null)}\n${document.body}`;
+  const entries = withSummary(document.entries, row, skill.name, truncated, true);
   const source = options.links === undefined || options.links === null ? null : join(options.links.sourceDir, skill.name, "SKILL.md");
-  return relinked(
-    path,
-    rewriteInvocations(relink(content, source, path), row, options.invocationPrefix),
-    rewriteInvocations(content, row, options.invocationPrefix),
+  const render = (kept: readonly FrontmatterEntry[]): GeneratedFile => {
+    const content = `${renderFrontmatter(kept, new Set(row.skillKeys))}${markerFor(row.surface, options.stamp ?? null)}\n${document.body}`;
+    return relinked(
+      path,
+      rewriteInvocations(relink(content, source, path), row, options.invocationPrefix),
+      rewriteInvocations(content, row, options.invocationPrefix),
+    );
+  };
+  const file = render(entries);
+  // The bytes a build before zheref/nen#328 wrote for this skill -- the
+  // header kept in the description's text, the summary unquoted -- so `check`
+  // reads a mirror that build really generated as STALE, never hand-edited
+  // (the #270 rule, Nobunaga N1 on this change).
+  // Both forms that build could have written are kept: with its links re-aimed,
+  // and -- a build before zheref/nen#270 too -- with them verbatim (Copilot on
+  // #343), so an upgrade across both generator changes still reads stale.
+  const old = render(withSummary(document.entries, row, skill.name, [], false));
+  const before = [...new Set([old.content, old.beforeLinkRewrite ?? old.content])].filter(
+    (bytes): boolean => bytes !== file.content,
   );
+  return before.length === 0 ? file : { ...file, beforeSummaryQuoting: before };
+}
+
+/**
+ * `entries` with nen's `summary:` inserted after `description` where the row's
+ * budget calls for one, recording the skill in `truncated`. `current` false
+ * renders it as a build before zheref/nen#328 did: the block-scalar header
+ * kept in the text, and the sentence written unquoted.
+ */
+function withSummary(
+  entries: readonly FrontmatterEntry[],
+  row: SurfaceRow,
+  name: string,
+  truncated: string[],
+  current: boolean,
+): readonly FrontmatterEntry[] {
+  if (row.descriptionBudget === null) return entries;
+  const description = descriptionTextOf(entries, current);
+  if (description.length <= row.descriptionBudget || entries.some((entry): boolean => entry.key === "summary")) return entries;
+  const sentence = firstSentence(description, row.descriptionBudget);
+  const summary: FrontmatterEntry = { key: "summary", lines: [`summary: ${current ? yamlScalar(sentence) : sentence}`] };
+  const at = entries.findIndex((entry): boolean => entry.key === "description");
+  truncated.push(name);
+  return [...entries.slice(0, at + 1), summary, ...entries.slice(at + 1)];
 }
 
 interface AgentOutput {
@@ -1105,6 +1186,14 @@ export function checkSurfaceMirror(
       file.beforeLinkRewrite !== undefined &&
       withoutStamp(existing) !== withoutStamp(file.content) &&
       withoutStamp(existing) === withoutStamp(file.beforeLinkRewrite)
+    )
+      stale.push(file.path);
+    // ...and so is what a build before zheref/nen#328 generated: a summary
+    // written unquoted, or read with a block scalar's header in it.
+    else if (
+      file.beforeSummaryQuoting !== undefined &&
+      withoutStamp(existing) !== withoutStamp(file.content) &&
+      file.beforeSummaryQuoting.some((before): boolean => withoutStamp(existing) === withoutStamp(before))
     )
       stale.push(file.path);
     // Aimed from another location (Nobunaga, the #270 review): the links OUT

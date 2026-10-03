@@ -10177,6 +10177,19 @@ is none) — inserted right after `description`, and never added over a
 `summary` the source already carries. Each such skill is listed in
 `truncated[]`. `summary` is nen's key, not the surface's: an extra frontmatter
 line the surface ignores, holding the sentence its picker would otherwise cut.
+The sentence, and the budget it is measured against, are read from the
+description's **text**: a folded or literal block scalar (`>`, `>-`, `|`,
+`|+2`, …) contributes its lines, never its header (zheref/nen#328). The
+`summary:` line itself always parses as the string it holds: it is written
+plain where YAML 1.2 and 1.1 both read it back as that string, and
+double-quoted otherwise (an opening indicator character, `: `, ` #`, a
+trailing `:`, a control or line-break character, or a value such as `1.`,
+`yes` or `2026-10-02` a parser would read as a number, bool or date). A
+summary with none of those keeps the bytes earlier builds wrote. The
+`summary:` line is nen's; a source `description:` that is itself invalid YAML
+is copied as written and stays invalid. **On upgrade**, a mirror an earlier
+build wrote with an unquoted summary that now needs quoting reads **stale**
+(never hand-edited) until it is regenerated once.
 
 **Output and exit codes** — prints `surface:`, `out:`, `stamp:` (when given),
 then `written:`, `unchanged:` and `deleted (orphaned):` (each `(none)` when
