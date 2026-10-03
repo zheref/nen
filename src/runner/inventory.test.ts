@@ -11,7 +11,8 @@ import {
   renderInventory,
   runnersArgv,
 } from "./inventory.js";
-import { inventoryCalls, POLICY, pool, runnersAnswer, TARGET } from "./testkit.js";
+import { parseRunners } from "../schema/workflow.js";
+import { DESKTOP_POOL_BODY, inventoryCalls, POLICY, POLICY_BODY, pool, runnersAnswer, TARGET } from "./testkit.js";
 
 describe("parseRunnerName -- <machine>-<consumer>R<slot>, or runner 0", () => {
   it("parses the convention", () => {
@@ -121,6 +122,18 @@ describe("assembleInventory -- runners grouped by the declared pools", () => {
     expect(report.unpooled).toEqual(["Runner0"]);
     expect(report.runners.find((row) => row.name === "Runner0")?.convention).toBe("runner-0");
     expect(renderInventory(report).join("\n")).toMatch(/\(runner 0\)/);
+  });
+
+  it("counts a desktop runner in its interactive pool AND in the plain pool, as GitHub schedules it (#333)", () => {
+    const policy = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0], DESKTOP_POOL_BODY] });
+    const answer = runnersAnswer([{ name: "NZ-NNR1" }, { name: "NZ-KWIR2", labels: ["self-hosted", "Windows", "X64", "desktop"] }]);
+    const s = new ScriptedSeams(inventoryCalls(answer));
+    const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), policy, null);
+    expect(report.pools?.map((row) => [row.id, row.runners])).toEqual([
+      ["windows-x64", ["NZ-NNR1", "NZ-KWIR2"]],
+      ["windows-x64-desktop", ["NZ-KWIR2"]],
+    ]);
+    expect(report.unpooled).toEqual([]);
   });
 
   it("carries no pools at all without a policy", () => {

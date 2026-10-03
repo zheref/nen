@@ -4,10 +4,12 @@
 // NEN CARRIES THE RENDERER, NOT THE TEMPLATE -- the split tenkai's
 // `pr-readiness.yml` already has. The template is Hatsu's
 // (`templates/runner-preflight.yml`); what nen owns is the substitution and
-// the refusal: seven `@@NAME@@` placeholders, every one filled from the
+// the refusal: eight `@@NAME@@` placeholders, every one filled from the
 // declaration, and any `@@X@@` left standing afterwards is exit 1 naming it --
 // a workflow carrying a literal `@@RUNS_ON@@` would be a workflow GitHub
 // rejects at the first push, or worse, one that parses and targets nothing.
+// A template need not use every value: `@@MODE@@` (#333) arrived after the
+// first templates shipped, and one that predates it still renders.
 //
 // THE RENDERED FILE MUST PARSE AS YAML. A template whose substitution produced
 // a document the `yaml` reader refuses is refused here, before it lands on a
@@ -17,7 +19,7 @@ import { parse } from "yaml";
 import type { Target } from "../github/target.js";
 import type { RunnerPool } from "../schema/workflow.js";
 
-export const PLACEHOLDERS = ["REPO_SLUG", "RUNS_ON", "OS", "TOOLS", "POOL_ID", "WORKFLOW_FILE", "RENDERED_BY"] as const;
+export const PLACEHOLDERS = ["REPO_SLUG", "RUNS_ON", "OS", "MODE", "TOOLS", "POOL_ID", "WORKFLOW_FILE", "RENDERED_BY"] as const;
 const PLACEHOLDER = /@@([A-Za-z0-9_]+)@@/g;
 
 export function workflowValues(pool: RunnerPool, target: Target, version: string): Readonly<Record<string, string>> {
@@ -25,6 +27,7 @@ export function workflowValues(pool: RunnerPool, target: Target, version: string
     REPO_SLUG: target.slug,
     RUNS_ON: `[${pool.labels.join(", ")}]`,
     OS: pool.os,
+    MODE: pool.mode,
     TOOLS: pool.tools.join(" "),
     POOL_ID: pool.id,
     WORKFLOW_FILE: pool.preflightWorkflow,

@@ -1296,6 +1296,33 @@ export type RunnerOs = (typeof RUNNER_OSES)[number];
 /** The two architectures a pool may declare, in GitHub's own label case. */
 export const RUNNER_ARCHES = ["X64", "ARM64"] as const;
 export type RunnerArch = (typeof RUNNER_ARCHES)[number];
+/**
+ * How a pool's runners run on their host (#333). `service` is a boot-persistent
+ * service with no desktop -- on Windows, session 0, where a job that drives a
+ * real UI cannot. `interactive` runs inside a signed-in desktop session: on
+ * Windows a Scheduled Task at the identity's logon, and on macOS the launchd
+ * LaunchAgent a macOS runner always is.
+ */
+export const RUNNER_MODES = ["service", "interactive"] as const;
+export type RunnerMode = (typeof RUNNER_MODES)[number];
+/** The mode of a pool that declares none: a macOS runner is a LaunchAgent, so it is already interactive. */
+export const DEFAULT_RUNNER_MODE: Readonly<Record<RunnerOs, RunnerMode>> = {
+  Windows: "service",
+  Linux: "service",
+  macOS: "interactive",
+};
+/**
+ * The fourth label an interactive Windows pool carries, and only that pool. A
+ * job that needs a desktop asks for it, so only this pool's runners take that
+ * job. The converse does not hold: a runner carrying it also matches every job
+ * aimed at the plain [self-hosted, Windows, arch] set, the way GitHub matches.
+ */
+export const DESKTOP_LABEL = "desktop";
+
+/** A pool's exact label set: self-hosted, its os, its arch -- then `desktop` for an interactive Windows pool. */
+export function poolLabels(os: RunnerOs, arch: RunnerArch, mode: RunnerMode): string[] {
+  return os === "Windows" && mode === "interactive" ? ["self-hosted", os, arch, DESKTOP_LABEL] : ["self-hosted", os, arch];
+}
 
 /**
  * The one runner-name template this release accepts.
@@ -1340,6 +1367,7 @@ const RUNNER_POOL_KEYS: readonly string[] = [
   "id",
   "os",
   "arch",
+  "mode",
   "labels",
   "enableVariable",
   "tools",
@@ -1362,7 +1390,9 @@ export interface RunnerPool {
   readonly id: string;
   readonly os: RunnerOs;
   readonly arch: RunnerArch;
-  /** Always exactly `["self-hosted", os, arch]`: the policy refuses anything else. */
+  /** `service` or `interactive`; a pool that declares none takes its OS's DEFAULT_RUNNER_MODE. */
+  readonly mode: RunnerMode;
+  /** Always exactly `poolLabels(os, arch, mode)`: the policy refuses anything else. */
   readonly labels: readonly string[];
   /** Absent when this pool's jobs are not variable-gated; `runner enable` then has nothing to set. */
   readonly enableVariable: string | null;
@@ -1447,6 +1477,34 @@ function parseRunnerRoot(path: string, pointer: string, value: unknown): RunnerP
   return { windows: one("windows"), linux: one("linux"), darwin: one("darwin") };
 }
 
+/** `mode`: absent is the OS's default; a macOS pool is only interactive, a Linux pool only a service. */
+function parseRunnerMode(path: string, pointer: string, value: unknown, os: RunnerOs): RunnerMode {
+  if (value === undefined || value === null) return DEFAULT_RUNNER_MODE[os];
+  const text = requireString(path, pointer, value);
+  if (!(RUNNER_MODES as readonly string[]).includes(text)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${text}' is not a runner mode. The two are ${RUNNER_MODES.join(" and ")}; absent means ${DEFAULT_RUNNER_MODE[os]} for a ${os} pool`,
+    );
+  }
+  if (os === "macOS" && text === "service") {
+    throw new SchemaError(
+      path,
+      pointer,
+      "is 'service', and a macOS runner is only ever a launchd LaunchAgent of the user who installs it -- interactive, in that user's session; nen renders no LaunchDaemon. Drop the key, or write 'interactive'",
+    );
+  }
+  if (os === "Linux" && text === "interactive") {
+    throw new SchemaError(
+      path,
+      pointer,
+      "is 'interactive', and nen provisions a Linux runner only as a systemd service: there is no desktop session it knows how to start one in. Drop the key, or write 'service'",
+    );
+  }
+  return text as RunnerMode;
+}
+
 function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerPool {
   const raw = block(path, pointer, value, RUNNER_POOL_KEYS, "A runner pool's keys are");
   if (raw["id"] === undefined) {
@@ -1456,7 +1514,8 @@ function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerP
   requirePolicyName(path, `${pointer}.id`, id, "a pool id");
   const os = requireCanonical(path, `${pointer}.os`, raw["os"], RUNNER_OSES, OS_ALIASES, "an operating system");
   const arch = requireCanonical(path, `${pointer}.arch`, raw["arch"], RUNNER_ARCHES, ARCH_ALIASES, "an architecture");
-  const expected = ["self-hosted", os, arch];
+  const mode = parseRunnerMode(path, `${pointer}.mode`, raw["mode"], os);
+  const expected = poolLabels(os, arch, mode);
   const labels = requireArray(path, `${pointer}.labels`, raw["labels"]).map((item, index): string =>
     requireString(path, `${pointer}.labels[${index}]`, item),
   );
@@ -1464,7 +1523,11 @@ function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerP
     throw new SchemaError(
       path,
       `${pointer}.labels`,
-      `is ${JSON.stringify(labels)}, and a pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', then its os, then its arch, in GitHub's case. An extra label is refused: the runner-policy guard in this repository family admits a job only on one of the canonical three-label sets, so a pool carrying a fourth is a pool no guarded workflow can target, and a bare 'self-hosted' would match every runner the repository has`,
+      expected.length === 4
+        ? `is ${JSON.stringify(labels)}, and an interactive Windows pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', its os, its arch, then '${DESKTOP_LABEL}', in GitHub's case. '${DESKTOP_LABEL}' is what a job that needs a signed-in desktop asks for, so only this pool's runners take it`
+        : `is ${JSON.stringify(labels)}, and a pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', then its os, then its arch, in GitHub's case. An extra label is refused: the runner-policy guard in this repository family admits a job only on one of the canonical label sets, so a pool carrying another is a pool no guarded workflow can target, and a bare 'self-hosted' would match every runner the repository has${
+            os === "Windows" && labels.includes(DESKTOP_LABEL) ? `. '${DESKTOP_LABEL}' is an interactive pool's fourth label: declare "mode": "interactive"` : ""
+          }`,
     );
   }
   const variableRaw = raw["enableVariable"];
@@ -1521,6 +1584,7 @@ function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerP
     id,
     os,
     arch,
+    mode,
     labels,
     enableVariable,
     tools,

@@ -12,7 +12,7 @@ import { findCommand } from "../cli/registry.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { isUnder, makeRunnerCommand, RUNNER_SUBCOMMANDS, RUNNER_SUBCOMMAND_FLAGS } from "./command.js";
 import { defaultBranchArgv } from "./preflight.js";
-import { FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET, windowsServicesCall } from "./testkit.js";
+import { DESKTOP_POOL_BODY, FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET, windowsServicesCall } from "./testkit.js";
 import { runnersArgv } from "./inventory.js";
 
 const COMMAND = makeRunnerCommand({ sleep: () => {}, version: "0.0.0-test" });
@@ -24,11 +24,16 @@ interface Outcome {
   readonly seams: ScriptedSeams;
 }
 
-async function run(argv: readonly string[], script: readonly ScriptedCall[] = [], platform: NodeJS.Platform = "win32"): Promise<Outcome> {
+async function run(
+  argv: readonly string[],
+  script: readonly ScriptedCall[] = [],
+  platform: NodeJS.Platform = "win32",
+  env: Readonly<Record<string, string>> = { HOME: "/home/maintainer" },
+): Promise<Outcome> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
-  const seams = new ScriptedSeams(script, { platform, env: { HOME: "/home/maintainer" } });
+  const seams = new ScriptedSeams(script, { platform, env });
   const code = await runFamily(COMMAND, ["runner", ...argv], null, false, io, seams);
   return { code, out: out.join("\n"), err: err.join("\n"), seams };
 }
@@ -116,7 +121,7 @@ describe("nen runner plan", () => {
     const result = await run([...flags, "--repo", root, "--out", "plan.json", "--json"], [...inventoryCalls(), windowsServicesCall()]);
     expect(result.code, result.err).toBe(0);
     const plan = JSON.parse(result.out);
-    expect(plan.contract).toBe("nen.runner.plan/v0.1");
+    expect(plan.contract).toBe("nen.runner.plan/v0.2");
     expect(plan.consumerCode).toBe("NN");
     expect(plan.machineCode).toBe("NZ");
     expect(plan.runners.map((runner: { name: string }) => runner.name)).toEqual(["NZ-NNR1", "NZ-NNR2", "NZ-NNR3"]);
@@ -191,8 +196,8 @@ describe("nen runner script", () => {
     const result = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1", "--json"]);
     expect(result.code, result.err).toBe(0);
     const report = JSON.parse(result.out);
-    expect(Object.keys(report)).toEqual(["os", "out", "runners", "identity", "needsElevation", "launch", "written", "scriptSha256", "summary"]);
-    expect(report).toMatchObject({ os: "Windows", runners: ["NZ-NNR1", "NZ-NNR2", "NZ-NNR3"], identity: ".\\lordzheref", needsElevation: true, written: true });
+    expect(Object.keys(report)).toEqual(["os", "out", "runners", "identity", "mode", "dailyAccount", "needsElevation", "launch", "written", "scriptSha256", "summary"]);
+    expect(report).toMatchObject({ os: "Windows", runners: ["NZ-NNR1", "NZ-NNR2", "NZ-NNR3"], identity: ".\\lordzheref", mode: "service", dailyAccount: false, needsElevation: true, written: true });
     expect(report.launch).toBe(`powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','${report.out}'"`);
     const golden = readFileSync(join(FIXTURES, "register.windows.golden.ps1"), "utf8").replace(/\r\n/g, "\n");
     expect(readFileSync(join(root, "register.ps1"), "utf8")).toBe(golden);
@@ -215,6 +220,45 @@ describe("nen runner script", () => {
     expect(isUnder("/opt/Actions-Runners/register.sh", "/opt/actions-runners", "Linux")).toBe(false);
     expect(isUnder("/Users/me/Actions-Runners/register.sh", "/Users/me/actions-runners", "macOS")).toBe(true);
     expect(isUnder("/home/me/.local/state/nen/jusshin/register.sh", "/opt/actions-runners", "Linux")).toBe(false);
+  });
+
+  it("plans an interactive pool as the daily account, then renders it only with --accept-daily-account (#333)", async () => {
+    const root = consumer({ ...POLICY_BODY, pools: [...POLICY_BODY.pools, DESKTOP_POOL_BODY] });
+    const argv = ["plan", "--target", "zheref/nen", "--pool", "windows-x64-desktop", "--machine-code", "NZ", "--count", "1", "--repo", root, "--service-account", "Zhere", "--out", "plan.json"];
+    const planned = await run(argv, [...inventoryCalls(), windowsServicesCall()], "win32", { USERNAME: "zhere" });
+    expect(planned.code, planned.err).toBe(0);
+    expect(planned.out).toMatch(/^mode: interactive/m);
+    expect(planned.out).toMatch(/warning: \.\\Zhere is the account computing this plan -- your own daily account/);
+    expect(JSON.parse(readFileSync(join(root, "plan.json"), "utf8"))).toMatchObject({ mode: "interactive", dailyAccount: true });
+
+    const refused = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1"]);
+    expect(refused.code).toBe(2);
+    expect(refused.err).toMatch(/as \.\\Zhere, the account that computed or is rendering it -- your own daily account..*--accept-daily-account/);
+    expect(existsSync(join(root, "register.ps1"))).toBe(false);
+
+    const accepted = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1", "--accept-daily-account", "--json"]);
+    expect(accepted.code, accepted.err).toBe(0);
+    expect(JSON.parse(accepted.out)).toMatchObject({ mode: "interactive", dailyAccount: true, identity: ".\\Zhere" });
+    const text = readFileSync(join(root, "register.ps1"), "utf8");
+    expect(text).toContain("Register-ScheduledTask");
+    expect(text).not.toContain("'--runasservice'");
+  });
+
+  it("re-checks the daily account at render time: a plan computed elsewhere is refused on the identity's own Windows session", async () => {
+    const root = consumer({ ...POLICY_BODY, pools: [...POLICY_BODY.pools, DESKTOP_POOL_BODY] });
+    const argv = ["plan", "--target", "zheref/nen", "--pool", "windows-x64-desktop", "--machine-code", "NZ", "--count", "1", "--repo", root, "--service-account", "zhere", "--out", "plan.json"];
+    expect((await run(argv, [...inventoryCalls(), windowsServicesCall()], "win32", {})).code).toBe(0);
+    expect(JSON.parse(readFileSync(join(root, "plan.json"), "utf8"))).toMatchObject({ dailyAccount: false });
+    const refused = await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1"], [], "win32", { USERNAME: "ZHERE" });
+    expect(refused.code).toBe(2);
+    expect(refused.err).toMatch(/your own daily account/);
+    expect((await run(["script", "--repo", root, "--plan", "plan.json", "--out", "register.ps1"], [], "win32", { USERNAME: "someone" })).code).toBe(0);
+  });
+
+  it("refuses --accept-daily-account on any other runner verb", async () => {
+    const refused = await run(["plan", "--pool", "windows-x64", "--accept-daily-account"]);
+    expect(refused.code).toBe(2);
+    expect(refused.err).toMatch(/--accept-daily-account is not a 'runner plan' flag \(it belongs to runner script\)/);
   });
 
   it("writes nothing under --dry-run", async () => {

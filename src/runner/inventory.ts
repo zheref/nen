@@ -16,9 +16,11 @@
 // and never renamed, and never counted as holding a slot.
 //
 // POOL MATCHING IS A SUPERSET TEST. A runner belongs to a pool when it carries
-// every one of the pool's three labels (case-insensitively, the way GitHub's
+// every one of the pool's labels (case-insensitively, the way GitHub's
 // scheduler compares them). A runner with an extra label still matches: that is
-// exactly how GitHub would schedule a job onto it. A runner that matches no
+// exactly how GitHub would schedule a job onto it -- so an interactive pool's
+// `desktop` runner is counted in the plain pool of its os and arch as well,
+// because it takes that pool's jobs too (#333). A runner that matches no
 // declared pool is `unpooled`, listed by name.
 
 import type { Target } from "../github/target.js";

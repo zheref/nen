@@ -325,6 +325,99 @@ describe("the Windows script -- PowerShell 5.1, and the secrets never leave the 
   });
 });
 
+describe("the interactive Windows script -- a logon task in a desktop session, never a service (#333)", () => {
+  const desktop = renderScript(planFor("windows-x64-desktop", { serviceAccount: "kwidesktop", count: 1 }), VERSION);
+  const code = desktop.text.split("\n").filter((line) => !line.trimStart().startsWith("#"));
+
+  it("renders byte-for-byte, elevated, and deterministically", () => {
+    expect(desktop.needsElevation).toBe(true);
+    golden("register.windows-desktop.golden.ps1", desktop.text);
+    expect(renderScript(planFor("windows-x64-desktop", { serviceAccount: "kwidesktop", count: 1 }), VERSION).text).toBe(desktop.text);
+  });
+
+  it("says what it is in the header: the four labels, the identity, and online only while signed in", () => {
+    const lines = desktop.text.split("\n");
+    expect(lines[0]).toBe("# jusshin -- register self-hosted GitHub Actions runners as logon tasks in a desktop session.");
+    expect(lines).toContain("# pool:     windows-x64-desktop (self-hosted,Windows,X64,desktop)");
+    expect(lines).toContain("# identity: .\\kwidesktop");
+    expect(desktop.text).toContain("# is online only while that identity is signed in (or auto-logged on -- this");
+    expect(desktop.text).toContain("$Labels = 'self-hosted,Windows,X64,desktop'");
+  });
+
+  it("installs no service and asks no password: config runs without --runasservice or a logon account", () => {
+    expect(code.join("\n")).not.toMatch(/--runasservice|--windowslogonaccount|WINDOWSLOGONPASSWORD|Read-Host -AsSecureString|Test-Password|Start-Service|\$secure/);
+    // Get-Service only looks: the guard against a runner an earlier run installed as a
+    // service, and #319's stale-slot read, which deletes a service only when GitHub no
+    // longer lists the runner. A missing service never makes a logon-task runner stale.
+    expect(code).toContain("        if ($null -ne (Get-Service -Name $taskName -ErrorAction SilentlyContinue)) {");
+    expect(code).toContain("                $stale = Get-StaleReason $runner.Name $true $script:Listed");
+    expect(code.join("\n")).not.toContain("Get-StaleReason $runner.Name ($null -ne $service)");
+    expect(code).toContain("        $configArgs = @('--unattended', '--url', $RepoUrl, '--name', $name, '--labels', $Labels, '--work', '_work')");
+    expect(code).toContain("            $env:ACTIONS_RUNNER_INPUT_TOKEN = $token");
+    expect(code).toContain("            [Environment]::SetEnvironmentVariable('ACTIONS_RUNNER_INPUT_TOKEN', $null, 'Process')");
+    expect(code.filter((line) => line.includes("config.cmd @configArgs"))).toEqual(["                & .\\config.cmd @configArgs *> $null"]);
+  });
+
+  it("keeps #312's guarantees: the locked root, the re-hashed package, the summary file", () => {
+    const lockdown = code.findIndex((line) => line.includes("Invoke-Icacls @($Root, '/setowner', $AdminsSid)"));
+    const download = code.findIndex((line) => line.includes("Invoke-WebRequest"));
+    expect(lockdown).toBeGreaterThan(-1);
+    expect(download).toBeGreaterThan(lockdown);
+    const extract = code.findIndex((line) => line.includes("Expand-Archive"));
+    expect(lastBefore(code, extract, (line) => line.includes("Test-Package $zip"))).toBeGreaterThan(-1);
+    expect(desktop.text).toContain("Set-Content -LiteralPath $script:SummaryPath -Value $summary -Encoding Ascii");
+  });
+
+  it("refuses an identity that is not an enabled local account before anything is registered", () => {
+    const check = code.findIndex((line) => line.includes("Get-LocalUser -Name $Account"));
+    const register = code.findIndex((line) => line.includes("Register-ScheduledTask"));
+    expect(check).toBeGreaterThan(-1);
+    expect(register).toBeGreaterThan(check);
+    expect(desktop.text).toContain("    if ($null -eq $localUser -or -not $localUser.Enabled) {");
+  });
+
+  it("grants the identity Modify on its own runner folder only, then registers a logon task with no time limit that restarts", () => {
+    expect(code).toContain("        $code = Invoke-Quiet 'icacls' @($runner.Dir, '/grant', ('{0}:(OI)(CI)M' -f $Account))");
+    expect(code.filter((line) => /\(OI\)\(CI\)M/.test(line))).toHaveLength(1);
+    // The folder is reset to the root's baseline first, so a former identity keeps no Modify.
+    const reset = code.indexOf("        $code = Invoke-Quiet 'icacls' @($runner.Dir, '/reset', '/T', '/C', '/Q')");
+    expect(reset).toBeGreaterThan(-1);
+    expect(code.indexOf("        $code = Invoke-Quiet 'icacls' @($runner.Dir, '/grant', ('{0}:(OI)(CI)M' -f $Account))")).toBeGreaterThan(reset);
+    expect(code).toContain("            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $TaskUser");
+    expect(code).toContain("            $principal = New-ScheduledTaskPrincipal -UserId $TaskUser -LogonType Interactive -RunLevel Limited");
+    expect(code.join("\n")).toMatch(
+      /New-ScheduledTaskSettingsSet -ExecutionTimeLimit \(\[TimeSpan\]::Zero\) -RestartCount 255 -RestartInterval \(New-TimeSpan -Minutes 1\) -MultipleInstances IgnoreNew -Priority 4 /,
+    );
+    expect(code.join("\n")).toMatch(/New-ScheduledTaskAction -Execute \(Join-Path \$runner\.Dir 'run\.cmd'\) -WorkingDirectory \$runner\.Dir/);
+    expect(desktop.text).toContain("$TaskPrefix = 'actions.runner.zheref-nen.'");
+  });
+
+  it("starts the task only where the identity is signed in, and otherwise says the runners wait for its logon", () => {
+    expect(code.join("\n")).toMatch(/Win32_Process -Filter "Name = 'explorer\.exe'"/);
+    expect(code.join("\n")).toMatch(/\$_\.User -eq \$Account -and \$_\.Domain -eq \$env:COMPUTERNAME/);
+    expect(desktop.text).toContain("could not tell whether {0} is signed in ({1}); the logon tasks are registered but not started.");
+    expect(code).toContain("    if ($waiting -gt 0 -and $probed) {");
+    expect(desktop.text).toContain("jusshin: WARNING -- {0} is the account running this script");
+    expect(code).toContain("        if (-not $signedIn) {");
+    expect(code).toContain("                Start-ScheduledTask -TaskName $taskName -TaskPath '\\'");
+    expect(desktop.text).toContain("the runners come online when {0} signs in to the desktop (or is auto-logged on; this script never configures that)");
+  });
+
+  it("is ASCII and parses under Windows PowerShell's own parser, where there is one", () => {
+    expect(/^[\x00-\x7f]*$/.test(desktop.text)).toBe(true);
+    if (!hasTool("powershell", ["-NoProfile", "-Command", "exit 0"])) return;
+    const dir = mkdtempSync(join(tmpdir(), "nen-runner-ps-"));
+    const path = join(dir, "register-desktop.ps1");
+    writeFileSync(path, desktop.text);
+    const result = spawnSync(
+      "powershell",
+      ["-NoProfile", "-Command", `$e = $null; [void][System.Management.Automation.Language.Parser]::ParseFile('${path}', [ref]$null, [ref]$e); exit $e.Count`],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+});
+
 describe("the bash scripts -- Linux under sudo, macOS as the user", () => {
   it("carries the em-dash header line on both", () => {
     expect(linux.text.split("\n")[2]).toBe(`# rendered by nen ${VERSION} runner script — do not edit; re-run nen runner script`);

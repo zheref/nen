@@ -18,29 +18,43 @@
 // plan for a Windows pool reads `C:\GithubRunners\nen-runners\Runner1` even
 // when it is computed on a Mac -- the script that reads it runs on Windows.
 //
-// THE PLAN IS A CONTRACT (`nen.runner.plan/v0.1`), because a PROGRAM reads it
+// THE PLAN IS A CONTRACT (`nen.runner.plan/v0.2`; a v0.1 plan still reads), because a PROGRAM reads it
 // back: `runner script` renders a script that runs elevated on a real machine
 // from it. `validatePlan` below is the refusal that contract earns -- every
 // field that reaches the script is re-checked against the same shape the
 // computation produced, so a hand-edited plan cannot smuggle a quote into a
 // PowerShell string.
+//
+// AN INTERACTIVE PLAN SAYS WHAT IT COSTS (#333). A runner in a desktop session
+// is online only while its identity is signed in, and every job it takes runs
+// with that account's profile and credentials. The plan states the first in
+// every rendering, and when the identity IS the account computing the plan --
+// the maintainer's own daily account -- it says so and records
+// `dailyAccount: true`, which `runner script` refuses to render without
+// `--accept-daily-account`.
 
 import { posix } from "node:path";
 import type { Target } from "../github/target.js";
 import { renderPipeTable } from "../cli/table.js";
 import { VerbUsageError } from "../cli/command.js";
 import {
+  DEFAULT_RUNNER_MODE,
+  poolLabels,
   RUNNER_ARCHES,
+  RUNNER_MODES,
   RUNNER_OSES,
   RUNNER_ROOT,
   type RunnerArch,
+  type RunnerMode,
   type RunnerOs,
   type RunnerPool,
 } from "../schema/workflow.js";
 import { RunnerFailure } from "./github.js";
 import type { DownloadRow, RunnerRow } from "./inventory.js";
 
-export const PLAN_CONTRACT = "nen.runner.plan/v0.1";
+/** v0.2 adds `mode` and `dailyAccount` (#333); a v0.1 plan still reads, as a service plan. */
+export const PLAN_CONTRACT = "nen.runner.plan/v0.2";
+const PLAN_CONTRACT_V01 = "nen.runner.plan/v0.1";
 
 /** `--machine-code`: one to eight upper-case letters or digits, after upper-casing. */
 export const MACHINE_CODE = /^[A-Z0-9]{1,8}$/;
@@ -53,6 +67,12 @@ export const LINUX_USER = /^[a-z_][a-z0-9_-]{0,31}$/;
 /** The Windows identity that is a built-in account rather than a local user. */
 export const NETWORK_SERVICE = "network-service";
 export const MAX_COUNT = 16;
+/**
+ * Built-in Windows identities with no interactive logon, lower-cased. Whether a
+ * named local account exists, is enabled, or holds "Allow log on locally" is
+ * the host's to answer: the rendered script checks the first two.
+ */
+export const BUILT_IN_IDENTITIES: readonly string[] = ["system", "localsystem", "localservice", "networkservice", NETWORK_SERVICE];
 
 /** The built-in root per runner-host OS, when neither --root nor the pool names one. */
 export const DEFAULT_ROOTS: Readonly<Record<RunnerOs, string>> = {
@@ -90,6 +110,8 @@ export interface RunnerPlan {
   readonly pool: string;
   readonly os: RunnerOs;
   readonly arch: RunnerArch;
+  /** The pool's mode: `interactive` on Windows renders a logon task, never a service. */
+  readonly mode: RunnerMode;
   readonly labels: readonly string[];
   readonly machineCode: string;
   readonly consumerCode: string;
@@ -101,6 +123,12 @@ export interface RunnerPlan {
    * installs it). `ask` when nobody named one -- `runner script` refuses it.
    */
   readonly identity: string;
+  /**
+   * True when an interactive Windows plan's identity is the account that
+   * computed it -- the maintainer's own daily account. `runner script` refuses
+   * such a plan without `--accept-daily-account`.
+   */
+  readonly dailyAccount: boolean;
   readonly runnerVersion: string;
   readonly download: DownloadRow;
   readonly runners: readonly PlannedRunner[];
@@ -154,8 +182,8 @@ export function normalizeMachineCode(raw: string): string {
   return code;
 }
 
-/** The identity a plan stores, from `--service-account` and the pool's OS. */
-export function resolveIdentity(os: RunnerOs, flag: string | null): string {
+/** The identity a plan stores, from `--service-account`, the pool's OS and its mode. */
+export function resolveIdentity(os: RunnerOs, flag: string | null, mode: RunnerMode = DEFAULT_RUNNER_MODE[os]): string {
   if (os === "macOS") {
     if (flag !== null) {
       throw new VerbUsageError(
@@ -166,11 +194,26 @@ export function resolveIdentity(os: RunnerOs, flag: string | null): string {
   }
   if (flag === null) return "ask";
   if (os === "Windows") {
-    if (flag === NETWORK_SERVICE) return NETWORK_SERVICE;
+    const interactive = mode === "interactive";
+    if (flag === NETWORK_SERVICE) {
+      if (interactive) {
+        throw new VerbUsageError(
+          `--service-account ${NETWORK_SERVICE} cannot log on interactively: it is a built-in service identity with no desktop session, so an interactive pool's logon task would never fire. Name the LOCAL account whose desktop session the runner should run in (e.g. kwi-desktop).`,
+        );
+      }
+      return NETWORK_SERVICE;
+    }
     const bare = flag.startsWith(".\\") ? flag.slice(2) : flag;
+    if (interactive && BUILT_IN_IDENTITIES.includes(bare.toLowerCase())) {
+      throw new VerbUsageError(
+        `--service-account '${flag}' is a built-in service identity, and it cannot log on interactively: it has no desktop session, so an interactive pool's logon task would never fire. Name the LOCAL account whose desktop session the runner should run in.`,
+      );
+    }
     if (bare.includes("@") || bare.includes("\\")) {
       throw new VerbUsageError(
-        `--service-account '${flag}' is not a local account. A Windows runner service logs on with a LOCAL account's password; a Microsoft (e-mail) account or a domain account cannot be that logon. Name a local account without '.\\' (e.g. lordzheref), or '${NETWORK_SERVICE}' by explicit choice.`,
+        interactive
+          ? `--service-account '${flag}' is not a local account name. An interactive pool's logon task is registered for a local account on the runner host; for a Microsoft (e-mail) account, name the local account Windows created for it (the part after the backslash in 'whoami'), without '.\\'.`
+          : `--service-account '${flag}' is not a local account. A Windows runner service logs on with a LOCAL account's password; a Microsoft (e-mail) account or a domain account cannot be that logon. Name a local account without '.\\' (e.g. lordzheref), or '${NETWORK_SERVICE}' by explicit choice.`,
       );
     }
     if (!WINDOWS_ACCOUNT.test(bare)) {
@@ -233,6 +276,24 @@ export function runnerVersionOf(filename: string): string | null {
   return /-(\d+\.\d+\.\d+)\.(?:zip|tar\.gz)$/.exec(filename)?.[1] ?? null;
 }
 
+/**
+ * Whether an interactive Windows identity is the account computing this plan.
+ * Only a Windows process can tell (USERNAME is that host's sign-in name); a plan
+ * computed elsewhere for a Windows host says false, and the rendered plan says
+ * the check was not possible.
+ */
+export function isDailyAccount(
+  os: RunnerOs,
+  mode: RunnerMode,
+  identity: string,
+  platform: NodeJS.Platform,
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  if (os !== "Windows" || mode !== "interactive" || platform !== "win32" || !identity.startsWith(".\\")) return false;
+  const me = env["USERNAME"];
+  return me !== undefined && me !== "" && me.toLowerCase() === identity.slice(2).toLowerCase();
+}
+
 export function computePlan(inputs: PlanInputs): RunnerPlan {
   const { target, pool, machineCode, consumerCode, count } = inputs;
   if (!Number.isInteger(count) || count < 1 || count > MAX_COUNT) {
@@ -279,18 +340,21 @@ export function computePlan(inputs: PlanInputs): RunnerPlan {
     };
   });
 
+  const identity = resolveIdentity(pool.os, inputs.serviceAccount, pool.mode);
   return {
     contract: PLAN_CONTRACT,
     target: target.slug,
     pool: pool.id,
     os: pool.os,
     arch: pool.arch,
+    mode: pool.mode,
     labels: pool.labels,
     machineCode,
     consumerCode,
     root,
     projectDir,
-    identity: resolveIdentity(pool.os, inputs.serviceAccount),
+    identity,
+    dailyAccount: isDailyAccount(pool.os, pool.mode, identity, inputs.platform, inputs.env),
     runnerVersion,
     download,
     runners,
@@ -298,15 +362,36 @@ export function computePlan(inputs: PlanInputs): RunnerPlan {
   };
 }
 
+/** Whether the plan renders a Windows logon task rather than a service. */
+export function isLogonTask(plan: Pick<RunnerPlan, "os" | "mode">): boolean {
+  return plan.os === "Windows" && plan.mode === "interactive";
+}
+
+/** What an interactive plan costs, said in every rendering of it. Empty for a service plan. */
+export function interactiveNotes(plan: RunnerPlan): string[] {
+  if (!isLogonTask(plan)) return [];
+  const who = plan.identity === "ask" ? "the identity" : plan.identity;
+  return [
+    `note: an interactive runner is online only while ${who} is signed in to the desktop (or auto-logged on); nen never configures auto-logon.`,
+    `note: a UI job needs that session active and unlocked, and the run.cmd console window open; a locked screen or a disconnected session still reports a non-zero session id.`,
+    `note: every job it takes runs in ${who}'s desktop session, with that account's profile and credentials -- not only the jobs asking for 'desktop': a runner carrying [self-hosted, ${plan.os}, ${plan.arch}, desktop] also matches every job aimed at [self-hosted, ${plan.os}, ${plan.arch}] on ${plan.target}.`,
+    plan.dailyAccount
+      ? `warning: ${plan.identity} is the account computing this plan -- your own daily account. Its jobs would run with your profile and your credentials. Prefer a dedicated local account; 'nen runner script' renders this plan only with --accept-daily-account.`
+      : "note: use a dedicated local account, never your daily one. nen can only tell them apart when the plan is computed on Windows (it compares USERNAME).",
+  ];
+}
+
 export function renderPlan(plan: RunnerPlan): string[] {
   return [
     `plan: ${plan.runners.length} runner(s) for ${plan.target}, pool ${plan.pool}`,
     `labels: ${plan.labels.join(",")}`,
-    `identity: ${plan.identity}${plan.identity === "ask" ? " -- pass --service-account before rendering a script" : ""}`,
+    `mode: ${plan.mode}${isLogonTask(plan) ? " -- a Scheduled Task at the identity's logon starts run.cmd in its desktop session; no service is installed" : ""}`,
+    `identity: ${plan.identity}${plan.identity === "ask" ? ` -- pass --service-account before rendering a script` : ""}`,
+    ...interactiveNotes(plan),
     `download: ${plan.download.filename} (runner ${plan.runnerVersion}, sha256 ${plan.download.sha256_checksum})`,
     `project dir: ${plan.projectDir}`,
     ...renderPipeTable([
-      ["slot", "name", "install dir", "service"],
+      ["slot", "name", "install dir", isLogonTask(plan) ? "logon task" : plan.os === "macOS" ? "launch agent" : "service"],
       ...plan.runners.map((runner): string[] => [String(runner.slot), runner.name, runner.installDir, runner.serviceName]),
     ]),
     `already registered for ${plan.machineCode}/${plan.consumerCode}: ${plan.existing.length === 0 ? "(none)" : plan.existing.join(", ")}`,
@@ -328,7 +413,8 @@ export function validatePlan(value: unknown, source: string): RunnerPlan {
     throw new VerbUsageError(`${source} is not a runner plan this build can render (${what}). Re-run 'nen runner plan --out' rather than editing one by hand.`);
   };
   const plan = value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : bad("not a JSON object");
-  if (plan["contract"] !== PLAN_CONTRACT) bad(`contract is ${JSON.stringify(plan["contract"])}, expected '${PLAN_CONTRACT}'`);
+  const v01 = plan["contract"] === PLAN_CONTRACT_V01;
+  if (plan["contract"] !== PLAN_CONTRACT && !v01) bad(`contract is ${JSON.stringify(plan["contract"])}, expected '${PLAN_CONTRACT}'`);
   const str = (key: string, pattern: RegExp): string => {
     const field = plan[key];
     if (typeof field !== "string" || !pattern.test(field)) bad(`'${key}' is ${JSON.stringify(field)}`);
@@ -342,9 +428,19 @@ export function validatePlan(value: unknown, source: string): RunnerPlan {
   if (!(RUNNER_ARCHES as readonly unknown[]).includes(arch)) bad(`'arch' is ${JSON.stringify(arch)}`);
   const runnerOs = os as RunnerOs;
   const runnerArch = arch as RunnerArch;
+  // A v0.1 plan predates `mode`: it was a service plan (a LaunchAgent on macOS).
+  const modeRaw = v01 ? DEFAULT_RUNNER_MODE[runnerOs] : plan["mode"];
+  if (!(RUNNER_MODES as readonly unknown[]).includes(modeRaw)) bad(`'mode' is ${JSON.stringify(modeRaw)}`);
+  const mode = modeRaw as RunnerMode;
+  if (mode !== DEFAULT_RUNNER_MODE[runnerOs] && runnerOs !== "Windows") bad(`'mode' is '${mode}' for a ${runnerOs} pool`);
+  const expectedLabels = poolLabels(runnerOs, runnerArch, mode);
   const labels = plan["labels"];
-  if (!Array.isArray(labels) || labels.join(",") !== ["self-hosted", runnerOs, runnerArch].join(",")) {
-    bad(`'labels' is ${JSON.stringify(labels)}, expected ["self-hosted","${runnerOs}","${runnerArch}"]`);
+  if (!Array.isArray(labels) || labels.join(",") !== expectedLabels.join(",")) {
+    bad(`'labels' is ${JSON.stringify(labels)}, expected ${JSON.stringify(expectedLabels)}`);
+  }
+  const dailyRaw = v01 ? false : plan["dailyAccount"];
+  if (typeof dailyRaw !== "boolean" || (dailyRaw && !isLogonTask({ os: runnerOs, mode }))) {
+    bad(`'dailyAccount' is ${JSON.stringify(dailyRaw)} for a ${mode} ${runnerOs} pool`);
   }
   const machineCode = str("machineCode", MACHINE_CODE);
   const consumerCode = str("consumerCode", CONSUMER_CODE);
@@ -354,7 +450,8 @@ export function validatePlan(value: unknown, source: string): RunnerPlan {
   const identityOk =
     typeof identity === "string" &&
     (identity === "ask" ||
-      (runnerOs === "Windows" && (identity === NETWORK_SERVICE || (identity.startsWith(".\\") && WINDOWS_ACCOUNT.test(identity.slice(2))))) ||
+      (runnerOs === "Windows" &&
+        ((identity === NETWORK_SERVICE && mode === "service") || (identity.startsWith(".\\") && WINDOWS_ACCOUNT.test(identity.slice(2))))) ||
       (runnerOs === "Linux" && LINUX_USER.test(identity) && identity !== "root") ||
       (runnerOs === "macOS" && identity === "invoking-user"));
   if (!identityOk) bad(`'identity' is ${JSON.stringify(identity)} for a ${runnerOs} pool`);
@@ -396,12 +493,14 @@ export function validatePlan(value: unknown, source: string): RunnerPlan {
     pool,
     os: runnerOs,
     arch: runnerArch,
-    labels: ["self-hosted", runnerOs, runnerArch],
+    mode,
+    labels: expectedLabels,
     machineCode,
     consumerCode,
     root,
     projectDir,
     identity: identity as string,
+    dailyAccount: dailyRaw as boolean,
     runnerVersion,
     download: {
       os: DOWNLOAD_OS[runnerOs],

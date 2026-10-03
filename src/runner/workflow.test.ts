@@ -21,7 +21,7 @@ function golden(name: string, text: string): void {
 
 type Row = Record<string, unknown>;
 
-describe("renderWorkflow -- the template's seven placeholders, filled from the declaration", () => {
+describe("renderWorkflow -- the template's eight placeholders, filled from the declaration", () => {
   const rendered = renderWorkflow(TEMPLATE, workflowValues(pool("windows-x64"), TARGET, "0.0.0-test"));
 
   it("uses every placeholder the renderer fills, and nothing else", () => {
@@ -55,7 +55,7 @@ describe("renderWorkflow -- the template's seven placeholders, filled from the d
     // Every run step pins bash: Actions defaults to pwsh on Windows.
     for (const step of steps.filter((candidate) => candidate["run"] !== undefined)) expect(step["shell"]).toBe("bash");
     const env = steps.map((step) => step["env"] as Row | undefined).filter((value): value is Row => value !== undefined);
-    expect(env).toContainEqual({ TOOLS: "git bash gh" });
+    expect(env).toContainEqual({ TOOLS: "git bash gh", MODE: "service" });
     expect(env).toContainEqual({ EXPECTED_OS: "Windows" });
   });
 
@@ -65,7 +65,42 @@ describe("renderWorkflow -- the template's seven placeholders, filled from the d
     expect(job["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64"]);
     expect(mac.text).toContain("'.github/workflows/runner-preflight-macos-arm64.yml'");
     const gated = (job["steps"] as Row[]).filter((step) => step["if"] !== undefined).map((step) => step["if"]);
-    expect(gated).toEqual(["runner.os == 'Windows'", "runner.os != 'Windows'"]);
+    expect(gated).toEqual(["runner.os == 'Windows'", "runner.os == 'Windows' && 'interactive' == 'interactive'", "runner.os != 'Windows'"]);
+  });
+
+  it("renders an interactive Windows pool's four labels and switches its desktop-session probe on (#333)", () => {
+    const desktop = renderWorkflow(TEMPLATE, workflowValues(pool("windows-x64-desktop"), TARGET, "0.0.0-test"));
+    expect(desktop.leftovers).toEqual([]);
+    expect(desktop.yamlError).toBeNull();
+    golden("runner-preflight-windows-x64-desktop.golden.yml", desktop.text);
+    const job = ((parse(desktop.text) as Row)["jobs"] as Row)["preflight"] as Row;
+    expect(job["runs-on"]).toEqual(["self-hosted", "Windows", "X64", "desktop"]);
+    const probe = (job["steps"] as Row[]).find((step) => step["name"] === "Desktop session present (interactive Windows pool)");
+    expect(probe?.["if"]).toBe("runner.os == 'Windows' && 'interactive' == 'interactive'");
+    expect(probe?.["shell"]).toBe("bash");
+    expect(probe?.["run"]).toMatch(/GetCurrentProcess\(\)\.SessionId/);
+    expect(probe?.["run"]).toMatch(/if \[ -z "\$session" \] \|\| \[ "\$session" = "0" \]; then/);
+    // Remediation is mode-aware: a logon task is restarted by signing in again, and
+    // an AppData hit is a warning for the account the runner runs as.
+    const steps = job["steps"] as Row[];
+    const toolchain = steps.find((step) => step["name"] === "Host toolchain -- every tool a job on this pool invokes");
+    expect(toolchain?.["env"]).toEqual({ TOOLS: "git bash gh", MODE: "interactive" });
+    expect(toolchain?.["run"]).toMatch(/sign the runner's account \(\$acct\) out and back in, which restarts its logon task/);
+    const appdata = steps.find((step) => step["name"] === "Resolution must be machine-wide (Windows)");
+    expect(appdata?.["run"]).toMatch(/if \[ "\$MODE" = interactive \]; then\n\s+echo "::warning::/);
+  });
+
+  it("keeps the probe off for a service pool: its condition is false once rendered", () => {
+    const service = renderWorkflow(TEMPLATE, workflowValues(pool("windows-x64"), TARGET, "0.0.0-test"));
+    const job = ((parse(service.text) as Row)["jobs"] as Row)["preflight"] as Row;
+    const probe = (job["steps"] as Row[]).find((step) => step["name"] === "Desktop session present (interactive Windows pool)");
+    expect(probe?.["if"]).toBe("runner.os == 'Windows' && 'service' == 'interactive'");
+  });
+
+  it("still renders a template that predates @@MODE@@", () => {
+    const old = renderWorkflow(TEMPLATE.replace(/@@MODE@@/g, "service"), workflowValues(pool("windows-x64"), TARGET, "v"));
+    expect(old.leftovers).toEqual([]);
+    expect(old.yamlError).toBeNull();
   });
 
   it("reports an unknown placeholder once, and a document that is not YAML", () => {

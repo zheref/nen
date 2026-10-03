@@ -1,4 +1,4 @@
-# runner-preflight -- proves the self-hosted windows-x64 pool can RUN a job,
+# runner-preflight -- proves the self-hosted windows-x64-desktop pool can RUN a job,
 # not merely that it is registered. Rendered by nen 0.0.0-test runner workflow for
 # zheref/nen; re-render it rather than editing it.
 #
@@ -13,7 +13,7 @@
 # Run it green BEFORE the pool's enable variable is set -- enabling first
 # leaves every gated job queued on a pool that cannot run it.
 #
-#   nen runner preflight --target zheref/nen --workflow runner-preflight-windows-x64.yml
+#   nen runner preflight --target zheref/nen --workflow runner-preflight-windows-x64-desktop.yml
 #
 # FORK SAFETY. This job runs arbitrary steps on a physical machine, so the
 # trigger set is the control. `push` fires only in the repository the push
@@ -25,19 +25,19 @@
 #
 # `push` is path-filtered to this file: it costs nothing on any other change
 # and still proves itself on the branch that changes it.
-name: runner-preflight-windows-x64
+name: runner-preflight-windows-x64-desktop
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - '.github/workflows/runner-preflight-windows-x64.yml'
+      - '.github/workflows/runner-preflight-windows-x64-desktop.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: runner-preflight-windows-x64-${{ github.ref }}
+  group: runner-preflight-windows-x64-desktop-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,7 +45,7 @@ jobs:
     if: github.repository == 'zheref/nen'
     # Exactly the pool's labels. A job queues until a runner carrying all of
     # them is free; it never falls back to another pool.
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: [self-hosted, Windows, X64, desktop]
     # Bounds the RUN, not the wait: a job queues indefinitely when every slot
     # is busy or offline, and a preflight that never starts is itself the
     # answer ('nen runner preflight' names it).
@@ -69,7 +69,7 @@ jobs:
           echo "runner os   : ${RUNNER_OS:-<unset>}"
           echo "service acct: ${USERNAME:-${USER:-${LOGNAME:-unknown}}}"
           if [ "${RUNNER_OS:-}" != "$EXPECTED_OS" ]; then
-            echo "::error::Preflight landed on '${RUNNER_OS:-<unset>}', not $EXPECTED_OS -- it proves nothing about the windows-x64 pool. Check runs-on and that a runner of this pool was free."
+            echo "::error::Preflight landed on '${RUNNER_OS:-<unset>}', not $EXPECTED_OS -- it proves nothing about the windows-x64-desktop pool. Check runs-on and that a runner of this pool was free."
             exit 1
           fi
 
@@ -82,7 +82,7 @@ jobs:
         shell: bash
         env:
           TOOLS: 'git bash gh'
-          MODE: 'service'
+          MODE: 'interactive'
         run: |
           set -uo pipefail
           acct="${USERNAME:-${USER:-${LOGNAME:-unknown}}}"
@@ -115,7 +115,7 @@ jobs:
         shell: bash
         env:
           TOOLS: 'git bash gh'
-          MODE: 'service'
+          MODE: 'interactive'
         run: |
           set -uo pipefail
           resolved="$(where.exe $TOOLS || true)"
@@ -137,13 +137,13 @@ jobs:
           done <<< "$resolved"
           exit "$bad"
 
-      # An interactive pool (mode service) exists for jobs that drive a real UI,
+      # An interactive pool (mode interactive) exists for jobs that drive a real UI,
       # and only a signed-in desktop session can run them. A runner installed as
       # a service runs in session 0, which has no desktop, and a UI job there
       # times out. Rendered for every pool; it runs only for an interactive
       # Windows one.
       - name: Desktop session present (interactive Windows pool)
-        if: runner.os == 'Windows' && 'service' == 'interactive'
+        if: runner.os == 'Windows' && 'interactive' == 'interactive'
         shell: bash
         run: |
           set -uo pipefail

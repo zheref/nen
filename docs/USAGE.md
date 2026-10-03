@@ -175,8 +175,9 @@ change from a compatible one.
 [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
 here is the ruling rather than the silence. A `contract` field is **earned by a
 shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. Twenty-two shapes
-qualify today and declare one:
+document half-understood is worse than not reading it at all. Twenty-nine shapes
+qualify today and declare one (thirty-one ids: `nen.stop.mark` and
+`nen.runner.plan` each have two versions):
 
 `nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.1` ·
 `nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ready/v0.1` ·
@@ -184,7 +185,7 @@ qualify today and declare one:
 `nen.scaffold.new/v0.1` · `nen.shu.<verb>/v0.1` (per executing verb) ·
 `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
 `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` ·
-`nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.decisions/v0.1` · `nen.phase.ledger/v0.1` · `nen.repo.classify/v0.1` · `nen.runner.plan/v0.1` · `nen.surface.capabilities/v0.1` ·
+`nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.decisions/v0.1` · `nen.phase.ledger/v0.1` · `nen.repo.classify/v0.1` · `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2` · `nen.surface.capabilities/v0.1` ·
 `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.generate/v0.1` ·
 `nen.wc.squash/v0.1` · `nen.workflow/v0.1`
 
@@ -465,7 +466,7 @@ they assumed instead); they come back empty or `null`.
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 | `release.unitPaths` | the release-unit entry list a release unit is bounded to. Each entry is either a STRING (a repo-relative prefix or narrow glob, `src/report/patterns.ts`'s grammar) or an OBJECT `{"path": "<exact file>", "keys": ["<json pointer or dotted key>", ...]}` bounding one exact JSON file to a set of its own leaf keys rather than its whole content (item 4) — `path` matched by exact equality, never a pattern; `keys` a non-empty list of non-empty JSON-pointer or dotted leaf paths. `null` (the key absent) means UNDECLARED, never "everything" or "nothing" — [`release unit-check`](#nen-release-unit-check) and [`nen pr merge`](#nen-pr-merge)'s own unit gate both refuse (naming the key) rather than guess a boundary the repository never drew. A STRING pattern the shared matcher proves claims EVERY path (`**`, `**/*`, and any other pattern that matches a repo-relative path no matter its shape) is refused by pointer too: a release unit that bounds nothing is never what declaring this key is meant to say. `*` (one path segment) is NOT refused -- it claims a single top-level entry, never every path -- and a leading `/` (e.g. `/**`) is refused separately as an invalid absolute pattern, since every path this key is compared against is already repo-relative. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (read from the pull request's BASE commit, never this checkout's own file) |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
-| `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `labels` exactly `["self-hosted", os, arch]` (an extra label is refused: the runner-policy guard admits only the canonical sets, and a bare `self-hosted` would match every runner), `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools with one label set are refused. **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
+| `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `mode` (optional, #333: `service` or `interactive` -- how the runners run on their host; absent is `service` for `Windows` and `Linux` and `interactive` for `macOS`, whose runner is always a LaunchAgent in the user's session. `macOS` + `service` and `Linux` + `interactive` are refused, naming why. An interactive `Windows` pool runs inside a signed-in desktop session, for jobs that drive a real UI, which a service in session 0 cannot), `labels` exactly `["self-hosted", os, arch]`, or `["self-hosted", "Windows", arch, "desktop"]` for an interactive Windows pool (any other extra label is refused: the runner-policy guard admits only the canonical sets, and a bare `self-hosted` would match every runner; `desktop` on a service pool is refused naming the missing `"mode": "interactive"`), `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools with one label set are refused. **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
 
 **Unknown keys are preserved, and near-miss keys are refused *because* they
 are.** A key nen has never heard of survives a round trip untouched — the file
@@ -735,8 +736,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
-| [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), and the package with its SHA-256 -- the `nen.runner.plan/v0.1` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
-| [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
+| [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
+| [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv; an interactive Windows plan asks no password and registers logon tasks instead of services), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled; never exits 0 on a partial pass | github (gh api GET runners) | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
@@ -10634,6 +10635,36 @@ install` takes (never `root`); on macOS none (a LaunchAgent runs as the user
 who installs it, stored `invoking-user`). Unnamed, it is `ask`, and
 [`runner script`](#nen-runner-script) refuses to render it.
 
+**An interactive Windows pool** (`mode: interactive`, #333) is a runner in a
+signed-in desktop session, started at its identity's logon, never a service.
+Its identity must be an account that can log on interactively: a LOCAL
+account, stored `.\<name>` (for a Microsoft account, the local account
+Windows created for it, as `whoami` prints it after the backslash). The
+built-in service identities — `network-service`, `NetworkService`,
+`LocalService`, `LocalSystem`, `SYSTEM`, in any case — are refused, exit 2:
+they have no desktop session, so the logon task would never fire. Whether the
+named account exists and is enabled is the host's to answer, and the
+rendered script checks it there; whether it holds *Allow log on locally* is
+checked by nobody. Every rendering of the plan says what that
+costs: the runner is **online only while that account is signed in** (or
+auto-logged on, which nen never configures), and every job it takes runs with
+that account's profile and credentials — and that is **every** job such a
+runner takes, not only the ones asking for `desktop`: GitHub gives a job to
+any runner carrying all of its labels, so a runner labelled
+`[self-hosted, Windows, X64, desktop]` also takes every job aimed at
+`[self-hosted, Windows, X64]` on that repository ([`runner
+inventory`](#nen-runner-inventory) counts it in both pools for that reason).
+A UI job also needs that session **active and unlocked**, with `run.cmd`'s
+console window open: a locked screen or a disconnected session still has a
+non-zero session id, which the preflight probe accepts. When the identity is **the account
+computing the plan** — `USERNAME`, compared without regard to case, and only
+when the plan is computed on Windows — the plan prints a `warning:` naming it
+as your own daily account and records `dailyAccount: true`;
+[`runner script`](#nen-runner-script) then renders it only with
+`--accept-daily-account`, and makes the same check again itself when it runs
+on Windows, so a plan computed on another host is caught where it is
+rendered. Use a dedicated local account instead.
+
 **One account is one trust domain (#330).** Every runner service that logs on
 as the same account can rewrite every other one's binaries and `_work` (on
 Windows, `config.cmd` gives the account's `GITHUB_ActionsRunner_*` group full
@@ -10683,7 +10714,9 @@ warn and recommend, never refuse). The plan itself, on stdout under `--json`
 and in `--out`, is unchanged. Off the pool's OS the check cannot see the host,
 so it prints a `note:` saying it did not run. A failed host read is also a
 `note:`, never an exit. macOS is not checked: a LaunchAgent runs as the
-installing user, so there is no account to choose.
+installing user, so there is no account to choose. An interactive Windows
+pool's runners are logon tasks, not services, so this read does not see
+them: an account they share is not reported.
 
 **Usage**
 
@@ -10705,17 +10738,21 @@ nen runner plan --pool <id> --machine-code <CODE> --count <n> [--target <owner/n
 | `--out <file>` | no | also write the plan JSON there | resolved against `--repo` |
 | `--json` | no | the plan | — |
 
-**Output and exit codes** — human: the count, the labels line, the identity,
-the package with its SHA-256, the project directory, a table (slot, name,
-install dir, service), and the names this machine and consumer already hold.
-`--json` (and `--out`) is the plan, contract **`nen.runner.plan/v0.1`** — a
+**Output and exit codes** — human: the count, the labels line, the mode, the
+identity (and, for an interactive Windows pool, its `note:` and `warning:`
+lines), the package with its SHA-256, the project directory, a table (slot,
+name, install dir, service — `logon task` for an interactive Windows pool),
+and the names this machine and consumer already hold.
+`--json` (and `--out`) is the plan, contract **`nen.runner.plan/v0.2`** — a
 program reads it back, so [`runner script`](#nen-runner-script) refuses one it
 cannot vouch for — top-level keys: `contract`, `target`, `pool`, `os`, `arch`,
-`labels[]`, `machineCode`, `consumerCode`, `root`, `projectDir`, `identity`,
-`runnerVersion`, `download` (`os`, `architecture`, `filename`,
-`download_url`, `sha256_checksum`), `runners[]` (`slot`, `name`,
-`installDir`, `serviceName` — GitHub's own `actions.runner.<owner>-<repo>.<name>`)
-and `existing[]`. Exit 0; 1 when GitHub refused, offers no package for the
+`mode`, `labels[]`, `machineCode`, `consumerCode`, `root`, `projectDir`,
+`identity`, `dailyAccount`, `runnerVersion`, `download` (`os`,
+`architecture`, `filename`, `download_url`, `sha256_checksum`), `runners[]`
+(`slot`, `name`, `installDir`, `serviceName` — GitHub's own
+`actions.runner.<owner>-<repo>.<name>`, also the logon task's name) and
+`existing[]`. v0.2 added `mode` and `dailyAccount`; a `v0.1` plan still
+reads, as the service plan it was. Exit 0; 1 when GitHub refused, offers no package for the
 pool's OS and architecture, or a planned name is already registered; 2 for
 every usage refusal above and a missing `runners` block; 5 without `gh`.
 
@@ -10727,6 +10764,7 @@ nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code N
 ```text
 plan: 3 runner(s) for zheref/nen, pool windows-x64
 labels: self-hosted,Windows,X64
+mode: service
 identity: .\lordzheref
 download: actions-runner-win-x64-2.337.0.zip (runner 2.337.0, sha256 1150692afa94e71f872017e254ea55b6eece1eece3fe7e3a6d4c93d0a1b85cfc)
 project dir: C:\GithubRunners\nen-runners
@@ -10857,6 +10895,38 @@ around the one call and cleared in a `finally`.
   summary line `jusshin: <n> registered, <m> skipped, <k> failed`. The window
   stays open on a failure only when it is an interactive console. Exit 0 only
   when every planned service is Running and nothing failed.
+- **Windows, interactive** (`mode: interactive`, #333) — the same 5.1 script
+  up to registration, with the same root lockdown, transcript, `gh` checks,
+  package hash and token handling, and four differences. It checks that the
+  identity is an **enabled local account** on the host (`Get-LocalUser`;
+  exit 1 otherwise, naming it), and prints a `WARNING` when it is the account
+  running the script. It asks **no password**: `config.cmd` runs
+  without `--runasservice` and without a logon account, so only
+  `ACTIONS_RUNNER_INPUT_TOKEN` is set around the call. It resets each
+  `Runner<N>` folder to the locked root's inherited baseline (`icacls /reset
+  /T`), so an account an earlier run granted keeps no access, then grants the
+  identity `(OI)(CI)M` there and nothing wider, because
+  `run.cmd` runs as the identity and writes `_diag`, `_work` and its own
+  updates there. Then, for every planned runner (skipped ones included), it
+  registers a **Scheduled Task** named `actions.runner.<owner>-<repo>.<name>`
+  at the root of the task library: action `<installDir>\run.cmd` in that
+  folder, trigger at logon of `<COMPUTERNAME>\<account>`, principal that
+  account with an **interactive token** (`-LogonType Interactive`, so the
+  task runs only in its desktop session and stores no password), run level
+  Limited, priority 4 (normal — Task Scheduler's default 7 is below normal,
+  and every job would inherit it), no execution time limit, restarted every
+  minute (up to 255 times) when the task ends in failure — a sign-out is not
+  a failure — one instance at a time, `-Force` to replace an earlier
+  registration. **It never installs a service**, and a runner folder an
+  earlier service-mode run left installed as the service of the same name is
+  refused (no task beside it; exit 1). If the identity is signed in now (it
+  owns an `explorer.exe` on this computer), each task is started and must
+  reach `Running` within 30 s. Otherwise the tasks wait, and the script says
+  the runners come online when that account signs in (or is auto-logged on,
+  which the script never configures); when it cannot tell, it says so and
+  starts none. A table of the tasks and the one
+  summary line follow. Exit 0 when every task is registered, and running
+  wherever the identity is signed in, and nothing failed.
 - **Linux** — bash, run by the maintainer as `sudo bash <file>`: it refuses
   anything but root reached through `sudo` from a real account (exit 3),
   runs `gh` as that account (`SUDO_USER`, with its own sign-in), `config.sh`
@@ -10907,7 +10977,7 @@ file, which 5.1 would otherwise read in the ANSI code page).
 **Usage**
 
 ```text
-nen runner script --plan <plan.json> --out <file> [--repo <path>] [--dry-run] [--json]
+nen runner script --plan <plan.json> --out <file> [--repo <path>] [--accept-daily-account] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -10916,13 +10986,14 @@ nen runner script --plan <plan.json> --out <file> [--repo <path>] [--dry-run] [-
 |---|---|---|---|
 | `--plan <plan.json>` | yes | what [`runner plan --out`](#nen-runner-plan) wrote | resolved against `--repo`; unreadable or not a plan is exit 2 |
 | `--out <file>` | yes | where the script is written | its directory is created. Outside the plan's `root` (exit 2 otherwise) — `%LOCALAPPDATA%\nen\jusshin\` on Windows, `~/.local/state/nen/jusshin/` elsewhere. On Windows it must end `.ps1` and carry no space or quote — the launch line passes it inside a quoted argument list |
+| `--accept-daily-account` | no | render a plan whose `dailyAccount` is `true` | without it such a plan is exit 2: its interactive runners would run every UI job as your own daily account. Re-plan with a dedicated local account instead where you can |
 | `--dry-run` | no | render and validate, write nothing | — |
 | `--json` | no | the result | — |
 
 **Output and exit codes** — human: the file line, the `sha256 ...; the run
 leaves its one summary line in ...` line, and the launch line.
 `--json` top-level keys: `os`, `out`, `runners[]` (names), `identity`,
-`needsElevation` (Windows and Linux `true`), `launch` — Windows
+`mode`, `dailyAccount`, `needsElevation` (Windows and Linux `true`), `launch` — Windows
 `powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process
 powershell -Verb RunAs -Wait -ArgumentList
 '-NoProfile','-ExecutionPolicy','Bypass','-File','<out>'"`, Linux `sudo bash
@@ -10930,7 +11001,7 @@ powershell -Verb RunAs -Wait -ArgumentList
 `scriptSha256` (lowercase hex SHA-256 of the rendered bytes) and `summary`
 (the glob `<projectDir>\_jusshin\register-*.summary` the run's summary file
 matches; the newest is this run's). Exit 0; 2 for a plan that is not one, an
-identity still `ask`, a Windows `--out` that is not a plain `.ps1`, or an
+identity still `ask`, a `dailyAccount` plan without `--accept-daily-account`, a Windows `--out` that is not a plain `.ps1`, or an
 `--out` under the plan's root. The script's own exit codes (`0`, `1`, `3`,
 `5`, `6`) are its own, listed above, and are never this verb's.
 
@@ -11005,10 +11076,12 @@ NOT READY: 0/1 runner(s) online on zheref/nen (1 attempt(s), waited 0s)
 
 Renders the pool's **preflight workflow** from a template the caller
 supplies. Nen carries the **renderer**, not the template — the same split the
-readiness workflow a skill installs already has. Seven placeholders, all
+readiness workflow a skill installs already has. Eight placeholders, all
 `@@NAME@@`: `@@REPO_SLUG@@`, `@@RUNS_ON@@` (the pool's labels as a flow
 sequence, `[self-hosted, Windows, X64]`), `@@OS@@` (the `RUNNER_OS` value),
-`@@TOOLS@@` (space-separated), `@@POOL_ID@@`, `@@WORKFLOW_FILE@@` (the pool's
+`@@MODE@@` (the pool's mode, `service` or `interactive`, #333; a
+template that predates it still renders — a template need not use every
+value), `@@TOOLS@@` (space-separated), `@@POOL_ID@@`, `@@WORKFLOW_FILE@@` (the pool's
 `preflightWorkflow`, for the push path filter) and `@@RENDERED_BY@@` (`nen
 <version> runner workflow`). Any `@@X@@` left after substitution is exit 1
 naming it, and so is a rendering the YAML reader refuses — nothing is written
