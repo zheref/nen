@@ -28,11 +28,87 @@
 // `--dry-run` whose printed byte count is not the byte count that would be
 // sent is not a dry run, and `gh` is handed the caller's ORIGINAL path
 // untouched, so both sides read the same bytes without either one moving.
+//
+// LOST UPDATES, AND WHAT `--expect-body-sha256` DOES AND DOES NOT BUY
+// (zheref/nen#205). A whole-body replacement is prepared from SOME earlier
+// version of the body. If writers A and B both read v1, B writes v2, and A
+// then submits a replacement prepared from v1, B's additions are gone and
+// nothing says so. `--expect-body-sha256 <hex>` names the version the
+// replacement was prepared from; the certifying read this verb already makes
+// carries the CURRENT body, and when its sha256 differs the verb refuses at
+// exit 3 (a conflict) and writes nothing, printing the current hash so the
+// caller can re-read, re-fold and retry.
+//
+// IT IS NOT A COMPARE-AND-SWAP, AND NOTHING HERE MAY CALL IT ONE. GitHub's
+// issue-update API takes no precondition (no If-Match, no expected version),
+// so the check is read -> compare -> write: two requests, with a window
+// between them in which another writer's update can land and then be
+// overwritten by this one, undetected. Doing the compare on the very read
+// that immediately precedes the write makes that window as narrow as this
+// backend allows; it does not close it. Every report this verb prints under
+// the flag says so (`atomic: false` under --json), and a caller that needs
+// exclusion must still serialise its own writers or use an additive comment.
+//
+// AN UNCERTAIN WRITE IS NEVER REPORTED AS WRITTEN. A failed `gh issue edit`
+// -- a non-zero exit, a spawn failure, a dropped connection after GitHub
+// applied the change -- cannot tell "refused" from "applied, answer lost".
+// So the verb reads the body back once, reports what it saw (`written: null`,
+// `outcome: "uncertain"`), and exits 1; it never prints "replaced".
 
+import { createHash } from "node:crypto";
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import { VerbUsageError } from "../cli/command.js";
 import type { Target } from "../github/target.js";
-import { readIssue } from "./subissue.js";
+import { readIssue, type IssueSummary } from "./subissue.js";
+
+/**
+ * The sha256 an expectation is compared against: lowercase hex over the
+ * body's UTF-8 bytes, exactly as the REST payload's `body` field carries it
+ * (GitHub's `null` -- an issue never given a body -- hashes as ""). No
+ * trimming, no newline normalisation: a hash computed over a copy with an
+ * extra trailing newline is a DIFFERENT version, and refusing it as a
+ * conflict is the safe failure.
+ */
+export function bodySha256(body: string): string {
+  return createHash("sha256").update(body, "utf8").digest("hex");
+}
+
+/**
+ * Read `--expect-body-sha256`'s value: 64 hex digits, case-insensitive,
+ * returned lowercase. Anything else is a usage error (exit 2) -- a malformed
+ * expectation could never match, and refusing it as a "conflict" would send a
+ * caller off to reconcile a body that never changed.
+ */
+export function parseExpectedSha256(raw: string): string {
+  if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
+    throw new VerbUsageError(
+      `--expect-body-sha256 takes a sha256 as 64 hex digits -- got '${raw}'. It is the hash of the body your replacement was prepared from (UTF-8 bytes of the API's 'body' field, untrimmed); 'nen issue edit-body --dry-run' prints the current one.`,
+    );
+  }
+  return raw.toLowerCase();
+}
+
+/** What the certifying read found about the current body, for the expectation check. */
+export interface BodyCheck {
+  /** sha256 of the body as read just before the write. */
+  readonly currentSha256: string;
+  readonly currentBytes: number;
+  /** The caller's expectation, or null when none was given. */
+  readonly expectedSha256: string | null;
+  /** "none" without an expectation; otherwise whether the read matched it. */
+  readonly result: "none" | "matched" | "conflict";
+}
+
+export function checkExpectedBody(summary: IssueSummary, expectedSha256: string | null): BodyCheck {
+  const current = summary.body ?? "";
+  const currentSha256 = bodySha256(current);
+  return {
+    currentSha256,
+    currentBytes: Buffer.byteLength(current, "utf8"),
+    expectedSha256,
+    result: expectedSha256 === null ? "none" : expectedSha256 === currentSha256 ? "matched" : "conflict",
+  };
+}
 
 /**
  * The `gh` call, built once and used by BOTH the dry run and the real write --
@@ -65,9 +141,9 @@ export function editBodyArgv(target: Target, issue: number, bodyFile: string): r
  * same class of mistake a malformed flag is. `VerbUsageError` (exit 2) says
  * that plainly, and matches the exit code this verb's own spec requires.
  */
-export function certifyIssue(seams: Seams, target: Target, issue: number): void {
+export function certifyIssue(seams: Seams, target: Target, issue: number): IssueSummary {
   const summary = readIssue(seams, target, issue);
-  if (!summary.isPullRequest) return;
+  if (!summary.isPullRequest) return summary;
   throw new VerbUsageError(
     `#${issue} names a pull request in ${target.slug}, not an issue -- 'nen issue edit-body' replaces an ISSUE's body only, and it is certified before any write, so nothing was changed. ` +
       `Ask 'nen pr edit-body' for the pull request's body instead.`,
@@ -84,5 +160,31 @@ export function writeIssueBody(seams: Seams, target: Target, issue: number, body
         outputLines(result.stderr).join(" ") || `exit ${result.code}`
       }`,
     );
+  }
+}
+
+/**
+ * After a write `gh` did not confirm: read the body back ONCE and say what it
+ * holds. Never a verdict of "written" -- a body equal to the submitted bytes
+ * may equally be another writer's identical text, and a body that differs may
+ * still be overwritten by a request GitHub has not finished applying. The
+ * read-back narrows what the caller has to reconcile; it certifies nothing.
+ */
+export function readBackAfterFailedWrite(
+  seams: Seams,
+  target: Target,
+  issue: number,
+  submittedSha256: string,
+): { readonly currentSha256: string | null; readonly matchesSubmitted: boolean | null; readonly readError: string | null } {
+  try {
+    const summary = readIssue(seams, target, issue);
+    const currentSha256 = bodySha256(summary.body ?? "");
+    return { currentSha256, matchesSubmitted: currentSha256 === submittedSha256, readError: null };
+  } catch (error) {
+    return {
+      currentSha256: null,
+      matchesSubmitted: null,
+      readError: error instanceof Error ? error.message : String(error),
+    };
   }
 }

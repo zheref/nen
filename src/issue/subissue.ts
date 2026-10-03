@@ -104,6 +104,13 @@ export interface IssueSummary {
    * fetch).
    */
   readonly isPullRequest: boolean;
+  /**
+   * The object's body EXACTLY as the REST payload carried it, with GitHub's
+   * `null` (an issue that was never given one) read as "". Optional only so
+   * hand-built fixtures elsewhere need not invent one; `readIssue` always sets
+   * it. `nen issue edit-body --expect-body-sha256` hashes this (zheref/nen#205).
+   */
+  readonly body?: string;
 }
 
 // One `gh api` read per issue. REST rather than `gh issue view`, because `id`
@@ -148,6 +155,7 @@ export function readIssue(seams: Seams, target: Target, number: number): IssueSu
     // hand-written fixture rather than a real object, and would silently
     // diverge from the predicate zheref/nen#25 shipped in ./chain.ts.
     isPullRequest: rawPullRequest !== undefined && rawPullRequest !== null,
+    body: typeof parsed["body"] === "string" ? parsed["body"] : "",
   };
 }
 

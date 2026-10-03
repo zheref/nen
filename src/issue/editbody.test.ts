@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
-import { certifyIssue, editBodyArgv, writeIssueBody } from "./editbody.js";
+import {
+  bodySha256,
+  certifyIssue,
+  checkExpectedBody,
+  editBodyArgv,
+  parseExpectedSha256,
+  readBackAfterFailedWrite,
+  writeIssueBody,
+} from "./editbody.js";
 
 const TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
@@ -84,5 +92,63 @@ describe("writeIssueBody -- posts through the Runner seam", () => {
       },
     ]);
     expect(() => writeIssueBody(seams, TARGET, 12, "notes/body.md")).toThrow(/ENOENT/);
+  });
+});
+
+describe("bodySha256 / parseExpectedSha256 / checkExpectedBody -- the lost-update check (zheref/nen#205)", () => {
+  const ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+  it("hashes the UTF-8 bytes exactly, with no trimming or newline normalisation", () => {
+    expect(bodySha256("abc")).toBe(ABC);
+    expect(bodySha256("abc\n")).not.toBe(ABC);
+    expect(bodySha256("a\r\nb")).not.toBe(bodySha256("a\nb"));
+  });
+
+  it("accepts 64 hex digits in either case and returns them lowercase; refuses anything else as a usage error", () => {
+    expect(parseExpectedSha256(ABC.toUpperCase())).toBe(ABC);
+    for (const bad of ["", "abc", `${ABC}a`, ABC.replace("b", "z"), ` ${ABC}`]) {
+      expect(() => parseExpectedSha256(bad)).toThrow(/64 hex digits/);
+    }
+  });
+
+  it("reports none / matched / conflict from the certifying read's body", () => {
+    const summary = { number: 12, id: 1, title: "t", state: "open", labels: [], isPullRequest: false, body: "abc" };
+    expect(checkExpectedBody(summary, null)).toEqual({ currentSha256: ABC, currentBytes: 3, expectedSha256: null, result: "none" });
+    expect(checkExpectedBody(summary, ABC).result).toBe("matched");
+    expect(checkExpectedBody(summary, bodySha256("other")).result).toBe("conflict");
+    // A summary carrying no body (a hand-built fixture) is the empty body.
+    const bodiless = { number: 12, id: 1, title: "t", state: "open", labels: [], isPullRequest: false };
+    expect(checkExpectedBody(bodiless, bodySha256("")).result).toBe("matched");
+  });
+
+  it("certifyIssue hands back the read it made, body included, so the check costs no second request", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/12", result: { stdout: JSON.stringify({ number: 12, id: 1, title: "t", state: "open", labels: [], body: "abc" }) } },
+    ]);
+    expect(certifyIssue(seams, TARGET, 12).body).toBe("abc");
+    expect(seams.calls.length).toBe(1);
+  });
+});
+
+describe("readBackAfterFailedWrite -- evidence about an uncertain write, never a verdict", () => {
+  it("says whether the body now equals the submitted bytes", () => {
+    const seams = new ScriptedSeams([
+      { match: "gh api repos/zheref/nen/issues/12", result: { stdout: JSON.stringify({ number: 12, id: 1, body: "sent" }) } },
+    ]);
+    expect(readBackAfterFailedWrite(seams, TARGET, 12, bodySha256("sent"))).toEqual({
+      currentSha256: bodySha256("sent"),
+      matchesSubmitted: true,
+      readError: null,
+    });
+    expect(readBackAfterFailedWrite(seams, TARGET, 12, bodySha256("other")).matchesSubmitted).toBe(false);
+  });
+
+  it("reports a failed read-back as unknown rather than throwing over the write's own error", () => {
+    const seams = new ScriptedSeams([{ match: "gh api repos/zheref/nen/issues/12", result: { code: 1, stderr: "HTTP 503" } }]);
+    expect(readBackAfterFailedWrite(seams, TARGET, 12, bodySha256("sent"))).toEqual({
+      currentSha256: null,
+      matchesSubmitted: null,
+      readError: "could not read zheref/nen#12: HTTP 503",
+    });
   });
 });
