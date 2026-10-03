@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 41 command
-families, 118 verbs, every flag checked against the binary this repository
+families, 119 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -140,6 +140,7 @@ thing from the checkout on disk, so it gets a different flag. `--target
 [`pr next-blocker`](#nen-pr-next-blocker), [`pr retarget`](#nen-pr-retarget),
 [`pr request-reviews`](#nen-pr-request-reviews),
 [`pr edit-body`](#nen-pr-edit-body),
+[`pr mark-ready`](#nen-pr-mark-ready),
 [`run rerun-failed`](#nen-run-rerun-failed), the whole
 [`issue`](#family-issue) family (including
 [`issue edit-body`](#nen-issue-edit-body)), [`idea file`](#nen-idea-file),
@@ -175,12 +176,12 @@ change from a compatible one.
 [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
 here is the ruling rather than the silence. A `contract` field is **earned by a
 shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. Twenty-nine shapes
-qualify today and declare one (thirty-one ids: `nen.stop.mark` and
+document half-understood is worse than not reading it at all. Thirty shapes
+qualify today and declare one (thirty-two ids: `nen.stop.mark` and
 `nen.runner.plan` each have two versions):
 
 `nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.1` ·
-`nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ready/v0.1` ·
+`nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.ready/v0.1` ·
 `nen.report.data/v0.1` · `nen.report.render/v0.1` · `nen.scaffold.init/v0.1` ·
 `nen.scaffold.new/v0.1` · `nen.shu.<verb>/v0.1` (per executing verb) ·
 `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
@@ -311,6 +312,7 @@ verb does by default:
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, before printing the byte count and first/last line |
+| [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
 | [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, so it can print which route each name or `--add-bots` id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
@@ -666,7 +668,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 118 verbs, grouped as the README groups them. **Reads** is what a
+All 119 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -683,6 +685,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json, nen/repos.json (a `CODE#n` ref) | yes |
@@ -811,7 +814,9 @@ state snapshot (`fetch`), the first blocking condition in a fixed order
 (`next-blocker`), a trunk cascade-merge (`cascade-main`), a narrow `gh pr
 edit` mutation (`retarget`), and reviewer requests routed by resolved kind
 (`request-reviews` — `gh pr edit --add-reviewer` for a User/Team, GitHub's
-`requestReviews` GraphQL mutation for a Bot). `ready` and `next-blocker`
+`requestReviews` GraphQL mutation for a Bot), and the one draft-to-ready
+transition (`mark-ready` — a write, and never the readiness verdict).
+`ready` and `next-blocker`
 read reviewer identities from `nen/gates.json` (or an explicit `--gates`
 file, or a reduced `--reviewers` set with no default); `ready`'s ref
 resolution also reads `nen/repos.json`'s `product_codes`. This family
@@ -1917,6 +1922,84 @@ is an issue, ask 'nen issue edit-body' instead.
 Run 'nen pr --help'.
 ```
 exit 2
+
+### `nen pr mark-ready`
+
+Moves ONE existing draft pull request out of draft, through GitHub's
+`markPullRequestReadyForReview` GraphQL mutation
+([#345](https://github.com/zheref/nen/issues/345)). It is **not**
+[`pr ready`](#nen-pr-ready): that verb is the read-only CON-32 verdict — and
+since a draft fails its first row ("a draft is never Ready"), this verb is the
+way out of that row. It changes one fact, `isDraft`, and decides nothing about
+readiness; a `ready` verdict never triggers it, and it never consults one.
+
+**Authorization boundary.** It runs on whatever credential `gh` is already
+authenticated as, and neither widens nor replaces it. It never merges, casts a
+review vote, applies a label, requests a reviewer or changes a permission. A
+refusal from GitHub (insufficient access, a branch rule) is reported as
+`refused` at exit 1, never routed around.
+
+**Order of operations.** One certifying GraphQL read (`repository.pullRequest(number:)`
+→ `id number state isDraft headRefOid url`) runs first, and every refusal is
+decided from it **before any write**: a number or repository that does not
+resolve (exit 2), a pull request that is `CLOSED` or `MERGED` (exit 3), a
+`--require-head` that is not a prefix of GitHub's head (exit 8, both SHAs
+printed). A pull request that is already not a draft answers `already-ready`
+at exit 0 with nothing sent. Otherwise the mutation is addressed by the node id
+that read produced — never re-resolved from the number — and GitHub is **read
+back**: `marked-ready` (exit 0) only when the same pull request now reads
+`isDraft: false`. A refused mutation (including a 200 carrying `errors`) is
+`refused`; a read back that fails, still reads draft, or answers a different
+object is `unconfirmed`; both exit 1 and neither is ever reported as ready.
+The mutation takes no expected head, so a push landing between the read and
+the write cannot be refused by GitHub — the read back reports it as
+`headMoved: true`, never hides it.
+
+**Usage**
+
+```text
+nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The GitHub repository. | Missing or malformed exits 2. |
+| `--pr <n>` | yes | The pull request to move out of draft. | The strict reader [`pr edit-body`](#nen-pr-edit-body) uses — `1e3` or `0x0c` are refused (exit 2), because this verb WRITES. |
+| `--require-head <sha>` | no | Act ONLY if GitHub's head is this commit. | 7–40 hex digits, a prefix of GitHub's head, any case — `pr ready`'s own rule and exit code (8). Malformed exits 2. |
+| `--dry-run` | no | Run the certifying read and every refusal, then print the mutation argv and send nothing. | **Still reads GitHub** — a dry run whose refusals differed from the real run's would prove nothing. |
+
+**Output and exit codes** — the first human line is the status, the second the
+message, then the url and the head. `--json`: `{ contract:
+"nen.pr.mark-ready/v0.1", status, ok, target, number, url, stateBefore,
+wasDraft, isDraft, requiredHead, headBefore, headAfter, headMoved, sent,
+dryRun, mutationArgv, message }` — `status` is one of `marked-ready`,
+`already-ready`, `dry-run`, `not-open`, `head-mismatch`, `refused`,
+`unconfirmed`; `isDraft` is `null` when a read back could not be read.
+
+| Exit | Status | Meaning |
+|---|---|---|
+| 0 | `marked-ready` · `already-ready` · `dry-run` | read back not a draft; already not a draft, nothing sent; or a dry run |
+| 1 | `refused` · `unconfirmed` | GitHub refused the mutation; or the read back failed, still reads draft, or answered another object. Also a first read that failed outright (no document; the error is on stderr) |
+| 2 | — | usage: `--target`, `--pr`, `--require-head`, an unknown flag, or a number/repository that does not resolve |
+| 3 | `not-open` | the pull request is `CLOSED` or `MERGED`; nothing sent |
+| 8 | `head-mismatch` | `--require-head` is not GitHub's head; nothing sent |
+
+**Example**
+
+```bash
+nen pr mark-ready --target acme/widgets --pr 42 --require-head 0123456 --dry-run
+```
+```text
+dry-run
+would mark acme/widgets#42 ready for review (it is a draft at 0123456789abcdef0123456789abcdef01234567); nothing was sent.
+would run: gh api --method POST graphql -f 'query=mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id isDraft}}}' -f id=PR_kwSYNTHETIC
+  https://github.com/acme/widgets/pull/42
+  head: 0123456789abcdef0123456789abcdef01234567
+  --require-head 0123456
+```
+(scripted — the repository, number and node id are synthetic)
 
 ### `nen pr threads`
 
