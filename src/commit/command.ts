@@ -51,6 +51,7 @@ import { runCheck } from "./check.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules, wrapFormatBody } from "./bodywidth.js";
 import { COMMIT_MESSAGE_PATH, write, WRITE_CONTRACT } from "./write.js";
+import { injectedMessage } from "./readback.js";
 import {
   COMMIT_TYPES,
   formatCommitMessage,
@@ -218,9 +219,34 @@ Refused, in this order: a ${WORKFLOW_FILE} or .commitlintrc nen cannot read
 -- exactly as 'format' reports them); the message or a --trailer failing the
 shape (exit 2, every reason named); the proof, when required (exit 1); an
 empty index (exit 1, 'nothing staged'). Then 'git commit -F ${COMMIT_MESSAGE_PATH}' -- the
-composed message is written there and removed afterwards. --json's contract is
-'${WRITE_CONTRACT}': { contract, sha (null on a dry run), subject, trailers:
-[{ key, value }], dryRun }.`;
+composed message is written there and removed afterwards.
+
+THEN THE COMMIT IS READ BACK (zheref/nen#273), by git's own trailer parser
+on both sides: the composed message through 'git interpret-trailers --parse
+--unfold --no-divider' (decoded with the first character of
+trailer.separators) BEFORE the write, and the written commit through 'git cat-file
+commit <sha>' (plumbing -- no log.* config reaches it) and the same parser
+after. A trailer on the commit the message did not carry was added by a hook
+inside 'git commit' (prepare-commit-msg, commit-msg, a harness's own). It is
+INJECTED when the policy refuses it, or when its key ends in -by or -with
+(any case) and commits.allowedAttributionTrailers does not admit it -- that
+rule binds with no ${WORKFLOW_FILE} too ('Made-with: Cursor'). A refused key
+the MESSAGE itself carried (a 'Key:value' line git reads as a trailer) is
+named as the message's, never a hook's. Any of these: exit 3, every key
+named with its source and rule, the commit LEFT IN PLACE -- never amended;
+drop it yourself, the change kept staged: 'git reset --soft HEAD~1', or for
+a ROOT commit (no HEAD~1) 'git update-ref -d HEAD' on a branch and 'git
+checkout --orphan <branch>' on a detached HEAD -- the line names the one that
+applies. An added key nothing refuses
+is a 'note:' line, exit unchanged. A read-back git could not answer is exit
+1: the commit exists, the check did not happen.
+
+Exits: 0 committed (and nothing refused was added); 1 a broken config, a
+refused proof, an empty index, a failed git; 2 the shape; 3 committed, and a
+hook injected a refused trailer. --json's contract is '${WRITE_CONTRACT}': {
+contract, sha (null on a dry run), subject, trailers: [{ key, value }] (READ
+BACK from the written commit; the composed message's on a dry run), injected:
+[key, ...] (null on a dry run -- not checked), dryRun }.`;
 
 /**
  * The exit-1 line for a nen/workflow.json that will not load, shared by
@@ -314,6 +340,14 @@ function runWrite(context: CommandContext): number {
     return 1;
   }
   emit(context.io, context.json, outcome.report, outcome.lines);
+  // EXIT 3 (zheref/nen#273): the commit was written, and it carries a trailer
+  // this repository refuses -- ./readback.ts's three rules. Not 1 -- nothing failed to run,
+  // and the commit exists -- and not 2 -- the invocation was right. The report
+  // above still names the sha; the commit is left for the caller to drop.
+  if (outcome.findings.length > 0 && outcome.report.sha !== null && outcome.policy !== null && outcome.undo !== null) {
+    context.io.err(`nen commit write: ${injectedMessage(outcome.report.sha, outcome.findings, outcome.policy, outcome.undo)}`);
+    return 3;
+  }
   return 0;
 }
 
