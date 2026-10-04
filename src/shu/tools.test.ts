@@ -1153,6 +1153,18 @@ describe("the nen row -- behind dependency.pinned_ref, inside the minimum (#327)
     expect(text.out.join("\n")).toMatch(/pinned_ref main is not a release tag \(\[v\]X\.Y\.Z\) nen can compare, so whether this host is behind it was NOT checked/);
   });
 
+  it("tells --install --only nen apart: the check's 5 (missing/wrong) from its 7 (BEHIND)", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), ["--install", "--only", "nen"], {
+      script: nenAt("0.18.1"),
+    });
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/exits 5 when anything is missing or outside its pin or minimum/);
+    expect(err).toMatch(/exits 7 when everything passes but nen is inside its minimum and behind the dependency block's pinned_ref \(BEHIND: install that ref\)/);
+    // Refused before the first probe, exactly as before.
+    expect(result.seams.calls).toEqual([]);
+  });
+
   it("never exits 7 under --install or --dry-run", async () => {
     const install = await withDeclaration(pinnedAt("v0.18.2"), ["--install", "--json"], {
       script: nenAt("0.18.1"),

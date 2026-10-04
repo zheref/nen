@@ -441,7 +441,7 @@ export function refuseUnactionableNarrowing(
     )
     .join("  |  ");
   throw new VerbUsageError(
-    `--install --only ${only.join(", ")} narrows this run to ${plans.length === 1 ? "a tool" : "tools"} ${PROGRAM} installs none of, so it would exit 0 having done nothing it was asked to do. Each row, with its own way out -- ${reasons}. The CHECK is what answers "is this host ready": run the same line without --install, which exits 5 when anything is missing or is not the pinned version and prints what to do about every row.`,
+    `--install --only ${only.join(", ")} narrows this run to ${plans.length === 1 ? "a tool" : "tools"} ${PROGRAM} installs none of, so it would exit 0 having done nothing it was asked to do. Each row, with its own way out -- ${reasons}. The CHECK is what answers "is this host ready": run the same line without --install, which exits 5 when anything is missing or outside its pin or minimum, exits ${EXIT_BEHIND_PINNED_REF} when everything passes but ${PROGRAM} is inside its minimum and behind the dependency block's pinned_ref (BEHIND: install that ref), and prints what to do about every row.`,
   );
 }
 
