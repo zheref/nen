@@ -5406,7 +5406,7 @@ nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
 | `--issue <n>` | yes | The issue to replace the body of. | Read with the same strict `/^\d+$/` guard `comment`'s `--issue` uses — `1e3` or `0x0c` are refused rather than silently accepted as 1000/12, because this is a MUTATING read. |
 | `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) so `gh` reads the same bytes this verb previewed. | There is no inline `--body` — that flag belongs to [`issue comment`](#nen-issue-comment). An unreadable path, or one holding only whitespace, is refused (exit 2). |
 | `--expect-body-sha256 <hex>` | no | The sha256 (64 hex digits, either case) of the body your replacement was **prepared from**: the UTF-8 bytes of the REST payload's `body` field exactly — untrimmed, no newline normalisation, a `null` body hashing as `""`. The certifying read compares it with the current body; a mismatch writes nothing and exits **3**. | A malformed value is a usage error (exit 2), never a conflict. A read carrying no `body` field at all (not `null` — absent) is refused at exit 1, never hashed as `""`. **Not atomic** — see *Lost updates* below. Without it nothing is compared. |
-| `--current-body-out <path>` | no | Write the **exact bytes of the certifying read** to `<path>`, on a dry run and on a conflict — the safe source for the next expectation: fold from that file, and its sha256 is the one the report printed. | Never written on a real write that proceeds. Refused (exit 2) when it names the `--body-file` — a conflict would overwrite your fold. A dry run that cannot write it exits 1; a conflict that cannot write it stays exit 3 and says so (`currentBodyOut.written: false`). |
+| `--current-body-out <path>` | no | Write the **exact bytes of the certifying read** to `<path>`, on a dry run and on a conflict — the safe source for the next expectation: fold from that file, and its sha256 is the one the report printed. | Never written on a real write that proceeds. Refused (exit 2) when it names the `--body-file` — the same path, or, when both exist, the same file by identity (device + inode, following links: a symlink, a hard link or a case-insensitive alias) — because a conflict would overwrite your fold. A dry run that cannot write it exits 1; a conflict that cannot write it stays exit 3 and says so (`currentBodyOut.written: false`). |
 | `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has. |
 
 **Output and exit codes** — human line on a real write: `replaced
@@ -5415,13 +5415,15 @@ issue edit ...` followed by `target:`/`number:`/`bytes:`/`first line:`/`last
 line:`/`current body sha256:`/`body check:`. `--json`: `{ contract:
 "nen.issue.edit-body/v0.2", target, number, bytes, bodySha256, written,
 dryRun, outcome, bodyCheck: { expectedSha256, currentSha256, currentBytes,
-result, atomic }, currentBodyOut }` — `bodySha256` is the hash of the bytes
-sent, `outcome` is `written` | `dry-run` | `conflict` | `uncertain` |
+result, atomic }, currentBodyOut }` — `bodySha256` is the sha256 of the
+**replacement bytes read from `--body-file`**, populated on every outcome
+(dry run, conflict and not-sent included, where nothing was sent), `outcome` is `written` | `dry-run` | `conflict` | `uncertain` |
 `not-sent`, `bodyCheck.result` is `none` | `matched` | `conflict`, `atomic`
 is always `false`, and `currentBodyOut` is `null` or `{ path, written, error
 }`. An uncertain outcome sets `written: null` and adds `error` and `readBack:
 { currentSha256, matchesSubmitted, matchesPrevious, readError }` —
-`matchesPrevious` compares with `bodyCheck.currentSha256`, the version the
+`matchesSubmitted` compares the body now on GitHub with `bodySha256`, the
+replacement bytes read from `--body-file`; `matchesPrevious` compares with `bodyCheck.currentSha256`, the version the
 certifying read saw. A not-sent outcome sets `written: false` and adds
 `error`. (v0.1 carried only the first six fields.) Exit 0 on success (dry or real); exit 2 on a malformed/absent
 `--issue`, an empty/unreadable `--body-file`, a malformed

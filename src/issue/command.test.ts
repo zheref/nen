@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -1673,6 +1673,31 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     const result = await capture(argv(path, sha(V1), "--current-body-out", path), []);
     expect(result.code).toBe(2);
     expect(result.calls).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe("my fold\n");
+  });
+
+  // Copilot round 1 (NN-PR-#356): a lexical compare misses a link to the same
+  // file, and writeFileSync follows it. Identity (dev + ino) catches both.
+  it.each([
+    ["a symlink", (target: string, link: string): void => symlinkSync(target, link)],
+    ["a hard link", (target: string, link: string): void => linkSync(target, link)],
+  ])("refuses --current-body-out that is %s to the --body-file (exit 2), leaving the fold untouched", async (_kind, makeLink) => {
+    const path = tempFile("body.md", "my fold\n");
+    const alias = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "alias.md");
+    makeLink(path, alias);
+    const result = await capture(argv(path, sha(V1), "--current-body-out", alias), [readReturning(V2)]);
+    expect(result.code).toBe(2);
+    expect(result.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/is the --body-file itself \(the same path, or a link or alias to the same file\)/);
+    expect(readFileSync(path, "utf8")).toBe("my fold\n");
+  });
+
+  it("accepts a --current-body-out that does not exist yet, or that exists as a DIFFERENT file", async () => {
+    const path = tempFile("body.md", "my fold\n");
+    const other = tempFile("other.md", "stale\n");
+    const result = await capture(argv(path, sha(V1), "--current-body-out", other), [readReturning(V2)]);
+    expect(result.code).toBe(3);
+    expect(readFileSync(other, "utf8")).toBe(V2);
     expect(readFileSync(path, "utf8")).toBe("my fold\n");
   });
 

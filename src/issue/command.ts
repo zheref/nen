@@ -15,7 +15,7 @@ import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
-import { writeFileSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
 import {
@@ -401,14 +401,17 @@ usage:
       compared. A write that gh started and that failed or dropped is
       UNCERTAIN (exit 1, never "replaced"): the verb reads the body back
       once and says whether it now equals the submitted bytes or the
-      previous ones -- evidence, not proof. A gh that could not be STARTED sent nothing: that is NOT-SENT
-      (exit 1, written false, no read-back). Exits: 0 written (or dry run),
+      previous ones -- evidence, not proof. A gh that could not be
+      STARTED sent nothing: that is NOT-SENT (exit 1, written false, no
+      read-back). Exits: 0 written (or dry run),
       1 not sent / uncertain / unreadable body / --current-body-out not
       written on a dry run, 2 usage (including a malformed hash), 3
       conflict. --json: '{ contract: "nen.issue.edit-body/v0.2", target,
       number, bytes, bodySha256, written, dryRun, outcome, bodyCheck: {
       expectedSha256, currentSha256, currentBytes, result, atomic: false },
-      currentBodyOut: null | { path, written, error } }' -- outcome is
+      currentBodyOut: null | { path, written, error } }' -- bodySha256 is
+      the sha256 of the replacement bytes read from --body-file, on every
+      outcome, whether or not they were sent; outcome is
       written | dry-run | conflict | uncertain | not-sent; written is null
       when uncertain; 'error' is added on uncertain and not-sent, and
       'readBack: { currentSha256, matchesSubmitted, matchesPrevious,
@@ -952,9 +955,9 @@ function editBody(context: CommandContext): number {
     rawCurrentOut === undefined
       ? null
       : resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), rawCurrentOut);
-  if (currentOutPath !== null && currentOutPath === bodyPath) {
+  if (currentOutPath !== null && sameFile(currentOutPath, bodyPath)) {
     throw new VerbUsageError(
-      `--current-body-out '${rawCurrentOut ?? ""}' is the --body-file itself. It is written on a dry run and on a conflict, so it would overwrite the replacement you prepared; name another path.`,
+      `--current-body-out '${rawCurrentOut ?? ""}' is the --body-file itself (the same path, or a link or alias to the same file). It is written on a dry run and on a conflict, so it would overwrite the replacement you prepared; name another path.`,
     );
   }
 
@@ -986,7 +989,7 @@ function editBody(context: CommandContext): number {
   const check = checkExpectedBody(summary, expectedSha256, target.slug);
 
   const bytes = Buffer.byteLength(body, "utf8");
-  const sentSha256 = bodySha256(body);
+  const replacementSha256 = bodySha256(body);
   const argv = editBodyArgv(target, issue, bodyPath);
   const dryRun = context.args.booleans.has("dry-run");
   const bodyCheck = {
@@ -1025,7 +1028,7 @@ function editBody(context: CommandContext): number {
         target: target.slug,
         number: issue,
         bytes,
-        bodySha256: sentSha256,
+        bodySha256: replacementSha256,
         written,
         dryRun,
         outcome,
@@ -1104,7 +1107,7 @@ function editBody(context: CommandContext): number {
     }
     // UNCERTAIN, NEVER "WRITTEN" -- and never confidently "not written"
     // either: a request whose answer was lost may still have been applied.
-    const readBack = readBackAfterFailedWrite(context.seams, target, issue, sentSha256, check.currentSha256);
+    const readBack = readBackAfterFailedWrite(context.seams, target, issue, replacementSha256, check.currentSha256);
     if (context.json) {
       context.io.out(report("uncertain", null, { error: message, readBack }));
     } else {
@@ -1132,6 +1135,28 @@ function editBody(context: CommandContext): number {
   context.io.out(`replaced ${target.slug}#${issue}'s body (${bytes} byte(s))`);
   if (check.result === "matched") context.io.out(bodyCheckLine(check, "write"));
   return 0;
+}
+
+/**
+ * Whether two paths name ONE file -- lexically, or, when both exist, by
+ * identity (device + inode, following links), so a symlink, a hard link or a
+ * case-insensitive alias of the --body-file is caught too: `writeFileSync`
+ * follows a link, and would overwrite the caller's fold through any of them.
+ * A path that does not exist yet can only be the same file lexically.
+ */
+function sameFile(a: string, b: string): boolean {
+  if (a === b) return true;
+  const identity = (path: string): { dev: number; ino: number } | null => {
+    try {
+      const stats = statSync(path);
+      return { dev: stats.dev, ino: stats.ino };
+    } catch {
+      return null;
+    }
+  };
+  const left = identity(a);
+  const right = identity(b);
+  return left !== null && right !== null && left.dev === right.dev && left.ino === right.ino;
 }
 
 /** One human line for --current-body-out's result. */
