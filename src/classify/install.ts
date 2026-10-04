@@ -27,6 +27,9 @@
 // retired; deleting a label that still sits on issues is not this verb's call.
 
 import { writeFileSync } from "node:fs";
+import type { Target } from "../github/target.js";
+import { plainLine } from "../cli/plain.js";
+import { GH, mustJson, type Seams } from "../seam/exec.js";
 import { VerbUsageError, type CommandContext } from "../cli/command.js";
 import { isRecord, requireArray, requireRecord, SchemaError } from "../schema/errors.js";
 import { loadLabelTaxonomy, parseLabelTaxonomy, type Label, type LabelTaxonomy } from "../schema/labels.js";
@@ -158,6 +161,36 @@ function filteredTaxonomy(path: string, taxonomy: ClassifyTaxonomy): LabelTaxono
   });
 }
 
+export interface LandedState {
+  readonly branch: string;
+  /** Taxonomy labels absent or drifted on the target's default branch. */
+  readonly missing: readonly string[];
+}
+
+/** The target repository's default-branch `nen/labels.json`, read through gh. */
+export function readLanded(seams: Seams, target: Target): { branch: string; declaration: LabelTaxonomy } {
+  const repository = mustJson<{ default_branch?: unknown }>(seams, GH, ["api", `repos/${target.slug}`]);
+  const branch = repository.default_branch;
+  if (typeof branch !== "string" || branch === "") {
+    throw new Error(`could not read ${target.slug}'s default branch: the repository answered no default_branch.`);
+  }
+  const file = mustJson<{ content?: unknown; encoding?: unknown }>(seams, GH, [
+    "api",
+    `repos/${target.slug}/contents/nen/labels.json?ref=${encodeURIComponent(branch)}`,
+  ]);
+  if (typeof file.content !== "string" || file.encoding !== "base64") {
+    throw new Error(`could not read nen/labels.json on ${target.slug}@${branch}: expected a base64 file, got something else.`);
+  }
+  const text = Buffer.from(file.content.replace(/\s/g, ""), "base64").toString("utf8");
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new Error(`nen/labels.json on ${target.slug}@${branch} is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+  }
+  return { branch, declaration: parseLabelTaxonomy(`${target.slug}@${branch}:nen/labels.json`, value) };
+}
+
 export const NOT_LANDED_MESSAGE =
   "the declaration is not landed: run `nen classify install --write`, land it through its PR, then sync";
 
@@ -179,8 +212,13 @@ export function runInstall(context: CommandContext): number {
   const report = compareDeclaration(taxonomy, declared);
   const missing = notLanded(report);
   const mode = sync ? "sync" : write ? "write" : "report";
+  // Every HUMAN line passes plainLine: label names and gh's own diagnostics are
+  // text nen did not write. The --json document carries the raw data.
+  const out = (line: string): void => context.io.out(plainLine(line));
+  const err = (line: string): void => context.io.err(plainLine(line));
   const wanted = new Map(taxonomyLabels(taxonomy).map((label): [string, ClassifyLabel] => [label.name, label]));
 
+  let landedState: LandedState | null = null;
   const body = (written: WriteResult | null, synced: SyncReport | null): unknown => ({
     contract: "nen.classify.install/v0.1",
     mode,
@@ -190,6 +228,7 @@ export function runInstall(context: CommandContext): number {
     foreign: report.foreign,
     written,
     sync: synced,
+    landed: landedState,
   });
   const foreignLines = report.foreign.map((name): string => `foreign  ${name}  (declared, not in the taxonomy; left alone)`);
 
@@ -202,15 +241,15 @@ export function runInstall(context: CommandContext): number {
       const have = declared.get(entry.name);
       const want = wanted.get(entry.name);
       const detail = entry.status === "drift" && have !== undefined && want !== undefined ? `  (${describeDrift(have, want)})` : "";
-      context.io.out(`${entry.status.padEnd(7)}  ${entry.name}${detail}`);
+      out(`${entry.status.padEnd(7)}  ${entry.name}${detail}`);
     }
-    for (const line of foreignLines) context.io.out(line);
+    for (const line of foreignLines) out(line);
     if (missing.length === 0) {
-      context.io.out(`installed: all ${report.entries.length} label(s) are declared in ${declared.path}`);
+      out(`installed: all ${report.entries.length} label(s) are declared in ${declared.path}`);
       return 0;
     }
     const absent = missing.filter((entry): boolean => entry.status === "absent").length;
-    context.io.err(
+    err(
       `nen: ${missing.length} of ${report.entries.length} label(s) not installed (${absent} absent, ${missing.length - absent} drift) -- run 'nen classify install --write'.`,
     );
     return 1;
@@ -233,30 +272,47 @@ export function runInstall(context: CommandContext): number {
     }
     for (const entry of missing) {
       const verb = entry.status === "absent" ? "add" : "update";
-      context.io.out(`${dryRun ? "would " : ""}${verb}  ${entry.name}`);
+      out(`${dryRun ? "would " : ""}${verb}  ${entry.name}`);
     }
-    for (const line of foreignLines) context.io.out(line);
-    context.io.out(`${dryRun ? "would write" : "written"}: ${result.added} added, ${result.updated} updated${dryRun ? " (nothing was written)" : ""}`);
+    for (const line of foreignLines) out(line);
+    out(`${dryRun ? "would write" : "written"}: ${result.added} added, ${result.updated} updated${dryRun ? " (nothing was written)" : ""}`);
     return 0;
   }
 
   // --sync
   if (missing.length > 0) {
     if (context.json) context.io.out(JSON.stringify(body(null, null), null, 2));
-    context.io.err(
+    err(
       `nen: ${NOT_LANDED_MESSAGE} (${missing.length} label(s) absent or drifted in ${declared.path}: ${missing.map((entry): string => entry.name).join(", ")}).`,
     );
     return 1;
   }
   if (target === null) throw new Error("unreachable: --sync resolved no target");
+
+  // THE LANDED DECLARATION IS THE GATE; the working-tree check above is only
+  // necessary. `install --write` then `install --sync` in one uncommitted
+  // checkout would otherwise change GitHub before any merge -- the exact order
+  // the ruling forbids. So the target's CURRENT default-branch nen/labels.json
+  // is read, and a read that fails is a refusal, never a pass. --dry-run reads
+  // it too: it must predict the real run's verdict.
+  const landed = readLanded(context.seams, target);
+  const there = notLanded(compareDeclaration(taxonomy, landed.declaration));
+  landedState = { branch: landed.branch, missing: there.map((entry): string => entry.name) };
+  if (there.length > 0) {
+    if (context.json) context.io.out(JSON.stringify(body(null, null), null, 2));
+    err(
+      `nen: the declaration is not landed on ${target.slug}'s default branch '${landed.branch}': ${there.length} label(s) absent or drifted there (${there.map((entry): string => entry.name).join(", ")}). Merge the pull request carrying 'nen classify install --write', then sync.`,
+    );
+    return 1;
+  }
   const synced = syncLabels(context.seams, target, filteredTaxonomy(declared.path, taxonomy), dryRun);
   if (context.json) {
     context.io.out(JSON.stringify(body(null, synced), null, 2));
     return synced.failed.length === 0 ? 0 : 1;
   }
-  for (const entry of synced.entries) context.io.out(entry.message ?? `${entry.status}: ${entry.name}`);
+  for (const entry of synced.entries) out(entry.message ?? `${entry.status}: ${entry.name}`);
   if (synced.failed.length > 0) {
-    context.io.err(`nen: ${synced.failed.length} label(s) failed to sync: ${synced.failed.join(", ")}`);
+    err(`nen: ${synced.failed.length} label(s) failed to sync: ${synced.failed.join(", ")}`);
     return 1;
   }
   return 0;

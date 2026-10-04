@@ -4732,7 +4732,13 @@ Three forms, and the third is the second step of a deliberate two:
   same create-or-update as [`labels sync`](#nen-labels-sync), but only the taxonomy's labels, never the
   rest of the declaration. It **refuses at exit 1 while the on-disk declaration lacks a taxonomy label
   or carries a drifted one** — "the declaration is not landed: run `nen classify install --write`, land
-  it through its PR, then sync". `--dry-run` reports `would-sync` and makes no `gh` call.
+  it through its PR, then sync" — and then **reads the target repository's current default-branch
+  `nen/labels.json`** (`gh api repos/<o>/<n>` for `default_branch`, then the file's contents) and refuses
+  at exit 1, naming the labels absent or drifted *there*, unless the landed declaration carries every
+  taxonomy label: the local file matching is necessary, the landed one is the gate, so a `--write`
+  followed by a `--sync` in one uncommitted checkout cannot change GitHub before the merge. A read that
+  fails is exit 1, never a pass. `--dry-run` makes the same two reads and reports `would-sync` without
+  any label call.
 
 **Usage**
 
@@ -4758,7 +4764,7 @@ lines and `written: <n> added, <m> updated`; `--sync` prints what `labels sync` 
 prints one document; top-level keys, in this order: `contract` (`nen.classify.install/v0.1`), `mode`
 (`report`, `write` or `sync`), `labelsFile` (the resolved path), `dryRun`, `entries` (an array of
 `{ name, status }` — in `write` mode, what was found *before* the write), `foreign`, `written`
-(`{ added, updated }`, or `null`) and `sync` (the full `labels sync` report, or `null`). Exit 0: report
+(`{ added, updated }`, or `null`), `sync` (the full `labels sync` report, or `null`) and `landed` (`{ branch, missing }`, the default-branch read of a `--sync`, or `null`). Exit 0: report
 with every label present; `--write` done; `--sync` done. Exit 1: report with any label absent or
 drifted; `--sync` refused or any label failed to sync; an unreadable taxonomy or declaration. Exit 2:
 `--write` with `--sync`, `--target` without `--sync`, a missing `--sync` target, or a missing
@@ -4884,7 +4890,7 @@ nen classify apply --taxonomy <path> --repo <path> --target <owner/name> --plan 
 | `--run` | no (boolean) | Apply for real. | Without it: a dry run; the ledger still records each decision. |
 | `--include-low` | no (boolean) | Apply rows at a confidence level the taxonomy lists rather than applies. | |
 | `--reason <text>` | no | Recorded in each ledger line after the row's own reason. | Never sent to GitHub. |
-| `--ledger <path>` | no | Ledger file. | Defaults to `label-ledger.jsonl` under `--repo`'s root. Its directory must exist (checked before the first write, exit 2). |
+| `--ledger <path>` | no | Ledger file. | Defaults to `label-ledger.jsonl` under `--repo`'s root. Opened for append before the first edit; a directory or unwritable file is refused at exit 2. |
 
 **Output and exit codes** — human rendering is a `(dry run)` banner when there is no `--run`, one line
 per issue (`#12  applied: …  already: …  listed: …`; `would apply:` on a dry run; `failed:` on a
@@ -4894,8 +4900,8 @@ resolved path), `issues` (an array of `{ number, applied, wouldApply, already, f
 a list of label names) and `totals` (`issues`, `applied`, `wouldApply`, `already`, `failed`,
 `listed`). Exit 0 when nothing failed; exit 1 when any application failed (its labels named), when a
 number names a pull request, or when `gh` could not read an issue; exit 2 for a plan that does not
-validate (every refusal named, nothing read or written), an unreadable plan, an unwritable ledger
-directory, or a missing flag.
+validate (every refusal named, nothing read or written), an unreadable plan, a ledger that cannot be appended to (a directory, an unwritable file — opened for append
+before the first edit, so nothing was applied), or a missing flag.
 
 **Example** (quoted from `src/classify/apply.test.ts` — this verb reads GitHub even as a dry run, so
 it was not run live)

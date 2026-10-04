@@ -129,3 +129,20 @@ export function issueCall(number: number, labels: readonly string[], extra: Reco
     },
   };
 }
+
+/** The two reads `install --sync` makes of the target's landed declaration. */
+export function landedCalls(declaration: unknown, branch = "main"): ScriptedCall[] {
+  return [
+    { match: gh("api", `repos/${SLUG}`), result: { stdout: JSON.stringify({ default_branch: branch }) } },
+    {
+      match: gh("api", `repos/${SLUG}/contents/nen/labels.json?ref=${encodeURIComponent(branch)}`),
+      result: {
+        stdout: JSON.stringify({
+          encoding: "base64",
+          // GitHub wraps its base64 at 60 columns; the reader must cope.
+          content: (Buffer.from(JSON.stringify(declaration)).toString("base64").match(/.{1,60}/g) ?? []).join("\n"),
+        }),
+      },
+    },
+  ];
+}

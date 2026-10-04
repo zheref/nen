@@ -264,6 +264,28 @@ describe("nen classify status --with-body", () => {
   });
 });
 
+describe("nen classify status -- human output is plain text", () => {
+  it("strips terminal control bytes from a label name GitHub holds, and keeps them raw in --json", async () => {
+    const ESC = String.fromCharCode(0x1b);
+    const hostile = `job/gone${ESC}[2K`;
+    const script = [issueCall(12, ["lang/alpha", hostile]), ALL_ON_GITHUB];
+    const human = await capture(status(landedRepo(), "--issue", "12"), script);
+    expect(human.out.join("\n")).toContain("unknown: job/gone[2K");
+    expect(human.out.join("\n")).not.toContain(ESC);
+    const json = await capture(status(landedRepo(), "--issue", "12", "--json"), script);
+    expect((JSON.parse(json.out.join("\n")) as { issues: { unknown: string[] }[] }).issues[0]?.unknown).toEqual([hostile]);
+  });
+
+  it("strips them from gh's diagnostic when an issue cannot be read", async () => {
+    const ESC = String.fromCharCode(0x1b);
+    const result = await capture(status(landedRepo(), "--issue", "12"), [
+      { match: gh("api", `repos/${SLUG}/issues/12`), result: { code: 1, stderr: `HTTP 404${ESC}[2K` } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).not.toContain(ESC);
+  });
+});
+
 describe("nen classify status -- usage", () => {
   it("needs exactly one of --issue and --open, a --target and a --repo", async () => {
     const repo = landedRepo();

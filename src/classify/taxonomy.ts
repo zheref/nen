@@ -429,6 +429,9 @@ export function parseClassifyTaxonomy(path: string, value: unknown): ClassifyTax
 
   const rawAxes = requireRecord(path, "axes", root["axes"]);
   for (const declared of Object.keys(rawAxes)) {
+    // `$`-prefixed keys are metadata (`$comment`), never axes -- the loader
+    // policy of ../schema/source.ts, so a note beside the axes is not a third one.
+    if (declared.startsWith("$")) continue;
     if (!(AXES as readonly string[]).includes(declared)) {
       throw new SchemaError(
         path,

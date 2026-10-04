@@ -11,6 +11,7 @@ import {
   copyPartialRepo,
   EXPECTED_AFTER_WRITE,
   gh,
+  landedCalls,
   landedRepo,
   MINI,
   MINI_LABELS,
@@ -220,9 +221,9 @@ describe("nen classify install --sync", () => {
       match: gh(...createArgv(TARGET, label)),
       result: {},
     }));
-    const result = await capture(install(repo, "--sync", "--target", SLUG), script);
+    const result = await capture(install(repo, "--sync", "--target", SLUG), [...landedCalls({ labels: MINI_LABELS }), ...script]);
     expect(result.code).toBe(0);
-    expect(result.seams.calls.map((call): string => call.args[2] ?? "")).toEqual(["lang/alpha", "lang/beta", "job/build", "job/test"]);
+    expect(result.seams.calls.filter((call): boolean => call.args[0] === "label").map((call): string => call.args[2] ?? "")).toEqual(["lang/alpha", "lang/beta", "job/build", "job/test"]);
     expect(result.out).toEqual(["created: lang/alpha", "created: lang/beta", "created: job/build", "created: job/test"]);
   });
 
@@ -237,23 +238,24 @@ describe("nen classify install --sync", () => {
       { match: gh(...editArgv(TARGET, build!)), result: { code: 1, stderr: "still bad" } },
       { match: gh(...createArgv(TARGET, test!)), result: {} },
     ];
-    const result = await capture(install(repo, "--sync", "--target", SLUG, "--json"), script);
+    const result = await capture(install(repo, "--sync", "--target", SLUG, "--json"), [...landedCalls({ labels: MINI_LABELS }), ...script]);
     expect(result.code).toBe(1);
     const json = JSON.parse(result.out.join("\n")) as { sync: { entries: { status: string }[]; failed: string[] } };
     expect(json.sync.entries.map((entry): string => entry.status)).toEqual(["updated", "created", "failed", "created"]);
     expect(json.sync.failed).toEqual(["job/build"]);
 
-    const human = await capture(install(repo, "--sync", "--target", SLUG), script);
+    const human = await capture(install(repo, "--sync", "--target", SLUG), [...landedCalls({ labels: MINI_LABELS }), ...script]);
     expect(human.code).toBe(1);
     expect(human.err.join("\n")).toMatch(/1 label\(s\) failed to sync: job\/build/);
   });
 
   it("--dry-run reports would-sync and never calls gh", async () => {
-    const result = await capture(install(landedRepo(), "--sync", "--target", SLUG, "--dry-run"));
+    const result = await capture(install(landedRepo(), "--sync", "--target", SLUG, "--dry-run"), landedCalls({ labels: MINI_LABELS }));
     expect(result.code).toBe(0);
     expect(result.out).toHaveLength(4);
     expect(result.out[0]).toBe("would sync: lang/alpha (#1d76db) -- Needs alpha");
-    expect(result.seams.calls).toEqual([]);
+    // Only the two reads of the landed declaration: no label call at all.
+    expect(result.seams.calls.every((call): boolean => call.args[0] === "api")).toBe(true);
   });
 
   it("requires --target (exit 2), and rejects a malformed one (exit 2)", async () => {
@@ -261,6 +263,95 @@ describe("nen classify install --sync", () => {
     expect(missing.code).toBe(2);
     expect(missing.err.join("\n")).toMatch(/--target owner\/name is required/);
     expect((await capture(install(landedRepo(), "--sync", "--target", "not-a-slug"))).code).toBe(2);
+  });
+});
+
+describe("nen classify install --sync -- the LANDED declaration is the gate", () => {
+  const sync = (...rest: string[]): string[] => install(landedRepo(), "--sync", "--target", SLUG, ...rest);
+
+  it("refuses at exit 1 when the local file matches but the default branch does not, naming what is absent or drifted THERE", async () => {
+    const landed = { labels: [MINI_LABELS[0], { ...MINI_LABELS[2], color: "ffffff" }] };
+    const argv = sync();
+    const result = await capture(argv, landedCalls(landed));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/not landed on zheref\/nen's default branch 'main'.*lang\/beta, job\/build, job\/test/);
+    expect(result.seams.calls.every((call): boolean => call.args[0] === "api")).toBe(true);
+  });
+
+  it("--dry-run performs the same read and the same refusal", async () => {
+    const result = await capture(sync("--dry-run"), landedCalls({ labels: [] }));
+    expect(result.code).toBe(1);
+  });
+
+  it("reads the branch GitHub names, not a literal one", async () => {
+    const result = await capture(sync("--dry-run"), landedCalls({ labels: MINI_LABELS }, "trunk"));
+    expect(result.code).toBe(0);
+    expect(result.seams.calls.map((call): string => call.args.join(" "))).toContain(`api repos/${SLUG}/contents/nen/labels.json?ref=trunk`);
+  });
+
+  it("syncs when both the local and the landed declaration carry every label", async () => {
+    const script = MINI_LABELS.map((label) => ({ match: gh(...createArgv(TARGET, label)), result: {} }));
+    const result = await capture(sync(), [...landedCalls({ labels: MINI_LABELS }), ...script]);
+    expect(result.code).toBe(0);
+  });
+
+  it("--json on the landed refusal still prints the document, with landed.missing and sync null", async () => {
+    const result = await capture(sync("--json"), landedCalls({ labels: MINI_LABELS.slice(0, 2) }));
+    expect(result.code).toBe(1);
+    const json = JSON.parse(result.out.join("\n")) as { sync: unknown; landed: { branch: string; missing: string[] } };
+    expect(json.sync).toBeNull();
+    expect(json.landed).toEqual({ branch: "main", missing: ["job/build", "job/test"] });
+  });
+
+  it("a failing read is exit 1, never a pass: repository, file, or an unparseable file", async () => {
+    const repoFails = await capture(sync(), [{ match: gh("api", `repos/${SLUG}`), result: { code: 1, stderr: "HTTP 404" } }]);
+    expect(repoFails.code).toBe(1);
+    const [repository] = landedCalls({ labels: [] });
+    const fileFails = await capture(sync(), [
+      repository!,
+      { match: gh("api", `repos/${SLUG}/contents/nen/labels.json?ref=main`), result: { code: 1, stderr: "HTTP 404: Not Found" } },
+    ]);
+    expect(fileFails.code).toBe(1);
+    expect(fileFails.err.join("\n")).toMatch(/HTTP 404/);
+    const garbage = await capture(sync(), [
+      repository!,
+      {
+        match: gh("api", `repos/${SLUG}/contents/nen/labels.json?ref=main`),
+        result: { stdout: JSON.stringify({ encoding: "base64", content: Buffer.from("{ nope").toString("base64") }) },
+      },
+    ]);
+    expect(garbage.code).toBe(1);
+    expect(garbage.err.join("\n")).toMatch(/not valid JSON/);
+    for (const run of [repoFails, fileFails, garbage]) {
+      expect(run.seams.calls.some((call): boolean => call.args[0] === "label")).toBe(false);
+    }
+  });
+});
+
+describe("nen classify install -- human output is plain text", () => {
+  it("strips terminal control bytes from a foreign label name and from gh's diagnostics, and keeps them raw in --json", async () => {
+    const ESC = String.fromCharCode(0x1b);
+    const hostile = `lang/zeta${ESC}[2K`;
+    const repo = landedRepo([{ name: hostile, color: "1d76db", description: "retired" }]);
+    const human = await capture(install(repo));
+    expect(human.out.join("\n")).toContain("lang/zeta[2K");
+    expect(human.out.join("\n")).not.toContain(ESC);
+    const json = await capture(install(repo, "--json"));
+    expect((JSON.parse(json.out.join("\n")) as { foreign: string[] }).foreign).toEqual([hostile]);
+
+    const failing = await capture(
+      install(landedRepo(), "--sync", "--target", SLUG),
+      [
+        ...landedCalls({ labels: MINI_LABELS }),
+        ...MINI_LABELS.flatMap((label) => [
+          { match: gh(...createArgv(TARGET, label)), result: { code: 1, stderr: "x" } },
+          { match: gh(...editArgv(TARGET, label)), result: { code: 1, stderr: `boom${ESC}[31m` } },
+        ]),
+      ],
+    );
+    expect(failing.code).toBe(1);
+    expect(failing.out.join("\n")).not.toContain(ESC);
+    expect(failing.err.join("\n")).not.toContain(ESC);
   });
 });
 
