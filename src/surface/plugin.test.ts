@@ -8,12 +8,12 @@
 
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, readdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Io } from "../index.js";
 import { CHECK_PLUGIN_CONTRACT } from "./command.js";
-import { overallVerdict, resolveConfigDir, safe, validateTrees, type CopyJudgement } from "./plugin.js";
+import { overallVerdict, resolveConfigDir, safe, sameIdentity, validateTrees, type CopyJudgement } from "./plugin.js";
 
 const PLUGIN = "demo";
 const TREES = "claude/skills,claude/agents,hooks,scripts";
@@ -456,5 +456,168 @@ describe("plugin.ts helpers", () => {
     expect(overallVerdict([of("not comparable"), of("broken install")])).toBe("broken install");
     expect(overallVerdict([of("broken install"), of("different")])).toBe("different");
     expect(overallVerdict([of("different"), of("wiring")])).toBe("wiring");
+  });
+});
+
+describe("check --plugin, hanten round 1 (zheref/nen#339)", () => {
+  const withTrees = (args: readonly string[], trees: string): string[] => {
+    const out = [...args];
+    out[out.indexOf("--trees") + 1] = trees;
+    return out;
+  };
+  const initGit = (dir: string): void => {
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "init");
+  };
+
+  it("N1: refuses a --trees entry that is not a real directory in the source, never reading it identical", async () => {
+    const w = world();
+    const copy = w.fresh("same");
+    const typo = await capture(withTrees(argv(w, w.src, copy), "claude/skils,hooks"));
+    expect(typo.code).toBe(2);
+    expect(typo.err.join("\n")).toMatch(/--trees entry 'claude\/skils' does not exist in the source/);
+    expect(typo.out).toEqual([]);
+    const file = await capture(withTrees(argv(w, w.src, copy), "hooks/hooks.json"));
+    expect(file.code).toBe(2);
+    expect(file.err.join("\n")).toMatch(/reaches a file/);
+    // An INDEPENDENT source missing the tree is wiring in the report, not an empty tree.
+    const thin = w.fresh("thin");
+    rmSync(join(thin, "scripts"), { recursive: true });
+    const report = await capture(argv(w, copy, copy, ["--independent-source", thin]));
+    expect(report.code).toBe(2);
+    expect(json(report)["verdict"]).toBe("wiring");
+    expect(copiesOf(report)[0]?.reason).toMatch(/--trees entry 'scripts' does not exist in the source/);
+  });
+
+  it.skipIf(process.platform === "win32")("N2: a copy whose 'claude' links into the source is different, never followed", async () => {
+    const w = world();
+    const copy = w.fresh("linkedclaude");
+    rmSync(join(copy, "claude"), { recursive: true });
+    symlinkSync(join(w.src, "claude"), join(copy, "claude"));
+    const result = await capture(argv(w, w.src, copy));
+    expect(result.code).toBe(1);
+    expect(copiesOf(result)[0]?.differences).toEqual([{ kind: "differs-symlink", path: "claude" }]);
+    // A linked .claude-plugin is no copy of the plugin at all: refused, never followed.
+    const manifest = w.fresh("linkedmanifest");
+    rmSync(join(manifest, ".claude-plugin"), { recursive: true });
+    symlinkSync(join(w.src, ".claude-plugin"), join(manifest, ".claude-plugin"));
+    expect((await capture(argv(w, w.src, manifest))).code).toBe(2);
+    // ...and a source whose tree passes through a link is refused as a tree.
+    const via = w.fresh("via");
+    rmSync(join(via, "hooks"), { recursive: true });
+    symlinkSync(join(w.src, "hooks"), join(via, "hooks"));
+    const viaLink = await capture(argv(w, via, w.fresh("same")));
+    expect(viaLink.code).toBe(2);
+    expect(viaLink.err.join("\n")).toMatch(/reaches a symbolic link at 'hooks'/);
+  });
+
+  it.skipIf(process.platform !== "linux")("N3: sets aside a name that is not UTF-8, never printing its raw byte", async () => {
+    const w = world();
+    const copy = w.fresh("latin");
+    const dir = Buffer.from(join(copy, "claude", "skills"));
+    writeFileSync(Buffer.concat([dir, Buffer.from("/bad"), Buffer.from([0xff]), Buffer.from(".md")]), "x\n");
+    expect(readdirSync(join(copy, "claude", "skills"), { encoding: "buffer" }).some((name): boolean => name.includes(0xff))).toBe(true);
+    const result = await capture(argv(w, w.src, copy));
+    expect(result.code).toBe(1);
+    const differences = copiesOf(result)[0]?.differences ?? [];
+    expect(differences).toHaveLength(1);
+    expect(differences[0]?.kind).toBe("unexpected-in-copy");
+    const text = await capture(argv(w, w.src, copy).filter((arg): boolean => arg !== "--json"));
+    for (const line of [...result.out, ...text.out]) expect(Buffer.from(line, "utf8").includes(0xff)).toBe(false);
+  });
+
+  it("N4: validates --independent-source, and refuses it when no copy is --source", async () => {
+    const w = world();
+    const copy = w.fresh("same");
+    const notRoot = await capture(argv(w, copy, copy, ["--independent-source", w.nowhere]));
+    expect(notRoot.code).toBe(2);
+    expect(notRoot.err.join("\n")).toMatch(/--independent-source .* is not a root of 'demo'/);
+    const unread = await capture(argv(w, w.src, copy, ["--independent-source", w.src]));
+    expect(unread.code).toBe(2);
+    expect(unread.err.join("\n")).toMatch(/consulted only when a judged copy IS --source/);
+    record(w, { plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: copy }] } });
+    const auto = await capture(argv(w, w.src, "auto", ["--independent-source", w.src]));
+    expect(auto.code).toBe(2);
+    expect(auto.err.join("\n")).toMatch(/consulted only when a judged copy IS --source/);
+  });
+
+  it("N6: splits --trees on both separators on every host, and refuses ':'", async () => {
+    const w = world();
+    const copy = w.fresh("same");
+    for (const tree of ["..\\x", "claude\\..\\x", "c:skills"]) {
+      const result = await capture(withTrees(argv(w, w.src, copy), tree));
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/not a plain relative path/);
+    }
+    expect((await capture(withTrees(argv(w, w.src, copy), "claude\\skills"))).code).toBe(0);
+    const name = await capture(argv(w, w.src, copy).map((arg): string => (arg === PLUGIN ? "a\\b" : arg)));
+    expect(name.code).toBe(2);
+    expect((await capture(argv(w, w.src, copy).map((arg): string => (arg === PLUGIN ? ".." : arg)))).code).toBe(2);
+  });
+
+  it("N7: a file where the source has a directory is drift, naming the source files by side", async () => {
+    const w = world();
+    const copy = w.fresh("flat");
+    rmSync(join(copy, "claude"), { recursive: true });
+    writeFileSync(join(copy, "claude"), "not a directory\n");
+    const result = await capture(argv(w, w.src, copy));
+    expect(result.code).toBe(1);
+    expect(copiesOf(result)[0]?.differences).toEqual([
+      { kind: "only-in-copy", path: "claude" },
+      { kind: "only-in-source", path: "claude/agents/lead.md" },
+      { kind: "only-in-source", path: "claude/skills/ten/SKILL.md" },
+    ]);
+  });
+
+  it("N8: a served checkout that IS the stand-in is identical by link only on its trunk", async () => {
+    const w = world();
+    initGit(w.src);
+    const onTrunk = await capture(argv(w, w.src, w.src, [], w.src));
+    expect(onTrunk.code).toBe(0);
+    expect(copiesOf(onTrunk)[0]).toMatchObject({ byLink: true, namedBy: "checkout" });
+    git(w.src, "checkout", "-q", "-b", "feat/y");
+    const onFeature = await capture(argv(w, w.src, w.src, [], w.src));
+    expect(onFeature.code).toBe(4);
+    expect(copiesOf(onFeature)[0]?.reason).toMatch(/feat\/y, a feature branch/);
+  });
+
+  it.skipIf(process.platform === "win32")("N9: an install record that is a dangling link is a broken install", async () => {
+    const w = world();
+    symlinkSync(join(w.work, "nothing.json"), join(w.cfg, "plugins", "installed_plugins.json"));
+    const result = await capture(argv(w, w.src, "auto"));
+    expect(result.code).toBe(5);
+    expect(json(result)["record"]).toBe("unreadable");
+    expect(copiesOf(result)[0]?.reason).toMatch(/dangling or looping link/);
+  });
+
+  it("N10: identity is the real path OR the device and inode", () => {
+    expect(sameIdentity({ real: "/a", dev: 1, ino: 2 }, { real: "/A", dev: 1, ino: 2 })).toBe(true);
+    expect(sameIdentity({ real: "/a", dev: 1, ino: 2 }, { real: "/a", dev: 3, ino: 4 })).toBe(true);
+    expect(sameIdentity({ real: "/a", dev: 1, ino: 2 }, { real: "/b", dev: 1, ino: 3 })).toBe(false);
+  });
+
+  it("N11: never echoes a control character from --surface", async () => {
+    const w = world();
+    const result = await capture(argv(w, w.src, w.fresh("same")).map((arg): string => (arg === "claude-code" ? "x\u001b[2J" : arg)));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).not.toContain("\u001b");
+  });
+
+  it("N13: an inherited GIT_DIR does not redirect the stand-in probes", async () => {
+    const w = world();
+    initGit(w.src);
+    const drift = w.fresh("drift");
+    writeFileSync(join(drift, "claude", "skills", "ten", "SKILL.md"), "stale\n");
+    const saved = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = join(w.nowhere, "not-a-repo");
+    try {
+      const result = await capture(argv(w, drift, drift, [], w.src));
+      expect(result.code).toBe(1);
+      expect(copiesOf(result)[0]?.namedBy).toBe("checkout");
+    } finally {
+      if (saved === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved;
+    }
   });
 });

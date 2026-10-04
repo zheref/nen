@@ -18,7 +18,6 @@
 // mirrored into. `check --installed` reads a copy somebody else installed and
 // says whether it is still the source's image; it copies nothing back.
 
-import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
   emit,
@@ -52,7 +51,9 @@ import {
 import { commaList } from "../cli/comma.js";
 import { GIT } from "../seam/exec.js";
 import {
+  assertTreesInSource,
   checkExplicitCopy,
+  identityOf,
   checkRecordedCopies,
   PluginCheckError,
   pluginManifest,
@@ -262,7 +263,10 @@ ${SURFACE_LIST}
                               worst (2 > 1 > 5 > 4 > 0).
   --trees <a,b,...>           with --plugin, REQUIRED: the directories the plugin
                               ships, relative to its root. Caller data: which
-                              trees a plugin ships is the plugin's fact.
+                              trees a plugin ships is the plugin's fact. Split
+                              on '/' and '\\' on every host; ':' and '.'/'..'
+                              refused; each must be a real directory in
+                              --source, every segment lstat'ed (exit 2 if not).
   --config-dir <dir>          with --plugin: Claude Code's config directory
                               (default \$CLAUDE_CONFIG_DIR, else ~/.claude).
   --independent-source <dir>  with --plugin: a source root named independently
@@ -277,7 +281,9 @@ ${SURFACE_LIST}
                               the branch the served copy is at. When that source
                               IS the copy and the copy is a git checkout, it is
                               identical by link; with none it is NOT
-                              COMPARABLE, never identical.
+                              COMPARABLE, never identical. Refused (exit 2) when
+                              no judged copy is --source. A stand-in that IS
+                              the copy counts only on its trunk.
   --dry-run                   generate only. Reports exactly what it would write
                               and writes nothing.
 
@@ -309,8 +315,10 @@ as missing); 3 not installed -- no <name>@ entry and no skills/<name>; 4 not
 comparable -- the copy is the source given and no independent source exists;
 5 broken install -- an entry with no usable installPath, a recorded path that
 is gone, a dangling or looping link, a path with a control character (one
-install, refused, never split), an install record that is not JSON, or a
-recorded copy of another plugin.`;
+install, refused, never split), a recorded path that is not a directory, an
+install record that is not JSON or is a dangling link, or a recorded copy of
+another plugin. Every path is walked one segment at a time with lstat: a link
+anywhere is an entry compared by target, never descended into.`;
 
 /** `check --plugin`'s own flags (zheref/nen#339): read in that mode only, refused outside it. */
 const PLUGIN_VALUES = ["plugin", "trees", "config-dir", "independent-source"];
@@ -694,13 +702,13 @@ function copyLines(copy: CopyJudgement): string[] {
  */
 function runPluginCheck(context: CommandContext): number {
   const plugin = required(context, "plugin", "It names the plugin whose install is judged.");
-  if (CONTROL_CHAR.test(plugin) || plugin.includes("@") || plugin.includes("/")) {
-    throw new VerbUsageError(`--plugin '${safe(plugin)}' is not a plugin name (no '@', no '/', no control character).`);
+  if (CONTROL_CHAR.test(plugin) || /[@/\\]/.test(plugin) || plugin === "." || plugin === "..") {
+    throw new VerbUsageError(`--plugin '${safe(plugin)}' is not a plugin name (no '@', '/' or '\\', not '.' or '..', no control character).`);
   }
   const surfaceName = required(context, "surface", "--plugin judges a Claude Code plugin install: give --surface claude-code.");
   if (surfaceName !== "claude-code") {
     throw new VerbUsageError(
-      `--plugin judges a Claude Code plugin install in its own layout; --surface '${surfaceName}' has no plugin cache. Give --surface claude-code, or drop --plugin to check a mirror.`,
+      `--plugin judges a Claude Code plugin install in its own layout; --surface '${safe(surfaceName)}' has no plugin cache. Give --surface claude-code, or drop --plugin to check a mirror.`,
     );
   }
   const foreign = MIRROR_ONLY_VALUES.filter((flag): boolean => context.args.values[flag] !== undefined);
@@ -717,17 +725,33 @@ function runPluginCheck(context: CommandContext): number {
       `--source '${safe(sourceFlag)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`,
     );
   }
+  const sourceId = identityOf(sourceFlag);
+  /* c8 ignore next 3 -- pluginManifest above already proved the directory is there */
+  if (sourceId === null) {
+    throw new VerbUsageError(`--source '${safe(sourceFlag)}' cannot be resolved.`);
+  }
+  // Every tree a real directory in the source, every segment lstat'ed (N1):
+  // a typo'd tree would otherwise compare as empty on both sides and read identical.
+  assertTreesInSource(sourceId.real, trees);
   const independent = optionalPath(context, "independent-source");
+  if (independent !== null && pluginManifest(independent, plugin) === null) {
+    throw new VerbUsageError(
+      `--independent-source '${safe(independent)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`,
+    );
+  }
   const configDir = resolveConfigDir(optionalPath(context, "config-dir"), context.seams.env);
   const judge: JudgeContext = {
     plugin,
     trees,
-    source: realpathSync(sourceFlag),
+    source: sourceId.real,
+    sourceId,
     independentSource: independent,
     configDir,
     standIn: resolve(context.repoFlag ?? process.cwd()),
     git: (cwd, args) => {
-      const result = context.seams.run(GIT, [...args], { cwd });
+      // Read-only probes of the checkout named by cwd: a GIT_DIR, GIT_WORK_TREE
+      // or GIT_INDEX_FILE inherited from a hook must not redirect them (N13).
+      const result = context.seams.run(GIT, [...args], { cwd, env: GIT_PROBE_ENV });
       return { code: result.spawnFailed ? 127 : result.code, stdout: result.stdout.split("\n")[0]?.trim() ?? "" };
     },
   };
@@ -766,6 +790,7 @@ function runPluginCheck(context: CommandContext): number {
   return VERDICT_EXIT[report.verdict];
 }
 
+const GIT_PROBE_ENV: Readonly<Record<string, undefined>> = { GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined };
 const CONTROL_CHAR = /[\x00-\x1f\x7f-\x9f]/;
 const PLUGIN_MANIFESTS_LINE = ".claude-plugin/plugin.json, .claude-plugin/marketplace.json";
 

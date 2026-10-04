@@ -112,15 +112,24 @@ export function validateTrees(trees: readonly string[]): readonly string[] {
       "--trees is required with --plugin: the directories the plugin ships (e.g. 'skills,agents,hooks'). Which trees a plugin ships is the plugin's own fact, never a guess of this binary.",
     );
   }
+  const normalized: string[] = [];
   for (const tree of trees) {
-    const parts = tree.split("/");
-    if (isAbsolute(tree) || CONTROL.test(tree) || parts.some((part): boolean => part === ".." || part === "." || part === "")) {
+    // Split on BOTH separators on every host: `..\x` is a way out on Windows
+    // and a name nobody ships everywhere else, so it is refused everywhere.
+    const parts = tree.split(/[\\/]/);
+    if (
+      isAbsolute(tree) ||
+      CONTROL.test(tree) ||
+      tree.includes(":") ||
+      parts.some((part): boolean => part === ".." || part === "." || part === "")
+    ) {
       throw new PluginCheckError(
-        `--trees entry '${safe(tree)}' is not a plain relative path inside the plugin root (no leading '/', no '.' or '..' segment, no empty segment, no control character).`,
+        `--trees entry '${safe(tree)}' is not a plain relative path inside the plugin root (no leading '/' or '\\', no ':', no '.' or '..' segment, no empty segment, no control character).`,
       );
     }
+    normalized.push(parts.join("/"));
   }
-  return [...new Set(trees)];
+  return [...new Set(normalized)];
 }
 
 /** The real path of `path`, or null when it cannot be resolved (gone, dangling, looping, unreadable). */
@@ -130,6 +139,29 @@ function real(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A file's identity: its real path, and its device and inode. */
+export interface Identity {
+  readonly real: string;
+  readonly dev: number;
+  readonly ino: number;
+}
+
+export function identityOf(path: string): Identity | null {
+  const resolved = real(path);
+  if (resolved === null) return null;
+  try {
+    const stats = statSync(resolved);
+    return { real: resolved, dev: stats.dev, ino: stats.ino };
+  } catch {
+    return null;
+  }
+}
+
+/** The same directory: the same real path, or the same device and inode (a bind mount, a case-folding host). */
+export function sameIdentity(left: Identity, right: Identity): boolean {
+  return left.real === right.real || (left.dev === right.dev && left.ino === right.ino);
 }
 
 function isDirectory(path: string): boolean {
@@ -149,6 +181,8 @@ export function pluginManifest(dir: string, plugin: string): { readonly version:
   if (!isDirectory(dir)) return null;
   const file = join(dir, ".claude-plugin", "plugin.json");
   try {
+    // Segment by segment: a `.claude-plugin` that is a link is never followed.
+    if (!lstatSync(join(dir, ".claude-plugin")).isDirectory()) return null;
     if (!lstatSync(file).isFile()) return null;
     const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
@@ -175,49 +209,107 @@ interface Listing {
 /** A directory that could not be listed, or a file that could not be read: the copy is not judged. */
 class Unreadable extends Error {}
 
+/** A `--trees` entry that is not a real directory in a source: wiring, never an empty tree. */
+class TreeNotInSource extends PluginCheckError {}
+
+/**
+ * `relative` under `base`, walked ONE SEGMENT AT A TIME with lstat (zheref/nen
+ * #339, N2): a link anywhere on the way -- `claude` linked into the source --
+ * stops the walk there and is the entry, compared by its target and never
+ * descended into; so is a file where a directory was expected (N7).
+ */
+type Walked =
+  | { readonly kind: "absent" }
+  | { readonly kind: "dir" }
+  | { readonly kind: "other" }
+  | { readonly kind: "entry"; readonly at: string; readonly entry: EntryKind; readonly final: boolean };
+
+function walkSegments(base: string, relative: string): Walked {
+  const parts = relative.split("/");
+  for (let index = 0; index < parts.length; index += 1) {
+    const prefix = parts.slice(0, index + 1).join("/");
+    const final = index === parts.length - 1;
+    let stats;
+    try {
+      stats = lstatSync(join(base, ...parts.slice(0, index + 1)));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT" || code === "ENOTDIR") return { kind: "absent" };
+      throw new Unreadable(prefix);
+    }
+    if (stats.isSymbolicLink()) return { kind: "entry", at: prefix, entry: "link", final };
+    if (stats.isFile()) return { kind: "entry", at: prefix, entry: "file", final };
+    if (!stats.isDirectory()) return { kind: "other" };
+    if (final) return { kind: "dir" };
+  }
+  /* c8 ignore next -- a validated tree has at least one segment */
+  return { kind: "absent" };
+}
+
+/** Throws TreeNotInSource unless every tree is a real directory under `source`, every segment lstat'ed. */
+export function assertTreesInSource(source: string, trees: readonly string[]): void {
+  for (const tree of trees) {
+    let walked: Walked;
+    try {
+      walked = walkSegments(source, tree);
+    } catch {
+      throw new TreeNotInSource(`--trees entry '${tree}' could not be read in the source ${safe(source)}`);
+    }
+    if (walked.kind !== "dir") {
+      const why =
+        walked.kind === "absent"
+          ? "does not exist"
+          : walked.kind === "entry" && walked.entry === "link"
+            ? `reaches a symbolic link at '${walked.at}'`
+            : walked.kind === "entry"
+              ? `reaches a file at '${walked.at}'`
+              : "is not a directory";
+      throw new TreeNotInSource(
+        `--trees entry '${tree}' ${why} in the source ${safe(source)}: a tree that is not a real directory there would compare as empty and read identical`,
+      );
+    }
+  }
+}
+
 function listSide(base: string, trees: readonly string[]): Listing {
   const entries = new Map<string, EntryKind>();
   const unexpected: string[] = [];
   const visit = (relative: string): void => {
     const absolute = join(base, ...relative.split("/"));
-    let stats;
+    let names: Buffer[];
     try {
-      stats = lstatSync(absolute);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      names = readdirSync(absolute, { encoding: "buffer" });
+    } catch {
       throw new Unreadable(relative);
     }
-    if (stats.isSymbolicLink()) entries.set(relative, "link");
-    else if (stats.isFile()) entries.set(relative, "file");
-    else if (stats.isDirectory()) {
-      let names: Buffer[];
+    for (const raw of names) {
+      const name = raw.toString("utf8");
+      const child = `${relative}/${name}`;
+      if (CONTROL.test(name) || !Buffer.from(name, "utf8").equals(raw)) {
+        unexpected.push(safe(child));
+        continue;
+      }
+      if (name === ".DS_Store") continue;
+      let stats;
       try {
-        names = readdirSync(absolute, { encoding: "buffer" });
+        stats = lstatSync(join(absolute, name));
       } catch {
-        throw new Unreadable(relative);
+        throw new Unreadable(child);
       }
-      for (const raw of names) {
-        const name = raw.toString("utf8");
-        const child = `${relative}/${name}`;
-        if (CONTROL.test(name) || !Buffer.from(name, "utf8").equals(raw)) {
-          unexpected.push(safe(child));
-          continue;
-        }
-        if (name === ".DS_Store") continue;
-        visit(child);
-      }
+      if (stats.isSymbolicLink()) entries.set(child, "link");
+      else if (stats.isFile()) entries.set(child, "file");
+      else if (stats.isDirectory()) visit(child);
+      // A FIFO, socket or device is not a shipped file: never listed, never opened.
     }
-    // A FIFO, socket or device is not a shipped file: never listed, never opened.
   };
-  for (const tree of trees) visit(tree);
+  for (const tree of trees) {
+    const walked = walkSegments(base, tree);
+    if (walked.kind === "dir") visit(tree);
+    else if (walked.kind === "entry") entries.set(walked.at, walked.entry);
+  }
   for (const manifest of PLUGIN_MANIFESTS) {
-    try {
-      const stats = lstatSync(join(base, ...manifest.split("/")));
-      if (stats.isSymbolicLink()) entries.set(manifest, "link");
-      else if (stats.isFile()) entries.set(manifest, "file");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Unreadable(manifest);
-    }
+    const walked = walkSegments(base, manifest);
+    if (walked.kind === "entry") entries.set(walked.at, walked.entry);
   }
   return { entries, unexpected: unexpected.sort() };
 }
@@ -234,8 +326,10 @@ function compareTrees(source: string, copy: string, trees: readonly string[]): C
   let left: Listing;
   let right: Listing;
   try {
+    assertTreesInSource(source, trees);
     left = listSide(source, trees);
   } catch (error) {
+    if (error instanceof TreeNotInSource) return { ok: false, reason: error.message };
     if (error instanceof Unreadable) return { ok: false, reason: `unreadable: ${safe(error.message)} under the source ${safe(source)} could not be listed or read` };
     throw error;
   }
@@ -245,16 +339,26 @@ function compareTrees(source: string, copy: string, trees: readonly string[]): C
     if (error instanceof Unreadable) return { ok: false, reason: `unreadable: ${safe(error.message)} under the copy ${safe(copy)} could not be listed or read` };
     throw error;
   }
-  if (left.entries.size === 0) return { ok: false, reason: `the source ${safe(source)} listed no files under the trees named` };
   const differences: Difference[] = [
     ...right.unexpected.map((path): Difference => ({ kind: "unexpected-in-copy", path })),
     ...left.unexpected.map((path): Difference => ({ kind: "unexpected-in-source", path })),
   ];
+  // A link on one side where the other holds a directory of files (the copy's
+  // `claude` linked into the source): ONE differs-symlink at the link, and
+  // the files under it are not listed again path by path.
+  const shadowed = (mine: ReadonlyMap<string, EntryKind>, theirs: ReadonlyMap<string, EntryKind>): readonly string[] =>
+    [...mine]
+      .filter(([path, kind]): boolean => kind === "link" && !theirs.has(path) && [...theirs.keys()].some((other): boolean => other.startsWith(`${path}/`)))
+      .map(([path]): string => path);
+  const links = [...shadowed(right.entries, left.entries), ...shadowed(left.entries, right.entries)];
+  const underLink = (path: string): boolean => links.some((link): boolean => path.startsWith(`${link}/`));
   const paths = [...new Set([...left.entries.keys(), ...right.entries.keys()])].sort();
   for (const path of paths) {
+    if (underLink(path)) continue;
     const a = left.entries.get(path);
     const b = right.entries.get(path);
-    if (b === undefined) differences.push({ kind: "only-in-source", path });
+    if (links.includes(path)) differences.push({ kind: "differs-symlink", path });
+    else if (b === undefined) differences.push({ kind: "only-in-source", path });
     else if (a === undefined) differences.push({ kind: "only-in-copy", path });
     else if (a === "link" || b === "link") {
       // Never opened: two links with the same target string are equal, anything else differs.
@@ -294,6 +398,8 @@ export interface JudgeContext {
   readonly trees: readonly string[];
   /** `--source`, as a real path. */
   readonly source: string;
+  /** `--source`'s identity: a copy IS the source when either its real path or its device and inode match. */
+  readonly sourceId: Identity;
   /** `--independent-source`, as given, or null. */
   readonly independentSource: string | null;
   readonly configDir: string;
@@ -318,11 +424,15 @@ function readJsonFile(path: string): unknown {
 
 export function readInstallRecord(configDir: string): RecordRead {
   const path = join(configDir, "plugins", "installed_plugins.json");
+  let isLink: boolean;
   try {
-    lstatSync(path);
+    isLink = lstatSync(path).isSymbolicLink();
   } catch {
     return { state: "absent" };
   }
+  // A record that is a dangling or looping link is there and unusable: a
+  // broken install, never "not installed" (zheref/nen#339, N9).
+  if (isLink && real(path) === null) return { state: "unreadable", reason: "it is a dangling or looping link" };
   try {
     const parsed = readJsonFile(path);
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -364,6 +474,7 @@ interface IndependentFound {
   readonly found: true;
   readonly how: SourceOrigin;
   readonly path: string;
+  readonly id: Identity;
 }
 interface IndependentNone {
   readonly found: false;
@@ -395,12 +506,12 @@ function marketplaceCandidate(context: JudgeContext): string | null {
   return null;
 }
 
-export function independentSource(copy: string, context: JudgeContext): IndependentFound | IndependentNone {
+export function independentSource(copy: string, copyId: Identity, context: JudgeContext): IndependentFound | IndependentNone {
   let skippedBranch: string | null = null;
   const accept = (candidate: string | null, how: SourceOrigin): IndependentFound | null => {
     if (candidate === null || pluginManifest(candidate, context.plugin) === null) return null;
-    const path = real(candidate);
-    return path === null ? null : { found: true, how, path };
+    const id = identityOf(candidate);
+    return id === null ? null : { found: true, how, path: id.real, id };
   };
   const explicit = accept(context.independentSource, "independent-source");
   if (explicit !== null) return explicit;
@@ -414,7 +525,13 @@ export function independentSource(copy: string, context: JudgeContext): Independ
     // so a copy sitting inside some other repository never borrows its branch.
     const served = existsSync(join(copy, ".git")) ? context.git(copy, ["symbolic-ref", "--quiet", "--short", "HEAD"]) : null;
     const servedBranch = served !== null && served.code === 0 && served.stdout !== "" ? served.stdout : null;
-    if (current !== null && (current === trunkOf(top.stdout, context.git) || current === servedBranch)) {
+    // When the stand-in IS the copy, its branch is trivially the served one;
+    // only its trunk makes it the source (N8) -- a feature branch checked out
+    // in the served checkout is what is wrongly served, never its own evidence.
+    const topId = identityOf(top.stdout);
+    const isCopy = topId !== null && sameIdentity(topId, copyId);
+    const trunk = trunkOf(top.stdout, context.git);
+    if (current !== null && (current === trunk || (!isCopy && current === servedBranch))) {
       const checkout = accept(top.stdout, "checkout");
       if (checkout !== null) return checkout;
     } else {
@@ -449,12 +566,13 @@ export interface CopyJudgement {
 const NONE = { source: null, namedBy: null, byLink: false, sourceVersion: null, copyVersion: null, differences: [] } as const;
 
 /** One copy, already resolved to a real path and known to be a root of the plugin. */
-export function judgeCopy(label: string, path: string, copy: string, context: JudgeContext): CopyJudgement {
+export function judgeCopy(label: string, path: string, copyId: Identity, context: JudgeContext): CopyJudgement {
+  const copy = copyId.real;
   let source = context.source;
   let namedBy: SourceOrigin = "source";
   const shown = safe(path);
-  if (copy === context.source) {
-    const found = independentSource(copy, context);
+  if (sameIdentity(copyId, context.sourceId)) {
+    const found = independentSource(copy, copyId, context);
     if (!found.found) {
       const skipped =
         found.skippedBranch === null
@@ -470,7 +588,7 @@ export function judgeCopy(label: string, path: string, copy: string, context: Ju
     }
     source = found.path;
     namedBy = found.how;
-    if (source === copy) {
+    if (sameIdentity(found.id, copyId)) {
       if (existsSync(join(copy, ".git"))) {
         return {
           label,
@@ -516,6 +634,10 @@ export function judgeCopy(label: string, path: string, copy: string, context: Ju
   };
 }
 
+/** --independent-source is consulted only for a copy that IS --source; given otherwise, it is refused (N4). */
+const INDEPENDENT_UNREAD =
+  "--independent-source is consulted only when a judged copy IS --source (a copy is never its own evidence), and no copy here is: it would be accepted and ignored. Drop it, or point --source at the served copy.";
+
 export interface PluginCheckReport {
   readonly verdict: PluginVerdict;
   /** The install record's state: `read`, `absent`, `unreadable`, or `not read` (an explicit --installed). */
@@ -537,12 +659,15 @@ export function overallVerdict(copies: readonly CopyJudgement[]): PluginVerdict 
 /** `--installed <dir>`: one copy the caller names. Refusals are PluginCheckError (exit 2). */
 export function checkExplicitCopy(installed: string, context: JudgeContext): PluginCheckReport {
   if (CONTROL.test(installed)) throw new PluginCheckError("--installed carries a control character.");
-  if (!isDirectory(installed)) throw new PluginCheckError(`--installed '${installed}' is not a directory.`);
-  const copy = real(installed);
-  if (copy === null || pluginManifest(copy, context.plugin) === null) {
+  if (!isDirectory(installed)) throw new PluginCheckError(`--installed '${safe(installed)}' is not a directory.`);
+  const copy = identityOf(installed);
+  if (copy === null || pluginManifest(copy.real, context.plugin) === null) {
     throw new PluginCheckError(
-      `--installed '${installed}' is not a copy of '${context.plugin}' (no regular .claude-plugin/plugin.json naming it). A copy of another plugin is never judged as drift.`,
+      `--installed '${safe(installed)}' is not a copy of '${context.plugin}' (no regular .claude-plugin/plugin.json naming it). A copy of another plugin is never judged as drift.`,
     );
+  }
+  if (context.independentSource !== null && !sameIdentity(copy, context.sourceId)) {
+    throw new PluginCheckError(INDEPENDENT_UNREAD);
   }
   const judgement = judgeCopy("--installed", installed, copy, context);
   return { verdict: judgement.verdict, record: "not read", copies: [judgement] };
@@ -557,6 +682,7 @@ export function checkExplicitCopy(installed: string, context: JudgeContext): Plu
 export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
   const copies: CopyJudgement[] = [];
   const judged = new Set<string>();
+  let sawSource = false;
   const judgePath = (path: string, label: string): void => {
     let linkStats;
     try {
@@ -565,8 +691,9 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
       copies.push(broken(label, path, `${label} ${safe(path)} does not exist (a stale record)`));
       return;
     }
-    const resolved = real(path);
-    if (resolved === null) {
+    const id = identityOf(path);
+    const resolved = id?.real ?? null;
+    if (id === null || resolved === null) {
       copies.push(
         broken(label, path, linkStats.isSymbolicLink() ? `${label} ${safe(path)} is a dangling or looping link` : `${label} ${safe(path)} cannot be resolved`),
       );
@@ -580,9 +707,13 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
       copies.push(broken(label, path, `${label} ${safe(path)} holds no '${context.plugin}' plugin (a regular .claude-plugin/plugin.json naming it)`));
       return;
     }
-    if (judged.has(resolved)) return; // the same copy reached twice is judged once
+    // The same copy reached twice is judged once, by device and inode.
+    const key = `${id.dev}:${id.ino}`;
+    if (judged.has(key) || judged.has(resolved)) return;
+    judged.add(key);
     judged.add(resolved);
-    copies.push(judgeCopy(label, path, resolved, context));
+    if (sameIdentity(id, context.sourceId)) sawSource = true;
+    copies.push(judgeCopy(label, path, id, context));
   };
 
   const record = readInstallRecord(context.configDir);
@@ -619,5 +750,6 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
     present = false;
   }
   if (present) judgePath(skills, `skills/${context.plugin}`);
+  if (context.independentSource !== null && !sawSource) throw new PluginCheckError(INDEPENDENT_UNREAD);
   return { verdict: overallVerdict(copies), record: record.state, copies };
 }
