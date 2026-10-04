@@ -92,7 +92,11 @@ import {
 // parameterised by. A TYPE-ONLY import -- these predicates stay pure and never
 // read a file; the CALLER loads the target repository's `nen/gates.json`
 // and hands the result in.
-import type { GateIdentities, ReviewerIdentity } from "../schema/gates.js";
+import type {
+  DeclaredCheckExclusion,
+  GateIdentities,
+  ReviewerIdentity,
+} from "../schema/gates.js";
 // PORT ADDITION (zheref/nen#8 item 3, review MAJOR 1): `safePattern` was a
 // private function in THIS file and a byte-identical private function in
 // ../verbs/pr_ready.ts. When the ReDoS guard landed it was added to that copy
@@ -477,6 +481,148 @@ export function unmatchedExcludeCheckNames(
     if (label !== null) labels.add(label);
   }
   return names.filter((name): boolean => !labels.has(name));
+}
+
+// --- declared check exclusions (zheref/nen#249) ------------------------------
+// `nen/gates.json`'s `checks.excluded`: the maintainer's ruling that a check is
+// out of CON-32(a), declared where the verdict reads its policy instead of
+// typed per invocation. The DECLARATION is ../schema/gates.ts's
+// `DeclaredCheckExclusion` (its header says what each field binds); what lives
+// here is the two deterministic questions the gate asks of one:
+//
+//   1. Does it apply TODAY? A ruling dated after today (UTC) is not yet in
+//      force. A date `until` is honoured through that UTC day and ignored from
+//      the next; a `{ condition }` until cannot be evaluated by nen and is
+//      honoured until the file changes. An unreadable clock honours NO
+//      exclusion at all: "could not tell whether it is in force" is never "it
+//      is".
+//   2. Which rollup labels does it name? Exact compares the whole label; glob
+//      treats `*` as any run of characters and every other character as itself.
+//
+// The answer is a concrete LABEL SET, which the gate hands to
+// `excludeCheckNames` above alongside `--exclude-check`'s names -- one
+// exclusion mechanism, two sources, so a declared check and a flagged one are
+// dropped by exactly the same rule.
+
+/**
+ * Whether `label` is the check `exclusion` names. A `*`-only wildcard matcher,
+ * written by hand rather than compiled to a RegExp: the label is GitHub-supplied
+ * and nothing in it may be read as syntax, and the classic two-pointer walk is
+ * linear-backtracking, so no declared glob can hang the gate.
+ */
+export function checkExclusionMatches(exclusion: DeclaredCheckExclusion, label: string): boolean {
+  if (exclusion.match === "exact") return label === exclusion.name;
+  const pattern = exclusion.name;
+  let p = 0;
+  let l = 0;
+  let star = -1;
+  let resume = 0;
+  while (l < label.length) {
+    if (p < pattern.length && pattern[p] !== "*" && pattern[p] === label[l]) {
+      p += 1;
+      l += 1;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p;
+      resume = l;
+      p += 1;
+    } else if (star !== -1) {
+      p = star + 1;
+      resume += 1;
+      l = resume;
+    } else {
+      return false;
+    }
+  }
+  while (p < pattern.length && pattern[p] === "*") p += 1;
+  return p === pattern.length;
+}
+
+/** One declared exclusion as the gate applied it to one rollup. */
+export interface DeclaredExclusionOutcome {
+  readonly name: string;
+  readonly match: "exact" | "glob";
+  readonly reason: string;
+  readonly ruled: string;
+  readonly until: DeclaredCheckExclusion["until"];
+  /**
+   * `honoured` -- applied: every label in `matched` was dropped from CON-32(a).
+   * `expired`  -- its date `until` has passed: NOT applied, and every label in
+   *               `matched` was counted as an ordinary check.
+   * `not-yet-ruled` -- its `ruled` date is after today (UTC): NOT applied.
+   * `unknown-date` -- the evaluation time could not be read as a date: NOT
+   *               applied, on the conservative side.
+   * `in-force` -- ONLY on a report whose rollup was never read (an
+   *               unevaluated one): the entry is in force by its dates, but
+   *               nothing was applied, so it is not `honoured`.
+   */
+  readonly status: "honoured" | "expired" | "not-yet-ruled" | "unknown-date" | "in-force";
+  /** The rollup labels it names, in rollup order, each once. */
+  readonly matched: readonly string[];
+}
+
+/**
+ * The UTC calendar day of an ISO-8601 instant, or `null` when `now` cannot be
+ * read as one. Kept separate so the expiry rule is stated in one place.
+ */
+export function utcDay(now: string): string | null {
+  const instant = new Date(now);
+  if (Number.isNaN(instant.getTime())) return null;
+  return instant.toISOString().slice(0, 10);
+}
+
+/**
+ * Resolve every declared exclusion against one rollup (already narrowed by
+ * `excludeCheckRun`, exactly as `--exclude-check` is) at the instant `now`.
+ * Returns each declaration's outcome, in the file's order, and the labels the
+ * HONOURED ones name -- the set to pass to `excludeCheckNames`.
+ */
+export function resolveDeclaredExclusions(
+  exclusions: readonly DeclaredCheckExclusion[],
+  entries: readonly RollupEntry[],
+  now: string,
+): { readonly outcomes: readonly DeclaredExclusionOutcome[]; readonly labels: readonly string[] } {
+  if (exclusions.length === 0) return { outcomes: [], labels: [] };
+  const labelsInRollup: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const label = rollupEntryLabel(entry);
+    if (label === null || seen.has(label)) continue;
+    seen.add(label);
+    labelsInRollup.push(label);
+  }
+  const today = utcDay(now);
+  const honouredLabels: string[] = [];
+  const honouredSeen = new Set<string>();
+  const outcomes = exclusions.map((exclusion): DeclaredExclusionOutcome => {
+    const matched = labelsInRollup.filter((label): boolean =>
+      checkExclusionMatches(exclusion, label),
+    );
+    const status: DeclaredExclusionOutcome["status"] =
+      today === null
+        ? "unknown-date"
+        : today < exclusion.ruled
+          ? "not-yet-ruled"
+          : exclusion.untilDate !== null && today > exclusion.untilDate
+            ? "expired"
+            : "honoured";
+    if (status === "honoured") {
+      for (const label of matched) {
+        if (honouredSeen.has(label)) continue;
+        honouredSeen.add(label);
+        honouredLabels.push(label);
+      }
+    }
+    return {
+      name: exclusion.name,
+      match: exclusion.match,
+      reason: exclusion.reason,
+      ruled: exclusion.ruled,
+      until: exclusion.until,
+      status,
+      matched,
+    };
+  });
+  return { outcomes, labels: honouredLabels };
 }
 
 // --- normalizeReviewers ------------------------------------------------------
@@ -1327,6 +1473,38 @@ export interface QuorumMember {
     readonly from: "head" | "earlier-head" | null;
     readonly sha: string | null;
   } | null;
+}
+
+/**
+ * The 2026-10-04 ruling (zheref/nen#361): a MET `round_quorum` FULFILS the
+ * round owed by its own `any_of` members -- "if Bugbot is unavailable because
+ * it is exhausted, Copilot's round satisfies the review gate, and the other way
+ * around". It covers an UNAVAILABLE member, never one MID-REVIEW (the
+ * maintainer's clarification of the same ruling): a member is excused only when
+ * it has no round-check run at head, or one that COMPLETED without a round
+ * (NEUTRAL/Error, CANCELLED, SKIPPED, FAILURE). A member whose round-check run
+ * at head is still IN FLIGHT (QUEUED, IN_PROGRESS, PENDING, WAITING -- no
+ * conclusion yet, state `pending`) stays owed: its review is coming, and
+ * excusing it would let a pull request read ready minutes before its findings
+ * land. Splits the owed list into what still fails CON-32(b) and what the met
+ * quorum excuses. A member owed under an UNMET quorum, a non-member, and every
+ * owed round when no quorum is declared (`null`) stay owed exactly as before.
+ * Pure: `pr ready`'s row 4 and `pr next-blocker` both call it, so they agree.
+ */
+export function quorumExcusedRounds(
+  owed: readonly OwedRound[],
+  quorum: QuorumResult | null | undefined,
+): { readonly owed: readonly OwedRound[]; readonly excused: readonly OwedRound[] } {
+  if (quorum === null || quorum === undefined || !quorum.met) return { owed, excused: [] };
+  const unavailable = new Set(
+    quorum.members
+      .filter((member): boolean => member.roundCheck?.state !== "pending")
+      .map((member): string => member.reviewer),
+  );
+  return {
+    owed: owed.filter((round): boolean => !unavailable.has(round.reviewer)),
+    excused: owed.filter((round): boolean => unavailable.has(round.reviewer)),
+  };
 }
 
 export interface QuorumResult {

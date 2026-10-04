@@ -348,7 +348,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
-| `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, read at the pull request's base) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
@@ -939,10 +939,11 @@ path-filtered or conditional job that did not apply is not a failure. A
 A draft pull request fails row 1 (CON-42/1) with `not-ready: the PR is a DRAFT
 (CON-42/1) — a draft cannot be merged; mark it ready for review first`, even
 when GitHub reports it `MERGEABLE`. An intentional-skip exception is never
-inferred from branch protection, and **no mechanism declares one today**:
-`--exclude-check` only removes names, and an all-skipped head with its skips
-excluded is an empty rollup, which also fails. A declared exception is
-zheref/nen#249's to build. **Consumer note:** a repository whose only checks
+inferred from branch protection, and **no mechanism admits an all-skipped
+head**: both `--exclude-check` and a declared `checks.excluded` entry in
+`nen/gates.json` (zheref/nen#249, below) only *remove* a check, and an
+all-skipped head with its skips excluded is an empty rollup, which also
+fails. **Consumer note:** a repository whose only checks
 are conditional (a job-level `if:` that skips on a docs-only change, or jobs
 gated on a runner variable) now reads not-ready on such a head; make one job
 run and succeed on every head.
@@ -1075,9 +1076,123 @@ its own occurrence instead. (An unclosed opener with no comma after it, such
 as `lint (`, is not ambiguous and is kept as typed; a closer with no opener
 is an ordinary character.) And a name with a comma **outside every bracket**
 (`lint, format`) still splits and cannot be named by this flag — no Actions
-matrix name is shaped that way; a declared, pattern-capable exclusion is
-[zheref/nen#249](https://github.com/zheref/nen/issues/249)'s. The grammar is
+matrix name is shaped that way; the declared, pattern-capable form is
+`nen/gates.json`'s `checks.excluded`, below. The grammar is
 `src/pr/excludecheck.ts`'s header.
+
+**A declared exclusion: `checks.excluded` (zheref/nen#249).** A flag is a
+per-invocation choice every caller has to remember; a maintainer's ruling that
+a check is out of scope belongs in the declaration the verdict already reads.
+`nen/gates.json` may carry an optional `checks.excluded` list:
+
+```json
+"checks": {
+  "excluded": [
+    {
+      "name": "check (Windows, [\"self-hosted\",\"Windows\",\"X64\"])",
+      "reason": "the maintainer ruled Windows out of scope until a runner exists",
+      "ruled": "2026-09-22",
+      "until": { "condition": "a self-hosted Windows runner is registered" }
+    },
+    { "name": "check (Windows*", "match": "glob", "reason": "…", "ruled": "2026-09-22", "until": "2026-12-31" }
+  ]
+}
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | the check's own rollup label (a check run's name, a status's context), compared **whole**. The file is JSON, so a comma, a bracket or a quote is simply part of the name — nothing splits it. |
+| `match` | only when `name` contains `*` | `exact` (the default for a name with no `*`) or `glob`. Under `glob`, `*` matches any run of characters, including none, and **nothing else is special**: `[`, `]`, `?`, `(` and `"` are literal, because matrix names carry them. A name with a `*` and no `match` is refused, since it reads two ways. A glob must carry **at least 3 literal characters before its first `*`** (`check (*` passes; `*`, `*)`, `*e*`, `* *`, `?*` are refused). |
+| `reason` | yes | the ruling's reason, quoted beside every check it drops |
+| `ruled` | yes | the ruling's date, strictly `YYYY-MM-DD`. A ruling dated **after** today (UTC) is not yet in force: `not-yet-ruled`, not honoured, named in `meta.warnings`. |
+| `until` | yes | **exactly one of two shapes.** A strict `YYYY-MM-DD` string — honoured through that UTC day, **ignored and reported as expired** from the next. Or an object `{ "condition": "<text>" }` — a lapse nen cannot evaluate, honoured until the file is edited, with a `meta.warnings` line on **every** evaluation saying so. Any other string is refused at load, because a near-date read as a condition would never lapse: `2026/10/01`, `2026-10-1`, `2026-10-01T00:00:00Z`, fullwidth digits and Unicode hyphens are all refused by pointer. |
+
+**Matching is by label only, with no origin pinning.** Any check run or status
+that reports under a matching name — whichever app or workflow posted it — is
+dropped. That is why a glob needs a literal prefix, and why an exact name is
+the safer form.
+
+**Read at the pull request's BASE, never its head (Feitan F1).** `nen pr ready`
+reads reviewer identities from the local file (or `--gates`), as before, but
+reads `checks.excluded` from `nen/gates.json` **at the base commit GitHub
+reports for the pull request** (`baseRefOid`, through the REST contents API on
+the same token — it needs `contents:read`). Under `--repo`, a worktree holds the
+pull request's own head; reading the exclusions there would let a pull request
+add an exclusion for its own red check. So:
+
+- an entry the local file declares that the base does not is **not honoured**,
+  and named: `declared exclusion '<name>' is in the local nen/gates.json but not
+  at the pull request's base (<owner>/<repo>@<sha>:nen/gates.json) — NOT
+  honoured until it is merged there.`;
+- a base read that **fails** (no base commit, a 403, a transport that cannot
+  read files, a payload that is not a base64-encoded file — a directory, a
+  symlink, a file too large to be delivered inline, named by its type or size —
+  or a base file that is not JSON or whose block does not validate) honours
+  **no** exclusion. When the local file (or `--gates`) declares at least one
+  entry, that is a `meta.warnings` line (`declared check exclusions NOT
+  honoured: …`); when it declares **none**, nothing anybody can see was lost,
+  so it is a quiet `meta.notes` line instead (`could not confirm the base
+  declares no exclusion: <reason>`), rendered by `--explain` only — the verdict
+  is the stricter one either way;
+- a base with **no** `nen/gates.json` declares nothing; that is not a failure;
+- identities from `--reviewers` declare no exclusion, as they declare no
+  carve-out, and the base is not read.
+
+**The base is only as trusted as its branch protection.** Reading the base
+stops a pull request from exempting its own checks, but anyone who can push to
+the base branch directly can write a ruling there; a ruling binds when it lives
+on a protected base.
+
+**Consumer note:** `nen pr ready` (and `pr next-blocker`, through `gh`) now
+reads `nen/gates.json` at the base through the REST contents API, so the token
+needs `contents:read` for declared exclusions to apply.
+
+What `nen pr ready` does with what it read:
+
+- Every **honoured** entry is resolved to the rollup labels it names, and those
+  are dropped from CON-32(a) **before** it is evaluated, through the same
+  exclusion `--exclude-check` uses (after `--exclude-run`'s carve-out). The two
+  **combine**: a flag's names and a declaration's labels are dropped together.
+- **Nothing is dropped silently.** For every honoured entry that removed at
+  least one check, the line `excluded by declaration: <labels> — <reason>
+  (ruled <date>, until <until>)` is printed by the **default output** right after
+  the judged-head line, carried in `meta.warnings`, set as the passing CON-32(a)
+  row's `note`, and appended to `nen pr merge --release-unit`'s transcript
+  (`pr ready: excluded by declaration: …`). `--json` carries every entry in
+  `meta.declaredExclusions` — `name`, `match`, `reason`, `ruled`, `until` (the
+  date string or the `{ condition }` object), `status` and `matched`, the labels
+  it named. `--explain` prints one line per entry with its status.
+- `status` is `honoured` (applied), `expired`, `not-yet-ruled`, `unknown-date`
+  (the evaluation time could not be read as a date; **no** entry is honoured),
+  or — **only on an unevaluated report**, where GitHub and therefore the base
+  were never read — `in-force`: the LOCAL file's entry is in force by its dates,
+  but nothing was applied, so it is not `honoured`, and `matched` is `null`.
+- `meta.declaredExclusionsSource` says where the entries came from:
+  `<owner>/<repo>@<sha>` (the base, on a decided report) or `local-unverified`
+  (an unevaluated report's entries, the checkout's own file, never checked
+  against the base; `--explain` says `local, not verified at base`). It is
+  `null` for identities from `--reviewers`. `meta.notes` is always an array.
+- A rollup that held **only** excluded checks is still
+  `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
+  names from both sources listed once. An exclusion never turns an empty or
+  all-skipped head into a ready one.
+- Like `--exclude-check`, it never changes which reviewers owe a round or
+  whether CON-30's carve-out fires. `meta.excludedChecks` stays the **flag's**
+  names only.
+- `nen pr next-blocker` applies the same base-read exclusions; see its section.
+- An entry carrying a key it does not define (`$comment` aside) is refused.
+
+The block is validated at load wherever it is read — the local file by
+`nen pr ready` (exit `2`) and by `nen schema check` (whose `gates.json` row adds
+`, N declared check exclusion(s)` when there are any), the base's copy by the
+base read above. Refused by pointer (`checks.excluded[<i>].<field>`): a missing
+or blank field; surrounding whitespace on any field (its own message); a
+`ruled` or `until` that is not a strict, real `YYYY-MM-DD` date; an `until`
+object carrying anything but `condition`; an `until` date before `ruled`; a glob
+with under 3 literal characters before its first `*`; an unknown `match`; the
+same name declared twice. **Compatibility:** an optional key, so `version`
+stays `1`; a nen older than the release that reads it ignores the block, which
+leaves the excluded check counted — a stricter verdict, never a wider one.
 
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
@@ -1140,13 +1255,35 @@ Cursor Bugbot". `round_quorum` says it:
   `bounded_policy_exempt`**. Those two facts decide who is *owed* a round, not
   who *has* one. A pending review request is reported beside the member, and it
   is never counted either way.
-- **It only adds a requirement.** Fewer than `minimum` members with a round
-  fails row 4 (`rounds-owed`, CON-32(b)). Every per-reviewer owed round is
-  judged exactly as before and is never excused by a met quorum. A member with
-  a pending request is still owed, and an enrolled `Cursor Bugbot` whose check
-  is still running is still owed. The quorum is on row 4 rather than a row of
-  its own because `conjuncts` stays the six rows of `nen.pr.ready/v0.1`, and a
-  seventh would change what the table means for every consumer.
+- **Unmet, it adds a requirement; met, it fulfils its members' rounds
+  (maintainer ruling of 2026-10-04, zheref/nen#361, superseding "it only adds
+  a requirement").** The ruling: *a declared `round_quorum` must fulfil the
+  round requirement for its members. If Bugbot is unavailable because it is
+  exhausted, Copilot's round satisfies the review gate, and the other way
+  around.* So:
+  - fewer than `minimum` members with a round fails row 4 (`rounds-owed`,
+    CON-32(b)), even when nothing is owed, exactly as before;
+  - once the quorum is **met**, a round owed by an **unavailable** reviewer
+    **named in `any_of`** no longer fails row 4. An unavailable member is one
+    with no round-check run at head, or one whose run completed without a
+    round (`NEUTRAL`/Error such as "usage limit reached", `CANCELLED`,
+    `SKIPPED`, `FAILURE`); a member with only a pending review request and no
+    round check (Copilot) counts too. A member whose run at head is still **in
+    flight** (`QUEUED`, `IN_PROGRESS`, `PENDING`, `WAITING`) is mid-review, not
+    unavailable, and **stays owed** even when the quorum is met. The row
+    passes, and its note names the quorum and each excused member:
+    `round quorum met (1 of 2 …): …; excused by the met round quorum (ruling
+    2026-10-04): bugbot (no round at head; covered by round quorum)`;
+  - a reviewer **not** in `any_of` is owed exactly as before;
+  - row 3 (a stalled request) and row 6 (unresolved threads) are unchanged,
+    so a member's posted findings must still be resolved;
+  - `nen pr next-blocker` agrees: it reports no `owed-round` for a member the
+    met quorum covers;
+  - a file with no `round_quorum` gets byte-identical output.
+
+  The quorum is on row 4 rather than a row of its own because `conjuncts`
+  stays the six rows of `nen.pr.ready/v0.1`, and a seventh would change what
+  the table means for every consumer.
 - **The reason names every member.** With nothing owed, the row reads
   `not-ready: round quorum not met (0 of 2 with a round, 1 required, CON-32b):
   copilot (no round), bugbot (no round, no 'Cursor Bugbot' check)`. A member
@@ -1225,11 +1362,10 @@ unmet until something changes. There are two remedies:
   re-run needs a new comment ([Cursor Docs: Bugbot](https://cursor.com/help/ai-features/bugbot)).
   A run that concludes `SUCCESS` is Bugbot's round. A run with findings posts a
   review, which is its round too.
-- **When Bugbot cannot succeed and Copilot already has a round**, run
-  `nen pr ready <ref> --reviewers copilot` (the reviewers other than Bugbot).
-  `--reviewers` sets who is *owed* a round, so Bugbot stops being owed. The
-  quorum is the repository's declared floor and still counts Copilot's round,
-  so the pull request is not waved through on nobody's review.
+- **When Bugbot cannot succeed and Copilot already has a round**, nothing is
+  needed since the 2026-10-04 ruling: the met quorum fulfils Bugbot's round.
+  (Before it, the remedy was `--reviewers copilot`.) Without another member's
+  round, an owed Bugbot still holds the quorum unmet.
 
 **Worked example: this repository's own `nen/gates.json`.** Copilot is kept but
 exempt under `bounded`, Cursor Bugbot is added, and the quorum asks for at least
@@ -1260,8 +1396,9 @@ one of the two:
 | Bugbot posted a review (as `cursor[bot]`) at any earlier head | ready |
 | Bugbot's run concluded `SUCCESS` on an earlier commit that GitHub lists against this PR, nothing at head, no review | ready under `bounded`, noted `bugbot (round: 'Cursor Bugbot' check completed at earlier head <sha>)`. FAILED under `strict` |
 | Copilot posted a review at any earlier head | ready |
-| `Cursor Bugbot` still running, Copilot reviewed earlier | FAILED: `bugbot (no round at head)`. It is enrolled and owed until its run concludes `SUCCESS` or it posts a review. See *The way out of an owed Bugbot round* below |
-| Copilot re-requested and not yet posted, Bugbot reviewed | FAILED: `copilot (review requested, not yet posted)` |
+| `Cursor Bugbot` still running, Copilot reviewed earlier | FAILED: `bugbot (no round at head)`. It is mid-review, not unavailable, so the met quorum does not excuse it; it is owed until its run concludes `SUCCESS`, it posts a review, or its run completes without a round |
+| `Cursor Bugbot` errored (`NEUTRAL`, "usage limit reached"), Copilot reviewed earlier | ready (ruling 2026-10-04), noted the same way |
+| Copilot re-requested and not yet posted, Bugbot reviewed | ready (ruling 2026-10-04), noted `copilot (review requested, not yet posted; covered by round quorum)`. Row 3 still fails if the request has stalled |
 
 Under a release that predates `round_quorum` (through v0.16.0), the first three
 rows read `ready`: no reviewer is owed, and those releases ignore the floor.
@@ -1575,6 +1712,24 @@ This verb reads the **head only**: its snapshot carries no earlier-commit check
 runs. So it does not count a round-check run on an earlier commit, which
 `nen pr ready` does under `bounded`. Where the two differ, `next-blocker` calls
 the round owed. It is stricter than `pr ready` there, never looser.
+
+**Declared check exclusions (zheref/nen#249).** The red-check step applies
+`checks.excluded` exactly as `nen pr ready` does: read from `nen/gates.json`
+**at the pull request's base commit** (`baseRefOid`), never from the local
+file, dated against the current UTC day, and the honoured labels dropped
+before the step judges the rollup. A rollup holding only excluded checks is a
+`red-check` whose detail begins `no checks remain after the declared
+exclusion(s): …`. Any failure to read the base (no base commit, a 403, a
+malformed block) applies **no** exclusion; a base with no `nen/gates.json`
+declares none. Nothing is applied or refused silently: under the result line
+it prints `  excluded by declaration: …` for each honoured entry that removed a
+check, and `  warning: …` for every base-read failure (when the local file
+declares an entry), local-only entry, expired, not-yet-ruled or
+condition-`until` entry — the same wording `pr ready` uses. `--json` adds
+`warnings` (those lines) and `notes` (the quiet "could not confirm the base
+declares no exclusion" line, when nothing is declared locally). This verb does not
+take `--exclude-check` or `--exclude-run`, so where a `pr ready` call passed
+one of those it can name a check `pr ready` dropped — stricter, never looser.
 
 The quorum clause **says so wherever it can matter** (Nobunaga's delta review
 of E7, finding F2). That is when the quorum is unmet under `bounded` and a

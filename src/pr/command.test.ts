@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runFamily, type Io } from "../index.js";
@@ -500,6 +500,146 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       expect(result.err).toEqual([]);
       expect(result.code).toBe(0);
       expect(result.out[0]).toBe("#9: none");
+    });
+
+    // zheref/nen#249 (Nobunaga N4): next-blocker applies the same declared
+    // exclusions pr ready does, read from nen/gates.json AT THE BASE commit,
+    // never from the local (head) file.
+    it("applies checks.excluded read at the pull request's BASE, and only there", async () => {
+      const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+      const altGates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const ruling = { name: "check (Windows*", match: "glob", reason: "no runner", ruled: "2020-01-01", until: { condition: "a runner exists" } };
+      const script = (atBase: Record<string, unknown> | null): ScriptedCall[] => {
+        const [view, ...rest] = greenAltApprovedScript();
+        const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
+        const withRed = {
+          ...viewJson,
+          baseRefOid: "base123",
+          statusCheckRollup: [
+            ...(viewJson["statusCheckRollup"] as unknown[]),
+            { __typename: "CheckRun", name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        };
+        const contents: ScriptedCall =
+          atBase === null
+            ? { match: "gh api repos/o/n/contents/nen/gates.json?ref=base123", result: { code: 1, stderr: "HTTP 404" } }
+            : {
+                match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+                result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(JSON.stringify(atBase)).toString("base64") }) },
+              };
+        return [{ match: view?.match ?? "", result: { stdout: JSON.stringify(withRed) } }, ...rest, contents];
+      };
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      const honoured = await capture(
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", join(ALT_REPO, "nen", "gates.json")],
+        checkout,
+        new ScriptedSeams(script({ ...altGates, checks: { excluded: [ruling] } })),
+      );
+      expect(honoured.out[0]).toBe("#9: none");
+      // Never silent (hanten round 2, N1): the notice and the condition
+      // warning print under the result line.
+      expect(honoured.out).toContain(`  excluded by declaration: ${WINDOWS} — no runner (ruled 2020-01-01, until a runner exists)`);
+      expect(honoured.out.some((line): boolean => /^ {2}warning: declared exclusion 'check \(Windows\*' .* CONDITION nen cannot evaluate/.test(line))).toBe(true);
+      // The LOCAL file declaring it is not enough: the base has none.
+      const localOnly = mkdtempSync(join(tmpdir(), "nen-249-local-"));
+      const localGates = join(localOnly, "gates.json");
+      writeFileSync(localGates, JSON.stringify({ ...altGates, checks: { excluded: [ruling] } }));
+      const refused = await capture(
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", localGates],
+        checkout,
+        new ScriptedSeams(script(null)),
+      );
+      expect(refused.out[0]).toBe("#9: red-check");
+      expect(refused.out.join("\n")).toContain(WINDOWS);
+      expect(refused.out).toContain(
+        "  warning: declared exclusion 'check (Windows*' is in the local nen/gates.json but not at the pull request's base (o/n@base123:nen/gates.json) — NOT honoured until it is merged there.",
+      );
+    });
+
+    it("control characters in labels and declared text are stripped from rendered lines, kept in --json (Copilot on #359)", async () => {
+      const EVIL = "check (Windows\u001b[2J\r\nfake: none";
+      const altGates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const ruling = { name: "check (Windows*", match: "glob", reason: "no\u001b[31m\r\nrunner", ruled: "2020-01-01", until: "2099-12-31" };
+      const script = (): ScriptedCall[] => {
+        const [view, ...rest] = greenAltApprovedScript();
+        const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
+        const withRed = {
+          ...viewJson,
+          baseRefOid: "base123",
+          statusCheckRollup: [
+            ...(viewJson["statusCheckRollup"] as unknown[]),
+            { __typename: "CheckRun", name: EVIL, status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        };
+        const content = Buffer.from(JSON.stringify({ ...altGates, checks: { excluded: [ruling] } })).toString("base64");
+        return [
+          { match: view?.match ?? "", result: { stdout: JSON.stringify(withRed) } },
+          ...rest,
+          {
+            match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+            result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content }) },
+          },
+        ];
+      };
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      const gatesFlag = ["--gates", join(ALT_REPO, "nen", "gates.json")];
+      const plain = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", ...gatesFlag], checkout, new ScriptedSeams(script()));
+      expect(plain.out[0]).toBe("#9: none");
+      expect(plain.out).toContain("  excluded by declaration: check (Windows[2Jfake: none — no[31mrunner (ruled 2020-01-01, until 2099-12-31)");
+      for (const line of plain.out) expect(line).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+      const json = await capture(
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", ...gatesFlag, "--json"],
+        checkout,
+        new ScriptedSeams(script()),
+      );
+      const parsed = JSON.parse(json.out.join("\n")) as { warnings: string[] };
+      expect(parsed.warnings).toContain(`excluded by declaration: ${EVIL} — ${ruling.reason} (ruled 2020-01-01, until 2099-12-31)`);
+    });
+
+    it("a base read refused with 403 applies nothing and WARNS -- in the plain output and in --json's warnings", async () => {
+      const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+      const altGates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const ruling = { name: "check (Windows*", match: "glob", reason: "no runner", ruled: "2020-01-01", until: "2099-12-31" };
+      const dir = mkdtempSync(join(tmpdir(), "nen-249-local-"));
+      const localGates = join(dir, "gates.json");
+      writeFileSync(localGates, JSON.stringify({ ...altGates, checks: { excluded: [ruling] } }));
+      const script = (): ScriptedCall[] => {
+        const [view, ...rest] = greenAltApprovedScript();
+        const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
+        const withRed = {
+          ...viewJson,
+          baseRefOid: "base123",
+          statusCheckRollup: [
+            ...(viewJson["statusCheckRollup"] as unknown[]),
+            { __typename: "CheckRun", name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        };
+        return [
+          { match: view?.match ?? "", result: { stdout: JSON.stringify(withRed) } },
+          ...rest,
+          {
+            match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+            result: { code: 1, stderr: "gh: Resource not accessible by integration (HTTP 403)" },
+          },
+        ];
+      };
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      const plain = await capture(
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", localGates],
+        checkout,
+        new ScriptedSeams(script()),
+      );
+      expect(plain.out[0]).toBe("#9: red-check");
+      expect(plain.out.some((line): boolean => /^ {2}warning: declared check exclusions NOT honoured: the base could not be read \(.*HTTP 403/.test(line))).toBe(true);
+      const json = await capture(
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", localGates, "--json"],
+        checkout,
+        new ScriptedSeams(script()),
+      );
+      const parsed = JSON.parse(json.out.join("\n")) as { kind: string; warnings: string[]; notes: string[] };
+      expect(parsed.kind).toBe("red-check");
+      expect(parsed.warnings.join("\n")).toMatch(/NOT honoured: the base could not be read[\s\S]*HTTP 403/);
+      expect(parsed.notes).toEqual([]);
     });
 
     it("the --gates file's OWN reviewer set decides -- the SAME snapshot reads owed-round under the other taxonomy", async () => {

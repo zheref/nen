@@ -86,6 +86,12 @@ export interface PrSnapshot {
   readonly url: string;
   readonly body: string;
   readonly state: string;
+  /**
+   * The base branch's tip commit, where `pr next-blocker` reads
+   * `checks.excluded` (zheref/nen#249, Feitan F1). Absent or "" when GitHub
+   * answered none, which honours no declared exclusion.
+   */
+  readonly baseRefOid?: string;
   /** GitHub's own composite: CLEAN, DIRTY, BLOCKED, BEHIND, UNSTABLE, UNKNOWN. */
   readonly mergeStateStatus: string;
   readonly checks: readonly RollupEntry[];
@@ -102,7 +108,7 @@ export class FetchError extends Error {
 }
 
 const VIEW_FIELDS =
-  "number,headRefOid,baseRefName,headRefName,author,labels,mergeable,mergeStateStatus,isDraft,body,url,title,state,statusCheckRollup,reviewRequests";
+  "number,headRefOid,baseRefName,baseRefOid,headRefName,author,labels,mergeable,mergeStateStatus,isDraft,body,url,title,state,statusCheckRollup,reviewRequests";
 
 export function viewArgv(target: Target, prNumber: number): readonly string[] {
   return ["pr", "view", String(prNumber), "--repo", target.slug, "--json", VIEW_FIELDS];
@@ -341,6 +347,7 @@ export function fetchPullRequest(
     url: String(view["url"] ?? ""),
     body: String(view["body"] ?? ""),
     state: String(view["state"] ?? ""),
+    baseRefOid: typeof view["baseRefOid"] === "string" ? view["baseRefOid"] : "",
     mergeStateStatus: String(view["mergeStateStatus"] ?? "UNKNOWN"),
     checks: checks.value,
     reviews: reviews.value,

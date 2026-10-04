@@ -156,11 +156,24 @@
 //     contract -- a seventh row changes what the table MEANS, which bumps the
 //     contract and every consumer with it -- and because in substance it IS
 //     CON-32(b)'s owed limb: "a round is owed at the current head", asked of a
-//     group. The QUORUM BRANCH only ever ADDS a failure: it excuses no
-//     per-reviewer owed round, and a file that declares no quorum gets from
-//     THIS branch byte-for-byte the table, the line and the JSON it got
-//     before. (Per-reviewer verdicts themselves DID move, for a different
-//     reason -- see (10).)
+//     group. A file that declares no quorum gets from THIS branch
+//     byte-for-byte the table, the line and the JSON it got before.
+//     (Per-reviewer verdicts themselves DID move, for a different reason --
+//     see (10).)
+//     A MET QUORUM FULFILS ITS OWN MEMBERS' ROUNDS (maintainer ruling
+//     2026-10-04, zheref/nen#361, superseding "the quorum only ever ADDS a
+//     failure"): "a declared round_quorum must fulfil the round requirement
+//     for its members. If Bugbot is unavailable because it is exhausted,
+//     Copilot's round satisfies the review gate, and the other way around."
+//     So once the quorum is met, an owed round of an UNAVAILABLE reviewer
+//     NAMED IN `any_of` -- an unavailable member: no run at head, or one that
+//     completed without a round -- no longer fails row 4; the row's note names
+//     the quorum and each excused member. A member whose round-check run at
+//     head is still in flight is MID-REVIEW, not unavailable, and stays owed
+//     (the maintainer's clarification of the same ruling). A reviewer outside `any_of` is owed exactly as
+//     before, an UNMET quorum fails exactly as before, and rows 3 (a stalled
+//     request) and 6 (unresolved threads) are untouched -- an excused
+//     member's posted findings must still be resolved.
 //     Under `bounded`, a round-check reviewer's SUCCESS run on an EARLIER
 //     commit that GitHub lists against this pull request -- the blob's
 //     `earlier_round_checks`, read by ../github/pr_state.ts -- is also its
@@ -304,12 +317,15 @@ import {
   latestChecks,
   normalizeReviewers,
   pendingRounds,
+  quorumExcusedRounds,
+  resolveDeclaredExclusions,
   reviewsAllApprovedAtHead,
   reviewerReviewCheckPattern,
   roundQuorum,
   unapprovedApprovers,
   uncheckedChecks,
   unmatchedExcludeCheckNames,
+  type DeclaredExclusionOutcome,
   type EarlierHeadCheck,
   type OwedRound,
   type QuorumMember,
@@ -323,7 +339,7 @@ import {
   parseReviews,
   type ParseError,
 } from "../github/parse.js";
-import type { GateIdentities } from "../schema/gates.js";
+import { untilText, type GateIdentities } from "../schema/gates.js";
 
 // ── tiny jq equivalents ──────────────────────────────────────────────────────
 //
@@ -633,6 +649,13 @@ export interface EvaluationContext {
    * hazard the flag exists to close.
    */
   readonly warnings: readonly string[];
+  /**
+   * `nen/gates.json`'s `checks.excluded` (zheref/nen#249), each as applied to
+   * this rollup at `now`: honoured, expired or undecidable, with the labels it
+   * named. Empty when the identities declare none. An exclusion never widens
+   * the verdict silently, so every one is reported whether or not it matched.
+   */
+  readonly declaredExclusions: readonly DeclaredExclusionOutcome[];
 }
 
 export interface EvaluateOptions {
@@ -648,6 +671,64 @@ export interface EvaluateOptions {
    * reading. See ./predicates.ts's `excludeCheckNames` for what "match" means.
    */
   readonly excludeCheckNames: readonly string[];
+  /**
+   * Where `identities.excludedChecks` came from, as the warnings name it
+   * (zheref/nen#249). `nen pr ready` reads them at the pull request's BASE
+   * (Feitan F1) and says so here; absent, the identities' own path is named.
+   */
+  readonly declaredExclusionsSource?: string;
+}
+
+/**
+ * The line that says a declaration dropped checks (zheref/nen#249, Feitan F2):
+ * `excluded by declaration: <labels> — <reason> (ruled <date>, until <until>)`.
+ * One spelling, used by the CON-32(a) row's note, `meta.warnings`, `pr ready`'s
+ * default output and `pr merge`'s transcript, so no reader of any of them sees
+ * a widened verdict without the ruling that widened it.
+ */
+export function declarationNotice(outcome: DeclaredExclusionOutcome): string {
+  return `excluded by declaration: ${outcome.matched.join(", ")} — ${outcome.reason} (ruled ${outcome.ruled}, until ${untilText(outcome.until)})`;
+}
+
+/**
+ * The `meta.warnings` lines one declared exclusion contributes on a decided
+ * evaluation. Every state but "honoured, matched nothing, dated" says
+ * something, because each of the others is either a widened verdict or a
+ * ruling the reader believes applies and does not.
+ */
+export function declarationWarnings(outcome: DeclaredExclusionOutcome, source: string, now: string): string[] {
+  const until = untilText(outcome.until);
+  const counted =
+    outcome.matched.length === 0
+      ? "it names no check at this head"
+      : // Not "counted": another honoured entry, or --exclude-check, may still
+        // remove the same label (Copilot on zheref/nen#359). This declaration
+        // only says it did not.
+        `labels matched but not removed by this declaration: ${outcome.matched.join(", ")}`;
+  switch (outcome.status) {
+    case "expired":
+      return [
+        `declared exclusion '${outcome.name}' (${source}) EXPIRED — until ${until} has passed, so it is no longer honoured; ${counted}. Renew the ruling with a new until, or delete the entry.`,
+      ];
+    case "not-yet-ruled":
+      return [
+        `declared exclusion '${outcome.name}' (${source}) NOT honoured — ruled ${outcome.ruled} is after today (UTC), so the ruling is not in force yet; ${counted}.`,
+      ];
+    case "unknown-date":
+      return [
+        `declared exclusion '${outcome.name}' (${source}) NOT honoured — the evaluation time '${now}' could not be read as a date, so whether it is in force is unknown; ${counted}.`,
+      ];
+    case "in-force":
+    case "honoured": {
+      const lines = outcome.matched.length === 0 ? [] : [declarationNotice(outcome)];
+      if (typeof outcome.until !== "string") {
+        lines.push(
+          `declared exclusion '${outcome.name}' (${source}) is in force on a CONDITION nen cannot evaluate: "${until}". It lapses only when the file is edited; re-check the condition.`,
+        );
+      }
+      return lines;
+    }
+  }
 }
 
 /**
@@ -941,11 +1022,30 @@ export function evaluateReady(
   const checksExcludedByRun = parsedChecks.ok
     ? excludeCheckRun(parsedChecks.value, excludeRun)
     : [];
-  const excludeCheckWarnings: readonly string[] = parsedChecks.ok
-    ? unmatchedExcludeCheckNames(checksExcludedByRun, options.excludeCheckNames).map(
-        (name): string => `--exclude-check '${name}' matched no check in the rollup`,
-      )
-    : [];
+  // `checks.excluded` (zheref/nen#249): the file's declared exclusions,
+  // resolved to concrete labels against the SAME post-run set `--exclude-check`
+  // is matched against, and dated against `now`. The honoured labels join the
+  // flag's names in ONE `excludeCheckNames` pass below; an expired one is
+  // counted as an ordinary check and named, never quietly dropped or kept.
+  const declared = resolveDeclaredExclusions(
+    identities.excludedChecks ?? [],
+    checksExcludedByRun,
+    options.now,
+  );
+  const excludeCheckWarnings: readonly string[] = [
+    ...(parsedChecks.ok
+      ? unmatchedExcludeCheckNames(checksExcludedByRun, options.excludeCheckNames).map(
+          (name): string => `--exclude-check '${name}' matched no check in the rollup`,
+        )
+      : []),
+    ...declared.outcomes.flatMap((outcome): string[] =>
+      declarationWarnings(outcome, options.declaredExclusionsSource ?? `${identities.path} checks.excluded`, options.now),
+    ),
+  ];
+  const excludedNames: readonly string[] = [
+    ...options.excludeCheckNames,
+    ...declared.labels.filter((label): boolean => !options.excludeCheckNames.includes(label)),
+  ];
 
   // PORT CHANGE (§3): the shell's `// "sasuke,tenma,copilot"` default is the
   // FILE's `base_reviewers`. Reachable only for a hand-built blob -- the
@@ -1042,15 +1142,21 @@ export function evaluateReady(
     // `map(select(...))` aborted the whole script and emitted NO verdict,
     // breaking --verdict's always-print contract (Copilot, BC-PR-#745).
     if (!parsedChecks.ok) return failed(unreadable(parsedChecks.error));
-    const checksExcluded = excludeCheckNames(checksExcludedByRun, options.excludeCheckNames);
-    // A green row still names what it admitted without a build (zheref/nen#331).
+    const checksExcluded = excludeCheckNames(checksExcludedByRun, excludedNames);
+    // A green row still names what it admitted without a build (zheref/nen#331),
+    // and what a DECLARATION dropped from it, with the ruling's reason
+    // (zheref/nen#249): an exclusion never widens the verdict silently.
     const unchecked = uncheckedChecks(checksExcluded);
     if (checksAllGreen(checksExcluded)) {
-      return passed(
-        unchecked.length === 0
-          ? null
-          : `admitted beside a SUCCESS, not verified: ${unchecked.join(", ")}`,
-      );
+      const notes = [
+        ...(unchecked.length === 0
+          ? []
+          : [`admitted beside a SUCCESS, not verified: ${unchecked.join(", ")}`]),
+        ...declared.outcomes
+          .filter((outcome): boolean => outcome.status === "honoured" && outcome.matched.length > 0)
+          .map(declarationNotice),
+      ];
+      return passed(notes.length === 0 ? null : notes.join("; "));
     }
     // AN EMPTY ROLLUP IS NOT A RED ROLLUP (bankai-core#671). `checksAllGreen`
     // opens with a non-empty test, so "no checks at all" and "a check failed"
@@ -1079,10 +1185,12 @@ export function evaluateReady(
       // never `ready`, on the same reasoning: a consumer excluding its OWN
       // readiness check's prior report must not read a false READY off a
       // rollup that, once that name is dropped, has nothing left to judge.
-      if (options.excludeCheckNames.length > 0 && checksExcludedByRun.length > 0) {
+      // A declared exclusion (zheref/nen#249) that dropped everything is the
+      // same finding, and its names join the list.
+      if (excludedNames.length > 0 && checksExcludedByRun.length > 0) {
         return failed(
           "not-ready: no checks reported (after excluding: " +
-            `${options.excludeCheckNames.join(", ")}) (CON-32a) — the rollup held only the ` +
+            `${excludedNames.join(", ")}) (CON-32a) — the rollup held only the ` +
             "excluded name(s), so the gate has no evidence to judge. This is an ABSENT verdict, " +
             "not a red one; ask again once a check outside that exclusion reports.",
         );
@@ -1280,25 +1388,35 @@ export function evaluateReady(
         earlierChecks: earlierRoundChecks(state),
       };
       const owed = pendingRounds(identities, roundInputs, head, reviewers, policy, delivery);
-      const owedReason =
-        owed.length === 0
-          ? null
-          : "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
-            owed.map((entry): string => describeOwedRound(identities, entry)).join(";");
-      // `round_quorum` (maintainer ruling 2026-09-29) -- ADOPTION DIVERGENCE
-      // (9) in the header. The quorum is judged on the SAME row and only ever
-      // ADDS a failure: an owed round above is never excused by a met quorum,
-      // and an unmet quorum fails the row even when nothing above is owed.
-      // It is read from the FILE, so it applies under `--reviewers` too -- the
-      // configured set decides who is OWED, the quorum is the repository's
-      // declared floor on who HAS reviewed -- and it is `null` on the
-      // `--reviewers`-only identity path, which names no file.
+      // `round_quorum` (maintainer rulings 2026-09-29 and 2026-10-04) --
+      // ADOPTION DIVERGENCE (9) in the header. The quorum is judged on the
+      // SAME row. Unmet, it fails the row even when nothing is owed. MET, it
+      // FULFILS the owed rounds of its own UNAVAILABLE `any_of` members
+      // (`quorumExcusedRounds`); a member still in flight at head, and a
+      // non-member, are still owed. It is read from
+      // the FILE, so it applies under `--reviewers` too -- the configured set
+      // decides who is OWED, the quorum is the repository's declared rule on
+      // who HAS reviewed -- and it is `null` on the `--reviewers`-only
+      // identity path, which names no file.
       const quorum =
         roundQuorum(identities, roundInputs, head, policy, delivery) ?? undefined;
+      const { owed: stillOwed, excused } = quorumExcusedRounds(owed, quorum);
+      const owedReason =
+        stillOwed.length === 0
+          ? null
+          : "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
+            stillOwed.map((entry): string => describeOwedRound(identities, entry)).join(";");
       if (quorum === undefined || quorum.met) {
+        const excusedClause =
+          excused.length === 0
+            ? ""
+            : "; excused by the met round quorum (ruling 2026-10-04): " +
+              excused
+                .map((entry): string => `${describeOwedRound(identities, entry).replace(/\)$/, "")}; covered by round quorum)`)
+                .join(", ");
         owedRow =
           owedReason === null
-            ? passed(quorum === undefined ? null : describeQuorum(quorum), quorum)
+            ? passed(quorum === undefined ? null : `${describeQuorum(quorum)}${excusedClause}`, quorum)
             : failed(owedReason, quorum);
       } else {
         // Both failures on one row, owed first: the line a caller quotes
@@ -1388,6 +1506,7 @@ export function evaluateReady(
       // CON-32(b) rows are unknown and the carve-out cleared nothing.
       dependabotCarveOut: carveOut && headKnown,
       warnings: excludeCheckWarnings,
+      declaredExclusions: declared.outcomes,
     },
   };
 }
