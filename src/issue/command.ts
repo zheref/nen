@@ -59,9 +59,11 @@ import {
   blockingExit,
   blocksWrite,
   checkPrivateNames,
+  parseIgnoreList,
   privateNameLines,
   SKIP_PRIVATE_NAME_CHECK_FLAG,
   type CheckedText,
+  type IgnoreList,
   type PrivateNameCheck,
 } from "./privacy.js";
 import {
@@ -129,12 +131,15 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   search: { values: ["target", "subject", "files", "rule-ids", "lane-labels"] },
   "open-pr-check": { values: ["target", "issues"] },
   file: {
-    values: ["target", "title", "body-file", "label", "assignee", "forbid-family"],
+    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", "private-names-ignore-file"],
     booleans: ["dry-run", "skip-private-name-check"],
   },
-  comment: { values: ["target", "issue", "body", "body-file"], booleans: ["dry-run", "skip-private-name-check"] },
+  comment: {
+    values: ["target", "issue", "body", "body-file", "private-names-ignore-file"],
+    booleans: ["dry-run", "skip-private-name-check"],
+  },
   "edit-body": {
-    values: ["target", "issue", "body-file", "expect-body-sha256", "current-body-out"],
+    values: ["target", "issue", "body-file", "expect-body-sha256", "current-body-out", "private-names-ignore-file"],
     booleans: ["dry-run", "skip-private-name-check"],
   },
   "attach-sub": { values: ["target", "parent", "children"], booleans: ["dry-run"] },
@@ -347,6 +352,7 @@ usage:
                  --body-file <path> --label a,b --assignee <user>
                  [--forbid-family ns:family] [--dry-run]
                  [--skip-private-name-check]
+                 [--private-names-ignore-file <path>]
       Creates the issue with its labels and assignee IN THE CREATE CALL. Every
       label must exist in the target repository's taxonomy. --body-file
       resolves against --repo's root, and that resolved path is what 'gh'
@@ -355,6 +361,7 @@ usage:
   nen issue comment --target <owner/name> --issue <n>
                     (--body-file <path> | --body <text>) [--dry-run]
                     [--skip-private-name-check]
+                    [--private-names-ignore-file <path>]
       Posts ONE caller-supplied comment on ONE issue -- the general primitive
       every other verb here lacked, so a mechanized choreography no longer has
       to drop back to a hand-run 'gh issue comment' for the one step written in
@@ -374,6 +381,7 @@ usage:
                       --body-file <path> [--expect-body-sha256 <hex>]
                       [--current-body-out <path>] [--dry-run]
                       [--skip-private-name-check]
+                      [--private-names-ignore-file <path>]
       Replaces the issue's body OUTRIGHT with the file's bytes -- no
       trimming, no template, the file becomes the body exactly, through
       'gh issue edit --body-file'. --body-file is required; there is no
@@ -460,11 +468,18 @@ usage:
       that reads EMPTY refuses with exit 1 -- never a pass. nen never
       rewrites the text: redact and retry. --skip-private-name-check is the
       opt-out for a caller that has run its own check; nothing is read, and
-      every run that uses it says so on stderr. --json carries
+      every run that uses it says so on stderr.
+      --private-names-ignore-file <path> exempts names the caller ruled too
+      generic to police: one per line, '#' comments and blank lines ignored,
+      case-insensitive; a bare 'name' exempts that name under every owner,
+      an 'owner/name' line that slug only. No default path is ever read, and
+      a missing file is a usage error (exit 2). An ignored hit never blocks
+      and is never silent: 'ignored: <field>:<line>: private repository #k
+      (ignore file)' on stderr, without the name. --json carries
       'privateNameCheck: { result: clean | skipped-private-target |
       skipped-by-flag | refused | unavailable, targetVisibility, hits: [{
-      field, line, index, normalised }], error }'; a refused 'comment' report
-      carries no 'body'.
+      field, line, index, normalised, ignored }], error }'; a refused
+      'comment' report carries no 'body'.
 
   nen issue attach-sub --target <owner/name> --parent <n> --children 1,2
                        [--dry-run]
@@ -741,19 +756,45 @@ function openPr(context: CommandContext): number {
  * Its human lines go to stderr in every mode, so a passing run's stdout is
  * unchanged and the opt-out is named even under --json.
  */
-function guardPrivateNames(context: CommandContext, target: Target, fields: readonly CheckedText[]): PrivateNameCheck {
+function guardPrivateNames(
+  context: CommandContext,
+  target: Target,
+  fields: readonly CheckedText[],
+  ignore: IgnoreList | null,
+): PrivateNameCheck {
   const check = checkPrivateNames(
     context.seams,
     target,
     fields,
     context.args.booleans.has(SKIP_PRIVATE_NAME_CHECK_FLAG),
+    ignore,
   );
   for (const line of privateNameLines(check, target)) context.io.err(line);
   return check;
 }
 
+/**
+ * `--private-names-ignore-file <path>`, read BEFORE any `gh` call: absent or
+ * unreadable when given is a usage error (exit 2), and with the flag omitted
+ * nothing is read -- there is no default path. Resolved against --repo's root
+ * like every other own-path flag (zheref/nen#100).
+ */
+function readIgnoreFlag(context: CommandContext): IgnoreList | null {
+  const raw = context.args.values["private-names-ignore-file"];
+  if (raw === undefined) return null;
+  const path = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), raw);
+  return parseIgnoreList(
+    readTextFile(
+      path,
+      process.cwd(),
+      "--private-names-ignore-file names the private repositories this run may mention; a missing one is never read as an empty list.",
+    ),
+  );
+}
+
 function file(context: CommandContext): number {
   const target = requireTarget(context);
+  const ignore = readIgnoreFlag(context);
   // `--body` is `comment`'s flag, and filing keeps its own rule (see the
   // --body-file refusal below). The refusal itself falls out of ISSUE_SUBCOMMAND_FLAGS
   // above -- `file` does not declare `--body` -- and fires with
@@ -796,7 +837,7 @@ function file(context: CommandContext): number {
   const privateNameCheck = guardPrivateNames(context, target, [
     { field: "title", text: request.title },
     { field: "body", text: body },
-  ]);
+  ], ignore);
   if (blocksWrite(privateNameCheck)) {
     if (context.json) {
       context.io.out(JSON.stringify({ dryRun: context.args.booleans.has("dry-run"), filed: false, privateNameCheck }, null, 2));
@@ -830,6 +871,7 @@ function file(context: CommandContext): number {
 // do with; --target alone addresses the API, exactly as its own help text says.
 function comment(context: CommandContext): number {
   const target = requireTarget(context);
+  const ignore = readIgnoreFlag(context);
   // `--issue`, READ WITH THE HOUSE `/^\d+$/` GUARD rather than this family's
   // `Number(...)` idiom -- the rule ../cli/command.ts's readInteger and
   // splitIntegerList exist to provide, and whose docblock names this exact
@@ -931,7 +973,7 @@ function comment(context: CommandContext): number {
 
   // Checked BEFORE the dry run prints the body, and before the post. A refusal
   // under --json carries no `body`: the body is the text that names it.
-  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }]);
+  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore);
   if (blocksWrite(privateNameCheck)) {
     if (context.json) {
       context.io.out(
@@ -1018,6 +1060,7 @@ function bodyBookends(body: string): { readonly first: string; readonly last: st
 // API.
 function editBody(context: CommandContext): number {
   const target = requireTarget(context);
+  const ignore = readIgnoreFlag(context);
 
   // `--issue`, READ WITH THE HOUSE `/^\d+$/` GUARD -- see comment()'s own
   // note above for why a MUTATING number read takes the strict form rather
@@ -1173,7 +1216,7 @@ function editBody(context: CommandContext): number {
 
   // THE PRIVATE-NAME GUARD, after the conflict (which writes nothing either way)
   // and before the dry run and the write -- zheref/nen#329.
-  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }]);
+  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore);
   if (blocksWrite(privateNameCheck)) {
     if (context.json) {
       context.io.out(

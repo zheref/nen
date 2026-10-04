@@ -2947,7 +2947,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(report["privateNameCheck"]).toEqual({
       result: "refused",
       targetVisibility: "public",
-      hits: [{ field: "body", line: 1, index: 2, normalised: false }],
+      hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false }],
       error: null,
     });
     expect(result.out.join("\n")).not.toMatch(/vault/i);
@@ -3063,7 +3063,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(report["outcome"]).toBe("private-name");
     expect(report["written"]).toBe(false);
     expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([
-      { field: "body", line: 3, index: 2, normalised: false },
+      { field: "body", line: 3, index: 2, normalised: false, ignored: false },
     ]);
   });
 
@@ -3078,6 +3078,101 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect((JSON.parse(result.out.join("\n")) as { outcome: string }).outcome).toBe("private-name-check-unavailable");
   });
 
+  describe("--private-names-ignore-file", () => {
+    const ignoreFile = (text: string): string => tempFile("redaction-ignore", text);
+
+    it("a bare name in the ignore file exempts it under every owner: the post goes ahead, and the hit is reported, not silent", async () => {
+      const path = ignoreFile("# too generic to police\n\nVAULT\n");
+      const result = await capture(
+        commentArgs("the vault", "--private-names-ignore-file", path),
+        [PUBLIC, LIST, { match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
+        guarded,
+      );
+      expect(result.code).toBe(0);
+      expect(result.err).toEqual(["nen issue: ignored: body:1: private repository #2 (ignore file)"]);
+    });
+
+    it("--json records the ignored hit as ignored: true, with a clean verdict", async () => {
+      const path = ignoreFile("vault\n");
+      const result = await capture(
+        commentArgs("the vault", "--dry-run", "--private-names-ignore-file", path),
+        [PUBLIC, LIST],
+        { ...guarded, json: true },
+      );
+      expect(result.code).toBe(0);
+      const report = JSON.parse(result.out.join("\n")) as { privateNameCheck: unknown };
+      expect(report.privateNameCheck).toEqual({
+        result: "clean",
+        targetVisibility: "public",
+        hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: true }],
+        error: null,
+      });
+    });
+
+    it("an owner/name line exempts that slug only: the same name under another owner still refuses", async () => {
+      const path = ignoreFile("acme/vault\n");
+      const twin = listOf(["acme/vault", "other/vault"]);
+      const result = await capture(commentArgs("the vault", "--private-names-ignore-file", path), [PUBLIC, twin], guarded);
+      expect(result.code).toBe(4);
+      expect(writes(result.calls)).toEqual([]);
+      const exact = await capture(
+        commentArgs("the vault", "--dry-run", "--private-names-ignore-file", path),
+        [PUBLIC, LIST],
+        guarded,
+      );
+      expect(exact.code).toBe(0);
+    });
+
+    it("an ignored hit beside a policed one: still exit 4, both reported, the name never printed", async () => {
+      const path = ignoreFile("vault\n");
+      const result = await capture(
+        commentArgs("vault and hidden-thing", "--private-names-ignore-file", path),
+        [PUBLIC, LIST],
+        guarded,
+      );
+      expect(result.code).toBe(4);
+      const err = result.err.join("\n");
+      expect(err).toContain("ignored: body:1: private repository #2 (ignore file)");
+      expect(err).toContain("nen issue: body:1: private repository #1");
+      expect(err).toMatch(/1 mention\(s\)/);
+      expect(err).not.toMatch(/vault|hidden-thing/i);
+    });
+
+    it("a missing ignore file is a usage error (exit 2) before any gh call", async () => {
+      for (const argv of [
+        commentArgs("x", "--private-names-ignore-file", "/nonexistent/redaction-ignore"),
+        ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", tempFile("b.md", "x\n"),
+          "--private-names-ignore-file", "/nonexistent/redaction-ignore"],
+      ]) {
+        const result = await capture(argv, [], guarded);
+        expect(result.code).toBe(2);
+        expect(result.calls).toEqual([]);
+      }
+    });
+
+    it("works on 'file' too, and on 'edit-body'", async () => {
+      const ignore = ignoreFile("hidden-thing\n");
+      const body = tempFile("body.md", "about hidden-thing\n");
+      const filed = await capture(
+        [
+          "issue", "file", "--target", "o/n", "--title", "t", "--body-file", body,
+          "--label", "bankai:severity/low", "--assignee", "me", "--dry-run", "--private-names-ignore-file", ignore,
+        ],
+        [PUBLIC, LIST],
+        { ...guarded, repoFlag: BANKAI_REPO },
+      );
+      expect(filed.code).toBe(0);
+      expect(filed.err).toEqual(["nen issue: ignored: body:1: private repository #1 (ignore file)"]);
+      const edited = await capture(
+        ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", body, "--dry-run",
+          "--private-names-ignore-file", ignore],
+        [CERTIFY, PUBLIC, LIST],
+        guarded,
+      );
+      expect(edited.code).toBe(0);
+    });
+  });
+
   it("the opt-out belongs to the three writing verbs only: 'search' refuses it as foreign (exit 2)", async () => {
     const result = await capture(["issue", "search", "--target", "o/n", "--subject", "x", "--skip-private-name-check"]);
     expect(result.code).toBe(2);
@@ -3088,5 +3183,6 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(out).toMatch(/PRIVATE REPOSITORY NAMES/);
     expect(out).toMatch(/REFUSES with exit 4/);
     expect(out).toMatch(/--skip-private-name-check/);
+    expect(out).toMatch(/--private-names-ignore-file <path>/);
   });
 });

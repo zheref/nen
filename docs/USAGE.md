@@ -5443,6 +5443,7 @@ nen issue file --target <owner/name> --repo <path> --title <t>
                --body-file <path> --label a,b --assignee <user>
                [--forbid-family ns:family] [--dry-run]
                [--skip-private-name-check]
+               [--private-names-ignore-file <path>]
 ```
 
 **Arguments**
@@ -5458,6 +5459,7 @@ nen issue file --target <owner/name> --repo <path> --title <t>
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Caller data -- nen carries no repository's own "which family means released" convention. |
 | `--dry-run` | no | Print the exact `gh issue create` argv and write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs here too, so a dry run's verdict is the real run's. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; every run that uses it says so on stderr, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 
 **Output and exit codes** -- human rendering: `filed #<n> <url>` on success, or `would run: gh issue create ...` under `--dry-run`. `--json`: `{ ...FileResult, labels, privateNameCheck }` on success (`FileResult` = `{ url, number }`), `{ dryRun: true, argv, privateNameCheck }` under `--dry-run`, `{ dryRun, filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses. Refusals are ALWAYS printed as plain `nen: <reason>` lines to stderr, even under `--json` -- a caller in JSON mode still gets prose for a refusal, only the success path is machine-shaped. Exit 0 on a successful file (dry or real); exit 1 when title/labels/assignee/label-taxonomy/forbidden-family checks fail (every failing check is reported at once, not one round trip at a time); exit 2 when `--repo` or `--body-file` was omitted outright, `--body-file` cannot be read, or the label taxonomy itself could not be loaded; exit **4** when the [private-name guard](#the-private-name-guard) finds a private repository named in the title or body of a filing to a PUBLIC target, and exit 1 when that guard could not run.
 
@@ -5484,6 +5486,7 @@ The general primitive the rest of the family lacked: post ONE caller-supplied co
 nen issue comment --target <owner/name> --issue <n>
                   (--body-file <path> | --body <text>) [--dry-run]
                   [--skip-private-name-check]
+                  [--private-names-ignore-file <path>]
 ```
 
 **Arguments**
@@ -5496,6 +5499,7 @@ nen issue comment --target <owner/name> --issue <n>
 | `--body-file <path>` | one of these two | The comment text, from a file -- keeps a body of any size off the command line. | An unreadable path, or one holding only whitespace, is refused. |
 | `--dry-run` | no | Print the exact `gh` call AND the exact bytes it would send; write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs first, and a refusal prints no body. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; named on stderr in every run that uses it. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 
 **Output and exit codes** -- prints `commented on <target>#<issue> <url>` (or, when `gh` printed no URL, says so explicitly rather than inventing one). `--dry-run` prints `would run: gh ...` plus the body fenced between `--- body as it would be posted ---` / `--- end of body ...---`, stating explicitly whether the body ends with a trailing newline. `--json`: `{ dryRun, target, issue, source, argv, body, url?, privateNameCheck }`; when the [private-name guard](#the-private-name-guard) refuses, `{ dryRun, target, issue, source, posted: false, privateNameCheck }` -- with **no `body`**, because the body is the text that names it. Exit 0 on a successful post (dry or real); exit 2 on a malformed/absent body or issue number; exit **4** when the guard finds a private repository named in a comment bound for a PUBLIC target; exit 1 when the guard could not run.
 
@@ -5532,6 +5536,7 @@ write.
 nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
                     [--expect-body-sha256 <hex>] [--current-body-out <path>]
                     [--dry-run] [--skip-private-name-check]
+                    [--private-names-ignore-file <path>]
 ```
 
 **Arguments**
@@ -5545,6 +5550,7 @@ nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
 | `--current-body-out <path>` | no | Write the **exact bytes of the certifying read** to `<path>`, on a dry run and on a conflict — the safe source for the next expectation: fold from that file, and its sha256 is the one the report printed. | Never written on a real write that proceeds. Refused (exit 2) when it names the `--body-file` — the same path, or, when both exist, the same file by identity (device + inode, following links: a symlink, a hard link or a case-insensitive alias) — because a conflict would overwrite your fold. A dry run that cannot write it exits 1; a conflict that cannot write it stays exit 3 and says so (`currentBodyOut.written: false`). |
 | `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has — and runs the [private-name guard](#the-private-name-guard). |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 
 **Output and exit codes** — human line on a real write: `replaced
 <target>#<issue>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh
@@ -5690,15 +5696,27 @@ zheref/hatsu's `scripts/private_name_check.sh`.
   list, a list that fills 100 pages (and so may be truncated) and a list that
   reads **EMPTY** are each a refusal at exit **1** — never a pass. A token that
   cannot see private repositories would otherwise read green.
+- **The ignore file** is `--private-names-ignore-file <path>`: private
+  repositories the caller has ruled too generic to police — one per line, `#`
+  comments and blank lines ignored, case-insensitive. A bare `name` exempts
+  that name under every owner; an `owner/name` line exempts that slug only (a
+  name shared by two owners stays policed until both are exempt). **No default
+  path is ever read**: a caller that keeps one passes it (Hatsu passes its own
+  `~/.config/hatsu/redaction-ignore`), and a missing or unreadable file is a
+  usage error (exit **2**) before any `gh` call, never an empty list. An
+  ignored hit does not block and is **never silent**: stderr prints `nen issue:
+  ignored: <field>:<line>: private repository #<k> (ignore file)`, without the
+  name, and `--json` records it with `ignored: true`.
 - **The opt-out** is `--skip-private-name-check`, for a caller that has run its
-  own check (one with an ignore list, say — nen carries none). Nothing is read,
-  the run says so on stderr every time, and `--json` reports it.
+  own check. Nothing is read, the run says so on stderr every time, and
+  `--json` reports it.
 
 Every `--json` report of the three verbs carries `privateNameCheck: { result,
-targetVisibility, hits: [{ field, line, index, normalised }], error }`, where
-`result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
-`refused` | `unavailable`. A clean run and a private target add nothing to the
-human output.
+targetVisibility, hits: [{ field, line, index, normalised, ignored }], error
+}`, where `result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
+`refused` | `unavailable`; a run whose only hits are ignored is `clean` and
+still lists them. A clean run with no hits and a private target add nothing to
+the human output.
 
 ### `nen issue attach-sub`
 

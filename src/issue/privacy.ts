@@ -27,11 +27,18 @@
 //   - the refusal NEVER prints the name: a hit is an index into the sorted list
 //     and the line it was found on.
 //
-// WHAT IS NOT CARRIED OVER, deliberately: the script's per-machine ignore file
-// and its one named exemption (a marker quoted byte for byte by one consumer's
-// generator). Both are that consumer's policy, not a property of the check, and
-// an exemption nen invented would be a hole nobody reviewed. The caller that
-// needs either runs its own check and passes the opt-out.
+// THE IGNORE FILE, and only when the caller names it. `--private-names-ignore-
+// file <path>` lists private repositories the caller has ruled too generic to
+// police -- one per line, `#` comments and blanks ignored; a bare `name`
+// exempts that name under every owner, an `owner/name` line that slug only,
+// case-insensitive. No default path is ever read: an ignore list nen found on
+// its own is an exemption nobody passed. An ignored hit is NEVER silent -- it is
+// reported (stderr, and `ignored: true` under --json), it just does not block.
+//
+// WHAT IS NOT CARRIED OVER, deliberately: the script's one named exemption (a
+// marker quoted byte for byte by one consumer's generator). That is the
+// consumer's policy, not a property of the check, and an exemption nen invented
+// would be a hole nobody reviewed.
 //
 // FAIL CLOSED, ALWAYS. An unreadable target visibility, an unreadable list, a
 // list that may be truncated and a list that reads EMPTY are each a refusal --
@@ -68,6 +75,33 @@ export interface PrivateNameHit {
   readonly index: number;
   /** True when it was found only once the line was normalised. */
   readonly normalised: boolean;
+  /** True when the caller's ignore file exempts this name: reported, never blocking. */
+  readonly ignored: boolean;
+}
+
+/**
+ * The caller's ignore list: bare names (exempt under every owner) and
+ * `owner/name` slugs (exempt for that repository only), both lowercase.
+ */
+export interface IgnoreList {
+  readonly names: ReadonlySet<string>;
+  readonly slugs: ReadonlySet<string>;
+}
+
+/**
+ * Parse an ignore file's text: one entry per line, `#` to end of line a
+ * comment, whitespace removed, blank lines skipped, compared lowercase.
+ */
+export function parseIgnoreList(text: string): IgnoreList {
+  const names = new Set<string>();
+  const slugs = new Set<string>();
+  for (const raw of text.split(/\r?\n/)) {
+    const entry = raw.replace(/#.*/, "").replace(/\s+/g, "").toLowerCase();
+    if (entry === "") continue;
+    if (entry.includes("/")) slugs.add(entry);
+    else names.add(entry);
+  }
+  return { names, slugs };
 }
 
 /** One field of text to check, named for the report. */
@@ -205,6 +239,12 @@ function sortedUnique(values: readonly string[]): readonly string[] {
 export interface NameMatcher {
   readonly pattern: RegExp;
   readonly indexOf: ReadonlyMap<string, number>;
+  /**
+   * Lowercase names the ignore list exempts: a name is exempt only when EVERY
+   * list entry carrying it is -- ignoring `a/thing` leaves `b/thing` policed,
+   * and the two share one index, so the name still blocks.
+   */
+  readonly ignored: ReadonlySet<string>;
 }
 
 function escapeRegExp(text: string): string {
@@ -216,22 +256,27 @@ function escapeRegExp(text: string): string {
  * first entry wins a case twin across owners, so they share one index.
  * Longest first, so a name that is a prefix of another never shadows it.
  */
-export function compileMatcher(list: readonly string[]): NameMatcher {
+export function compileMatcher(list: readonly string[], ignore: IgnoreList | null = null): NameMatcher {
   const indexOf = new Map<string, number>();
   const names: string[] = [];
+  const policed = new Set<string>();
   list.forEach((entry, position): void => {
     const name = entry.replace(/^.*\//, "");
     const key = name.toLowerCase();
-    if (name === "" || indexOf.has(key)) return;
+    if (name === "") return;
+    const exempt = ignore !== null && (ignore.names.has(key) || ignore.slugs.has(entry.toLowerCase()));
+    if (!exempt) policed.add(key);
+    if (indexOf.has(key)) return;
     indexOf.set(key, position + 1);
     names.push(name);
   });
+  const ignored = new Set([...indexOf.keys()].filter((key): boolean => !policed.has(key)));
   const alternation = names
     .sort((a, b): number => b.length - a.length)
     .map(escapeRegExp)
     .join("|");
   const pattern = new RegExp(`(?<![A-Za-z0-9-])(${alternation})(?![A-Za-z0-9-])`, "gi");
-  return { pattern, indexOf };
+  return { pattern, indexOf, ignored };
 }
 
 /** Named HTML entities the normalised reading decodes -- the script's own table. */
@@ -313,7 +358,7 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
           const index = matcher.indexOf.get(key);
           if (index === undefined) continue;
           reported.add(key);
-          hits.push({ field, line: offset + 1, index, normalised });
+          hits.push({ field, line: offset + 1, index, normalised, ignored: matcher.ignored.has(key) });
         }
       };
       scan(line, false);
@@ -339,6 +384,7 @@ export function checkPrivateNames(
   target: Target,
   fields: readonly CheckedText[],
   skip: boolean,
+  ignore: IgnoreList | null = null,
 ): PrivateNameCheck {
   if (skip) return { result: "skipped-by-flag", targetVisibility: null, hits: [], error: null };
   let visibility: Visibility;
@@ -358,8 +404,9 @@ export function checkPrivateNames(
     if (!(error instanceof PrivateListUnavailableError)) throw error;
     return { result: "unavailable", targetVisibility: visibility, hits: [], error: error.message };
   }
-  const hits = findPrivateNames(compileMatcher(list), fields);
-  return { result: hits.length > 0 ? "refused" : "clean", targetVisibility: visibility, hits, error: null };
+  const hits = findPrivateNames(compileMatcher(list, ignore), fields);
+  const blocking = hits.some((hit): boolean => !hit.ignored);
+  return { result: blocking ? "refused" : "clean", targetVisibility: visibility, hits, error: null };
 }
 
 /** Whether a verdict stops the write. */
@@ -378,8 +425,15 @@ export function blockingExit(check: PrivateNameCheck): number {
  * unchanged. The opt-out is always named.
  */
 export function privateNameLines(check: PrivateNameCheck, target: Target): readonly string[] {
+  const where = (hit: PrivateNameHit): string =>
+    `${hit.field}:${hit.line}: private repository #${hit.index}${hit.normalised ? " (spelt through an escape, entity, encoding, markup or invisible character)" : ""}`;
+  // An ignored hit is never silent, whatever the verdict.
+  const ignoredLines = check.hits
+    .filter((hit): boolean => hit.ignored)
+    .map((hit): string => `nen issue: ignored: ${where(hit)} (ignore file)`);
   switch (check.result) {
     case "clean":
+      return ignoredLines;
     case "skipped-private-target":
       return [];
     case "skipped-by-flag":
@@ -391,14 +445,14 @@ export function privateNameLines(check: PrivateNameCheck, target: Target): reado
         `nen issue: private-name check could not run -- ${check.error ?? "unknown error"}.`,
         `  ${target.slug} may be public, so nothing was written: a check that cannot read is a refusal, never a pass. Fix the read, or pass --${SKIP_PRIVATE_NAME_CHECK_FLAG} after running your own check.`,
       ];
-    case "refused":
+    case "refused": {
+      const blocking = check.hits.filter((hit): boolean => !hit.ignored);
       return [
-        ...check.hits.map(
-          (hit): string =>
-            `nen issue: ${hit.field}:${hit.line}: private repository #${hit.index}${hit.normalised ? " (spelt through an escape, entity, encoding, markup or invisible character)" : ""}`,
-        ),
-        `nen issue: ${check.hits.length} mention(s) of a private repository in text bound for PUBLIC ${target.slug}; nothing was written. Redact them and retry.`,
+        ...ignoredLines,
+        ...blocking.map((hit): string => `nen issue: ${where(hit)}`),
+        `nen issue: ${blocking.length} mention(s) of a private repository in text bound for PUBLIC ${target.slug}; nothing was written. Redact them and retry.`,
         `  #k indexes the credential's private list, sorted bytewise: gh api --paginate 'user/repos?visibility=private&per_page=100' -q '.[].full_name' | LC_ALL=C sort -u | sed -n '<k>p'`,
       ];
+    }
   }
 }

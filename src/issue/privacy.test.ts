@@ -7,6 +7,7 @@ import {
   compileMatcher,
   findPrivateNames,
   normalise,
+  parseIgnoreList,
   privateNameLines,
   readPrivateList,
   readTargetVisibility,
@@ -94,6 +95,29 @@ describe("private-name matching (zheref/nen#329)", () => {
 
   it("normalise() folds dashes and drops format characters", () => {
     expect(normalise("a—b­c")).toBe("a-bc");
+  });
+});
+
+describe("the ignore list", () => {
+  it("parses names and slugs, lowercase, skipping comments, blanks and whitespace", () => {
+    const list = parseIgnoreList("# header\n\n  Vault  # generic\nAcme/Thing\r\n");
+    expect([...list.names]).toEqual(["vault"]);
+    expect([...list.slugs]).toEqual(["acme/thing"]);
+  });
+
+  it("exempts a case twin only when every owner carrying the name is ignored", () => {
+    const both = compileMatcher(["a/Thing", "b/thing"], parseIgnoreList("thing\n"));
+    expect(both.ignored.has("thing")).toBe(true);
+    const one = compileMatcher(["a/Thing", "b/thing"], parseIgnoreList("a/thing\n"));
+    expect(one.ignored.has("thing")).toBe(false);
+  });
+
+  it("marks an ignored hit, and a check with only ignored hits is clean but reports them", () => {
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault"])]);
+    const check = checkPrivateNames(seams, TARGET, [{ field: "body", text: "vault" }], false, parseIgnoreList("vault"));
+    expect(check.result).toBe("clean");
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true }]);
+    expect(privateNameLines(check, TARGET)).toEqual(["nen issue: ignored: body:1: private repository #1 (ignore file)"]);
   });
 });
 
