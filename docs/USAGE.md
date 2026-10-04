@@ -2517,10 +2517,10 @@ branch; `branch.base` in this checkout's `nen/workflow.json` (`main` when
 absent); `branch.base` in `nen/workflow.json` **at the pull request's base
 commit** (so a head that edits `branch.base` cannot dodge it) and **at the
 default branch**. It is also refused when GitHub reports the base `protected`
-(`gh api repos/{slug}/branches/{base}`), when a ruleset targets it (`gh api
+(`gh api repos/{slug}/branches/{base}`, the name percent-encoded as ONE path component: `opus%2Fkurapika%2Fx`), when a ruleset targets it (`gh api
 repos/{slug}/rules/branches/{base}` non-empty), or when an open pull request
 whose head is the base aims at a protected name with auto-merge enabled
-(`gh pr list --head <base> --state open`) — or at a target GitHub reports
+(`gh pr list --head <base> --state open --limit 1000`; a list that fills the limit cannot be proven complete and is unknown, exit 1, as is an auto-merge entry that names no base) — or at a target GitHub reports
 protected or a ruleset binds. That chain check covers **one hop**: each
 auto-merge target is judged like a base, but a chain onward from that target
 is not walked. The transcript and the `--json`
@@ -2542,7 +2542,9 @@ integration branches.
 1. **base** — fails (exit 1, nothing merged) when ANY read above fails or is
    empty: the pull request, its `baseRefName`, a `baseRefOid` that is not a
    SHA, the default branch, either remote `nen/workflow.json` (an absent file
-   included — the contents route answers both alike), the protection or
+   included — the contents route answers both alike — or a `branch` block
+   `nen/workflow.json`'s own loader would refuse, such as a `branch.template`
+   with no `{descriptor}`), the protection or
    rules reads, or the auto-merge chain. Unknown is never a pass.
 2. **`pr ready`** — in-process, `--require-head` passed through.
 3. **head pin** — as `--release-unit`'s.

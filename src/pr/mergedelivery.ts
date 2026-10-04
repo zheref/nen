@@ -61,8 +61,8 @@ import {
   type PrOnce,
 } from "./mergeunit.js";
 import type { BodyRequirement } from "./bodycheck.js";
-import { DEFAULT_BASE, DEFAULT_BRANCH_TEMPLATE, loadWorkflow } from "../schema/workflow.js";
-import { fetchJsonAtRef } from "../release/unitcheck.js";
+import { loadWorkflow, parseBranchPolicy } from "../schema/workflow.js";
+import { fetchJsonAtRef, type JValue } from "../release/unitcheck.js";
 import { SchemaError } from "../schema/errors.js";
 import { GH, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import type { PrReadyDeps } from "../verbs/pr_ready.js";
@@ -164,12 +164,15 @@ function branchName(raw: unknown): string | null {
   return name === "" ? null : name;
 }
 
-/** A branch name as one URL path, each segment encoded the way ../release/unitcheck.ts encodes a contents path. */
+/**
+ * A branch name as ONE percent-encoded path component (Copilot round 1 on
+ * NN-PR-#377): `branches/{branch}` and `rules/branches/{branch}` take the
+ * whole name as one segment, so `opus/kurapika/x` is sent as
+ * `opus%2Fkurapika%2Fx` -- per-segment encoding addressed a different URL and
+ * blocked every run-style base.
+ */
 function branchPath(name: string): string {
-  return name
-    .split("/")
-    .map((segment): string => encodeURIComponent(segment))
-    .join("/");
+  return encodeURIComponent(name);
 }
 
 /** GitHub's own default branch -- the same `gh repo view` read ../runner/preflight.ts makes. `null` when it named none. */
@@ -203,15 +206,34 @@ interface PolicyAtRef {
 function readPolicyAt(seams: Seams, target: Target, ref: string): PolicyAtRef {
   const root = fetchJsonAtRef(seams, target, "nen/workflow.json", encodeURIComponent(ref));
   if (root === null || root.kind !== "object") return { branchBase: null, template: null };
-  const branch = root.entries.get("branch");
-  if (branch === undefined) return { branchBase: DEFAULT_BASE, template: DEFAULT_BRANCH_TEMPLATE };
-  if (branch.kind !== "object") return { branchBase: null, template: null };
-  const base = branch.entries.get("base");
-  const template = branch.entries.get("template");
-  return {
-    branchBase: base === undefined ? DEFAULT_BASE : base.kind === "string" ? branchName(base.value) : null,
-    template: template === undefined ? DEFAULT_BRANCH_TEMPLATE : template.kind === "string" && template.value !== "" ? template.value : null,
-  };
+  // Held to ../schema/workflow.ts's OWN `branch` rules (Copilot round 1):
+  // a template with no `{descriptor}`, a base git or a shell would not take,
+  // a near-miss key -- any refusal there is UNREADABLE here, never a pass.
+  try {
+    const policy = parseBranchPolicy(`${target.slug}@${ref}:nen/workflow.json`, toPlain(root.entries.get("branch")));
+    return { branchBase: branchName(policy.base), template: policy.template };
+  } catch (error) {
+    if (error instanceof SchemaError) return { branchBase: null, template: null };
+    throw error;
+  }
+}
+
+/** A `JValue` as the plain value `JSON.parse` would have produced -- what the schema parsers take. */
+function toPlain(value: JValue | undefined): unknown {
+  if (value === undefined) return undefined;
+  switch (value.kind) {
+    case "object":
+      return Object.fromEntries([...value.entries].map(([key, entry]): [string, unknown] => [key, toPlain(entry)]));
+    case "array":
+      return value.items.map((item): unknown => toPlain(item));
+    case "number":
+      return value.value;
+    case "string":
+    case "boolean":
+      return value.value;
+    default:
+      return null;
+  }
 }
 
 /**
@@ -265,16 +287,40 @@ interface ChainEntry {
   readonly autoMergeRequest?: unknown;
 }
 
-/** F4: the open pull requests whose HEAD is this PR's base. */
+/**
+ * `gh pr list`'s ceiling for the chain read (Copilot round 1): its default of
+ * 30 would silently drop the 31st open pull request. A page that comes back
+ * FULL cannot be told from a list that was cut off, so it is refused as
+ * incomplete -- unknown, exit 1 -- rather than read as every entry there is.
+ */
+export const CHAIN_LIMIT = 1000;
+
+/** F4: the open pull requests whose HEAD is this PR's base -- all of them, or a refusal. */
 function readChain(seams: Seams, target: Target, base: string): { readonly ok: true; readonly entries: readonly ChainEntry[] } | { readonly ok: false; readonly message: string } {
   let entries: unknown;
   try {
-    entries = mustJson<unknown>(seams, GH, ["pr", "list", "--repo", target.slug, "--head", base, "--state", "open", "--json", "number,baseRefName,autoMergeRequest"]);
+    entries = mustJson<unknown>(seams, GH, [
+      "pr",
+      "list",
+      "--repo",
+      target.slug,
+      "--head",
+      base,
+      "--state",
+      "open",
+      "--limit",
+      String(CHAIN_LIMIT),
+      "--json",
+      "number,baseRefName,autoMergeRequest",
+    ]);
   } catch (error) {
     if (error instanceof ToolError) return { ok: false, message: redactRemoteCredentials(error.message) };
     throw error;
   }
   if (!Array.isArray(entries)) return { ok: false, message: "gh pr list answered something that is not a list" };
+  if (entries.length >= CHAIN_LIMIT) {
+    return { ok: false, message: `gh pr list returned ${entries.length} entries, its --limit of ${CHAIN_LIMIT}, so the list may be cut off and its completeness cannot be proven` };
+  }
   return { ok: true, entries: entries as readonly ChainEntry[] };
 }
 
@@ -475,8 +521,14 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
       for (const entry of chain.entries) {
         if (entry.autoMergeRequest === null || entry.autoMergeRequest === undefined) continue;
         const into = branchName(entry.baseRefName);
-        const label = `#${String(entry.number)} into '${into ?? "(unnamed)"}'`;
-        if (into === null || names.has(into)) {
+        if (into === null) {
+          // UNREAD, not proven protected (Copilot round 1): an ordinary failed
+          // gate, never the ruling's refusal.
+          unknowns.push(`auto-merge pull request #${String(entry.number)} answered no base branch name, so where it would carry this merge is unknown`);
+          continue;
+        }
+        const label = `#${String(entry.number)} into '${into}'`;
+        if (names.has(into)) {
           carried.push(label);
           continue;
         }

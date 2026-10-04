@@ -148,13 +148,13 @@ function workflowAt(ref: string, workflow: unknown = { branch: { base: "main" } 
 
 function protectionCalls(base: string = INTEGRATION, isProtected: unknown = false, rules: unknown = []): ScriptedCall[] {
   return [
-    { match: `gh api repos/zheref/example/branches/${base}`, result: { code: 0, stdout: JSON.stringify({ name: base, protected: isProtected }) } },
-    { match: `gh api repos/zheref/example/rules/branches/${base}`, result: { code: 0, stdout: JSON.stringify(rules) } },
+    { match: `gh api repos/zheref/example/branches/${encodeURIComponent(base)}`, result: { code: 0, stdout: JSON.stringify({ name: base, protected: isProtected }) } },
+    { match: `gh api repos/zheref/example/rules/branches/${encodeURIComponent(base)}`, result: { code: 0, stdout: JSON.stringify(rules) } },
   ];
 }
 
 function chainMatch(base: string = INTEGRATION): string {
-  return `gh pr list --repo zheref/example --head ${base} --state open --json number,baseRefName,autoMergeRequest`;
+  return `gh pr list --repo zheref/example --head ${base} --state open --limit 1000 --json number,baseRefName,autoMergeRequest`;
 }
 
 function chainCall(base: string = INTEGRATION, entries: unknown = []): ScriptedCall {
@@ -324,13 +324,38 @@ describe("mergeDelivery -- refused by ruling (exit 2, the document still emitted
       tmpRoot(),
       script({
         chain: chainCall(INTEGRATION, [{ number: 14, baseRefName: "release/1.x", autoMergeRequest: { enabledAt: "x" } }]),
-        protection: [...protectionCalls(), { match: "gh api repos/zheref/example/branches/release/1.x", result: { code: 1, stderr: "HTTP 403" } }],
+        protection: [...protectionCalls(), { match: "gh api repos/zheref/example/branches/release%2F1.x", result: { code: 1, stderr: "HTTP 403" } }],
       }),
     );
     expect(outcome.report.refused).toBe(false);
     expect(outcome.report.baseOk).toBe(false);
     expect(exitOf(outcome.report)).toBe(1);
     expect(outcome.lines[0]).toMatch(/auto-merge target 'release\/1\.x' of #14/);
+  });
+
+  it("reads every open pull request on the chain, past gh's default 30 (Copilot round 1)", async () => {
+    const entries = Array.from({ length: 31 }, (_, index) => ({ number: 100 + index, baseRefName: "other/integration", autoMergeRequest: null }));
+    entries.push({ number: 131, baseRefName: "main", autoMergeRequest: { enabledAt: "x" } as never });
+    const outcome = await run(tmpRoot(), script({ chain: chainCall(INTEGRATION, entries), viewer: null }));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.lines[0]).toMatch(/#131 into 'main'/);
+  });
+
+  it("refuses as unknown (exit 1) a chain list that fills --limit, whose completeness cannot be proven", async () => {
+    const entries = Array.from({ length: 1000 }, (_, index) => ({ number: index + 1, baseRefName: "other/integration", autoMergeRequest: null }));
+    const outcome = await run(tmpRoot(), script({ chain: chainCall(INTEGRATION, entries) }));
+    expect(outcome.report.refused).toBe(false);
+    expect(outcome.report.baseOk).toBe(false);
+    expect(exitOf(outcome.report)).toBe(1);
+    expect(outcome.lines[0]).toMatch(/its --limit of 1000, so the list may be cut off/);
+  });
+
+  it("an auto-merge entry with no baseRefName is UNREAD -- exit 1, not a refusal by ruling (Copilot round 1)", async () => {
+    const outcome = await run(tmpRoot(), script({ chain: chainCall(INTEGRATION, [{ number: 15, autoMergeRequest: { enabledAt: "x" } }]) }));
+    expect(outcome.report.refused).toBe(false);
+    expect(outcome.report.baseOk).toBe(false);
+    expect(exitOf(outcome.report)).toBe(1);
+    expect(outcome.lines[0]).toMatch(/auto-merge pull request #15 answered no base branch name/);
   });
 
   it("lets a chain through when its auto-merge is off or its target is unprotected", async () => {
@@ -393,7 +418,7 @@ describe("mergeDelivery -- a base nobody could establish is a failed gate (exit 
 
   it("GitHub's protection cannot be read (F2)", async () => {
     await expectUnknown(
-      script({ protection: [{ match: `gh api repos/zheref/example/branches/${INTEGRATION}`, result: { code: 1, stderr: "HTTP 403" } }] }),
+      script({ protection: [{ match: `gh api repos/zheref/example/branches/${encodeURIComponent(INTEGRATION)}`, result: { code: 1, stderr: "HTTP 403" } }] }),
       /could not read GitHub's protection/,
     );
   });
@@ -439,6 +464,35 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     const outcome = await run(tmpRoot(), script({ pr: prOnceCall({ headRefName: "feature/x" }) }));
     expect(outcome.report.wholeOk).toBe(false);
     expect(outcome.lines.join("\n")).toMatch(/head 'feature\/x' is not in the run form of branch\.template '\{model\}\/\{persona\}\/\{descriptor\}'/);
+  });
+
+  it("addresses a slash-bearing base as ONE encoded path component (Copilot round 1)", async () => {
+    const seams = new ScriptedSeams(script());
+    const root = tmpRoot();
+    const outcome = await mergeDelivery({
+      typedRef: "zheref/example#9",
+      repoFlag: root,
+      requirements: REQUIREMENTS,
+      requireHead: null,
+      run: false,
+      seams,
+      root,
+      deps: readyDeps(readySource()),
+    });
+    expect(outcome.report.ok).toBe(true);
+    const lines = seams.calls.map((call) => [call.command, ...call.args].join(" "));
+    expect(lines).toContain("gh api repos/zheref/example/branches/opus%2Fkurapika%2Ffuton-integration");
+    expect(lines).toContain("gh api repos/zheref/example/rules/branches/opus%2Fkurapika%2Ffuton-integration");
+    expect(lines.some((line) => line.includes("branches/opus/kurapika"))).toBe(false);
+  });
+
+  it("a base-commit branch.template with no {descriptor} is UNREADABLE: the whose gate fails, exit 1 (Copilot round 1)", async () => {
+    const outcome = await run(tmpRoot(), script({ baseWorkflow: workflowAt(BASE_OID, { branch: { base: "main", template: "runs/fixed" } }) }));
+    expect(outcome.report.refused).toBe(false);
+    expect(outcome.report.wholeOk).toBe(false);
+    expect(outcome.report.ok).toBe(false);
+    expect(exitOf(outcome.report)).toBe(1);
+    expect(outcome.lines.join("\n")).toMatch(/branch\.template at the pull request's base commit could not be read/);
   });
 
   it("refuses a pull request that answers no headRefName (round 2, N5)", async () => {

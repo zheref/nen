@@ -466,7 +466,10 @@ merge --delivery (zheref/nen#286):
   branch for --delivery to work: an absent file reads as unknown (exit 1).
   A ruleset matching every branch (e.g. ~ALL) refuses every base until it
   excludes the integration branches. The auto-merge chain check covers ONE
-  hop: each auto-merge target is judged like a base, its own chain is not.
+  hop: each auto-merge target is judged like a base, its own chain is not;
+  a chain list that fills gh's --limit 1000, or an entry naming no base, is
+  unknown (exit 1). A remote 'branch' block is held to nen/workflow.json's
+  own loader rules (a branch.template must carry {descriptor}).
   Exit codes: 0 merged, or a passing plan without --run; 1 a gate did not
   pass (an unknown base included); 2 usage, OR refused by ruling -- told
   apart by 'refused by ruling' on stdout and refused: true in --json, where
