@@ -45,8 +45,10 @@ import {
   type InstallPlan,
   type InstallStepReport,
 } from "./install.js";
+import { EXIT_BEHIND_PINNED_REF, EXIT_TOOL_NOT_INSTALLED } from "./exit.js";
 import { renderArgv, type RenderedStep } from "./render.js";
 import {
+  behindPinnedRef,
   minimumBelowFloor,
   parseMinimum,
   parsePin,
@@ -151,14 +153,28 @@ export interface ToolRow {
   readonly install: RowInstall | null;
   /** The declaration's own reason for the pin. Never nen's. */
   readonly why: string | null;
+  /**
+   * `dependency.pinned_ref`, verbatim, on the `dependency` row -- the ref that
+   * repository's bootstrap installs. `null` on every `project.toolchain` row,
+   * which pins a version rather than a ref (zheref/nen#327).
+   */
+  readonly pinnedRef: string | null;
+  /**
+   * The host's version against `pinnedRef`: `true` behind it, `false` at or
+   * above it, `null` when NO COMPARISON WAS MADE -- no ref on this row, nothing
+   * observed or no version read, or a `pinned_ref` that is not a release tag
+   * (a branch, a SHA, a bare year). Null is never "not behind".
+   */
+  readonly behindPinnedRef: boolean | null;
 }
 
 /**
  * The whole report in numbers, so a caller does not have to count rows to learn
  * what happened.
  *
- * THE FOUR STATE COUNTS SUM TO `checked`, always -- which is what makes them
- * readable as a whole rather than as four unrelated numbers, and is why
+ * THE FIVE STATE COUNTS SUM TO `checked`, always (`satisfied`, `behind`,
+ * `missing`, `wrong`, `notProbed` -- `behind` appended last, zheref/nen#327) -- which is what makes them
+ * readable as a whole rather than as five unrelated numbers, and is why
  * `notProbed` is here even though it is only ever non-zero under `--dry-run`.
  *
  * `notInstallable` IS THE ONE THAT EXPLAINS AN EXIT CODE. Under `--install` the
@@ -179,6 +195,12 @@ export interface ToolsSummary {
   readonly refused: number;
   /** Rows that do not pass and that nen has no installer for. */
   readonly notInstallable: number;
+  /**
+   * Rows that satisfy their minimum and are behind `dependency.pinned_ref`
+   * (`present-but-behind-pin`). NOT counted in `satisfied`, which counts
+   * `present-and-matching` alone, so the five state counts still sum.
+   */
+  readonly behind: number;
 }
 
 /** The one value both renderings come from (../cli/command.ts's `emit`). */
@@ -224,6 +246,12 @@ export interface ToolPlan {
   readonly satisfiedBy: (found: string) => boolean;
   readonly install: InstallPlan;
   readonly why: string | null;
+  /** `dependency.pinned_ref` on the dependency row; null on a toolchain row. */
+  readonly pinnedRef: string | null;
+  /** Behind `pinnedRef`? null when not compared -- see `behindPinnedRef`. */
+  readonly behindBy: (found: string) => boolean | null;
+  /** The way out of a row behind its pinned ref, in words; null without a ref. */
+  readonly behindRemedy: string | null;
 }
 
 /** One plan, once the host has (or has not) been looked at. */
@@ -324,6 +352,13 @@ export function buildPlans(
         why: `the bootstrap this repository pins installs ${dependency.pinnedRef}. Re-pinning ${dependencyName} is the bootstrap's job and this repository's decision; this verb reports the version and never changes it.${belowFloor === null ? "" : ` ${belowFloor}`}`,
       },
       why: dependency.raw["minimum_semantics"] === undefined ? null : String(dependency.raw["minimum_semantics"]),
+      // THE PIN IS A SECOND FACT BESIDE THE RANGE, NOT A NARROWING OF IT
+      // (zheref/nen#327). `minimum` keeps every meaning it had and still
+      // decides `satisfied`; `pinned_ref` only decides whether a satisfied
+      // host is BEHIND the ref this repository's bootstrap installs.
+      pinnedRef: dependency.pinnedRef,
+      behindBy: (found): boolean | null => behindPinnedRef(dependency.pinnedRef, found),
+      behindRemedy: `verify-only: behind the pin -- inside minimum '${dependency.minimum}', and older than pinned_ref ${dependency.pinnedRef}, the ref this repository's bootstrap installs, so a fix that ref ships has not reached this host. Install the pin: '${PROGRAM} bootstrap --ref ${dependency.pinnedRef}${dependency.source === null ? "" : ` --source ${dependency.source}`} --script <the bootstrap, fetched to a file>' (with no ${dependencyName} on PATH, fetch the bootstrap to a file and run that file with --ref ${dependency.pinnedRef}). This verb reports the version and never changes it.`,
     });
   }
 
@@ -344,6 +379,11 @@ export function buildPlans(
       satisfiedBy: (found): boolean => satisfiesPin(pin, found),
       install: resolveInstall(entry, manifest, host),
       why: entry.why,
+      // A toolchain entry pins a VERSION, never a ref: there is nothing to be
+      // behind, and `null` says the comparison does not apply.
+      pinnedRef: null,
+      behindBy: (): null => null,
+      behindRemedy: null,
     });
   }
   return plans;
@@ -401,7 +441,7 @@ export function refuseUnactionableNarrowing(
     )
     .join("  |  ");
   throw new VerbUsageError(
-    `--install --only ${only.join(", ")} narrows this run to ${plans.length === 1 ? "a tool" : "tools"} ${PROGRAM} installs none of, so it would exit 0 having done nothing it was asked to do. Each row, with its own way out -- ${reasons}. The CHECK is what answers "is this host ready": run the same line without --install, which exits 5 when anything is missing or is not the pinned version and prints what to do about every row.`,
+    `--install --only ${only.join(", ")} narrows this run to ${plans.length === 1 ? "a tool" : "tools"} ${PROGRAM} installs none of, so it would exit 0 having done nothing it was asked to do. Each row, with its own way out -- ${reasons}. The CHECK is what answers "is this host ready": run the same line without --install, which exits 5 when anything is missing or outside its pin or minimum, exits ${EXIT_BEHIND_PINNED_REF} when everything passes but ${PROGRAM} is inside its minimum and behind the dependency block's pinned_ref (BEHIND: install that ref), and prints what to do about every row.`,
   );
 }
 
@@ -445,6 +485,17 @@ export function refusedInstalls(assessed: readonly AssessedTool[]): readonly Ass
  *
  * A DRY RUN IS 0 BECAUSE A RENDERING SUCCEEDED. It observed nothing, so it has
  * nothing to fail about; every row reads `not-probed`, which is what says so.
+ *
+ * A CHECK IS 7 WHEN EVERY ROW IS SATISFIED AND ONE IS BEHIND ITS PINNED REF
+ * (zheref/nen#327) -- distinct from 0, because the host is not where the
+ * repository's pin says it should be, and from 5, because nothing is missing
+ * or out of range: a consumer routes 7 to an install of the pin, and 5 to
+ * whatever the row's own way out says. 5 WINS when both apply, because a row
+ * outside its requirement is the stronger finding and the behind row's way out
+ * is still printed beside it. `--install` never exits 7: the behind row is
+ * `verify-only` and nen installs nothing for it, and the install form's code
+ * reports only what nen could install -- the CHECK is what answers "is this
+ * host at the pin".
  */
 export function toolsExitCode(assessed: readonly AssessedTool[], mode: ToolsMode): number {
   if (mode === "dry-run") return 0;
@@ -452,9 +503,12 @@ export function toolsExitCode(assessed: readonly AssessedTool[], mode: ToolsMode
     const acted = assessed.filter((entry): boolean => entry.install !== null);
     return acted.every((entry): boolean => entry.install?.ok === true && entry.assessment.satisfied === true)
       ? 0
-      : 5;
+      : EXIT_TOOL_NOT_INSTALLED;
   }
-  return assessed.every((entry): boolean => entry.assessment.satisfied === true) ? 0 : 5;
+  if (!assessed.every((entry): boolean => entry.assessment.satisfied === true)) return EXIT_TOOL_NOT_INSTALLED;
+  return assessed.some((entry): boolean => entry.assessment.state === "present-but-behind-pin")
+    ? EXIT_BEHIND_PINNED_REF
+    : 0;
 }
 
 /** Whether this row still needs a way out printing at all. */
@@ -462,7 +516,13 @@ function needsAWayOut(assessed: AssessedTool, mode: ToolsMode): boolean {
   // A dry run has not looked at the host, so every row's way out is printed --
   // which is what "--dry-run prints every command it would run" has to mean
   // when nothing was observed to narrow the list.
-  return mode === "dry-run" || assessed.assessment.satisfied !== true;
+  // A ROW BEHIND ITS PINNED REF IS SATISFIED AND STILL OWES AN INSTALL, so it
+  // prints its way out exactly as a failing row does (zheref/nen#327).
+  return (
+    mode === "dry-run" ||
+    assessed.assessment.satisfied !== true ||
+    assessed.assessment.state === "present-but-behind-pin"
+  );
 }
 
 /** Each plan's install command, rendered, or null when there is nothing to run. */
@@ -488,6 +548,11 @@ function installCommandOf(assessed: AssessedTool, mode: ToolsMode): readonly str
  */
 function remedyOf(assessed: AssessedTool, mode: ToolsMode): string | null {
   if (!needsAWayOut(assessed, mode)) return null;
+  // THE BEHIND ROW'S WAY OUT IS THE PIN, not the range: it already satisfies
+  // the range, and the generic "install by hand" would not say which ref.
+  if (assessed.assessment.state === "present-but-behind-pin" && assessed.plan.behindRemedy !== null) {
+    return assessed.plan.behindRemedy;
+  }
   const plan = assessed.plan.install;
   const installer = assessed.plan.installer;
   // EXHAUSTIVE OVER ./install.ts's PLAN KINDS, by type: a new kind added there
@@ -551,6 +616,7 @@ function summarise(rows: readonly ToolRow[], assessed: readonly AssessedTool[]):
     notInstallable: rows.filter(
       (row): boolean => row.satisfied !== true && row.installCommand === null,
     ).length,
+    behind: counted("present-but-behind-pin"),
   };
 }
 
@@ -578,6 +644,8 @@ export function assembleToolsReport(
     remedy: remedyOf(entry, mode),
     install: rowInstallOf(entry, mode),
     why: entry.plan.why,
+    pinnedRef: entry.plan.pinnedRef,
+    behindPinnedRef: entry.assessment.behindPinnedRef,
   }));
   return {
     contract: TOOLS_CONTRACT,
@@ -595,6 +663,7 @@ export function assembleToolsReport(
 
 const MARKS: Readonly<Record<ToolState, string>> = {
   "present-and-matching": "ok",
+  "present-but-behind-pin": "BEHIND",
   "present-but-wrong-version": "WRONG",
   missing: "MISSING",
   "not-probed": "?",
@@ -696,9 +765,24 @@ export function renderToolsReport(report: ToolsReport): readonly string[] {
   const indent = " ".repeat(2 + MARK_WIDTH + nameWidth + 2);
   for (const row of tools) {
     const pack = row.packMinimum === null ? "" : `  (tested minimum ${row.packMinimum})`;
+    // THE BEHIND ROW NAMES THE REF ON ITS OWN LINE, beside the range it is
+    // inside, so the one line a reader scans says both facts (zheref/nen#327).
+    // GATED ON THE STATE, not on the comparison: a WRONG row that also happens
+    // to be below the ref prints byte-for-byte what it printed before #327.
+    const ref = row.state === "present-but-behind-pin" && row.pinnedRef !== null ? `  pinned_ref ${row.pinnedRef}` : "";
     lines.push(
-      `  ${MARKS[row.state].padEnd(MARK_WIDTH)}${row.name.padEnd(nameWidth)}  ${foundColumn(row).padEnd(foundWidth)}  ${pinnedColumn(row).padEnd(pinWidth)}${pack}`.trimEnd(),
+      `  ${MARKS[row.state].padEnd(MARK_WIDTH)}${row.name.padEnd(nameWidth)}  ${foundColumn(row).padEnd(foundWidth)}  ${pinnedColumn(row).padEnd(pinWidth)}${ref}${pack}`.trimEnd(),
     );
+    // A REF NEN COULD NOT COMPARE IS SAID, never left to read as "at the pin":
+    // a branch or a SHA in `pinned_ref` is not a version, and an unperformed
+    // comparison must not render as one that came back clean (#83).
+    // SATISFIED ROWS ONLY: on a WRONG row the stronger finding is already
+    // printed, and that row stays exactly as it read before #327.
+    if (row.pinnedRef !== null && row.found !== null && row.satisfied === true && row.behindPinnedRef === null) {
+      lines.push(
+        `${indent}pinned_ref ${row.pinnedRef} is not a release tag ([v]X.Y.Z) ${PROGRAM} can compare, so whether this host is behind it was NOT checked.`,
+      );
+    }
     if (mode === "dry-run") lines.push(`${indent}would probe: ${row.probe}`);
     // THE LINE THAT MAKES `unknown` ACTIONABLE. A row that says "present,
     // version unknown" and quotes nothing sends a reader to run the probe by
@@ -749,15 +833,41 @@ function stillMissing(report: ToolsReport): readonly string[] {
 export function renderAdvice(report: ToolsReport, invocation: string): readonly string[] {
   const failing = report.tools.filter((row): boolean => row.satisfied !== true);
   const fixable = failing.filter((row): boolean => row.installCommand !== null);
+  const behind = behindAdvice(report);
+  // `behindAdvice` names exit 7 only when this run's code IS 7.
+  if (failing.length === 0) return behind;
   const head = `${failing.length} of ${report.tools.length} declared tool${report.tools.length === 1 ? " is" : "s are"} missing or not the pinned version.`;
   if (fixable.length === 0) {
     return [
       `${head} None of them has an installer nen runs in this release: each row above names what to do instead. nen never installs a toolchain on a repository's say-so.`,
+      ...behind,
     ];
   }
   return [
     `${head} nen can install ${fixable.length} of them (${fixable.map((row): string => row.name).join(", ")}):`,
     `  ${invocation} --install --dry-run   # see the commands`,
     `  ${invocation} --install             # run them`,
+    ...behind,
+  ];
+}
+
+/**
+ * THE ADVICE FOR EXIT 7, and the line appended to a 5 that also has one
+ * (zheref/nen#327). It names each behind row, its version and its ref, and
+ * sends the reader to the row's own way out -- `--install` is never offered
+ * here, because nen does not install itself through this verb.
+ */
+function behindAdvice(report: ToolsReport): readonly string[] {
+  const behind = report.tools.filter((row): boolean => row.state === "present-but-behind-pin");
+  if (behind.length === 0) return [];
+  const named = behind.map((row): string => `${row.name} ${row.found ?? "?"} < ${row.pinnedRef ?? "?"}`).join(", ");
+  // THE CODE IS NAMED ONLY WHEN IT IS THE CODE: beside a 5, "exit 7 means
+  // exactly that" would describe a code this run did not return.
+  const code =
+    report.exitCode === EXIT_BEHIND_PINNED_REF
+      ? ` Exit ${EXIT_BEHIND_PINNED_REF} means exactly that:`
+      : "";
+  return [
+    `${behind.length} declared tool${behind.length === 1 ? " satisfies its" : "s satisfy their"} minimum and ${behind.length === 1 ? "is" : "are"} behind the pinned ref (${named}).${code} Install the pinned ref -- the row above names the command. ${PROGRAM} shu tools never installs it.`,
   ];
 }

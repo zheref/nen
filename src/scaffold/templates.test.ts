@@ -534,6 +534,19 @@ describe("the template pack agrees with the profiles pack", () => {
       expect(body.indexOf("--dry-run")).toBeLessThan(body.lastIndexOf("shu"));
     }
   });
+
+  it("treats `shu tools` exit 7 as a ::warning:: and fails on every other non-zero (zheref/nen#327)", () => {
+    for (const name of bundledTemplateNames()) {
+      const stack = knownStacks().find(
+        (id): boolean => profileById(pack, id).scaffoldTemplate === name,
+      ) as string;
+      const body = templateForStack(stack)?.ci.body ?? "";
+      const step = body.slice(body.indexOf("- name: toolchain"), body.indexOf("- name: build / test / lint"));
+      expect(step, name).toContain("set +e");
+      expect(step, name).toContain('shu tools --repo .\n          status=$?');
+      expect(step, name).toMatch(/if \[ "\$\{status\}" -eq 7 \]; then\n\s+echo "::warning [^"]*NEN_REF[^"]*dependency\.pinned_ref[^"]*"\n\s+exit 0\n\s+fi\n\s+exit "\$\{status\}"/);
+    }
+  });
 });
 
 describe("--stack is validated by shape first and membership second", () => {

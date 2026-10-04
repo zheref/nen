@@ -29,6 +29,7 @@ import { SHU_REPO, SHU_TOOLS_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
 import { ENABLED_INSTALLERS, readManifestPin, resolveInstall } from "./install.js";
 import {
+  behindPinnedRef,
   compareVersions,
   extractVersion,
   MAX_FOUND,
@@ -171,6 +172,8 @@ interface Row {
     readonly failure: string | null;
   } | null;
   readonly why: string | null;
+  readonly pinnedRef: string | null;
+  readonly behindPinnedRef: boolean | null;
 }
 
 interface Summary {
@@ -182,6 +185,7 @@ interface Summary {
   readonly installed: number;
   readonly refused: number;
   readonly notInstallable: number;
+  readonly behind: number;
 }
 
 interface Report {
@@ -947,6 +951,235 @@ describe("the nen row -- the dependency block, under the contract's zero-major r
   });
 });
 
+// ── (d2) behind dependency.pinned_ref, inside the minimum (zheref/nen#327) ─
+//
+// A host on 0.18.1 read `ok` against a contract pinning `v0.18.2`, so the patch
+// the pin moved to fetch never arrived. The pin is now a second fact beside the
+// range: `minimum` still alone decides `satisfied`, and a satisfied version
+// below the ref is its own row state, its own mark and its own exit code.
+//
+// THE MINIMUM IS `0.18` AND THE PIN IS A 0.18.x TAG, so every case here holds
+// whatever this build's own version and floor become: `0.18` admits 0.18.x
+// under both the widened and the exact-minor reading.
+
+describe("the nen row -- behind dependency.pinned_ref, inside the minimum (#327)", () => {
+  /** A dependency block pinning `pinnedRef`, beside one tool that is always fine. */
+  function pinnedAt(pinnedRef: string | null): Readonly<Record<string, unknown>> {
+    const project = {
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      toolchain: {
+        "placeholder-tool": {
+          version: "1.0.0",
+          probe: ["placeholder-tool", "--version"],
+          versionFrom: "first-semver-on-stdout",
+          installer: "verify-only",
+        },
+      },
+      verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] } } },
+    };
+    if (pinnedRef === null) return { $schema: "nen.contract/v0.1", project };
+    return {
+      $schema: "nen.contract/v0.1",
+      dependency: {
+        name: "nen",
+        source: "zheref/nen",
+        minimum: "0.18",
+        pinned_ref: pinnedRef,
+        version_probe: ["nen", "--version"],
+        bootstrap: {
+          url: "https://example.invalid/nen.sh",
+          script_path_in_source: "bootstrap/nen.sh",
+        },
+      },
+      project,
+    };
+  }
+
+  const TOOL_OK: ScriptedCall = { match: "placeholder-tool --version", result: { stdout: "1.0.0\n" } };
+
+  function nenAt(version: string): readonly ScriptedCall[] {
+    return [{ match: "nen --version", result: { stdout: `${version}\n` } }, TOOL_OK];
+  }
+
+  it("compares by semver precedence, a leading v dropped, and refuses to guess on a non-version", () => {
+    expect(behindPinnedRef("v0.18.2", "0.18.1")).toBe(true);
+    expect(behindPinnedRef("v0.18.2", "0.18.2")).toBe(false);
+    expect(behindPinnedRef("v0.18.2", "0.18.3")).toBe(false);
+    // A release candidate is not the release the pin names.
+    expect(behindPinnedRef("v0.18.2", "0.18.2-rc.1")).toBe(true);
+    // A branch or a SHA is not a version: NOT COMPARED, which is not "not behind".
+    expect(behindPinnedRef("main", "0.18.1")).toBeNull();
+    expect(behindPinnedRef("4f2a9c1", "0.18.1")).toBeNull();
+  });
+
+  it("compares only a ref shaped like a release tag -- never an all-digit SHA or a year (N1)", () => {
+    // Each of these parses as a one-component VERSION, which is exactly the
+    // trap: compared, a SHA pin would read "not behind" on every host.
+    expect(behindPinnedRef("1234567", "0.18.1")).toBeNull();
+    expect(behindPinnedRef("1234567890123456789012345678901234567890", "0.18.1")).toBeNull();
+    expect(behindPinnedRef("2026", "0.18.1")).toBeNull();
+    // Two components is not a tag either, nor is a leading anything but v.
+    expect(behindPinnedRef("v0.18", "0.17.1")).toBeNull();
+    expect(behindPinnedRef("release-0.18.2", "0.18.1")).toBeNull();
+    // The tag shapes that ARE compared: v or V, pre-release, build.
+    expect(behindPinnedRef("V0.18.2", "0.18.1")).toBe(true);
+    expect(behindPinnedRef("v0.18.2-rc.1", "0.18.1")).toBe(true);
+    expect(behindPinnedRef("0.18.2+build.5", "0.18.2")).toBe(false);
+  });
+
+  it("does not compare an all-digit SHA pinned_ref end to end, and exits on the minimum alone", async () => {
+    const result = await withDeclaration(pinnedAt("1234567"), ["--json"], { script: nenAt("0.18.1") });
+    expect(result.code).toBe(0);
+    expect(row(result, "nen")).toMatchObject({ state: "present-and-matching", behindPinnedRef: null });
+  });
+
+  it("reports a host AT the pin as ok, exit 0, unchanged", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), ["--json"], { script: nenAt("0.18.2") });
+    expect(result.code).toBe(0);
+    expect(row(result, "nen")).toMatchObject({
+      state: "present-and-matching",
+      satisfied: true,
+      found: "0.18.2",
+      pinnedRef: "v0.18.2",
+      behindPinnedRef: false,
+      remedy: null,
+    });
+    expect(report(result).summary).toMatchObject({ behind: 0, satisfied: 2 });
+  });
+
+  it("reports a host ABOVE the pin, inside the minimum, as ok, exit 0, unchanged", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), ["--json"], { script: nenAt("0.18.3") });
+    expect(result.code).toBe(0);
+    expect(row(result, "nen")).toMatchObject({ state: "present-and-matching", behindPinnedRef: false });
+  });
+
+  it("reports a host BEHIND the pin, inside the minimum, as its own row and exit 7", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), ["--json"], { script: nenAt("0.18.1") });
+    expect(result.code).toBe(7);
+    const nen = row(result, "nen");
+    expect(nen).toMatchObject({
+      state: "present-but-behind-pin",
+      // `minimum` keeps its meaning: 0.18.1 IS inside `0.18`.
+      satisfied: true,
+      found: "0.18.1",
+      pinnedRef: "v0.18.2",
+      behindPinnedRef: true,
+      installCommand: null,
+    });
+    // The way out names the pinned ref and the install, in words.
+    expect(nen.remedy).toMatch(/behind the pin/);
+    expect(nen.remedy).toContain("nen bootstrap --ref v0.18.2 --source zheref/nen --script");
+    expect(report(result).exitCode).toBe(7);
+    const summary = report(result).summary;
+    expect(summary).toMatchObject({ checked: 2, satisfied: 1, behind: 1, missing: 0, wrong: 0 });
+
+    const text = await withDeclaration(pinnedAt("v0.18.2"), [], { script: nenAt("0.18.1") });
+    expect(text.code).toBe(7);
+    expect(text.out.join("\n")).toMatch(/BEHIND\s+nen\s+0\.18\.1\s+pinned >=0\.18\.0 <\S+\s+pinned_ref v0\.18\.2/);
+    expect(text.out.join("\n")).toMatch(/nen bootstrap --ref v0\.18\.2/);
+    // The advice names the code and what it means; it never offers --install.
+    expect(text.err.join("\n")).toMatch(/behind the pinned ref \(nen 0\.18\.1 < v0\.18\.2\)/);
+    expect(text.err.join("\n")).toMatch(/Exit 7/);
+    expect(text.err.join("\n")).not.toMatch(/--install/);
+  });
+
+  it("prints a WRONG row byte-for-byte as before #327, with no ref suffix and no not-compared line (N2)", async () => {
+    const below = await withDeclaration(pinnedAt("v0.18.2"), [], { script: nenAt("0.17.9") });
+    expect(below.code).toBe(5);
+    const nenLines = below.out.filter((line): boolean => /^\s+WRONG\s+nen\b/.test(line));
+    expect(nenLines).toHaveLength(1);
+    expect(nenLines[0]).toMatch(/^\s+WRONG\s+nen\s+0\.17\.9\s+pinned >=0\.18\.0 <\S+$/);
+    expect(below.out.join("\n")).not.toMatch(/pinned_ref v0\.18\.2/);
+    // Exit 5, and no behind row: the advice never names exit 7.
+    expect(below.err.join("\n")).not.toMatch(/Exit 7|behind the pinned ref/);
+
+    // A WRONG row with an uncomparable ref prints no not-compared line either.
+    const sha = await withDeclaration(pinnedAt("main"), [], { script: nenAt("0.17.9") });
+    expect(sha.code).toBe(5);
+    expect(sha.out.join("\n")).not.toMatch(/NOT checked/);
+  });
+
+  it("leaves a host BELOW the minimum exactly as before: WRONG, exit 5", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), ["--json"], { script: nenAt("0.17.9") });
+    expect(result.code).toBe(5);
+    expect(row(result, "nen")).toMatchObject({
+      state: "present-but-wrong-version",
+      satisfied: false,
+      // The comparison is still reported as a fact; it moves no state here.
+      behindPinnedRef: true,
+    });
+    expect(report(result).summary).toMatchObject({ behind: 0, wrong: 1 });
+  });
+
+  it("leaves a host ABOVE the minimum's range exactly as before: WRONG, exit 5", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), ["--json"], { script: nenAt("1.0.0") });
+    expect(result.code).toBe(5);
+    expect(row(result, "nen")).toMatchObject({ state: "present-but-wrong-version", behindPinnedRef: false });
+  });
+
+  it("lets 5 win over 7 when another row is missing, and still names the behind row", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), [], {
+      script: [
+        { match: "nen --version", result: { stdout: "0.18.1\n" } },
+        { match: "placeholder-tool --version", result: { spawnFailed: true, code: -1 } },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(result.out.join("\n")).toMatch(/BEHIND\s+nen/);
+    expect(result.err.join("\n")).toMatch(/behind the pinned ref/);
+    // The code this run did NOT return is never named (N6).
+    expect(result.err.join("\n")).not.toMatch(/Exit 7/);
+  });
+
+  it("carries no ref and makes no comparison on a toolchain row, or with no dependency block", async () => {
+    const result = await withDeclaration(pinnedAt(null), ["--json"], { script: [TOOL_OK] });
+    expect(result.code).toBe(0);
+    expect(report(result).tools.map((entry): string => entry.name)).toEqual(["placeholder-tool"]);
+    expect(row(result, "placeholder-tool")).toMatchObject({ pinnedRef: null, behindPinnedRef: null });
+    expect(report(result).summary.behind).toBe(0);
+  });
+
+  it("does not compare a pinned_ref that is not a version, and says so rather than reading ok", async () => {
+    const result = await withDeclaration(pinnedAt("main"), ["--json"], { script: nenAt("0.18.1") });
+    // The minimum still decides, unchanged: 0.18.1 is inside `0.18`.
+    expect(result.code).toBe(0);
+    expect(row(result, "nen")).toMatchObject({
+      state: "present-and-matching",
+      pinnedRef: "main",
+      behindPinnedRef: null,
+    });
+    const text = await withDeclaration(pinnedAt("main"), [], { script: nenAt("0.18.1") });
+    expect(text.out.join("\n")).toMatch(/pinned_ref main is not a release tag \(\[v\]X\.Y\.Z\) nen can compare, so whether this host is behind it was NOT checked/);
+  });
+
+  it("tells --install --only nen apart: the check's 5 (missing/wrong) from its 7 (BEHIND)", async () => {
+    const result = await withDeclaration(pinnedAt("v0.18.2"), ["--install", "--only", "nen"], {
+      script: nenAt("0.18.1"),
+    });
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/exits 5 when anything is missing or outside its pin or minimum/);
+    expect(err).toMatch(/exits 7 when everything passes but nen is inside its minimum and behind the dependency block's pinned_ref \(BEHIND: install that ref\)/);
+    // Refused before the first probe, exactly as before.
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("never exits 7 under --install or --dry-run", async () => {
+    const install = await withDeclaration(pinnedAt("v0.18.2"), ["--install", "--json"], {
+      script: nenAt("0.18.1"),
+    });
+    expect(install.code).toBe(0);
+    expect(row(install, "nen")).toMatchObject({ state: "present-but-behind-pin", install: { outcome: "skipped" } });
+    expect(spawned(install.seams)).toEqual(["nen --version", "placeholder-tool --version"]);
+
+    const dry = await withDeclaration(pinnedAt("v0.18.2"), ["--dry-run", "--json"], {});
+    expect(dry.code).toBe(0);
+    expect(row(dry, "nen")).toMatchObject({ state: "not-probed", pinnedRef: "v0.18.2", behindPinnedRef: null });
+    expect(dry.seams.calls).toEqual([]);
+  });
+});
+
 // ── (e) --install, and everything it will not do ───────────────────────────
 
 describe("--install -- the one installer nen runs, at the version the declaration pins", () => {
@@ -1329,6 +1562,8 @@ describe("--json -- one object, in one key order", () => {
         "remedy",
         "install",
         "why",
+        "pinnedRef",
+        "behindPinnedRef",
       ]);
     }
   });
@@ -1347,12 +1582,13 @@ describe("--json -- one object, in one key order", () => {
       "installed",
       "refused",
       "notInstallable",
+      "behind",
     ]);
-    // THE FOUR STATE COUNTS SUM TO `checked`, which is what makes them readable
-    // as a whole rather than as four unrelated numbers.
-    expect(summary.satisfied + summary.missing + summary.wrong + summary.notProbed).toBe(
-      summary.checked,
-    );
+    // THE FIVE STATE COUNTS SUM TO `checked`, which is what makes them readable
+    // as a whole rather than as five unrelated numbers.
+    expect(
+      summary.satisfied + summary.behind + summary.missing + summary.wrong + summary.notProbed,
+    ).toBe(summary.checked);
     expect(summary).toMatchObject({ checked: 6, missing: 1, satisfied: 5, installed: 0 });
   });
 
