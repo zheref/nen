@@ -3,6 +3,9 @@ import {
   addListFrom,
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
+  parseCommitRange,
+  parseLsTreeSizesBytes,
+  parseNameStatusBytes,
   parseStatusPorcelain,
   parseStatusPorcelainBytes,
   pathspecLine,
@@ -356,5 +359,49 @@ describe("addListFrom -- what a list may never carry, and the rename it must", (
     // A worktree rename whose original git ALSO reports as its own deletion row.
     const list = listOf(" R b.ts\0a.ts\0 D a.ts\0 M c.ts\0", "a.ts");
     expect(list.add).toEqual(["b.ts", "a.ts", "c.ts"]);
+  });
+});
+
+describe("the committed-range readers (zheref/nen#337)", () => {
+  const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+
+  it("parseCommitRange splits one '..' and refuses everything else", () => {
+    expect(parseCommitRange("origin/main..HEAD")).toEqual({ base: "origin/main", head: "HEAD" });
+    for (const bad of ["HEAD", "a...b", "..b", "a..", "a..b..c", ""]) expect(parseCommitRange(bad)).toBeNull();
+  });
+
+  it("parseNameStatusBytes keeps the NEW path of a rename, carries the original, and reads a deletion as 'D'", () => {
+    const entries = parseNameStatusBytes(bytes("M\u0000src/a.ts\u0000R087\u0000old.ts\u0000new.ts\u0000D\u0000gone.ts\u0000A\u0000.env\u0000"));
+    expect(entries).toEqual([
+      { path: "src/a.ts", indexStatus: "M", worktreeStatus: " ", ignored: false },
+      { path: "new.ts", indexStatus: "R", worktreeStatus: " ", ignored: false, origPath: "old.ts" },
+      { path: "gone.ts", indexStatus: "D", worktreeStatus: " ", ignored: false },
+      { path: ".env", indexStatus: "A", worktreeStatus: " ", ignored: false },
+    ]);
+  });
+
+  it("parseNameStatusBytes marks a non-UTF-8 name undecodable", () => {
+    const raw = new Uint8Array([0x41, 0, 0x66, 0xff, 0x2e, 0x74, 0x73, 0]);
+    expect(parseNameStatusBytes(raw)[0]?.undecodable).toBe(true);
+  });
+
+  it("parseLsTreeSizesBytes measures blobs only, never a gitlink", () => {
+    const sizes = parseLsTreeSizesBytes(
+      bytes("100644 blob abc     120\tsrc/a.ts\u0000160000 commit def       -\tvendor/sub\u0000100644 blob 012 3\tpath with space.ts\u0000"),
+    );
+    expect([...sizes]).toEqual([
+      ["src/a.ts", 120],
+      ["path with space.ts", 3],
+    ]);
+  });
+
+  it("a range's entries triage exactly as working-copy entries do: a deletion is never large, mentions still match", () => {
+    const entries = parseNameStatusBytes(bytes("D\u0000src/gone.ts\u0000A\u0000certs/server.pem\u0000"));
+    const result = triageStage(entries, { mentionedText: "remove gone.ts", sizes: new Map([["certs/server.pem", 1]]), largeBytes: 1 });
+    expect(result).toEqual({
+      clean: ["src/gone.ts"],
+      flagged: [{ path: "certs/server.pem", reasons: ["secret-shape", "large"] }],
+      ignored: [],
+    });
   });
 });

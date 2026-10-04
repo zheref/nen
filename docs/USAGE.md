@@ -722,7 +722,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
-| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
+| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy, an unresolved ref exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, diff --name-status, ls-tree | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -3350,7 +3350,7 @@ with every reason it matched, `secret-shape` included, and never appears in
 
 ```text
 nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
-                 [--large-bytes <n>]
+                 [--large-bytes <n>] [--range <base>..<head>]
 ```
 
 **Arguments**
@@ -3361,7 +3361,46 @@ nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
 | `--scope <a,b>` | no | in-scope path prefixes | omit to skip the out-of-scope check entirely |
 | `--mentions <text>` | no | free text (a commit message draft, a PR description) searched for a deleted path's basename | an unmentioned deletion is flagged, never silently staged |
 | `--large-bytes <n>` | no | bytes at or above which a file is flagged `large` | default **1048576** (1 MiB) — no ordinary source file trips it, a multi-megabyte accident does. A default exists here where [`loop slots --local-cap`](#nen-loop-slots) refuses one, because that flag is a concurrency *guard* whose forgotten default silently widens what is allowed, while this is a *detection* threshold on a verb that decides nothing and whose default errs toward flagging. A zero or negative value is refused at exit 2. |
+| `--range <base>..<head>` | no | triage the paths the COMMITS in the range changed, instead of the working copy ([#337](https://github.com/zheref/nen/issues/337)) | `stage triage` only — refused on `stage list` at exit 2. See *Committed-range mode* below. |
 | `--json` | no | machine-readable triage | — |
+
+**Committed-range mode ([#337](https://github.com/zheref/nen/issues/337)).**
+Without `--range` the verb reads the working copy — `git status`, staged,
+unstaged, untracked and ignored — and never a commit; that reading is
+unchanged. With `--range <base>..<head>` it reads ONLY commits: both sides are
+resolved to commits (`git rev-parse --verify <ref>^{commit}`), then `git diff
+-z --name-status --find-renames` runs from their merge base to `<head>` — the
+commits `git log <base>..<head>` lists, so a base that moved on after the
+branch was cut contributes nothing — and the working copy and the index are
+never read. Same detectors, same exit codes and the same `--json` shape
+(`clean[]`, `flagged[]`, `ignored[]`); the text report opens with one extra
+line, `read: committed range <base>..<head> (<merge-base>..<head-sha>), not the
+working copy`, naming which reading produced it. A rename is reported by its
+new path. Sizes are the blob sizes in `<head>`'s tree (`git ls-tree -l`), never
+the disk; a path the range deleted is absent from that tree and so is never
+measured and never flagged `large`; `--mentions` is matched against a deleted
+path's basename exactly as in the working-copy mode. Nothing in a commit is
+git-ignored, so `ignored` is always empty. **It never falls back**: a value
+that is not `<base>..<head>` (a bare ref, an empty side, the three-dot form), a
+side that does not resolve to a commit, or two commits with no common ancestor
+is exit 2 naming what failed; a directory that is not a repository, or a diff or
+tree read that fails, is exit 1. This is the reading a review of a pushed
+branch runs for its secret-shape row; it is a filename check, not a substitute
+for a content scanner.
+
+```bash
+nen stage triage --repo . --range base..HEAD
+```
+```text
+read: committed range base..HEAD (d11d59a37658..29b6ce3d98ed), not the working copy
+clean: 1 file(s)
+  src/a.ts
+ignored: 0 file(s), not listed
+flagged: 1 file(s) -- never staged without an explicit yes
+  .env  [secret-shape]
+```
+(from a real run against a throwaway scratch repository, exit 1: one commit on
+top of `base` editing `src/a.ts` and adding a `.env`, the working tree clean)
 
 **The two detectors added for [#57](https://github.com/zheref/nen/issues/57).**
 `local-config` is a **filename** check like the secret shape, not a directory

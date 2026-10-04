@@ -87,6 +87,17 @@ interface StatusRecord {
  * records around it.
  */
 export function parseStatusPorcelainBytes(bytes: Uint8Array): readonly StatusEntry[] {
+  return parseRecords(splitNulRecords(bytes));
+}
+
+/**
+ * Raw `-z` output split on the byte 0, each record decoded on its own by a
+ * FATAL UTF-8 decoder and, where that fails, leniently with the record marked
+ * `undecodable`. Shared by the status reader above and the committed-range
+ * readers below (zheref/nen#337), so a non-UTF-8 name is detected the same way
+ * whichever git command printed it. Empty records are dropped.
+ */
+function splitNulRecords(bytes: Uint8Array): readonly StatusRecord[] {
   const fatal = new TextDecoder("utf-8", { fatal: true });
   const lenient = new TextDecoder("utf-8");
   const records: StatusRecord[] = [];
@@ -103,7 +114,7 @@ export function parseStatusPorcelainBytes(bytes: Uint8Array): readonly StatusEnt
     }
     start = i + 1;
   }
-  return parseRecords(records);
+  return records;
 }
 
 function parseRecords(records: readonly StatusRecord[]): readonly StatusEntry[] {
@@ -135,6 +146,105 @@ function parseRecords(records: readonly StatusRecord[]): readonly StatusEntry[] 
     }
   }
   return entries;
+}
+
+// ---------------------------------------------------------------------------
+// THE COMMITTED-RANGE READING (zheref/nen#337).
+//
+// `stage triage --range <base>..<head>` triages the paths a range of COMMITS
+// changed, so a review of a branch whose work is already committed can read
+// the secret-shape row instead of reporting it unread. The detectors do not
+// change and do not learn where their entries came from: the range is read
+// into the same `StatusEntry` shape, one per changed path, with the commit's
+// change letter in `indexStatus` (so a `D` is a deletion to every detector
+// exactly as a staged deletion is) and a blank `worktreeStatus`. Nothing in a
+// commit is git-ignored -- it is already tracked -- so `ignored` is always
+// false here.
+
+/** One `<base>..<head>` range, as typed. Neither side is resolved yet. */
+export interface CommitRange {
+  readonly base: string;
+  readonly head: string;
+}
+
+/**
+ * Splits a `--range` value on its ONE `..`. `null` for anything else: a bare
+ * ref, an empty side (git would read it as HEAD, which this verb never
+ * guesses), or the three-dot form, which is refused rather than read as a
+ * two-dot one with a stray dot.
+ */
+export function parseCommitRange(text: string): CommitRange | null {
+  if (text.includes("...")) return null;
+  const at = text.indexOf("..");
+  if (at === -1 || text.indexOf("..", at + 2) !== -1) return null;
+  const base = text.slice(0, at);
+  const head = text.slice(at + 2);
+  if (base === "" || head === "") return null;
+  return { base, head };
+}
+
+/**
+ * `git diff -z --name-status --find-renames <from> <to>`, raw bytes. Each
+ * change is a status record (`A`, `M`, `D`, `T`, or `R`/`C` with a similarity
+ * score) followed by its path -- for a rename or copy, the ORIGINAL path then
+ * the new one, the reverse of `git status -z`'s order. The new path is the
+ * entry; the original is carried as `origPath`, never an entry of its own,
+ * exactly as an index rename is in the working-copy reading.
+ */
+export function parseNameStatusBytes(bytes: Uint8Array): readonly StatusEntry[] {
+  const records = splitNulRecords(bytes);
+  const entries: StatusEntry[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const letter = (records[i]?.text ?? "").charAt(0);
+    if (letter === "R" || letter === "C") {
+      const orig = records[i + 1];
+      const next = records[i + 2];
+      i += 2;
+      if (next === undefined) break;
+      const undecodable = next.undecodable || orig?.undecodable === true;
+      entries.push({
+        path: next.text,
+        indexStatus: letter,
+        worktreeStatus: " ",
+        ignored: false,
+        ...(orig === undefined ? {} : { origPath: orig.text }),
+        ...(undecodable ? { undecodable: true as const } : {}),
+      });
+      continue;
+    }
+    const path = records[i + 1];
+    i++;
+    if (path === undefined) break;
+    entries.push({
+      path: path.text,
+      indexStatus: letter === "" ? " " : letter,
+      worktreeStatus: " ",
+      ignored: false,
+      ...(path.undecodable ? { undecodable: true as const } : {}),
+    });
+  }
+  return entries;
+}
+
+/**
+ * `git ls-tree -r -l -z --full-tree <head>`, raw bytes, as a size per blob
+ * path: `<mode> SP <type> SP <object> SP+ <size> TAB <path>`. Only a blob with
+ * a numeric size is measured -- a submodule's gitlink prints `-` and is left
+ * out, so it is "not measured", never "measured and small". This is the
+ * committed counterpart of the working-copy stat: the size a path has AT THE
+ * HEAD OF THE RANGE, which is what the range would put in the trunk.
+ */
+export function parseLsTreeSizesBytes(bytes: Uint8Array): ReadonlyMap<string, number> {
+  const sizes = new Map<string, number>();
+  for (const record of splitNulRecords(bytes)) {
+    const tab = record.text.indexOf("\t");
+    if (tab === -1) continue;
+    const fields = record.text.slice(0, tab).split(/ +/);
+    if (fields[1] !== "blob") continue;
+    const size = Number(fields[3]);
+    if (Number.isInteger(size) && size >= 0) sizes.set(record.text.slice(tab + 1), size);
+  }
+  return sizes;
 }
 
 export type FlagReason =

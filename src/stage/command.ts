@@ -19,6 +19,9 @@ import {
   addListFrom,
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
+  parseCommitRange,
+  parseLsTreeSizesBytes,
+  parseNameStatusBytes,
   parseStatusPorcelain,
   parseStatusPorcelainBytes,
   pathspecLine,
@@ -32,7 +35,7 @@ nen stage list   -- the exact add list: what a checkpoint stages, nothing else.
 
 usage:
   nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
-                   [--large-bytes <n>]
+                   [--large-bytes <n>] [--range <base>..<head>]
   nen stage list   --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
                    [--large-bytes <n>] [--nul | --json]
 
@@ -47,6 +50,25 @@ usage:
                  it, and a multi-megabyte accident does. A file this verb
                  could not measure -- a deletion -- is never flagged large,
                  because "not measured" must not read as "measured and small".
+  --range        stage triage only. Triage the paths the COMMITS in
+                 <base>..<head> changed instead of the working copy -- the
+                 review of a branch whose work is already committed. Same
+                 detectors, same output shape, same exit codes.
+
+WHICH MODE READ THE PATHS. Without --range, stage triage reads the working
+copy (git status: staged, unstaged, untracked and ignored paths) and never a
+commit. With --range it reads ONLY the commits: git diff --name-status from
+the merge base of <base> and <head> to <head> -- the commits git log
+<base>..<head> lists, renames followed -- and never the working copy or the
+index, so uncommitted changes are not in it. Its text report opens with a
+'read: committed range ...' line naming both resolved commits. Sizes are the
+blob sizes at <head>; a path the range deleted is never measured, so never
+flagged large; --mentions is matched against a deleted path's basename as in
+the working-copy mode. Nothing in a commit is git-ignored, so the ignored
+bucket is always empty. A ref that does not resolve to a commit, a value that
+is not <base>..<head> (an empty side, the three-dot form), or two commits with
+no common ancestor is exit 2 naming what failed -- never a fall back to the
+working copy.
 
 Detects, never decides: secret shapes (.env, *.pem, *.key, credentials*),
 local-config filenames (the '.local' infix -- settings.local.json, .env.local,
@@ -92,6 +114,17 @@ it from --json), so a pipe that ignores the code stages nothing rather than a
 partial set -- or git could not read the tree; 2 usage; 3 the add list is
 empty and nothing needs a human.`;
 
+function readLargeBytes(context: CommandContext): number {
+  const rawLarge = context.args.values["large-bytes"];
+  const largeBytes = rawLarge === undefined ? DEFAULT_LARGE_BYTES : Number(rawLarge);
+  if (!Number.isInteger(largeBytes) || largeBytes <= 0) {
+    throw new VerbUsageError(
+      `--large-bytes takes a positive whole number of bytes -- got '${rawLarge}'. It is the size at or above which a file is flagged for a human to look at, so a zero or negative one would flag every file and say nothing.`,
+    );
+  }
+  return largeBytes;
+}
+
 /**
  * Reads the working copy, measures it and triages it -- the one path both verbs
  * share, so `stage list` can never answer from a different reading of the tree
@@ -113,13 +146,7 @@ function readAndTriage(
     context.io.err(`nen: could not read working-copy status: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
     return null;
   }
-  const rawLarge = context.args.values["large-bytes"];
-  const largeBytes = rawLarge === undefined ? DEFAULT_LARGE_BYTES : Number(rawLarge);
-  if (!Number.isInteger(largeBytes) || largeBytes <= 0) {
-    throw new VerbUsageError(
-      `--large-bytes takes a positive whole number of bytes -- got '${rawLarge}'. It is the size at or above which a file is flagged for a human to look at, so a zero or negative one would flag every file and say nothing.`,
-    );
-  }
+  const largeBytes = readLargeBytes(context);
 
   const parsed =
     result.stdoutBytes === undefined ? parseStatusPorcelain(result.stdout) : parseStatusPorcelainBytes(result.stdoutBytes);
@@ -157,10 +184,138 @@ function readAndTriage(
   return { entries, triage };
 }
 
-function runTriage(context: CommandContext, triage: TriageResult): number {
+/** What `--range` resolved to: the commits the diff actually ran between. */
+interface ResolvedRange {
+  readonly base: string;
+  readonly head: string;
+  readonly mergeBase: string;
+  readonly headSha: string;
+}
+
+function gitFailure(result: { code: number; stderr: string }): string {
+  return outputLines(result.stderr).join(" ") || `exit ${result.code}`;
+}
+
+/** Raw stdout bytes from a `bytes: true` call, whichever seam answered it. */
+function stdoutBytesOf(result: { stdout: string; stdoutBytes?: Uint8Array }): Uint8Array {
+  return result.stdoutBytes ?? new TextEncoder().encode(result.stdout);
+}
+
+/**
+ * `stage triage --range` (zheref/nen#337): the paths the commits in
+ * `<base>..<head>` changed, triaged by the same detectors as the working
+ * copy. NEVER FALLS BACK: a value that is not a range, a ref that does not
+ * resolve to a commit and two commits with no common ancestor are each a
+ * usage error at exit 2 naming what failed. `null` is a git read failure
+ * (not a repository, a diff or tree read that failed), already reported.
+ */
+function readRangeAndTriage(
+  context: CommandContext,
+  root: string,
+  rawRange: string,
+): { range: ResolvedRange; triage: TriageResult } | null {
+  const range = parseCommitRange(rawRange);
+  if (range === null) {
+    throw new VerbUsageError(
+      `--range takes <base>..<head> -- got '${rawRange}'. Both sides are required and the three-dot form is refused: an empty side is not read as HEAD, and the range is never guessed.`,
+    );
+  }
+  const largeBytes = readLargeBytes(context);
+
+  const gitDir = context.seams.run(GIT, ["rev-parse", "--git-dir"], { cwd: root });
+  if (gitDir.code !== 0) {
+    context.io.err(`nen: ${root} is not a git repository: ${gitFailure(gitDir)}`);
+    return null;
+  }
+
+  const resolve = (side: "base" | "head", ref: string): string => {
+    // `--end-of-options` so a ref spelled like a flag is a ref; `^{commit}` so
+    // a tree or blob id is refused rather than diffed.
+    const result = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], {
+      cwd: root,
+    });
+    const sha = result.stdout.trim();
+    if (result.code !== 0 || sha === "") {
+      throw new VerbUsageError(
+        `--range ${rawRange}: the ${side} ref '${ref}' does not resolve to a commit in ${root}. Nothing was triaged -- the working copy is never read in its place. Fetch it, or name a ref that exists.`,
+      );
+    }
+    return sha;
+  };
+  const baseSha = resolve("base", range.base);
+  const headSha = resolve("head", range.head);
+
+  const mb = context.seams.run(GIT, ["merge-base", baseSha, headSha], { cwd: root });
+  const mergeBase = mb.stdout.trim();
+  if (mb.code === 1 && mergeBase === "") {
+    throw new VerbUsageError(
+      `--range ${rawRange}: '${range.base}' and '${range.head}' share no common ancestor, so the range names no commits. Nothing was triaged.`,
+    );
+  }
+  if (mb.code !== 0 || mergeBase === "") {
+    context.io.err(`nen: could not read the merge base of ${rawRange}: ${gitFailure(mb)}`);
+    return null;
+  }
+
+  const diff = context.seams.run(
+    GIT,
+    [
+      "-c",
+      "core.quotePath=false",
+      "diff",
+      "-z",
+      "--name-status",
+      "--find-renames",
+      "--no-relative",
+      "--no-ext-diff",
+      mergeBase,
+      headSha,
+      "--",
+    ],
+    { cwd: root, bytes: true },
+  );
+  if (diff.code !== 0) {
+    context.io.err(`nen: could not read the paths changed in ${rawRange}: ${gitFailure(diff)}`);
+    return null;
+  }
+  const entries = parseNameStatusBytes(stdoutBytesOf(diff));
+
+  // MEASURED AT <head>, from the tree, never from the disk: the working copy is
+  // not what the range would land. A deleted path is absent from <head>'s tree
+  // and so is never measured -- and never flagged large.
+  const tree = context.seams.run(GIT, ["ls-tree", "-r", "-l", "-z", "--full-tree", headSha], { cwd: root, bytes: true });
+  if (tree.code !== 0) {
+    context.io.err(`nen: could not read the tree at ${range.head}: ${gitFailure(tree)}`);
+    return null;
+  }
+  const treeSizes = parseLsTreeSizesBytes(stdoutBytesOf(tree));
+  const sizes = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.indexStatus === "D") continue;
+    const size = treeSizes.get(entry.path);
+    if (size !== undefined) sizes.set(entry.path, size);
+  }
+
+  const triage = triageStage(entries, {
+    scopePrefixes: commaList(context.args.values["scope"]),
+    mentionedText: context.args.values["mentions"] ?? "",
+    sizes,
+    largeBytes,
+  });
+  return { range: { base: range.base, head: range.head, mergeBase, headSha }, triage };
+}
+
+function runTriage(context: CommandContext, triage: TriageResult, range?: ResolvedRange): number {
   if (context.json) {
     context.io.out(JSON.stringify(triage, null, 2));
     return triage.flagged.length === 0 ? 0 : 1;
+  }
+  if (range !== undefined) {
+    // Text only, and only in range mode: the working-copy report is unchanged,
+    // and --json keeps the one shape both modes share.
+    context.io.out(
+      `read: committed range ${range.base}..${range.head} (${range.mergeBase.slice(0, 12)}..${range.headSha.slice(0, 12)}), not the working copy`,
+    );
   }
   context.io.out(`clean: ${triage.clean.length} file(s)`);
   for (const path of triage.clean) context.io.out(`  ${path}`);
@@ -283,12 +438,18 @@ export const stageCommand: Command = {
   subcommands: ["triage", "list"],
   summary: "Flag secrets, local config, oversized files, binaries and unmentioned deletions before staging; emit the exact add list.",
   usage: USAGE,
-  flags: { values: ["scope", "mentions", "large-bytes"], booleans: ["nul"] },
+  flags: { values: ["scope", "mentions", "large-bytes", "range"], booleans: ["nul"] },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("stage", context.args, ["triage", "list"]);
     const nul = context.args.booleans.has("nul");
     if (nul && subcommand !== "list") {
       throw new VerbUsageError("--nul belongs to 'stage list' -- 'stage triage' prints a human report, not a list to feed git.");
+    }
+    const rawRange = context.args.values["range"];
+    if (rawRange !== undefined && subcommand !== "triage") {
+      throw new VerbUsageError(
+        "--range belongs to 'stage triage' -- 'stage list' is the add list for the working copy, and a committed range has nothing left to add.",
+      );
     }
     if (nul && context.json) {
       throw new VerbUsageError("--nul and --json are two different forms of the same list; pass one.");
@@ -304,6 +465,11 @@ export const stageCommand: Command = {
           : "It names the working tree whose unstaged files are triaged.",
       ),
     });
+    if (rawRange !== undefined) {
+      const ranged = readRangeAndTriage(context, root, rawRange);
+      if (ranged === null) return 1;
+      return runTriage(context, ranged.triage, ranged.range);
+    }
     if (subcommand === "list" && requireToplevel(context, root) === null) return 1;
     const read = readAndTriage(context, root, subcommand === "list");
     if (read === null) return 1;
