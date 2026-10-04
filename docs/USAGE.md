@@ -1004,7 +1004,7 @@ commit. Three things make that visible:
   hold as the head. The code collides with nothing else this CLI or its
   bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s,
   `commit write`'s and `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and
-  `shu coverage`'s, `7` is `pr merge --delivery`'s, `9` is `pr request-reviews`', and `3`–`7` are the
+  `shu coverage`'s, `7` is both [`shu tools`](#nen-shu-tools)' (`BEHIND` the pinned ref) and `pr merge --delivery`'s (merged without authority), `9` is `pr request-reviews`', and `3`–`7` are the
   bootstrap script's). Under `--json` the mismatch
   prints its own document with its own contract,
   `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
@@ -2442,10 +2442,9 @@ GitHub's own `MERGED` state is reported as `merged:`; anything else prints
 
 **Exit codes:** 0 merged, or a passing plan printed without `--run`; 1 at
 least one gate did not pass; 2 usage (neither or both of `--release-unit`
-and `--delivery`, `--require-head` (read by `--delivery` only), a `pr
-ready`-only flag (`--gates`, `--reviewers`, `--approvers`, `--round-policy`,
-`--token-env`, `--exclude-run`, `--exclude-check`, `--gh-repo`, `--explain`
-— refused before any `gh` call), a bad ref,
+and `--delivery`, `--require-head` (read by `--delivery` only), any flag
+`pr merge` does not read (`pr ready`'s own, or another subcommand's such as
+`--base`/`--target` — refused before any `gh` call), a bad ref,
 an unknown product code or an unreadable `nen/repos.json`,
 missing/empty/unparseable `--requirements-from`, `--repo`'s origin naming a
 different repository than the ref or its code resolves to, or an unknown
@@ -2507,6 +2506,11 @@ nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --rep
 | `--run` | no | execute the merge once every gate passes | omit to see the plan only |
 | `--json` | no | machine-readable result | emitted on a refusal by ruling too |
 
+Every other flag — `pr ready`'s own (`--gates`, `--reviewers`, `--approvers`,
+`--round-policy`, `--token-env`, `--exclude-run`, `--exclude-check`,
+`--gh-repo`, `--explain`) and other subcommands' (`--base`, `--target`, …) —
+is refused at exit 2 before any `gh` call, on either form.
+
 **Refused by ruling — exit 2, before any other gate.** The base (a `refs/heads/`
 prefix stripped) is compared with every **protected name**: GitHub's default
 branch; `branch.base` in this checkout's `nen/workflow.json` (`main` when
@@ -2516,13 +2520,22 @@ default branch**. It is also refused when GitHub reports the base `protected`
 (`gh api repos/{slug}/branches/{base}`), when a ruleset targets it (`gh api
 repos/{slug}/rules/branches/{base}` non-empty), or when an open pull request
 whose head is the base aims at a protected name with auto-merge enabled
-(`gh pr list --head <base> --state open`). The transcript and the `--json`
+(`gh pr list --head <base> --state open`) — or at a target GitHub reports
+protected or a ruleset binds. That chain check covers **one hop**: each
+auto-merge target is judged like a base, but a chain onward from that target
+is not walked. The transcript and the `--json`
 document are still emitted (`refused: true`, `baseOk: false`), the last line
 reads `nen pr merge: refused by ruling -- not merged (exit 2)` naming the
 ruling, and the maintainer is handed `nen pr ready <n> --gh-repo <slug>
 --require-head <head>` **before** `gh pr merge ... --match-head-commit
 <head>`, because `pr ready` was not evaluated. A usage error writes only
 stderr; a refusal by ruling writes its transcript on stdout.
+
+**Two preconditions on the repository.** `nen/workflow.json` must be committed
+at the pull request's base commit **and** on the default branch for
+`--delivery` to work — an absent file reads as unknown, exit 1. A ruleset
+matching every branch (e.g. `~ALL`) refuses every base until it excludes the
+integration branches.
 
 **Gates, in order, every one evaluated:**
 
@@ -2543,22 +2556,29 @@ stderr; a refusal by ruling writes its transcript on stdout.
 pins the head, not the base) and a `base (re-read)` gate is appended: a
 retarget onto a protected name is refused by ruling (exit 2); a failed read,
 an empty name or any other retarget fails the gate (exit 1, `ran: false`,
-`mergeArgv: null`). After a merge the state re-read also asks for
-`baseRefName`: merged into a protected name, into any base but the one gated,
-or into one GitHub will not name is **exit 7 — merged without authority**,
-printed as `MERGED INTO '<base>' WITHOUT AUTHORITY ... Tell the maintainer
-now`. The window between the pre-merge re-read and GitHub's own merge is the
+`mergeArgv: null`, `rereadBase` naming what it read); a refusal there names
+both bases and hands over "'pr ready' passed at <head>; the base moved". Once
+`gh pr merge` exits 0 the state re-read also asks for `baseRefName`, and it is
+checked **whatever the state** — merged or queued: a protected name, any base
+but the one gated, or none at all is **exit 7 — merged without authority**
+(`MERGED INTO '<base>' WITHOUT AUTHORITY ... Tell the maintainer now`, or
+`ACCEPTED (state 'OPEN') INTO ...` for a queued one), and a re-read that
+cannot be read is exit 7 too, **authority unconfirmed** — never 0. The window between the pre-merge re-read and GitHub's own merge is the
 one nothing here can close; exit 7 is what makes it loud.
 
 **Exit codes:** 0 merged, or a passing plan without `--run`; 1 a gate did not
 pass; 2 usage, **or refused by ruling**; 5 `gh` refused the merge; 6 `gh`
-could not be started; 7 merged without authority.
+could not be started; 7 merged (or queued) without authority, or authority
+unconfirmed.
 
 **`--json`** — `nen.pr.merge-delivery/v0.1`: `{ contract, target, pr, base,
 baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
 defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk, wholeOk,
-ok, ran, spawnFailed, judgedHead, requiredHead, state, mergedBase,
-outsideAuthority, mergeArgv, gates: [{ name, ok, lines }] }`.
+ok, ran, spawnFailed, judgedHead, requiredHead, state, rereadBase, mergedBase,
+outsideAuthority, mergeArgv, gates: [{ name, ok, lines }] }` — `baseRulesets`
+counts DISTINCT `ruleset_id`s (the transcript prints `N rule(s) from M
+ruleset(s)`); `rereadBase` is the pre-merge re-read's answer, `mergedBase` the
+post-merge one's.
 
 <a id="family-gate"></a>
 

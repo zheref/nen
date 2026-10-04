@@ -4,8 +4,8 @@
 // UNPROTECTED base. A protected name is refused by ruling (exit 2, document
 // still emitted); every base read that fails is "unknown" (exit 1).
 
-import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { afterAll, describe, expect, it } from "vitest";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -14,6 +14,7 @@ import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import { MergeUnitUsageError } from "./mergeunit.js";
+import { mergeExit } from "./command.js";
 import {
   deliveryExit,
   EXIT_MERGED_OUTSIDE_AUTHORITY,
@@ -31,8 +32,14 @@ const INTEGRATION = "opus/kurapika/futon-integration";
 const RUN_HEAD = "opus/kurapika/the-change";
 const REQUIREMENTS = [{ name: "how to verify", pattern: "## How to verify" }];
 
+const created: string[] = [];
+afterAll((): void => {
+  for (const dir of created) rmSync(dir, { recursive: true, force: true });
+});
+
 function tmpRoot(workflow: unknown = null): string {
   const dir = mkdtempSync(join(tmpdir(), "nen-merge-delivery-"));
+  created.push(dir);
   mkdirSync(join(dir, "nen"), { recursive: true });
   copyFileSync(join(BANKAI_REPO, "nen", "gates.json"), join(dir, "nen", "gates.json"));
   if (workflow !== null) writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify(workflow));
@@ -209,9 +216,9 @@ async function run(
   });
 }
 
-/** The adapter's mapping, with ../pr/command.ts's shared code reproduced for the 0/1/5/6 half. */
+/** The adapter's REAL mapping (round 2, N9): ../pr/command.ts's exported `mergeExit` behind `deliveryExit`. */
 function exitOf(report: MergeDeliveryReport): number {
-  return deliveryExit(report, (r): number => (r.ok ? 0 : r.ran === false && r.mergeArgv !== null ? (r.spawnFailed ? 6 : 5) : 1));
+  return deliveryExit(report, mergeExit);
 }
 
 /** A protected-name base: the reads before the refusal, nothing after it. */
@@ -285,17 +292,45 @@ describe("mergeDelivery -- refused by ruling (exit 2, the document still emitted
     expect(outcome.lines[0]).toMatch(/a protected branch \(GitHub branch protection\)/);
   });
 
-  it("refuses a base a ruleset targets (F2)", async () => {
-    const outcome = await run(tmpRoot(), script({ protection: protectionCalls(INTEGRATION, false, [{ type: "deletion", ruleset_id: 1 }]), chain: null, viewer: null }));
+  it("refuses a base a ruleset targets, counting DISTINCT rulesets (F2, round 2 N2): 4 rules from 1 ruleset", async () => {
+    const rules = ["deletion", "non_fast_forward", "pull_request", "required_status_checks"].map((type) => ({ type, ruleset_id: 42 }));
+    const outcome = await run(tmpRoot(), script({ protection: protectionCalls(INTEGRATION, false, rules), chain: null, viewer: null }));
     expect(outcome.report.refused).toBe(true);
     expect(outcome.report.baseRulesets).toBe(1);
-    expect(outcome.lines[0]).toMatch(/targeted by 1 ruleset\(s\)/);
+    expect(outcome.lines[0]).toMatch(/targeted by 4 rule\(s\) from 1 ruleset\(s\)/);
   });
 
   it("refuses an auto-merge chain from the base into a protected name (F4), naming it", async () => {
     const outcome = await run(tmpRoot(), script({ chain: chainCall(INTEGRATION, [{ number: 12, baseRefName: "main", autoMergeRequest: { enabledAt: "x" } }]), viewer: null }));
     expect(outcome.report.refused).toBe(true);
     expect(outcome.lines[0]).toMatch(/is the head of #12 into 'main' with auto-merge enabled/);
+  });
+
+  it("judges each auto-merge target like a base: a protected release/1.x is refused (round 2, N6)", async () => {
+    const outcome = await run(
+      tmpRoot(),
+      script({
+        chain: chainCall(INTEGRATION, [{ number: 14, baseRefName: "release/1.x", autoMergeRequest: { enabledAt: "x" } }]),
+        protection: [...protectionCalls(), ...protectionCalls("release/1.x", true)],
+        viewer: null,
+      }),
+    );
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.lines[0]).toMatch(/#14 into 'release\/1\.x' \(a protected branch \(GitHub branch protection\)\) with auto-merge enabled/);
+  });
+
+  it("an auto-merge target whose protection cannot be read is unknown, exit 1 (round 2, N6)", async () => {
+    const outcome = await run(
+      tmpRoot(),
+      script({
+        chain: chainCall(INTEGRATION, [{ number: 14, baseRefName: "release/1.x", autoMergeRequest: { enabledAt: "x" } }]),
+        protection: [...protectionCalls(), { match: "gh api repos/zheref/example/branches/release/1.x", result: { code: 1, stderr: "HTTP 403" } }],
+      }),
+    );
+    expect(outcome.report.refused).toBe(false);
+    expect(outcome.report.baseOk).toBe(false);
+    expect(exitOf(outcome.report)).toBe(1);
+    expect(outcome.lines[0]).toMatch(/auto-merge target 'release\/1\.x' of #14/);
   });
 
   it("lets a chain through when its auto-merge is off or its target is unprotected", async () => {
@@ -306,6 +341,7 @@ describe("mergeDelivery -- refused by ruling (exit 2, the document still emitted
           { number: 12, baseRefName: "main", autoMergeRequest: null },
           { number: 13, baseRefName: "other/integration", autoMergeRequest: { enabledAt: "x" } },
         ]),
+        protection: [...protectionCalls(), ...protectionCalls("other/integration")],
       }),
     );
     expect(outcome.report.refused).toBe(false);
@@ -405,6 +441,18 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     expect(outcome.lines.join("\n")).toMatch(/head 'feature\/x' is not in the run form of branch\.template '\{model\}\/\{persona\}\/\{descriptor\}'/);
   });
 
+  it("refuses a pull request that answers no headRefName (round 2, N5)", async () => {
+    const outcome = await run(tmpRoot(), script({ pr: prOnceCall({ headRefName: undefined }) }));
+    expect(outcome.report.wholeOk).toBe(false);
+    expect(outcome.lines.join("\n")).toMatch(/whose pr: the pull request answered no head branch name -- refused\./);
+  });
+
+  it("refuses a malformed local nen/workflow.json as usage, before any gh call (round 2, N5)", async () => {
+    const root = tmpRoot();
+    writeFileSync(join(root, "nen", "workflow.json"), "{ not json");
+    await expect(run(root, [ORIGIN_CALL])).rejects.toThrow(MergeUnitUsageError);
+  });
+
   it("reads the template from the base commit (F1)", async () => {
     const outcome = await run(
       tmpRoot(),
@@ -457,6 +505,7 @@ describe("mergeDelivery -- under --run", () => {
     expect(outcome.report.ok).toBe(true);
     expect(outcome.report.ran).toBe(true);
     expect(outcome.report.mergedBase).toBe(INTEGRATION);
+    expect(outcome.report.rereadBase).toBe(INTEGRATION);
     expect(outcome.report.outsideAuthority).toBe(false);
     expect(outcome.report.gates.at(-1)).toEqual({ name: "base (re-read)", ok: true, lines: [`base (re-read): still '${INTEGRATION}'`] });
     expect(outcome.lines.at(-1)).toBe(`merged: gh ${MERGE_MATCH.slice(3)}`);
@@ -470,6 +519,43 @@ describe("mergeDelivery -- under --run", () => {
     expect(outcome.report.ok).toBe(false);
     expect(exitOf(outcome.report)).toBe(EXIT_MERGED_OUTSIDE_AUTHORITY);
     expect(outcome.lines.at(-1)).toMatch(/MERGED INTO 'main' WITHOUT AUTHORITY .* Tell the maintainer now \(exit 7\)/);
+  });
+
+  it("R2: is exit 7 'authority unconfirmed' when the post-merge re-read fails (round 2, N1) -- never 0", async () => {
+    const outcome = await run(
+      tmpRoot(),
+      [...script(), baseRereadCall(), MERGE_CALL, { match: "gh pr view 9 --repo zheref/example --json state,mergedAt,baseRefName", result: { code: 1, stderr: "HTTP 502" } }],
+      { run: true },
+    );
+    expect(outcome.report.ran).toBe(true);
+    expect(outcome.report.outsideAuthority).toBe(true);
+    expect(outcome.report.ok).toBe(false);
+    expect(exitOf(outcome.report)).toBe(EXIT_MERGED_OUTSIDE_AUTHORITY);
+    expect(outcome.lines.at(-1)).toMatch(/AUTHORITY UNCONFIRMED/);
+  });
+
+  it("R3: is exit 7 when a QUEUED merge (state OPEN) reports a base of main (round 2, N1)", async () => {
+    const queued: ScriptedCall = {
+      match: "gh pr view 9 --repo zheref/example --json state,mergedAt,baseRefName",
+      result: { code: 0, stdout: JSON.stringify({ state: "OPEN", mergedAt: null, baseRefName: "main" }) },
+    };
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall(), MERGE_CALL, queued], { run: true });
+    expect(outcome.report.state).toBe("OPEN");
+    expect(outcome.report.mergedBase).toBe("main");
+    expect(outcome.report.outsideAuthority).toBe(true);
+    expect(exitOf(outcome.report)).toBe(EXIT_MERGED_OUTSIDE_AUTHORITY);
+    expect(outcome.lines.at(-1)).toMatch(/ACCEPTED \(state 'OPEN'\) INTO 'main' WITHOUT AUTHORITY/);
+  });
+
+  it("a queued merge into the gated base is exit 0, reported queued", async () => {
+    const queued: ScriptedCall = {
+      match: "gh pr view 9 --repo zheref/example --json state,mergedAt,baseRefName",
+      result: { code: 0, stdout: JSON.stringify({ state: "OPEN", mergedAt: null, baseRefName: INTEGRATION }) },
+    };
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall(), MERGE_CALL, queued], { run: true });
+    expect(outcome.report.outsideAuthority).toBe(false);
+    expect(exitOf(outcome.report)).toBe(0);
+    expect(outcome.lines.at(-1)).toMatch(/^queued \(auto-merge or merge queue\)/);
   });
 
   it("is exit 7 when the merged base cannot be confirmed (F3/F5)", async () => {
@@ -499,6 +585,11 @@ describe("mergeDelivery -- under --run", () => {
   it("refuses by ruling a retarget onto the trunk between the gates and the merge", async () => {
     const outcome = await run(tmpRoot(), [...script(), baseRereadCall("refs/heads/main")], { run: true });
     expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.rereadBase).toBe("main");
+    const text = outcome.lines.join("\n");
+    expect(text).toMatch(/the gates judged base 'opus\/kurapika\/futon-integration', and the pull request has since been retargeted onto 'main'/);
+    expect(text).toMatch(/'pr ready' passed at cafebabe; the base moved/);
+    expect(text).not.toMatch(/'pr ready' was NOT evaluated/);
     expect(outcome.report.baseOk).toBe(false);
     expect(outcome.report.ready).toBe(true);
     expect(outcome.report.gates.at(-1)?.name).toBe("base (re-read)");
@@ -508,6 +599,7 @@ describe("mergeDelivery -- under --run", () => {
   it("does not merge when the base moved to another non-main branch (N7)", async () => {
     const outcome = await run(tmpRoot(), [...script(), baseRereadCall("other/integration")], { run: true });
     expect(outcome.report.ran).toBe(false);
+    expect(outcome.report.rereadBase).toBe("other/integration");
     expect(outcome.report.baseOk).toBe(false);
     expect(outcome.report.gates.at(-1)).toMatchObject({ name: "base (re-read)", ok: false });
   });
@@ -521,6 +613,18 @@ describe("mergeDelivery -- under --run", () => {
 });
 
 describe("helpers", () => {
+  it("mergeExit / deliveryExit: the real mapping (round 2, N9)", () => {
+    const base = { ok: false, ran: false, spawnFailed: false, mergeArgv: null as readonly string[] | null };
+    expect(mergeExit({ ...base, ok: true })).toBe(0);
+    expect(mergeExit(base)).toBe(1);
+    expect(mergeExit({ ...base, mergeArgv: ["pr", "merge"] })).toBe(5);
+    expect(mergeExit({ ...base, mergeArgv: ["pr", "merge"], spawnFailed: true })).toBe(6);
+    const report = { refused: false, outsideAuthority: false, ...base } as unknown as MergeDeliveryReport;
+    expect(deliveryExit({ ...report, refused: true }, mergeExit)).toBe(2);
+    expect(deliveryExit({ ...report, outsideAuthority: true, ran: true }, mergeExit)).toBe(7);
+    expect(deliveryExit({ ...report, mergeArgv: ["pr", "merge"] }, mergeExit)).toBe(5);
+  });
+
   it("runBranchPattern: three non-empty segments for the default template", () => {
     const pattern = runBranchPattern("{model}/{persona}/{descriptor}");
     expect(pattern.test("opus/kurapika/x")).toBe(true);

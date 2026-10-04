@@ -102,7 +102,7 @@ export interface MergeDeliveryReport {
   readonly defaultBranchBase: string | null;
   /** GitHub's `protected` for the base; `null` when unread. */
   readonly baseProtected: boolean | null;
-  /** How many rulesets target the base; `null` when unread. */
+  /** How many DISTINCT rulesets (by `ruleset_id`) target the base; `null` when unread. */
   readonly baseRulesets: number | null;
   readonly ready: boolean;
   readonly pinOk: boolean;
@@ -115,9 +115,15 @@ export interface MergeDeliveryReport {
   readonly judgedHead: string | null;
   readonly requiredHead: string | null;
   readonly state: string | null;
-  /** The base GitHub reports AFTER a merge; `null` when no merge was confirmed. */
+  /** The base the pre-merge re-read answered under --run; `null` when there was none or it named none. */
+  readonly rereadBase: string | null;
+  /** The base the post-merge re-read answered, whatever the state; `null` when there was none or it named none. */
   readonly mergedBase: string | null;
-  /** True when the merge landed in a protected name or a base other than the one gated -- exit 7. */
+  /**
+   * True when gh accepted the merge and the post-merge re-read names a
+   * protected name, a base other than the one gated, no base at all, or could
+   * not be read -- merged (or queued) without confirmed authority, exit 7.
+   */
   readonly outsideAuthority: boolean;
   readonly gates: readonly GateOutcome[];
 }
@@ -223,8 +229,22 @@ export function runBranchPattern(template: string): RegExp {
 
 /** GitHub's protection for one branch (F2): the classic flag and the rulesets that target it. */
 type Protection =
-  | { readonly ok: true; readonly protected: boolean; readonly rulesets: number }
+  | { readonly ok: true; readonly protected: boolean; readonly rules: number; readonly rulesets: number }
   | { readonly ok: false; readonly message: string };
+
+/**
+ * DISTINCT rulesets behind a `rules/branches` answer (hanten round 2, N2):
+ * GitHub lists one entry per RULE, and one ruleset commonly carries several.
+ * An entry with no `ruleset_id` counts as its own.
+ */
+function distinctRulesets(rules: readonly unknown[]): number {
+  const ids = new Set<string>();
+  rules.forEach((rule, index): void => {
+    const id = typeof rule === "object" && rule !== null ? (rule as { readonly ruleset_id?: unknown }).ruleset_id : undefined;
+    ids.add(typeof id === "number" || typeof id === "string" ? `id:${String(id)}` : `rule:${index}`);
+  });
+  return ids.size;
+}
 
 function readProtection(seams: Seams, target: Target, base: string): Protection {
   try {
@@ -232,7 +252,7 @@ function readProtection(seams: Seams, target: Target, base: string): Protection 
     if (typeof branch?.protected !== "boolean") return { ok: false, message: `GitHub answered no 'protected' flag for '${base}'` };
     const rules = mustJson<unknown>(seams, GH, ["api", `repos/${target.slug}/rules/branches/${branchPath(base)}`]);
     if (!Array.isArray(rules)) return { ok: false, message: `GitHub's rules for '${base}' are not a list` };
-    return { ok: true, protected: branch.protected, rulesets: rules.length };
+    return { ok: true, protected: branch.protected, rules: rules.length, rulesets: distinctRulesets(rules) };
   } catch (error) {
     if (error instanceof ToolError) return { ok: false, message: redactRemoteCredentials(error.message) };
     throw error;
@@ -262,15 +282,21 @@ function protectedReasons(name: string, names: ReadonlyMap<string, readonly stri
   const reasons = [...(names.get(name) ?? [])];
   if (protection !== null && protection.ok) {
     if (protection.protected) reasons.push("a protected branch (GitHub branch protection)");
-    if (protection.rulesets > 0) reasons.push(`targeted by ${protection.rulesets} ruleset(s)`);
+    if (protection.rules > 0) reasons.push(`targeted by ${protection.rules} rule(s) from ${protection.rulesets} ruleset(s)`);
   }
   return reasons;
 }
 
-/** The maintainer's own lines (N9): `pr ready` was NOT evaluated, so the check comes before the merge. */
-function handOver(target: Target, prNumber: number, head: string): string[] {
+/**
+ * The maintainer's own lines (N9). Refused before the gates: `pr ready` was
+ * NOT evaluated, so the check comes before the merge. Refused on the re-read
+ * (round 2, N3): `pr ready` PASSED at the judged head and the base moved.
+ */
+function handOver(target: Target, prNumber: number, head: string, passedAt: string | null = null): string[] {
   return [
-    "'pr ready' was NOT evaluated -- the maintainer's own check, then the merge:",
+    passedAt === null
+      ? "'pr ready' was NOT evaluated -- the maintainer's own check, then the merge:"
+      : `'pr ready' passed at ${passedAt}; the base moved -- the maintainer's own check, then the merge:`,
     `  nen pr ready ${prNumber} --gh-repo ${target.slug} --require-head ${head}`,
     `  gh pr merge ${prNumber} --repo ${target.slug} --merge --match-head-commit ${head}`,
   ];
@@ -394,14 +420,17 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
     baseProtected: protection !== null && protection.ok ? protection.protected : null,
     baseRulesets: protection !== null && protection.ok ? protection.rulesets : null,
     requiredHead: options.requireHead,
+    rereadBase: null as string | null,
   };
 
   /** Refused by ruling (N6): the gates so far plus the refusal, exit 2, the document still emitted. */
   const refuse = (refusal: string, gatesSoFar: readonly GateOutcome[], partial: Partial<MergeDeliveryReport> = {}): MergeDeliveryOutcome => {
+    const onReread = gatesSoFar.length > 0;
+    const head = partial.judgedHead ?? readHead;
     const refusalGate: GateOutcome = {
-      name: gatesSoFar.length === 0 ? "base" : "base (re-read)",
+      name: onReread ? "base (re-read)" : "base",
       ok: false,
-      lines: [refusal, ...handOver(target, ref.number, partial.judgedHead ?? readHead)],
+      lines: [refusal, ...handOver(target, ref.number, head, onReread ? head : null)],
     };
     const gates = [...gatesSoFar, refusalGate];
     const lines = gates.flatMap((gate): readonly string[] => gate.lines);
@@ -439,15 +468,28 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
     if (!chain.ok) {
       unknowns.push(`could not list the open pull requests whose head is '${base}' (${chain.message})`);
     } else {
-      const carried = chain.entries
-        .filter((entry): boolean => entry.autoMergeRequest !== null && entry.autoMergeRequest !== undefined)
-        .filter((entry): boolean => {
-          const into = branchName(entry.baseRefName);
-          return into === null || names.has(into);
-        });
+      // ONE HOP (round 2, N6): each auto-merge target is judged as a base
+      // would be -- a protected name, GitHub protection, a ruleset -- but a
+      // chain from THAT target onward is not walked.
+      const carried: string[] = [];
+      for (const entry of chain.entries) {
+        if (entry.autoMergeRequest === null || entry.autoMergeRequest === undefined) continue;
+        const into = branchName(entry.baseRefName);
+        const label = `#${String(entry.number)} into '${into ?? "(unnamed)"}'`;
+        if (into === null || names.has(into)) {
+          carried.push(label);
+          continue;
+        }
+        const intoProtection = readProtection(options.seams, target, into);
+        if (!intoProtection.ok) {
+          unknowns.push(`could not read GitHub's protection for auto-merge target '${into}' of #${String(entry.number)} (${intoProtection.message})`);
+          continue;
+        }
+        const why = protectedReasons(into, names, intoProtection);
+        if (why.length > 0) carried.push(`${label} (${why.join(" and ")})`);
+      }
       if (carried.length > 0) {
-        const named = carried.map((entry): string => `#${String(entry.number)} into '${branchName(entry.baseRefName) ?? "(unnamed)"}'`).join(", ");
-        return refuse(`base: '${base}' is the head of ${named} with auto-merge enabled -- merging here would carry this pull request into a protected name.`, []);
+        return refuse(`base: '${base}' is the head of ${carried.join(", ")} with auto-merge enabled -- merging here would carry this pull request into a protected base.`, []);
       }
     }
   }
@@ -511,10 +553,10 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
   // The pre-merge re-read (this file's header): `gh pr merge` has no base pin.
   // A failure or a retarget appends a FAILED 'base (re-read)' gate, so `gates`
   // and `baseOk` never disagree (N7).
-  const failReread = (why: string): MergeDeliveryOutcome => {
+  const failReread = (why: string, rereadBase: string | null): MergeDeliveryOutcome => {
     const rereadGate: GateOutcome = { name: "base (re-read)", ok: false, lines: [`base (re-read): ${why} -- refused.`] };
     return {
-      report: { ...gateFacts, baseOk: false, ok: false, ran: false, spawnFailed: false, mergeArgv: null, state: null, gates: [...gates, rereadGate] },
+      report: { ...gateFacts, rereadBase, baseOk: false, ok: false, ran: false, spawnFailed: false, mergeArgv: null, state: null, gates: [...gates, rereadGate] },
       lines: [...lines, ...rereadGate.lines, "nen pr merge: not merged -- at least one gate above did not pass."],
     };
   };
@@ -525,36 +567,52 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
         ?.baseRefName,
     );
   } catch (error) {
-    if (error instanceof ToolError) return failReread(`could not re-read the base before merging (${redactRemoteCredentials(error.message)})`);
+    if (error instanceof ToolError) return failReread(`could not re-read the base before merging (${redactRemoteCredentials(error.message)})`, null);
     throw error;
   }
-  if (baseNow === null) return failReread("the pull request answered no base branch name on the re-read");
+  if (baseNow === null) return failReread("the pull request answered no base branch name on the re-read", null);
   const reasonsNow = protectedReasons(baseNow, names, baseNow === base ? protection : null);
   if (reasonsNow.length > 0) {
-    return refuse(`base (re-read): the pull request was retargeted onto '${baseNow}', which is ${reasonsNow.join(" and ")}.`, gates, gateFacts);
+    return refuse(
+      `base (re-read): the gates judged base '${base}', and the pull request has since been retargeted onto '${baseNow}', which is ${reasonsNow.join(" and ")}.`,
+      gates,
+      { ...gateFacts, rereadBase: baseNow },
+    );
   }
   if (baseNow !== base) {
-    return failReread(`the pull request was retargeted from '${base}' to '${baseNow}' after the gates above read it; run again so every gate judges the same base`);
+    return failReread(`the pull request was retargeted from '${base}' to '${baseNow}' after the gates above read it; run again so every gate judges the same base`, baseNow);
   }
   const rereadOk: GateOutcome = { name: "base (re-read)", ok: true, lines: [`base (re-read): still '${baseNow}'`] };
   lines.push(...rereadOk.lines);
+  const rereadFacts = { ...gateFacts, rereadBase: baseNow };
 
   const executed = executeMerge(options.seams, target, ref.number, mergeArgv, "state,mergedAt,baseRefName");
   lines.push(...executed.lines);
+  // N1 (round 2): EVERY post-merge re-read that answers is checked, whatever
+  // the state -- a queued merge into the trunk lands there all the same --
+  // and one that could not be read is "authority unconfirmed", never 0.
   let mergedBase: string | null = null;
   let outsideAuthority = false;
-  if (executed.state === "MERGED") {
-    mergedBase = branchName(executed.reread?.["baseRefName"]);
-    if (mergedBase === null || names.has(mergedBase) || mergedBase !== base) {
+  if (executed.ran) {
+    if (executed.reread === null) {
       outsideAuthority = true;
       lines.push(
-        `nen pr merge: MERGED INTO ${mergedBase === null ? "AN UNCONFIRMED BASE" : `'${mergedBase}'`} WITHOUT AUTHORITY -- the gates above judged '${base}'. Tell the maintainer now (exit ${EXIT_MERGED_OUTSIDE_AUTHORITY}). Per ${MERGE_AUTHORITY_RULING}.`,
+        `nen pr merge: AUTHORITY UNCONFIRMED -- gh accepted the merge, and the re-read that would name its base could not be read; the gates judged '${base}'. Tell the maintainer now (exit ${EXIT_MERGED_OUTSIDE_AUTHORITY}). Per ${MERGE_AUTHORITY_RULING}.`,
       );
+    } else {
+      mergedBase = branchName(executed.reread["baseRefName"]);
+      if (mergedBase === null || names.has(mergedBase) || mergedBase !== base) {
+        outsideAuthority = true;
+        const verb = executed.state === "MERGED" ? "MERGED" : `ACCEPTED (state '${executed.state ?? "unknown"}')`;
+        lines.push(
+          `nen pr merge: ${verb} INTO ${mergedBase === null ? "AN UNCONFIRMED BASE" : `'${mergedBase}'`} WITHOUT AUTHORITY -- the gates above judged '${base}'. Tell the maintainer now (exit ${EXIT_MERGED_OUTSIDE_AUTHORITY}). Per ${MERGE_AUTHORITY_RULING}.`,
+        );
+      }
     }
   }
   return {
     report: {
-      ...gateFacts,
+      ...rereadFacts,
       ok: executed.ok && !outsideAuthority,
       ran: executed.ran,
       spawnFailed: executed.spawnFailed,

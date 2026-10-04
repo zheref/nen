@@ -412,7 +412,7 @@ merge:
                               Omit it to see the plan only.
   Exit codes: 0 merged, or a passing plan printed without --run; 1 at
   least one gate did not pass; 2 usage (neither or both of --release-unit
-  and --delivery, a pr-ready-only flag, --require-head, a bad ref,
+  and --delivery, a flag merge does not read, --require-head, a bad ref,
   an unknown or unreadable product code, missing --requirements-from,
   --repo's origin naming a different repository than the ref or the code
   resolves to, or an unknown flag such as --admin/--auto);
@@ -452,14 +452,21 @@ merge --delivery (zheref/nen#286):
   merge' (which pins the head, not the base) and a 'base (re-read)' gate
   is appended: a retarget onto a protected name is refused by ruling (2),
   a failed read or any other retarget is exit 1, nothing merged. AFTER the
-  merge the base is read once more: merged into a protected name, into any
-  base but the one gated, or into one GitHub will not name, is EXIT 7.
+  merge the base is read once more, WHATEVER the state (merged or queued):
+  a protected name, any base but the one gated, no name, or a re-read that
+  fails ("authority unconfirmed") is EXIT 7, never 0.
   --requirements-from <path>  Required, as for --release-unit.
   --require-head <sha>        Pin the commit (7-40 hex digits); 'pr ready'
                               gives no verdict on any other head.
-  'pr ready''s own flags (--gates, --reviewers, --approvers, --round-policy,
-  --token-env, --exclude-run, --exclude-check, --gh-repo, --explain) are
-  refused on 'pr merge' (exit 2) before any gh call.
+  Every flag 'pr merge' does not read -- 'pr ready''s own (--gates,
+  --reviewers, --approvers, --round-policy, --token-env, --exclude-run,
+  --exclude-check, --gh-repo, --explain) and other subcommands' (--base,
+  --target, ...) -- is refused (exit 2) before any gh call.
+  nen/workflow.json must be committed at the base commit AND on the default
+  branch for --delivery to work: an absent file reads as unknown (exit 1).
+  A ruleset matching every branch (e.g. ~ALL) refuses every base until it
+  excludes the integration branches. The auto-merge chain check covers ONE
+  hop: each auto-merge target is judged like a base, its own chain is not.
   Exit codes: 0 merged, or a passing plan without --run; 1 a gate did not
   pass (an unknown base included); 2 usage, OR refused by ruling -- told
   apart by 'refused by ruling' on stdout and refused: true in --json, where
@@ -467,9 +474,10 @@ merge --delivery (zheref/nen#286):
   be run; 7 MERGED WITHOUT AUTHORITY -- tell the maintainer.
   --json: '{ contract: "nen.pr.merge-delivery/v0.1", target, pr, base,
   baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
-  defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk,
-  wholeOk, ok, ran, spawnFailed, judgedHead, requiredHead, state,
-  mergedBase, outsideAuthority, mergeArgv, gates: [{ name, ok, lines }] }'.`;
+  defaultBranchBase, baseProtected, baseRulesets (distinct ruleset_id),
+  ready, pinOk, bodyOk, wholeOk, ok, ran, spawnFailed, judgedHead,
+  requiredHead, state, rereadBase, mergedBase, outsideAuthority, mergeArgv,
+  gates: [{ name, ok, lines }] }'.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -1496,7 +1504,7 @@ function open(context: CommandContext): number {
  * whole composition; this adapter only reads the CLI's own flags and renders.
  */
 async function doMerge(context: CommandContext): Promise<number> {
-  refuseReadyOnlyFlagsOnMerge(context);
+  refuseFlagsMergeDoesNotRead(context);
   const releaseUnit = context.args.booleans.has("release-unit");
   const delivery = context.args.booleans.has("delivery");
   if (releaseUnit && delivery) {
@@ -1551,7 +1559,7 @@ async function doMerge(context: CommandContext): Promise<number> {
  * checks passed and gh said no" from "gh could not even be started" without
  * parsing the message.
  */
-function mergeExit(report: { readonly ok: boolean; readonly ran: boolean; readonly spawnFailed: boolean; readonly mergeArgv: readonly string[] | null }): number {
+export function mergeExit(report: { readonly ok: boolean; readonly ran: boolean; readonly spawnFailed: boolean; readonly mergeArgv: readonly string[] | null }): number {
   if (report.ok) return 0;
   if (report.ran === false && report.mergeArgv !== null) return report.spawnFailed ? EXIT_GH_NOT_RUNNABLE : EXIT_GH_REFUSED;
   return 1;
@@ -1608,20 +1616,26 @@ function readRequirements(requirementsPath: string, root: string): readonly Body
   return rawRequirements;
 }
 
+/** Every flag 'pr merge' reads, globals included (round 2, N7). */
+const MERGE_VALUES: ReadonlySet<string> = new Set(["requirements-from", "require-head", "repo"]);
+const MERGE_BOOLEANS: ReadonlySet<string> = new Set(["release-unit", "delivery", "run", "json", "help"]);
+
 /**
- * N11: 'pr ready''s own flags parse on every 'pr' subcommand (the family has
- * one flag table) and 'merge' reads none of them but --require-head -- its
- * 'pr ready' gate runs on the target repository's own declarations. Refused
- * here, before any gh call, rather than silently ignored, as mark-ready does.
+ * The 'pr' family has ONE flag table, so every family flag parses on 'merge'.
+ * 'merge' reads only the sets above; any other flag -- 'pr ready''s own
+ * (round 1, N11) or another subcommand's, such as --base or --target (round
+ * 2, N7) -- is refused here, before any gh call, rather than silently
+ * ignored, as mark-ready does.
  */
-function refuseReadyOnlyFlagsOnMerge(context: CommandContext): void {
-  for (const flag of PR_READY_ONLY) {
-    if (flag === "require-head") continue;
-    const given = context.args.values[flag] !== undefined || (context.args.lists[flag] ?? []).length > 0 || context.args.booleans.has(flag);
-    if (given) {
-      throw new VerbUsageError(
-        `--${flag} is only read by 'pr ready'; 'pr merge' reads its ref, --release-unit or --delivery, --requirements-from, --repo, --require-head (--delivery only), --run and --json.`,
-      );
-    }
-  }
+function refuseFlagsMergeDoesNotRead(context: CommandContext): void {
+  const given = [
+    ...Object.keys(context.args.values).filter((flag): boolean => context.args.values[flag] !== undefined && !MERGE_VALUES.has(flag)),
+    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
+    ...[...context.args.booleans].filter((flag): boolean => !MERGE_BOOLEANS.has(flag)),
+  ];
+  const first = given[0];
+  if (first === undefined) return;
+  const reads = "'pr merge' reads its ref, --release-unit or --delivery, --requirements-from, --repo, --require-head (--delivery only), --run and --json.";
+  if (PR_READY_ONLY.has(first)) throw new VerbUsageError(`--${first} is only read by 'pr ready'; ${reads}`);
+  throw new VerbUsageError(`--${first} is not read by 'pr merge'; ${reads}`);
 }

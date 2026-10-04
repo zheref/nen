@@ -1453,6 +1453,21 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     expect(doc.base).toBe("main");
   });
 
+  // Round 2, N7: other subcommands' flags parse on 'merge' (one family table)
+  // and are refused, not ignored -- on either form, before any gh call.
+  for (const [form, extra] of [
+    ["--delivery", ["--base", "main"]],
+    ["--delivery", ["--target", "zheref/example"]],
+    ["--release-unit", ["--base", "main"]],
+    ["--release-unit", ["--target", "zheref/example"]],
+  ] as const) {
+    it(`${extra[0]} is refused on 'pr merge ${form}' (exit 2, zero gh calls)`, async () => {
+      const result = await capture(["pr", "merge", "zheref/example#9", form, "--requirements-from", REQUIREMENTS_FILE, ...extra], unitRepo(), new ScriptedSeams([]));
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(new RegExp(`${extra[0]} is not read by 'pr merge'`));
+    });
+  }
+
   it("--delivery requires --requirements-from (AC1, N5)", async () => {
     const result = await capture(["pr", "merge", "zheref/example#9", "--delivery"], unitRepo(), new ScriptedSeams([]));
     expect(result.code).toBe(2);
@@ -1469,6 +1484,8 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     ["--round-policy", "strict"],
     ["--token-env", "TOKEN"],
     ["--exclude-run", "1"],
+    ["--gh-repo", "zheref/example"],
+    ["--explain"],
   ]) {
     it(`${extra[0]} is refused on 'pr merge' (exit 2, zero gh calls)`, async () => {
       const result = await capture(["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE, ...extra], unitRepo(), new ScriptedSeams([]));
