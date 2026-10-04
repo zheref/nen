@@ -384,6 +384,16 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     );
   });
 
+  // zheref/nen#345: mark-ready WRITES (a draft-to-ready mutation) unless
+  // --dry-run is given; its certifying read never does.
+  it("pr mark-ready is dry-run-gated, like edit-body in the same family", () => {
+    expect(classifyCommand("nen pr mark-ready --target o/r --pr 1").classification).toBe("mutating");
+    expect(classifyCommand("nen pr mark-ready --target o/r --pr 1 --require-head abcdef1").classification).toBe("mutating");
+    expect(classifyCommand("nen pr mark-ready --target o/r --pr 1 --dry-run").classification).toBe("read-only");
+    // and the read-only verdict verb stays read-only -- the two never share a row
+    expect(classifyCommand("nen pr ready o/r#1").classification).toBe("read-only");
+  });
+
   // zheref/nen#29's new verb. It POSTS to a public timeline, so it is gated
   // exactly like its issue-family siblings -- read-only only in the explicit
   // --dry-run form, never inferred from "it only comments".

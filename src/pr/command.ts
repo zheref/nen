@@ -1,8 +1,8 @@
 // src/pr/command.ts -- `nen pr ready`, `nen pr staleness`, `nen pr body-check`
 // (main), and (verbs/4-remainders, zheref/nen#4) `nen pr fetch`,
 // `nen pr next-blocker`, `nen pr cascade-main`, `nen pr retarget`,
-// `nen pr request-reviews`, `nen pr edit-body` -- one "pr" family, nine
-// subcommands.
+// `nen pr request-reviews`, `nen pr edit-body`, and (zheref/nen#345)
+// `nen pr mark-ready` -- one "pr" family.
 //
 // THREE SUBCOMMANDS, ONE FAMILY. `nen pr ready` (the CON-32 readiness verdict,
 // zheref/nen#2) is the ELDER of the three: it landed on main first, as a direct
@@ -58,6 +58,8 @@ import {
 } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 import { OPEN_CONTRACT, openPullRequest } from "./open.js";
+import { plainLine } from "../cli/plain.js";
+import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
 import {
   EXIT_FOR,
   listThreads,
@@ -99,6 +101,7 @@ nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots id,id] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
+nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
@@ -264,6 +267,40 @@ edit-body:
   the first and last line of the body instead of writing. --json:
   '{ contract: "nen.pr.edit-body/v0.1", target, number, bytes, written,
   dryRun }'.
+
+mark-ready:
+  Move ONE existing draft pull request out of draft, through GitHub's
+  'markPullRequestReadyForReview' mutation (zheref/nen#345). NOT 'pr ready':
+  that verb is the read-only CON-32 verdict and decides nothing here; this
+  one changes isDraft and decides nothing about readiness. It never merges,
+  votes, labels, requests reviewers or touches permissions, and it runs on
+  whatever credential gh already holds -- a refusal is reported, never
+  routed around.
+  ONE READ FIRST, BEFORE ANY WRITE: the number must resolve as a pull
+  request in --target (exit 2 if it, or the repository, does not), be OPEN
+  (exit 3 if CLOSED or MERGED), and carry the --require-head commit when one
+  is given (exit 8, both SHAs printed). Already NOT a draft: exit 0,
+  status already-ready, nothing sent. Otherwise the mutation is addressed by
+  the node id that read produced, and GitHub is READ BACK: success (exit 0,
+  marked-ready) only when the same pull request now reads isDraft false.
+  A 200 carrying errors is refused (exit 1); a non-zero gh exit or a
+  non-JSON answer is read back like any other, and a failed or still-draft
+  read back is unconfirmed (exit 1) -- never reported as ready. Every flag
+  this verb does not read (pr ready's --token-env, --gh-repo, ... included)
+  is refused at exit 2 before any call.
+  --require-head <sha>  7-40 hex digits, a prefix of GitHub's head, any case.
+                        Refused before the write unless it matches; the
+                        mutation itself is not pinned, so a head that moved
+                        by the read back is marked-ready-head-moved: the
+                        pull request left draft, the pin no longer holds,
+                        exit 8. Without --require-head a moved head is only
+                        reported (headMoved), at exit 0.
+  --dry-run             The read and every refusal above still run; prints
+                        the exact 'gh api graphql' mutation argv and sends
+                        nothing.
+  --json: '{ contract: "nen.pr.mark-ready/v0.1", status, ok, target, number,
+  url, stateBefore, wasDraft, isDraft, requiredHead, headBefore, headAfter,
+  headMoved, sent, dryRun, mutationArgv, message }'.
 
 threads:
   The review-thread half of a pull request (zheref/nen#215): 'list' reads
@@ -498,9 +535,9 @@ function ready(context: CommandContext): Promise<number> {
 
 export const prCommand: Command = {
   name: "pr",
-  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "threads", "open", "merge"],
+  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "mark-ready", "threads", "open", "merge"],
   summary:
-    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, threads, open, merge.",
+    "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge.",
   usage: USAGE,
   flags: {
     values: [
@@ -540,6 +577,7 @@ export const prCommand: Command = {
       "retarget",
       "request-reviews",
       "edit-body",
+      "mark-ready",
       "threads",
       "open",
       "merge",
@@ -575,11 +613,14 @@ export const prCommand: Command = {
     if (
       subcommand !== "edit-body" &&
       subcommand !== "request-reviews" &&
+      subcommand !== "mark-ready" &&
       subcommand !== "threads" &&
       subcommand !== "open" &&
       context.args.booleans.has("dry-run")
     ) {
-      throw new VerbUsageError("--dry-run is only read by 'pr edit-body', 'pr request-reviews', 'pr threads' and 'pr open'.");
+      throw new VerbUsageError(
+        "--dry-run is only read by 'pr edit-body', 'pr request-reviews', 'pr mark-ready', 'pr threads' and 'pr open'.",
+      );
     }
     if (subcommand !== "edit-body" && subcommand !== "threads" && subcommand !== "open" && context.args.values["body-file"] !== undefined) {
       throw new VerbUsageError("--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'.");
@@ -601,6 +642,7 @@ export const prCommand: Command = {
     if (subcommand !== "request-reviews" && context.args.values["add-bots"] !== undefined) {
       throw new VerbUsageError("--add-bots is only read by 'pr request-reviews'.");
     }
+    if (subcommand === "mark-ready") refuseFlagsMarkReadyDoesNotRead(context);
     switch (subcommand) {
       case "ready":
         return ready(context);
@@ -624,6 +666,8 @@ export const prCommand: Command = {
         return open(context);
       case "merge":
         return doMerge(context);
+      case "mark-ready":
+        return doMarkReady(context);
       default:
         return editBody(context);
     }
@@ -1088,6 +1132,71 @@ function editBody(context: CommandContext): number {
   }
   context.io.out(`replaced ${target.slug}#${pr}'s body (${bytes} byte(s))`);
   return 0;
+}
+
+// ── mark-ready (zheref/nen#345) ─────────────────────────────────────────────
+
+/** The only flags `pr mark-ready` reads (the global --json/--help/--repo aside). */
+const MARK_READY_VALUES: ReadonlySet<string> = new Set(["target", "pr", "require-head", "repo"]);
+const MARK_READY_BOOLEANS: ReadonlySet<string> = new Set(["dry-run", "json", "help"]);
+const PR_READY_ONLY: ReadonlySet<string> = new Set<string>([
+  ...PR_READY_FLAGS.values,
+  ...PR_READY_FLAGS.lists,
+  ...PR_READY_FLAGS.booleans,
+]);
+
+/**
+ * Refuse, at exit 2 and before any `gh` call, every family flag mark-ready
+ * does not read (Feitan F1, Nobunaga N1) -- the same local-refusal shape
+ * `--thread` and `--add-bots` have above, generalised because this verb sits
+ * in a family whose flag set is mostly OTHER verbs'. The sharpest case is
+ * `--token-env`: silently accepted, it reads as "this ran on that token"
+ * when the write in fact ran on whatever gh is authenticated as.
+ */
+function refuseFlagsMarkReadyDoesNotRead(context: CommandContext): void {
+  const given = [
+    ...Object.keys(context.args.values).filter((flag): boolean => !MARK_READY_VALUES.has(flag)),
+    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
+    ...[...context.args.booleans].filter((flag): boolean => !MARK_READY_BOOLEANS.has(flag)),
+  ];
+  const first = given[0];
+  if (first === undefined) return;
+  if (first === "token-env") {
+    throw new VerbUsageError("--token-env is only read by 'pr ready'; mark-ready runs on gh's own credential.");
+  }
+  if (PR_READY_ONLY.has(first)) {
+    throw new VerbUsageError(`--${first} is only read by 'pr ready'; 'pr mark-ready' reads --target, --pr, --require-head and --dry-run.`);
+  }
+  throw new VerbUsageError(`--${first} is not read by 'pr mark-ready'; it reads --target, --pr, --require-head and --dry-run.`);
+}
+
+//
+// The verb's logic lives in ./markready.ts behind the seam; this adapts flags
+// and renders. `--pr` takes the STRICT reader, because this verb WRITES: a
+// coerced `1e3` would move pull request 1000 out of draft.
+function doMarkReady(context: CommandContext): number {
+  const target = requireTarget(context);
+  const pr = requirePrStrict(context, "mark-ready");
+  const rawHead = context.args.values["require-head"];
+  if (rawHead !== undefined && !MARK_READY_SHA_PREFIX.test(rawHead)) {
+    throw new VerbUsageError(`mark-ready: --require-head takes a commit SHA of 7 to 40 hex digits (got '${rawHead}').`);
+  }
+  const report: MarkReadyReport = markReady(context.seams, {
+    target,
+    number: pr,
+    requiredHead: rawHead ?? null,
+    dryRun: context.args.booleans.has("dry-run"),
+  });
+  // EVERY HUMAN LINE THROUGH plainLine (Feitan F3): the url, the node id (in
+  // the argv and the different-object message) and gh's own stderr are
+  // GitHub-controlled strings. --json carries the original bytes.
+  const lines = [report.status, report.message];
+  if (report.mutationArgv !== null && report.dryRun) lines.push(`would run: ${printableArgv(report.mutationArgv.slice(1))}`);
+  lines.push(`  ${report.url}`);
+  lines.push(`  head: ${report.headBefore}${report.headAfter !== null && report.headMoved ? ` -> ${report.headAfter}` : ""}`);
+  if (report.requiredHead !== null) lines.push(`  --require-head ${report.requiredHead}`);
+  emit(context.io, context.json, report, lines.map(plainLine));
+  return exitCodeFor(report.status);
 }
 
 // ── threads (zheref/nen#215) ────────────────────────────────────────────────
