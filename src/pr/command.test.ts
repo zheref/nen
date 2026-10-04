@@ -1414,6 +1414,7 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
           result: { code: 0, stdout: JSON.stringify({ headRefOid: "cafebabe", baseRefOid: "b", baseRefName: "main", body: "", isCrossRepository: false, author: { login: "someone" }, state: "OPEN" }) },
         },
         { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: "main" } }) } },
+        { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=b", result: { code: 1, stderr: "HTTP 404: Not Found" } },
       ]),
     );
     expect(result.code).toBe(2);

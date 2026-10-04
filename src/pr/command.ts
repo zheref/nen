@@ -429,11 +429,14 @@ merge --delivery (zheref/nen#286):
   the maintainer's merge-authority ruling of 2026-09-30: a merge into the
   trunk is the maintainer's. REFUSED BY CONSTRUCTION (exit 2), before any other gate
   runs, when the pull request's base is the repository's default branch
-  (GitHub's defaultBranchRef) or equals nen/workflow.json's branch.base
-  ('main' when the file is absent) -- the refusal names the ruling and
-  prints the 'gh pr merge' line for the maintainer. No flag widens it.
+  (GitHub's defaultBranchRef) or equals branch.base as either this
+  checkout's nen/workflow.json ('main' when absent) or nen/workflow.json AT
+  THE PULL REQUEST'S BASE COMMIT states it -- so a head that edits
+  branch.base cannot dodge it. The refusal names the ruling and prints the
+  'gh pr merge' line for the maintainer. No flag widens it.
   Otherwise evaluates, IN ORDER, every one of: 'base' (fails, exit 1, when
-  the base or the default branch could not be read), 'pr ready' (IN-PROCESS,
+  the base, the default branch or the base commit's nen/workflow.json could
+  not be read -- the last is "configured base unknown"), 'pr ready' (IN-PROCESS,
   with --require-head passed through), 'head pin' (GitHub's head is the
   commit 'pr ready' judged, and --require-head's when given), 'pr
   body-check' (only with --requirements-from) and 'whose pr' (author is
@@ -446,9 +449,9 @@ merge --delivery (zheref/nen#286):
                               gives no verdict on any other head.
   --requirements-from <path>  Optional here: adds the 'pr body-check' gate.
   --json: '{ contract: "nen.pr.merge-delivery/v0.1", target, pr, base,
-  baseOk, defaultBranch, configuredBase, ready, pinOk, bodyOk (null when
-  not asked), wholeOk, ok, ran, spawnFailed, judgedHead, requiredHead,
-  state, mergeArgv, gates: [{ name, ok, lines }] }'.`;
+  baseOk, defaultBranch, configuredBase, baseCommitBase, ready, pinOk,
+  bodyOk (null when not asked), wholeOk, ok, ran, spawnFailed, judgedHead,
+  requiredHead, state, mergeArgv, gates: [{ name, ok, lines }] }'.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse

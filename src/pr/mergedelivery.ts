@@ -11,6 +11,11 @@
 // repository's default branch or `nen/workflow.json`'s `branch.base` -- there
 // is no flag that widens it, and none will be added here.
 //
+// `branch.base` is read TWICE OVER: from this checkout and from
+// `nen/workflow.json` at the pull request's base commit (the FEI-3 route), so
+// a head that edits `branch.base` cannot argue its own way past the refusal;
+// an unreadable base-commit copy is "configured base unknown", exit 1.
+//
 // Every other gate is ../pr/mergeunit.ts's, reused rather than restated: `pr
 // ready` IN-PROCESS (with `--require-head` passed through), the head pin
 // against the ONE `gh pr view` this module makes, whose-pr (author is the
@@ -28,7 +33,8 @@
 
 import { runBodyCheckGate, computePinGate, executeMerge, resolveMergeRef, resolveTargetForMerge, runReadyGate, runWhoseGate, MergeUnitUsageError, type GateOutcome, type PrOnce } from "./mergeunit.js";
 import type { BodyRequirement } from "./bodycheck.js";
-import { loadWorkflow } from "../schema/workflow.js";
+import { DEFAULT_BASE, loadWorkflow } from "../schema/workflow.js";
+import { fetchJsonAtRef, type JValue } from "../release/unitcheck.js";
 import { SchemaError } from "../schema/errors.js";
 import { GH, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import type { PrReadyDeps } from "../verbs/pr_ready.js";
@@ -52,6 +58,8 @@ export interface MergeDeliveryReport {
   readonly baseOk: boolean;
   readonly defaultBranch: string | null;
   readonly configuredBase: string;
+  /** `branch.base` at the pull request's base commit; `null` when it could not be read (a failed base gate). */
+  readonly baseCommitBase: string | null;
   readonly ready: boolean;
   readonly pinOk: boolean;
   /** `null` when no `--requirements-from` was given -- the gate did not run, which is not a pass. */
@@ -118,11 +126,36 @@ function fetchDefaultBranch(seams: Seams, target: Target): string {
 }
 
 /** The protected names a base equals, in the order they are named -- empty when it equals neither. */
-function protectedMatches(base: string, defaultBranch: string | null, configuredBase: string): string[] {
+function protectedMatches(base: string, defaultBranch: string | null, configuredBase: string, baseCommitBase: string | null): string[] {
   const reasons: string[] = [];
   if (defaultBranch !== null && base === defaultBranch) reasons.push(`the repository's default branch ('${defaultBranch}')`);
-  if (base === configuredBase) reasons.push(`nen/workflow.json's branch.base ('${configuredBase}')`);
+  if (base === configuredBase) reasons.push(`this checkout's nen/workflow.json branch.base ('${configuredBase}')`);
+  if (baseCommitBase !== null && base === baseCommitBase) reasons.push(`the base commit's nen/workflow.json branch.base ('${baseCommitBase}')`);
   return reasons;
+}
+
+/**
+ * `branch.base` as `nen/workflow.json` states it AT THE PULL REQUEST'S BASE
+ * COMMIT -- the FEI-3 route ./mergeunit.ts takes for `release.unitPaths`,
+ * through ../release/unitcheck.ts's `fetchJsonAtRef`. A local checkout of the
+ * head may carry an edit to `branch.base` made precisely to dodge the
+ * refusal; the base commit's copy is the policy the merge would land under.
+ *
+ * `null` is UNKNOWN, never a pass: the file could not be read (an absent file
+ * included -- the contents route answers both alike), was not JSON, or its
+ * `branch.base` is not a string. Only a file that was read and states no
+ * `branch.base` falls back to the schema's own default, exactly as
+ * ../schema/workflow.ts's loader does.
+ */
+function readBaseCommitBranchBase(seams: Seams, target: Target, baseRefOid: string): string | null {
+  const root = fetchJsonAtRef(seams, target, "nen/workflow.json", baseRefOid);
+  if (root === null || root.kind !== "object") return null;
+  const branch: JValue | undefined = root.entries.get("branch");
+  if (branch === undefined) return DEFAULT_BASE;
+  if (branch.kind !== "object") return null;
+  const base = branch.entries.get("base");
+  if (base === undefined) return DEFAULT_BASE;
+  return base.kind === "string" && base.value !== "" ? base.value : null;
 }
 
 function refuseBase(target: Target, prNumber: number, base: string, reasons: readonly string[], head: string): MergeUnitUsageError {
@@ -189,9 +222,13 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
     else throw error;
   }
 
+  const baseCommitBase = prOnce === null ? null : readBaseCommitBranchBase(options.seams, target, prOnce.baseRefOid);
+
+  // Any protected name the base matches refuses at exit 2 -- even when another
+  // read failed, because one match is already the ruling's refusal.
   const base = prOnce?.baseRefName ?? null;
   if (prOnce !== null && base !== null) {
-    const reasons = protectedMatches(base, defaultBranch, configuredBase);
+    const reasons = protectedMatches(base, defaultBranch, configuredBase, baseCommitBase);
     if (reasons.length > 0) throw refuseBase(target, ref.number, base, reasons, prOnce.headRefOid);
   }
   const baseGate: GateOutcome =
@@ -199,11 +236,21 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
       ? { name: "base", ok: false, lines: [`base: ${fetchFailure} -- refused rather than merging into a base nobody read.`] }
       : defaultFailure !== null
         ? { name: "base", ok: false, lines: [`base: ${defaultFailure} -- refused rather than merging into what may be the trunk.`] }
-        : {
-            name: "base",
-            ok: true,
-            lines: [`base: '${base}' is neither the default branch ('${defaultBranch}') nor branch.base ('${configuredBase}') -- a non-main base`],
-          };
+        : baseCommitBase === null
+          ? {
+              name: "base",
+              ok: false,
+              lines: [
+                `base: could not read branch.base from nen/workflow.json at the pull request's base commit (${prOnce?.baseRefOid ?? "unread"}) -- the configured base is unknown, refused rather than merging into what may be the trunk.`,
+              ],
+            }
+          : {
+              name: "base",
+              ok: true,
+              lines: [
+                `base: '${base}' is neither the default branch ('${defaultBranch}'), this checkout's branch.base ('${configuredBase}') nor the base commit's branch.base ('${baseCommitBase}') -- a non-main base`,
+              ],
+            };
 
   const readyGate = await runReadyGate({
     target,
@@ -237,6 +284,7 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
     baseOk: baseGate.ok,
     defaultBranch,
     configuredBase,
+    baseCommitBase,
     ready: readyGate.ok,
     pinOk: pinGate.ok,
     bodyOk: bodyGate === null ? null : bodyGate.ok,
@@ -275,7 +323,7 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
     }
     throw error;
   }
-  const reasonsNow = protectedMatches(baseNow, defaultBranch, configuredBase);
+  const reasonsNow = protectedMatches(baseNow, defaultBranch, configuredBase, baseCommitBase);
   if (reasonsNow.length > 0) throw refuseBase(target, ref.number, baseNow, reasonsNow, judgedHead ?? "<head>");
   if (baseNow !== base) {
     lines.push(`base: the pull request was retargeted from '${base}' to '${baseNow}' after the gates above read it -- refused; run again so every gate judges the same base.`);

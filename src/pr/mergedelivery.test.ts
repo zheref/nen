@@ -102,6 +102,15 @@ function defaultBranchCall(name: string = "main"): ScriptedCall {
   return { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name } }) } };
 }
 
+/** `nen/workflow.json` at the PR's base commit ('basebase'); `null` body = the read fails. */
+function baseWorkflowCall(workflow: unknown = { branch: { base: "main" } }): ScriptedCall {
+  if (workflow === null) {
+    return { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=basebase", result: { code: 1, stderr: "HTTP 404: Not Found" } };
+  }
+  const content = Buffer.from(JSON.stringify(workflow)).toString("base64");
+  return { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=basebase", result: { code: 0, stdout: JSON.stringify({ content, encoding: "base64" }) } };
+}
+
 const VIEWER_CALL: ScriptedCall = { match: "gh api user --jq .login", result: { code: 0, stdout: "someone\n" } };
 
 function baseRereadCall(base: string = INTEGRATION): ScriptedCall {
@@ -115,7 +124,7 @@ const STATE_CALL: ScriptedCall = {
 };
 
 function passingScript(): ScriptedCall[] {
-  return [ORIGIN_CALL, prOnceCall(), defaultBranchCall(), VIEWER_CALL];
+  return [ORIGIN_CALL, prOnceCall(), defaultBranchCall(), baseWorkflowCall(), VIEWER_CALL];
 }
 
 async function run(
@@ -141,25 +150,59 @@ describe("mergeDelivery -- the trunk is refused by construction", () => {
     const root = tmpRoot();
     // No viewer call, no merge call: an unscripted call would throw, so the
     // refusal provably lands before any other gate runs.
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "main" }), defaultBranchCall("main")];
+    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "main" }), defaultBranchCall("main"), baseWorkflowCall()];
     const error = await run(root, script).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(MergeUnitUsageError);
     const message = (error as Error).message;
-    expect(message).toMatch(/its base 'main' is the repository's default branch \('main'\) and nen\/workflow\.json's branch\.base \('main'\)/);
+    expect(message).toMatch(/its base 'main' is the repository's default branch \('main'\) and this checkout's nen\/workflow\.json branch\.base \('main'\) and the base commit's nen\/workflow\.json branch\.base \('main'\)/);
     expect(message).toMatch(/merge-authority ruling of 2026-09-30/);
     expect(message).toMatch(/gh pr merge 9 --repo zheref\/example --merge --match-head-commit cafebabe$/);
   });
 
   it("refuses a base equal to the configured branch.base even when GitHub's default branch differs", async () => {
     const root = tmpRoot({ branch: { base: "trunk" } });
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "trunk" }), defaultBranchCall("main")];
-    await expect(run(root, script)).rejects.toThrow(/its base 'trunk' is nen\/workflow\.json's branch\.base \('trunk'\)/);
+    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "trunk" }), defaultBranchCall("main"), baseWorkflowCall({ branch: { base: "trunk" } })];
+    await expect(run(root, script)).rejects.toThrow(/its base 'trunk' is this checkout's nen\/workflow\.json branch\.base \('trunk'\) and the base commit's/);
   });
 
   it("refuses a base equal to GitHub's default branch even when branch.base names another", async () => {
     const root = tmpRoot({ branch: { base: "trunk" } });
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "develop" }), defaultBranchCall("develop")];
+    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "develop" }), defaultBranchCall("develop"), baseWorkflowCall({ branch: { base: "trunk" } })];
     await expect(run(root, script)).rejects.toThrow(/its base 'develop' is the repository's default branch \('develop'\)\./);
+  });
+
+  it("refuses a head that edits branch.base to dodge the refusal: the base commit's branch.base still matches", async () => {
+    // The checkout is the head: its nen/workflow.json was edited to name
+    // another branch. The base commit still says 'trunk', which is this PR's
+    // base -- refused at exit 2 all the same, and before any other gate.
+    const root = tmpRoot({ branch: { base: "dodged" } });
+    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "trunk" }), defaultBranchCall("main"), baseWorkflowCall({ branch: { base: "trunk" } })];
+    const error = await run(root, script).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(MergeUnitUsageError);
+    expect((error as Error).message).toMatch(/its base 'trunk' is the base commit's nen\/workflow\.json branch\.base \('trunk'\)\./);
+  });
+
+  it("treats an unreadable base-commit nen/workflow.json as 'configured base unknown': exit 1, nothing merged", async () => {
+    const root = tmpRoot();
+    const outcome = await run(root, [ORIGIN_CALL, prOnceCall(), defaultBranchCall(), baseWorkflowCall(null), VIEWER_CALL], { run: true });
+    expect(outcome.report.ok).toBe(false);
+    expect(outcome.report.ran).toBe(false);
+    expect(outcome.report.baseOk).toBe(false);
+    expect(outcome.report.baseCommitBase).toBeNull();
+    expect(outcome.report.mergeArgv).toBeNull();
+    expect(outcome.lines[0]).toMatch(/^base: could not read branch\.base from nen\/workflow\.json at the pull request's base commit \(basebase\) -- the configured base is unknown/);
+  });
+
+  it("still refuses at exit 2 on the default branch when the base-commit file is unreadable", async () => {
+    const root = tmpRoot();
+    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "main" }), defaultBranchCall("main"), baseWorkflowCall(null)];
+    await expect(run(root, script)).rejects.toThrow(/its base 'main' is the repository's default branch/);
+  });
+
+  it("a base-commit file that states no branch.base falls back to the schema default", async () => {
+    const root = tmpRoot({ branch: { base: "trunk" } });
+    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "main" }), defaultBranchCall("develop"), baseWorkflowCall({})];
+    await expect(run(root, script)).rejects.toThrow(/its base 'main' is the base commit's nen\/workflow\.json branch\.base \('main'\)\./);
   });
 
   it("fails the base gate (exit 1, not a pass) when the default branch cannot be read", async () => {
@@ -168,6 +211,7 @@ describe("mergeDelivery -- the trunk is refused by construction", () => {
       ORIGIN_CALL,
       prOnceCall(),
       { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 1, stderr: "HTTP 502" } },
+      baseWorkflowCall(),
       VIEWER_CALL,
     ];
     const outcome = await run(root, script);
@@ -188,6 +232,7 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     expect(outcome.report.base).toBe(INTEGRATION);
     expect(outcome.report.defaultBranch).toBe("main");
     expect(outcome.report.configuredBase).toBe("main");
+    expect(outcome.report.baseCommitBase).toBe("main");
     expect(outcome.report.bodyOk).toBeNull();
     expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "whose pr"]);
     expect(outcome.lines.at(-1)).toBe("plan only (pass --run to execute): gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe");
@@ -217,7 +262,7 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
 
   it("refuses a pull request the viewer did not author", async () => {
     const root = tmpRoot();
-    const outcome = await run(root, [ORIGIN_CALL, prOnceCall({ author: "someone-else" }), defaultBranchCall(), VIEWER_CALL]);
+    const outcome = await run(root, [ORIGIN_CALL, prOnceCall({ author: "someone-else" }), defaultBranchCall(), baseWorkflowCall(), VIEWER_CALL]);
     expect(outcome.report.ok).toBe(false);
     expect(outcome.report.wholeOk).toBe(false);
     expect(outcome.lines.join("\n")).toMatch(/whose pr: this pull request's author is 'someone-else'/);
@@ -233,7 +278,7 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
 
   it("refuses when GitHub's head is not the head 'pr ready' judged", async () => {
     const root = tmpRoot();
-    const outcome = await run(root, [ORIGIN_CALL, prOnceCall({ headRefOid: "0badf00d" }), defaultBranchCall(), VIEWER_CALL]);
+    const outcome = await run(root, [ORIGIN_CALL, prOnceCall({ headRefOid: "0badf00d" }), defaultBranchCall(), baseWorkflowCall(), VIEWER_CALL]);
     expect(outcome.report.pinOk).toBe(false);
     expect(outcome.lines.join("\n")).toMatch(/head pin: 'pr ready' judged cafebabe, but the pull request's head is now 0badf00d/);
   });
