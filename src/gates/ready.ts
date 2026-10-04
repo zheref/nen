@@ -310,12 +310,14 @@
 import {
   cancelledLatestReport,
   checksAllGreen,
+  checksSettled,
   dependabotCarveOutSatisfied,
   excludeCheckNames,
   excludeCheckRun,
   isDeliveryPr,
   latestChecks,
   normalizeReviewers,
+  pendingCheckLabels,
   pendingRounds,
   quorumExcusedRounds,
   resolveDeclaredExclusions,
@@ -656,6 +658,31 @@ export interface EvaluationContext {
    * the verdict silently, so every one is reported whether or not it matched.
    */
   readonly declaredExclusions: readonly DeclaredExclusionOutcome[];
+  /**
+   * What `nen watch until --pr` wakes on (zheref/nen#264), read off THIS
+   * evaluation's own parse of the same state -- never a second read -- so a
+   * watch and a `pr ready` asked of one snapshot cannot disagree. Not a
+   * conjunct and never part of the verdict.
+   */
+  readonly settlement: Settlement;
+}
+
+/**
+ * The two non-verdict facts a watch composes with the verdict.
+ *
+ * `checksSettled` reads the rollup AFTER the exclusions CON-32(a) applies
+ * (`--exclude-run`, `--exclude-check`, an honoured `checks.excluded`), so a
+ * check the verdict ignores never holds a watch open. `null` -- and
+ * `reviewersAtHead: null` -- means the fact could not be read, which a watch
+ * must treat as an observation error, never as "not yet".
+ */
+export interface Settlement {
+  /** Every latest check has a terminal verdict (red included); an empty rollup is never settled. */
+  readonly checksSettled: boolean | null;
+  /** The latest checks still deciding, by label. Empty when settled or unreadable. */
+  readonly pendingChecks: readonly string[];
+  /** Distinct authors of a submitted (non-PENDING) review cast at the current head, in order. */
+  readonly reviewersAtHead: readonly string[] | null;
 }
 
 export interface EvaluateOptions {
@@ -1507,6 +1534,26 @@ export function evaluateReady(
       dependabotCarveOut: carveOut && headKnown,
       warnings: excludeCheckWarnings,
       declaredExclusions: declared.outcomes,
+      settlement: settlementOf(),
     },
   };
+
+  function settlementOf(): Settlement {
+    const settledSet = parsedChecks.ok ? excludeCheckNames(checksExcludedByRun, excludedNames) : null;
+    const reviewersAtHead =
+      headKnown && parsedReviews.ok
+        ? [
+            ...new Set(
+              parsedReviews.value
+                .filter((review): boolean => review.commitId === head && review.state !== "PENDING")
+                .map((review): string => review.author),
+            ),
+          ]
+        : null;
+    return {
+      checksSettled: settledSet === null ? null : checksSettled(settledSet),
+      pendingChecks: settledSet === null ? [] : pendingCheckLabels(settledSet),
+      reviewersAtHead,
+    };
+  }
 }

@@ -76,6 +76,7 @@ import {
   type Conjunct,
   type ConjunctId,
   type ReadyEvaluation,
+  type Settlement,
 } from "../gates/ready.js";
 import {
   resolveDeclaredExclusions,
@@ -1276,16 +1277,46 @@ export async function prReady(
 
   const json = input.booleans.has("json");
   const explain = input.booleans.has("explain");
+  const read = await readReady(typedRef, input, deps);
+  switch (read.kind) {
+    case "usage":
+      io.err(`${PROGRAM}: ${read.message}`);
+      return 2;
+    case "head-mismatch":
+      return emitHeadMismatch(io, json, read.report);
+    case "verdict":
+      return emit(io, json, explain, read.report);
+  }
+}
+
+/**
+ * What one `pr ready` read decided, before anything is printed.
+ *
+ * `usage` is exit 2 (the message carries no program prefix); `head-mismatch`
+ * is `--require-head`'s no-verdict document; `verdict` is the report, decided
+ * or unevaluated, plus -- on a decided one only -- the evaluation's
+ * `settlement` facts (../gates/ready.ts). Split out of `prReady` for
+ * `nen watch until --pr` (zheref/nen#264), which polls THIS function so a
+ * watch and a `pr ready` asked of the same snapshot can never disagree.
+ */
+export type ReadyRead =
+  | { readonly kind: "usage"; readonly message: string }
+  | { readonly kind: "head-mismatch"; readonly report: HeadMismatchReport }
+  | { readonly kind: "verdict"; readonly report: ReadyReport; readonly settlement: Settlement | null };
+
+export async function readReady(
+  typedRef: string,
+  input: PrReadyInput,
+  deps: PrReadyDeps = defaultDeps,
+): Promise<ReadyRead> {
   const policyText = input.values["round-policy"] ?? "bounded";
   if (policyText !== "strict" && policyText !== "bounded") {
-    io.err(`${PROGRAM}: --round-policy must be strict or bounded (got '${policyText}').`);
-    return 2;
+    return { kind: "usage", message: `--round-policy must be strict or bounded (got '${policyText}').` };
   }
   const policy: RoundPolicy = policyText;
   const excludeRun = input.values["exclude-run"] ?? "";
   if (excludeRun !== "" && !/^[0-9]+$/.test(excludeRun)) {
-    io.err(`${PROGRAM}: --exclude-run must be a numeric Actions run id (got '${excludeRun}').`);
-    return 2;
+    return { kind: "usage", message: `--exclude-run must be a numeric Actions run id (got '${excludeRun}').` };
   }
   // `--exclude-check <name>` (name-based exclusion, zheref/nen#216), REPEATABLE
   // and bracket-aware since zheref/nen#243: each occurrence is split on the
@@ -1310,8 +1341,7 @@ export async function prReady(
     excludeCheckNames = parseExcludeCheckNames(excludeCheckOccurrences);
   } catch (error) {
     if (error instanceof ExcludeCheckError) {
-      io.err(`${PROGRAM}: ${error.message}`);
-      return 2;
+      return { kind: "usage", message: error.message };
     }
     throw error;
   }
@@ -1332,10 +1362,7 @@ export async function prReady(
   const approverNames = approversFlag === undefined ? reviewerNames : splitCsv(approversFlag);
   const requiredHead = input.values["require-head"];
   if (requiredHead !== undefined && !SHA_PREFIX.test(requiredHead)) {
-    io.err(
-      `${PROGRAM}: --require-head takes a commit SHA of 7 to 40 hex digits (got '${requiredHead}').`,
-    );
-    return 2;
+    return { kind: "usage", message: `--require-head takes a commit SHA of 7 to 40 hex digits (got '${requiredHead}').` };
   }
 
   let ref: ResolvedRef;
@@ -1354,8 +1381,7 @@ export async function prReady(
     // A malformed ref, a missing registry, a missing identity source: all are
     // "you asked the wrong question", not "the answer is not-ready". Reporting
     // them as a verdict would put a readiness claim on a PR nobody looked at.
-    io.err(`${PROGRAM}: ${error instanceof Error ? error.message : String(error)}`);
-    return 2;
+    return { kind: "usage", message: `${error instanceof Error ? error.message : String(error)}` };
   }
 
   // `round_policy.stallMinutes` (zheref/nen#214 item 2): a repository-declared
@@ -1378,10 +1404,7 @@ export async function prReady(
 
   const opened = deps.openSource(input.values["token-env"] ?? DEFAULT_TOKEN_ENV);
   if (!opened.ok) {
-    return emit(
-      io,
-      json,
-      explain,
+    return verdictOf(
       unevaluatedReport(
         ref,
         deps.now(),
@@ -1412,10 +1435,7 @@ export async function prReady(
   } catch (error) {
     // A network failure, a 403 from a token without checks:read, an
     // unauthenticated read: SKILL.md § 4's list, and its classification.
-    return emit(
-      io,
-      json,
-      explain,
+    return verdictOf(
       unevaluatedReport(
         ref,
         deps.now(),
@@ -1433,10 +1453,7 @@ export async function prReady(
   }
 
   if (!fetched.ok) {
-    return emit(
-      io,
-      json,
-      explain,
+    return verdictOf(
       unevaluatedReport(
         ref,
         deps.now(),
@@ -1466,7 +1483,7 @@ export async function prReady(
     requiredHead !== undefined &&
     (githubHead === "" || !githubHead.toLowerCase().startsWith(requiredHead.toLowerCase()))
   ) {
-    return emitHeadMismatch(io, json, {
+    return { kind: "head-mismatch", report: {
       contract: HEAD_MISMATCH_CONTRACT,
       status: "head-mismatch",
       ref: ref.typed,
@@ -1480,7 +1497,7 @@ export async function prReady(
         "a commit GitHub does not hold as this pull request's head. If a push is in flight, ask again once it registers.",
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
-    });
+    } };
   }
 
   // ── the local tip, for the warning only ──────────────────────────────────
@@ -1563,12 +1580,17 @@ export async function prReady(
   // The mismatch warning rides in `meta.warnings` so it reaches EVERY output
   // mode -- `--json` included -- through the one channel each already renders.
   const mismatch = localHeadWarning(report);
-  return emit(
-    io,
-    json,
-    explain,
-    mismatch === null ? report : { ...report, meta: { ...report.meta, warnings: [...report.meta.warnings, mismatch] } },
-  );
+  return {
+    kind: "verdict",
+    report:
+      mismatch === null ? report : { ...report, meta: { ...report.meta, warnings: [...report.meta.warnings, mismatch] } },
+    settlement: evaluation.context.settlement,
+  };
+}
+
+/** An unevaluated report: GitHub was never read, so there is no settlement to carry. */
+function verdictOf(report: ReadyReport): ReadyRead {
+  return { kind: "verdict", report, settlement: null };
 }
 
 /**

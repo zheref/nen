@@ -302,6 +302,37 @@ export function checksAllGreen(entries: readonly RollupEntry[]): boolean {
   );
 }
 
+// --- checksSettled -----------------------------------------------------------
+// `nen watch until --pr <ref> --until checks-settled` (zheref/nen#264). True iff
+// the rollup is NON-EMPTY and every LATEST entry per name carries a TERMINAL
+// effective status -- any conclusion, green or red, and a StatusContext in
+// SUCCESS/FAILURE/ERROR. It is NOT CON-32(a): a red check is settled (the wait
+// is over and the gate's own row says what is wrong), and only a run still
+// deciding -- `null`, or a StatusContext PENDING/EXPECTED -- holds it open.
+//
+// THE SAME REDUCTION `checksAllGreen` USES, and the same emptiness rule: "no
+// reported check" is no signal, so an empty rollup is never settled -- a watch
+// that woke on it would wake on a startup_failure that produced no check run
+// at all (bankai-core#671), which is exactly the state waiting never improves.
+const UNSETTLED_STATUSES: ReadonlySet<string> = new Set(["PENDING", "EXPECTED"]);
+
+function checkSettled(entry: RollupEntry): boolean {
+  const status = rollupEntryStatus(entry);
+  return status !== null && !UNSETTLED_STATUSES.has(status);
+}
+
+export function checksSettled(entries: readonly RollupEntry[]): boolean {
+  const latest = latestChecks(entries);
+  return latest.length > 0 && latest.every(checkSettled);
+}
+
+/** The latest entries still deciding, by label, in latestChecks() order. */
+export function pendingCheckLabels(entries: readonly RollupEntry[]): string[] {
+  return latestChecks(entries)
+    .filter((entry): boolean => !checkSettled(entry))
+    .map((entry): string => rollupEntryLabel(entry) ?? "(unnamed)");
+}
+
 /**
  * The latest entries admitted WITHOUT succeeding, as `name (SKIPPED)` /
  * `name (NEUTRAL)`, in latestChecks() order -- what `--explain` names instead of

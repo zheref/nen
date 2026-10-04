@@ -14,11 +14,18 @@
 // certified reached jq with its quotes still on. classifyWatchCommand now
 // tokenises once, with ../parse/command-line.ts, and hands back the argv its
 // verdict is about; there is no split in this file to disagree with it.
+//
+// `--pr <ref> --until <predicate>` IS THE OTHER OBSERVATION (zheref/nen#264):
+// no command at all, but nen's own in-process `pr ready` read, polled with the
+// same pacing, bound, streak and exit codes. ./pr.ts says why it is native and
+// what each predicate reads.
 
 import { classifyWatchCommand } from "../parse/izanami.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { CommandResult } from "../seam/exec.js";
-import { watchUntil, type WatchResult } from "./until.js";
+import { watchUntil, watchUntilAsync, type WatchResult } from "./until.js";
+import { observePr, parsePrPredicate, type PrPredicate } from "./pr.js";
+import { defaultDeps, PR_READY_FLAGS, readReady, type PrReadyDeps, type ReadyRead } from "../verbs/pr_ready.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { PROGRAM } from "../version.js";
@@ -29,6 +36,11 @@ usage:
   nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                   [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                   [--error-exit-threshold <n>] [--repo <path>]
+  nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
+                  [--interval-ms 5000] [--max-iterations <n>] [--repo <path>]
+                  [<every 'nen pr ready' flag: --gh-repo --reviewers --approvers
+                   --round-policy --exclude-run --exclude-check --gates
+                   --token-env --require-head>]
 
   --command       the observation to repeat, e.g. "gh pr checks 42 --json state".
                   Classified against izanami's read-only table before the FIRST
@@ -82,108 +94,255 @@ usage:
                   unbounded; three consecutive observation ERRORS stop the run
                   regardless.
 
+  --pr <ref>      INSTEAD of --command (zheref/nen#264): watch one pull request
+                  through the SAME in-process read 'nen pr ready <ref>' makes --
+                  its ref grammar, its token, its identity resolution, its
+                  exclusions and its gate -- so the two never disagree about one
+                  snapshot. Every 'pr ready' flag above is read exactly as
+                  'pr ready' reads it, and only with --pr. --true-pattern,
+                  --error-exit-threshold and --cwd belong to --command and are
+                  refused beside --pr (exit 2).
+  --until         what --pr waits for, one of:
+                    checks-settled  every latest check (after the same
+                                    exclusions CON-32(a) applies) has a
+                                    verdict -- RED INCLUDED; an empty rollup is
+                                    never settled
+                    review-posted   a submitted review exists at the current
+                                    head, from any author
+                    ready           'pr ready' would answer ready
+                    settled-and-reviewed
+                                    checks-settled AND (review-posted OR ready)
+                  A read that could not see -- an unevaluated verdict, an
+                  unreadable rollup or reviews array the predicate needs, a
+                  --require-head GitHub's head does not match -- is an
+                  OBSERVATION ERROR (three in a row stop the watch), never a
+                  "not yet". A usage refusal from the read (a malformed ref, no
+                  identity source) stops the watch at exit 2 on the first poll.
+                  This wakes the caller; it rings nothing -- notification rungs
+                  stay the host's.
+                  --json adds 'until', 'pr' and 'last' (the final read's
+                  verdict, gateLine, judgedHead and settlement) to the result.
+
 Exits 0 when the condition became true, 1 on an error streak or a bound
 reached -- a caller piping this into further automation stops rather than
-reading a watch that gave up as success.`;
+reading a watch that gave up as success. 2 on a usage error.`;
 
-export const watchCommand: Command = {
-  name: "watch",
-  summary: "Poll a read-only command until its condition holds.",
-  usage: USAGE,
-  subcommands: ["until"],
-  flags: {
-    values: ["command", "true-pattern", "interval-ms", "max-iterations", "cwd", "error-exit-threshold"],
-    booleans: [],
-  },
-  run(context: CommandContext): number {
-    requireSubcommand("watch", context.args, ["until"]);
+/** What the `--pr` form reads through; injected so a test never reaches GitHub or sleeps. */
+export interface WatchDeps {
+  readonly prReady: PrReadyDeps;
+  readonly sleep?: (ms: number) => void | Promise<void>;
+}
 
-    const commandText = context.args.values["command"];
-    if (commandText === undefined || commandText.trim() === "") {
-      throw new VerbUsageError("--command '<bin> <args...>' is required.");
-    }
+/** The flags that belong to the `--pr` form only -- `pr ready`'s own surface plus `--until`. */
+const PR_ONLY_VALUES: readonly string[] = ["until", ...PR_READY_FLAGS.values];
+const PR_ONLY_LISTS: readonly string[] = [...PR_READY_FLAGS.lists];
+/** The flags that belong to the `--command` form only. */
+const COMMAND_ONLY_VALUES: readonly string[] = ["true-pattern", "error-exit-threshold", "cwd"];
 
-    // The host that will spawn the argv decides how far the seam may trust a
-    // quote -- see classifyWatchCommand's Windows paragraph.
-    const verdict = classifyWatchCommand(commandText, context.seams.platform);
-    if (verdict.argv === undefined) {
-      const { classification } = verdict;
-      context.io.err(
-        `nen: '${commandText}' classifies as ${classification.classification} (${classification.reason}). izanami watches only; a command that writes needs 'nen parse izanagi <task> until <condition> up to <N>' instead.`,
-      );
-      return 2;
-    }
+export function createWatchCommand(deps: WatchDeps = { prReady: defaultDeps }): Command {
+  return {
+    name: "watch",
+    summary: "Poll a read-only command, or a pull request's readiness facts, until a condition holds.",
+    usage: USAGE,
+    subcommands: ["until"],
+    flags: {
+      values: ["command", "true-pattern", "interval-ms", "max-iterations", "cwd", "error-exit-threshold", "pr", ...PR_ONLY_VALUES],
+      lists: PR_ONLY_LISTS,
+      booleans: [],
+    },
+    run(context: CommandContext): number | Promise<number> {
+      requireSubcommand("watch", context.args, ["until"]);
+      if (context.args.values["pr"] !== undefined) return runPr(context, deps);
+      return runCommand(context);
+    },
+  };
+}
 
-    const [bin, ...args] = verdict.argv;
-    if (bin === undefined) throw new VerbUsageError("--command is empty.");
+export const watchCommand: Command = createWatchCommand();
 
-    const truePattern = context.args.values["true-pattern"];
-    const regex = truePattern === undefined ? null : new RegExp(truePattern);
+function runCommand(context: CommandContext): number {
+  const commandText = context.args.values["command"];
+  if (commandText === undefined || commandText.trim() === "") {
+    throw new VerbUsageError("--command '<bin> <args...>' or --pr <ref> --until <predicate> is required.");
+  }
+  refuseForeign(context, [...PR_ONLY_VALUES, ...PR_ONLY_LISTS], "--command");
 
-    // THE TARGET'S OWN `monitor` POLICY IS THE DEFAULT PACE (zheref/nen#216).
-    // `nen/workflow.json` declares `monitor.pollSeconds` and `monitor.maxCycles`,
-    // and through v0.10.0 this verb parsed neither: the file said 300 s and
-    // the watch polled every 5 s. A flag still wins -- a caller who types
-    // --interval-ms meant it -- and an absent policy keeps the old 5000.
-    const monitor = readMonitor(context);
-    const intervalRaw = context.args.values["interval-ms"];
-    const intervalMs =
-      intervalRaw === undefined ? (monitor === null || monitor.pollSeconds === null ? 5000 : monitor.pollSeconds * 1000) : Number(intervalRaw);
-    if (!Number.isInteger(intervalMs) || intervalMs < 0) {
-      throw new VerbUsageError("--interval-ms must be a non-negative integer.");
-    }
-    const maxRaw = context.args.values["max-iterations"];
-    const maxIterations =
-      maxRaw === undefined ? (monitor === null || monitor.maxCycles === null ? undefined : monitor.maxCycles) : Number(maxRaw);
-    if (maxRaw !== undefined && (!Number.isInteger(maxIterations) || (maxIterations as number) <= 0)) {
-      throw new VerbUsageError("--max-iterations must be a positive integer.");
-    }
-    // A DECLARED ZERO IS A LOOP THAT NEVER RUNS -- workflow.ts admits it for
-    // exactly that meaning, and reading it as "absent" would make the watch
-    // UNBOUNDED, the opposite of what the file says (Copilot review on
-    // zheref/nen#217). Nothing is observed; the bound is reported reached.
-    if (maxIterations === 0) {
-      context.io.err(`${PROGRAM} watch until: nen/workflow.json declares monitor.maxCycles 0 -- the watch never runs. Type --max-iterations to watch anyway.`);
-      return 1;
-    }
+  // The host that will spawn the argv decides how far the seam may trust a
+  // quote -- see classifyWatchCommand's Windows paragraph.
+  const verdict = classifyWatchCommand(commandText, context.seams.platform);
+  if (verdict.argv === undefined) {
+    const { classification } = verdict;
+    context.io.err(
+      `nen: '${commandText}' classifies as ${classification.classification} (${classification.reason}). izanami watches only; a command that writes needs 'nen parse izanagi <task> until <condition> up to <N>' instead.`,
+    );
+    return 2;
+  }
 
-    const thresholdRaw = context.args.values["error-exit-threshold"];
-    const errorExitThreshold = thresholdRaw === undefined ? 2 : Number(thresholdRaw);
-    if (!Number.isInteger(errorExitThreshold) || errorExitThreshold < 1) {
-      throw new VerbUsageError("--error-exit-threshold must be a positive integer.");
-    }
+  const [bin, ...args] = verdict.argv;
+  if (bin === undefined) throw new VerbUsageError("--command is empty.");
 
-    // A permanently-broken observation must never masquerade as "not yet true"
-    // (until.ts's own header) -- until.ts's own default isError only catches a
-    // missing binary, and this verb is the caller until.ts's header says must
-    // supply its own. See the usage text above for the reasoning behind each
-    // branch below.
-    const isError = (observed: CommandResult): boolean => {
-      if (observed.spawnFailed) return true;
-      return regex === null ? observed.code >= errorExitThreshold : observed.code !== 0;
-    };
+  const truePattern = context.args.values["true-pattern"];
+  const regex = truePattern === undefined ? null : new RegExp(truePattern);
 
-    const result = watchUntil(context.seams, {
-      request: { command: bin, args, options: { cwd: context.args.values["cwd"] } },
-      isTrue: (observed): boolean => (regex === null ? observed.code === 0 : regex.test(observed.stdout)),
-      isError,
-      intervalMs,
-      maxIterations,
-      onIteration: context.json
-        ? undefined
-        : (iteration): void => {
-            context.io.out(`[${iteration.iteration}] ${iteration.message}`);
-          },
-    });
+  const pace = readPace(context);
+  if (pace === null) return 1;
+  const { intervalMs, maxIterations } = pace;
 
-    if (context.json) {
-      context.io.out(JSON.stringify(result, null, 2));
-    } else {
-      printOutcome(context, result);
-    }
-    return result.outcome === "condition-true" ? 0 : 1;
-  },
-};
+  const thresholdRaw = context.args.values["error-exit-threshold"];
+  const errorExitThreshold = thresholdRaw === undefined ? 2 : Number(thresholdRaw);
+  if (!Number.isInteger(errorExitThreshold) || errorExitThreshold < 1) {
+    throw new VerbUsageError("--error-exit-threshold must be a positive integer.");
+  }
+
+  // A permanently-broken observation must never masquerade as "not yet true"
+  // (until.ts's own header) -- until.ts's own default isError only catches a
+  // missing binary, and this verb is the caller until.ts's header says must
+  // supply its own. See the usage text above for the reasoning behind each
+  // branch below.
+  const isError = (observed: CommandResult): boolean => {
+    if (observed.spawnFailed) return true;
+    return regex === null ? observed.code >= errorExitThreshold : observed.code !== 0;
+  };
+
+  const result = watchUntil(context.seams, {
+    request: { command: bin, args, options: { cwd: context.args.values["cwd"] } },
+    isTrue: (observed): boolean => (regex === null ? observed.code === 0 : regex.test(observed.stdout)),
+    isError,
+    intervalMs,
+    maxIterations,
+    onIteration: context.json
+      ? undefined
+      : (iteration): void => {
+          context.io.out(`[${iteration.iteration}] ${iteration.message}`);
+        },
+  });
+
+  if (context.json) {
+    context.io.out(JSON.stringify(result, null, 2));
+  } else {
+    printOutcome(context, result);
+  }
+  return result.outcome === "condition-true" ? 0 : 1;
+}
+
+/**
+ * `--pr <ref> --until <predicate>` (zheref/nen#264). One `readReady` per
+ * observation -- the same function `nen pr ready` prints -- decided by
+ * ./pr.ts, paced and bounded exactly as the `--command` form is.
+ */
+async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> {
+  const typedRef = context.args.values["pr"] ?? "";
+  if (typedRef.trim() === "") throw new VerbUsageError("--pr needs a pull-request reference, e.g. --pr <CODE>#<N> or --pr <N> --gh-repo owner/name.");
+  if (context.args.values["command"] !== undefined) {
+    throw new VerbUsageError("--pr and --command are two different observations; give one.");
+  }
+  refuseForeign(context, COMMAND_ONLY_VALUES, "--pr");
+  const predicate: PrPredicate = parsePrPredicate(context.args.values["until"]);
+
+  const pace = readPace(context);
+  if (pace === null) return 1;
+
+  // `pr ready`'s own input, built from the SAME parsed flags -- the values
+  // and repeatable lists it reads pass through untouched, and nothing else
+  // does. `json` is deliberately absent: the read is never printed.
+  const input = {
+    positionals: ["pr", "ready", typedRef],
+    values: context.args.values,
+    booleans: new Set<string>(),
+    lists: context.args.lists,
+    repoFlag: context.repoFlag,
+  };
+  // The final read, for --json's `last`. A box rather than a bare `let`, so
+  // the narrowing after the loop is not lost to the closure that assigns it.
+  const last: { read: ReadyRead | null } = { read: null };
+  const result = await watchUntilAsync({
+    observe: async () => {
+      last.read = await readReady(typedRef, input, deps.prReady);
+      return observePr(last.read, predicate);
+    },
+    intervalMs: pace.intervalMs,
+    maxIterations: pace.maxIterations,
+    ...(deps.sleep === undefined ? {} : { sleep: deps.sleep }),
+    onIteration: context.json
+      ? undefined
+      : (iteration): void => {
+          context.io.out(`[${iteration.iteration}] ${iteration.message}`);
+        },
+  });
+
+  if (context.json) {
+    const { read } = last;
+    context.io.out(
+      JSON.stringify(
+        {
+          ...result,
+          until: predicate,
+          pr: typedRef,
+          last:
+            read === null || read.kind !== "verdict"
+              ? null
+              : {
+                  verdict: read.report.verdict,
+                  gateLine: read.report.gateLine,
+                  judgedHead: read.report.judgedHead,
+                  settlement: read.settlement,
+                },
+        },
+        null,
+        2,
+      ),
+    );
+  } else {
+    printOutcome(context, result);
+  }
+  return result.outcome === "condition-true" ? 0 : 1;
+}
+
+/** Refuse, at exit 2, a flag that belongs to the OTHER observation form. */
+function refuseForeign(context: CommandContext, names: readonly string[], form: string): void {
+  const given = names.filter(
+    (name): boolean => context.args.values[name] !== undefined || (context.args.lists[name]?.length ?? 0) > 0,
+  );
+  if (given.length > 0) {
+    throw new VerbUsageError(`${given.map((name): string => `--${name}`).join(", ")} ${given.length === 1 ? "is" : "are"} not read by the ${form} form of 'watch until'.`);
+  }
+}
+
+/**
+ * The pace and the bound, one rule for both forms: a typed flag wins, else the
+ * target's declared `monitor` policy, else 5000 ms and unbounded. `null` means
+ * a declared `maxCycles: 0` -- the watch never runs, already reported (exit 1).
+ */
+function readPace(context: CommandContext): { intervalMs: number; maxIterations: number | undefined } | null {
+  // THE TARGET'S OWN `monitor` POLICY IS THE DEFAULT PACE (zheref/nen#216).
+  // `nen/workflow.json` declares `monitor.pollSeconds` and `monitor.maxCycles`,
+  // and through v0.10.0 this verb parsed neither: the file said 300 s and
+  // the watch polled every 5 s. A flag still wins -- a caller who types
+  // --interval-ms meant it -- and an absent policy keeps the old 5000.
+  const monitor = readMonitor(context);
+  const intervalRaw = context.args.values["interval-ms"];
+  const intervalMs =
+    intervalRaw === undefined ? (monitor === null || monitor.pollSeconds === null ? 5000 : monitor.pollSeconds * 1000) : Number(intervalRaw);
+  if (!Number.isInteger(intervalMs) || intervalMs < 0) {
+    throw new VerbUsageError("--interval-ms must be a non-negative integer.");
+  }
+  const maxRaw = context.args.values["max-iterations"];
+  const maxIterations =
+    maxRaw === undefined ? (monitor === null || monitor.maxCycles === null ? undefined : monitor.maxCycles) : Number(maxRaw);
+  if (maxRaw !== undefined && (!Number.isInteger(maxIterations) || (maxIterations as number) <= 0)) {
+    throw new VerbUsageError("--max-iterations must be a positive integer.");
+  }
+  // A DECLARED ZERO IS A LOOP THAT NEVER RUNS -- workflow.ts admits it for
+  // exactly that meaning, and reading it as "absent" would make the watch
+  // UNBOUNDED, the opposite of what the file says (Copilot review on
+  // zheref/nen#217). Nothing is observed; the bound is reported reached.
+  if (maxIterations === 0) {
+    context.io.err(`${PROGRAM} watch until: nen/workflow.json declares monitor.maxCycles 0 -- the watch never runs. Type --max-iterations to watch anyway.`);
+    return null;
+  }
+
+  return { intervalMs, maxIterations };
+}
 
 /**
  * The target's `monitor` block, or null when the checkout declares no policy

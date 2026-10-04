@@ -735,7 +735,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `.nen/phases/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
-| [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
+| [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command — or, with `--pr`, one pull request's readiness facts through `pr ready`'s own read — until its condition holds, paced and bounded | whatever --command names (typically git or gh); with --pr, GitHub GraphQL + REST (token from --token-env, default GH_TOKEN), as `pr ready` | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
@@ -4125,6 +4125,10 @@ regardless of `--max-iterations`.
 nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                 [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                 [--error-exit-threshold <n>]
+nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
+                [--interval-ms 5000] [--max-iterations <n>]
+                [every `nen pr ready` flag: --gh-repo --reviewers --approvers --round-policy
+                 --exclude-run --exclude-check --gates --token-env --require-head]
 ```
 
 **The target's `monitor` policy is the default pace (v0.11.0, zheref/nen#216).** When the checkout under
@@ -4143,13 +4147,41 @@ was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 | `--max-iterations <n>` | no | A safety bound, not izanagi's mandatory cap. | Omit for an unbounded watch; an error streak still stops it. |
 | `--cwd <path>` | no | Working directory for the spawned command. | Defaults to the process's own cwd. |
 | `--error-exit-threshold <n>` | no | In exit-code-as-truth mode (no `--true-pattern`), an exit code at or above this is an OBSERVATION ERROR. | Default 2; ignored when `--true-pattern` is given. |
+| `--pr <ref>` | instead of `--command` | Watch one pull request through the **same in-process read** [`nen pr ready`](#nen-pr-ready) makes ([#264](https://github.com/zheref/nen/issues/264)). | The ref grammar, token, identity resolution, exclusions and gate are all `pr ready`'s, so the watch and a `pr ready` asked of one snapshot never disagree. Every `pr ready` flag is read exactly as `pr ready` reads it, and only beside `--pr`. `--pr` beside `--command`, or `--true-pattern`/`--error-exit-threshold`/`--cwd` beside `--pr`, or `--until`/a `pr ready` flag beside `--command`, refuses at exit 2. |
+| `--until <predicate>` | with `--pr` | What `--pr` waits for. | `checks-settled` — every latest check, after the exclusions CON-32(a) applies, has a verdict, **red included**; an empty rollup is never settled. `review-posted` — a submitted (non-PENDING) review exists at the current head, from any author. `ready` — `pr ready` would answer `ready`. `settled-and-reviewed` — `checks-settled` AND (`review-posted` OR `ready`). |
 
 **Output and exit codes** — human rendering is one `"[<n>] <message>"` line per observation, then a
 final line naming the outcome. `--json` prints `{ outcome, iterations }`, each iteration carrying
 `{ iteration, conditionTrue, errored, message }`. Exit 0 when the condition became true; exit 1 on an
-error streak or a bound reached; exit 2 when `--command` is missing/empty, or it classifies as
+error streak or a bound reached; exit 2 when neither `--command` nor `--pr` is given, `--command` is
+empty, or it classifies as
 mutating or unknown — which includes a metacharacter a shell would act on, an unclosed quote, a
 trailing backslash, whitespace other than a space or a tab, and a NUL byte (below).
+
+<a id="watch-until-pr"></a>
+
+**The `--pr` form — a native compound wake condition ([#264](https://github.com/zheref/nen/issues/264)).**
+"CI has settled AND (a review round has posted at head OR the pull request is ready)" is two
+independently polled facts, and `--command` takes one command and one pattern — so the wait an
+orchestrating flow most often holds before Ready was hand-rolled as a `for` + `sleep` loop over
+`gh pr checks` and `gh api …/reviews`. `--pr <ref> --until <predicate>` expresses it as one read-only
+verb, with the same pacing (`monitor.pollSeconds`), bound (`monitor.maxCycles`), three-error streak and
+exit codes as the `--command` form, and no subprocess at all. Each observation is one call of the
+function `nen pr ready` prints; the predicates read its verdict and two facts the gate's own
+evaluation computes from the same snapshot — whether the rollup has settled (with the still-running
+checks named) and who has reviewed at the current head. A read that could not see — an `unevaluated`
+verdict, a rollup or reviews array the predicate needs that could not be parsed, a `--require-head`
+GitHub's head does not match — is an **observation error**, never a "not yet". A usage refusal from the
+read (a malformed ref, no identity source, a bad `--round-policy`) stops the watch at exit 2 on the
+first poll. Human output is one `[<n>] <predicate> is (not yet) true -- head <sha7>: <checks>; <reviews>;
+verdict <gateLine>` line per poll; `--json` adds `until`, `pr` and `last` — the final read's `{ verdict,
+gateLine, judgedHead, settlement: { checksSettled, pendingChecks, reviewersAtHead } }`, or `null` when
+the last read decided no verdict. **It wakes the caller and rings nothing**: by the maintainer's ruling
+of 2026-10-03 notification rungs stay the host's, and `nen stop` does not ring them.
+
+```bash
+nen watch until --pr 42 --gh-repo owner/name --until settled-and-reviewed --gates nen/gates.json
+```
 
 <a id="watch-until-quoting"></a>
 
