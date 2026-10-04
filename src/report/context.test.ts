@@ -9,13 +9,16 @@
 // which is also why each lane of the CI matrix proves the same thing.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { reportCommand } from "./command.js";
-import { deriveTurn, isCompiledZone, localClock } from "./context.js";
+import { deriveStage, deriveTurn, isCompiledZone, localClock, type PrLookup } from "./context.js";
+import { isHostedRemote } from "./data.js";
+import { readHostZone } from "../seam/zone.js";
+import type { PrObject } from "./objects.js";
 import type { ReportPhase } from "./data.js";
 
 const FIELD = "\u001f";
@@ -92,15 +95,15 @@ interface Captured {
 async function capture(
   argv: readonly string[],
   calls: readonly ScriptedCall[],
-  options: { env?: Record<string, string>; hostTimeZone?: () => string | null } = {},
+  options: { env?: Record<string, string>; hostTimeZone?: () => string | null; platform?: NodeJS.Platform } = {},
 ): Promise<Captured> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
   const seams = new ScriptedSeams(calls, {
     now: (): Date => NOW,
-    platform: "linux",
-    env: { TZDIR, ...options.env },
+    platform: options.platform ?? "linux",
+    env: options.platform === "win32" ? { ...options.env } : { TZDIR, ...options.env },
     ...(options.hostTimeZone === undefined ? {} : { hostTimeZone: options.hostTimeZone }),
   });
   const code = await runFamily(reportCommand, argv, null, false, io, seams);
@@ -179,22 +182,38 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
   it("an UNPUSHED branch is authoring, gate 'none — local', info", async () => {
     const captured = await capture(data(repo()), script({ pushed: false }));
     expect(captured.doc).toMatchObject({ effortStage: "authoring", gate: "none — local", stageClass: "info" });
+    expect(captured.err.join("\n")).toMatch(/'authoring' is read from origin alone: no pull request was looked for/);
   });
 
-  it("a PUBLISHED branch with no PR is published, gate 'none — pushed' -- and says no PR was looked for", async () => {
+  it("a branch ON ORIGIN with no PR lookup is null -- never 'published' on origin alone (N2)", async () => {
     const captured = await capture(data(repo()), script({ pushed: true }));
-    expect(captured.doc).toMatchObject({ effortStage: "published", gate: "none — pushed", stageClass: "info" });
-    expect(captured.err.join("\n")).toMatch(/'published' is read from origin alone -- no pull request was looked for/);
+    expect(captured.doc).toMatchObject({ effortStage: null, gate: null, stageClass: null });
+    expect(captured.err.join("\n")).toMatch(/origin\/opus\/kurapika\/nn-258 exists and no pull request was looked for — pass --target <owner\/name> --prs <n>/);
   });
 
-  it("a published branch whose register holds no PR with its head is published, without that caveat", async () => {
+  it("a PR in scope whose head matches NEITHER head is null, naming the PR and both heads (N1)", async () => {
     const root = repo();
-    const captured = await capture(
-      data(root, "--objects-from", objectsFile(root, [prRow({ head: "3333333333333333333333333333333333333333" })])),
-      script({ pushed: true }),
-    );
-    expect(captured.doc["effortStage"]).toBe("published");
-    expect(captured.err.join("\n")).not.toMatch(/looked for/);
+    const other = "3333333333333333333333333333333333333333";
+    for (const pushed of [true, false]) {
+      const captured = await capture(data(root, "--objects-from", objectsFile(root, [prRow({ head: other })])), script({ pushed }));
+      expect(captured.doc).toMatchObject({ effortStage: null, gate: null, stageClass: null });
+      expect(captured.err.join("\n")).toContain(
+        `pull request #365 is in scope and its head matches neither HEAD ${HEAD}, origin/${BRANCH} ${pushed ? PUSHED : "(not on origin)"} -- fetch, or the PR's head moved`,
+      );
+    }
+  });
+
+  it("says 'no PR row matched this branch' for --backlog and --issues-only scopes (N1)", () => {
+    const run = (lookup: PrLookup, objects: readonly PrObject[], pushed: boolean): string[] => {
+      const warn: string[] = [];
+      const seams = new ScriptedSeams(script({ pushed }), { platform: "linux" });
+      const stage = deriveStage(seams, { root: repo(), repo: "zheref/nen", branch: BRANCH, phases: [], objects, prLookup: lookup, openStop: false }, (l) => warn.push(l));
+      expect(stage).toEqual({ effortStage: null, gate: null, stageClass: null });
+      return warn;
+    };
+    expect(run("backlog", [prRow({ head: "3".repeat(40) }) as unknown as PrObject], true).join("\n")).toMatch(/no PR row matched this branch: none of the 1 open pull request\(s\) --backlog read \(#365\).* -- fetch, or the PR's head moved/);
+    expect(run("backlog", [], true).join("\n")).toMatch(/no PR row matched this branch \(--backlog reads OPEN pull requests only/);
+    expect(run("issues-only", [], true).join("\n")).toMatch(/no PR row matched this branch \(--issues reads no pull request\)/);
   });
 
   it("an open PR that is not ready is in review, at the repository's own gate, pending", async () => {
@@ -204,6 +223,12 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
     const canon = repo(CANON);
     const atG4 = await capture(data(canon, "--objects-from", objectsFile(canon, [prRow()])), script({ pushed: true }));
     expect(atG4.doc).toMatchObject({ effortStage: "in review", gate: "G4 — pending" });
+  });
+
+  it("warns when the matched PR's head is origin/<branch> and HEAD has moved on (N12)", async () => {
+    const root = repo(CONSUMER);
+    const captured = await capture(data(root, "--objects-from", objectsFile(root, [prRow()])), script({ pushed: true }));
+    expect(captured.err.join("\n")).toContain(`pull request #365's head ${PUSHED} is origin/${BRANCH}, not HEAD ${HEAD}`);
   });
 
   it("matches the PR by HEAD too, when HEAD has moved past what was pushed", async () => {
@@ -219,11 +244,11 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
     expect(captured.doc).toMatchObject({ effortStage: "ready", gate: "G4 — yours", stageClass: "red" });
   });
 
-  it("an open PR with NO readiness read is in review, and says why it is not ready", async () => {
+  it("an open PR with NO readiness read is null -- never 'in review' (N5)", async () => {
     const root = repo(CANON);
     const captured = await capture(data(root, "--objects-from", objectsFile(root, [prRow({ readiness: null })])), script({ pushed: true }));
-    expect(captured.doc["effortStage"]).toBe("in review");
-    expect(captured.err.join("\n")).toMatch(/readiness was not read .* 'ready' is only ever the verdict's word/);
+    expect(captured.doc).toMatchObject({ effortStage: null, gate: null, stageClass: null });
+    expect(captured.err.join("\n")).toMatch(/#365's readiness was not read \(its notes say why\), so whether it is 'ready' or 'in review' is not known/);
   });
 
   it("a merged PR is landed, ok", async () => {
@@ -281,24 +306,26 @@ describe("turnNumber", () => {
     return { effort, phase: name, startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [] };
   }
 
-  it("counts the 'report' entries of the one effort that records them", () => {
+  it("counts the 'report' entries of the ledger named after the branch -- and only that one (N3)", () => {
     const warn: string[] = [];
-    expect(deriveTurn([phase("e", "report"), phase("e", "rasengan"), phase("e", "report")], "b", (l) => warn.push(l))).toBe(2);
+    const phases = [phase("a", "report"), phase(BRANCH, "report"), phase(BRANCH, "rasengan"), phase(BRANCH, "report")];
+    expect(deriveTurn(phases, BRANCH, (l) => warn.push(l))).toBe(2);
     expect(warn).toEqual([]);
   });
 
-  it("picks the effort named after the branch when several record turns, and is null when none is", () => {
-    const phases = [phase("a", "report"), phase(BRANCH, "report"), phase(BRANCH, "report")];
-    expect(deriveTurn(phases, BRANCH, () => undefined)).toBe(2);
+  it("never falls back to a lone ledger under another effort id (N3)", () => {
     const warn: string[] = [];
-    expect(deriveTurn(phases, "other", (l) => warn.push(l))).toBeNull();
-    expect(warn.join("\n")).toMatch(/2 efforts record 'report' phases/);
+    expect(deriveTurn([phase("e", "report"), phase("e", "report")], BRANCH, (l) => warn.push(l))).toBeNull();
+    expect(warn.join("\n")).toContain(`no .nen/phases/ ledger has the effort id '${BRANCH}'`);
   });
 
-  it("is null, not 0, with no 'report' entry recorded", () => {
+  it("is null, not 0, with no ledger, no 'report' entry, or no branch", () => {
     const warn: string[] = [];
-    expect(deriveTurn([phase("e", "rasengan")], "b", (l) => warn.push(l))).toBeNull();
-    expect(warn.join("\n")).toMatch(/turnNumber: no 'report' phase is recorded/);
+    expect(deriveTurn([], BRANCH, (l) => warn.push(l))).toBeNull();
+    expect(deriveTurn([phase(BRANCH, "rasengan")], BRANCH, (l) => warn.push(l))).toBeNull();
+    expect(deriveTurn([phase(BRANCH, "report")], null, (l) => warn.push(l))).toBeNull();
+    expect(warn.join("\n")).toMatch(/ledger records no 'report' phase/);
+    expect(warn.join("\n")).toMatch(/turnNumber: HEAD is detached/);
   });
 
   it("reads the ledger end to end", async () => {
@@ -306,8 +333,8 @@ describe("turnNumber", () => {
     mkdirSync(join(root, ".nen", "phases"), { recursive: true });
     const entry = { startedAt: "2026-09-22T18:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null };
     writeFileSync(
-      join(root, ".nen", "phases", "e.json"),
-      JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "e", phases: [{ phase: "report", ...entry }, { phase: "kokusen", ...entry }, { phase: "report", ...entry }, { phase: "report", ...entry }] }),
+      join(root, ".nen", "phases", `${encodeURIComponent(BRANCH)}.json`),
+      JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: BRANCH, phases: [{ phase: "report", ...entry }, { phase: "kokusen", ...entry }, { phase: "report", ...entry }, { phase: "report", ...entry }] }),
     );
     expect((await capture(data(root), script())).doc["turnNumber"]).toBe(3);
   });
@@ -336,6 +363,7 @@ describe("the local clock", () => {
   it("validates a zone against a real TZif file, never the directory listing", () => {
     expect(isCompiledZone("America/Bogota", [TZDIR])).toBe(true);
     expect(isCompiledZone("UTC", [])).toBe(true);
+    // A directory named like a zone is not a regular file (N13).
     for (const notAZone of ["zone.tab", "TZ", "Mars/Olympus", "America", "../../etc/passwd", "/etc/passwd", "", "C:/x"]) {
       expect(isCompiledZone(notAZone, [TZDIR]), notAZone).toBe(false);
     }
@@ -355,9 +383,13 @@ describe("the local clock", () => {
     for (const tz of ["Mars/Olympus", "zone.tab", "../../etc/passwd"]) {
       const captured = await capture(data(repo(), "--tz", tz, "--target", "zheref/nen", "--prs", "365"), script());
       expect(captured.code, tz).toBe(2);
-      expect(captured.err.join("\n")).toContain(`--tz '${tz}' is not a zone in this host's zoneinfo database`);
+      expect(captured.err.join("\n")).toContain(`--tz '${tz}' is not a zone:`);
       expect(captured.seams.calls.every((call): boolean => call.command === "git")).toBe(true);
     }
+    // A case mismatch would pass a case-insensitive file system and ICU both (N13).
+    const cased = await capture(data(repo(), "--tz", "america/bogota"), script());
+    expect(cased.code).toBe(2);
+    expect(cased.err.join("\n")).toMatch(/--tz 'america\/bogota' is not a zone/);
     const empty = await capture(data(repo(), "--tz", " "), script());
     expect(empty.code).toBe(2);
     expect(empty.err.join("\n")).toMatch(/--tz was given an empty value/);
@@ -391,18 +423,23 @@ describe("the --register path stays consistent", () => {
     gates: [{ gate: "G2", label: "Merge", cleared: "Nothing to merge.", asks: [] }],
   };
 
-  it("keeps the desk's page gate, and stamps the derived local clock where the desk wrote none", async () => {
+  it("keeps the desk's page gate and generatedAtLocal fallback byte for byte, and appends the context after (N6)", async () => {
     const root = repo();
     writeFileSync(join(root, "desk.json"), JSON.stringify(DESK));
     const captured = await capture(data(root, "--register", "desk.json", "--tz", "America/Bogota", "--open-stop"), script());
     expect(captured.code, captured.err.join("\n")).toBe(0);
     expect(captured.doc["gate"]).toBe("G2");
-    expect(captured.doc["generatedAtLocal"]).toBe("Tue 22 Sep 2026 · 14:05 America/Bogota (UTC-05:00)");
-    expect(captured.doc).toMatchObject({ effortStage: "blocked", stageClass: "red", timeZone: "America/Bogota", worktree: "core" });
+    // Unchanged from NN-PR-#365: the desk's, else generatedAt -- never the derived clock.
+    expect(captured.doc["generatedAtLocal"]).toBe("2026-09-22T19:05:00.000Z");
+    expect(captured.doc).toMatchObject({ effortStage: "blocked", stageClass: "red", timeZone: "America/Bogota", generatedDateLocal: "2026-09-22", worktree: "core" });
+  });
 
+  it("nulls timeZone and generatedDateLocal when the desk set the clock, and says so (N6)", async () => {
+    const root = repo();
     writeFileSync(join(root, "desk.json"), JSON.stringify({ ...DESK, generatedAtLocal: "the desk's own" }));
-    const deskWins = await capture(data(root, "--register", "desk.json", "--tz", "America/Bogota"), script());
-    expect(deskWins.doc["generatedAtLocal"]).toBe("the desk's own");
+    const captured = await capture(data(root, "--register", "desk.json", "--tz", "America/Bogota"), script());
+    expect(captured.doc).toMatchObject({ generatedAtLocal: "the desk's own", timeZone: null, generatedDateLocal: null });
+    expect(captured.err.join("\n")).toMatch(/the register desk set generatedAtLocal, so the desk owns the page's clock/);
   });
 
   it("falls back to generatedAt, as before, when no zone can be named", async () => {
@@ -410,5 +447,76 @@ describe("the --register path stays consistent", () => {
     writeFileSync(join(root, "desk.json"), JSON.stringify(DESK));
     const captured = await capture(data(root, "--register", "desk.json"), script());
     expect(captured.doc["generatedAtLocal"]).toBe("2026-09-22T19:05:00.000Z");
+  });
+});
+
+describe("where no zoneinfo database exists (N7)", () => {
+  it("checks --tz against ICU's zone list on win32, and says which authority answered", async () => {
+    const ok = await capture(data(repo(), "--tz", "America/Bogota"), script(), { platform: "win32" });
+    expect(ok.code, ok.err.join("\n")).toBe(0);
+    expect(ok.doc["timeZone"]).toBe("America/Bogota");
+    expect(ok.err.join("\n")).toContain("timeZone: this host (win32) has no zoneinfo database, so 'America/Bogota' was checked against the runtime's ICU zone list (Intl.supportedValuesOf), not a TZif file.");
+    const bad = await capture(data(repo(), "--tz", "Mars/Olympus"), script(), { platform: "win32" });
+    expect(bad.code).toBe(2);
+    const meta = await capture(data(repo(), "--tz", "zone.tab"), script(), { platform: "win32" });
+    expect(meta.code).toBe(2);
+  });
+
+  it("says so for a $TZDIR that is not a directory, too", async () => {
+    const captured = await capture(data(repo(), "--tz", "America/Bogota"), script(), { env: { TZDIR: join(TZDIR, "nope") } });
+    expect(captured.code).toBe(0);
+    expect(captured.err.join("\n")).toMatch(/\$TZDIR '.*nope' is not a directory, so 'America\/Bogota' was checked against the runtime's ICU zone list/);
+  });
+});
+
+describe("repo accepts only a hosted origin (N4)", () => {
+  it("reads scp-style and scheme://host/ origins", () => {
+    expect(isHostedRemote("git@github.com:zheref/nen.git")).toBe(true);
+    expect(isHostedRemote("https://github.com/zheref/nen.git")).toBe(true);
+    expect(isHostedRemote("ssh://git@github.com/zheref/nen.git")).toBe(true);
+  });
+
+  it("refuses a local path and a file:// origin", () => {
+    for (const url of ["/Users/me/src/nen", "../nen", "C:/src/nen", "file:///Users/me/src/nen", "file://host/src/nen", "https:///nen", ""]) {
+      expect(isHostedRemote(url), url).toBe(false);
+    }
+  });
+
+  for (const [label, url] of [["a local path", "/Users/me/src/nen"], ["a file:// URL", "file:///Users/me/src/nen.git"]] as const) {
+    it(`reports ${label} origin as a null repo, with the reason`, async () => {
+      const captured = await capture(data(repo()), script({ origin: url }));
+      expect(captured.code).toBe(0);
+      expect(captured.doc["repo"]).toBeNull();
+      expect(captured.err.join("\n")).toMatch(/repo: this checkout's 'origin' is not a hosted remote/);
+      expect(captured.out.join("\n")).not.toContain("src/nen");
+    });
+  }
+
+  it("reports an scp-style origin as owner/name", async () => {
+    expect((await capture(data(repo()), script({ origin: "git@github.com:zheref/nen.git" }))).doc["repo"]).toBe("zheref/nen");
+  });
+});
+
+describe("the host's own zone (N14)", () => {
+  function host(): string {
+    return mkdtempSync(join(tmpdir(), "nen-host-zone-"));
+  }
+
+  // A symlink needs a privilege Windows does not grant a CI job by default.
+  it.skipIf(process.platform === "win32")("prefers the /etc/localtime symlink's target, relative or absolute", () => {
+    const dir = host();
+    symlinkSync("../usr/share/zoneinfo/America/Bogota", join(dir, "localtime"));
+    writeFileSync(join(dir, "timezone"), "Europe/Madrid\n");
+    expect(readHostZone({ localtime: join(dir, "localtime"), timezone: join(dir, "timezone") }, () => "Asia/Tokyo")).toBe("America/Bogota");
+  });
+
+  it("then /etc/timezone beside a copied localtime, then ICU's guess", () => {
+    const dir = host();
+    writeFileSync(join(dir, "localtime"), "TZif-copy");
+    writeFileSync(join(dir, "timezone"), "  Europe/Madrid  \n");
+    const paths = { localtime: join(dir, "localtime"), timezone: join(dir, "timezone") };
+    expect(readHostZone(paths, () => "Asia/Tokyo")).toBe("Europe/Madrid");
+    expect(readHostZone({ ...paths, timezone: join(dir, "none") }, () => "Asia/Tokyo")).toBe("Asia/Tokyo");
+    expect(readHostZone({ ...paths, timezone: join(dir, "none") }, () => "Etc/Unknown")).toBeNull();
   });
 });

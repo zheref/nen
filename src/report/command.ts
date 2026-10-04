@@ -33,7 +33,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { loadWorkflow, type ReportSection } from "../schema/workflow.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
-import { assembleContext, deriveClock, type ReportContext } from "./context.js";
+import { assembleContext, deriveClock, type PrLookup, type ReportContext } from "./context.js";
 import { assembleObjects, renderObjects } from "./objects.js";
 import { assembleRegister, parseDesk, renderRegister, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
@@ -68,32 +68,41 @@ data      One document describing this branch against --base: the commits, the
                    order is the precedence -- the first tier whose patterns
                    match a path wins. Without it every file's tier is null.
 
-  --tz <zone>      The IANA zone the local clock is read in. It must be a
-                   COMPILED zone in this host's zoneinfo database ($TZDIR, else
-                   /usr/share/zoneinfo, /var/db/timezone/zoneinfo,
-                   /usr/lib/zoneinfo): a file whose first four bytes are
-                   'TZif'. Anything else -- a misspelling, 'zone.tab', a path --
-                   is refused at exit 2 before any GitHub read. Without it, $TZ,
-                   then the zone the host names.
+  --tz <zone>      The IANA zone the local clock is read in, printed as ICU's
+                   canonical name. It must be a COMPILED zone in this host's
+                   zoneinfo database ($TZDIR, else /usr/share/zoneinfo,
+                   /var/db/timezone/zoneinfo, /usr/lib/zoneinfo): a regular
+                   file whose first four bytes are 'TZif'. Where no such
+                   directory exists (win32), the runtime's ICU zone list
+                   answers instead, and stderr says so. A misspelling, a case
+                   mismatch, 'zone.tab' or a path is refused at exit 2 before
+                   any GitHub read. Without it: $TZ, then the /etc/localtime
+                   symlink's target, then /etc/timezone, then ICU's guess.
   --open-stop      A G5 stop is open this turn: effortStage is 'blocked'. The
                    only way to 'blocked' -- a .nen/last-stop.json on disk is a
                    record, not an open stop.
 
   THE DERIVED CONTEXT (zheref/nen#258) follows 'objects': worktree (the
   checkout's directory name when --git-dir and --git-common-dir differ, else
-  'core'), effortStage / gate / stageClass (authoring 'none — local' info;
-  published 'none — pushed' info; in review '<G2|G4> — pending' warn; ready
-  '<G2|G4> — yours' red; blocked 'G5 — yours' red; landed 'none — landed' ok --
-  pushed is refs/remotes/origin/<branch>, the PR is the 'objects' row whose
-  head is HEAD or origin/<branch>, ready is its readiness verdict, G2/G4 is the
-  repository's role in --repo's nen/repos.json), turnNumber (the 'report'
-  phase entries of the effort's ledger), and generatedAtLocal /
-  generatedDateLocal / timeZone. 'repo' is owner/name from the origin remote --
-  'nen repo resolve --from''s answer -- never the directory's name. EACH IS
-  null, WITH THE REASON ON STDERR, WHEN IT CANNOT BE DERIVED; none is guessed.
-  Under --register the register's own 'gate' and 'generatedAtLocal' keep their
-  places (the desk's, else the derived clock, else generatedAt) and the other
-  six follow the register keys.
+  'core'), effortStage / gate / stageClass, turnNumber (the 'report' entries
+  of the ledger whose effort id is this branch's name), and generatedAtLocal
+  / generatedDateLocal / timeZone. The stage: blocked 'G5 — yours' red
+  (--open-stop); landed 'none — landed' ok (the matched PR merged); ready
+  '<G2|G4> — yours' red and in review '<G2|G4> — pending' warn (the matched
+  PR open, its readiness verdict 'ready' or not); authoring 'none — local'
+  info (not on origin, no PR row in scope). The matched PR is the one
+  'objects' row whose head is HEAD or refs/remotes/origin/<branch>; G2/G4 is
+  the repository's role in --repo's nen/repos.json. A branch ON origin with
+  no matched PR, a PR row matching neither head, an unread readiness, a
+  closed PR or a detached HEAD is null -- so 'published' ("on origin, no PR")
+  is not derived by any lookup this verb makes, none of which is exhaustive.
+  'repo' is owner/name from a hosted origin (user@host: or scheme://host/),
+  spelled as the registry records it when listed; a local-path or file://
+  origin is null. EACH IS null, WITH THE REASON ON STDERR, WHEN IT CANNOT BE
+  DERIVED; none is guessed. Under --register the register's own 'gate' and
+  'generatedAtLocal' (the desk's, else generatedAt) keep their places and the
+  other six follow the register keys; when the desk sets generatedAtLocal,
+  timeZone and generatedDateLocal are null.
 
   The 'objects' REGISTER -- the issues and pull requests this effort is about
   -- is [] unless one of the five flags below is given, which keeps this
@@ -391,10 +400,18 @@ function readTz(context: CommandContext): string | null {
   return flag.trim();
 }
 
+/** How the `objects` flags looked for pull requests -- the stage's evidence. */
+function prLookupOf(options: { readonly prs: readonly number[]; readonly backlog: boolean; readonly from: unknown } | null): PrLookup {
+  if (options === null) return "none";
+  if (options.from !== null) return "file";
+  if (options.prs.length > 0) return "prs";
+  return options.backlog ? "backlog" : "issues-only";
+}
+
 /**
  * The context keys a register document carries AFTER its own: every one but
  * `gate` and `generatedAtLocal`, which the register already has (the desk's
- * page gate; the desk's local stamp, else the derived one) in the places
+ * page gate; the desk's local stamp, else `generatedAt`, exactly as before) in the places
  * NN-PR-#365 gave them. Re-spreading them would overwrite the desk's word with
  * the effort's, in a page about more than one effort.
  */
@@ -451,7 +468,7 @@ async function runData(context: CommandContext): Promise<number> {
       branch: document.branch,
       phases: document.phases,
       objects,
-      objectsAsked: objectOptions !== null,
+      prLookup: prLookupOf(objectOptions),
       openStop: context.args.booleans.has("open-stop"),
     },
     clock,
@@ -476,7 +493,6 @@ async function runData(context: CommandContext): Promise<number> {
   );
   const register = assembleRegister(desk, {
     generatedAt: document.generatedAt,
-    generatedAtLocal: derived.generatedAtLocal,
     objects,
     phases: document.phases,
     usage: document.usage,
@@ -489,7 +505,18 @@ async function runData(context: CommandContext): Promise<number> {
   // follow it, so a consumer of the v0.13 document reads the same keys in the
   // same order and the register is new information after them; the derived
   // context follows the register.
-  const full = { ...document, ...register, ...registerTail(derived) };
+  // A DESK THAT SETS THE CLOCK OWNS IT (N6): its `generatedAtLocal` is the
+  // page's, so a derived zone and date beside it would describe a clock the
+  // page does not show.
+  const tail = registerTail(derived);
+  if (desk.generatedAtLocal !== null && (tail.timeZone !== null || tail.generatedDateLocal !== null)) {
+    warn("timeZone: the register desk set generatedAtLocal, so the desk owns the page's clock; generatedDateLocal and timeZone reported as null.");
+  }
+  const full = {
+    ...document,
+    ...register,
+    ...(desk.generatedAtLocal === null ? tail : { ...tail, generatedDateLocal: null, timeZone: null }),
+  };
   emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects), ...renderRegister(register)]);
   return 0;
 }

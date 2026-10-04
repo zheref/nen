@@ -77,6 +77,7 @@
 // time" is not "nothing is there": ../shu/run.ts reports a timeout as `satisfied:
 // null` -- cannot assert -- exactly as it reports a kind it does not know.
 
+import { readHostZone } from "./zone.js";
 import { spawn, spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { constants as osConstants } from "node:os";
@@ -655,12 +656,8 @@ export function defaultSeams(): Seams {
     now: (): Date => new Date(),
     env: process.env,
     platform: process.platform,
-    hostTimeZone: (): string | null => {
-      // The runtime's own reading of /etc/localtime (or the OS's zone on a
-      // host with none). "Etc/Unknown" is ICU's word for "could not tell".
-      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      return zone === "" || zone === "Etc/Unknown" ? null : zone;
-    },
+    // The /etc/localtime symlink, then /etc/timezone, then ICU's guess.
+    hostTimeZone: (): string | null => readHostZone(),
   };
 }
 

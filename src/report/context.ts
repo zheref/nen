@@ -20,7 +20,7 @@
 // `git rev-parse` reads, the zoneinfo file the zone names (four bytes of it),
 // and `nen/repos.json` when the stage needs a gate.
 
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { roleOf } from "../repo/classify.js";
@@ -28,6 +28,8 @@ import { loadRepoRegistry } from "../schema/repos.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import type { ReportPhase } from "./data.js";
 import type { ReportObject, PrObject } from "./objects.js";
+
+export type PrLookup = "none" | "prs" | "backlog" | "issues-only" | "file";
 
 /** The six stages of Hatsu's WORKFLOW.md table, in its order. */
 export type EffortStage = "authoring" | "published" | "in review" | "ready" | "blocked" | "landed";
@@ -62,8 +64,11 @@ export interface ContextInput {
   readonly branch: string | null;
   readonly phases: readonly ReportPhase[];
   readonly objects: readonly ReportObject[];
-  /** Whether any of the five `objects` flags was given -- whether a PR was LOOKED FOR. */
-  readonly objectsAsked: boolean;
+  /**
+   * How pull requests were looked for: not at all; `--prs <n>`; `--backlog`
+   * (OPEN ones only); `--issues` alone (none); or an `--objects-from` file.
+   */
+  readonly prLookup: PrLookup;
   /** `--open-stop`: a G5 stop is open this turn. The only way to `blocked`. */
   readonly openStop: boolean;
 }
@@ -133,24 +138,36 @@ function originTip(seams: Seams, root: string, branch: string): string | null {
  *
  * MATCHED BY HEAD, NEVER BY "THE ONLY PR IN SCOPE": a `--backlog` register
  * with one open pull request in it is not a statement that that pull request
- * is this branch's. Two rows answering is ambiguous and a row whose head could
- * not be read cannot be ruled out, and both are `undefined` with the reason --
- * the caller's question had no single answer. `null` is "looked, none is".
+ * is this branch's. And a PR IN SCOPE THAT MATCHES NEITHER HEAD is not "no
+ * pull request" either (Nobunaga N1): it may be this branch's PR seen through a
+ * stale `origin/<branch>`, or one whose head moved on GitHub. Every answer
+ * that is not exactly one match is a reason, and the stage is null.
  */
 function effortPr(
   prs: readonly PrObject[],
-  heads: readonly string[],
-): { readonly pr: PrObject | null } | { readonly why: string } {
+  head: string | null,
+  pushed: string | null,
+  branch: string,
+  lookup: PrLookup,
+): { readonly pr: PrObject } | { readonly why: string } {
+  const heads = [head, pushed].filter((sha): sha is string => sha !== null);
   const matches = prs.filter((pr): boolean => pr.head !== "" && heads.includes(pr.head));
   if (matches.length === 1) return { pr: matches[0] as PrObject };
+  const numbers = (rows: readonly PrObject[]): string => rows.map((pr): string => `#${pr.number}`).join(", ");
   if (matches.length > 1) {
-    return { why: `${matches.length} pull requests in scope (${matches.map((pr): string => `#${pr.number}`).join(", ")}) have this branch's head, so which one is this effort's is not one answer` };
+    return { why: `${matches.length} pull requests in scope (${numbers(matches)}) have this branch's head, so which one is this effort's is not one answer` };
   }
   const unread = prs.filter((pr): boolean => pr.head === "");
   if (unread.length > 0) {
-    return { why: `pull request ${unread.map((pr): string => `#${pr.number}`).join(", ")} has a head that could not be read, so it cannot be ruled out as this branch's` };
+    return { why: `pull request ${numbers(unread)} has a head that could not be read, so it cannot be ruled out as this branch's` };
   }
-  return { pr: null };
+  const where = `HEAD ${head ?? "(unreadable)"}, origin/${branch} ${pushed ?? "(not on origin)"}`;
+  return {
+    why:
+      lookup === "backlog"
+        ? `no PR row matched this branch: none of the ${prs.length} open pull request(s) --backlog read (${numbers(prs)}) has its head at ${where} -- fetch, or the PR's head moved`
+        : `pull request ${numbers(prs)} is in scope and its head matches neither ${where} -- fetch, or the PR's head moved`,
+  };
 }
 
 /** The declaration gate for `repo`, from `--repo`'s registry, or null with the reason. */
@@ -180,41 +197,52 @@ export function deriveStage(
   warn: (line: string) => void,
 ): Pick<ReportContext, "effortStage" | "gate" | "stageClass"> {
   const none = { effortStage: null, gate: null, stageClass: null };
-  if (input.openStop) return stageRow("blocked", null);
-  if (input.branch === null) {
-    warn("effortStage: HEAD is detached, so there is no branch whose stage to read; reported as null.");
+  const fail = (why: string): Pick<ReportContext, "effortStage" | "gate" | "stageClass"> => {
+    warn(`effortStage: ${why}; effortStage, gate and stageClass reported as null.`);
     return none;
-  }
+  };
+  if (input.openStop) return stageRow("blocked", null);
+  if (input.branch === null) return fail("HEAD is detached, so there is no branch whose stage to read");
   const pushed = originTip(seams, input.root, input.branch);
   const prs = input.objects.filter((object): object is PrObject => object.kind === "pr");
-  let pr: PrObject | null = null;
-  if (prs.length > 0) {
-    const head = gitRead(seams, input.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
-    const heads = [...(head.ok ? outputLines(head.stdout).slice(0, 1) : []), ...(pushed === null ? [] : [pushed])];
-    const found = effortPr(prs, heads);
-    if ("why" in found) {
-      warn(`effortStage: ${found.why}; reported as null. Name this effort's own pull request with --prs <n>.`);
-      return none;
+
+  if (prs.length === 0) {
+    // NO PULL REQUEST ROW. That proves "no PR" only for a branch that is not
+    // on origin (a PR needs a pushed head); for one that is, no lookup this
+    // verb makes is exhaustive -- `--backlog` reads OPEN pull requests, and a
+    // merged one is not among them -- so the stage is not derived (N2).
+    const reason =
+      input.prLookup === "backlog"
+        ? "no PR row matched this branch (--backlog reads OPEN pull requests only, and none is open)"
+        : input.prLookup === "issues-only"
+          ? "no PR row matched this branch (--issues reads no pull request)"
+          : "no pull request was looked for — pass --target <owner/name> --prs <n>";
+    if (pushed === null) {
+      warn(`effortStage: 'authoring' is read from origin alone: ${reason}.`);
+      return stageRow("authoring", null);
     }
-    pr = found.pr;
+    return fail(`origin/${input.branch} exists and ${reason}`);
   }
-  if (pr === null) {
-    if (pushed === null) return stageRow("authoring", null);
-    if (!input.objectsAsked) {
-      warn(`effortStage: 'published' is read from origin alone -- no pull request was looked for (pass --target <owner/name> --prs <n> to read this effort's).`);
-    }
-    return stageRow("published", null);
+
+  const headRead = gitRead(seams, input.root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  const head = headRead.ok ? (outputLines(headRead.stdout)[0] ?? null) : null;
+  const found = effortPr(prs, head, pushed, input.branch, input.prLookup);
+  if ("why" in found) return fail(found.why);
+  const pr = found.pr;
+  if (head !== null && pr.head !== head) {
+    warn(`effortStage: pull request #${pr.number}'s head ${pr.head} is origin/${input.branch}, not HEAD ${head} -- the stage describes what was pushed, and this checkout has moved on.`);
   }
   const state = pr.state.toUpperCase();
   if (state === "MERGED") return stageRow("landed", null);
   if (state !== "OPEN") {
-    warn(`effortStage: pull request #${pr.number} is ${pr.state === "" ? "in an unreadable state" : `'${pr.state}'`}, which no stage in the table describes (closed without merging is not 'landed'); reported as null.`);
-    return none;
+    return fail(`pull request #${pr.number} is ${pr.state === "" ? "in an unreadable state" : `'${pr.state}'`}, which no stage in the table describes (closed without merging is not 'landed')`);
   }
-  const stage: EffortStage = pr.readiness?.verdict === "ready" ? "ready" : "in review";
   if (pr.readiness === null) {
-    warn(`effortStage: pull request #${pr.number}'s readiness was not read (its notes say why), so it is 'in review' -- 'ready' is only ever the verdict's word.`);
+    // NOT 'in review' (N5): an unread verdict has said nothing, and 'in
+    // review' is the statement that it said "not ready".
+    return fail(`pull request #${pr.number}'s readiness was not read (its notes say why), so whether it is 'ready' or 'in review' is not known`);
   }
+  const stage: EffortStage = pr.readiness.verdict === "ready" ? "ready" : "in review";
   const gate = declarationGate(input.root, input.repo);
   if ("why" in gate) {
     warn(`gate: ${gate.why}; reported as null.`);
@@ -231,27 +259,28 @@ function stageRow(stage: EffortStage, declaration: string | null): Pick<ReportCo
 // ── the turn ────────────────────────────────────────────────────────────────
 
 /**
- * `turnNumber`: how many `report` phase entries this effort's ledger holds.
- *
- * WHICH EFFORT. A checkout normally carries one ledger, and that is the answer.
- * With several, the one whose id is this branch's name; with none of them so
- * named, `null` -- adding two efforts' turns together is a number nobody's turn
- * has. Zero `report` entries is `null` too: "Turn 0" is not a turn.
+ * `turnNumber`: how many `report` phase entries THIS BRANCH'S ledger holds --
+ * the ledger whose effort id is the branch's name, and no other (N3). A lone
+ * ledger under another id is another effort's turns, however likely it looks;
+ * no ledger, a detached HEAD, or no `report` entry is `null` ("Turn 0" is not
+ * a turn).
  */
 export function deriveTurn(phases: readonly ReportPhase[], branch: string | null, warn: (line: string) => void): number | null {
-  const counts = new Map<string, number>();
-  for (const phase of phases) {
-    if (phase.phase === "report") counts.set(phase.effort, (counts.get(phase.effort) ?? 0) + 1);
-  }
-  if (counts.size === 0) {
-    warn("turnNumber: no 'report' phase is recorded in .nen/phases/ ('nen phase begin --phase report' records one per turn); reported as null.");
+  if (branch === null) {
+    warn("turnNumber: HEAD is detached, so there is no branch whose ledger to count; reported as null.");
     return null;
   }
-  if (counts.size === 1) return [...counts.values()][0] as number;
-  const mine = branch === null ? undefined : counts.get(branch);
-  if (mine !== undefined) return mine;
-  warn(`turnNumber: ${counts.size} efforts record 'report' phases (${[...counts.keys()].sort().join(", ")}) and none is named after this branch, so which one's turn this is is not one answer; reported as null.`);
-  return null;
+  const mine = phases.filter((phase): boolean => phase.effort === branch);
+  if (mine.length === 0) {
+    warn(`turnNumber: no .nen/phases/ ledger has the effort id '${branch}' (this branch's name; 'nen phase begin --effort ${branch} --phase report' records one per turn); reported as null.`);
+    return null;
+  }
+  const turns = mine.filter((phase): boolean => phase.phase === "report").length;
+  if (turns === 0) {
+    warn(`turnNumber: the '${branch}' ledger records no 'report' phase; reported as null.`);
+    return null;
+  }
+  return turns;
 }
 
 // ── the local clock ─────────────────────────────────────────────────────────
@@ -262,26 +291,33 @@ export const ZONEINFO_DIRS: readonly string[] = ["/usr/share/zoneinfo", "/var/db
 /** The zones that need no database: the C library answers them itself. */
 const BUILTIN_ZONES = new Set(["UTC", "Etc/UTC"]);
 
+/** A name that addresses a path rather than a zone, never looked up at all. */
+function pathShaped(zone: string): boolean {
+  return zone === "" || zone.startsWith("/") || zone.includes("\\") || zone.split("/").includes("..") || /^[A-Za-z]:/.test(zone);
+}
+
 /**
- * Whether `zone` is a COMPILED zone in this host's zoneinfo database: a file
- * whose first four bytes are `TZif`.
+ * Whether `zone` is a COMPILED zone in this host's zoneinfo database: a
+ * REGULAR file whose first four bytes are `TZif`.
  *
  * THE MAGIC, NOT THE FILE'S PRESENCE. The database directory also holds
  * tables and metadata (`zone.tab`, `tzdata.zi`, `+VERSION`, `leapseconds`,
- * `iso3166.tab`) that are files and are not zones. A path-shaped name
- * (absolute, or carrying `..`) is never looked up at all.
+ * `iso3166.tab`) that are files and are not zones; and a FIFO or a device
+ * named like a zone is not a file to read four bytes from (N13), so `fstat`
+ * must say regular file before anything is read.
  */
 export function isCompiledZone(zone: string, dirs: readonly string[]): boolean {
   if (BUILTIN_ZONES.has(zone)) return true;
-  if (zone === "" || zone.startsWith("/") || zone.includes("\\") || zone.split("/").includes("..") || /^[A-Za-z]:/.test(zone)) return false;
+  if (pathShaped(zone)) return false;
   for (const dir of dirs) {
     let fd: number | null = null;
     try {
-      fd = openSync(join(dir, ...zone.split("/")), "r");
+      fd = openSync(join(dir, ...zone.split("/")), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+      if (!fstatSync(fd).isFile()) continue;
       const magic = Buffer.alloc(4);
       if (readSync(fd, magic, 0, 4, 0) === 4 && magic.toString("latin1") === "TZif") return true;
     } catch {
-      // Absent, a directory, unreadable: not this directory's zone.
+      // Absent, unreadable: not this directory's zone.
     } finally {
       if (fd !== null) closeSync(fd);
     }
@@ -289,9 +325,70 @@ export function isCompiledZone(zone: string, dirs: readonly string[]): boolean {
   return false;
 }
 
-function zoneinfoDirs(seams: Seams): readonly string[] {
+/**
+ * WHICH AUTHORITY SAYS A NAME IS A ZONE (N7). A TZif file, wherever a zoneinfo
+ * database exists -- `$TZDIR`, else libc's directories (none of which is a path
+ * on Windows). Where none exists, the runtime's own ICU zone list,
+ * `Intl.supportedValuesOf("timeZone")`, and the run SAYS so on stderr: the
+ * check is weaker (ICU's table, not the host's), and a reader should know
+ * which one answered.
+ */
+type ZoneAuthority = { readonly kind: "tzif"; readonly dirs: readonly string[] } | { readonly kind: "icu"; readonly why: string };
+
+function zoneAuthority(seams: Seams): ZoneAuthority {
   const tzdir = seams.env["TZDIR"];
-  return tzdir !== undefined && tzdir.trim() !== "" ? [tzdir] : ZONEINFO_DIRS;
+  const named = tzdir !== undefined && tzdir.trim() !== "";
+  const candidates = named ? [tzdir] : seams.platform === "win32" ? [] : ZONEINFO_DIRS;
+  const dirs = candidates.filter((dir): boolean => {
+    try {
+      return statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  if (dirs.length > 0) return { kind: "tzif", dirs };
+  const why = named
+    ? `$TZDIR '${tzdir}' is not a directory`
+    : seams.platform === "win32"
+      ? "this host (win32) has no zoneinfo database"
+      : `none of ${ZONEINFO_DIRS.join(", ")} exists`;
+  return { kind: "icu", why };
+}
+
+/** ICU's canonical spelling of `zone`, or null when the runtime does not know it. */
+function canonicalZone(zone: string): string | null {
+  try {
+    return new Intl.DateTimeFormat("en-US", { timeZone: zone }).resolvedOptions().timeZone;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `zone` checked by the authority, as ICU's canonical name, or the reason it
+ * is not a zone.
+ *
+ * A CASE MISMATCH IS REFUSED (N13): on a case-insensitive file system
+ * `america/bogota` opens `America/Bogota`'s TZif file, and ICU canonicalises it
+ * -- so it would pass both checks while naming a zone nobody wrote. The name
+ * printed is ICU's `resolvedOptions().timeZone`, the one the clock was read in.
+ */
+export function validateZone(zone: string, authority: ZoneAuthority): { readonly zone: string } | { readonly why: string } {
+  if (pathShaped(zone)) return { why: "it is a path, not a zone name" };
+  const canonical = canonicalZone(zone);
+  if (canonical === null) return { why: "the runtime's ICU does not know it" };
+  if (canonical !== zone && canonical.toLowerCase() === zone.toLowerCase()) {
+    return { why: `zone names are case-sensitive, and the zone is spelled '${canonical}'` };
+  }
+  if (authority.kind === "tzif") {
+    return isCompiledZone(zone, authority.dirs)
+      ? { zone: canonical }
+      : { why: `there is no compiled zone of that name in ${authority.dirs.join(", ")} (a regular file starting 'TZif')` };
+  }
+  const known = new Set(Intl.supportedValuesOf("timeZone"));
+  return BUILTIN_ZONES.has(zone) || known.has(zone) || known.has(canonical)
+    ? { zone: canonical }
+    : { why: "it is not in the runtime's ICU zone list" };
 }
 
 interface LocalParts {
@@ -368,9 +465,10 @@ export function localClock(zone: string, instant: Date): Pick<ReportContext, "ge
  * `--tz` FIRST, AND A `--tz` THAT IS NOT A ZONE IS REFUSED (exit 2): the caller
  * typed it, and a report stamped in UTC because a zone name was misspelled is
  * the silent answer `date(1)` gives and this verb exists not to. Then `$TZ`,
- * then the zone the host names (the seam's `hostTimeZone`, which on a real host
- * is the runtime's reading of `/etc/localtime`). A host zone that fails the
- * same check is `null` with the reason, because nobody typed it wrong.
+ * then the zone the host names (the seam's `hostTimeZone`: the
+ * `/etc/localtime` symlink's target, then `/etc/timezone`, then ICU's own
+ * guess -- ../seam/zone.ts). A zone from either that fails the same check is
+ * `null` with the reason, because nobody typed it wrong.
  */
 export function deriveClock(
   seams: Seams,
@@ -379,14 +477,21 @@ export function deriveClock(
   warn: (line: string) => void,
 ): Pick<ReportContext, "generatedAtLocal" | "generatedDateLocal" | "timeZone"> {
   const none = { generatedAtLocal: null, generatedDateLocal: null, timeZone: null };
-  const dirs = zoneinfoDirs(seams);
+  const authority = zoneAuthority(seams);
+  const said = (zone: string): void => {
+    if (authority.kind === "icu") {
+      warn(`timeZone: ${authority.why}, so '${zone}' was checked against the runtime's ICU zone list (Intl.supportedValuesOf), not a TZif file.`);
+    }
+  };
   if (tz !== null) {
-    const clock = isCompiledZone(tz, dirs) ? localClock(tz, instant) : null;
+    const checked = validateZone(tz, authority);
+    const clock = "zone" in checked ? localClock(checked.zone, instant) : null;
     if (clock === null) {
       throw new VerbUsageError(
-        `--tz '${tz}' is not a zone in this host's zoneinfo database (${dirs.join(", ")}): a zone is an IANA name whose file there starts with 'TZif', like 'America/Bogota'. Refused rather than stamped in UTC, which is what date(1) silently does with a name it does not know.`,
+        `--tz '${tz}' is not a zone: ${"why" in checked ? checked.why : "the runtime could not read a clock in it"}. A zone is an IANA name, like 'America/Bogota'. Refused rather than stamped in UTC, which is what date(1) silently does with a name it does not know.`,
       );
     }
+    said(tz);
     return clock;
   }
   const fromEnv = seams.env["TZ"]?.replace(/^:/, "").trim();
@@ -396,11 +501,13 @@ export function deriveClock(
     warn("timeZone: this host does not name its zone; pass --tz <IANA zone>. generatedAtLocal, generatedDateLocal and timeZone reported as null.");
     return none;
   }
-  const clock = isCompiledZone(zone, dirs) ? localClock(zone, instant) : null;
+  const checked = validateZone(zone, authority);
+  const clock = "zone" in checked ? localClock(checked.zone, instant) : null;
   if (clock === null) {
-    warn(`timeZone: ${source} names '${zone}', which is not a zone in this host's zoneinfo database (${dirs.join(", ")}); pass --tz <IANA zone>. generatedAtLocal, generatedDateLocal and timeZone reported as null.`);
+    warn(`timeZone: ${source} names '${zone}', which is not a zone (${"why" in checked ? checked.why : "the runtime could not read a clock in it"}); pass --tz <IANA zone>. generatedAtLocal, generatedDateLocal and timeZone reported as null.`);
     return none;
   }
+  said(zone);
   return clock;
 }
 

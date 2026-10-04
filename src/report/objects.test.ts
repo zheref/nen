@@ -37,7 +37,7 @@ const COVERAGE_REPO = join(process.cwd(), "src", "schema", "fixtures", "shu-cove
 const TARGET = parseTarget("zheref/nen");
 const HEAD_SHA = "7db8de509dfb8623125e9d523220c69d3c8dbad1";
 
-/** The four git reads `report data` makes, all answered, and nothing else. */
+/** The git reads `report data` makes, all answered, and nothing else. */
 function script(): ScriptedCall[] {
   return [
     { match: "git rev-parse --verify --quiet main^{commit}", result: { code: 0, stdout: "0123456789abcdef\n" } },

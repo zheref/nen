@@ -32,9 +32,9 @@
 // (zheref/nen#258). It used to be the checkout's directory name -- which in a
 // git worktree is the worktree's (`quirky-chatterjee-88d5f6`), not the
 // project's, so every caller overrode it by hand with `nen repo resolve
-// --from`. It is now that verb's answer: the origin remote read as
-// `owner/name`, spelled as `nen/repos.json` records it when the registry knows
-// it. No readable origin is `null` with the reason -- never the directory name
+// --from`. It is now the hosted origin remote read as `owner/name`, spelled as
+// the registry records it when listed (`repo resolve --from` refuses an
+// unlisted origin; this field does not). No readable origin is `null` with the reason -- never the directory name
 // back again, which is the wrong answer this field used to give. And never a
 // path: this document is pasted into pull requests, and an absolute path
 // carries the developer's account name and directory layout out of the machine
@@ -229,8 +229,8 @@ export function readBranch(seams: Seams, root: string): string | null {
 }
 
 /**
- * `owner/name` from the origin remote -- `nen repo resolve --from`'s answer --
- * or null with the reason.
+ * `owner/name` from a hosted origin remote, spelled as the registry records
+ * it when listed, or null with the reason.
  *
  * NOT A REFUSAL: a checkout with no origin (a fresh `git init`, a scratch
  * clone) is still a branch with commits on it, and the rest of the document is
@@ -245,6 +245,10 @@ export function readRepoSlug(seams: Seams, root: string, warn: (line: string) =>
     return null;
   }
   const url = outputLines(result.stdout)[0] ?? "";
+  if (!isHostedRemote(url)) {
+    warn("repo: this checkout's 'origin' is not a hosted remote (a 'user@host:' or 'scheme://host/' URL) -- a local path or file:// clone names a directory, not a project; reported as null.");
+    return null;
+  }
   const slug = ownerNameFromRemote(url);
   if (slug === null) {
     warn("repo: this checkout's 'origin' does not read as an owner/name repository; reported as null.");
@@ -259,6 +263,24 @@ export function readRepoSlug(seams: Seams, root: string, warn: (line: string) =>
     // the origin's own spelling is the answer.
   }
   return slug;
+}
+
+/**
+ * WHETHER AN ORIGIN NAMES A HOSTED PROJECT AT ALL (Nobunaga N4).
+ * `ownerNameFromRemote` reads the last two path segments of anything, so a
+ * clone of `/Users/me/src/nen` would have been reported as `src/nen` -- a
+ * project nobody has. Only two shapes name a host: scp-style `user@host:path`
+ * and `scheme://host/path` with a non-empty host, `file://` excepted (its host
+ * is this machine's file system). Credentials in the URL are never printed.
+ */
+export function isHostedRemote(url: string): boolean {
+  const trimmed = url.trim();
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)\//.exec(trimmed);
+  if (scheme !== null) {
+    const host = (scheme[2] ?? "").replace(/^[^@]*@/, "");
+    return (scheme[1] ?? "").toLowerCase() !== "file" && host !== "";
+  }
+  return /^[^@\s/:]+@[^:\s/]+:[^\s]/.test(trimmed);
 }
 
 /**
