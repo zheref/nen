@@ -9,7 +9,7 @@ import { ExcludeCheckError, parseExcludeCheckNames, splitCheckNames } from "./ex
 import { prReady, type LocalCheckout, type PrReadyDeps, type PrReadyInput, type ReadyReport } from "../verbs/pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
 import type { CheckRollupPage, PullRequestSnapshot, ReviewRequestsPage, ReviewThreadPage } from "../github/graphql.js";
-import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { BANKAI_REPO, SHU_REPO } from "../schema/fixtures/paths.js";
 import { GATES_FILE, schemaPath } from "../schema/source.js";
 import { run, type Io } from "../index.js";
 
@@ -240,7 +240,10 @@ describe("nen pr ready --exclude-check -- the CLI flag repeats (zheref/nen#243)"
     const err: string[] = [];
     const io: Io = { out: (l): void => void out.push(l), err: (l): void => void err.push(l) };
     const code = await run(
-      ["pr", "ready", "5", "--gh-repo", "o/r", "--reviewers", "alice", "--token-env", TOKEN_ENV, "--json", ...argv],
+      // `--repo` names a fixture with no nen/gates.json, so `--reviewers` is the
+      // identity source (the process's own checkout's file is refused until
+      // zheref/nen#240; see ./command.test.ts's --json fold test).
+      ["pr", "ready", "5", "--gh-repo", "o/r", "--reviewers", "alice", "--token-env", TOKEN_ENV, "--json", "--repo", SHU_REPO, ...argv],
       io,
     );
     return { code, out, err };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { loadOwnGates } from "./fixtures/own_gates.js";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
 import { fileURLToPath } from "node:url";
 import {
@@ -547,7 +548,8 @@ describe("parseGateIdentities -- round_quorum", () => {
 describe("loadGateIdentities -- THIS repository's own nen/gates.json (ruling 2026-09-29)", () => {
   // vitest's cwd is the repository root (see ./fixtures/paths.ts), so this is
   // the file the maintainer's gate actually reads -- not a fixture of it.
-  const own = loadGateIdentities(process.cwd());
+  // TODO(zheref/nen#240): loadGateIdentities(process.cwd()) once #240 lands.
+  const own = loadOwnGates().identities;
 
   it("declares copilot and bugbot, copilot exempt, base set copilot, rounds-only approval", () => {
     expect(own.reviewers.map((r): string => r.name)).toEqual(["copilot", "bugbot"]);
@@ -816,15 +818,15 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
   it("names EVERY unread key in one refusal, and suggests the near miss", () => {
     const error = refusal({
       ...minimal,
-      round_policy: { minRound: 1, stallMinute: 5 },
+      round_policy: { stall_minutes: 1, stallMinute: 5 },
       reviewer_quorum: {},
     });
     expect(error.unread).toEqual([
-      { pointer: "round_policy", key: "minRound" },
+      { pointer: "round_policy", key: "stall_minutes" },
       { pointer: "round_policy", key: "stallMinute" },
       { pointer: "$", key: "reviewer_quorum" },
     ]);
-    expect(error.message).toContain("'minRound' -> 'minRounds'?");
+    expect(error.message).toContain("'stall_minutes' -> 'stallMinutes'?");
     expect(error.message).toContain("'stallMinute' -> 'stallMinutes'?");
     expect(error.message).toContain("Also at $: 'reviewer_quorum'");
   });
@@ -849,47 +851,71 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     ).not.toThrow();
   });
 
-  it("carries the named consumer-owned keys unread, whatever their shape (Hatsu's raw data)", () => {
-    const identities = parseGateIdentities(at, {
+  it("has NO consumer-owned carve-out: another tool's unprefixed data is refused (ruling of 2026-10-04)", () => {
+    const error = refusal({
       ...minimal,
       round_policy: { stallMinutes: 30, minRounds: 1, maxRounds: 3 },
       check_exclusions: [],
-      reviewer_fallback: {
-        chain: ["copilot", "cursor"],
-        terminal: "hanten",
-        exhausted: [{ reviewer: "copilot", reason: "r", ruled: "2026-09-29", until: "condition: x", extra: 1 }],
-      },
+      reviewer_fallback: { chain: ["copilot"] },
     });
-    expect(identities.stallMinutes).toBe(30);
-    // A consumer-owned key is a leaf to nen: its subtree is its owner's.
+    expect(error.unread).toEqual([
+      { pointer: "round_policy", key: "minRounds" },
+      { pointer: "round_policy", key: "maxRounds" },
+      { pointer: "$", key: "check_exclusions" },
+      { pointer: "$", key: "reviewer_fallback" },
+    ]);
+    // The same data under '$' keys is an annotation, and loads.
     expect(() =>
-      parseGateIdentities(at, { ...minimal, reviewer_fallback: "any shape at all" }),
+      parseGateIdentities(at, {
+        ...minimal,
+        round_policy: { stallMinutes: 30, $minRounds: 1 },
+        $reviewer_fallback: { chain: ["copilot"] },
+      }),
     ).not.toThrow();
   });
 
   it("the base-only exclusions reader applies the same sweep", () => {
     expect(() => parseCheckExclusions(at, { version: 1, round_quorom: {} })).toThrow(GatesUnknownKeyError);
-    expect(parseCheckExclusions(at, { version: 1, round_policy: { minRounds: 1 } })).toEqual([]);
+    expect(parseCheckExclusions(at, { version: 1, round_policy: { $note: 1 } })).toEqual([]);
   });
 
-  it("a file carrying only known keys is unchanged: both fixtures and this repository's own file load", () => {
+  it("a file carrying only known keys is unchanged: both fixtures load", () => {
     expect(loadGateIdentities(BANKAI_REPO).reviewers).toHaveLength(5);
     expect(loadGateIdentities(ALT_REPO).reviewers).toHaveLength(4);
-    // nen's own nen/gates.json declares Hatsu's minRounds/maxRounds as raw data.
-    const own = loadGateIdentities(fileURLToPath(new URL("../../", import.meta.url)));
-    expect(own.reviewers.map((r): string => r.name)).toEqual(["copilot", "bugbot"]);
-    expect(own.stallMinutes).toBe(30);
   });
 
-  it("the table: no nen key starts with '$', and every introducedIn is a release number", () => {
+  it("THIS repository's own nen/gates.json is REFUSED until zheref/nen#240 makes minRounds/maxRounds nen keys", () => {
+    // Pinned on purpose, not skipped: the maintainer's ruling of 2026-10-04
+    // ships #310 after #240, which adds the two keys to GATES_KNOWN_KEYS.
+    // When it does, this expectation fails and is flipped to "loads" -- the
+    // flip is the proof that #240 legalised exactly these two and nothing else.
+    const own = fileURLToPath(new URL("../../", import.meta.url));
+    let refused: unknown = null;
+    try {
+      loadGateIdentities(own);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(GatesUnknownKeyError);
+    expect((refused as GatesUnknownKeyError).unread).toEqual([
+      { pointer: "round_policy", key: "minRounds" },
+      { pointer: "round_policy", key: "maxRounds" },
+    ]);
+  });
+
+  it("the table: no nen key starts with '$', and every introducedIn is a release no later than the next minor (N8)", () => {
     const walk = (level: GatesKeyLevel, at: string): void => {
       for (const [key, spec] of Object.entries(level)) {
         expect(key.startsWith("$"), `${at}${key}`).toBe(false);
-        if ("consumer" in spec) {
-          expect(spec.consumer.length, `${at}${key}`).toBeGreaterThan(0);
-          continue;
-        }
         expect(spec.introducedIn, `${at}${key}`).toMatch(/^\d+\.\d+\.\d+$/);
+        // N8: no key is dated past the next minor of this build -- a key is
+        // tabled in the change that reads it, and ships in the next release.
+        const [major, minor] = spec.introducedIn.split(".").map(Number);
+        const [vMajor, vMinor] = VERSION.split(".").map(Number);
+        const rank = (a: number | undefined, b: number | undefined): number => (a ?? 0) * 10_000 + (b ?? 0);
+        expect(rank(major, minor), `${at}${key} ${spec.introducedIn}`).toBeLessThanOrEqual(
+          rank(vMajor, (vMinor ?? 0) + 1),
+        );
         if (spec.object !== undefined) walk(spec.object, `${at}${key}.`);
         if (spec.items !== undefined) walk(spec.items, `${at}${key}[].`);
       }

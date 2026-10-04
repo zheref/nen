@@ -162,9 +162,9 @@ row: delete it with git rm.
 A nen/gates.json key this build does not read is refused, never ignored
 (zheref/nen#310): the gates row fails naming every such key, the keys that
 object takes with the nen release that introduced each, and the exit is 2.
-'$'-prefixed keys are annotations and are allowed at every level; a few keys
-another tool reads (round_policy.minRounds and maxRounds, check_exclusions,
-reviewer_fallback) are carried unread by name.
+'$'-prefixed keys are annotations and are allowed at every level; nothing else
+outside the known set is, including another tool's own data, which belongs
+under a '$' key.
 
 Exit: 0 every required file loaded; 1 one did not; 2 nen/gates.json carries a
 key this build does not read.

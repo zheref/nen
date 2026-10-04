@@ -774,7 +774,9 @@ describe("nen schema check -- an unknown nen/gates.json key is exit 2 (zheref/ne
       expect(own.code).toBe(0);
       expect(fixture.code).toBe(0);
       const gatesRow = (lines: string[]): string | undefined => lines.find((line): boolean => line.includes("nen/gates.json"));
-      expect(gatesRow(own.out)).toBe(gatesRow(fixture.out));
+      // N6: the row exactly as main (7664c88) prints it for this fixture.
+      expect(gatesRow(fixture.out)).toBe("  ok    nen/gates.json  5 reviewer identities");
+      expect(gatesRow(own.out)).toBe("  ok    nen/gates.json  5 reviewer identities");
       const json = await capture(["schema", "check", "--repo", BANKAI_REPO, "--json"]);
       expect(JSON.parse(json.out.join("\n"))).toMatchObject({ ok: true, unknownKeys: [] });
     } finally {

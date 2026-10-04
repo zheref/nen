@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runFamily, type Io } from "../index.js";
-import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO, SHU_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
@@ -120,6 +120,12 @@ describe("nen pr ready (registry wiring onto ../verbs/pr_ready.ts)", () => {
   // before ../verbs/pr_ready.ts ever calls fetchPrState) -- see the house rule
   // against live GitHub reads from tests. `--gh-repo`/`--reviewers` resolve
   // the ref and identities from flags alone, with no repository schema read.
+  //
+  // `--repo` names a fixture that ships no nen/gates.json, so `--reviewers` is
+  // the identity source as this test intends. It used to inherit the process's
+  // own checkout, whose nen/gates.json is refused until zheref/nen#240 tables
+  // minRounds/maxRounds (zheref/nen#310) -- a fact about that file, not about
+  // the --json fold this test proves.
   it("--json is the SAME invocation whether given before or after 'pr' (mutation-proven fold)", async () => {
     const tokenEnv = "NEN_TEST_DEFINITELY_UNSET_TOKEN";
     delete process.env[tokenEnv];
@@ -127,14 +133,14 @@ describe("nen pr ready (registry wiring onto ../verbs/pr_ready.ts)", () => {
     const err: string[] = [];
     const io: Io = { out: (l): void => void out.push(l), err: (l): void => void err.push(l) };
     const before = await run(
-      ["--json", "pr", "ready", "5", "--gh-repo", "o/r", "--reviewers", "alice", "--token-env", tokenEnv],
+      ["--json", "pr", "ready", "5", "--gh-repo", "o/r", "--reviewers", "alice", "--token-env", tokenEnv, "--repo", SHU_REPO],
       io,
     );
     const outAfter: string[] = [];
     const errAfter: string[] = [];
     const ioAfter: Io = { out: (l): void => void outAfter.push(l), err: (l): void => void errAfter.push(l) };
     const after = await run(
-      ["pr", "ready", "5", "--gh-repo", "o/r", "--reviewers", "alice", "--token-env", tokenEnv, "--json"],
+      ["pr", "ready", "5", "--gh-repo", "o/r", "--reviewers", "alice", "--token-env", tokenEnv, "--json", "--repo", SHU_REPO],
       ioAfter,
     );
     expect(before).toBe(1); // unevaluated
@@ -482,9 +488,34 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         checkout,
         new ScriptedSeams([]),
       );
-      expect(result.code).toBe(1);
+      // Exit 2, as `pr ready` (zheref/nen#310, N2): a refused identity file is
+      // a usage error, never a blocker. It was 1 before.
+      expect(result.code).toBe(2);
       expect(result.err.join("\n")).toMatch(/no such file/);
       expect(result.err.join("\n")).toMatch(/nen\/gates\.json/);
+    });
+
+    it("a gates file carrying a key this build does not read is exit 2, before any gh call (zheref/nen#310)", async () => {
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      const gates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      gates["round_quorom"] = { any_of: ["itachi"], minimum: 1 };
+      const localGates = join(checkout, "gates.json");
+      writeFileSync(localGates, JSON.stringify(gates));
+      for (const argv of [
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", localGates],
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", localGates, "--json"],
+      ]) {
+        const result = await capture(argv, checkout, new ScriptedSeams([]));
+        expect(result.code).toBe(2);
+        expect(result.out).toEqual([]);
+        expect(result.err.join("\n")).toContain("carries 'round_quorom', which this build does not read");
+      }
+      // The same refusal through the checkout's own nen/gates.json (no --gates).
+      mkdirSync(join(checkout, "nen"));
+      writeFileSync(join(checkout, "nen", "gates.json"), JSON.stringify(gates));
+      const own = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9"], checkout, new ScriptedSeams([]));
+      expect(own.code).toBe(2);
+      expect(own.err.join("\n")).toContain("'round_quorom' -> 'round_quorum'?");
     });
 
     it("--gates redirects the taxonomy read: the alternate file's identities clear a PR the checkout alone could not even evaluate", async () => {

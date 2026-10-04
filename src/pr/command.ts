@@ -39,6 +39,7 @@ import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
+import { SchemaError } from "../schema/errors.js";
 import {
   BASE_GATES_PATH,
   decodeContentsPayload,
@@ -126,7 +127,9 @@ ready:
   parent. Every output states the judged head, and warns (naming both SHAs)
   when run inside a checkout of the PR's head branch whose tip differs.
   --require-head <sha> pins it. Exit 0 ready; 1 not-ready or unevaluated;
-  2 usage; 8 head-mismatch (--require-head did not match; no verdict).
+  2 usage or a refused gates file (unreadable, malformed, or carrying a key
+  this build does not read, zheref/nen#310); 8 head-mismatch (--require-head
+  did not match; no verdict).
   <ref>                       <CODE>#<N> via the target repo's product codes,
                               or a bare <N> with --gh-repo. The '#' may be
                               omitted (AB123 = AB#123); the shorthand reads the
@@ -211,6 +214,7 @@ next-blocker:
   The FIRST blocking condition, fixed order: conflict -> red required
   check -> owed reviewer round -> unresolved thread -> missing body
   requirement ('## How to verify', CON-17). Exits 1 when something blocks,
+  2 on usage or a refused gates file (as pr ready does, zheref/nen#310),
   0 when this check finds nothing -- the adversarial confirmation pass
   stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
   diff-shaped and not checked here; see ../pr/blocker.ts's header.
@@ -829,10 +833,20 @@ function blocker(context: CommandContext): number {
   // what it always was -- an override handed to nextBlocker() below, never an
   // identity SOURCE.
   const gatesFlag = context.args.values["gates"];
-  const identities =
-    gatesFlag === undefined
-      ? loadGateIdentities(root)
-      : resolveIdentities(root, gatesFlag, [], []).identities;
+  // A refused identity file -- unreadable, malformed, or carrying a key this
+  // build does not read (zheref/nen#310) -- is a usage error, exit 2, as it is
+  // in `pr ready`: nobody asked a question GitHub could answer, so no blocker
+  // is reported. Re-raised whole, so the path and pointer survive.
+  let identities;
+  try {
+    identities =
+      gatesFlag === undefined
+        ? loadGateIdentities(root)
+        : resolveIdentities(root, gatesFlag, [], []).identities;
+  } catch (error) {
+    if (error instanceof SchemaError) throw new VerbUsageError(error.message);
+    throw error;
+  }
   const snapshot = fetchPullRequest(context.seams, target, prNumber);
   // `checks.excluded` AT THE BASE (zheref/nen#249, Feitan F1), the same source
   // `pr ready` reads -- never the local file, which in a worktree is the pull

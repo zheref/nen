@@ -1392,18 +1392,19 @@ gate, and said nothing.
 | `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
 | `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
 
-Two kinds of key are allowed without being read:
+**Only `$`-prefixed keys are allowed without being read**, at every level —
+`$comment` and any other annotation. nen binds itself never to introduce a
+gate under a `$` key, so such a key can be neither a misspelling of one nor a
+newer one. There is **no consumer-owned carve-out** (maintainer ruling of
+2026-10-04): another tool's own data in this file goes under a `$` key, and an
+unprefixed key nen does not read is refused whoever reads it.
 
-- **Any key starting with `$`, at every level** — `$comment` and any other
-  annotation. nen binds itself never to introduce a gate under a `$` key, so
-  such a key can be neither a misspelling of one nor a newer one.
-- **Consumer-owned keys**, carried unread by name for the tool that reads
-  them: `round_policy.minRounds` and `round_policy.maxRounds` (Hatsu's
-  sharingan § 6; zheref/nen#240 would make nen read them),
-  `check_exclusions` (Hatsu, zheref/hatsu#104) and `reviewer_fallback`
-  (Hatsu's ruling of 2026-09-29; zheref/nen#275). nen does not validate their
-  values; their shape is their owner's. Another consumer's raw data takes a
-  `$` key, or is added to this list by a nen change.
+**And nen binds itself the other way** (Nobunaga's proposal, adopted with
+that ruling): *"nen never starts reading a key under a name a consumer already
+uses for its own data; when nen adopts a feature, it introduces the key in its
+own table with introducedIn"*. A consumer's existing values were written to
+its meaning, not nen's; reading them under nen's would change a verdict nobody
+re-declared.
 
 **The limit of a forward fix.** A binary can name the release of every key it
 knows, and no key released after it. So the refusal says "this is nen
@@ -1611,8 +1612,9 @@ Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
 Exit 2 on a malformed ref, an unresolvable code (unknown, or matching two registry keys
 that differ only by letter case), a malformed `--require-head`, a non-numeric
 `--exclude-run`, an ambiguous `--exclude-check` value (an opener never closed, with a
-comma after it), or no reviewer-identity source at all. That is a usage problem, never a
-verdict.
+comma after it), no reviewer-identity source at all, or a refused gates file — unreadable,
+malformed, or carrying a key this build does not read (zheref/nen#310). That is a usage
+problem, never a verdict.
 Exit **8** on `head-mismatch`: `--require-head` named a commit that is not GitHub's head, and no verdict was
 decided.
 
@@ -1771,6 +1773,12 @@ requirement (`## How to verify`, CON-17). It does not re-derive the CON-32
 predicates; it composes the ported, tested gate engine over one fetched
 snapshot. The changelog.d/ fragment half of CON-33(a) is diff-shaped and not
 checked here.
+
+| Exit | Meaning |
+|---|---|
+| `0` | nothing blocks, by this check |
+| `1` | something blocks (the blocker is printed) |
+| `2` | usage, or a refused gates file — unreadable, malformed, or carrying a key this build does not read (zheref/nen#310); no blocker is reported, as in `pr ready` |
 
 **`round_quorum`, and the head only (review of E7, finding H2).** When the
 `gates.json` declares a `round_quorum`, the owed-round step asks it too. It
@@ -5345,8 +5353,9 @@ nen schema check --repo <path> [--json]
 `nen/gates.json` carries a key this build does not read (zheref/nen#310). The gates row FAILs naming
 every such key, the keys its object takes with the release that introduced each, and the running
 version; `--json` adds `unknownKeys: ["nen/gates.json: <pointer>.<key>", ...]`, empty when every key is
-known. `$`-prefixed keys and the named consumer-owned keys are allowed — see
-[unknown keys under `pr ready`](#nen-pr-ready) for the table.
+known. The field is **additive**: every existing key and the row shape are unchanged, so a reader that
+ignores unknown fields reads the report as before. Only `$`-prefixed keys are allowed outside the known
+set — see [unknown keys under `pr ready`](#nen-pr-ready) for the table.
 
 **Four POINTER rows (zheref/nen#220, #227).** Four rows name a pointer
 rather than a file — `nen/workflow.json#reports.sections`,

@@ -452,46 +452,41 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 // it. Every release from this one on refuses instead of ignoring, which is the
 // forward half of the fix; a release before it cannot refuse at all.
 //
-// THREE KINDS OF KEY ARE ALLOWED, AND NOTHING ELSE:
+// TWO KINDS OF KEY ARE ALLOWED, AND NOTHING ELSE:
 //
 //   * nen's own keys, in the table below with `introducedIn`. A key is added
 //     here in the same change that makes nen read it, never earlier.
 //   * ANY key starting with `$`, at every level -- `$comment` and every other
-//     annotation (Hatsu's file carries `$check_exclusions`). The binding on
-//     nen that makes this safe: NEN NEVER INTRODUCES A GATE UNDER A `$` KEY,
-//     so a `$` key can be neither a misspelling of one nor a future one, and
-//     ignoring it can drop nothing. `gates.test.ts` pins that no table key
-//     starts with `$`.
-//   * CONSUMER-OWNED keys: raw data another tool reads out of this file, which
-//     nen carries without reading. Each is listed by name, with its owner and
-//     the reference that says so, and its value is never descended into or
-//     validated -- the shape is its owner's. Today these are Hatsu's four
-//     (`round_policy.minRounds`/`maxRounds`, read by sharingan § 6;
-//     `check_exclusions`, zheref/hatsu#104; `reviewer_fallback`, Hatsu's
-//     ROSTER ruling of 2026-09-29). A consumer-owned key nen later reads
-//     (zheref/nen#240 for the round caps, zheref/nen#275 for the fallback)
-//     moves into nen's own rows in that change. Chosen over requiring a `$`
-//     prefix because those keys are already deployed unprefixed and read by
-//     Hatsu's skills under those names; a rename there would be a breaking
-//     change in a second repository to admit a fix in this one.
+//     annotation. The binding on nen that makes this safe: NEN NEVER
+//     INTRODUCES A GATE UNDER A `$` KEY, so a `$` key can be neither a
+//     misspelling of one nor a future one, and ignoring it can drop nothing.
+//     `gates.test.ts` pins that no table key starts with `$`.
+//
+// THERE IS NO CONSUMER-OWNED CARVE-OUT (maintainer ruling of 2026-10-04,
+// "Retire 2, adopt 2"). A tool that keeps its own data in this file keeps it
+// under a `$` key. Unprefixed raw data is refused like any other unknown key:
+// a key nen does not read and a key a consumer reads are indistinguishable
+// from here, and only refusing both keeps the first from passing as the second.
+//
+// AND THE BINDING THAT KEEPS THE TABLE HONEST (proposed in review by
+// Nobunaga, adopted with the same ruling), verbatim: "nen never starts reading
+// a key under a name a consumer already uses for its own data; when nen adopts
+// a feature, it introduces the key in its own table with introducedIn". A
+// consumer's existing values were written to that consumer's meaning, not
+// nen's; reading them under nen's would change a verdict nobody re-declared.
 //
 // `introducedIn` for a key shipped after v0.19.0 is the next release's number,
 // 0.20.0 -- the release proposal corrects it if that release is cut under
 // another number.
 
-/** One key nen reads, or one it carries for a named consumer. */
-export type GatesKeySpec =
-  | {
-      readonly introducedIn: string;
-      /** The keys of this key's value when it is an object. */
-      readonly object?: GatesKeyLevel;
-      /** The keys of each element when this key's value is an array of objects. */
-      readonly items?: GatesKeyLevel;
-    }
-  | {
-      /** Who reads this key, and where that is stated. nen never does. */
-      readonly consumer: string;
-    };
+/** One key nen reads, and the release that introduced it. */
+export interface GatesKeySpec {
+  readonly introducedIn: string;
+  /** The keys of this key's value when it is an object. */
+  readonly object?: GatesKeyLevel;
+  /** The keys of each element when this key's value is an array of objects. */
+  readonly items?: GatesKeyLevel;
+}
 
 export type GatesKeyLevel = Readonly<Record<string, GatesKeySpec>>;
 
@@ -503,9 +498,8 @@ const pattern = (introducedIn: string): GatesKeySpec => ({
 });
 
 /**
- * Every key this build reads in `nen/gates.json`, and every consumer-owned key
- * it carries unread. `$`-prefixed keys are allowed at every level and appear
- * nowhere here. See the section header above.
+ * Every key this build reads in `nen/gates.json`. `$`-prefixed keys are
+ * allowed at every level and appear nowhere here. See the section header above.
  */
 export const GATES_KNOWN_KEYS: GatesKeyLevel = {
   version: { introducedIn: "0.1.0" },
@@ -544,8 +538,6 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
     introducedIn: "0.11.0",
     object: {
       stallMinutes: { introducedIn: "0.11.0" },
-      minRounds: { consumer: "a consumer's round floor; nen reads it once zheref/nen#240 lands" },
-      maxRounds: { consumer: "a consumer's round ceiling; nen reads it once zheref/nen#240 lands" },
     },
   },
   round_quorum: {
@@ -572,10 +564,6 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
         },
       },
     },
-  },
-  check_exclusions: { consumer: "a consumer's exclusion rows; nen's own form is checks.excluded (zheref/nen#249)" },
-  reviewer_fallback: {
-    consumer: "a consumer's reviewer fallback chain; nen reads it once zheref/nen#275 lands",
   },
 };
 
@@ -608,13 +596,9 @@ export class GatesUnknownKeyError extends SchemaError {
 }
 
 function describeLevel(level: GatesKeyLevel): string {
-  const nen: string[] = [];
-  const consumer: string[] = [];
-  for (const [key, spec] of Object.entries(level)) {
-    if ("consumer" in spec) consumer.push(key);
-    else nen.push(`${key} (nen >= ${spec.introducedIn})`);
-  }
-  return `${nen.join(", ")}${consumer.length === 0 ? "" : `; carried unread for a consumer: ${consumer.join(", ")}`}`;
+  return Object.entries(level)
+    .map(([key, spec]): string => `${key} (nen >= ${spec.introducedIn})`)
+    .join(", ");
 }
 
 /** Whether `a` is within two edits of `b`, ignoring case, `_` and `-`. */
@@ -654,7 +638,6 @@ function collectUnknownKeys(
       found.push({ pointer, key, level });
       continue;
     }
-    if ("consumer" in spec) continue;
     const here = pointer === "$" ? key : `${pointer}.${key}`;
     if (spec.object !== undefined && isRecord(value)) {
       collectUnknownKeys(here, value, spec.object, found);
@@ -670,7 +653,7 @@ function collectUnknownKeys(
 
 /**
  * Walk the file against GATES_KNOWN_KEYS and refuse it if any key is neither
- * nen's, consumer-owned, nor `$`-prefixed -- naming every such key, grouped by
+ * nen's nor `$`-prefixed -- naming every such key, grouped by
  * the object it sits in. It refuses KEYS only: a value of the wrong type is
  * left for that field's own reader to refuse by pointer, with the message it
  * already gives.

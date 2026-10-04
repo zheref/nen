@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { loadOwnGates } from "../schema/fixtures/own_gates.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import type { PrSnapshot } from "./fetch.js";
 import type { CheckRun, Review } from "../github/types.js";
 import { nextBlocker } from "./blocker.js";
@@ -153,7 +152,8 @@ describe("nextBlocker -- the FIRST condition, fixed order, and nothing past it",
 // while `nen pr ready` refused it on the quorum. These cases read the file the
 // maintainer's gate reads (vitest's cwd is the repository root).
 describe("nextBlocker -- round_quorum, on this repository's own nen/gates.json (finding H2)", () => {
-  const OWN: GateIdentities = loadGateIdentities(process.cwd());
+  // TODO(zheref/nen#240): loadGateIdentities(process.cwd()) once #240 lands.
+  const OWN: GateIdentities = loadOwnGates().identities;
   const green = {
     kind: "check_run" as const,
     name: "build",
@@ -220,7 +220,7 @@ describe("nextBlocker -- round_quorum, on this repository's own nen/gates.json (
   });
 
   it("#361: a non-member owed is still an owed-round, quorum met or not", () => {
-    const raw = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as {
+    const raw = loadOwnGates().raw as {
       reviewers: unknown[];
     } & Record<string, unknown>;
     const withOutsider = parseGateIdentities("/fixture/nen/gates.json", {

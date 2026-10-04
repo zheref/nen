@@ -1265,7 +1265,9 @@ const SHA_PREFIX = /^[0-9a-f]{7,40}$/i;
  *
  * 8 is `head-mismatch` (EXIT_HEAD_MISMATCH above): `--require-head` named a
  * commit that is not GitHub's head for the pull request, and no verdict was
- * decided. 2 is a usage error, as everywhere in this CLI.
+ * decided. 2 is a usage error, as everywhere in this CLI -- and a refused
+ * gates file (unreadable, malformed, or carrying a key this build does not
+ * read, zheref/nen#310) is one: no verdict is printed for it.
  */
 export async function prReady(
   input: PrReadyInput,
