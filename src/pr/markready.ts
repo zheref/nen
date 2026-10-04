@@ -28,8 +28,10 @@
 // THE HEAD PIN IS CHECKED BEFORE THE WRITE, NOT ENFORCED BY IT.
 // `markPullRequestReadyForReview` takes no expected-head argument, so a push
 // landing between the read and the write cannot be refused by GitHub. The read
-// back therefore reports the head it saw too, and a head that moved is said out
-// loud (`headMoved`) rather than silently folded into "done".
+// back therefore reports the head it saw too. With --require-head, a head that
+// moved means the pin no longer holds: the transition happened, but the verb
+// answers `marked-ready-head-moved` at exit 8, never "done". Without a pin,
+// `headMoved` is informational.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import { VerbUsageError } from "../cli/command.js";
@@ -55,6 +57,9 @@ export const EXIT_HEAD_MISMATCH = 8;
 
 /** git's shortest default abbreviation to a full SHA-1 -- `pr ready`'s own rule. */
 export const SHA_PREFIX = /^[0-9a-f]{7,40}$/i;
+
+/** A head GitHub answers is a full SHA-1; anything else is an unreadable answer. */
+const FULL_SHA = /^[0-9a-f]{40}$/i;
 
 const READ_QUERY =
   "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id number state isDraft headRefOid url}}}";
@@ -108,6 +113,10 @@ export interface DraftState {
 const NOT_A_PULL_REQUEST = /Could not resolve to a PullRequest/i;
 const NOT_A_REPOSITORY = /Could not resolve to a Repository/i;
 
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function graphqlErrors(parsed: unknown): string | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const errors = (parsed as { errors?: unknown }).errors;
@@ -153,15 +162,23 @@ export function readDraftState(seams: Seams, target: Target, prNumber: number): 
     if (NOT_A_PULL_REQUEST.test(errors) || NOT_A_REPOSITORY.test(errors)) refuseUnresolved(target, prNumber, errors);
     throw new Error(`reading ${target.slug}#${prNumber}: ${errors}`);
   }
-  const data = (parsed as { data?: { repository?: { pullRequest?: unknown } | null } }).data;
-  if (data?.repository === null || data?.repository === undefined) {
-    refuseUnresolved(target, prNumber, "Could not resolve to a Repository");
-  }
-  const pr = data.repository.pullRequest;
-  if (pr === null || pr === undefined) {
-    refuseUnresolved(target, prNumber, "Could not resolve to a PullRequest");
-  }
-  const record = pr as Record<string, unknown>;
+  // ONLY AN EXPLICIT null MEANS "DOES NOT RESOLVE" (exit 2). A missing key, or
+  // a value that is not an object, is an answer this verb cannot read -- a
+  // plain Error (exit 1) -- because reading a malformed 200 as "no such pull
+  // request" would tell the caller their number was wrong when GitHub said
+  // nothing of the kind.
+  const malformed = (what: string): Error =>
+    new Error(`reading ${target.slug}#${prNumber}: GitHub's answer has no readable ${what} -- an unreadable answer is never read as "does not resolve".`);
+  if (!isObject(parsed) || !("data" in parsed) || !isObject(parsed["data"])) throw malformed("data");
+  const data = parsed["data"];
+  if (!("repository" in data)) throw malformed("repository");
+  const repository = data["repository"];
+  if (repository === null) refuseUnresolved(target, prNumber, "Could not resolve to a Repository");
+  if (!isObject(repository) || !("pullRequest" in repository)) throw malformed("repository.pullRequest");
+  const pr = repository["pullRequest"];
+  if (pr === null) refuseUnresolved(target, prNumber, "Could not resolve to a PullRequest");
+  if (!isObject(pr)) throw malformed("repository.pullRequest");
+  const record = pr;
   const { id, number, state, isDraft, headRefOid, url } = record;
   if (
     typeof id !== "string" ||
@@ -170,10 +187,11 @@ export function readDraftState(seams: Seams, target: Target, prNumber: number): 
     (state !== "OPEN" && state !== "CLOSED" && state !== "MERGED") ||
     typeof isDraft !== "boolean" ||
     typeof headRefOid !== "string" ||
+    !FULL_SHA.test(headRefOid) ||
     typeof url !== "string"
   ) {
     throw new Error(
-      `reading ${target.slug}#${prNumber}: GitHub's answer is missing or mistypes one of id, number, state, isDraft, headRefOid, url -- an unreadable state is never read as "not a draft".`,
+      `reading ${target.slug}#${prNumber}: GitHub's answer is missing or mistypes one of id, number, state, isDraft, headRefOid (a 40-hex-digit SHA), url -- an unreadable state is never read as "not a draft".`,
     );
   }
   if (number !== prNumber) {
@@ -182,38 +200,48 @@ export function readDraftState(seams: Seams, target: Target, prNumber: number): 
   return { id, number, state, isDraft, headRefOid, url };
 }
 
-/** The mutation's outcome as `gh` reported it -- never itself proof of success. */
+/**
+ * The mutation's outcome as `gh` reported it -- never itself proof of success.
+ *
+ * THREE KINDS, BECAUSE ONLY ONE OF THEM IS KNOWN. `rejected` is GitHub's own
+ * answer -- a 200 carrying `errors` -- and the one case the verb can call a
+ * refusal without asking again. `uncertain` is everything else that is not a
+ * clean answer: a non-zero gh exit, a spawn failure, a body that is not JSON.
+ * Any of those can follow a write GitHub DID apply (a dropped connection after
+ * the server acted), so the verb reads back rather than guessing either way.
+ */
 export interface MarkReadyCall {
-  readonly ok: boolean;
+  readonly kind: "accepted" | "rejected" | "uncertain";
   readonly message: string;
 }
 
-/** Send the mutation. Returns `ok: false` with GitHub's words on any refusal. */
+/** Send the mutation. Never throws; the kind says what is known. */
 export function sendMarkReady(seams: Seams, target: Target, prNumber: number, pullRequestId: string): MarkReadyCall {
   const result = seams.run(GH, [...markReadyArgv(pullRequestId)]);
   if (result.spawnFailed) {
-    return { ok: false, message: `could not run gh to mark ${target.slug}#${prNumber} ready: ${result.stderr}` };
+    return { kind: "uncertain", message: `could not run gh to mark ${target.slug}#${prNumber} ready: ${result.stderr}` };
   }
   const stderr = outputLines(result.stderr).join(" ");
   if (result.code !== 0) {
-    return { ok: false, message: `GitHub refused to mark ${target.slug}#${prNumber} ready for review: ${stderr || `exit ${result.code}`}` };
+    return { kind: "uncertain", message: `gh exited ${result.code} marking ${target.slug}#${prNumber} ready: ${stderr || "(no stderr)"}` };
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout);
   } catch (error) {
-    return { ok: false, message: `marking ${target.slug}#${prNumber} ready: gh api graphql did not return JSON (${String(error)})` };
+    return { kind: "uncertain", message: `marking ${target.slug}#${prNumber} ready: gh api graphql did not return JSON (${String(error)})` };
   }
   // A 200 CARRYING `errors` IS A REFUSAL -- ./threads.ts's runGraphql says why.
   const errors = graphqlErrors(parsed);
   if (errors !== null) {
-    return { ok: false, message: `GitHub refused to mark ${target.slug}#${prNumber} ready for review: ${errors}` };
+    return { kind: "rejected", message: `GitHub refused to mark ${target.slug}#${prNumber} ready for review: ${errors}` };
   }
-  return { ok: true, message: `markPullRequestReadyForReview accepted for ${target.slug}#${prNumber}` };
+  return { kind: "accepted", message: `markPullRequestReadyForReview accepted for ${target.slug}#${prNumber}` };
 }
 
 export type MarkReadyStatus =
   | "marked-ready"
+  | "marked-ready-head-moved"
   | "already-ready"
   | "dry-run"
   | "not-open"
@@ -224,7 +252,11 @@ export type MarkReadyStatus =
 export interface MarkReadyReport {
   readonly contract: typeof MARK_READY_CONTRACT;
   readonly status: MarkReadyStatus;
-  /** True only on `marked-ready` and `already-ready`: the pull request is, read from GitHub, not a draft. */
+  /**
+   * True only on `marked-ready` and `already-ready`. `marked-ready-head-moved`
+   * is NOT ok: the pull request left draft, but the --require-head pin no
+   * longer holds.
+   */
   readonly ok: boolean;
   readonly target: string;
   readonly number: number;
@@ -264,6 +296,7 @@ export function exitCodeFor(status: MarkReadyStatus): number {
     case "not-open":
       return EXIT_NOT_OPEN;
     case "head-mismatch":
+    case "marked-ready-head-moved":
       return EXIT_HEAD_MISMATCH;
     case "refused":
     case "unconfirmed":
@@ -305,11 +338,9 @@ export function markReady(seams: Seams, input: MarkReadyInput): MarkReadyReport 
     };
   }
 
-  // An EMPTY head matches nothing: "could not confirm" is not "confirmed".
-  if (
-    requiredHead !== null &&
-    (before.headRefOid === "" || !before.headRefOid.toLowerCase().startsWith(requiredHead.toLowerCase()))
-  ) {
+  // readDraftState already refused any head that is not a full SHA, so an
+  // empty or unread head never reaches this comparison.
+  if (requiredHead !== null && !before.headRefOid.toLowerCase().startsWith(requiredHead.toLowerCase())) {
     return {
       ...base,
       ...nothingSent,
@@ -317,9 +348,7 @@ export function markReady(seams: Seams, input: MarkReadyInput): MarkReadyReport 
       ok: false,
       isDraft: before.isDraft,
       mutationArgv: null,
-      message: `--require-head ${requiredHead} does not match GitHub's head for ${target.slug}#${number}, which is ${
-        before.headRefOid === "" ? "(unread)" : before.headRefOid
-      }; nothing was sent. If a push is in flight, ask again once it registers.`,
+      message: `--require-head ${requiredHead} does not match GitHub's head for ${target.slug}#${number}, which is ${before.headRefOid}; nothing was sent. If a push is in flight, ask again once it registers.`,
     };
   }
 
@@ -349,7 +378,7 @@ export function markReady(seams: Seams, input: MarkReadyInput): MarkReadyReport 
   }
 
   const call = sendMarkReady(seams, target, number, before.id);
-  if (!call.ok) {
+  if (call.kind === "rejected") {
     return {
       ...base,
       ...nothingSent,
@@ -361,6 +390,10 @@ export function markReady(seams: Seams, input: MarkReadyInput): MarkReadyReport 
       message: `${call.message} -- the pull request is not reported ready.`,
     };
   }
+  // Accepted or uncertain alike, GitHub is READ BACK and only the read back
+  // decides. An uncertain call's own words ride along in the message, so a
+  // success after a gh failure is never reported as though gh had been clean.
+  const callNote = call.kind === "uncertain" ? ` (gh did not answer cleanly: ${call.message})` : "";
 
   let after: DraftState;
   try {
@@ -375,9 +408,9 @@ export function markReady(seams: Seams, input: MarkReadyInput): MarkReadyReport 
       ok: false,
       isDraft: null,
       mutationArgv: argv,
-      message: `the mutation was accepted, but the read back of ${target.slug}#${number} failed, so the transition is NOT confirmed: ${
+      message: `the read back of ${target.slug}#${number} failed, so the transition is NOT confirmed: ${
         error instanceof Error ? error.message : String(error)
-      }`,
+      }${callNote}`,
     };
   }
   const headMoved = after.headRefOid !== before.headRefOid;
@@ -389,10 +422,21 @@ export function markReady(seams: Seams, input: MarkReadyInput): MarkReadyReport 
       status: "unconfirmed",
       ok: false,
       isDraft: after.isDraft,
-      message:
+      message: `${
         after.id !== before.id
           ? `the read back of ${target.slug}#${number} answered a different object (${after.id}, not ${before.id}); the transition is NOT confirmed.`
-          : `the mutation was accepted, but GitHub still reads ${target.slug}#${number} as a draft; the transition is NOT confirmed.`,
+          : `GitHub still reads ${target.slug}#${number} as a draft; the transition is NOT confirmed.`
+      }${callNote}`,
+    };
+  }
+  if (requiredHead !== null && headMoved) {
+    return {
+      ...base,
+      ...readBack,
+      status: "marked-ready-head-moved",
+      ok: false,
+      isDraft: false,
+      message: `${target.slug}#${number} left draft, but its head moved from ${before.headRefOid} to ${after.headRefOid} during the transition, so --require-head ${requiredHead} no longer holds.${callNote}`,
     };
   }
   return {
@@ -403,6 +447,6 @@ export function markReady(seams: Seams, input: MarkReadyInput): MarkReadyReport 
     isDraft: false,
     message: `${target.slug}#${number} is ready for review (read back: not a draft)${
       headMoved ? ` -- NOTE: its head moved from ${before.headRefOid} to ${after.headRefOid} during the transition` : ""
-    }.`,
+    }.${callNote}`,
   };
 }

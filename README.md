@@ -432,8 +432,8 @@ they compose into. The families group roughly as:
 
 - **Readiness & pull requests** — `pr` (ready, staleness, body-check, fetch,
   next-blocker, cascade-main, retarget, request-reviews, edit-body,
-  mark-ready, threads, open), `gate`, `split`, `wc` (classify, squash, catch-up, publish, worktrees,
-  swap), `stage`
+  mark-ready, threads, open, merge), `gate`, `split`, `wc` (classify, squash,
+  catch-up, publish, worktrees, swap), `stage`
 - **Backlog & boards** — `backlog`, `board`, `epic`, `effort`, `loop`,
   `phase`, `usage` (the per-effort timing and spend ledgers),
   `warmup` (a *registry* stale-pin sweep — not `shu warmup`, below, which warms

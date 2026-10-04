@@ -1948,12 +1948,23 @@ printed). A pull request that is already not a draft answers `already-ready`
 at exit 0 with nothing sent. Otherwise the mutation is addressed by the node id
 that read produced — never re-resolved from the number — and GitHub is **read
 back**: `marked-ready` (exit 0) only when the same pull request now reads
-`isDraft: false`. A refused mutation (including a 200 carrying `errors`) is
-`refused`; a read back that fails, still reads draft, or answers a different
-object is `unconfirmed`; both exit 1 and neither is ever reported as ready.
-The mutation takes no expected head, so a push landing between the read and
-the write cannot be refused by GitHub — the read back reports it as
-`headMoved: true`, never hides it.
+`isDraft: false`. Only a 200 carrying `errors` is `refused`, without a read
+back. A non-zero `gh` exit, a spawn failure or a non-JSON answer can follow a
+write GitHub did apply, so it is read back like a clean answer, and its own
+words ride along in the message. A read back that fails, still reads draft, or
+answers a different object is `unconfirmed`. `refused` and `unconfirmed` both
+exit 1, and neither is ever reported as ready. The mutation takes no expected
+head, so a push landing between the read and the write cannot be refused by
+GitHub. With `--require-head`, a head that moved by the read back is
+`marked-ready-head-moved` at exit 8: the pull request left draft, but the pin
+no longer holds. Without `--require-head`, `headMoved: true` is only reported.
+
+Every family flag this verb does not read is refused at exit 2 before any
+`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on gh's own
+credential"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
+`--exclude-check` and the rest, and other verbs' `--base`,
+`--add-reviewers`, `--policy` and so on. Accepted silently, `--token-env`
+would read as "this ran on that token" when the write ran on gh's.
 
 **Usage**
 
@@ -1967,7 +1978,7 @@ nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-r
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository. | Missing or malformed exits 2. |
 | `--pr <n>` | yes | The pull request to move out of draft. | The strict reader [`pr edit-body`](#nen-pr-edit-body) uses — `1e3` or `0x0c` are refused (exit 2), because this verb WRITES. |
-| `--require-head <sha>` | no | Act ONLY if GitHub's head is this commit. | 7–40 hex digits, a prefix of GitHub's head, any case — `pr ready`'s own rule and exit code (8). Malformed exits 2. |
+| `--require-head <sha>` | no | Refuse before the write unless GitHub's head is this commit; the mutation itself is not pinned. | 7–40 hex digits, a prefix of GitHub's head, any case — `pr ready`'s own rule and exit code (8). Malformed exits 2. A head that moved by the read back is `marked-ready-head-moved`, exit 8. |
 | `--dry-run` | no | Run the certifying read and every refusal, then print the mutation argv and send nothing. | **Still reads GitHub** — a dry run whose refusals differed from the real run's would prove nothing. |
 
 **Output and exit codes** — the first human line is the status, the second the
@@ -1975,16 +1986,22 @@ message, then the url and the head. `--json`: `{ contract:
 "nen.pr.mark-ready/v0.1", status, ok, target, number, url, stateBefore,
 wasDraft, isDraft, requiredHead, headBefore, headAfter, headMoved, sent,
 dryRun, mutationArgv, message }` — `status` is one of `marked-ready`,
-`already-ready`, `dry-run`, `not-open`, `head-mismatch`, `refused`,
-`unconfirmed`; `isDraft` is `null` when a read back could not be read.
+`marked-ready-head-moved`, `already-ready`, `dry-run`, `not-open`,
+`head-mismatch`, `refused`, `unconfirmed`; `isDraft` is `null` when a read
+back could not be read. The human lines strip control characters from
+GitHub-controlled strings (the url, the node id, gh's stderr); `--json`
+carries the original bytes. A head GitHub answers that is not a full
+40-hex-digit SHA, or a 200 missing `data`, `repository` or `pullRequest`, is
+an unreadable answer at exit 1 — only an explicit `null` means "does not
+resolve" (exit 2).
 
 | Exit | Status | Meaning |
 |---|---|---|
 | 0 | `marked-ready` · `already-ready` · `dry-run` | read back not a draft; already not a draft, nothing sent; or a dry run |
-| 1 | `refused` · `unconfirmed` | GitHub refused the mutation; or the read back failed, still reads draft, or answered another object. Also a first read that failed outright (no document; the error is on stderr) |
-| 2 | — | usage: `--target`, `--pr`, `--require-head`, an unknown flag, or a number/repository that does not resolve |
+| 1 | `refused` · `unconfirmed` | GitHub answered the mutation with `errors`; or the read back failed, still reads draft, or answered another object. Also a first read that failed or answered something unreadable (no document; the error is on stderr) |
+| 2 | — | usage: `--target`, `--pr`, `--require-head`, a flag this verb does not read, or a number/repository that does not resolve |
 | 3 | `not-open` | the pull request is `CLOSED` or `MERGED`; nothing sent |
-| 8 | `head-mismatch` | `--require-head` is not GitHub's head; nothing sent |
+| 8 | `head-mismatch` · `marked-ready-head-moved` | `--require-head` is not GitHub's head, nothing sent; or the pull request left draft but its head moved from the pinned one by the read back |
 
 **Example**
 

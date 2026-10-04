@@ -58,6 +58,7 @@ import {
 } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
 import { OPEN_CONTRACT, openPullRequest } from "./open.js";
+import { plainLine } from "../cli/plain.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
 import {
   EXIT_FOR,
@@ -282,12 +283,18 @@ mark-ready:
   status already-ready, nothing sent. Otherwise the mutation is addressed by
   the node id that read produced, and GitHub is READ BACK: success (exit 0,
   marked-ready) only when the same pull request now reads isDraft false.
-  A refused mutation (exit 1, refused) or a failed or still-draft read back
-  (exit 1, unconfirmed) is never reported as ready.
+  A 200 carrying errors is refused (exit 1); a non-zero gh exit or a
+  non-JSON answer is read back like any other, and a failed or still-draft
+  read back is unconfirmed (exit 1) -- never reported as ready. Every flag
+  this verb does not read (pr ready's --token-env, --gh-repo, ... included)
+  is refused at exit 2 before any call.
   --require-head <sha>  7-40 hex digits, a prefix of GitHub's head, any case.
-                        Checked before the write; the mutation itself takes
-                        no head, so a push landing in between is reported by
-                        the read back as headMoved, never hidden.
+                        Refused before the write unless it matches; the
+                        mutation itself is not pinned, so a head that moved
+                        by the read back is marked-ready-head-moved: the
+                        pull request left draft, the pin no longer holds,
+                        exit 8. Without --require-head a moved head is only
+                        reported (headMoved), at exit 0.
   --dry-run             The read and every refusal above still run; prints
                         the exact 'gh api graphql' mutation argv and sends
                         nothing.
@@ -635,6 +642,7 @@ export const prCommand: Command = {
     if (subcommand !== "request-reviews" && context.args.values["add-bots"] !== undefined) {
       throw new VerbUsageError("--add-bots is only read by 'pr request-reviews'.");
     }
+    if (subcommand === "mark-ready") refuseFlagsMarkReadyDoesNotRead(context);
     switch (subcommand) {
       case "ready":
         return ready(context);
@@ -1127,6 +1135,41 @@ function editBody(context: CommandContext): number {
 }
 
 // ── mark-ready (zheref/nen#345) ─────────────────────────────────────────────
+
+/** The only flags `pr mark-ready` reads (the global --json/--help/--repo aside). */
+const MARK_READY_VALUES: ReadonlySet<string> = new Set(["target", "pr", "require-head", "repo"]);
+const MARK_READY_BOOLEANS: ReadonlySet<string> = new Set(["dry-run", "json", "help"]);
+const PR_READY_ONLY: ReadonlySet<string> = new Set<string>([
+  ...PR_READY_FLAGS.values,
+  ...PR_READY_FLAGS.lists,
+  ...PR_READY_FLAGS.booleans,
+]);
+
+/**
+ * Refuse, at exit 2 and before any `gh` call, every family flag mark-ready
+ * does not read (Feitan F1, Nobunaga N1) -- the same local-refusal shape
+ * `--thread` and `--add-bots` have above, generalised because this verb sits
+ * in a family whose flag set is mostly OTHER verbs'. The sharpest case is
+ * `--token-env`: silently accepted, it reads as "this ran on that token"
+ * when the write in fact ran on whatever gh is authenticated as.
+ */
+function refuseFlagsMarkReadyDoesNotRead(context: CommandContext): void {
+  const given = [
+    ...Object.keys(context.args.values).filter((flag): boolean => !MARK_READY_VALUES.has(flag)),
+    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
+    ...[...context.args.booleans].filter((flag): boolean => !MARK_READY_BOOLEANS.has(flag)),
+  ];
+  const first = given[0];
+  if (first === undefined) return;
+  if (first === "token-env") {
+    throw new VerbUsageError("--token-env is only read by 'pr ready'; mark-ready runs on gh's own credential.");
+  }
+  if (PR_READY_ONLY.has(first)) {
+    throw new VerbUsageError(`--${first} is only read by 'pr ready'; 'pr mark-ready' reads --target, --pr, --require-head and --dry-run.`);
+  }
+  throw new VerbUsageError(`--${first} is not read by 'pr mark-ready'; it reads --target, --pr, --require-head and --dry-run.`);
+}
+
 //
 // The verb's logic lives in ./markready.ts behind the seam; this adapts flags
 // and renders. `--pr` takes the STRICT reader, because this verb WRITES: a
@@ -1144,12 +1187,15 @@ function doMarkReady(context: CommandContext): number {
     requiredHead: rawHead ?? null,
     dryRun: context.args.booleans.has("dry-run"),
   });
+  // EVERY HUMAN LINE THROUGH plainLine (Feitan F3): the url, the node id (in
+  // the argv and the different-object message) and gh's own stderr are
+  // GitHub-controlled strings. --json carries the original bytes.
   const lines = [report.status, report.message];
   if (report.mutationArgv !== null && report.dryRun) lines.push(`would run: ${printableArgv(report.mutationArgv.slice(1))}`);
   lines.push(`  ${report.url}`);
   lines.push(`  head: ${report.headBefore}${report.headAfter !== null && report.headMoved ? ` -> ${report.headAfter}` : ""}`);
   if (report.requiredHead !== null) lines.push(`  --require-head ${report.requiredHead}`);
-  emit(context.io, context.json, report, lines);
+  emit(context.io, context.json, report, lines.map(plainLine));
   return exitCodeFor(report.status);
 }
 

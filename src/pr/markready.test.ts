@@ -118,12 +118,26 @@ describe("markReady -- the transition", () => {
     expect(report.status).toBe("marked-ready");
   });
 
-  it("says out loud when the head moved between the read and the read back", () => {
+  it("with --require-head, a head that moved by the read back is marked-ready-head-moved: not ok, exit 8", () => {
     const s = seams([read(), WRITE_OK, read({ isDraft: false, headRefOid: OTHER_HEAD })]);
     const report = markReady(s, { ...INPUT, requiredHead: HEAD });
+    expect(report.status).toBe("marked-ready-head-moved");
+    expect(report.ok).toBe(false);
+    expect(report.isDraft).toBe(false);
+    expect(report.headMoved).toBe(true);
+    expect(report.headAfter).toBe(OTHER_HEAD);
+    expect(report.message).toMatch(/no longer holds/);
+    expect(exitCodeFor(report.status)).toBe(EXIT_HEAD_MISMATCH);
+  });
+
+  it("without --require-head, a moved head is informational: marked-ready at exit 0", () => {
+    const s = seams([read(), WRITE_OK, read({ isDraft: false, headRefOid: OTHER_HEAD })]);
+    const report = markReady(s, INPUT);
     expect(report.status).toBe("marked-ready");
+    expect(report.ok).toBe(true);
     expect(report.headMoved).toBe(true);
     expect(report.message).toMatch(/head moved/);
+    expect(exitCodeFor(report.status)).toBe(0);
   });
 });
 
@@ -157,9 +171,16 @@ describe("markReady -- refusals before any write", () => {
     expect(s.calls.length).toBe(1);
   });
 
-  it("treats an empty GitHub head as a mismatch, never a match", () => {
-    const report = markReady(seams([read({ headRefOid: "" })]), { ...INPUT, requiredHead: HEAD });
-    expect(report.status).toBe("head-mismatch");
+  it.each(["", "0123456", `${HEAD}0`, "z".repeat(40)])("fails (exit 1, not a mismatch) on a GitHub head that is not a full SHA: '%s'", (head) => {
+    let thrown: unknown;
+    try {
+      markReady(seams([read({ headRefOid: head })]), { ...INPUT, requiredHead: HEAD });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(VerbUsageError);
+    expect(String(thrown)).toMatch(/headRefOid/);
   });
 
   it.each(["CLOSED", "MERGED"])("refuses a %s pull request at exit 3, sending nothing", (state) => {
@@ -229,6 +250,24 @@ describe("markReady -- refusals before any write", () => {
     expect(() => readDraftState(s, TARGET, 42)).toThrow(/isDraft/);
   });
 
+  it.each([
+    ["{}", "{}"],
+    ["no repository key", JSON.stringify({ data: {} })],
+    ["no pullRequest key", JSON.stringify({ data: { repository: {} } })],
+    ["data not an object", JSON.stringify({ data: [] })],
+    ["pullRequest not an object", JSON.stringify({ data: { repository: { pullRequest: 7 } } })],
+  ])("reads a malformed 200 (%s) as an unreadable answer (exit 1), never as 'does not resolve'", (_label, stdout) => {
+    let thrown: unknown;
+    try {
+      readDraftState(seams([{ match: READ_KEY, result: { code: 0, stdout } }]), TARGET, 42);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).not.toBeInstanceOf(VerbUsageError);
+    expect(String(thrown)).toMatch(/no readable/);
+  });
+
   it("fails on non-JSON and on an answer about a different number", () => {
     expect(() => readDraftState(seams([{ match: READ_KEY, result: { code: 0, stdout: "<html>" } }]), TARGET, 42)).toThrow(/JSON/);
     expect(() => readDraftState(seams([read({ number: 43 })]), TARGET, 42)).toThrow(/#43/);
@@ -236,8 +275,8 @@ describe("markReady -- refusals before any write", () => {
 });
 
 describe("markReady -- API rejection and failed read back stay non-success", () => {
-  it("reports refused (exit 1) when gh exits non-zero, and does not read back", () => {
-    const s = seams([read(), { match: WRITE_KEY, result: { code: 1, stderr: "GraphQL: Resource not accessible by integration" } }]);
+  it("reports refused (exit 1) when GitHub answers 200 with an errors array, and does not read back", () => {
+    const s = seams([read(), { match: WRITE_KEY, result: { code: 0, stdout: JSON.stringify({ data: null, errors: [{ message: "Resource not accessible by integration" }] }) } }]);
     const report = markReady(s, INPUT);
     expect(report.status).toBe("refused");
     expect(report.ok).toBe(false);
@@ -247,16 +286,32 @@ describe("markReady -- API rejection and failed read back stay non-success", () 
     expect(s.calls.length).toBe(2);
   });
 
-  it("reports refused when GitHub answers 200 with an errors array", () => {
-    const s = seams([read(), { match: WRITE_KEY, result: { code: 0, stdout: JSON.stringify({ data: null, errors: [{ message: "Pull request is not a draft" }] }) } }]);
-    expect(markReady(s, INPUT).status).toBe("refused");
+  it("reads back after a non-zero gh exit, and reports unconfirmed when it still reads draft", () => {
+    const s = seams([read(), { match: WRITE_KEY, result: { code: 1, stderr: "HTTP 502: Bad Gateway" } }, read()]);
+    const report = markReady(s, INPUT);
+    expect(report.status).toBe("unconfirmed");
+    expect(report.ok).toBe(false);
+    expect(report.message).toMatch(/502/);
+    expect(exitCodeFor(report.status)).toBe(1);
+    expect(s.calls.length).toBe(3);
   });
 
-  it("reports refused on a spawn failure and on a non-JSON mutation answer", () => {
-    expect(markReady(seams([read(), { match: WRITE_KEY, result: { code: -1, stderr: "spawn gh ENOENT", spawnFailed: true } }]), INPUT).status).toBe(
-      "refused",
+  it("reads back after a non-zero gh exit, and reports marked-ready when GitHub did apply it -- naming gh's failure", () => {
+    const s = seams([read(), { match: WRITE_KEY, result: { code: 1, stderr: "connection reset" } }, read({ isDraft: false })]);
+    const report = markReady(s, INPUT);
+    expect(report.status).toBe("marked-ready");
+    expect(report.ok).toBe(true);
+    expect(report.message).toMatch(/did not answer cleanly.*connection reset/);
+  });
+
+  it("reads back after a non-JSON mutation answer, and after a spawn failure", () => {
+    expect(markReady(seams([read(), { match: WRITE_KEY, result: { code: 0, stdout: "nope" } }, read({ isDraft: false })]), INPUT).status).toBe(
+      "marked-ready",
     );
-    expect(markReady(seams([read(), { match: WRITE_KEY, result: { code: 0, stdout: "nope" } }]), INPUT).status).toBe("refused");
+    const spawn = seams([read(), { match: WRITE_KEY, result: { code: -1, stderr: "spawn gh ENOENT", spawnFailed: true } }, read()]);
+    const report = markReady(spawn, INPUT);
+    expect(report.status).toBe("unconfirmed");
+    expect(report.message).toMatch(/ENOENT/);
   });
 
   it("reports unconfirmed (exit 1) when the read back still says draft", () => {

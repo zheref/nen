@@ -1468,6 +1468,55 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     expect((await capture(base, null, seams)).code).toBe(2);
   });
 
+  it("refuses --token-env at exit 2 with zero gh calls, naming gh's own credential", async () => {
+    const seams = new ScriptedSeams([]);
+    const result = await capture([...base, "--token-env", "MY_TOKEN"], null, seams);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--token-env is only read by 'pr ready'; mark-ready runs on gh's own credential");
+    expect(seams.calls.length).toBe(0);
+  });
+
+  it.each([
+    [["--gh-repo", "acme/widgets"], /--gh-repo is only read by 'pr ready'/],
+    [["--reviewers", "a"], /--reviewers is only read by 'pr ready'/],
+    [["--gates", "g.json"], /--gates is only read by 'pr ready'/],
+    [["--exclude-check", "ci"], /--exclude-check is only read by 'pr ready'/],
+    [["--explain"], /--explain is only read by 'pr ready'/],
+    [["--base", "main"], /--base is not read by 'pr mark-ready'/],
+    [["--add-reviewers", "a"], /--add-reviewers is not read by 'pr mark-ready'/],
+    [["--policy", "strict"], /--policy is not read by 'pr mark-ready'/],
+    [["--delivery-pr"], /--delivery-pr is not read by 'pr mark-ready'/],
+  ])("refuses a flag it does not read (%j) at exit 2 with zero gh calls", async (extra, message) => {
+    const seams = new ScriptedSeams([]);
+    const result = await capture([...base, ...extra], null, seams);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(message);
+    expect(seams.calls.length).toBe(0);
+  });
+
+  it("still accepts every flag it reads, together", async () => {
+    const seams = new ScriptedSeams([readCall()]);
+    const result = await capture([...base, "--require-head", MR_HEAD, "--dry-run", "--json"], null, seams);
+    expect(result.code).toBe(0);
+  });
+
+  it("exits 8 marked-ready-head-moved when the pinned head moved by the read back", async () => {
+    const other = "fedcba9876543210fedcba9876543210fedcba98";
+    const seams = new ScriptedSeams([readCall(), writeOk, readCall({ isDraft: false, headRefOid: other })]);
+    const result = await capture([...base, "--require-head", MR_HEAD], null, seams);
+    expect(result.code).toBe(8);
+    expect(result.out[0]).toBe("marked-ready-head-moved");
+  });
+
+  it("strips control characters from GitHub-controlled strings in the human rendering, never in --json", async () => {
+    const hostile = "https://github.com/acme/widgets/pull/42\u001b[2J\r";
+    const human = await capture(base, null, new ScriptedSeams([readCall({ isDraft: false, url: hostile })]));
+    for (const line of human.out) expect(line).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/);
+    expect(human.out.join("\n")).toContain("https://github.com/acme/widgets/pull/42[2J");
+    const json = await capture([...base, "--json"], null, new ScriptedSeams([readCall({ isDraft: false, url: hostile })]));
+    expect((JSON.parse(json.out.join("\n")) as { url: string }).url).toBe(hostile);
+  });
+
   it("is the only new reader of --dry-run: 'pr retarget --dry-run' is still refused", async () => {
     const result = await capture(["pr", "retarget", "--target", "acme/widgets", "--pr", "1", "--base", "main", "--dry-run"], null);
     expect(result.code).toBe(2);
