@@ -25,7 +25,8 @@ import { requireSubcommand, VerbUsageError, type Command, type CommandContext } 
 import type { CommandResult } from "../seam/exec.js";
 import { watchUntil, watchUntilAsync, type WatchResult } from "./until.js";
 import { observePr, parsePrPredicate, type PrPredicate } from "./pr.js";
-import { defaultDeps, PR_READY_FLAGS, readReady, type PrReadyDeps, type ReadyRead } from "../verbs/pr_ready.js";
+import { defaultDeps, PR_READY_FLAGS, readReady, renderDeclaredExclusions, type PrReadyDeps, type ReadyRead, type ReadyReport } from "../verbs/pr_ready.js";
+import { plainLine } from "../cli/plain.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { PROGRAM } from "../version.js";
@@ -107,26 +108,51 @@ usage:
                                     exclusions CON-32(a) applies) has a
                                     verdict -- RED INCLUDED; an empty rollup is
                                     never settled
+                    checks-settled  every REPORTED latest check (after the
+                                    same exclusions CON-32(a) applies) has a
+                                    verdict -- RED INCLUDED; an empty rollup is
+                                    never settled. A check that registers only
+                                    AFTER the others settle is not waited for:
+                                    the rollup cannot name what has not
+                                    reported yet
                     review-posted   a CONFIGURED reviewer's round is posted at
                                     the current head -- the gate's own
                                     reviewer set and identities: a review by
-                                    its login, or its definitive round-check
-                                    run (as CON-32(b) reads it). A review from
-                                    anyone outside the set wakes nothing; a
-                                    pending re-request means not posted yet
+                                    its login (on the --reviewers path the
+                                    WHOLE login, never a substring), its
+                                    definitive round-check run, or on a CON-40
+                                    delivery PR its holistic-pass review plus
+                                    a green review check at head (as CON-32(b)
+                                    reads it). A review from anyone outside
+                                    the set wakes nothing; a pending
+                                    re-request means not posted yet
                     ready           'pr ready' would answer ready
                     settled-and-reviewed
                                     checks-settled AND (review-posted OR ready)
+                  ONLY 'ready' IS A MERGE SIGNAL. checks-settled, review-posted
+                  and settled-and-reviewed are WAKES: the caller looks again,
+                  and asks 'nen pr ready' (or watches --until ready) before
+                  calling anything ready. --json's 'readyAtWake' says what the
+                  final read's verdict was, and is not a go either way.
                   A read that could not see -- an unevaluated verdict, an
-                  unreadable rollup or reviews array the predicate needs, a
-                  --require-head GitHub's head does not match -- is an
-                  OBSERVATION ERROR (three in a row stop the watch), never a
-                  "not yet". A usage refusal from the read (a malformed ref, no
-                  identity source) stops the watch at exit 2 on the first poll.
+                  unreadable rollup or reviews array the predicate needs (for
+                  'ready', either one on a not-ready read), a --require-head
+                  GitHub's head does not match -- is an OBSERVATION ERROR
+                  (three in a row stop the watch), never a "not yet". A usage
+                  refusal from the read (a malformed ref, no identity source)
+                  stops the watch at exit 2 on the first poll. The read's
+                  warnings, notes and declared exclusions go to stderr on the
+                  first poll and again whenever they change.
+                  PACING: --interval-ms is at least 30000 here (lower refuses,
+                  exit 2) -- every poll is several GitHub API calls; a
+                  monitor.pollSeconds under 30 is raised to 30 and says so.
+                  With no --max-iterations and no monitor.maxCycles the watch
+                  is bounded at 2 hours' worth of polls, never unbounded.
                   This wakes the caller; it rings nothing -- notification rungs
                   stay the host's.
-                  --json adds 'until', 'pr' and 'last' (the final read's
-                  verdict, gateLine, judgedHead and settlement: checksSettled,
+                  --json adds 'until', 'pr', 'readyAtWake' and 'last' (the
+                  final read's verdict, gateLine, judgedHead, warnings, notes,
+                  declaredExclusions and settlement: checksSettled,
                   pendingChecks, roundsAtHead [{reviewer, via}]) to the result.
 
 Exits 0 when the condition became true, 1 on an error streak or a bound
@@ -231,10 +257,16 @@ function runCommand(context: CommandContext): number {
   return result.outcome === "condition-true" ? 0 : 1;
 }
 
+/** The `--pr` form's pacing floor: every poll is several GitHub API calls (F4 on zheref/nen#264). */
+export const PR_MIN_INTERVAL_MS = 30_000;
+/** The `--pr` form's bound when neither a flag nor a monitor policy states one (N6). */
+export const PR_DEFAULT_BOUND_MS = 2 * 60 * 60 * 1000;
+
 /**
  * `--pr <ref> --until <predicate>` (zheref/nen#264). One `readReady` per
  * observation -- the same function `nen pr ready` prints -- decided by
- * ./pr.ts, paced and bounded exactly as the `--command` form is.
+ * ./pr.ts, paced and bounded as the `--command` form is, with a floor on the
+ * pace and a default bound of its own.
  */
 async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> {
   const typedRef = context.args.values["pr"] ?? "";
@@ -247,6 +279,21 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
 
   const pace = readPace(context);
   if (pace === null) return 1;
+  let intervalMs = pace.intervalMs;
+  if (intervalMs < PR_MIN_INTERVAL_MS) {
+    if (pace.intervalSource === "flag") {
+      throw new VerbUsageError(
+        `--interval-ms ${intervalMs} is under the --pr floor of ${PR_MIN_INTERVAL_MS} ms: every poll is several GitHub API calls.`,
+      );
+    }
+    context.io.err(
+      `${PROGRAM} watch until: ${pace.intervalSource === "policy" ? "nen/workflow.json's monitor.pollSeconds" : "the default interval"} (${intervalMs} ms) is under the --pr floor; polling every ${PR_MIN_INTERVAL_MS} ms instead.`,
+    );
+    intervalMs = PR_MIN_INTERVAL_MS;
+  }
+  // NEVER UNBOUNDED (N6): a flag or the policy states the bound; otherwise two
+  // hours' worth of polls at this pace.
+  const maxIterations = pace.maxIterations ?? Math.max(1, Math.ceil(PR_DEFAULT_BOUND_MS / intervalMs));
 
   // `pr ready`'s own input, built from the SAME parsed flags -- the values
   // and repeatable lists it reads pass through untouched, and nothing else
@@ -261,37 +308,58 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   // The final read, for --json's `last`. A box rather than a bare `let`, so
   // the narrowing after the loop is not lost to the closure that assigns it.
   const last: { read: ReadyRead | null } = { read: null };
+  // What the read said beside its verdict -- warnings, notes, declared
+  // exclusions -- printed on the first poll and whenever it changes (F3).
+  let printedContext: string | null = null;
   const result = await watchUntilAsync({
     observe: async () => {
       last.read = await readReady(typedRef, input, deps.prReady);
+      if (last.read.kind === "verdict") {
+        const lines = contextLines(last.read.report);
+        const key = JSON.stringify(lines);
+        if (key !== printedContext) {
+          printedContext = key;
+          for (const line of lines) context.io.err(plainLine(line));
+        }
+      }
       return observePr(last.read, predicate);
     },
-    intervalMs: pace.intervalMs,
-    maxIterations: pace.maxIterations,
+    intervalMs,
+    maxIterations,
     ...(deps.sleep === undefined ? {} : { sleep: deps.sleep }),
     onIteration: context.json
       ? undefined
       : (iteration): void => {
-          context.io.out(`[${iteration.iteration}] ${iteration.message}`);
+          // GitHub-sourced text (check names, the gate line, a head SHA) is
+          // plain at the human seam; --json keeps the bytes (F2).
+          context.io.out(plainLine(`[${iteration.iteration}] ${iteration.message}`));
         },
   });
 
   if (context.json) {
     const { read } = last;
+    const verdict = read !== null && read.kind === "verdict" ? read : null;
     context.io.out(
       JSON.stringify(
         {
           ...result,
           until: predicate,
           pr: typedRef,
+          // What the final read's verdict was when the watch stopped -- NOT a
+          // merge signal on its own (F5): only `--until ready` or a fresh
+          // `nen pr ready` is. `null` when that read decided no verdict.
+          readyAtWake: verdict === null || verdict.report.verdict === "unevaluated" ? null : verdict.report.verdict === "ready",
           last:
-            read === null || read.kind !== "verdict"
+            verdict === null
               ? null
               : {
-                  verdict: read.report.verdict,
-                  gateLine: read.report.gateLine,
-                  judgedHead: read.report.judgedHead,
-                  settlement: read.settlement,
+                  verdict: verdict.report.verdict,
+                  gateLine: verdict.report.gateLine,
+                  judgedHead: verdict.report.judgedHead,
+                  warnings: verdict.report.meta.warnings,
+                  notes: verdict.report.meta.notes,
+                  declaredExclusions: verdict.report.meta.declaredExclusions,
+                  settlement: verdict.settlement,
                 },
         },
         null,
@@ -302,6 +370,15 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
     printOutcome(context, result);
   }
   return result.outcome === "condition-true" ? 0 : 1;
+}
+
+/** The read's non-verdict context, as `pr ready`'s own renderers word it. */
+function contextLines(report: ReadyReport): string[] {
+  return [
+    ...report.meta.warnings.map((warning): string => `${PROGRAM} watch until: warning: ${warning}`),
+    ...report.meta.notes.map((note): string => `${PROGRAM} watch until: note: ${note}`),
+    ...renderDeclaredExclusions(report).map((line): string => `${PROGRAM} watch until:${line}`),
+  ];
 }
 
 /** Refuse, at exit 2, a flag that belongs to the OTHER observation form. */
@@ -319,7 +396,9 @@ function refuseForeign(context: CommandContext, names: readonly string[], form: 
  * target's declared `monitor` policy, else 5000 ms and unbounded. `null` means
  * a declared `maxCycles: 0` -- the watch never runs, already reported (exit 1).
  */
-function readPace(context: CommandContext): { intervalMs: number; maxIterations: number | undefined } | null {
+function readPace(
+  context: CommandContext,
+): { intervalMs: number; intervalSource: "flag" | "policy" | "default"; maxIterations: number | undefined } | null {
   // THE TARGET'S OWN `monitor` POLICY IS THE DEFAULT PACE (zheref/nen#216).
   // `nen/workflow.json` declares `monitor.pollSeconds` and `monitor.maxCycles`,
   // and through v0.10.0 this verb parsed neither: the file said 300 s and
@@ -347,7 +426,8 @@ function readPace(context: CommandContext): { intervalMs: number; maxIterations:
     return null;
   }
 
-  return { intervalMs, maxIterations };
+  const intervalSource = intervalRaw !== undefined ? "flag" : monitor !== null && monitor.pollSeconds !== null ? "policy" : "default";
+  return { intervalMs, intervalSource, maxIterations };
 }
 
 /**

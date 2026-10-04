@@ -20,12 +20,17 @@
 //
 // WHAT AN OBSERVATION ERROR IS HERE. A read that could not see -- an
 // `unevaluated` verdict (no token, GitHub unreachable), a rollup or a reviews
-// array that could not be parsed, a `--require-head` that does not match
+// array the predicate needs that could not be parsed (for `ready`, either one
+// on a not-ready read), a `--require-head` that does not match
 // GitHub's head -- is an ERROR, counted toward the three-error streak, never a
 // "not yet": absence is never a pass, and a watch that cannot see is not
 // watching. A USAGE refusal (a malformed ref, a missing identity source) is
 // deterministic and would refuse on every poll, so it aborts the watch at
 // exit 2 on the first observation instead of being polled three times.
+//
+// A WAKE IS NOT A GO. Only `ready` -- the gate's own verdict -- is a merge
+// signal; the other three tell the caller to look again, and the caller asks
+// `nen pr ready` before calling anything ready (F5 on zheref/nen#264).
 //
 // SCOPE, BY THE MAINTAINER'S RULING OF 2026-10-03. This file widens what a
 // watch can wake ON; it does nothing about what happens after. The issue's
@@ -71,12 +76,16 @@ export function observePr(read: ReadyRead, predicate: PrPredicate): WatchObserva
   const rounds = settlement.roundsAtHead;
   const reviewPosted = rounds !== null && rounds.length > 0;
 
-  // Which unreadable fact this predicate actually needs. `ready` reads none of
-  // them -- the verdict already turned on both (an unreadable rollup or reviews
-  // array is a not-ready verdict with the row saying so, never a ready one).
+  // Which unreadable fact this predicate actually needs. `ready` needs no fact beside the verdict when the verdict IS ready; on a
+  // not-ready read with either fact unreadable it is as blind as the others
+  // (N2 on zheref/nen#264), so it counts toward the streak.
   const blind: string | null =
     predicate === "ready"
-      ? null
+      ? !ready && checks === null
+        ? "the check rollup could not be read"
+        : !ready && rounds === null
+          ? "the reviewer rounds at head could not be read"
+          : null
       : (predicate === "checks-settled" || predicate === "settled-and-reviewed") && checks === null
         ? "the check rollup could not be read"
         : predicate === "review-posted" && rounds === null

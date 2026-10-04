@@ -88,7 +88,7 @@ import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state
 import { assertRepoRoot } from "../repo/root.js";
 import { SchemaError } from "../schema/errors.js";
 import { GIT, spawnRunner } from "../seam/exec.js";
-import { safePattern } from "../schema/pattern.js";
+import { exactLoginPattern } from "../schema/pattern.js";
 import {
   parseGateIdentities,
   type GateIdentities,
@@ -815,7 +815,8 @@ export function identitiesFromFlags(
 ): GateIdentities {
   const list: ReviewerIdentity[] = reviewers.map((name): ReviewerIdentity => ({
     name,
-    loginPattern: safePattern(name),
+    // The WHOLE login, never a substring (Feitan F1 on zheref/nen#264).
+    loginPattern: exactLoginPattern(name),
     reviewCheckPattern: null,
     roundCheckPattern: null,
     enrolmentCheckPattern: null,
@@ -1085,7 +1086,7 @@ export function localHeadWarning(report: ReadyReport): string | null {
  * declared exclusion, its reason verbatim, whether it was honoured, and which
  * checks it removed -- so a verdict a declaration widened says so on the page.
  */
-function renderDeclaredExclusions(report: ReadyReport): string[] {
+export function renderDeclaredExclusions(report: ReadyReport): string[] {
   return report.meta.declaredExclusions.map((exclusion): string => {
     const named = exclusion.match === "glob" ? `glob '${exclusion.name}'` : `'${exclusion.name}'`;
     const applied = exclusion.status === "honoured";
@@ -1652,8 +1653,9 @@ function emitHeadMismatch(io: Io, json: boolean, report: HeadMismatchReport): nu
   if (json) {
     io.out(JSON.stringify(report, null, 2));
   } else {
-    io.out(`${report.repo}#${report.pr}: head-mismatch: required ${report.requiredHead}, GitHub's head is ${report.githubHead ?? "(unread)"}`);
-    io.err(`${PROGRAM}: ${report.message}`);
+    // GitHub's head is GitHub's string: plain at the human seam (zheref/nen#264, F2).
+    io.out(plainLine(`${report.repo}#${report.pr}: head-mismatch: required ${report.requiredHead}, GitHub's head is ${report.githubHead ?? "(unread)"}`));
+    io.err(plainLine(`${PROGRAM}: ${report.message}`));
   }
   return EXIT_HEAD_MISMATCH;
 }
@@ -1764,7 +1766,7 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
     // the head-mismatch one included.
     // Plain at the boundary, as `renderExplain` is (Copilot on zheref/nen#359).
     io.out(plainLine(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`));
-    io.out(judgedHeadLine(report));
+    io.out(plainLine(judgedHeadLine(report)));
     // What a DECLARATION removed from CON-32(a), on the default output itself
     // (zheref/nen#249, Feitan F2): no widened verdict without its ruling.
     for (const notice of declarationNotices(report)) io.out(plainLine(`  ${notice}`));

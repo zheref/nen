@@ -136,7 +136,11 @@ ready:
                               what the gate does NOT decide.
   --reviewers <a,b,c>         The configured reviewer set (mirrors the shell
                               gate's flag). Also the identity source of last
-                              resort -- see --gates.
+                              resort -- see --gates. On that path each name is
+                              the WHOLE login, case-insensitive, with an
+                              optional [bot] suffix -- never a substring or a
+                              regex (zheref/nen#264): 'alice' is not
+                              'Not-Alice-Fan'.
   --approvers <a,b>           The approval set, when identities come from flags.
   --round-policy <p>          strict | bounded. Default bounded.
   --exclude-run <id>          Drop one Actions run's own checks (CON-36 clause

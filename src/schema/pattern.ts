@@ -480,3 +480,22 @@ export function safePattern(source: string): RegExp {
   }
   return catastrophicShape(source) === null ? compiled : /(?!)/;
 }
+
+/**
+ * The login pattern for a reviewer NAMED ON THE COMMAND LINE (`--reviewers`,
+ * `--approvers`) -- the whole login, case-insensitively, with GitHub's
+ * optional `[bot]` suffix: `^<escaped name>(\[bot\])?$`, flag `i`.
+ *
+ * WHY NOT `safePattern(name)` (Feitan F1 on zheref/nen#264). That compiles the
+ * bare name UNANCHORED, the shell's `test($name; "i")`, so `--reviewers
+ * alice` matched a stranger's `Not-Alice-Fan` and that stranger's APPROVED
+ * review satisfied both the approve limb and the owed round. A name typed on a
+ * command line is an identity, not a pattern; a repository that needs a
+ * pattern declares one in `nen/gates.json`'s `login_pattern`. Escaping every
+ * metacharacter also means no typed name can be catastrophic, so the shape
+ * guard has nothing to refuse.
+ */
+export function exactLoginPattern(name: string): RegExp {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+  return new RegExp(`^${escaped}(\\[bot\\])?$`, "i");
+}

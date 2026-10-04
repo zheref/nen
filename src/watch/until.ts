@@ -151,10 +151,22 @@ export interface AsyncWatchOptions {
   readonly onIteration?: (iteration: WatchIteration) => void;
 }
 
-function asyncSleep(ms: number): Promise<void> {
-  return new Promise((resolve): void => {
-    setTimeout(resolve, ms);
-  });
+/**
+ * The longest delay a timer honours: setTimeout stores it as a signed 32-bit
+ * integer and fires a LARGER one after 1 ms (N1 on zheref/nen#264). So a long
+ * wait is slept in slices no larger than this.
+ */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+export async function asyncSleep(ms: number): Promise<void> {
+  let remaining = ms;
+  do {
+    const slice = Math.min(remaining, MAX_TIMER_MS);
+    await new Promise((resolve): void => {
+      setTimeout(resolve, slice);
+    });
+    remaining -= slice;
+  } while (remaining > 0);
 }
 
 export async function watchUntilAsync(options: AsyncWatchOptions): Promise<WatchResult> {
