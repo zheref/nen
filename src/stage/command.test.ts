@@ -190,12 +190,14 @@ describe("nen stage triage -- an ignored path is never measured", () => {
 // zheref/nen#237: `nen stage list` -- the exact add list, triage's complement.
 describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
   const STATUS = "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall";
+  const TOPLEVEL = "git rev-parse --show-toplevel";
 
   async function list(
     argv: readonly string[],
     stdout: string,
     json = false,
     withWrite = false,
+    toplevel: string = BANKAI_REPO,
   ): Promise<{ code: number; out: string[]; err: string[]; written: string[] }> {
     const out: string[] = [];
     const err: string[] = [];
@@ -211,7 +213,10 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
       BANKAI_REPO,
       json,
       io,
-      new ScriptedSeams([{ match: STATUS, result: { stdout } }]),
+      new ScriptedSeams([
+        { match: TOPLEVEL, result: { stdout: `${toplevel}\n` } },
+        { match: STATUS, result: { stdout } },
+      ]),
     );
     return { code, out, err, written };
   }
@@ -235,7 +240,7 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
     expect(result.out).toEqual([]);
     const err = result.err.join("\n");
     expect(err).toMatch(/^excluded: \.env {2}\[secret-shape\]$/m);
-    expect(err).toMatch(/1 path\(s\) flagged -- the add list \(1 path\(s\)\) is withheld/);
+    expect(err).toMatch(/1 path\(s\) need a human -- the add list \(1 path\(s\)\) is withheld/);
   });
 
   it("--json carries the whole classification at the flagged exit", async () => {
@@ -247,6 +252,9 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
       excluded: [{ path: ".env", reasons: ["secret-shape"] }],
       alreadyStaged: [],
       ignored: [{ path: "node_modules/x", reasons: ["ignored"] }],
+      unmerged: [],
+      embeddedRepos: [],
+      undecodable: [],
     });
   });
 
@@ -280,6 +288,52 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
     expect(result.code).toBe(0);
     expect(result.out).toEqual(["src/a.ts"]);
     expect(result.err.join("\n")).toMatch(/^already staged: src\/gone\.ts {2}\[deletion in the index/m);
+  });
+
+  it("refuses a --repo that is not the top of its working tree (exit 2), naming the top to pass", async () => {
+    const result = await list([], " M src/a.ts\0", false, false, join(BANKAI_REPO, ".."));
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/not its top[\s\S]*Pass --repo /);
+  });
+
+  it("names each unmerged path on stderr and withholds the list at exit 1", async () => {
+    const result = await list([], "UU src/both.ts\0AA src/added.ts\0 M src/a.ts\0", true);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({
+      verdict: "flagged",
+      add: ["src/a.ts"],
+      unmerged: ["src/both.ts", "src/added.ts"],
+    });
+    const text = await list([], "UU src/both.ts\0 M src/a.ts\0");
+    expect(text.code).toBe(1);
+    expect(text.out).toEqual([]);
+    expect(text.err).toContain("unmerged: src/both.ts");
+  });
+
+  it("never lists an embedded repository, and names it on stderr at exit 1", async () => {
+    const result = await list([], "?? vendor/lib/\0?? src/new.ts\0");
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/^embedded repository: vendor\/lib\/ {2}\[/m);
+  });
+
+  it("names a path carrying U+FFFD as undecodable and withholds the list", async () => {
+    const result = await list([], "?? bad\uFFFDname.ts\0 M src/a.ts\0", true);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ verdict: "flagged", undecodable: ["bad\uFFFDname.ts"] });
+  });
+
+  it("lists a worktree rename's original as a deletion, flagged unless mentioned", async () => {
+    const unmentioned = await list([], " R src/new.ts\0src/old.ts\0", true);
+    expect(unmentioned.code).toBe(1);
+    expect(JSON.parse(unmentioned.out.join("\n"))).toMatchObject({
+      add: ["src/new.ts"],
+      excluded: [{ path: "src/old.ts", reasons: ["unmentioned-deletion"] }],
+    });
+    const mentioned = await list(["--mentions", "moves old.ts"], " R src/new.ts\0src/old.ts\0");
+    expect(mentioned.code).toBe(0);
+    expect(mentioned.out).toEqual(["src/new.ts", "src/old.ts"]);
   });
 
   it("refuses --nul with --json, and --nul on triage, at exit 2", async () => {

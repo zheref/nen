@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { addListFrom, DEFAULT_LARGE_BYTES, parseStatusPorcelain, pathspecLine, triageStage } from "./triage.js";
+import {
+  addListFrom,
+  DEFAULT_LARGE_BYTES,
+  expandWorktreeRenames,
+  parseStatusPorcelain,
+  pathspecLine,
+  triageStage,
+} from "./triage.js";
 
 describe("parseStatusPorcelain -- -z / NUL-delimited format", () => {
   it("parses ordinary modified/added/deleted/untracked entries", () => {
@@ -274,5 +281,56 @@ describe("pathspecLine -- one path, one line git add reads back exactly", () => 
     expect(pathspecLine("bell\u0001")).toBe('"bell\\001"');
     expect(pathspecLine('"quoted')).toBe('"\\"quoted"');
     expect(pathspecLine('a\\b\n"c')).toBe('"a\\\\b\\n\\"c"');
+  });
+});
+
+// hanten round 1 on #237 (N1, N3, N4, N7, N8).
+describe("addListFrom -- what a list may never carry, and the rename it must", () => {
+  function listOf(status: string, mentions = ""): ReturnType<typeof addListFrom> {
+    const entries = expandWorktreeRenames(parseStatusPorcelain(status));
+    return addListFrom(entries, triageStage(entries, { mentionedText: mentions }));
+  }
+
+  it("keeps a rename's ORIG_PATH on the entry", () => {
+    expect(parseStatusPorcelain(" R src/new.ts\0src/old.ts\0")[0]).toMatchObject({
+      path: "src/new.ts",
+      origPath: "src/old.ts",
+    });
+  });
+
+  it("expands a WORKTREE rename into its original's deletion, and leaves index renames and copies alone", () => {
+    const paths = (status: string): string[] =>
+      expandWorktreeRenames(parseStatusPorcelain(status)).map((e): string => `${e.indexStatus}${e.worktreeStatus} ${e.path}`);
+    expect(paths(" R new.ts\0old.ts\0")).toEqual([" R new.ts", " D old.ts"]);
+    expect(paths("R  new.ts\0old.ts\0")).toEqual(["R  new.ts"]);
+    expect(paths(" C copy.ts\0orig.ts\0")).toEqual([" C copy.ts"]);
+  });
+
+  it("holds every unmerged pair off the list, verdict flagged", () => {
+    const status = ["UU", "AA", "DD", "AU", "UA", "DU", "UD"].map((xy, i): string => `${xy} c${i}.ts\0`).join("");
+    const list = listOf(`${status} M ok.ts\0`, "c2.ts c5.ts c6.ts");
+    expect(list.unmerged).toEqual(["c0.ts", "c1.ts", "c2.ts", "c3.ts", "c4.ts", "c5.ts", "c6.ts"]);
+    expect(list.add).toEqual(["ok.ts"]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("holds an embedded repository (an untracked path ending in '/') off the list", () => {
+    const list = listOf("?? vendor/lib/\0?? src/new.ts\0");
+    expect(list.embeddedRepos).toEqual(["vendor/lib/"]);
+    expect(list.add).toEqual(["src/new.ts"]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("holds a path carrying U+FFFD off the list as undecodable", () => {
+    const list = listOf("?? bad�.ts\0?? src/new.ts\0");
+    expect(list.undecodable).toEqual(["bad�.ts"]);
+    expect(list.add).toEqual(["src/new.ts"]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("dedupes the add list, keeping first-seen order", () => {
+    // A worktree rename whose original git ALSO reports as its own deletion row.
+    const list = listOf(" R b.ts\0a.ts\0 D a.ts\0 M c.ts\0", "a.ts");
+    expect(list.add).toEqual(["b.ts", "a.ts", "c.ts"]);
   });
 });

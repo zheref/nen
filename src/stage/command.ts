@@ -13,11 +13,12 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   addListFrom,
   DEFAULT_LARGE_BYTES,
+  expandWorktreeRenames,
   parseStatusPorcelain,
   pathspecLine,
   triageStage,
@@ -62,7 +63,7 @@ complement on stdout: every modified, added, renamed, deleted and untracked
 path triage called clean, one per line -- minus every flagged path and every
 git-ignored one. It never runs git add. Feed it to git verbatim:
 
-  nen stage list --repo . --nul | git --literal-pathspecs -C . add \\
+  nen stage list --repo <top> --nul | git --literal-pathspecs -C <top> add \\
       --pathspec-from-file=- --pathspec-file-nul
 
   --nul   NUL-terminate every path instead of newline-terminating it. In the
@@ -70,22 +71,34 @@ git-ignored one. It never runs git add. Feed it to git verbatim:
           starting with '"', is C-quoted the way git's --pathspec-from-file
           unquotes it; every other path, spaces included, is written raw.
 
-Each exclusion is named on stderr with its reason(s) -- 'excluded:' for a
-flagged path, 'already staged:' for a deletion already in the index (a
-pathspec git add would refuse) -- plus the ignored count. --json carries
-{ verdict, add[], excluded[], alreadyStaged[], ignored[] } at every exit.
+--repo must be the TOP of the working tree: git status names paths relative
+to it, so a subdirectory is refused at exit 2 naming the top to pass. A
+worktree rename (git add -N, then a move) lists the original's deletion too.
 
-Exit codes: 0 the list is non-empty and nothing is flagged; 1 something is
-flagged -- the list is WITHHELD from stdout (read it from --json), so a pipe
-that ignores the code stages nothing rather than a partial set -- or git
-status failed; 2 usage; 3 the add list is empty and nothing is flagged.`;
+Each exclusion is named on stderr -- 'excluded:' for a flagged path with its
+reason(s), 'unmerged:' for a path in conflict, 'embedded repository:' for a
+nested repository, 'undecodable:' for a name that is not UTF-8, 'already
+staged:' for a deletion already in the index (a pathspec git add would
+refuse) -- plus the ignored count. --json carries { verdict, add[],
+excluded[], alreadyStaged[], ignored[], unmerged[], embeddedRepos[],
+undecodable[] } at every exit.
+
+Exit codes: 0 the list is non-empty and nothing needs a human; 1 something
+does (any of the first four above) -- the list is WITHHELD from stdout (read
+it from --json), so a pipe that ignores the code stages nothing rather than a
+partial set -- or git could not read the tree; 2 usage; 3 the add list is
+empty and nothing needs a human.`;
 
 /**
  * Reads the working copy, measures it and triages it -- the one path both verbs
  * share, so `stage list` can never answer from a different reading of the tree
  * than `stage triage` would. `null` is a git status failure, already reported.
  */
-function readAndTriage(context: CommandContext, root: string): { entries: readonly StatusEntry[]; triage: TriageResult } | null {
+function readAndTriage(
+  context: CommandContext,
+  root: string,
+  expandRenames: boolean,
+): { entries: readonly StatusEntry[]; triage: TriageResult } | null {
   const result = context.seams.run(
     GIT,
     ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--ignored", "-uall"],
@@ -103,7 +116,8 @@ function readAndTriage(context: CommandContext, root: string): { entries: readon
     );
   }
 
-  const entries = parseStatusPorcelain(result.stdout);
+  const parsed = parseStatusPorcelain(result.stdout);
+  const entries = expandRenames ? expandWorktreeRenames(parsed) : parsed;
   // MEASURED HERE, NOT IN THE PURE MODULE. ./triage.ts has no filesystem --
   // that is what makes every one of its branches testable as data -- so the
   // sizes are read at this seam and handed in. A path that cannot be stat'd
@@ -157,6 +171,40 @@ function runTriage(context: CommandContext, triage: TriageResult): number {
   return 0;
 }
 
+/** One directory, however spelled: symlinks and `/private` prefixes resolved. Unresolvable compares as written. */
+function canonical(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return path;
+  }
+}
+
+/**
+ * `--repo` must BE the top of its working tree (hanten N2). `git status`
+ * prints every path relative to the toplevel whatever directory it runs in, so
+ * a list read from `--repo sub/` and fed to `git -C sub add` names paths that
+ * do not exist there, or worse, ones that do and are not the ones meant. A
+ * subdirectory is refused at exit 2, naming the toplevel to pass instead.
+ * `null` is a directory git does not recognise as a working tree, reported.
+ */
+function requireToplevel(context: CommandContext, root: string): string | null {
+  const result = context.seams.run(GIT, ["rev-parse", "--show-toplevel"], { cwd: root });
+  const toplevel = outputLines(result.stdout)[0];
+  if (result.code !== 0 || toplevel === undefined || toplevel === "") {
+    context.io.err(
+      `nen: ${root} is not inside a git working tree: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,
+    );
+    return null;
+  }
+  if (canonical(toplevel) !== canonical(root)) {
+    throw new VerbUsageError(
+      `--repo ${root} is inside the working tree whose top is ${toplevel}, not its top. git status names every path relative to the top, so a list read here would be fed to git add from the wrong directory. Pass --repo ${toplevel}.`,
+    );
+  }
+  return toplevel;
+}
+
 /** `nen stage list` exit for an empty add list on an unflagged tree (zheref/nen#237). */
 export const EXIT_EMPTY = 3;
 
@@ -190,13 +238,21 @@ function runList(context: CommandContext, entries: readonly StatusEntry[], triag
     }
   }
   for (const file of list.excluded) context.io.err(`excluded: ${pathspecLine(file.path)}  [${file.reasons.join(", ")}]`);
+  for (const path of list.unmerged) context.io.err(`unmerged: ${pathspecLine(path)}`);
+  for (const path of list.embeddedRepos) {
+    context.io.err(`embedded repository: ${pathspecLine(path)}  [git add would record a gitlink with no .gitmodules entry]`);
+  }
+  for (const path of list.undecodable) {
+    context.io.err(`undecodable: ${pathspecLine(path)}  [git status gave bytes that are not UTF-8; this name cannot reach the file]`);
+  }
   for (const path of list.alreadyStaged) {
     context.io.err(`already staged: ${pathspecLine(path)}  [deletion in the index -- nothing to add, and git add would refuse the pathspec]`);
   }
   context.io.err(`ignored: ${list.ignored.length} file(s), not listed`);
   if (list.verdict === "flagged") {
+    const needing = list.excluded.length + list.unmerged.length + list.embeddedRepos.length + list.undecodable.length;
     context.io.err(
-      `nen: ${list.excluded.length} path(s) flagged -- the add list (${list.add.length} path(s)) is withheld from stdout. A flagged file is never staged without an explicit yes; resolve each one, or read the list from --json.`,
+      `nen: ${needing} path(s) need a human -- the add list (${list.add.length} path(s)) is withheld from stdout. A flagged file is never staged without an explicit yes; resolve each one, or read the list from --json.`,
     );
   } else if (list.verdict === "empty") {
     context.io.err(`nen: nothing to add -- no modified, added, deleted or untracked path outside the ignored set.`);
@@ -230,7 +286,8 @@ export const stageCommand: Command = {
           : "It names the working tree whose unstaged files are triaged.",
       ),
     });
-    const read = readAndTriage(context, root);
+    if (subcommand === "list" && requireToplevel(context, root) === null) return 1;
+    const read = readAndTriage(context, root, subcommand === "list");
     if (read === null) return 1;
     return subcommand === "list" ? runList(context, read.entries, read.triage, nul) : runTriage(context, read.triage);
   },

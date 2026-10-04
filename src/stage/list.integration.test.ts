@@ -19,7 +19,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -56,6 +56,9 @@ function usableGit(): boolean {
 }
 
 const HAVE_GIT = usableGit();
+const HAVE_BUN = spawnSync("bun", ["--version"], { encoding: "utf8" }).status === 0;
+/** This repository's own entry point, spawned as a process for the byte-level row. */
+const ENTRY = join(process.cwd(), "src", "index.ts");
 
 function write(root: string, path: string, content = "x\n"): void {
   const parts = path.split("/");
@@ -202,5 +205,104 @@ describe.skipIf(!HAVE_GIT)("nen stage list, against the real git (zheref/nen#237
     expect(result.code).not.toBe(0);
     expect(result.code).not.toBe(3);
     expect(result.out).toEqual([]);
+  });
+});
+
+// hanten round 1 on #237: each row a claim about git only git can answer.
+describe.skipIf(!HAVE_GIT)("nen stage list, against the real git -- hanten round 1 (zheref/nen#237)", () => {
+  let root = "";
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "nen-stage-list-r1-"));
+  });
+
+  afterAll(() => {
+    if (root !== "") rmSync(root, { recursive: true, force: true });
+  });
+
+  it("N1: a worktree rename (git add -N, then a move) piped into git add stages the WHOLE rename", async () => {
+    const repo = freshRepo(root, "rename");
+    write(repo, "src/old.ts", "a body long enough for git to call the move a rename\n");
+    mustGit(repo, ["add", "src/old.ts"]);
+    mustGit(repo, [...WHO, "commit", "--quiet", "-m", "old"]);
+    renameSync(join(repo, "src", "old.ts"), join(repo, "src", "new.ts"));
+    mustGit(repo, ["add", "-N", "src/new.ts"]);
+    expect(mustGit(repo, ["status", "--porcelain=v1", "-z"])).toBe(" R src/new.ts\0src/old.ts\0");
+
+    const unmentioned = await stageList(repo, []);
+    expect(unmentioned.code).toBe(1);
+    expect(unmentioned.err.join("\n")).toMatch(/^excluded: src\/old\.ts {2}\[unmentioned-deletion\]$/m);
+
+    const result = await stageList(repo, ["--nul", "--mentions", "moves old.ts"]);
+    expect(result.code).toBe(0);
+    expect(result.written).toBe("src/new.ts\0src/old.ts\0");
+    mustGit(repo, ["--literal-pathspecs", "add", "--pathspec-from-file=-", "--pathspec-file-nul"], result.written);
+    expect(mustGit(repo, ["diff", "--cached", "--name-status", "-M", "-z"])).toMatch(/^R100\0src\/old\.ts\0src\/new\.ts\0$/);
+  });
+
+  it("N2: a --repo naming a subdirectory is refused at exit 2, naming the top", async () => {
+    const repo = freshRepo(root, "subdir");
+    write(repo, "src/new.ts");
+    const result = await stageList(join(repo, "src"), []);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/not its top/);
+    expect((await stageList(repo, [])).code).toBe(0);
+  });
+
+  it("N3: a real merge conflict is named 'unmerged', the list withheld at exit 1", async () => {
+    const repo = freshRepo(root, "conflict");
+    mustGit(repo, ["switch", "--quiet", "-c", "side"]);
+    write(repo, "src/a.ts", "side\n");
+    mustGit(repo, [...WHO, "commit", "--quiet", "-am", "side"]);
+    mustGit(repo, ["switch", "--quiet", "main"]);
+    write(repo, "src/a.ts", "main\n");
+    mustGit(repo, [...WHO, "commit", "--quiet", "-am", "main"]);
+    expect(git(repo, [...WHO, "merge", "--no-edit", "side"]).code).not.toBe(0);
+    write(repo, "src/other.ts");
+
+    const result = await stageList(repo, []);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err).toContain("unmerged: src/a.ts");
+    const json = await stageList(repo, [], true);
+    expect(JSON.parse(json.out.join("\n"))).toMatchObject({ verdict: "flagged", unmerged: ["src/a.ts"], add: ["src/other.ts"] });
+  });
+
+  it("N4: an embedded repository, empty or populated, is never on the list", async () => {
+    const repo = freshRepo(root, "embedded");
+    mustGit(repo, ["init", "--quiet", "--initial-branch=main", join(repo, "empty-sub")]);
+    const populated = join(repo, "full-sub");
+    mustGit(repo, ["init", "--quiet", "--initial-branch=main", populated]);
+    write(populated, "inner.ts");
+    mustGit(populated, ["add", "inner.ts"]);
+    mustGit(populated, [...WHO, "commit", "--quiet", "-m", "inner"]);
+    write(repo, "src/new.ts");
+
+    const json = await stageList(repo, [], true);
+    expect(json.code).toBe(1);
+    const doc = JSON.parse(json.out.join("\n")) as { add: string[]; embeddedRepos: string[] };
+    expect([...doc.embeddedRepos].sort()).toEqual(["empty-sub/", "full-sub/"]);
+    expect(doc.add).toEqual(["src/new.ts"]);
+    const text = await stageList(repo, []);
+    expect(text.out).toEqual([]);
+    expect(text.err.join("\n")).toMatch(/^embedded repository: empty-sub\/ /m);
+    expect(text.err.join("\n")).toMatch(/^embedded repository: full-sub\/ /m);
+  });
+
+  // N5: the in-process harness proves `write` gets the bytes; only a real
+  // process proves nothing APPENDS one -- the trailing newline that git reads
+  // as one more pathspec, matching nothing, and then stages nothing.
+  it.skipIf(!HAVE_BUN)("N5: the spawned entry point's --nul stdout ends in NUL, with no newline after it", () => {
+    const repo = freshRepo(root, "process");
+    write(repo, "src/new.ts");
+    write(repo, "with space.ts");
+    const result = spawnSync("bun", [ENTRY, "stage", "list", "--repo", repo, "--nul"], { cwd: repo });
+    expect(result.status).toBe(0);
+    const stdout = result.stdout;
+    expect(stdout.length).toBeGreaterThan(0);
+    expect(stdout[stdout.length - 1]).toBe(0);
+    expect(stdout.includes(0x0a)).toBe(false);
+    expect(stdout.toString("utf8")).toBe("src/new.ts\0with space.ts\0");
   });
 });

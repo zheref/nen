@@ -26,6 +26,14 @@ export interface StatusEntry {
   readonly indexStatus: string;
   readonly worktreeStatus: string;
   readonly ignored: boolean;
+  /**
+   * A rename's or copy's ORIGINAL path -- the second `-z` record. Carried
+   * rather than discarded (zheref/nen#237, hanten N1): a WORKTREE-column rename
+   * (`git add -N new` after a move) leaves the original's deletion unstaged,
+   * and `stage list` must put it on the add list or the commit keeps the old
+   * file. Absent on every entry that is not a rename or copy.
+   */
+  readonly origPath?: string;
 }
 
 // `git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall`.
@@ -55,16 +63,16 @@ export function parseStatusPorcelain(text: string): readonly StatusEntry[] {
     const indexStatus = raw[0] ?? " ";
     const worktreeStatus = raw[1] ?? " ";
     const path = raw.slice(3);
-    entries.push({
-      path,
-      indexStatus,
-      worktreeStatus,
-      ignored: indexStatus === "!" && worktreeStatus === "!",
-    });
     const isRenameOrCopy = indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C";
+    const ignored = indexStatus === "!" && worktreeStatus === "!";
     if (isRenameOrCopy) {
-      // The next record is ORIG_PATH -- skip it, it is not its own entry.
+      // The next record is ORIG_PATH -- consumed here, never its own entry,
+      // and carried on this one as `origPath`.
+      const origPath = records[i + 1];
       i++;
+      entries.push({ path, indexStatus, worktreeStatus, ignored, ...(origPath === undefined ? {} : { origPath }) });
+    } else {
+      entries.push({ path, indexStatus, worktreeStatus, ignored });
     }
   }
   return entries;
@@ -231,12 +239,49 @@ export function triageStage(entries: readonly StatusEntry[], options: TriageOpti
 
 export type AddVerdict = "ready" | "flagged" | "empty";
 
+/**
+ * A WORKTREE-column rename's original path, as the deletion it is (hanten N1).
+ *
+ * `git add -N new` after `mv old new` makes `git status` report ` R new\0old`:
+ * the index holds `old` and an intent-to-add `new`, and the working tree has
+ * moved one onto the other. Staging `new` alone commits a COPY -- `old` stays
+ * in the index -- so the original goes on the entry list as an ordinary
+ * worktree deletion, right after the rename, where every detector sees it and
+ * an unmentioned one is flagged like any other deletion.
+ *
+ * Only `R`, not `C`: a copy's original is still on disk and still tracked, so
+ * there is no deletion to stage. An INDEX-column rename (`R `) needs nothing
+ * either -- the original's removal is already in the index.
+ *
+ * Used by `stage list` only. `stage triage`'s entries and output are left as
+ * they were (#237's scope boundary), so on such a tree triage still does not
+ * see the deletion; that is named as a follow-up rather than changed here.
+ */
+export function expandWorktreeRenames(entries: readonly StatusEntry[]): readonly StatusEntry[] {
+  const expanded: StatusEntry[] = [];
+  for (const entry of entries) {
+    expanded.push(entry);
+    if (entry.worktreeStatus === "R" && entry.origPath !== undefined) {
+      expanded.push({ path: entry.origPath, indexStatus: " ", worktreeStatus: "D", ignored: false });
+    }
+  }
+  return expanded;
+}
+
+/**
+ * The seven unmerged XY pairs `git status` documents. A path in conflict is
+ * not a change to stage: `git add` on it RECORDS A RESOLUTION, which is a
+ * decision about the conflict, never a transcription (hanten N3).
+ */
+const UNMERGED = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
 export interface AddList {
   /**
-   * `ready` -- the list is non-empty and nothing was flagged. `flagged` --
-   * something needs a human's yes; it outranks `empty`, because a tree whose
-   * every change is flagged is not a tree with nothing to add. `empty` --
-   * nothing to add and nothing flagged.
+   * `ready` -- the list is non-empty and nothing needs a human. `flagged` --
+   * something does: a triage flag, an unmerged path, an embedded repository or
+   * an undecodable name. It outranks `empty`, because a tree whose every change
+   * needs a human is not a tree with nothing to add. `empty` -- nothing to add
+   * and nothing needing a human.
    */
   readonly verdict: AddVerdict;
   /** The exact add list, in `git status` order. Flagged and ignored paths are never on it. */
@@ -247,22 +292,70 @@ export interface AddList {
   readonly alreadyStaged: readonly string[];
   /** Git-ignored paths, exactly as triage's `ignored` bucket carries them. */
   readonly ignored: readonly FlaggedFile[];
+  /** Paths in conflict (UU AA DD AU UA DU UD). Never listed: adding one resolves the conflict. */
+  readonly unmerged: readonly string[];
+  /**
+   * Untracked paths git reports with a trailing `/` under `-uall` -- a nested
+   * repository, empty or populated (hanten N4). `git add` on one records a
+   * gitlink with no `.gitmodules` entry, or refuses it; neither is a decision
+   * a list may make.
+   */
+  readonly embeddedRepos: readonly string[];
+  /**
+   * Paths carrying U+FFFD, the replacement character: `git status` emitted
+   * bytes that are not UTF-8, the decode replaced them, and the string can no
+   * longer name the file on disk (hanten N7). Listing it would stage nothing,
+   * or the wrong thing.
+   */
+  readonly undecodable: readonly string[];
 }
 
 export function addListFrom(entries: readonly StatusEntry[], triage: TriageResult): AddList {
   const byPath = new Map<string, StatusEntry>();
-  for (const entry of entries) byPath.set(entry.path, entry);
+  for (const entry of entries) if (!byPath.has(entry.path)) byPath.set(entry.path, entry);
 
+  // Paths no list may carry whatever triage said about them, each a fact a
+  // human has to act on. Every one of them makes the verdict non-ready.
+  const unmerged: string[] = [];
+  const embeddedRepos: string[] = [];
+  const undecodable: string[] = [];
+  const held = new Set<string>();
+  const hold = (bucket: string[], path: string): void => {
+    if (!bucket.includes(path)) bucket.push(path);
+    held.add(path);
+  };
+  for (const entry of entries) {
+    if (entry.ignored) continue;
+    if (UNMERGED.has(`${entry.indexStatus}${entry.worktreeStatus}`)) hold(unmerged, entry.path);
+    if (entry.indexStatus === "?" && entry.path.endsWith("/")) hold(embeddedRepos, entry.path);
+    if (entry.path.includes("\uFFFD")) hold(undecodable, entry.path);
+  }
+
+  // DEDUPED, FIRST-SEEN ORDER KEPT (hanten N8): a path reached twice -- a
+  // rename's original that git also reports as its own row -- is one pathspec.
   const add: string[] = [];
+  const seen = new Set<string>();
   const alreadyStaged: string[] = [];
   for (const path of triage.clean) {
+    if (held.has(path) || seen.has(path)) continue;
+    seen.add(path);
     const entry = byPath.get(path);
     if (entry !== undefined && entry.indexStatus === "D" && entry.worktreeStatus === " ") alreadyStaged.push(path);
     else add.push(path);
   }
 
-  const verdict: AddVerdict = triage.flagged.length > 0 ? "flagged" : add.length === 0 ? "empty" : "ready";
-  return { verdict, add, excluded: triage.flagged, alreadyStaged, ignored: triage.ignored };
+  const needsHuman = triage.flagged.length + unmerged.length + embeddedRepos.length + undecodable.length > 0;
+  const verdict: AddVerdict = needsHuman ? "flagged" : add.length === 0 ? "empty" : "ready";
+  return {
+    verdict,
+    add,
+    excluded: triage.flagged,
+    alreadyStaged,
+    ignored: triage.ignored,
+    unmerged,
+    embeddedRepos,
+    undecodable,
+  };
 }
 
 const NAMED_ESCAPES: Readonly<Record<string, string>> = {

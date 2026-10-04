@@ -712,7 +712,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
-| [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
+| [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
 | [`board`](#family-board) | [`nen board build`](#nen-board-build) | assembles a Board from already-computed rows (gate from 'gate derive', colour from 'color status') | local file (--rows-from) | yes |
@@ -3202,7 +3202,25 @@ One clean shape is not on the list: a deletion **already staged** (`D `, gone
 from the index and the working tree). It is already in the commit-to-be, and
 `git add` answers its pathspec with `fatal: pathspec … did not match any files`,
 staging nothing from the whole list — so it is reported as `alreadyStaged`
-instead.
+instead. One shape adds a path git does not print as its own row: a
+**worktree rename** (` R new` → `old`, which `git add -N` followed by a move
+produces) puts the original's deletion on the list right after the new path,
+through the deletion detector like any other, so the commit records the whole
+rename rather than a copy. Paths are listed once each, in first-seen order.
+
+Four kinds of path are never on the list and always make it **non-ready**
+(exit 1, list withheld), because staging any of them is a decision rather
+than a transcription: a triage **flag**; an **unmerged** path (`UU AA DD AU
+UA DU UD` — `git add` on one records a resolution); an **embedded
+repository** (an untracked path git prints with a trailing `/` — `git add`
+would record a gitlink with no `.gitmodules` entry); and an **undecodable**
+name (one carrying U+FFFD, where `git status` printed bytes that are not
+UTF-8 and the string can no longer reach the file).
+
+**`--repo` must be the top of the working tree.** `git status` names every
+path relative to the top whatever directory it runs in, so a list read from a
+subdirectory and fed to `git -C <that subdirectory> add` names the wrong
+paths. A subdirectory is refused at exit 2, naming the top to pass instead.
 
 **Usage**
 
@@ -3215,7 +3233,7 @@ nen stage list --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--repo <path>` | **yes** | the working tree whose add list is emitted | unbracketed in usage; omitted is refused at exit 2 (#28) |
+| `--repo <path>` | **yes** | the TOP of the working tree whose add list is emitted | unbracketed in usage; omitted is refused at exit 2 (#28); a subdirectory is refused at exit 2, naming the top |
 | `--scope <a,b>` | no | in-scope path prefixes, exactly as `stage triage` | an out-of-scope path is flagged, so it is excluded |
 | `--mentions <text>` | no | free text searched for a deleted path's basename, exactly as `stage triage` | an unmentioned deletion is flagged, so pass the commit message draft to keep an intended deletion on the list |
 | `--large-bytes <n>` | no | the `large` threshold, exactly as `stage triage` | default **1048576** |
@@ -3226,8 +3244,10 @@ nen stage list --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
 `git add` with no `awk`, `grep` or `cut` between them:
 
 ```bash
-nen stage list --repo . --nul | git --literal-pathspecs add --pathspec-from-file=- --pathspec-file-nul
+nen stage list --repo "<toplevel>" --nul | git --literal-pathspecs -C "<toplevel>" add --pathspec-from-file=- --pathspec-file-nul
 ```
+
+On Windows, pipe from `cmd` or PowerShell 7.4+ (Windows PowerShell re-encodes the bytes a pipe carries), or write `--nul > file` from `cmd` and pass `--pathspec-from-file=file --pathspec-file-nul`.
 
 `--literal-pathspecs` makes a path containing `*`, `?` or `[` match only
 itself. In the default newline form a path carrying a control character (a
@@ -3239,19 +3259,21 @@ git as one more pathspec matching nothing, and git then stages nothing.
 
 **Output and exit codes** — stdout carries the list, one path per line (or
 NUL-terminated under `--nul`), and nothing else. Stderr carries, for a human:
-`excluded: <path>  [<reasons>]` per flagged path, `already staged: <path>
-[…]` per staged deletion, `ignored: <n> file(s), not listed`, and on exit 1 or
-3 a `nen:` line saying why the list is empty. `--json` top-level keys, at
-**every** exit: `verdict` (`ready`, `flagged` or `empty`), `add[]`,
-`excluded[]` and `ignored[]` (each `{ path, reasons[] }`, as triage's
-`flagged[]` and `ignored[]`), and `alreadyStaged[]`.
+`excluded: <path>  [<reasons>]` per flagged path, `unmerged: <path>`,
+`embedded repository: <path>  […]`, `undecodable: <path>  […]`,
+`already staged: <path>  […]` per staged deletion, `ignored: <n> file(s), not
+listed`, and on exit 1 or 3 a `nen:` line saying why stdout is empty.
+`--json` top-level keys, at **every** exit: `verdict` (`ready`, `flagged` or
+`empty`), `add[]`, `excluded[]` and `ignored[]` (each `{ path, reasons[] }`,
+as triage's `flagged[]` and `ignored[]`), `alreadyStaged[]`, `unmerged[]`,
+`embeddedRepos[]` and `undecodable[]` (each an array of paths).
 
 | Exit | Meaning |
 |---|---|
-| `0` | `ready` — the list is non-empty and nothing is flagged |
-| `1` | `flagged` — something needs a human's yes; the list is **withheld from stdout** (read it from `--json`), so a pipe that ignores the exit code stages nothing rather than a partial set that looks whole. Also `1`: `git status` failed — the tree was never read, and stdout is empty |
-| `2` | usage — a missing `--repo`, `--nul` with `--json`, a bad `--large-bytes` |
-| `3` | `empty` — nothing to add and nothing flagged (a clean tree, or one dirty only in ignored paths). A tree whose every change is flagged is `1`, never `3` |
+| `0` | `ready` — the list is non-empty and nothing needs a human |
+| `1` | `flagged` — a triage flag, an unmerged path, an embedded repository or an undecodable name; the list is **withheld from stdout** (read it from `--json`), so a pipe that ignores the exit code stages nothing rather than a partial set that looks whole. Also `1`: git could not read the tree (`--repo` is not in a working tree, or `git status` failed) — stdout is empty |
+| `2` | usage — a missing `--repo`, a `--repo` that is not the top of its working tree, `--nul` with `--json`, a bad `--large-bytes` |
+| `3` | `empty` — nothing to add and nothing needing a human (a clean tree, or one dirty only in ignored paths). A tree whose every change needs a human is `1`, never `3` |
 
 **Example**
 
@@ -3287,7 +3309,10 @@ nen stage list --repo . --mentions "drops src/gone.ts" --json
   ],
   "excluded": [{ "path": ".env", "reasons": ["secret-shape"] }],
   "alreadyStaged": [],
-  "ignored": [{ "path": "node_modules/leftpad/index.js", "reasons": ["ignored"] }]
+  "ignored": [{ "path": "node_modules/leftpad/index.js", "reasons": ["ignored"] }],
+  "unmerged": [],
+  "embeddedRepos": [],
+  "undecodable": []
 }
 ```
 (exit 1 — the same tree with an untracked `.env`; the text form prints nothing
