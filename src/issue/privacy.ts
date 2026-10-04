@@ -46,6 +46,7 @@
 // "could not look" must never read the same as "found nothing".
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
 
 /** The exit code a private-name refusal answers with, in every verb that runs the check. */
@@ -215,6 +216,16 @@ export function readPrivateList(seams: Seams): readonly string[] {
       if (typeof fullName !== "string" || fullName === "") {
         throw new PrivateListUnavailableError(`page ${page} of the private repository list carried an entry with no full_name`);
       }
+      // EXACTLY `owner/name`, both halves non-empty and whitespace-free. A
+      // malformed entry (`owner/`, `a/b/c`, a bare name) would be dropped or
+      // mis-split by the matcher and police nothing, so the whole list is
+      // refused rather than checked with a hole in it. The value is not echoed:
+      // it may be a private name.
+      if (!VALID_FULL_NAME.test(fullName)) {
+        throw new PrivateListUnavailableError(
+          `page ${page} of the private repository list carried a malformed full_name (entry ${names.length + 1}; not exactly owner/name), so the list is not checked against`,
+        );
+      }
       names.push(fullName);
     }
     if (parsed.length < PAGE_SIZE) {
@@ -231,6 +242,9 @@ export function readPrivateList(seams: Seams): readonly string[] {
   );
 }
 
+/** One slash, a non-empty whitespace-free owner and name on either side. */
+const VALID_FULL_NAME = /^[^\s/]+\/[^\s/]+$/;
+
 /** Bytewise (LC_ALL=C) sort, de-duplicated -- the order an index points into. */
 function sortedUnique(values: readonly string[]): readonly string[] {
   return [...new Set(values)].sort((a, b): number => {
@@ -242,9 +256,19 @@ function sortedUnique(values: readonly string[]): readonly string[] {
 
 // --- matching ----------------------------------------------------------------
 
-/** A compiled matcher over one list: the regex and each lowercase name's index. */
+/**
+ * A compiled matcher over one list: ONE REGEX PER NAME, and each lowercase
+ * name's index.
+ *
+ * Per name, never one alternation: an alternation consumes the text it
+ * matches, so a longer name (`vault.tools`, `my_vault`) hides every shorter
+ * name it contains (`vault`) -- and when the longer one is ignored, the
+ * shorter, still-policed one passed unseen. Each name is tested against the
+ * whole line with its own boundary test, overlaps included, and exemptions
+ * are applied only after every occurrence is found.
+ */
 export interface NameMatcher {
-  readonly pattern: RegExp;
+  readonly patterns: ReadonlyMap<string, RegExp>;
   readonly indexOf: ReadonlyMap<string, number>;
   /**
    * Each still-policed name's index: the FIRST entry carrying it that the
@@ -266,9 +290,8 @@ function escapeRegExp(text: string): string {
 }
 
 /**
- * Compile the list. Each entry's NAME (after the last `/`) is matched; the
- * first entry wins a case twin across owners, so they share one index.
- * Longest first, so a name that is a prefix of another never shadows it.
+ * Compile the list. Each entry's NAME (after the `/`) is matched; the first
+ * entry wins a case twin across owners, so they share one index.
  */
 export function compileMatcher(list: readonly string[], ignore: IgnoreList | null = null): NameMatcher {
   const indexOf = new Map<string, number>();
@@ -285,12 +308,13 @@ export function compileMatcher(list: readonly string[], ignore: IgnoreList | nul
     names.push(name);
   });
   const ignored = new Set([...indexOf.keys()].filter((key): boolean => !policedIndexOf.has(key)));
-  const alternation = names
-    .sort((a, b): number => b.length - a.length)
-    .map(escapeRegExp)
-    .join("|");
-  const pattern = new RegExp(`(?<![A-Za-z0-9-])(${alternation})(?![A-Za-z0-9-])`, "gi");
-  return { pattern, indexOf, policedIndexOf, ignored };
+  const patterns = new Map<string, RegExp>(
+    names.map((name): [string, RegExp] => [
+      name.toLowerCase(),
+      new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(name)}(?![A-Za-z0-9-])`, "i"),
+    ]),
+  );
+  return { patterns, indexOf, policedIndexOf, ignored };
 }
 
 /**
@@ -337,13 +361,26 @@ function percentDecode(line: string): string {
  * transformations are what is handled; nothing else is claimed.
  */
 export function normalise(line: string): string {
+  return normaliseReading(line, true);
+}
+
+/**
+ * The same reading with inline tags KEPT. Stripping a tag strips what is
+ * inside it too -- an autolink `<https://…/v%61ult>` or an `href="…"` -- so
+ * the decoded text is scanned before the tags go as well as after.
+ */
+export function normaliseKeepingTags(line: string): string {
+  return normaliseReading(line, false);
+}
+
+function normaliseReading(line: string, stripTags: boolean): string {
   let text = percentDecode(line);
   for (let pass = 0; pass < 2; pass++) {
     text = text.replace(/&#[xX]([0-9A-Fa-f]{1,6});/g, (_m, hex: string): string => codePoint(Number.parseInt(hex, 16)));
     text = text.replace(/&#([0-9]{1,7});/g, (_m, dec: string): string => codePoint(Number.parseInt(dec, 10)));
     text = text.replace(/&([A-Za-z][A-Za-z0-9]{1,31});/g, (whole, name: string): string => ENTITIES.get(name) ?? whole);
   }
-  text = text.replace(/<\/?[A-Za-z][^<>]*>/g, "");
+  if (stripTags) text = text.replace(/<\/?[A-Za-z][^<>]*>/g, "");
   text = text.replace(/\\(?=[!-/:-@[-`{-~])/g, "");
   text = text.normalize("NFKC");
   // Format characters AND every default-ignorable code point (U+034F
@@ -377,9 +414,8 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
     text.split(/\r?\n/).forEach((line, offset): void => {
       const reported = new Set<string>();
       const scan = (candidate: string, normalised: boolean): void => {
-        for (const match of candidate.matchAll(matcher.pattern)) {
-          const key = (match[1] ?? "").toLowerCase();
-          if (reported.has(key)) continue;
+        for (const [key, pattern] of matcher.patterns) {
+          if (reported.has(key) || !pattern.test(candidate)) continue;
           const ignored = matcher.ignored.has(key);
           const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (index === undefined) continue;
@@ -389,6 +425,11 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
       };
       scan(line, false);
       if (!needsNormalising(line)) return;
+      // Decoded with tags kept FIRST, so a name inside a link destination or
+      // an attribute is read before the tag-stripped reading removes it.
+      const withTags = normaliseKeepingTags(line);
+      scan(withTags, true);
+      scan(normaliseMarkup(withTags), true);
       const first = normalise(line);
       scan(first, true);
       scan(normaliseMarkup(first), true);
@@ -486,7 +527,9 @@ export function privateNameLines(check: PrivateNameCheck, target: Target): reado
       ];
     case "unavailable":
       return [
-        `nen issue: private-name check could not run -- ${check.error ?? "unknown error"}.`,
+        // plainLine: the error can carry gh's stderr, which is text nen did
+        // not write; --json keeps the bytes.
+        `nen issue: private-name check could not run -- ${plainLine(check.error ?? "unknown error")}.`,
         `  ${target.slug} may be public, so nothing was written: a check that cannot read is a refusal, never a pass. Fix the read, or pass --${SKIP_PRIVATE_NAME_CHECK_FLAG} after running your own check.`,
       ];
     case "refused": {

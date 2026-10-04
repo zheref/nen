@@ -5705,7 +5705,11 @@ zheref/hatsu's `scripts/private_name_check.sh`.
   default-ignorable code points (zero-width, soft hyphen, U+034F, variation
   selectors) deleted and every dash, U+2212 MINUS SIGN included, folded to `-`;
   then once more with HTML comments, `*`, `~` and backticks removed, so
-  `na**me**`, `na~~me~~`, ``na`m`e`` and `na<!-- -->me` read as the name. Those transformations are what is handled;
+  `na**me**`, `na~~me~~`, ``na`m`e`` and `na<!-- -->me` read as the name. The
+  decoded text is scanned with inline tags kept as well as stripped, so a name
+  inside an autolink (`<https://…/v%61ult>`) or an `href="…"` is found. Each
+  name is matched on its own, overlaps included, before any exemption applies:
+  an ignored `vault.tools` or `my_vault` never hides a policed `vault`. Those transformations are what is handled;
   nothing else is claimed.
 - **The refusal** exits **4**, writes nothing, and never prints the name:
   each hit is `nen issue: <field>:<line>: private repository #<k>`, `k` a
@@ -5715,7 +5719,8 @@ zheref/hatsu's `scripts/private_name_check.sh`.
   prints the command that resolves `k` on your own terminal. nen never rewrites
   the text: redact and retry.
 - **Fail closed.** An unreadable target visibility, an unreadable or malformed
-  list, a list that fills 100 pages (and so may be truncated) and a list that
+  list (including any entry whose `full_name` is not exactly `owner/name`, both
+  halves non-empty and whitespace-free), a list that fills 100 pages (and so may be truncated) and a list that
   reads **EMPTY** are each a refusal at exit **1** — never a pass. A token that
   cannot see private repositories would otherwise read green.
 - **The ignore file** is `--private-names-ignore-file <path>`: private

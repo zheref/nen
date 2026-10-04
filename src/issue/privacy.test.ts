@@ -49,7 +49,8 @@ describe("private-name matching (zheref/nen#329)", () => {
   });
 
   it("is case-insensitive", () => {
-    expect(hits(LIST, "VAULT and Secret-Sauce")).toEqual(["body:1:#2", "body:1:#1"]);
+    // Within a line, hits come in list order (one pattern per name), not text order.
+    expect(hits(LIST, "VAULT and Secret-Sauce")).toEqual(["body:1:#1", "body:1:#2"]);
   });
 
   it("treats `_` and `.` as word bounds -- markdown emphasis, snake_case, a file suffix, a sentence's end", () => {
@@ -102,6 +103,27 @@ describe("private-name matching (zheref/nen#329)", () => {
 
   it("never resolves an entity name through Object.prototype (N11)", () => {
     expect(normalise("&constructor;&toString;&__proto__;")).toBe("&constructor;&toString;&__proto__;");
+  });
+
+  it("finds a policed name inside an IGNORED longer one -- prefix and suffix overlaps (Copilot round 1)", () => {
+    // Prefix: `vault` is policed, `vault.tools` ignored; `.` bounds a word, so `vault` occurs.
+    const prefix = compileMatcher(["a/vault", "b/vault.tools"], parseIgnoreList("vault.tools\n"));
+    expect(findPrivateNames(prefix, [{ field: "body", text: "see vault.tools" }])).toEqual([
+      { field: "body", line: 1, index: 1, normalised: false, ignored: false },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: true },
+    ]);
+    // Suffix: `vault` is policed, `my_vault` ignored; `_` bounds a word.
+    const suffix = compileMatcher(["a/my_vault", "b/vault"], parseIgnoreList("my_vault\n"));
+    expect(findPrivateNames(suffix, [{ field: "body", text: "in my_vault today" }])).toEqual([
+      { field: "body", line: 1, index: 1, normalised: false, ignored: true },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false },
+    ]);
+  });
+
+  it("reads a name inside a link destination before tags are stripped -- autolink and href (Copilot round 1)", () => {
+    expect(hits(LIST, "<https://github.com/acme/v%61ult>")).toEqual(["body:1:#2n"]);
+    expect(hits(LIST, '<a href="https://github.com/acme/v%61ult">the adapter</a>')).toEqual(["body:1:#2n"]);
+    expect(hits(LIST, '<a href="https://github.com/acme/v&#97;ult">x</a>')).toEqual(["body:1:#2n"]);
   });
 
   it("normalise() folds dashes and drops format characters", () => {
@@ -197,6 +219,22 @@ describe("the private-name reads, fail closed", () => {
     expect(() => readPrivateList(new ScriptedSeams([page(1, [])]))).toThrow(/read EMPTY/);
   });
 
+  it("refuses a list with ANY malformed full_name, mixed with valid ones, never checking past it (Copilot round 1)", () => {
+    for (const bad of ["owner/", "/name", "a/b/c", "bare", "own er/name", "owner/na me"]) {
+      const seams = new ScriptedSeams([page(1, ["acme/vault", bad, "other/zeta"])]);
+      expect(() => readPrivateList(seams), bad).toThrow(/malformed full_name \(entry 2; not exactly owner\/name\)/);
+    }
+    // And through the verdict: unavailable, never a clean read of unrelated text.
+    const check = checkPrivateNames(
+      new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault", "secretco/"])]),
+      TARGET,
+      [{ field: "body", text: "unrelated text" }],
+      false,
+    );
+    expect(check.result).toBe("unavailable");
+    expect(check.error).not.toMatch(/secretco/);
+  });
+
   it("refuses a failing or malformed list", () => {
     const failing: ScriptedCall = {
       match: "gh api user/repos?visibility=private&per_page=100&page=1",
@@ -256,6 +294,18 @@ describe("checkPrivateNames -- the verdict a verb acts on", () => {
     const check = checkPrivateNames(seams, TARGET, body, false);
     expect(check.result).toBe("clean");
     expect(privateNameLines(check, TARGET)).toEqual([]);
+  });
+
+  it("strips terminal controls from gh's stderr in the human lines, and keeps the bytes in the verdict (Copilot round 1)", () => {
+    const failing: ScriptedCall = {
+      match: "gh api user/repos?visibility=private&per_page=100&page=1",
+      result: { code: 1, stderr: "HTTP 401\u001b[2K\u001b[1Aforged\r" },
+    };
+    const check = checkPrivateNames(new ScriptedSeams([visibility({ visibility: "public" }), failing]), TARGET, [], false);
+    expect(check.error).toContain("\u001b[2K");
+    const human = privateNameLines(check, TARGET).join("\n");
+    expect(human).not.toMatch(/[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/);
+    expect(human).toContain("HTTP 401[2K[1Aforged");
   });
 
   it("is unavailable (exit 1) when the visibility or the list cannot be read", () => {
