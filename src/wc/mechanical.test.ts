@@ -6,6 +6,7 @@
 // real-git half is ./catchup.integration.test.ts.
 
 import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,7 @@ import type { MechanicalBlock } from "../schema/contract.js";
 import {
   classifyConflicts,
   displayPath,
+  globPathspec,
   loadMechanical,
   renderClassification,
   renderCommand,
@@ -121,6 +123,18 @@ describe("rendering", () => {
     expect(displayPath("docs/ünï.md")).toBe("docs/ünï.md");
   });
 
+  it("escapes a C1 control -- CSI, U+009B -- as \\u009b rather than sending it to a terminal (Copilot, NN-PR-#368)", () => {
+    expect(displayPath("a\u009bb")).toBe("$'a\\u009bb'");
+    expect(renderCommand(["git", "add", "--", "x\u0085y"])).toBe("git add -- $'x\\u0085y'");
+  });
+
+  it("sanitises an unreadable declaration's error at the rendering boundary (Copilot, NN-PR-#368)", () => {
+    const broken: MechanicalDeclaration = { state: "unreadable", block: null, error: "/repo\u001b[31m/nen\u009b/contract.json: bad" };
+    const line = renderClassification(classifyConflicts([at("a.ts")], broken, "merge", ROOT), broken, ["a.ts"])[0] ?? "";
+    expect(line).toContain("could not be read (/repo[31m/nen/contract.json: bad)");
+    expect(/[\u0000-\u001f\u007f-\u009f]/.test(line)).toBe(false);
+  });
+
   it("states the root, and why every path is 'other' when nothing was declared or the file could not be read", () => {
     const declared = renderClassification(classifyConflicts([at("package.json")], DECLARED, "merge", ROOT), DECLARED, []);
     expect(declared).toContain(`  run from ${ROOT} (every git step also says so with -C; the regenerate commands run from there too):`);
@@ -131,6 +145,29 @@ describe("rendering", () => {
     const broken: MechanicalDeclaration = { state: "unreadable", block: null, error: "boom" };
     expect(renderClassification(classifyConflicts([at("a.ts")], broken, "merge", ROOT), broken, ["a.ts"])[0]).toContain("could not be read (boom)");
   });
+});
+
+describe("globPathspec -- nen's glob, spelled in git's grammar with the same meaning (Copilot, NN-PR-#368)", () => {
+  it("escapes the brackets nen reads literally and git would read as a class", () => {
+    expect(globPathspec("generated/[ab].txt")).toBe(":(top,glob)generated/\\[ab\\].txt");
+    expect(globPathspec("surfaces/**/*.md")).toBe(":(top,glob)surfaces/**/*.md");
+  });
+
+  const probe = spawnSync("git", ["--version"], { encoding: "utf8" });
+  it.skipIf(probe.error !== undefined || probe.status !== 0)("stages the literal '[ab].txt' and never 'a.txt', in a real repository", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-wc-pathspec-"));
+    const git = (...args: string[]): string => {
+      const result = spawnSync("git", ["-C", root, "-c", "core.autocrlf=false", ...args], { encoding: "utf8" });
+      if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+      return result.stdout;
+    };
+    git("init", "--quiet");
+    mkdirSync(join(root, "generated"));
+    writeFileSync(join(root, "generated", "[ab].txt"), "literal\n");
+    writeFileSync(join(root, "generated", "a.txt"), "class member\n");
+    git("add", "-A", "--", globPathspec("generated/[ab].txt"));
+    expect(git("-c", "core.quotePath=false", "diff", "--cached", "--name-only").trim().split("\n")).toEqual(["generated/[ab].txt"]);
+  }, 20_000);
 });
 
 describe("loadMechanical", () => {

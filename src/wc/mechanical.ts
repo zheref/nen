@@ -135,9 +135,17 @@ export function literalPathspec(path: string): string {
   return `:(top,literal)${path}`;
 }
 
-/** A declared glob as a root-anchored glob pathspec. */
-function globPathspec(glob: string): string {
-  return `:(top,glob)${glob}`;
+/**
+ * A declared glob as a root-anchored git glob pathspec, with the SAME meaning
+ * nen's matcher gives it (Copilot, NN-PR-#368). The two grammars agree on
+ * `*` (within a segment), `?` (one character within a segment) and a whole
+ * `**` segment (leading, middle or trailing); a `**` inside a segment is two
+ * ordinary stars in both. They disagree on `[` and `]`: literal to nen, a
+ * character class to git -- so both are escaped. A backslash is refused when
+ * the declaration is loaded, so nothing else needs escaping.
+ */
+export function globPathspec(glob: string): string {
+  return `:(top,glob)${glob.replace(/[[\]]/g, (bracket): string => `\\${bracket}`)}`;
 }
 
 /**
@@ -226,7 +234,8 @@ export function classifyConflicts(
   };
 }
 
-const CONTROL = /[\u0000-\u001f\u007f]/;
+/** C0, DEL and C1 (U+0080-U+009F, CSI U+009B among them): every byte a terminal may act on. */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
 
 /**
  * One token as ONE shell word (hanten N8, N9). Plain tokens pass bare; a
@@ -246,7 +255,11 @@ export function shellWord(token: string, first = false): string {
         if (char === "\n") return "\\n";
         if (char === "\r") return "\\r";
         const code = char.charCodeAt(0);
-        return code < 0x20 || code === 0x7f ? `\\x${code.toString(16).padStart(2, "0")}` : char;
+        if (code < 0x20 || code === 0x7f) return `\\x${code.toString(16).padStart(2, "0")}`;
+        // C1 is a CHARACTER, written as \u so the shell re-encodes it as the
+        // same UTF-8 the path holds (\x9b would be one raw byte instead).
+        if (code >= 0x80 && code <= 0x9f) return `\\u${code.toString(16).padStart(4, "0")}`;
+        return char;
       })
       .join("");
     return `$'${body}'`;
@@ -279,7 +292,7 @@ export function renderClassification(
   if (declaration.state === "absent") {
     lines.push(`classes: ${tally} -- ${CONTRACT_FILE} declares no 'mechanical' block, so every path is 'other'`);
   } else if (declaration.state === "unreadable") {
-    lines.push(`classes: ${tally} -- ${CONTRACT_FILE} could not be read (${declaration.error ?? "unknown error"}), so every path is reported as 'other'`);
+    lines.push(`classes: ${tally} -- ${CONTRACT_FILE} could not be read (${plainLine(declaration.error ?? "unknown error")}), so every path is reported as 'other'`);
   } else {
     lines.push(`classes: ${tally} (by ${CONTRACT_FILE}'s 'mechanical' block)`);
   }

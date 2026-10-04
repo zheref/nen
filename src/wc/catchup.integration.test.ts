@@ -31,6 +31,7 @@ import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
+import { renderCommand, shellWord } from "./mechanical.js";
 
 const WHO = ["-c", "user.name=nen test", "-c", "user.email=nen@example.invalid", "-c", "commit.gpgsign=false"];
 const PINNED = ["-c", "core.autocrlf=false", "-c", "protocol.file.allow=always"];
@@ -341,7 +342,9 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"]).split("\n").sort()).toEqual(Object.keys(byPath).sort());
     expect(stopped.doc["cwd"]).toBe(work);
     expect(groups(stopped).every((g): boolean => g.cwd === work)).toBe(true);
-    expect(out).toContain(`  run from ${work} (every git step also says so with -C; the regenerate commands run from there too):`);
+    // The root is rendered through the verb's own quoting: on win32 a path like
+    // C:\Users\LORDZH~1\... is single-quoted, and the line must say exactly that.
+    expect(out).toContain(`  run from ${shellWord(work)} (every git step also says so with -C; the regenerate commands run from there too):`);
     mustGit(work, ["merge", "--abort"]);
   }, GIT_CASE_MS);
 
@@ -370,7 +373,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(text.code).toBe(3);
     expect(text.out.join("\n")).toContain("all 4 conflicted path(s) are mechanical -- exit 3; nen resolved none.");
     expect(text.out.join("\n")).toContain("    $ nen surface mirror generate --surface codex --out allmech/surfaces/codex");
-    expect(text.out.join("\n")).toContain(`    $ git -C ${work} add -A -- ':(top,glob)allmech/surfaces/codex/**'`);
+    expect(text.out.join("\n")).toContain(`    $ ${renderCommand(["git", "-C", work, "add", "-A", "--", ":(top,glob)allmech/surfaces/codex/**"])}`);
     // Nothing was resolved by the verb.
     expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"]).split("\n")).toHaveLength(4);
 

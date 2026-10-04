@@ -2163,8 +2163,11 @@ function repoGlobs(path: string, pointer: string, value: unknown): readonly stri
   });
 }
 
-/** A mirror glob that names EVERY path (`*` at the root, `**`) is refused: every conflict would be a mirror's. */
-const WHOLE_TREE_GLOBS: readonly string[] = ["*", "**", "**/*", "**/**"];
+// A mirror glob made of nothing but `*` and `/` is refused: whatever its
+// spelling (`*`, `**`, `***`, `*/**`, `**/*`), it names paths by depth alone,
+// never by a generated directory, so nearly every conflict would be classed
+// a mirror's and the stop would read as mechanical whatever conflicted.
+const WHOLE_TREE_GLOB = /^[*/]+$/;
 
 /**
  * `mechanical` -- what `nen wc catch-up` may call a MECHANICAL conflict
@@ -2206,7 +2209,7 @@ export function parseMechanical(path: string, value: unknown): MechanicalBlock {
     }
     const paths = repoGlobs(path, `${at}.paths`, entry["paths"]);
     paths.forEach((glob, globIndex): void => {
-      if (WHOLE_TREE_GLOBS.includes(glob)) {
+      if (WHOLE_TREE_GLOB.test(glob)) {
         throw new SchemaError(
           path,
           `${at}.paths[${globIndex}]`,

@@ -142,10 +142,13 @@ describe("the mechanical block -- the conflict set 'nen wc catch-up' classifies 
   });
 
   it("refuses a mirror glob covering the whole tree, and any glob reaching nen/contract.json itself (hanten N7)", () => {
-    for (const glob of ["*", "**", "**/*"]) {
+    for (const glob of ["*", "**", "**/*", "***", "*/**"]) {
       expect(refusal({ mechanical: { mirrors: [{ paths: ["gen/**", glob], regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].paths[1]");
     }
     expect(refusal({ mechanical: { mirrors: [{ paths: ["*"], regenerate: ["x"] }] } }).message).toContain("covers the whole tree");
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["***"], regenerate: ["x"] }] } }).message).toContain("covers the whole tree");
+    // A star INSIDE a named directory is a real mirror glob, not a whole-tree one.
+    expect(parse({ mechanical: { mirrors: [{ paths: ["gen/**", "out*/**"], regenerate: ["x"] }] } }).mechanical?.mirrors[0]?.paths).toEqual(["gen/**", "out*/**"]);
     const self = refusal({ mechanical: { manifests: ["**/*.json"] } });
     expect(self.pointer).toBe("mechanical.manifests[0]");
     expect(self.message).toContain("matches nen/contract.json");

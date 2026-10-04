@@ -196,7 +196,8 @@ conflicted:
 
 Globs take '*', '**' and '?'; a path two globs match is the first class's
 (manifest, changelog, then each mirror in order). A mirror glob covering the
-whole tree ('*', '**') and any glob reaching nen/contract.json itself are
+whole tree (any glob of only '*' and '/': '*', '**', '***', '*/**')
+and any glob reaching nen/contract.json itself are
 refused when the file is read. A DELETE/MODIFY conflict (one side's stage
 missing) on a manifest or changelog is 'other': whether the file should
 exist is a judgement. A mirror's deletion stays a mirror's.

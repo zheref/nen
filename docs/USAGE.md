@@ -2765,8 +2765,8 @@ conflicted path carries a `class`: `manifest`, `changelog`, `mirror` or
 Each list holds repo-relative globs (`*`, `**`, `?`; absolute or backslashed
 ones are refused at load, since git never reports a path that way). A path two
 globs match is the first class's: manifest, then changelog, then each mirror in
-declared order. A mirror glob covering the whole tree (`*`, `**`, `**/*`) is
-refused, since every conflict would then read as a mirror's. So is any glob that
+declared order. A mirror glob covering the whole tree (any glob made only of `*` and `/`:
+`*`, `**`, `***`, `*/**`, `**/*`) is refused, since every conflict would then read as a mirror's. So is any glob that
 reaches `nen/contract.json` itself, because a conflict on the declaration is
 never mechanical. **A delete/modify conflict** on a manifest or changelog (one
 side's index stage missing) is classed `other`: whether the file should exist
@@ -2798,7 +2798,7 @@ assignment.
   `git checkout HEAD` on a rebase) or `git rm` where the base deleted the path, so that a
   generator that will not overwrite a file it did not write can run; then the
   declared `regenerate` argv, exactly as declared; then `git add -A --
-  ':(glob)<each glob>'`. Run it after every non-mirror conflict, since a mirror
+  ':(top,glob)<each glob>'`, each glob spelled in git's grammar with nen's meaning (a `[` or `]`, literal to nen and a class to git, is escaped). Run it after every non-mirror conflict, since a mirror
   is generated from those sources.
 - **other** — listed by name: a judgement nen does not make.
 
