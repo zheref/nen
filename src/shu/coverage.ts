@@ -45,7 +45,7 @@ import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { GIT, must } from "../seam/exec.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { advisoryFor, type CoverageAdvisory } from "./coverage/advisory.js";
-import { digestArtifacts, nulPaths, readCaptureSidecar, recordCapture, takeFingerprint } from "./capture-provenance.js";
+import { digestArtifacts, fileStats, nulPaths, readCaptureSidecar, recordCapture, takeFingerprint } from "./capture-provenance.js";
 import { captureRefusal, judgeCapture, sidecarPath, type CaptureProblem } from "./coverage/capture.js";
 import { openDeclaration } from "./declaration.js";
 import { EXIT_COVERAGE_STALE_CAPTURE, EXIT_COVERAGE_UNJOINED, ShuRefusal } from "./exit.js";
@@ -1012,12 +1012,9 @@ function proveCapture(
   return judgeCapture(read.sidecar, { lane, artifacts: digests, fingerprint: now.fingerprint, head: now.head });
 }
 
+/** The one stat rule (../capture-provenance.ts's `fileStats`): lstat, a regular file. */
 function existsOnDisk(repoRoot: string, value: string): boolean {
-  try {
-    return statSync(join(repoRoot, value)).isFile();
-  } catch {
-    return false;
-  }
+  return fileStats(join(repoRoot, value)) !== null;
 }
 
 /**

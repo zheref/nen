@@ -29,13 +29,25 @@
 // WHAT THE FINGERPRINT LEAVES OUT, ON PURPOSE: the declared reports themselves
 // and the sidecar directory -- the run writes both, so a fingerprint that
 // covered them could never match its own capture -- and ignored files, which
-// is what ignoring means. Everything else a run could have measured is in it.
+// is what ignoring means. Files git is told to look away from (assume-unchanged
+// `h`, skip-worktree `S`) are folded in by their raw content hash, since
+// `git diff` would not show their edits. What still escapes it is published,
+// word for word, as CAPTURE_LIMITS below.
 //
 // TEXT IN, SHAPE OUT. The git reads, the file hashes and the sidecar's bytes
 // are gathered by ../capture-provenance.ts and handed in; this module hashes
 // and compares, and touches neither a filesystem nor a subprocess.
 
 import { createHash } from "node:crypto";
+
+/**
+ * What the fingerprint does NOT catch -- the ONE sentence, printed identically
+ * in `nen shu --help` and docs/USAGE.md (../coverage.test.ts holds the two to
+ * this string), so the limits cannot drift apart between the two places a
+ * reader looks.
+ */
+export const CAPTURE_LIMITS =
+  "Not caught: a change to an IGNORED file; an edit made during the run and undone byte for byte before the reuse; the contents of a NESTED untracked repository (it counts only as present); a difference a clean filter or end-of-line normalisation hides from 'git diff'; an exec-bit change under core.fileMode=false; and two edits to a non-UTF-8 text file that differ only in bytes UTF-8 cannot decode.";
 
 /** The sidecar's own contract name. */
 export const CAPTURE_CONTRACT = "nen.shu.coverage-capture/v0.1";
@@ -65,6 +77,13 @@ export interface TreeFacts {
   readonly head: string;
   readonly diff: string;
   readonly untracked: readonly UntrackedDigest[];
+  /**
+   * Tracked files git is told to look away from -- assume-unchanged (`h`) and
+   * skip-worktree (`S`) -- each with `git hash-object --no-filters` of its
+   * working-tree bytes, or `absent`. Optional so a facts object without any
+   * such file fingerprints exactly as before.
+   */
+  readonly hidden?: readonly UntrackedDigest[];
 }
 
 /** The sidecar, as written and as read back. */
@@ -101,6 +120,14 @@ export function fingerprintOf(facts: TreeFacts): string {
   for (const entry of sorted) {
     field("path", entry.path);
     field("sha256", entry.sha256);
+  }
+  const hidden = [...(facts.hidden ?? [])].sort((a, b): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  if (hidden.length > 0) {
+    field("hidden", String(hidden.length));
+    for (const entry of hidden) {
+      field("path", entry.path);
+      field("object", entry.sha256);
+    }
   }
   return hash.digest("hex");
 }

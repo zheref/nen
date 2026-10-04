@@ -45,7 +45,7 @@ const HAVE_GIT = ((): boolean => {
 })();
 
 /** A script for `process.execPath -e` that writes the declared reports. */
-function writer(declared: readonly string[], extra = ""): string {
+function writer(declared: readonly string[], extra = "", before = ""): string {
   const summary = JSON.stringify({
     total: { lines: { total: 12, covered: 9 } },
     "src/a.ts": { lines: { total: 4, covered: 4 } },
@@ -55,6 +55,7 @@ function writer(declared: readonly string[], extra = ""): string {
   const lcov = `SF:src/a.ts\\nLF:4\\nLH:4\\nend_of_record\\nSF:${CAFE}\\nLF:4\\nLH:3\\nend_of_record\\n`;
   return [
     `const fs = require("fs");`,
+    before,
     `fs.mkdirSync("coverage", { recursive: true });`,
     `fs.writeFileSync(${JSON.stringify(SUMMARY)}, ${JSON.stringify(summary)});`,
     declared.includes(LCOV) ? `fs.writeFileSync(${JSON.stringify(LCOV)}, "${lcov}");` : "",
@@ -65,6 +66,8 @@ function writer(declared: readonly string[], extra = ""): string {
 interface RepoOptions {
   /** Extra JS the coverage tool runs after writing its reports. */
   readonly during?: string;
+  /** JS the coverage tool runs BEFORE writing -- it may exit, or skip the write. */
+  readonly before?: string;
   /** The reports the coverage row declares. */
   readonly artifacts?: readonly string[];
   /** A `test` row, if any, and the artifacts it declares. */
@@ -89,9 +92,11 @@ function repo(options: RepoOptions = {}): string {
   mkdirSync(join(dir, "nen"));
   const artifacts = options.artifacts ?? [SUMMARY];
   const verbs: Record<string, unknown> = {
-    coverage: { exe: process.execPath, argv: ["-e", writer(artifacts, options.during)], artifacts },
+    coverage: { exe: process.execPath, argv: ["-e", writer(artifacts, options.during, options.before)], artifacts },
   };
   if (options.testArtifacts !== undefined && options.testArtifacts !== null) {
+    // The test row's tool writes what the COVERAGE row declares -- the shape
+    // of a test command that also produces the coverage capture.
     verbs["test"] = { exe: process.execPath, argv: ["-e", writer(artifacts)], artifacts: options.testArtifacts };
   }
   writeFileSync(
@@ -263,4 +268,110 @@ describe.skipIf(!HAVE_GIT)("--from-capture, against the real git", () => {
     // the malformed one can never reach git.
     expect(classifyCommand("nen shu coverage --touched --base main --from-capture").classification).toBe("read-only");
   });
+
+  // ── hanten round 2 (zheref/nen#250) ──────────────────────────────────────
+
+  it("a run that exits 0 WITHOUT rewriting the report records nothing, and the old sidecar fails (N1)", async () => {
+    const dir = repo({ before: `if (fs.existsSync(${JSON.stringify(SUMMARY)})) process.exit(0);` });
+    expect((await nen(dir, MEASURE)).code).toBe(0);
+    const sidecar = readFileSync(join(dir, ".nen/coverage-capture/only.json"), "utf8");
+    writeFileSync(join(dir, "src", "a.ts"), "export const a = 'T2';\n");
+    const second = await nen(dir, MEASURE);
+    expect(second.code).toBe(0);
+    expect(second.err.join("\n")).toContain(`the run did not write '${SUMMARY}'; no provenance recorded`);
+    expect(readFileSync(join(dir, ".nen/coverage-capture/only.json"), "utf8")).toBe(sidecar);
+    const reused = await nen(dir, REUSE);
+    expect(reused.code).toBe(8);
+    expect(reused.err.join("\n")).toMatch(/working tree is not the one the capture's run started on/);
+  });
+
+  it("a failed run writes no sidecar", async () => {
+    const dir = repo({ before: "process.exit(1);" });
+    expect((await nen(dir, MEASURE)).code).toBe(1);
+    expect(existsSync(join(dir, ".nen/coverage-capture"))).toBe(false);
+  });
+
+  it("--dry-run writes no sidecar", async () => {
+    const dir = repo();
+    expect((await nen(dir, [...MEASURE, "--dry-run"])).code).toBe(0);
+    expect(existsSync(join(dir, ".nen/coverage-capture"))).toBe(false);
+  });
+
+  it("a tree that cannot be fingerprinted (no .git) records nothing, and says so", async () => {
+    const dir = repo();
+    rmSync(join(dir, ".git"), { recursive: true, force: true });
+    const ran = await nen(dir, ["coverage", "--json"]);
+    expect(ran.code).toBe(0);
+    expect(ran.err.join("\n")).toMatch(/recorded no coverage-capture provenance for lane 'only': HEAD does not name a commit/);
+    expect(existsSync(join(dir, ".nen/coverage-capture"))).toBe(false);
+  });
+
+  it("exit 0 with a declared report missing records nothing, and says so", async () => {
+    const dir = repo({ before: "process.exit(0);" });
+    const ran = await nen(dir, MEASURE);
+    expect(ran.code).toBe(1);
+    expect(ran.err.join("\n")).toContain(`did not leave '${SUMMARY}' on disk`);
+    expect(existsSync(join(dir, ".nen/coverage-capture"))).toBe(false);
+  });
+
+  it("'shu test-report' records the producing verb as 'test-report'", async () => {
+    const dir = repo({ testArtifacts: [SUMMARY] });
+    await nen(dir, ["test-report"]);
+    const sidecar = JSON.parse(readFileSync(join(dir, ".nen/coverage-capture/only.json"), "utf8")) as Record<string, unknown>;
+    expect(sidecar["verb"]).toBe("test-report");
+  });
+
+  it("a test row declaring only SOME of the coverage reports records nothing", async () => {
+    const dir = repo({ artifacts: [SUMMARY, LCOV], testArtifacts: [SUMMARY] });
+    expect((await nen(dir, ["test"])).code).toBe(0);
+    expect(existsSync(join(dir, ".nen/coverage-capture"))).toBe(false);
+  });
+
+  it("a sidecar left behind a later FAILED run that rewrote the report is refused as artifact-changed", async () => {
+    const dir = repo({
+      before: `if (fs.existsSync(".git/nen-fail")) { fs.writeFileSync(${JSON.stringify(SUMMARY)}, '{"total":{"lines":{"total":2,"covered":1}}}'); process.exit(1); }`,
+    });
+    expect((await nen(dir, MEASURE)).code).toBe(0);
+    writeFileSync(join(dir, ".git", "nen-fail"), "");
+    expect((await nen(dir, MEASURE)).code).toBe(1);
+    const reused = await nen(dir, REUSE);
+    expect(reused.code).toBe(8);
+    const said = reused.err.join("\n");
+    expect(said).toContain(`'${SUMMARY}' is not the file the run recorded`);
+    // .git/ is not in the tree: the fingerprint still matches, so this is
+    // the REPORT's hash alone refusing it.
+    expect(said).not.toMatch(/working tree is not/);
+  });
+
+  it("an edit to an ASSUME-UNCHANGED file -- invisible to git diff -- is refused (N2)", async () => {
+    const dir = repo();
+    git(dir, ["update-index", "--assume-unchanged", "src/b.ts"]);
+    expect((await nen(dir, MEASURE)).code).toBe(0);
+    writeFileSync(join(dir, "src", "b.ts"), "export const b = 'hidden';\n");
+    expect(git(dir, ["status", "--porcelain", "--", "src"])).toBe("");
+    expect((await nen(dir, REUSE)).code).toBe(8);
+  });
+
+  it("an edit to a SKIP-WORKTREE file is refused too (N2)", async () => {
+    const dir = repo();
+    git(dir, ["update-index", "--skip-worktree", "src/b.ts"]);
+    expect((await nen(dir, MEASURE)).code).toBe(0);
+    writeFileSync(join(dir, "src", "b.ts"), "export const b = 'hidden';\n");
+    expect((await nen(dir, REUSE)).code).toBe(8);
+  });
+
+  it("an untracked path that is not UTF-8 makes the run record nothing, saying why -- never a marker (N2)", async () => {
+    const dir = repo();
+    const name = Buffer.concat([Buffer.from(join(dir, "src") + "/x"), Buffer.from([0xff]), Buffer.from(".ts")]);
+    try {
+      writeFileSync(name, "x");
+    } catch {
+      return; // a filesystem that only stores UTF-8 names (APFS) cannot hold one: nothing to prove here
+    }
+    const ran = await nen(dir, MEASURE);
+    expect(ran.code).toBe(0);
+    expect(ran.err.join("\n")).toMatch(/is not valid UTF-8/);
+    expect(existsSync(join(dir, ".nen/coverage-capture"))).toBe(false);
+  });
 });
+

@@ -7822,7 +7822,7 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touche
 | `--lane <name>` | no | Which lane to measure. | Defaults to `project.defaultLane`, as everywhere else in this family. |
 | `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. Under `--touched`, also reported **per row**, and giving it OVERRIDES the workflow-file ladder below for that run. |
 | `--touched` | no | Narrow `targets` to the rows a change touched. | Requires `--base`; given without it, **exit 2**. Reads **every** declared report nen can parse, each resolved against its own root; **0 matched against a non-empty touched set is exit 6**. With `--threshold` absent, also loads `nen/workflow.json`'s coverage ladder (defaulting to 80/85/90 when that file is absent) and bands each row; a malformed policy is exit 1 before anything is spawned. See below. |
-| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. Checked before anything runs: a value beginning with `-` (git would read it as an option — `--base=--output=<p>`) and one `git rev-parse --verify --quiet --end-of-options <base>^{commit}` cannot resolve are **exit 2**. |
+| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. Checked before anything runs: a value beginning with `-` (git would read it as an option — `--base=--output=<p>`) and one `git rev-parse --verify --quiet --end-of-options <base>^{commit}` cannot resolve are **exit 2**. **A deliberate exit change** ([#250](https://github.com/zheref/nen/issues/250)): a base naming no commit used to surface as exit 1 from the diff, after the whole coverage run; it is now exit 2 before anything runs. |
 | `--from-capture` | only with `--touched` | Build the touched table from the reports already on disk and **run nothing**. | nen proves the capture this tree's from its provenance sidecar first; one it cannot prove is **exit 8**, nothing reused. Given without `--touched`, with `--dry-run`, or with `--effort`: **exit 2**. See [below](#coverage-from-capture). |
 | `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
@@ -8113,11 +8113,15 @@ the lane's declared coverage reports writes a sidecar,
 lane, the producing verb, each declared report's path and sha256, `HEAD`, the
 start time (for a reader, never compared), and a **tree fingerprint taken at
 the START of the run** — sha256 over `HEAD`, the bytes of
-`git -c core.quotePath=false diff HEAD --binary` (no colour, no external diff,
-no textconv), and the sorted NUL list of untracked non-ignored files
+`git -c core.quotePath=false diff HEAD --binary --submodule=diff
+--ignore-submodules=none` (no colour, no external diff, no textconv), the
+sorted NUL list of untracked non-ignored files
 (`git ls-files -z --others --exclude-standard`) with each file's content
-sha256. The declared reports and `.nen/coverage-capture/` are left out of the
-fingerprint, since the run writes both. Which runs write one is read off the
+sha256 read from the path's exact bytes, and — for every file `git ls-files -v`
+tags assume-unchanged (`h`) or skip-worktree (`S`), whose edits `git diff`
+does not show — `git hash-object --no-filters` of its working-tree bytes
+(read-only, no `-w`). The declared reports and `.nen/coverage-capture/` are
+left out of the fingerprint, since the run writes both. Which runs write one is read off the
 declaration:
 
 - **`nen shu coverage`** (the run form) — always, once its run exits 0 with
@@ -8127,9 +8131,15 @@ declaration:
   names among its own `artifacts`: the repository saying, in its own file,
   that its test command writes the capture. A `test` row that declares none
   of them, or only some, records nothing;
-- never a `--dry-run`, and never a run that failed. A fingerprint that cannot
-  be taken (not a git work tree, no commit yet) records nothing and says so on
-  stderr; the run's document is unchanged either way.
+- never a `--dry-run`, and never a run that failed. Nothing is recorded, with a
+  line on stderr saying why, when the run exited 0 but left a declared report
+  missing, or did **not rewrite** one — its sha256, size, mtime and inode all
+  as they were before the run, so it may be an earlier tree's report; an
+  existing sidecar is then left to fail on its own fingerprint. Nor when the
+  tree cannot be fingerprinted: not a git work tree or no commit yet, a path
+  that is not valid UTF-8 (nen cannot read its bytes back through git's
+  output), or an untracked file it cannot read. The run's document is
+  unchanged either way.
 
 `--from-capture` reads the sidecar, recomputes the fingerprint **now** and
 hashes the reports **now**, and is **refused at exit 8**, with **no document**
@@ -8138,20 +8148,24 @@ fingerprint differs (the message says whether `HEAD` moved), the lane or the
 declared report list differs, or any report's sha256 differs from the one
 recorded — naming that report. Nothing is reused silently, and never a subset.
 So an edit made during or after the run, a merge or pull that rewrote files the
-change does not touch, a rename, a deletion, a new untracked file and a skewed
-clock are all caught. **A capture produced outside nen — no sidecar — is refused
+change does not touch, a rename, a deletion, a new untracked file, an edit to an
+assume-unchanged or skip-worktree file and a skewed clock are all caught. **A
+commit after the capture is a new `HEAD`: measure again** — the ordinary loop
+measures and then commits, and the reuse is for the step that follows the
+measurement on the same tree, not for the tree after the commit. **A capture produced outside nen — no sidecar — is refused
 by design**: nen cannot vouch for a tree it did not fingerprint. The way out is
 always to measure again — the same line without `--from-capture`.
 
-**The limits that remain, stated rather than hidden.** A change to an
-**ignored** file is not in the fingerprint (that is what ignoring means). An
-edit made during the run and undone, byte for byte, before the reuse matches the
-start fingerprint. A run that leaves an **undeclared, unignored** output beside
-its report (an HTML tree, a second report nobody declared) makes its own
-capture unreusable — the fingerprint sees a new untracked file — so ignore that
-output or declare it. The diff is read as text, so two edits to a non-UTF-8
-text file that differ only in bytes UTF-8 cannot decode could fingerprint
-alike.
+**The limits that remain, stated rather than hidden** — the same sentence
+`nen shu --help` prints. Not caught: a change to an IGNORED file; an edit made during the run and undone
+byte for byte before the reuse; the contents of a NESTED untracked repository
+(it counts only as present); a difference a clean filter or end-of-line
+normalisation hides from 'git diff'; an exec-bit change under
+core.fileMode=false; and two edits to a non-UTF-8 text file that differ only in
+bytes UTF-8 cannot decode. A run that
+leaves an **undeclared, unignored** output beside its report (an HTML tree, a
+second report nobody declared) makes its own capture unreusable — the
+fingerprint sees a new untracked file — so ignore that output or declare it.
 
 A proven capture gets exactly what a run's report gets: the same parse, the
 same per-report roots, the same ladder and `touched` shape, and exit 6 when

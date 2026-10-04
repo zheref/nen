@@ -537,42 +537,58 @@ flags:
                    runs: a base beginning with '-' is exit 2 (git would read
                    it as an option), and so is one 'git rev-parse --verify
                    --quiet --end-of-options <base>^{commit}' cannot resolve.
+                   That is a DELIBERATE exit change (zheref/nen#250): a base
+                   naming no commit was exit 1 from the diff, after the whole
+                   coverage run; it is now exit 2 before anything runs.
                    Every path git hands back is read with core.quotePath=false
                    and -z, so a non-ASCII touched path is matched as itself.
   --from-capture   'coverage' only, and only WITH --touched (zheref/nen#250).
                    Do not run the lane's coverage command: build the touched
                    table from the reports its 'artifacts' name, ALREADY ON
-                   DISK. The lane, verb and host are resolved exactly as a
-                   run resolves them (a seated 'coverage' is still exit 4);
-                   the declared argv and its preconditions are never spawned
-                   -- it starts only nen's own fixed-argv git reads. NEN
-                   DECIDES WHETHER THE CAPTURE IS THIS TREE'S, never the
-                   caller, and by PROVENANCE, never a clock: every nen run
-                   that produces the lane's declared coverage reports writes
-                   .nen/coverage-capture/<lane>.json -- 'coverage' always;
-                   'test' and 'test-report' only when the lane's TEST row
-                   declares every one of those reports among its own
+                   DISK. The lane, verb and host are resolved exactly as a run
+                   resolves them (a seated 'coverage' is still exit 4); the
+                   declared argv and its preconditions are never spawned -- it
+                   starts only nen's own fixed-argv git reads. NEN DECIDES
+                   WHETHER THE CAPTURE IS THIS TREE'S, never the caller, and
+                   by PROVENANCE, never a clock: every nen run that produces
+                   the lane's declared coverage reports AND rewrites them
+                   writes .nen/coverage-capture/<lane>.json -- 'coverage'
+                   always; 'test' and 'test-report' only when the lane's TEST
+                   row declares every one of those reports among its own
                    'artifacts' -- recording the lane, each report's sha256,
                    HEAD, the start time, and a TREE FINGERPRINT taken at the
-                   START of the run: sha256 over HEAD, 'git diff HEAD
-                   --binary', and every untracked non-ignored file's path and
-                   content sha256 (the declared reports and .nen/coverage-
-                   capture/ left out). --from-capture recomputes it now and
-                   REFUSES, at exit 8 with no document, naming every reason:
-                   no sidecar (a capture produced outside nen is refused by
-                   design), a different fingerprint, a different lane or
-                   report list, or a report whose sha256 changed. So an edit
-                   during or after the run, a merge, a rename, a deletion and
-                   a new untracked file are all caught; nothing is reused
-                   silently, and never a subset. Not caught: a change to an
-                   IGNORED file, and an edit made during the run and undone
-                   before the reuse. A run that leaves an undeclared,
-                   unignored output beside its report makes its own capture
-                   unreusable -- ignore that output, or declare it. A proven
-                   capture gets exactly the parse, join, ladder, 'touched'
-                   shape and exit 6 a run's report gets, with 'exitCode'
-                   about the read. Given without --touched, with --dry-run,
-                   or with --effort: exit 2.
+                   START of the run: sha256 over HEAD, 'git diff HEAD --binary
+                   --submodule=diff --ignore-submodules=none', every untracked
+                   non-ignored file's path and content sha256, and every
+                   assume-unchanged or skip-worktree file's 'git hash-object
+                   --no-filters' (the declared reports and
+                   .nen/coverage-capture/ left out). Nothing is recorded for a dry run, a
+                   failed run, a run that left a report missing or did NOT
+                   rewrite one (it may be an earlier tree's), or a tree nen
+                   cannot fingerprint (no commit, a non-UTF-8 path, an
+                   unreadable untracked file) -- each says so on stderr.
+                   --from-capture recomputes the fingerprint now and REFUSES,
+                   at exit 8 with no document, naming every reason: no sidecar
+                   (a capture produced outside nen is refused by design), a
+                   different fingerprint, a different lane or report list, or
+                   a report whose sha256 changed. So an edit during or after
+                   the run, a merge, a rename, a deletion and a new untracked
+                   file are all caught, and a commit after the capture is a
+                   new HEAD: measure again. Nothing is reused silently, and
+                   never a subset. Not caught: a change to an IGNORED file; an
+                   edit made during the run and undone byte for byte before
+                   the reuse; the contents of a NESTED untracked repository
+                   (it counts only as present); a difference a clean filter or
+                   end-of-line normalisation hides from 'git diff'; an
+                   exec-bit change under core.fileMode=false; and two edits to a
+                   non-UTF-8 text file that differ only in bytes UTF-8 cannot
+                   decode. A run that leaves an undeclared, unignored output
+                   beside its report makes its own capture unreusable --
+                   ignore that output, or declare it. A proven capture gets
+                   exactly the parse, join, ladder, 'touched' shape and exit 6
+                   a run's report gets, with 'exitCode' about the read. Given
+                   without --touched, with --dry-run, or with --effort: exit
+                   2.
   --from-artifacts 'test-report' only. Do not run anything: read the results
                    file the lane's 'test' verb declares under 'artifacts' and
                    parse whatever is on disk. The lane, the verb and the host
