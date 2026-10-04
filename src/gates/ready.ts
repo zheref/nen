@@ -325,7 +325,7 @@ import {
   parseReviews,
   type ParseError,
 } from "../github/parse.js";
-import type { GateIdentities } from "../schema/gates.js";
+import { untilText, type GateIdentities } from "../schema/gates.js";
 
 // ── tiny jq equivalents ──────────────────────────────────────────────────────
 //
@@ -657,6 +657,61 @@ export interface EvaluateOptions {
    * reading. See ./predicates.ts's `excludeCheckNames` for what "match" means.
    */
   readonly excludeCheckNames: readonly string[];
+  /**
+   * Where `identities.excludedChecks` came from, as the warnings name it
+   * (zheref/nen#249). `nen pr ready` reads them at the pull request's BASE
+   * (Feitan F1) and says so here; absent, the identities' own path is named.
+   */
+  readonly declaredExclusionsSource?: string;
+}
+
+/**
+ * The line that says a declaration dropped checks (zheref/nen#249, Feitan F2):
+ * `excluded by declaration: <labels> — <reason> (ruled <date>, until <until>)`.
+ * One spelling, used by the CON-32(a) row's note, `meta.warnings`, `pr ready`'s
+ * default output and `pr merge`'s transcript, so no reader of any of them sees
+ * a widened verdict without the ruling that widened it.
+ */
+export function declarationNotice(outcome: DeclaredExclusionOutcome): string {
+  return `excluded by declaration: ${outcome.matched.join(", ")} — ${outcome.reason} (ruled ${outcome.ruled}, until ${untilText(outcome.until)})`;
+}
+
+/**
+ * The `meta.warnings` lines one declared exclusion contributes on a decided
+ * evaluation. Every state but "honoured, matched nothing, dated" says
+ * something, because each of the others is either a widened verdict or a
+ * ruling the reader believes applies and does not.
+ */
+function declarationWarnings(outcome: DeclaredExclusionOutcome, source: string, now: string): string[] {
+  const until = untilText(outcome.until);
+  const counted =
+    outcome.matched.length === 0
+      ? "it names no check at this head"
+      : `counted on CON-32(a): ${outcome.matched.join(", ")}`;
+  switch (outcome.status) {
+    case "expired":
+      return [
+        `declared exclusion '${outcome.name}' (${source}) EXPIRED — until ${until} has passed, so it is no longer honoured; ${counted}. Renew the ruling with a new until, or delete the entry.`,
+      ];
+    case "not-yet-ruled":
+      return [
+        `declared exclusion '${outcome.name}' (${source}) NOT honoured — ruled ${outcome.ruled} is after today (UTC), so the ruling is not in force yet; ${counted}.`,
+      ];
+    case "unknown-date":
+      return [
+        `declared exclusion '${outcome.name}' (${source}) NOT honoured — the evaluation time '${now}' could not be read as a date, so whether it is in force is unknown; ${counted}.`,
+      ];
+    case "in-force":
+    case "honoured": {
+      const lines = outcome.matched.length === 0 ? [] : [declarationNotice(outcome)];
+      if (typeof outcome.until !== "string") {
+        lines.push(
+          `declared exclusion '${outcome.name}' (${source}) is in force on a CONDITION nen cannot evaluate: "${until}". It lapses only when the file is edited; re-check the condition.`,
+        );
+      }
+      return lines;
+    }
+  }
 }
 
 /**
@@ -966,23 +1021,9 @@ export function evaluateReady(
           (name): string => `--exclude-check '${name}' matched no check in the rollup`,
         )
       : []),
-    ...declared.outcomes.flatMap((outcome): string[] => {
-      const counted =
-        outcome.matched.length === 0
-          ? "it names no check at this head"
-          : `counted on CON-32(a): ${outcome.matched.join(", ")}`;
-      if (outcome.status === "expired") {
-        return [
-          `declared exclusion '${outcome.name}' (${identities.path} checks.excluded) EXPIRED — until ${outcome.until} has passed, so it is no longer honoured; ${counted}. Renew the ruling with a new until, or delete the entry.`,
-        ];
-      }
-      if (outcome.status === "unknown-date") {
-        return [
-          `declared exclusion '${outcome.name}' (${identities.path} checks.excluded) NOT honoured — the evaluation time '${options.now}' could not be read as a date, so whether until ${outcome.until} has passed is unknown; ${counted}.`,
-        ];
-      }
-      return [];
-    }),
+    ...declared.outcomes.flatMap((outcome): string[] =>
+      declarationWarnings(outcome, options.declaredExclusionsSource ?? `${identities.path} checks.excluded`, options.now),
+    ),
   ];
   const excludedNames: readonly string[] = [
     ...options.excludeCheckNames,
@@ -1096,10 +1137,7 @@ export function evaluateReady(
           : [`admitted beside a SUCCESS, not verified: ${unchecked.join(", ")}`]),
         ...declared.outcomes
           .filter((outcome): boolean => outcome.status === "honoured" && outcome.matched.length > 0)
-          .map(
-            (outcome): string =>
-              `excluded by declaration: ${outcome.matched.join(", ")} — ${outcome.reason} (ruled ${outcome.ruled}, until ${outcome.until})`,
-          ),
+          .map(declarationNotice),
       ];
       return passed(notes.length === 0 ? null : notes.join("; "));
     }

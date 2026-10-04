@@ -59,7 +59,8 @@ import {
 import { parseWorkflow, type ReleaseUnitEntry } from "../schema/workflow.js";
 import { SchemaError } from "../schema/errors.js";
 import { GH, must, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
-import type { Io, PrReadyDeps, PrReadyInput } from "../verbs/pr_ready.js";
+import type { DeclaredExclusionReport, Io, PrReadyDeps, PrReadyInput } from "../verbs/pr_ready.js";
+import { declarationNotice } from "../gates/ready.js";
 import { prReady, defaultDeps } from "../verbs/pr_ready.js";
 import { targetFromRemote, TargetError, type Target } from "../github/target.js";
 
@@ -178,7 +179,13 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
   };
   await prReady(input, captured.io, options.deps ?? defaultDeps);
   const raw = captured.outLines.join("");
-  let parsed: { readonly verdict?: string; readonly gateLine?: string; readonly message?: string; readonly judgedHead?: string | null };
+  let parsed: {
+    readonly verdict?: string;
+    readonly gateLine?: string;
+    readonly message?: string;
+    readonly judgedHead?: string | null;
+    readonly meta?: { readonly declaredExclusions?: readonly DeclaredExclusionReport[] };
+  };
   try {
     parsed = JSON.parse(raw) as typeof parsed;
   } catch {
@@ -194,8 +201,23 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     name: "pr ready",
     ok: parsed.verdict === "ready",
     judgedHead: parsed.judgedHead ?? null,
-    lines: [`pr ready: ${line}`, ...captured.errLines.map(redact)],
+    // What a declared `checks.excluded` entry removed from CON-32(a)
+    // (zheref/nen#249, Feitan F2): a merge transcript never records a widened
+    // verdict without the ruling that widened it.
+    lines: [
+      `pr ready: ${line}`,
+      ...declaredNoticeLines(parsed.meta?.declaredExclusions).map((notice): string => `pr ready: ${notice}`),
+      ...captured.errLines.map(redact),
+    ],
   };
+}
+
+/** The honoured, matching declarations as `declarationNotice` spells them. */
+function declaredNoticeLines(declared: readonly DeclaredExclusionReport[] | undefined): string[] {
+  if (!Array.isArray(declared)) return [];
+  return declared
+    .filter((entry): boolean => entry.status === "honoured" && Array.isArray(entry.matched) && entry.matched.length > 0)
+    .map((entry): string => declarationNotice({ ...entry, matched: entry.matched ?? [] }));
 }
 
 /** The one `gh pr view` fetch this module makes of the pull request itself (Feitan F7/FEI-4/FEI-5). */

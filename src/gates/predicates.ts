@@ -490,10 +490,12 @@ export function unmatchedExcludeCheckNames(
 // `DeclaredCheckExclusion` (its header says what each field binds); what lives
 // here is the two deterministic questions the gate asks of one:
 //
-//   1. Does it apply TODAY? A date `until` is honoured through that UTC day and
-//      ignored from the next; a condition `until` cannot be evaluated by nen and
-//      is honoured until the file changes. An unreadable clock honours NO dated
-//      exclusion: "could not tell whether it lapsed" is never "it has not".
+//   1. Does it apply TODAY? A ruling dated after today (UTC) is not yet in
+//      force. A date `until` is honoured through that UTC day and ignored from
+//      the next; a `{ condition }` until cannot be evaluated by nen and is
+//      honoured until the file changes. An unreadable clock honours NO
+//      exclusion at all: "could not tell whether it is in force" is never "it
+//      is".
 //   2. Which rollup labels does it name? Exact compares the whole label; glob
 //      treats `*` as any run of characters and every other character as itself.
 //
@@ -541,15 +543,19 @@ export interface DeclaredExclusionOutcome {
   readonly match: "exact" | "glob";
   readonly reason: string;
   readonly ruled: string;
-  readonly until: string;
+  readonly until: DeclaredCheckExclusion["until"];
   /**
    * `honoured` -- applied: every label in `matched` was dropped from CON-32(a).
    * `expired`  -- its date `until` has passed: NOT applied, and every label in
    *               `matched` was counted as an ordinary check.
-   * `unknown-date` -- a dated `until` met a clock nen could not read: NOT
+   * `not-yet-ruled` -- its `ruled` date is after today (UTC): NOT applied.
+   * `unknown-date` -- the evaluation time could not be read as a date: NOT
    *               applied, on the conservative side.
+   * `in-force` -- ONLY on a report whose rollup was never read (an
+   *               unevaluated one): the entry is in force by its dates, but
+   *               nothing was applied, so it is not `honoured`.
    */
-  readonly status: "honoured" | "expired" | "unknown-date";
+  readonly status: "honoured" | "expired" | "not-yet-ruled" | "unknown-date" | "in-force";
   /** The rollup labels it names, in rollup order, each once. */
   readonly matched: readonly string[];
 }
@@ -592,11 +598,11 @@ export function resolveDeclaredExclusions(
       checkExclusionMatches(exclusion, label),
     );
     const status: DeclaredExclusionOutcome["status"] =
-      exclusion.untilDate === null
-        ? "honoured"
-        : today === null
-          ? "unknown-date"
-          : today > exclusion.untilDate
+      today === null
+        ? "unknown-date"
+        : today < exclusion.ruled
+          ? "not-yet-ruled"
+          : exclusion.untilDate !== null && today > exclusion.untilDate
             ? "expired"
             : "honoured";
     if (status === "honoured") {

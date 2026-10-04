@@ -323,22 +323,35 @@ export interface GateIdentities {
  *          ["self-hosted","Windows","X64"])`). A name containing a `*` MUST
  *          state `match` -- it has two honest readings, a literal asterisk or a
  *          wildcard -- and a name with no `*` is the same check under either.
+ *          MATCHING IS BY LABEL ONLY, WITH NO ORIGIN PINNING: any check run or
+ *          status that reports under a matching name -- whichever app or
+ *          workflow posted it -- is dropped. That is why a glob must carry a
+ *          literal prefix (see `readCheckExclusions`).
  *   reason the ruling's reason, reported verbatim beside every check it drops.
- *   ruled  the ruling's date, `YYYY-MM-DD`.
- *   until  EITHER a date `YYYY-MM-DD` -- honoured through that UTC day and
- *          IGNORED (reported as expired) from the next one -- OR a free-text
- *          condition ("a Windows runner exists"), which nen cannot evaluate and
- *          so honours until the file is edited, reporting the condition beside
- *          the exclusion every time it applies.
+ *   ruled  the ruling's date, strictly `YYYY-MM-DD`. A ruling dated after the
+ *          evaluation day is not yet in force.
+ *   until  EXACTLY ONE OF TWO SHAPES, so a typo cannot change which one it is:
+ *          a strict `YYYY-MM-DD` string -- honoured through that UTC day and
+ *          IGNORED (reported as expired) from the next one -- or an object
+ *          `{ "condition": "<text>" }`, which nen cannot evaluate and so honours
+ *          until the file is edited, warning on every evaluation it applies to.
+ *          Any other string is refused at load: "2026/10/01" read as a
+ *          condition would never lapse.
  */
 export interface DeclaredCheckExclusion {
   readonly name: string;
   readonly match: "exact" | "glob";
   readonly reason: string;
   readonly ruled: string;
-  readonly until: string;
+  /** As the file states it: the date string, or `{ condition }`. */
+  readonly until: string | { readonly condition: string };
   /** `until` when it is a date, else `null` (a condition nen cannot evaluate). */
   readonly untilDate: string | null;
+}
+
+/** `until` as one line of prose: the date, or the condition's own text. */
+export function untilText(until: DeclaredCheckExclusion["until"]): string {
+  return typeof until === "string" ? until : until.condition;
 }
 
 function readPattern(
@@ -801,6 +814,14 @@ export function isIsoDate(text: string): boolean {
 }
 
 /**
+ * The shortest literal prefix a glob must carry before its first `*`
+ * (Feitan F4). Matching is by label with no origin pinning, so `*)` or `*e*`
+ * would drop checks nobody named -- any app's, any workflow's. Three
+ * characters is the least that still names a job (`ci *`, `check (*`).
+ */
+export const GLOB_MIN_LITERAL_PREFIX = 3;
+
+/**
  * `checks.excluded` -- OPTIONAL, and REFUSED BY POINTER at load when malformed
  * (zheref/nen#249). An exclusion only ever WIDENS the verdict -- it removes a
  * check CON-32(a) would otherwise wait on -- so a malformed one must be a loud
@@ -809,18 +830,26 @@ export function isIsoDate(text: string): boolean {
  *
  *   * a missing or blank `name`, `reason`, `ruled` or `until` is a binding
  *     with part of its condition unstated;
+ *   * surrounding whitespace on any field is refused on its own: a name with
+ *     it matches no label, and a date with it is not the strict shape;
  *   * a name with a `*` and no `match` has two readings (literal or wildcard)
  *     and the file has not said which; guessing changes which check is dropped;
- *   * a glob made only of `*` matches EVERY check -- CON-32(a) retired outright;
- *   * a name with leading or trailing whitespace matches no label GitHub
- *     reports, so it would exclude nothing while reading as if it did;
- *   * a `ruled` or a date-shaped `until` that is not a real calendar date has
- *     no day it was ruled on or lapses on;
- *   * an `until` date BEFORE `ruled` is born expired -- a ruling that never
- *     applied, kept in the file as though it did;
+ *   * a glob whose literal prefix before the first `*` is shorter than
+ *     GLOB_MIN_LITERAL_PREFIX matches checks nobody named (`*`, `*)`, `?*`);
+ *   * a `ruled` or a string `until` that is not a strict, real `YYYY-MM-DD`
+ *     date has no day it was ruled on or lapses on -- and a near-date string
+ *     ("2026/10/01", "2026-10-1", a timestamp, fullwidth digits, a Unicode
+ *     hyphen) read as a condition would NEVER lapse, so it is refused rather
+ *     than reinterpreted; a condition is the explicit `{ "condition": ... }`;
+ *   * an `until` date BEFORE `ruled` is born expired;
  *   * the same `name` twice (under the same `match`) is two reasons for one
  *     exclusion, and the report could quote only one of them.
  */
+export function parseCheckExclusions(path: string, rootValue: unknown): DeclaredCheckExclusion[] {
+  const root = requireRecord(path, "$", rootValue);
+  return readCheckExclusions(path, root["checks"]);
+}
+
 function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion[] {
   if (raw === undefined || raw === null) return [];
   const checks = requireRecord(path, "checks", raw);
@@ -828,28 +857,38 @@ function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion
   if (rawExcluded === undefined || rawExcluded === null) return [];
   const exclusions: DeclaredCheckExclusion[] = [];
   const seenAt = new Map<string, number>();
+  const text = (pointer: string, value: unknown): string => {
+    const stated = requireString(path, pointer, value);
+    if (stated.trim() === "") {
+      throw new SchemaError(
+        path,
+        pointer,
+        "is blank. A declared exclusion states which check, why, when it was ruled and when it lapses -- all four, because each is part of the condition the exclusion binds under.",
+      );
+    }
+    if (stated !== stated.trim()) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `(${JSON.stringify(stated)}) has leading or trailing whitespace. Every field is compared or parsed exactly as written -- a name against a check label that carries none, a date against the strict YYYY-MM-DD shape -- so the whitespace would silently change what it means. Remove it.`,
+      );
+    }
+    return stated;
+  };
+  const strictDate = (pointer: string, stated: string, what: string): string => {
+    if (!isIsoDate(stated)) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `expected ${what} as a strict, real YYYY-MM-DD date (ASCII digits and '-', nothing else), got ${describeValue(stated)}.`,
+      );
+    }
+    return stated;
+  };
   requireArray(path, "checks.excluded", rawExcluded).forEach((entry, index): void => {
     const pointer = `checks.excluded[${index}]`;
     const record = requireRecord(path, pointer, entry);
-    const text = (key: string): string => {
-      const value = requireString(path, `${pointer}.${key}`, record[key]);
-      if (value.trim() === "") {
-        throw new SchemaError(
-          path,
-          `${pointer}.${key}`,
-          "is blank. A declared exclusion states which check, why, when it was ruled and when it lapses -- all four, because each is part of the condition the exclusion binds under.",
-        );
-      }
-      return value;
-    };
-    const name = text("name");
-    if (name !== name.trim()) {
-      throw new SchemaError(
-        path,
-        `${pointer}.name`,
-        `('${name}') has leading or trailing whitespace. Names are compared whole against the check's own label, which carries none, so this entry would exclude nothing while reading as if it did.`,
-      );
-    }
+    const name = text(`${pointer}.name`, record["name"]);
     const rawMatch = record["match"];
     let match: "exact" | "glob";
     if (rawMatch === undefined || rawMatch === null) {
@@ -870,32 +909,28 @@ function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion
         `expected 'exact' or 'glob', got ${describeValue(rawMatch)}`,
       );
     }
-    if (match === "glob" && /^\**$/.test(name)) {
-      throw new SchemaError(
-        path,
-        `${pointer}.name`,
-        `('${name}') is a glob that matches EVERY check, which retires CON-32(a) outright rather than excluding a check. Name the check.`,
-      );
-    }
-    const reason = text("reason");
-    const ruled = text("ruled");
-    if (!isIsoDate(ruled)) {
-      throw new SchemaError(
-        path,
-        `${pointer}.ruled`,
-        `expected the ruling's date as YYYY-MM-DD, got ${describeValue(ruled)}`,
-      );
-    }
-    const until = text("until");
-    let untilDate: string | null = null;
-    if (ISO_DATE.test(until.trim())) {
-      if (!isIsoDate(until)) {
+    if (match === "glob") {
+      const star = name.indexOf("*");
+      const prefix = star === -1 ? name : name.slice(0, star);
+      if (star !== -1 && prefix.length < GLOB_MIN_LITERAL_PREFIX) {
         throw new SchemaError(
           path,
-          `${pointer}.until`,
-          `('${until}') is shaped like a date but is not a real YYYY-MM-DD calendar date, so it has no day it lapses on.`,
+          `${pointer}.name`,
+          `('${name}') is a glob whose literal prefix before the first '*' is ${prefix.length === 0 ? "empty" : `'${prefix}'`}, shorter than ${GLOB_MIN_LITERAL_PREFIX} characters. Matching is by check label with no origin pinning, so it would drop checks nobody named -- any app's, any workflow's. Start it with the job's own name, e.g. 'check (*'.`,
         );
       }
+    }
+    const reason = text(`${pointer}.reason`, record["reason"]);
+    const ruled = strictDate(`${pointer}.ruled`, text(`${pointer}.ruled`, record["ruled"]), "the ruling's date");
+    const rawUntil = record["until"];
+    let until: DeclaredCheckExclusion["until"];
+    let untilDate: string | null = null;
+    if (typeof rawUntil === "string") {
+      until = strictDate(
+        `${pointer}.until`,
+        text(`${pointer}.until`, rawUntil),
+        `the lapse date (a condition nen cannot evaluate is written { "condition": "<text>" })`,
+      );
       if (until < ruled) {
         throw new SchemaError(
           path,
@@ -904,6 +939,22 @@ function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion
         );
       }
       untilDate = until;
+    } else if (isRecord(rawUntil)) {
+      const unknown = Object.keys(rawUntil).filter((key): boolean => key !== "condition" && key !== "$comment");
+      if (unknown.length > 0) {
+        throw new SchemaError(
+          path,
+          `${pointer}.until`,
+          `carries ${unknown.map((key): string => `'${key}'`).join(", ")}, which this build does not read. A condition is exactly { "condition": "<text>" }; a key nobody reads is a lapse rule nobody applies.`,
+        );
+      }
+      until = { condition: text(`${pointer}.until.condition`, rawUntil["condition"]) };
+    } else {
+      throw new SchemaError(
+        path,
+        `${pointer}.until`,
+        `is required: a strict YYYY-MM-DD lapse date, or { "condition": "<text>" } for a lapse nen cannot evaluate. Got ${describeValue(rawUntil)}.`,
+      );
     }
     const key = `${match}\u0000${name}`;
     const previous = seenAt.get(key);

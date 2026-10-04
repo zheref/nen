@@ -3,7 +3,7 @@
 // unit-check (policy read from the pull request's BASE), and whose-pr.
 
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -44,6 +44,7 @@ function readySource(head: string = HEAD): PrStateSource {
       headRefOid: head,
       headRefName: "feature/x",
       baseRefName: "main",
+      baseRefOid: "basebase",
       author: { login: "someone" },
       labels: [],
       reviewRequests: [],
@@ -68,6 +69,7 @@ function readySource(head: string = HEAD): PrStateSource {
     reviewRequestsPage: async (): Promise<never> => {
       throw new Error("should not paginate");
     },
+    fileAtRef: async (): Promise<string | null> => null,
   };
 }
 
@@ -269,6 +271,40 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     expect(outcome.lines.join("\n")).toMatch(/pr ready: ready/);
     expect(outcome.lines.join("\n")).toMatch(/head pin: pinned to cafebabe/);
     expect(outcome.lines.join("\n")).toMatch(/plan only \(pass --run to execute\)/);
+  });
+
+  it("the transcript names what a declared checks.excluded entry removed (zheref/nen#249, Feitan F2)", async () => {
+    const root = tmpRoot();
+    const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+    const plain = readySource();
+    const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+    const source: PrStateSource = {
+      ...plain,
+      pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => {
+        const snapshot = await plain.pullRequestSnapshot(repo, n);
+        return {
+          ...snapshot,
+          checkRollup: [
+            ...(snapshot.checkRollup as unknown[]),
+            { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        };
+      },
+      fileAtRef: async (): Promise<string | null> =>
+        JSON.stringify({
+          ...gates,
+          checks: {
+            excluded: [
+              { name: "check (Windows*", match: "glob", reason: "no Windows runner", ruled: "2024-12-01", until: "2025-06-30" },
+            ],
+          },
+        }),
+    };
+    const outcome = await run(root, passingScript(), { deps: readyDeps(source) });
+    expect(outcome.report.ok).toBe(true);
+    expect(outcome.lines).toContain(
+      `pr ready: excluded by declaration: ${WINDOWS} — no Windows runner (ruled 2024-12-01, until 2025-06-30)`,
+    );
   });
 
   it("merges with --run when every gate passes, carrying the judged SHA in argv (item 3)", async () => {

@@ -355,7 +355,7 @@ that repository's `nen/` directory at the path given by `--repo`
 | `nen/labels.json` | The label set — names, colors, descriptions |
 | `nen/repos.json` | The repository registry — product codes, consumers, and the canon pin (the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry) |
 | `nen/colors.yml` | The status-color precedence for board rendering |
-| `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check |
+| `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check, and optionally `checks.excluded`: checks the maintainer ruled out of CON-32(a), each with its reason, ruling date and `until` — read at the pull request's **base**, never its head |
 | `nen/contract.json` | Optional. What this repository needs *from* Nen (`dependency`), and the stack declaration Nen reads *about* it (`project`). Parsed, validated and reported; nothing acts on it yet |
 | `nen/workflow.json` | Optional, and its absence is a full policy of defaults rather than none. The delivery loop's parameters: the branch template and trunk, the iteration checks, the coverage ladder, which attribution trailers a commit may carry, the reports directory, the model matrix, the self-hosted runner pools. Read by `nen commit format` and `nen runner`, and baked into the hooks `nen scaffold init` generates |
 

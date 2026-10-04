@@ -338,6 +338,33 @@ describe("GitHubClient.pullRequestCommits -- the PR's commits, paginated (E7 opt
   });
 });
 
+describe("GitHubClient.fileAtRef -- one file at one commit (zheref/nen#249, Feitan F1)", () => {
+  it("GETs contents/{path}?ref= and decodes GitHub's line-wrapped base64", async () => {
+    const text = '{"version":1,"checks":{"excluded":[]}}';
+    const b64 = Buffer.from(text).toString("base64");
+    const wrapped = `${b64.slice(0, 20)}\n${b64.slice(20)}\n`;
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: { content: wrapped, encoding: "base64" } }));
+    expect(await drive(clientWith(stub).fileAtRef(REPO, "nen/gates.json", "base123"))).toBe(text);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toContain("/repos/zheref/nen/contents/nen/gates.json");
+    expect(calls[0]?.url).toMatch(/ref=base123/);
+  });
+
+  it("answers null ONLY for a 404 -- the file is not there", async () => {
+    const { fetch: stub } = recordingFetch(() => ({ status: 404, body: { message: "Not Found" } }));
+    expect(await drive(clientWith(stub).fileAtRef(REPO, "nen/gates.json", "base123"))).toBeNull();
+  });
+
+  it("throws on any other failure, and on content that is not base64, so the caller can say the base was unread", async () => {
+    const { fetch: forbidden } = recordingFetch(() => ({ status: 403, body: { message: "Resource not accessible" } }));
+    expect(await rejection(clientWith(forbidden).fileAtRef(REPO, "nen/gates.json", "b"))).toMatchObject({ status: 403 });
+    const { fetch: garbled } = recordingFetch(() => ({ body: { content: "not*base64!" } }));
+    expect(String(await rejection(clientWith(garbled).fileAtRef(REPO, "nen/gates.json", "b")))).toMatch(/not base64/);
+    const { fetch: directory } = recordingFetch(() => ({ body: [{ name: "gates.json" }] }));
+    expect(String(await rejection(clientWith(directory).fileAtRef(REPO, "nen", "b")))).toMatch(/no file content/);
+  });
+});
+
 describe("GitHubClient.commitCheckRuns -- ONE page of a commit's check runs, raw (E7 option B)", () => {
   const payload = {
     total_count: 140,

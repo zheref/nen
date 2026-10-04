@@ -275,3 +275,52 @@ describe("nextBlocker -- round_quorum, on this repository's own nen/gates.json (
     expect(nextBlocker(IDENTITIES, snapshot({ checks: [green], reviews })).kind).toBe("none");
   });
 });
+
+// zheref/nen#249 (Nobunaga N4): the declared exclusions, applied as pr ready
+// applies them. The caller hands in the BASE's declarations.
+describe("nextBlocker -- declared checks.excluded", () => {
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+  const run = (name: string, conclusion: "SUCCESS" | "FAILURE"): CheckRun => ({
+    kind: "check_run",
+    name,
+    status: "COMPLETED",
+    conclusion,
+    startedAt: null,
+    completedAt: null,
+    detailsUrl: null,
+  });
+  const green = run("ci", "SUCCESS");
+  const red = run(WINDOWS, "FAILURE");
+  const ruling = {
+    name: "check (Windows*",
+    match: "glob" as const,
+    reason: "no runner",
+    ruled: "2026-01-01",
+    until: "2026-12-31",
+    untilDate: "2026-12-31",
+  };
+  const NOW = "2026-10-04T00:00:00Z";
+
+  it("drops an honoured excluded check before the red-check step", () => {
+    const withExclusion = nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }), {
+      declaredExclusions: [ruling],
+      now: NOW,
+    });
+    expect(withExclusion.kind).not.toBe("red-check");
+    const without = nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }));
+    expect(without.kind).toBe("red-check");
+  });
+
+  it("an expired one, or one with no clock, drops nothing", () => {
+    expect(
+      nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }), { declaredExclusions: [ruling], now: "2027-01-01T00:00:00Z" }).kind,
+    ).toBe("red-check");
+    expect(nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }), { declaredExclusions: [ruling] }).kind).toBe("red-check");
+  });
+
+  it("a rollup holding only excluded checks is still a red-check, named as such", () => {
+    const result = nextBlocker(IDENTITIES, snapshot({ checks: [red] }), { declaredExclusions: [ruling], now: NOW });
+    expect(result.kind).toBe("red-check");
+    expect(result.detail).toMatch(/^no checks remain after the declared exclusion\(s\): check \(Windows/);
+  });
+});

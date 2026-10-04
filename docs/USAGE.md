@@ -335,7 +335,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
-| `nen/gates.json` | reviewer identities for the readiness check | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, read at the pull request's base) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
@@ -1074,7 +1074,7 @@ a check is out of scope belongs in the declaration the verdict already reads.
       "name": "check (Windows, [\"self-hosted\",\"Windows\",\"X64\"])",
       "reason": "the maintainer ruled Windows out of scope until a runner exists",
       "ruled": "2026-09-22",
-      "until": "a self-hosted Windows runner is registered"
+      "until": { "condition": "a self-hosted Windows runner is registered" }
     },
     { "name": "check (Windows*", "match": "glob", "reason": "…", "ruled": "2026-09-22", "until": "2026-12-31" }
   ]
@@ -1084,29 +1084,56 @@ a check is out of scope belongs in the declaration the verdict already reads.
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | yes | the check's own rollup label (a check run's name, a status's context), compared **whole**. The file is JSON, so a comma, a bracket or a quote is simply part of the name — nothing splits it. |
-| `match` | only when `name` contains `*` | `exact` (the default for a name with no `*`) or `glob`. Under `glob`, `*` matches any run of characters, including none, and **nothing else is special**: `[`, `]`, `?`, `(` and `"` are literal, because matrix names carry them. A name with a `*` and no `match` is refused, since it reads two ways. |
+| `match` | only when `name` contains `*` | `exact` (the default for a name with no `*`) or `glob`. Under `glob`, `*` matches any run of characters, including none, and **nothing else is special**: `[`, `]`, `?`, `(` and `"` are literal, because matrix names carry them. A name with a `*` and no `match` is refused, since it reads two ways. A glob must carry **at least 3 literal characters before its first `*`** (`check (*` passes; `*`, `*)`, `*e*`, `* *`, `?*` are refused). |
 | `reason` | yes | the ruling's reason, quoted beside every check it drops |
-| `ruled` | yes | the ruling's date, `YYYY-MM-DD` |
-| `until` | yes | when it lapses: **either** a date `YYYY-MM-DD` — honoured through that UTC day, **ignored and reported as expired** from the next — **or** a free-text condition, which nen cannot evaluate and so honours until the file is edited, quoting the condition every time |
+| `ruled` | yes | the ruling's date, strictly `YYYY-MM-DD`. A ruling dated **after** today (UTC) is not yet in force: `not-yet-ruled`, not honoured, named in `meta.warnings`. |
+| `until` | yes | **exactly one of two shapes.** A strict `YYYY-MM-DD` string — honoured through that UTC day, **ignored and reported as expired** from the next. Or an object `{ "condition": "<text>" }` — a lapse nen cannot evaluate, honoured until the file is edited, with a `meta.warnings` line on **every** evaluation saying so. Any other string is refused at load, because a near-date read as a condition would never lapse: `2026/10/01`, `2026-10-1`, `2026-10-01T00:00:00Z`, fullwidth digits and Unicode hyphens are all refused by pointer. |
 
-What `nen pr ready` does with it:
+**Matching is by label only, with no origin pinning.** Any check run or status
+that reports under a matching name — whichever app or workflow posted it — is
+dropped. That is why a glob needs a literal prefix, and why an exact name is
+the safer form.
+
+**Read at the pull request's BASE, never its head (Feitan F1).** `nen pr ready`
+reads reviewer identities from the local file (or `--gates`), as before, but
+reads `checks.excluded` from `nen/gates.json` **at the base commit GitHub
+reports for the pull request** (`baseRefOid`, through the REST contents API on
+the same token — it needs `contents:read`). Under `--repo`, a worktree holds the
+pull request's own head; reading the exclusions there would let a pull request
+add an exclusion for its own red check. So:
+
+- an entry the local file declares that the base does not is **not honoured**,
+  and named: `declared exclusion '<name>' is in the local nen/gates.json but not
+  at the pull request's base (<owner>/<repo>@<sha>:nen/gates.json) — NOT
+  honoured until it is merged there.`;
+- a base read that **fails** (no base commit, a 403, a transport that cannot
+  read files, a base file that is not JSON or whose block does not validate)
+  honours **no** exclusion and says so in `meta.warnings`
+  (`declared check exclusions NOT honoured: …`);
+- a base with **no** `nen/gates.json` declares nothing; that is not a failure;
+- identities from `--reviewers` declare no exclusion, as they declare no
+  carve-out, and the base is not read.
+
+What `nen pr ready` does with what it read:
 
 - Every **honoured** entry is resolved to the rollup labels it names, and those
   are dropped from CON-32(a) **before** it is evaluated, through the same
   exclusion `--exclude-check` uses (after `--exclude-run`'s carve-out). The two
   **combine**: a flag's names and a declaration's labels are dropped together.
-- Nothing is dropped silently. `--json` carries every entry in
-  `meta.declaredExclusions` — `name`, `match`, `reason`, `ruled`, `until`,
-  `status` (`honoured`, `expired`, or `unknown-date` when the evaluation time
-  could not be read as a date, which honours no dated entry) and `matched`, the
-  labels it named (`null` on an unevaluated report, whose rollup was never
-  read). A passing CON-32(a) row's `note` says `excluded by declaration:
-  <labels> — <reason> (ruled <date>, until <until>)`. `--explain` prints one
-  line per entry: `declared exclusion: …`, or `declared exclusion EXPIRED, not
-  honoured: …` with the checks it now **counts**.
-- An **expired** entry is not applied, and is also a `meta.warnings` entry
-  naming the file and saying to renew the ruling with a new `until` or delete
-  it — whether or not it names a check at this head.
+- **Nothing is dropped silently.** For every honoured entry that removed at
+  least one check, the line `excluded by declaration: <labels> — <reason>
+  (ruled <date>, until <until>)` is printed by the **default output** right after
+  the judged-head line, carried in `meta.warnings`, set as the passing CON-32(a)
+  row's `note`, and appended to `nen pr merge --release-unit`'s transcript
+  (`pr ready: excluded by declaration: …`). `--json` carries every entry in
+  `meta.declaredExclusions` — `name`, `match`, `reason`, `ruled`, `until` (the
+  date string or the `{ condition }` object), `status` and `matched`, the labels
+  it named. `--explain` prints one line per entry with its status.
+- `status` is `honoured` (applied), `expired`, `not-yet-ruled`, `unknown-date`
+  (the evaluation time could not be read as a date; **no** entry is honoured),
+  or — **only on an unevaluated report**, where GitHub and therefore the base
+  were never read — `in-force`: the LOCAL file's entry is in force by its dates,
+  but nothing was applied, so it is not `honoured`, and `matched` is `null`.
 - A rollup that held **only** excluded checks is still
   `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
   names from both sources listed once. An exclusion never turns an empty or
@@ -1114,17 +1141,19 @@ What `nen pr ready` does with it:
 - Like `--exclude-check`, it never changes which reviewers owe a round or
   whether CON-30's carve-out fires. `meta.excludedChecks` stays the **flag's**
   names only.
+- `nen pr next-blocker` applies the same base-read exclusions; see its section.
 
-The entry is validated at load, by `nen pr ready` and by `nen schema check`
-(whose `gates.json` row adds `, N declared check exclusion(s)` when there are
-any). A missing or blank field, a `ruled` or date-shaped `until` that is not a
-real calendar date, an `until` date before `ruled`, a name with leading or
-trailing whitespace, a glob made only of `*` (it would match every check), an
-unknown `match`, and the same name declared twice are each refused by pointer
-(`checks.excluded[<i>].<field>`), exit `2` from `pr ready`. **Compatibility:**
-an optional key, so `version` stays `1`; a nen older than the release that
-reads it ignores the block, which leaves the excluded check counted — a
-stricter verdict, never a wider one.
+The block is validated at load wherever it is read — the local file by
+`nen pr ready` (exit `2`) and by `nen schema check` (whose `gates.json` row adds
+`, N declared check exclusion(s)` when there are any), the base's copy by the
+base read above. Refused by pointer (`checks.excluded[<i>].<field>`): a missing
+or blank field; surrounding whitespace on any field (its own message); a
+`ruled` or `until` that is not a strict, real `YYYY-MM-DD` date; an `until`
+object carrying anything but `condition`; an `until` date before `ruled`; a glob
+with under 3 literal characters before its first `*`; an unknown `match`; the
+same name declared twice. **Compatibility:** an optional key, so `version`
+stays `1`; a nen older than the release that reads it ignores the block, which
+leaves the excluded check counted — a stricter verdict, never a wider one.
 
 **CON-30's dependency-author carve-out.** `nen/gates.json` may declare an
 optional `dependabot_carve_out`:
@@ -1622,6 +1651,17 @@ This verb reads the **head only**: its snapshot carries no earlier-commit check
 runs. So it does not count a round-check run on an earlier commit, which
 `nen pr ready` does under `bounded`. Where the two differ, `next-blocker` calls
 the round owed. It is stricter than `pr ready` there, never looser.
+
+**Declared check exclusions (zheref/nen#249).** The red-check step applies
+`checks.excluded` exactly as `nen pr ready` does: read from `nen/gates.json`
+**at the pull request's base commit** (`baseRefOid`), never from the local
+file, dated against the current UTC day, and the honoured labels dropped
+before the step judges the rollup. A rollup holding only excluded checks is a
+`red-check` whose detail begins `no checks remain after the declared
+exclusion(s): …`. Any failure to read the base (no base commit, the file absent
+or unreadable, a malformed block) applies **no** exclusion. This verb does not
+take `--exclude-check` or `--exclude-run`, so where a `pr ready` call passed
+one of those it can name a check `pr ready` dropped — stricter, never looser.
 
 The quorum clause **says so wherever it can matter** (Nobunaga's delta review
 of E7, finding F2). That is when the quorum is unmet under `bounded` and a

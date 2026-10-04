@@ -37,7 +37,10 @@ import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js
 import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE } from "./mergeunit.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
-import { loadGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseCheckExclusions, type DeclaredCheckExclusion } from "../schema/gates.js";
+import { SchemaError } from "../schema/errors.js";
+import { BASE_GATES_PATH } from "../gates/base_exclusions.js";
+import { fetchJsonAtRef, type JValue } from "../release/unitcheck.js";
 import type { Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
@@ -143,10 +146,12 @@ ready:
                               An opener never closed with a comma after it is
                               refused (exit 2) -- repeat the flag instead. A
                               name with a comma outside every bracket cannot
-                              be named. Combines with the gates file's
-                              declared checks.excluded (zheref/nen#249): a
-                              standing ruling belongs there, with its reason,
-                              ruling date and until, not in a flag.
+                              be named. Combines with nen/gates.json's
+                              declared checks.excluded (zheref/nen#249), which
+                              is read AT THE PR's BASE commit (never the local
+                              file) and needs contents:read: a standing ruling
+                              belongs there, with its reason, ruling date and
+                              until, not in a flag.
   --gates <path>              Read reviewer identities from this gates file
                               instead of the target repo's nen/gates.json.
                               A RELATIVE path is resolved against the --repo
@@ -702,7 +707,14 @@ function blocker(context: CommandContext): number {
       ? loadGateIdentities(root)
       : resolveIdentities(root, gatesFlag, [], []).identities;
   const snapshot = fetchPullRequest(context.seams, target, prNumber);
+  // `checks.excluded` AT THE BASE (zheref/nen#249, Feitan F1), the same source
+  // `pr ready` reads -- never the local file, which in a worktree is the pull
+  // request's own head. Any failure (no base commit, an unreadable or absent
+  // file, a malformed block) applies none: the stricter answer.
+  const declaredExclusions = baseDeclaredExclusions(context.seams, target, snapshot.baseRefOid ?? "");
   const result = nextBlocker(identities, snapshot, {
+    declaredExclusions,
+    now: new Date().toISOString(),
     reviewers,
     policy: context.args.values["policy"] === "strict" ? "strict" : context.args.values["policy"] === "bounded" ? "bounded" : undefined,
     deliveryPr: context.args.booleans.has("delivery-pr"),
@@ -714,6 +726,35 @@ function blocker(context: CommandContext): number {
   context.io.out(`#${prNumber}: ${result.kind}`);
   context.io.out(`  ${result.detail}`);
   return result.kind === "none" ? 0 : 1;
+}
+
+/** `fetchJsonAtRef`'s structure-preserving tree as the plain value a schema loader reads. */
+function plainJson(value: JValue): unknown {
+  switch (value.kind) {
+    case "object":
+      return Object.fromEntries([...value.entries].map(([key, item]): [string, unknown] => [key, plainJson(item)]));
+    case "array":
+      return value.items.map(plainJson);
+    case "number":
+    case "string":
+    case "boolean":
+      return value.value;
+    case "null":
+      return null;
+  }
+}
+
+/** `checks.excluded` from `nen/gates.json` at `baseSha`, or none on any failure. */
+function baseDeclaredExclusions(seams: Seams, target: Target, baseSha: string): readonly DeclaredCheckExclusion[] {
+  if (baseSha === "") return [];
+  const value = fetchJsonAtRef(seams, target, BASE_GATES_PATH, baseSha);
+  if (value === null) return [];
+  try {
+    return parseCheckExclusions(`${target.slug}@${baseSha}:${BASE_GATES_PATH}`, plainJson(value));
+  } catch (error) {
+    if (error instanceof SchemaError) return [];
+    throw error;
+  }
 }
 
 function cascade(context: CommandContext): number {

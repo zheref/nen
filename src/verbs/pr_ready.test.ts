@@ -3,8 +3,8 @@
 // verb end to end against a STUBBED transport (no gh, no octokit, no
 // network -- `deps.openSource` is the one seam this file drives).
 
-import { describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -25,7 +25,7 @@ import {
   type PrReadyInput,
   type ReadyReport,
 } from "./pr_ready.js";
-import type { PrStateSource } from "../github/pr_state.js";
+import type { PrRef, PrStateSource } from "../github/pr_state.js";
 import {
   normalizePullRequestResponse,
   type CheckRollupPage,
@@ -646,6 +646,7 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
       headRefOid: "cafebabe",
       headRefName: "feature/x",
       baseRefName: "main",
+      baseRefOid: "basebase",
       author: { login: "someone" },
       labels: [],
       reviewRequests: [],
@@ -670,6 +671,9 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
     reviewRequestsPage: async (): Promise<ReviewRequestsPage> => {
       throw new Error("reviewRequestsPage should not be called when hasNextPage is false");
     },
+    // The base declares no nen/gates.json unless a test says otherwise
+    // (zheref/nen#249): an absent file is "no exclusion", never a failed read.
+    fileAtRef: async (): Promise<string | null> => null,
     ...overrides,
   };
 }
@@ -826,6 +830,7 @@ describe("prReady -- the checks-rollup distinction (zheref/nen#14, empty vs. unr
           headRefOid: "cafebabe",
           headRefName: "feature/x",
           baseRefName: "main",
+      baseRefOid: "basebase",
           author: { login: "someone" },
           labels: { nodes: [] },
           reviewRequests: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } },
@@ -896,6 +901,7 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
         headRefOid: "cafebabe",
         headRefName: "feature/x",
         baseRefName: "main",
+      baseRefOid: "basebase",
         author: { login: "someone" },
         labels: [],
         reviewRequests: [],
@@ -1179,6 +1185,7 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
           headRefOid: "cafebabe",
           headRefName: "feature/x",
           baseRefName: "main",
+      baseRefOid: "basebase",
           author: { login: "someone" },
           labels: [],
           reviewRequests: [],
@@ -1211,6 +1218,7 @@ describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
           headRefOid: "cafebabe",
           headRefName: "feature/x",
           baseRefName: "main",
+      baseRefOid: "basebase",
           author: { login: "someone" },
           labels: [],
           reviewRequests: [],
@@ -1268,6 +1276,7 @@ describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
           headRefOid: "cafebabe",
           headRefName: "feature/x",
           baseRefName: "main",
+      baseRefOid: "basebase",
           author: { login: "someone" },
           labels: [],
           reviewRequests: [],
@@ -1412,6 +1421,7 @@ function redCheckAndThreads(): PrStateSource {
         headRefOid: "cafebabe",
         headRefName: "feature/x",
         baseRefName: "main",
+      baseRefOid: "basebase",
         author: { login: "someone" },
         labels: [],
         reviewRequests: [],
@@ -1640,6 +1650,7 @@ describe("prReady -- --require-head <sha> (zheref/nen#245)", () => {
           headRefOid: "",
           headRefName: "feature/x",
           baseRefName: "main",
+      baseRefOid: "basebase",
           author: { login: "someone" },
           labels: [],
           reviewRequests: [],
@@ -1722,13 +1733,7 @@ describe("prReady -- an unevaluated report never carries an unverified requiredH
 
 describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
   const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
-  function gatesDeclaring(excluded: Record<string, unknown>[]): string {
-    const raw = JSON.parse(readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8")) as Record<string, unknown>;
-    const dir = mkdtempSync(join(tmpdir(), "nen-249-"));
-    const path = join(dir, "gates.json");
-    writeFileSync(path, JSON.stringify({ ...raw, checks: { excluded } }));
-    return path;
-  }
+  const FIXTURE = JSON.parse(readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8")) as Record<string, unknown>;
   const RULING = {
     name: "check (Windows*",
     match: "glob",
@@ -1736,7 +1741,24 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     ruled: "2024-12-01",
     until: "2025-06-30",
   };
-  function withRedWindows(): PrStateSource {
+  const NOTICE = `excluded by declaration: ${WINDOWS} — no Windows runner exists (ruled 2024-12-01, until 2025-06-30)`;
+  const dirs: string[] = [];
+  afterEach((): void => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  function gatesText(excluded: Record<string, unknown>[] | null): string {
+    return JSON.stringify(excluded === null ? FIXTURE : { ...FIXTURE, checks: { excluded } });
+  }
+  /** The LOCAL file under --gates: what a worktree on the PR's own head holds. */
+  function localGates(excluded: Record<string, unknown>[] | null): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-249-"));
+    dirs.push(dir);
+    const path = join(dir, "gates.json");
+    writeFileSync(path, gatesText(excluded));
+    return path;
+  }
+  /** A source with a red Windows leg, whose BASE holds `atBase` (null: no file). */
+  function withRedWindows(atBase: (path: string, ref: string) => Promise<string | null>): PrStateSource {
     return stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
         pullRequest: {
@@ -1746,6 +1768,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
           headRefOid: "cafebabe",
           headRefName: "feature/x",
           baseRefName: "main",
+          baseRefOid: "basebase",
           author: { login: "someone" },
           labels: [],
           reviewRequests: [],
@@ -1759,80 +1782,136 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
         reviewRequests: [],
         reviewRequestsPageInfo: { hasNextPage: false, endCursor: null },
       }),
+      fileAtRef: async (_repo: PrRef, path: string, ref: string): Promise<string | null> => atBase(path, ref),
     });
   }
-
-  it("--json: ready, meta.declaredExclusions names the check with its reason, and the row says what it dropped", async () => {
+  const baseDeclares =
+    (excluded: Record<string, unknown>[] | null) =>
+    async (path: string, ref: string): Promise<string | null> => {
+      expect(path).toBe("nen/gates.json");
+      expect(ref).toBe("basebase");
+      return excluded === null ? null : gatesText(excluded);
+    };
+  const run = async (
+    source: PrStateSource | null,
+    local: Record<string, unknown>[] | null,
+    mode: "json" | "explain" | "plain" = "json",
+  ): Promise<{ code: number; out: string[]; report: ReadyReport | null }> => {
     const { io, out } = capture();
     const code = await prReady(
-      input({ values: { ...input().values, gates: gatesDeclaring([RULING]) } }),
+      input({
+        values: { ...input().values, gates: localGates(local) },
+        booleans: new Set(mode === "plain" ? [] : [mode]),
+      }),
       io,
-      stubDeps(withRedWindows()),
+      stubDeps(source),
     );
+    return { code, out, report: mode === "json" ? (JSON.parse(out.join("\n")) as ReadyReport) : null };
+  };
+
+  it("an exclusion present AT THE BASE is honoured: ready, named with its reason in --json", async () => {
+    const { code, report } = await run(withRedWindows(baseDeclares([RULING])), null);
     expect(code).toBe(0);
-    const report = JSON.parse(out.join("\n")) as ReadyReport;
-    expect(report.verdict).toBe("ready");
-    expect(report.meta.excludedChecks).toEqual([]);
-    expect(report.meta.declaredExclusions).toEqual([
-      { ...RULING, status: "honoured", matched: [WINDOWS] },
-    ]);
-    const row = report.conjuncts.find((c): boolean => c.id === "checks-green");
-    expect(row?.note).toContain(`excluded by declaration: ${WINDOWS} — no Windows runner exists`);
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.excludedChecks).toEqual([]);
+    expect(report?.meta.declaredExclusions).toEqual([{ ...RULING, status: "honoured", matched: [WINDOWS] }]);
+    expect(report?.conjuncts.find((c): boolean => c.id === "checks-green")?.note).toContain(NOTICE);
+    expect(report?.meta.warnings).toContain(NOTICE);
   });
 
-  it("undeclared, the same rollup is not-ready", async () => {
-    const { io, out } = capture();
-    expect(await prReady(input(), io, stubDeps(withRedWindows()))).toBe(1);
-    const report = JSON.parse(out.join("\n")) as ReadyReport;
-    expect(report.meta.declaredExclusions).toEqual([]);
+  it("a PR whose HEAD adds an exclusion for its own red check reads not-ready, and says why (Feitan F1)", async () => {
+    const { code, report } = await run(withRedWindows(baseDeclares(null)), [RULING]);
+    expect(code).toBe(1);
+    expect(report?.verdict).toBe("not-ready");
+    expect(report?.meta.declaredExclusions).toEqual([]);
+    expect(report?.meta.warnings).toContain(
+      "declared exclusion 'check (Windows*' is in the local nen/gates.json but not at the pull request's base (zheref/example@basebase:nen/gates.json) — NOT honoured until it is merged there.",
+    );
+  });
+
+  it("undeclared anywhere, the same rollup is not-ready", async () => {
+    const { code, report } = await run(withRedWindows(baseDeclares(null)), null);
+    expect(code).toBe(1);
+    expect(report?.meta.declaredExclusions).toEqual([]);
+    expect(report?.meta.warnings).toEqual([]);
+  });
+
+  it("a base read that FAILS honours no exclusion, and says so", async () => {
+    const failing = withRedWindows(async (): Promise<string | null> => {
+      throw new Error("HTTP 403: Resource not accessible by integration");
+    });
+    const { code, report } = await run(failing, [RULING]);
+    expect(code).toBe(1);
+    expect(report?.meta.declaredExclusions).toEqual([]);
+    expect(report?.meta.warnings.join("\n")).toMatch(
+      /declared check exclusions NOT honoured: the base could not be read \(HTTP 403[\s\S]*every check counts on CON-32\(a\)/,
+    );
+  });
+
+  it("a malformed block AT THE BASE honours nothing, and says so", async () => {
+    const { code, report } = await run(withRedWindows(baseDeclares([{ ...RULING, until: "2025/06/30" }])), null);
+    expect(code).toBe(1);
+    expect(report?.meta.warnings.join("\n")).toMatch(/NOT honoured: [\s\S]*checks\.excluded\[0\]\.until/);
+  });
+
+  it("a transport that cannot read files, or a PR with no base commit, honours none", async () => {
+    const noReader = withRedWindows(baseDeclares([RULING]));
+    delete (noReader as { fileAtRef?: unknown }).fileAtRef;
+    const a = await run(noReader, null);
+    expect(a.code).toBe(1);
+    expect(a.report?.meta.warnings.join("\n")).toMatch(/cannot read files at a commit/);    const withBase = withRedWindows(baseDeclares([RULING]));
+    const noBase: PrStateSource = {
+      ...withBase,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+        const snapshot = await withBase.pullRequestSnapshot(repo, n);
+        return { ...snapshot, pullRequest: { ...snapshot.pullRequest, baseRefOid: undefined } } as PullRequestSnapshot;
+      },
+    };
+    const b = await run(noBase, null);
+    expect(b.code).toBe(1);
+    expect(b.report?.meta.warnings.join("\n")).toMatch(/GitHub answered no base commit/);
+  });
+
+  it("the DEFAULT output prints the notice right after the judged-head line, once (Feitan F2)", async () => {
+    const { out } = await run(withRedWindows(baseDeclares([RULING])), null, "plain");
+    expect(out[0]).toBe("zheref/example#9: ready");
+    expect(out[2]).toBe(`  ${NOTICE}`);
+    expect(out.filter((line): boolean => line.includes("excluded by declaration")).length).toBe(1);
   });
 
   it("--explain names the exclusion, its reason and what it removed", async () => {
-    const { io, out } = capture();
-    await prReady(
-      input({ values: { ...input().values, gates: gatesDeclaring([RULING]) }, booleans: new Set(["explain"]) }),
-      io,
-      stubDeps(withRedWindows()),
-    );
-    expect(out.join("\n")).toContain(
+    const { out } = await run(withRedWindows(baseDeclares([RULING])), null, "explain");
+    const text = out.join("\n");
+    expect(text).toContain(
       `declared exclusion: glob 'check (Windows*' — no Windows runner exists (ruled 2024-12-01, until 2025-06-30) · removed from CON-32(a): ${WINDOWS}`,
     );
+    expect(text).not.toContain("warning: excluded by declaration");
   });
 
   it("past its until date it is not honoured: not-ready, named EXPIRED in --explain and in meta.warnings", async () => {
     const expired = { ...RULING, until: "2024-12-31" };
-    const json = capture();
-    expect(
-      await prReady(input({ values: { ...input().values, gates: gatesDeclaring([expired]) } }), json.io, stubDeps(withRedWindows())),
-    ).toBe(1);
-    const report = JSON.parse(json.out.join("\n")) as ReadyReport;
-    expect(report.meta.declaredExclusions[0]?.status).toBe("expired");
-    expect(report.meta.warnings.some((w): boolean => /EXPIRED — until 2024-12-31 has passed/.test(w))).toBe(true);
-    const explain = capture();
-    await prReady(
-      input({ values: { ...input().values, gates: gatesDeclaring([expired]) }, booleans: new Set(["explain"]) }),
-      explain.io,
-      stubDeps(withRedWindows()),
-    );
+    const json = await run(withRedWindows(baseDeclares([expired])), null);
+    expect(json.code).toBe(1);
+    expect(json.report?.meta.declaredExclusions[0]?.status).toBe("expired");
+    expect(json.report?.meta.warnings.some((w): boolean => /EXPIRED — until 2024-12-31 has passed/.test(w))).toBe(true);
+    const explain = await run(withRedWindows(baseDeclares([expired])), null, "explain");
     expect(explain.out.join("\n")).toContain(
       `declared exclusion EXPIRED, not honoured: glob 'check (Windows*' — no Windows runner exists (ruled 2024-12-01, until 2024-12-31) · COUNTED on CON-32(a): ${WINDOWS}`,
     );
   });
 
-  it("an unevaluated report still names every declaration, with matched null (the rollup was never read)", async () => {
-    const { io, out } = capture();
-    await prReady(input({ values: { ...input().values, gates: gatesDeclaring([RULING]) } }), io, stubDeps(null));
-    const report = JSON.parse(out.join("\n")) as ReadyReport;
-    expect(report.verdict).toBe("unevaluated");
-    expect(report.meta.declaredExclusions).toEqual([{ ...RULING, status: "honoured", matched: null }]);
+  it("an unevaluated report names the local declarations as in-force, matched null -- nothing was applied (N7)", async () => {
+    const { report } = await run(null, [RULING]);
+    expect(report?.verdict).toBe("unevaluated");
+    expect(report?.meta.declaredExclusions).toEqual([{ ...RULING, status: "in-force", matched: null }]);
   });
 
-  it("a malformed declaration is refused at load, never read as something else", async () => {
+  it("a malformed LOCAL declaration is refused at load, never read as something else", async () => {
     const { io, err } = capture();
     const code = await prReady(
-      input({ values: { ...input().values, gates: gatesDeclaring([{ ...RULING, reason: undefined }]) } }),
+      input({ values: { ...input().values, gates: localGates([{ ...RULING, reason: undefined }]) } }),
       io,
-      stubDeps(withRedWindows()),
+      stubDeps(withRedWindows(baseDeclares(null))),
     );
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/checks\.excluded\[0\]\.reason/);

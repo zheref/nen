@@ -24,14 +24,16 @@ import {
   checkAdmissible,
   checksAllGreen,
   defaultReviewers,
+  excludeCheckNames,
   latestChecks,
   pendingRounds,
+  resolveDeclaredExclusions,
   roundQuorum,
   type RoundPolicy,
 } from "../gates/predicates.js";
 import { describeQuorum } from "../gates/ready.js";
 import { rollupEntryLabel, rollupEntryStatus } from "../github/types.js";
-import type { GateIdentities } from "../schema/gates.js";
+import type { DeclaredCheckExclusion, GateIdentities } from "../schema/gates.js";
 import type { PrSnapshot } from "./fetch.js";
 
 export type BlockerKind =
@@ -53,6 +55,18 @@ export interface NextBlockerOptions {
   readonly reviewers?: readonly string[] | undefined;
   readonly policy?: RoundPolicy | undefined;
   readonly deliveryPr?: boolean | undefined;
+  /**
+   * `checks.excluded` as the pull request's BASE declares it (zheref/nen#249),
+   * applied exactly as `nen pr ready` applies it: resolved against the rollup
+   * at `now`, the honoured labels dropped through `excludeCheckNames` before
+   * the red-check step. The caller reads them at the base, never from the
+   * local file, so this verb can never be looser than `pr ready` about which
+   * checks count; it does not apply `--exclude-check`/`--exclude-run`, so it
+   * can be STRICTER (it may name a red check a `pr ready` flag excluded).
+   */
+  readonly declaredExclusions?: readonly DeclaredCheckExclusion[] | undefined;
+  /** The instant exclusions are dated against (ISO-8601). Required to honour any. */
+  readonly now?: string | undefined;
 }
 
 const HOW_TO_VERIFY = /^##\s*How to verify\b/im;
@@ -78,8 +92,20 @@ export function nextBlocker(
     };
   }
 
-  if (!checksAllGreen(snapshot.checks)) {
-    const latest = latestChecks(snapshot.checks);
+  const declared = resolveDeclaredExclusions(
+    options.declaredExclusions ?? [],
+    snapshot.checks,
+    options.now ?? "",
+  );
+  const checks = excludeCheckNames(snapshot.checks, declared.labels);
+  if (!checksAllGreen(checks)) {
+    const latest = latestChecks(checks);
+    if (latest.length === 0 && declared.labels.length > 0 && snapshot.checks.length > 0) {
+      return {
+        kind: "red-check",
+        detail: `no checks remain after the declared exclusion(s): ${declared.labels.join(", ")} -- the rollup held only excluded checks, so nothing was verified; an excluded check is never a pass`,
+      };
+    }
     const summary = latest
       .map((entry): string => `${rollupEntryLabel(entry) ?? "(unnamed)"}=${rollupEntryStatus(entry) ?? "pending"}`)
       .join(", ");

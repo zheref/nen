@@ -656,7 +656,7 @@ describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
     name: WINDOWS,
     reason: "the maintainer ruled Windows out of scope until a runner exists",
     ruled: "2025-05-01",
-    until: "a Windows runner exists",
+    until: { condition: "a Windows runner exists" },
   };
   function declaring(...excluded: Record<string, unknown>[]): ReturnType<typeof parseGateIdentities> {
     return parseGateIdentities("/fixture/nen/gates.json", { ...FIXTURE_RAW, checks: { excluded } });
@@ -677,7 +677,12 @@ describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(evaluation.context.declaredExclusions).toEqual([
       { ...RULING, match: "exact", status: "honoured", matched: [WINDOWS] },
     ]);
-    expect(evaluation.context.warnings).toEqual([]);
+    // Never silent (Feitan F2): the notice rides in the warnings too, and a
+    // condition nen cannot evaluate says so on every run (Feitan F3).
+    expect(evaluation.context.warnings).toEqual([
+      `excluded by declaration: ${WINDOWS} — ${RULING.reason} (ruled 2025-05-01, until a Windows runner exists)`,
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) is in force on a CONDITION nen cannot evaluate: "a Windows runner exists". It lapses only when the file is edited; re-check the condition.`,
+    ]);
   });
 
   it("the SAME check undeclared yields not-ready", () => {
@@ -758,6 +763,33 @@ describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(evaluation.context.warnings[0]).toMatch(/EXPIRED[\s\S]*it names no check at this head/);
   });
 
+  it("a ruling dated after today is NOT YET in force: not honoured, and named", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, ruled: "2025-06-02", until: "2025-12-31" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.declaredExclusions[0]?.status).toBe("not-yet-ruled");
+    expect(evaluation.context.warnings).toEqual([
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) NOT honoured — ruled 2025-06-02 is after today (UTC), so the ruling is not in force yet; counted on CON-32(a): ${WINDOWS}.`,
+    ]);
+    // ...and from its own day on, it is.
+    expect(
+      evaluateReady(declaring({ ...RULING, ruled: "2025-06-01" }), readyState({ checks: [greenCheck(), redWindows] }), OPTIONS)
+        .ready,
+    ).toBe(true);
+  });
+
+  it("names the source the caller says the exclusions came from (the base, in pr ready)", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, until: "2025-01-02", ruled: "2025-01-01" }),
+      readyState(),
+      { ...OPTIONS, declaredExclusionsSource: "o/r@base:nen/gates.json checks.excluded" },
+    );
+    expect(evaluation.context.warnings[0]).toContain("(o/r@base:nen/gates.json checks.excluded) EXPIRED");
+  });
+
   it("an unreadable clock honours NO dated exclusion, and says so", () => {
     const evaluation = evaluateReady(
       declaring({ ...RULING, until: "2099-01-01" }),
@@ -767,6 +799,11 @@ describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(evaluation.ready).toBe(false);
     expect(evaluation.context.declaredExclusions[0]?.status).toBe("unknown-date");
     expect(evaluation.context.warnings[0]).toMatch(/NOT honoured — the evaluation time 'not a time'/);
+    // An unreadable clock honours NO exclusion, a condition one included.
+    expect(
+      evaluateReady(declaring(RULING), readyState({ checks: [greenCheck(), redWindows] }), { ...OPTIONS, now: "x" })
+        .context.declaredExclusions[0]?.status,
+    ).toBe("unknown-date");
   });
 
   it("a rollup holding only declared-excluded checks keeps the ABSENT finding, naming them", () => {

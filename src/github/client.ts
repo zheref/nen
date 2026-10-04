@@ -282,6 +282,52 @@ export class GitHubClient {
     return response.data;
   }
 
+  // ONE file's text at ONE commit, REST `contents/{path}?ref={sha}` -- the
+  // same route ../release/unitcheck.ts's `fetchJsonAtRef` takes through `gh`
+  // for `nen/workflow.json` (Feitan FEI-3), on this client's own token. Read by
+  // `nen pr ready` for `nen/gates.json`'s `checks.excluded` AT THE PULL
+  // REQUEST'S BASE (zheref/nen#249, Feitan F1). `null` ONLY for a 404 (the
+  // file is not there); every other failure throws, so the caller can tell
+  // "the base declares nothing" from "the base could not be read". The base64
+  // body is validated before decoding, for fetchJsonAtRef's reason:
+  // `Buffer.from(..., "base64")` silently drops bytes outside the alphabet.
+  // Needs `contents:read`.
+  async fileAtRef(repo: RepoRef, path: string, ref: string): Promise<string | null> {
+    let data: unknown;
+    try {
+      // Each segment encoded on its own and the slashes kept, as
+      // fetchJsonAtRef does: a `{path}` template parameter would encode the
+      // slash itself (`nen%2Fgates.json`).
+      const encodedPath = path
+        .split("/")
+        .map((segment): string => encodeURIComponent(segment))
+        .join("/");
+      const response = await this.octokit.request(`GET /repos/{owner}/{repo}/contents/${encodedPath}`, {
+        owner: repo.owner,
+        repo: repo.repo,
+        ref,
+      });
+      data = response.data;
+    } catch (error) {
+      if (typeof error === "object" && error !== null && (error as { status?: unknown }).status === 404) {
+        return null;
+      }
+      throw error;
+    }
+    const content =
+      typeof data === "object" && data !== null && !Array.isArray(data)
+        ? (data as { content?: unknown }).content
+        : undefined;
+    if (typeof content !== "string") {
+      throw new Error(`contents/${path}@${ref} answered no file content`);
+    }
+    const base64 = content.replace(/\n/g, "");
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 !== 0) {
+      throw new Error(`contents/${path}@${ref} answered content that is not base64`);
+    }
+    return Buffer.from(base64, "base64").toString("utf8");
+  }
+
   // The issue TIMELINE, paginated, raw.
   //
   // IT HAS TO EXIST, and REST is the only place it does. `reviewRequests`
