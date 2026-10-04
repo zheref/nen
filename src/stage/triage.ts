@@ -26,6 +26,23 @@ export interface StatusEntry {
   readonly indexStatus: string;
   readonly worktreeStatus: string;
   readonly ignored: boolean;
+  /**
+   * A rename's or copy's ORIGINAL path -- the second `-z` record. Carried
+   * rather than discarded (zheref/nen#237, hanten N1): a WORKTREE-column rename
+   * (`git add -N new` after a move) leaves the original's deletion unstaged,
+   * and `stage list` must put it on the add list or the commit keeps the old
+   * file. Absent on every entry that is not a rename or copy.
+   */
+  readonly origPath?: string;
+  /**
+   * The bytes git printed for this path (or its rename's original) are not
+   * UTF-8 -- read by a FATAL decoder on the raw status output, never inferred
+   * from the decoded text (Copilot round 1 on #237: U+FFFD is a legal
+   * character, and a real file named with one is an ordinary path). The path
+   * string is the lenient decode and cannot name the file on disk. Absent
+   * unless set.
+   */
+  readonly undecodable?: true;
 }
 
 // `git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall`.
@@ -48,23 +65,73 @@ export interface StatusEntry {
 // NEW path is kept, since that is what would be staged; the ORIG_PATH record
 // is consumed and never treated as an entry of its own.
 export function parseStatusPorcelain(text: string): readonly StatusEntry[] {
+  return parseRecords(
+    text
+      .split("\0")
+      .filter((record): boolean => record !== "")
+      .map((record): StatusRecord => ({ text: record, undecodable: false })),
+  );
+}
+
+interface StatusRecord {
+  readonly text: string;
+  readonly undecodable: boolean;
+}
+
+/**
+ * `parseStatusPorcelain` over the RAW bytes of `git status -z`: each
+ * NUL-terminated record is decoded on its own by a FATAL UTF-8 decoder, and a
+ * record that is not UTF-8 is decoded leniently instead and its entry marked
+ * `undecodable`. Splitting on the byte 0 first is exact -- UTF-8 never puts a
+ * 0 byte inside a multi-byte character -- so one bad name cannot spoil the
+ * records around it.
+ */
+export function parseStatusPorcelainBytes(bytes: Uint8Array): readonly StatusEntry[] {
+  const fatal = new TextDecoder("utf-8", { fatal: true });
+  const lenient = new TextDecoder("utf-8");
+  const records: StatusRecord[] = [];
+  let start = 0;
+  for (let i = 0; i <= bytes.length; i++) {
+    if (i < bytes.length && bytes[i] !== 0) continue;
+    if (i > start) {
+      const slice = bytes.subarray(start, i);
+      try {
+        records.push({ text: fatal.decode(slice), undecodable: false });
+      } catch {
+        records.push({ text: lenient.decode(slice), undecodable: true });
+      }
+    }
+    start = i + 1;
+  }
+  return parseRecords(records);
+}
+
+function parseRecords(records: readonly StatusRecord[]): readonly StatusEntry[] {
   const entries: StatusEntry[] = [];
-  const records = text.split("\0").filter((record): boolean => record !== "");
   for (let i = 0; i < records.length; i++) {
-    const raw = records[i] ?? "";
+    const record = records[i];
+    const raw = record?.text ?? "";
     const indexStatus = raw[0] ?? " ";
     const worktreeStatus = raw[1] ?? " ";
     const path = raw.slice(3);
-    entries.push({
-      path,
-      indexStatus,
-      worktreeStatus,
-      ignored: indexStatus === "!" && worktreeStatus === "!",
-    });
     const isRenameOrCopy = indexStatus === "R" || indexStatus === "C" || worktreeStatus === "R" || worktreeStatus === "C";
+    const ignored = indexStatus === "!" && worktreeStatus === "!";
     if (isRenameOrCopy) {
-      // The next record is ORIG_PATH -- skip it, it is not its own entry.
+      // The next record is ORIG_PATH -- consumed here, never its own entry,
+      // and carried on this one as `origPath`.
+      const orig = records[i + 1];
       i++;
+      const undecodable = record?.undecodable === true || orig?.undecodable === true;
+      entries.push({
+        path,
+        indexStatus,
+        worktreeStatus,
+        ignored,
+        ...(orig === undefined ? {} : { origPath: orig.text }),
+        ...(undecodable ? { undecodable: true as const } : {}),
+      });
+    } else {
+      entries.push({ path, indexStatus, worktreeStatus, ignored, ...(record?.undecodable === true ? { undecodable: true as const } : {}) });
     }
   }
   return entries;
@@ -205,4 +272,195 @@ export function triageStage(entries: readonly StatusEntry[], options: TriageOpti
   }
 
   return { clean, flagged, ignored };
+}
+
+// ---------------------------------------------------------------------------
+// THE ADD LIST (zheref/nen#237) -- the complement triage never printed.
+//
+// `triageStage` answers "what must NOT be staged blind". A checkpoint needs the
+// other half, "what SHOULD be staged", and deriving it by re-walking `git
+// status` in shell is how two untracked files were dropped from a commit on
+// zheref/kro-pwa#95: a hand-written filter loses exactly the untracked rows,
+// and the diff still looks whole locally because the file is on disk.
+//
+// So the list is computed HERE, from the same entries and the same triage, and
+// never re-derived: every path triage called clean is on it, every flagged path
+// is off it WITH its reasons, every ignored path is off it as the fact it is.
+// It composes with triage rather than changing it -- no detector, no reason
+// and no triage exit code moves for this.
+//
+// ONE CLEAN SHAPE IS NOT ADDABLE, and it is a fact about git rather than a
+// policy: a deletion already staged (`D ` -- gone from the index AND the
+// working tree) matches no pathspec, and `git add` answers it with `fatal:
+// pathspec did not match any files`, staging NOTHING from the whole list. It
+// is already in the commit-to-be, so it is reported in `alreadyStaged` rather
+// than put on a list whose one job is to be fed to `git add` verbatim.
+
+export type AddVerdict = "ready" | "flagged" | "empty";
+
+/**
+ * A WORKTREE-column rename's original path, as the deletion it is (hanten N1).
+ *
+ * `git add -N new` after `mv old new` makes `git status` report ` R new\0old`:
+ * the index holds `old` and an intent-to-add `new`, and the working tree has
+ * moved one onto the other. Staging `new` alone commits a COPY -- `old` stays
+ * in the index -- so the original goes on the entry list as an ordinary
+ * worktree deletion, right after the rename, where every detector sees it and
+ * an unmentioned one is flagged like any other deletion.
+ *
+ * Only `R`, not `C`: a copy's original is still on disk and still tracked, so
+ * there is no deletion to stage. An INDEX-column rename (`R `) needs nothing
+ * either -- the original's removal is already in the index.
+ *
+ * Used by `stage list` only. `stage triage`'s entries and output are left as
+ * they were (#237's scope boundary), so on such a tree triage still does not
+ * see the deletion; that is named as a follow-up rather than changed here.
+ */
+export function expandWorktreeRenames(entries: readonly StatusEntry[]): readonly StatusEntry[] {
+  const expanded: StatusEntry[] = [];
+  for (const entry of entries) {
+    expanded.push(entry);
+    if (entry.worktreeStatus === "R" && entry.origPath !== undefined) {
+      expanded.push({
+        path: entry.origPath,
+        indexStatus: " ",
+        worktreeStatus: "D",
+        ignored: false,
+        ...(entry.undecodable === true ? { undecodable: true as const } : {}),
+      });
+    }
+  }
+  return expanded;
+}
+
+/**
+ * The seven unmerged XY pairs `git status` documents. A path in conflict is
+ * not a change to stage: `git add` on it RECORDS A RESOLUTION, which is a
+ * decision about the conflict, never a transcription (hanten N3).
+ */
+const UNMERGED = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+
+export interface AddList {
+  /**
+   * `ready` -- the list is non-empty and nothing needs a human. `flagged` --
+   * something does: a triage flag, an unmerged path, an embedded repository or
+   * an undecodable name. It outranks `empty`, because a tree whose every change
+   * needs a human is not a tree with nothing to add. `empty` -- nothing to add
+   * and nothing needing a human.
+   */
+  readonly verdict: AddVerdict;
+  /** The exact add list, in `git status` order. Flagged and ignored paths are never on it. */
+  readonly add: readonly string[];
+  /** Triage's flagged paths, each with every reason it matched -- "excluded on purpose", never "not seen". */
+  readonly excluded: readonly FlaggedFile[];
+  /** Clean deletions already staged: in the commit-to-be, and a pathspec `git add` would refuse. */
+  readonly alreadyStaged: readonly string[];
+  /** Git-ignored paths, exactly as triage's `ignored` bucket carries them. */
+  readonly ignored: readonly FlaggedFile[];
+  /** Paths in conflict (UU AA DD AU UA DU UD). Never listed: adding one resolves the conflict. */
+  readonly unmerged: readonly string[];
+  /**
+   * Untracked paths git reports with a trailing `/` under `-uall` -- a nested
+   * repository, empty or populated (hanten N4). `git add` on one records a
+   * gitlink with no `.gitmodules` entry, or refuses it; neither is a decision
+   * a list may make.
+   */
+  readonly embeddedRepos: readonly string[];
+  /**
+   * Paths whose bytes in `git status` are not UTF-8, found by a fatal decoder
+   * on the raw output (`StatusEntry.undecodable`): the string shown is a
+   * lenient decode and can no longer name the file on disk (hanten N7).
+   * Listing it would stage nothing, or the wrong thing. A real U+FFFD in a
+   * name is NOT this -- it is an ordinary path, listed like any other.
+   */
+  readonly undecodable: readonly string[];
+}
+
+export function addListFrom(entries: readonly StatusEntry[], triage: TriageResult): AddList {
+  const byPath = new Map<string, StatusEntry>();
+  for (const entry of entries) if (!byPath.has(entry.path)) byPath.set(entry.path, entry);
+
+  // Paths no list may carry whatever triage said about them, each a fact a
+  // human has to act on. Every one of them makes the verdict non-ready.
+  const unmerged: string[] = [];
+  const embeddedRepos: string[] = [];
+  const undecodable: string[] = [];
+  const held = new Set<string>();
+  const hold = (bucket: string[], path: string): void => {
+    if (!bucket.includes(path)) bucket.push(path);
+    held.add(path);
+  };
+  for (const entry of entries) {
+    if (entry.ignored) continue;
+    if (UNMERGED.has(`${entry.indexStatus}${entry.worktreeStatus}`)) hold(unmerged, entry.path);
+    if (entry.indexStatus === "?" && entry.path.endsWith("/")) hold(embeddedRepos, entry.path);
+    if (entry.undecodable === true) hold(undecodable, entry.path);
+  }
+
+  // DEDUPED, FIRST-SEEN ORDER KEPT (hanten N8): a path reached twice -- a
+  // rename's original that git also reports as its own row -- is one pathspec.
+  const add: string[] = [];
+  const seen = new Set<string>();
+  const alreadyStaged: string[] = [];
+  for (const path of triage.clean) {
+    if (held.has(path) || seen.has(path)) continue;
+    seen.add(path);
+    const entry = byPath.get(path);
+    if (entry !== undefined && entry.indexStatus === "D" && entry.worktreeStatus === " ") alreadyStaged.push(path);
+    else add.push(path);
+  }
+
+  const needsHuman = triage.flagged.length + unmerged.length + embeddedRepos.length + undecodable.length > 0;
+  const verdict: AddVerdict = needsHuman ? "flagged" : add.length === 0 ? "empty" : "ready";
+  return {
+    verdict,
+    add,
+    excluded: triage.flagged,
+    alreadyStaged,
+    ignored: triage.ignored,
+    unmerged,
+    embeddedRepos,
+    undecodable,
+  };
+}
+
+const NAMED_ESCAPES: Readonly<Record<string, string>> = {
+  "\u0007": "\\a",
+  "\b": "\\b",
+  "\t": "\\t",
+  "\n": "\\n",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\r": "\\r",
+  '"': '\\"',
+  "\\": "\\\\",
+};
+
+/**
+ * One path as one LINE `git add --pathspec-from-file=-` reads back as that
+ * exact path.
+ *
+ * Without `--pathspec-file-nul`, git reads one pathspec per line and C-unquotes
+ * a line that BEGINS with a double quote, exactly as `core.quotePath` writes
+ * one. So an ordinary path -- spaces, leading or trailing ones included, and
+ * non-ASCII -- is written raw, and only a path that could not survive a line
+ * is quoted: one carrying a control character (a newline would split it, a
+ * trailing carriage return would be eaten as CR/LF) or one that itself starts
+ * with `"` (which git would otherwise try to unquote). Inside the quotes `"` and
+ * `\` are escaped, the usual control characters take their C names and the rest
+ * are three-digit octal. Non-ASCII stays raw: git's unquote copies every byte it
+ * does not recognise as an escape.
+ */
+export function pathspecLine(path: string): string {
+  const needsQuoting = path.startsWith('"') || /[\u0000-\u001f\u007f]/.test(path);
+  if (!needsQuoting) return path;
+  let quoted = '"';
+  for (const char of path) {
+    const named = NAMED_ESCAPES[char];
+    const code = char.codePointAt(0) ?? 0;
+    if (named !== undefined) quoted += named;
+    else if (code < 0x20 || code === 0x7f) quoted += `\\${code.toString(8).padStart(3, "0")}`;
+    else quoted += char;
+  }
+  return `${quoted}"`;
 }
