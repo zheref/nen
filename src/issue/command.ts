@@ -15,6 +15,7 @@ import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { statSync, writeFileSync } from "node:fs";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
 import {
@@ -54,7 +55,18 @@ import {
   type CloseComments,
 } from "./subissue.js";
 import { commentArgv, postComment, type CommentRequest } from "./comment.js";
-import { certifyIssue, editBodyArgv, writeIssueBody } from "./editbody.js";
+import {
+  bodySha256,
+  certifyIssue,
+  checkExpectedBody,
+  BodyNotSentError,
+  BodyUnreadError,
+  editBodyArgv,
+  parseExpectedSha256,
+  readBackAfterFailedWrite,
+  writeIssueBody,
+  type BodyCheck,
+} from "./editbody.js";
 import { chainPosition, parseRoleMap, terminus, type ChainPositionResult, type TerminusResult } from "./chain.js";
 import { conjoin } from "../cli/prose.js";
 
@@ -112,7 +124,10 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
     booleans: ["dry-run"],
   },
   comment: { values: ["target", "issue", "body", "body-file"], booleans: ["dry-run"] },
-  "edit-body": { values: ["target", "issue", "body-file"], booleans: ["dry-run"] },
+  "edit-body": {
+    values: ["target", "issue", "body-file", "expect-body-sha256", "current-body-out"],
+    booleans: ["dry-run"],
+  },
   "attach-sub": { values: ["target", "parent", "children"], booleans: ["dry-run"] },
   "consolidate-close": {
     values: ["target", "parent", "children", "severity-family", "close-comment", "close-comment-map"],
@@ -342,7 +357,8 @@ usage:
       the same decision chain-position/terminus made.
 
   nen issue edit-body --target <owner/name> --issue <n>
-                      --body-file <path> [--dry-run]
+                      --body-file <path> [--expect-body-sha256 <hex>]
+                      [--current-body-out <path>] [--dry-run]
       Replaces the issue's body OUTRIGHT with the file's bytes -- no
       trimming, no template, the file becomes the body exactly, through
       'gh issue edit --body-file'. --body-file is required; there is no
@@ -359,8 +375,47 @@ usage:
       a refusal. --dry-run still performs that certifying read (this verb
       is not network-free, like 'attach-sub'), then prints the target, the
       number, the byte count and the first and last line of the body
-      instead of writing. --json: '{ contract: "nen.issue.edit-body/v0.1",
-      target, number, bytes, written, dryRun }'.
+      instead of writing, plus the CURRENT body's sha256.
+      --expect-body-sha256 <hex> guards against a LOST UPDATE: give the
+      sha256 (64 hex digits; UTF-8 bytes of the API's 'body' field exactly,
+      untrimmed, a null body hashing as "") of the body your replacement was
+      prepared from. The certifying read compares it with the current body;
+      on a mismatch the verb writes NOTHING and exits 3 (conflict), printing
+      the current hash so you can re-read, re-fold and retry. A dry run
+      performs the same comparison and exits 3 the same way. The safe hash
+      source is --current-body-out <path>: on a dry run and on a conflict it
+      writes the EXACT bytes of the certifying read to <path> (never on a
+      real write that proceeds; refused when it names the --body-file), so
+      you fold from the very bytes whose sha256 the report prints. Computing
+      it yourself:
+          gh api repos/<o>/<n>/issues/<i> | jq -j '.body // ""' | shasum -a 256
+      NOT 'gh ... -q/--jq .body', which adds a trailing newline, and NOT
+      bare 'jq -j .body', which prints 'null' for a null body; either gives
+      a different hash and a false conflict. A read carrying no 'body' field
+      at all is refused under the flag (exit 1), never hashed as "".
+      THIS IS NOT ATOMIC: GitHub's issue update takes no precondition, so
+      the check is read -> compare -> write, and an edit landing between
+      that read and the write is still overwritten unseen. It narrows the
+      window; it does not close it -- serialise your own writers, or
+      comment instead, when that matters. Without the flag nothing is
+      compared. A write that gh started and that failed or dropped is
+      UNCERTAIN (exit 1, never "replaced"): the verb reads the body back
+      once and says whether it now equals the submitted bytes or the
+      previous ones -- evidence, not proof. A gh that could not be
+      STARTED sent nothing: that is NOT-SENT (exit 1, written false, no
+      read-back). Exits: 0 written (or dry run),
+      1 not sent / uncertain / unreadable body / --current-body-out not
+      written on a dry run, 2 usage (including a malformed hash), 3
+      conflict. --json: '{ contract: "nen.issue.edit-body/v0.2", target,
+      number, bytes, bodySha256, written, dryRun, outcome, bodyCheck: {
+      expectedSha256, currentSha256, currentBytes, result, atomic: false },
+      currentBodyOut: null | { path, written, error } }' -- bodySha256 is
+      the sha256 of the replacement bytes read from --body-file, on every
+      outcome, whether or not they were sent; outcome is
+      written | dry-run | conflict | uncertain | not-sent; written is null
+      when uncertain; 'error' is added on uncertain and not-sent, and
+      'readBack: { currentSha256, matchesSubmitted, matchesPrevious,
+      readError }' on uncertain.
 
   nen issue attach-sub --target <owner/name> --parent <n> --children 1,2
                        [--dry-run]
@@ -876,6 +931,11 @@ function editBody(context: CommandContext): number {
     );
   }
 
+  // Parsed before any read, so a malformed expectation is a usage error
+  // (exit 2), never a "conflict" against a body that did not change.
+  const rawExpected = context.args.values["expect-body-sha256"];
+  const expectedSha256 = rawExpected === undefined ? null : parseExpectedSha256(rawExpected);
+
   // READ RAW AND CHECKED BEFORE ANYTHING IS SENT -- the same two decisions
   // comment()'s own --body-file path makes above, for the same reasons: a
   // --dry-run byte count that is not the byte count that would be sent is
@@ -886,6 +946,21 @@ function editBody(context: CommandContext): number {
     resolveRepoRoot({ repoFlag: context.repoFlag }),
     bodyFile,
   );
+  // --current-body-out: where the certifying read's EXACT bytes go, on a dry
+  // run and on a conflict, so a fold is prepared from the very bytes whose
+  // sha256 the report prints (zheref/nen#205). Refused when it names the
+  // --body-file itself: a conflict would overwrite the caller's own fold.
+  const rawCurrentOut = context.args.values["current-body-out"];
+  const currentOutPath =
+    rawCurrentOut === undefined
+      ? null
+      : resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), rawCurrentOut);
+  if (currentOutPath !== null && sameFile(currentOutPath, bodyPath)) {
+    throw new VerbUsageError(
+      `--current-body-out '${rawCurrentOut ?? ""}' is the --body-file itself (the same path, or a link or alias to the same file). It is written on a dry run and on a conflict, so it would overwrite the replacement you prepared; name another path.`,
+    );
+  }
+
   const body = readTextFile(
     bodyPath,
     process.cwd(),
@@ -905,21 +980,96 @@ function editBody(context: CommandContext): number {
   // request for. See ./editbody.ts's own header for why this is a usage
   // error (exit 2) rather than this family's other object-class refusal
   // (NotAnIssueError, exit 1).
-  certifyIssue(context.seams, target, issue);
+  //
+  // THE SAME READ CARRIES THE CURRENT BODY, and with --expect-body-sha256 it
+  // is compared here, on the read that immediately precedes the write -- the
+  // narrowest window this backend allows, and still a window: see
+  // ./editbody.ts's header (zheref/nen#205) for why this is not atomic.
+  const summary = certifyIssue(context.seams, target, issue);
+  const check = checkExpectedBody(summary, expectedSha256, target.slug);
 
   const bytes = Buffer.byteLength(body, "utf8");
+  const replacementSha256 = bodySha256(body);
   const argv = editBodyArgv(target, issue, bodyPath);
+  const dryRun = context.args.booleans.has("dry-run");
+  const bodyCheck = {
+    expectedSha256: check.expectedSha256,
+    currentSha256: check.currentSha256,
+    currentBytes: check.currentBytes,
+    result: check.result,
+    // Never true: GitHub takes no precondition on this write. Carried on
+    // every report so no consumer can read a "matched" as a guarantee.
+    atomic: false,
+  };
+  // What --current-body-out did: null when not asked for; otherwise the path
+  // and whether the bytes landed there (only a dry run or a conflict writes).
+  let currentBodyOut: { path: string; written: boolean; error: string | null } | null =
+    currentOutPath === null ? null : { path: currentOutPath, written: false, error: null };
+  const writeCurrentBody = (): void => {
+    if (currentOutPath === null) return;
+    if (summary.body === undefined) {
+      throw new BodyUnreadError(target.slug, issue, "--current-body-out has no bytes to write");
+    }
+    try {
+      writeFileSync(currentOutPath, summary.body, "utf8");
+      currentBodyOut = { path: currentOutPath, written: true, error: null };
+    } catch (error) {
+      currentBodyOut = {
+        path: currentOutPath,
+        written: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+  const report = (outcome: string, written: boolean | null, extra: Record<string, unknown> = {}): string =>
+    JSON.stringify(
+      {
+        contract: EDIT_BODY_CONTRACT,
+        target: target.slug,
+        number: issue,
+        bytes,
+        bodySha256: replacementSha256,
+        written,
+        dryRun,
+        outcome,
+        bodyCheck,
+        currentBodyOut,
+        ...extra,
+      },
+      null,
+      2,
+    );
 
-  if (context.args.booleans.has("dry-run")) {
+  // A CONFLICT REFUSES BEFORE ANY WRITE, dry run or not -- a dry run whose
+  // verdict differs from the real run's is not a dry run.
+  if (check.result === "conflict") {
+    // Still exit 3 if the file could not be written: the conflict is the
+    // fact a caller branches on, and the report says the file did not land.
+    writeCurrentBody();
     if (context.json) {
-      context.io.out(
-        JSON.stringify(
-          { contract: "nen.issue.edit-body/v0.1", target: target.slug, number: issue, bytes, written: false, dryRun: true },
-          null,
-          2,
-        ),
+      context.io.out(report("conflict", false));
+    } else {
+      context.io.err(
+        `nen issue: conflict -- ${target.slug}#${issue}'s body is not the version this replacement was prepared from, so nothing was written.`,
       );
-      return 0;
+      context.io.err(`  expected body sha256: ${check.expectedSha256 ?? ""}`);
+      context.io.err(`  current body sha256:  ${check.currentSha256 ?? ""} (${check.currentBytes ?? 0} byte(s))`);
+      if (currentBodyOut !== null) context.io.err(`  ${currentBodyOutLine(currentBodyOut)}`);
+      context.io.err(
+        "  Someone else changed it since you read it. Re-read the body (or take the bytes --current-body-out wrote), fold your change into it, and retry with --expect-body-sha256 set to what you read.",
+      );
+    }
+    return EDIT_BODY_CONFLICT_EXIT;
+  }
+
+  if (dryRun) {
+    writeCurrentBody();
+    // A dry run asked for the file and did not produce it: that is a failed
+    // dry run (exit 1), never a quiet success a fold is then prepared from.
+    const outFailed = currentBodyOut !== null && !currentBodyOut.written;
+    if (context.json) {
+      context.io.out(report("dry-run", false));
+      return outFailed ? 1 : 0;
     }
     const { first, last } = bodyBookends(body);
     context.io.out(`would run: gh ${argv.join(" ")}`);
@@ -928,24 +1078,111 @@ function editBody(context: CommandContext): number {
     context.io.out(`bytes: ${bytes}`);
     context.io.out(`first line: ${first}`);
     context.io.out(`last line: ${last}`);
+    context.io.out(`current body sha256: ${check.currentSha256 ?? "unknown -- the read carried no 'body' field"}`);
+    if (currentBodyOut !== null) context.io.out(currentBodyOutLine(currentBodyOut));
+    context.io.out(bodyCheckLine(check, "dry run"));
+    if (outFailed) {
+      context.io.err("nen issue: --current-body-out could not be written, so this dry run did not produce what it was asked for.");
+      return 1;
+    }
     return 0;
   }
 
   // The resolved path, for the reason comment() states: `gh` must be handed the
   // same file this verb read and counted (Copilot, PR #197).
-  writeIssueBody(context.seams, target, issue, bodyPath);
+  try {
+    writeIssueBody(context.seams, target, issue, bodyPath);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // NOT SENT is certain: gh never started, so no request left this machine,
+    // and a read-back would need the same missing gh.
+    if (error instanceof BodyNotSentError) {
+      if (context.json) {
+        context.io.out(report("not-sent", false, { error: message }));
+      } else {
+        context.io.err(`nen issue: ${message}.`);
+        context.io.err("  Nothing reached GitHub; the body is unchanged by this run.");
+      }
+      return 1;
+    }
+    // UNCERTAIN, NEVER "WRITTEN" -- and never confidently "not written"
+    // either: a request whose answer was lost may still have been applied.
+    const readBack = readBackAfterFailedWrite(context.seams, target, issue, replacementSha256, check.currentSha256);
+    if (context.json) {
+      context.io.out(report("uncertain", null, { error: message, readBack }));
+    } else {
+      context.io.err(`nen issue: ${message}`);
+      context.io.err(
+        `  outcome UNCERTAIN -- a failed or dropped response cannot tell a refused write from an applied one whose answer was lost, so this is not reported as written.`,
+      );
+      context.io.err(
+        readBack.readError !== null
+          ? `  read-back failed too: ${readBack.readError}`
+          : readBack.matchesSubmitted === true
+            ? `  read-back: the body now equals the submitted bytes (sha256 ${readBack.currentSha256 ?? ""}) -- the write probably landed, but that is not proof.`
+            : readBack.matchesPrevious === true
+              ? `  read-back: the body still equals what the certifying read saw (sha256 ${readBack.currentSha256 ?? ""}) -- the write probably did not land, but a delayed apply cannot be ruled out.`
+              : `  read-back: the body equals NEITHER the submitted bytes NOR what the certifying read saw (current sha256 ${readBack.currentSha256 ?? ""}) -- another writer has been here.`,
+      );
+      context.io.err("  Re-read the body before retrying; retry with --expect-body-sha256 set to what you read.");
+    }
+    return 1;
+  }
   if (context.json) {
-    context.io.out(
-      JSON.stringify(
-        { contract: "nen.issue.edit-body/v0.1", target: target.slug, number: issue, bytes, written: true, dryRun: false },
-        null,
-        2,
-      ),
-    );
+    context.io.out(report("written", true));
     return 0;
   }
   context.io.out(`replaced ${target.slug}#${issue}'s body (${bytes} byte(s))`);
+  if (check.result === "matched") context.io.out(bodyCheckLine(check, "write"));
   return 0;
+}
+
+/**
+ * Whether two paths name ONE file -- lexically, or, when both exist, by
+ * identity (device + inode, following links), so a symlink, a hard link or a
+ * case-insensitive alias of the --body-file is caught too: `writeFileSync`
+ * follows a link, and would overwrite the caller's fold through any of them.
+ * A path that does not exist yet can only be the same file lexically.
+ */
+function sameFile(a: string, b: string): boolean {
+  if (a === b) return true;
+  const identity = (path: string): { dev: number; ino: number } | null => {
+    try {
+      const stats = statSync(path);
+      return { dev: stats.dev, ino: stats.ino };
+    } catch {
+      return null;
+    }
+  };
+  const left = identity(a);
+  const right = identity(b);
+  return left !== null && right !== null && left.dev === right.dev && left.ino === right.ino;
+}
+
+/** One human line for --current-body-out's result. */
+function currentBodyOutLine(out: { readonly path: string; readonly written: boolean; readonly error: string | null }): string {
+  return out.written
+    ? `current body written to: ${out.path} (the exact bytes of this read)`
+    : `current body NOT written to ${out.path}: ${out.error ?? "unknown error"}`;
+}
+
+/** The `--json` contract id. v0.2 adds bodySha256/outcome/bodyCheck (zheref/nen#205). */
+const EDIT_BODY_CONTRACT = "nen.issue.edit-body/v0.2";
+
+/** Exit 3: the body changed since the expected version; nothing was written. */
+export const EDIT_BODY_CONFLICT_EXIT = 3;
+
+/**
+ * One line saying what was CHECKED and what was not GUARANTEED -- the
+ * distinction zheref/nen#205 requires both modes to keep.
+ */
+function bodyCheckLine(check: BodyCheck, mode: "dry run" | "write"): string {
+  if (check.result === "none") {
+    return "body check: none -- no --expect-body-sha256 given, so a concurrent edit would be overwritten unseen.";
+  }
+  return mode === "dry run"
+    ? "body check: the current body matches --expect-body-sha256 at this read; a real run re-reads and re-checks, and even then the check is NOT atomic (GitHub takes no conditional write)."
+    : "body check: the current body matched --expect-body-sha256 on the read just before the write -- NOT atomic: an edit landing between that read and this write would have been overwritten unseen.";
 }
 
 function attach(context: CommandContext): number {

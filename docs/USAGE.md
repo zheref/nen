@@ -180,7 +180,7 @@ document half-understood is worse than not reading it at all. Thirty shapes
 qualify today and declare one (thirty-two ids: `nen.stop.mark` and
 `nen.runner.plan` each have two versions):
 
-`nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.1` ·
+`nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.2` ·
 `nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.ready/v0.1` ·
 `nen.report.data/v0.1` · `nen.report.render/v0.1` · `nen.scaffold.init/v0.1` ·
 `nen.scaffold.new/v0.1` · `nen.shu.<verb>/v0.1` (per executing verb) ·
@@ -277,6 +277,7 @@ verb it invoked. The complete list:
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
+| [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
@@ -307,7 +308,7 @@ verb does by default:
 |---|---|---|---|
 | [`issue file`](#nen-issue-file) | no | `--dry-run` | fully offline — no network call at all |
 | [`issue comment`](#nen-issue-comment) | no | `--dry-run` | fully offline; also prints the exact bytes of the body |
-| [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count and first/last line |
+| [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count, first/last line, `current body sha256:` and a `body check:` line saying what was and was not checked; with `--expect-body-sha256` it also compares, and a mismatch exits **3** (conflict, nothing written) exactly as a real run would; `--current-body-out <path>` writes the read's exact bytes |
 | [`issue attach-sub`](#nen-issue-attach-sub) | no | `--dry-run` | **still reads GitHub** to certify every number is an issue, not a PR |
 | [`issue consolidate-close`](#nen-issue-consolidate-close) | no | `--dry-run` | **still reads GitHub** for the object-class check and the open-PR guard |
 | [`labels sync`](#nen-labels-sync) | no | `--dry-run` | fully offline |
@@ -5523,7 +5524,9 @@ write.
 **Usage**
 
 ```text
-nen issue edit-body --target <owner/name> --issue <n> --body-file <path> [--dry-run]
+nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
+                    [--expect-body-sha256 <hex>] [--current-body-out <path>]
+                    [--dry-run]
 ```
 
 **Arguments**
@@ -5533,16 +5536,76 @@ nen issue edit-body --target <owner/name> --issue <n> --body-file <path> [--dry-
 | `--target <owner/name>` | yes | The GitHub repository. | Missing exits 1. |
 | `--issue <n>` | yes | The issue to replace the body of. | Read with the same strict `/^\d+$/` guard `comment`'s `--issue` uses — `1e3` or `0x0c` are refused rather than silently accepted as 1000/12, because this is a MUTATING read. |
 | `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) so `gh` reads the same bytes this verb previewed. | There is no inline `--body` — that flag belongs to [`issue comment`](#nen-issue-comment). An unreadable path, or one holding only whitespace, is refused (exit 2). |
+| `--expect-body-sha256 <hex>` | no | The sha256 (64 hex digits, either case) of the body your replacement was **prepared from**: the UTF-8 bytes of the REST payload's `body` field exactly — untrimmed, no newline normalisation, a `null` body hashing as `""`. The certifying read compares it with the current body; a mismatch writes nothing and exits **3**. | A malformed value is a usage error (exit 2), never a conflict. A read carrying no `body` field at all (not `null` — absent) is refused at exit 1, never hashed as `""`. **Not atomic** — see *Lost updates* below. Without it nothing is compared. |
+| `--current-body-out <path>` | no | Write the **exact bytes of the certifying read** to `<path>`, on a dry run and on a conflict — the safe source for the next expectation: fold from that file, and its sha256 is the one the report printed. | Never written on a real write that proceeds. Refused (exit 2) when it names the `--body-file` — the same path, or, when both exist, the same file by identity (device + inode, following links: a symlink, a hard link or a case-insensitive alias) — because a conflict would overwrite your fold. A dry run that cannot write it exits 1; a conflict that cannot write it stays exit 3 and says so (`currentBodyOut.written: false`). |
 | `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has. |
 
 **Output and exit codes** — human line on a real write: `replaced
 <target>#<issue>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh
 issue edit ...` followed by `target:`/`number:`/`bytes:`/`first line:`/`last
-line:`. `--json`: `{ contract: "nen.issue.edit-body/v0.1", target, number,
-bytes, written, dryRun }` — exactly those six fields, dry run or not. Exit 0
-on success (dry or real); exit 2 on a malformed/absent `--issue`, an
-empty/unreadable `--body-file`, or a number that certifies as a pull
-request; exit 1 if `gh issue edit` itself fails after certification passed.
+line:`/`current body sha256:`/`body check:`. `--json`: `{ contract:
+"nen.issue.edit-body/v0.2", target, number, bytes, bodySha256, written,
+dryRun, outcome, bodyCheck: { expectedSha256, currentSha256, currentBytes,
+result, atomic }, currentBodyOut }` — `bodySha256` is the sha256 of the
+**replacement bytes read from `--body-file`**, populated on every outcome
+(dry run, conflict and not-sent included, where nothing was sent), `outcome` is `written` | `dry-run` | `conflict` | `uncertain` |
+`not-sent`, `bodyCheck.result` is `none` | `matched` | `conflict`, `atomic`
+is always `false`, and `currentBodyOut` is `null` or `{ path, written, error
+}`. An uncertain outcome sets `written: null` and adds `error` and `readBack:
+{ currentSha256, matchesSubmitted, matchesPrevious, readError }` —
+`matchesSubmitted` compares the body now on GitHub with `bodySha256`, the
+replacement bytes read from `--body-file`; `matchesPrevious` compares with `bodyCheck.currentSha256`, the version the
+certifying read saw. A not-sent outcome sets `written: false` and adds
+`error`. (v0.1 carried only the first six fields.) Exit 0 on success (dry or real); exit 2 on a malformed/absent
+`--issue`, an empty/unreadable `--body-file`, a malformed
+`--expect-body-sha256`, a `--current-body-out` naming the `--body-file`, or a
+number that certifies as a pull request (that refusal comes before the hash
+comparison); exit 3 on a **conflict** — the current body is not the expected
+version, nothing was written; exit 1 if `gh issue edit` fails after
+certification passed (reported as **uncertain**, or as **not sent** when `gh`
+could not be started, never as written), on a read with no `body` field under
+`--expect-body-sha256`/`--current-body-out`, or on a dry run whose
+`--current-body-out` could not be written.
+
+**Where the expected hash comes from.** The safe source is the verb itself:
+`nen issue edit-body … --dry-run --current-body-out base.md` writes the exact
+bytes of its read to `base.md` and prints their sha256 — fold into that file,
+then pass the printed hash. A conflict does the same, so the retry loop is
+"take the bytes the conflict wrote, re-fold, retry with the hash it printed".
+To compute one outside nen:
+
+```bash
+gh api repos/<owner>/<name>/issues/<n> | jq -j '.body // ""' | shasum -a 256
+```
+
+Two traps produce a **different** hash and a false conflict: `gh … -q .body`
+/ `--jq .body` adds a trailing newline, and bare `jq -j .body` prints the
+four characters `null` for a null body (the `// ""` above is what maps it to
+the empty body nen hashes).
+
+**Lost updates, and why this is not a compare-and-swap**
+([#205](https://github.com/zheref/nen/issues/205)). Writers A and B both
+read v1; B writes v2; A submits a replacement prepared from v1 — and B's
+additions are gone. With `--expect-body-sha256 <sha256 of v1>`, A's run sees
+v2 on its certifying read and refuses at exit 3, printing the current hash so
+A can re-read, re-fold and retry. What it **cannot** do: GitHub's issue
+update takes no precondition (no `If-Match`, no expected version), so the
+check is read → compare → write, two requests with a window between them. A
+write landing inside that window is still overwritten unseen. Comparing on
+the read that immediately precedes the write makes the window as narrow as
+this backend allows; it does not close it, and every report says so
+(`atomic: false`; the human `body check:` line). Where exclusion matters,
+serialise your own writers or post an additive comment instead.
+
+A write `gh` started and that then failed is **uncertain**, not "not
+written": a dropped or timed-out response cannot tell a refused request from
+an applied one whose answer was lost. The verb reads the body back once and
+says whether it now equals the submitted bytes (`matchesSubmitted`) or the
+version its certifying read saw (`matchesPrevious`) — evidence, not proof —
+prints no `replaced` line, and exits 1. Re-read before retrying, and retry
+with `--expect-body-sha256` set to what you read. A `gh` that could not be
+**started** is the one certain failure: nothing was sent, so it is reported
+as **not sent** (`written: false`), with no read-back.
 
 **Example**
 
@@ -5560,6 +5623,8 @@ last line: permanently.
 ```
 (a real run against `zheref/nen#93` — read-only: the certifying `gh api
 repos/zheref/nen/issues/93` call reached GitHub, `gh issue edit` did not)
+— captured before `v0.2` of the shape; a run today also prints `current body
+sha256: <hex>` and a `body check:` line after `last line:`.
 
 Handed a pull request's number instead, the certification refuses before
 anything is written — this is `zheref/nen#141`, a genuine (closed) pull
