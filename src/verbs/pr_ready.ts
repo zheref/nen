@@ -128,7 +128,9 @@ export const PR_READY_FLAGS = {
   // `--exclude-check` REPEATS (zheref/nen#243): one occurrence per name is the
   // one spelling that can carry a check name the comma-joined form cannot --
   // see ../pr/excludecheck.ts for the whole grammar.
-  lists: ["exclude-check"],
+  // `--reviewer-login <name>=<login>` REPEATS too (zheref/nen#264): one exact
+  // login per occurrence, read only on the --reviewers identity path.
+  lists: ["exclude-check", "reviewer-login"],
   booleans: ["explain"],
 } as const;
 
@@ -812,11 +814,14 @@ export class IdentityError extends Error {}
 export function identitiesFromFlags(
   reviewers: readonly string[],
   approvers: readonly string[],
+  logins: ReadonlyMap<string, readonly string[]> = new Map(),
 ): GateIdentities {
   const list: ReviewerIdentity[] = reviewers.map((name): ReviewerIdentity => ({
     name,
-    // The WHOLE login, never a substring (Feitan F1 on zheref/nen#264).
-    loginPattern: exactLoginPattern(name),
+    // The WHOLE login, never a substring (Feitan F1 on zheref/nen#264): the
+    // name itself, or -- when --reviewer-login states them -- exactly those
+    // logins and nothing else. Nothing is built in.
+    loginPattern: exactLoginPattern(logins.get(name) ?? name),
     reviewCheckPattern: null,
     roundCheckPattern: null,
     enrolmentCheckPattern: null,
@@ -921,6 +926,7 @@ export function resolveIdentities(
   gatesFlag: string | undefined,
   reviewers: readonly string[],
   approvers: readonly string[],
+  logins: ReadonlyMap<string, readonly string[]> = new Map(),
 ): ResolvedIdentities {
   if (gatesFlag !== undefined) {
     // `--gates ""` FIRST, before any resolution. An empty string resolves to
@@ -1029,7 +1035,7 @@ export function resolveIdentities(
     return { identities: parseGateIdentities(path, value), source: "schema", path };
   }
   if (reviewers.length > 0) {
-    return { identities: identitiesFromFlags(reviewers, approvers), source: "flags", path: null };
+    return { identities: identitiesFromFlags(reviewers, approvers, logins), source: "flags", path: null };
   }
   throw new IdentityError(
     `no reviewer identities. This gate never falls back to a built-in reviewer set: a binary that guessed the reviewers would judge this repository against another one's and report success. Give it one of: --gates <path>, a '${GATES_FILE}' in the target repository (looked for at '${inRepo.canonical.path}'${
@@ -1361,6 +1367,16 @@ export async function readReady(
   // contract, unchanged).
   const approversFlag = input.values["approvers"];
   const approverNames = approversFlag === undefined ? reviewerNames : splitCsv(approversFlag);
+  // `--reviewer-login <name>=<login>` (zheref/nen#264): the EXACT login a
+  // `--reviewers` name posts under, since a typed name is now the whole login
+  // and nothing about which login a bot uses is built in (§3).
+  let reviewerLogins: ReadonlyMap<string, readonly string[]>;
+  try {
+    reviewerLogins = parseReviewerLogins(input.lists?.["reviewer-login"] ?? []);
+  } catch (error) {
+    if (error instanceof ReviewerLoginError) return { kind: "usage", message: error.message };
+    throw error;
+  }
   const requiredHead = input.values["require-head"];
   if (requiredHead !== undefined && !SHA_PREFIX.test(requiredHead)) {
     return { kind: "usage", message: `--require-head takes a commit SHA of 7 to 40 hex digits (got '${requiredHead}').` };
@@ -1377,6 +1393,7 @@ export async function readReady(
       input.values["gates"],
       reviewerNames,
       approverNames,
+      reviewerLogins,
     );
   } catch (error) {
     // A malformed ref, a missing registry, a missing identity source: all are
@@ -1396,12 +1413,30 @@ export async function readReady(
   // `default_approvers` decides and the flag is silently unreachable code with
   // no diagnostic. Loud rather than silent: a caller who typed `--approvers` and
   // sees it ignored needs to know the identity source won, not guess.
-  const flagWarnings: string[] =
-    identities.source === "schema" && approversFlag !== undefined
+  const flagWarnings: string[] = [
+    ...(identities.source === "schema" && approversFlag !== undefined
       ? [
           `--approvers is read only when reviewer identities come from --reviewers; identities came from '${identities.path ?? "?"}' instead, so --approvers was ignored.`,
         ]
-      : [];
+      : []),
+    // The same loudness for --reviewer-login: a file's `login_pattern` decides.
+    ...(identities.source === "schema" && reviewerLogins.size > 0
+      ? [
+          `--reviewer-login is read only when reviewer identities come from --reviewers; identities came from '${identities.path ?? "?"}' instead, so --reviewer-login was ignored (declare login_pattern there).`,
+        ]
+      : []),
+  ];
+  // On the flags path a login for a name --reviewers never named is a typo,
+  // and silently ignoring it would leave that reviewer matching only its name.
+  if (identities.source === "flags") {
+    const unknown = [...reviewerLogins.keys()].filter((name): boolean => !reviewerNames.includes(name));
+    if (unknown.length > 0) {
+      return {
+        kind: "usage",
+        message: `--reviewer-login names ${unknown.map((name): string => `'${name}'`).join(", ")}, which --reviewers does not (got --reviewers '${reviewersCsv}').`,
+      };
+    }
+  }
 
   const opened = deps.openSource(input.values["token-env"] ?? DEFAULT_TOKEN_ENV);
   if (!opened.ok) {
@@ -1658,6 +1693,32 @@ function emitHeadMismatch(io: Io, json: boolean, report: HeadMismatchReport): nu
     io.err(plainLine(`${PROGRAM}: ${report.message}`));
   }
   return EXIT_HEAD_MISMATCH;
+}
+
+/** A malformed `--reviewer-login` occurrence (exit 2). */
+export class ReviewerLoginError extends Error {}
+
+/**
+ * `--reviewer-login <name>=<login>`, every occurrence, into name -> logins.
+ * Split at the FIRST `=` (a login never contains one); both halves trimmed and
+ * required. Repeating a name adds an alternative login for it.
+ */
+export function parseReviewerLogins(occurrences: readonly string[]): ReadonlyMap<string, readonly string[]> {
+  const logins = new Map<string, string[]>();
+  for (const occurrence of occurrences) {
+    const at = occurrence.indexOf("=");
+    const name = at < 0 ? "" : occurrence.slice(0, at).trim();
+    const login = at < 0 ? "" : occurrence.slice(at + 1).trim();
+    if (name === "" || login === "") {
+      throw new ReviewerLoginError(
+        `--reviewer-login takes <name>=<login>, both non-empty (got '${occurrence}'), e.g. --reviewer-login reviewer=reviewer-app[bot].`,
+      );
+    }
+    const known = logins.get(name);
+    if (known === undefined) logins.set(name, [login]);
+    else if (!known.includes(login)) known.push(login);
+  }
+  return logins;
 }
 
 function splitCsv(csv: string): string[] {

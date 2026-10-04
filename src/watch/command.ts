@@ -39,9 +39,9 @@ usage:
                   [--error-exit-threshold <n>] [--repo <path>]
   nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
                   [--interval-ms 5000] [--max-iterations <n>] [--repo <path>]
-                  [<every 'nen pr ready' flag: --gh-repo --reviewers --approvers
-                   --round-policy --exclude-run --exclude-check --gates
-                   --token-env --require-head>]
+                  [<every 'nen pr ready' flag: --gh-repo --reviewers
+                   --reviewer-login --approvers --round-policy --exclude-run
+                   --exclude-check --gates --token-env --require-head>]
 
   --command       the observation to repeat, e.g. "gh pr checks 42 --json state".
                   Classified against izanami's read-only table before the FIRST

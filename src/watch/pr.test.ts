@@ -662,3 +662,77 @@ describe("N5 -- the --pr form reads the monitor policy, and its edges", () => {
     expect(checksSettled(entries)).toBe(true);
   });
 });
+
+describe("--reviewer-login and the anchored name-as-login fallback (zheref/nen#264)", () => {
+  const BOT = "copilot-pull-request-reviewer[bot]";
+
+  it("watch until --pr passes --reviewer-login through: the exact bot login counts, a look-alike does not", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-watch-pr-logins-"));
+    const argv = [
+      "watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--until", "review-posted",
+      "--reviewers", "copilot", "--reviewer-login", `copilot=${BOT}`, "--interval-ms", "30000", "--max-iterations", "1",
+    ];
+    // One read whose only review is `login`'s, at head.
+    const reviewed = (login: string): PrReadyDeps => ({
+      ...deps([]),
+      openSource: (): ReturnType<PrReadyDeps["openSource"]> => ({
+        ok: true,
+        source: {
+          ...source({ pending: false, reviews: "none" }),
+          reviews: async (): Promise<unknown[]> => [{ user: { login }, state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-01-01T00:00:00Z" }],
+        },
+      }),
+    });
+    expect((await watch(argv, reviewed(BOT), false, root)).code).toBe(0);
+    expect((await watch(argv, reviewed("copilot-evil"), false, root)).code).toBe(1);
+    expect((await watch(argv, reviewed("Not-copilot"), false, root)).code).toBe(1);
+  });
+
+  it("beside a gates file --reviewer-login is ignored with a warning, never silently", async () => {
+    const stub = deps([READY]);
+    const input = {
+      positionals: ["pr", "ready", "9"],
+      values: { "gh-repo": "zheref/example", gates: GATES },
+      booleans: new Set<string>(),
+      lists: { "reviewer-login": [`copilot=${BOT}`] },
+      repoFlag: null,
+    };
+    const read = await readReady("9", input, stub);
+    expect(read.kind === "verdict" && read.report.meta.warnings.some((w) => w.startsWith("--reviewer-login is read only when"))).toBe(true);
+  });
+
+  it("a reviewer name a gates file does not declare is its WHOLE login: a stranger's round never counts", () => {
+    const identities = loadGateIdentities(BANKAI_REPO);
+    const at = "2026-01-01T00:00:00Z";
+    const evaluation = evaluateReady(
+      identities,
+      {
+        mergeable: "MERGEABLE",
+        head_sha: HEAD,
+        reviewers: "ghost",
+        checks: [{ name: "build", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [{ author: "ghost-fan", state: "APPROVED", commit_id: HEAD, submitted_at: at }],
+        review_requests: [],
+        unresolved_threads: 0,
+      },
+      { roundPolicyDefault: "bounded", stallMinutes: 30, now: at, excludeCheckNames: [] },
+    );
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.status).toBe("failed");
+    expect(evaluation.context.settlement.roundsAtHead).toEqual([]);
+
+    const own = evaluateReady(
+      identities,
+      {
+        mergeable: "MERGEABLE",
+        head_sha: HEAD,
+        reviewers: "ghost",
+        checks: [{ name: "build", status: "COMPLETED", conclusion: "SUCCESS" }],
+        reviews: [{ author: "Ghost[bot]", state: "COMMENTED", commit_id: HEAD, submitted_at: at }],
+        review_requests: [],
+        unresolved_threads: 0,
+      },
+      { roundPolicyDefault: "bounded", stallMinutes: 30, now: at, excludeCheckNames: [] },
+    );
+    expect(own.context.settlement.roundsAtHead).toEqual([{ reviewer: "ghost", via: "review" }]);
+  });
+});

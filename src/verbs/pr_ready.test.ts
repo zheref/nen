@@ -1026,6 +1026,63 @@ describe("prReady -- the --reviewers identity path never lets an omitted --appro
     expect(status("approvals-at-head")).toBe("failed");
   });
 
+  // --reviewer-login (zheref/nen#264): the exact login a typed name posts
+  // under, stated by the caller -- nothing is built in.
+  const BOT = "copilot-pull-request-reviewer[bot]";
+  const loginRun = async (logins: string[], reviewers: string[], extra: Record<string, string> = {}): Promise<{ code: number; out: string[]; err: string[] }> => {
+    const emptyRepo = mkdtempSync(join(tmpdir(), "nen-pr-ready-logins-"));
+    const source = stubSource({
+      reviews: async (): Promise<unknown[]> =>
+        reviewers.map((login) => ({ user: { login }, state: "APPROVED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" })),
+    });
+    const { io, out, err } = capture();
+    const code = await prReady(
+      input({ values: { "gh-repo": "zheref/example", reviewers: "copilot", ...extra }, lists: { "reviewer-login": logins }, repoFlag: emptyRepo }),
+      io,
+      stubDeps(source),
+    );
+    return { code, out, err };
+  };
+
+  it("--reviewer-login copilot=<bot login> lets that exact login count for --reviewers copilot", async () => {
+    const { code, out } = await loginRun([`copilot=${BOT}`], [BOT]);
+    expect(code).toBe(0);
+    expect((JSON.parse(out.join("\n")) as ReadyReport).verdict).toBe("ready");
+  });
+
+  it("...and a login that merely starts with or contains the name still does not", async () => {
+    for (const stranger of ["copilot-evil", "Not-copilot", "copilot-pull-request-reviewer-evil[bot]"]) {
+      const { code, out } = await loginRun([`copilot=${BOT}`], [stranger]);
+      expect(code).toBe(1);
+      const report = JSON.parse(out.join("\n")) as ReadyReport;
+      expect(report.conjuncts.find((row) => row.id === "approvals-at-head")?.status).toBe("failed");
+      expect(report.conjuncts.find((row) => row.id === "rounds-owed")?.status).toBe("failed");
+    }
+  });
+
+  it("without the flag the name must EQUAL the login: the bot's real login does not count for 'copilot'", async () => {
+    const without = await loginRun([], [BOT]);
+    expect(without.code).toBe(1);
+    const exact = await loginRun([], ["Copilot"]);
+    expect(exact.code).toBe(0);
+  });
+
+  it("a stated login REPLACES the name; repeat the flag for alternatives", async () => {
+    expect((await loginRun([`copilot=${BOT}`], ["copilot"])).code).toBe(1);
+    expect((await loginRun([`copilot=${BOT}`, "copilot=copilot"], ["copilot"])).code).toBe(0);
+  });
+
+  it("refuses a malformed occurrence and a name --reviewers does not list, at exit 2", async () => {
+    const malformed = await loginRun(["copilot"], [BOT]);
+    expect(malformed.code).toBe(2);
+    expect(malformed.err.join("\n")).toMatch(/--reviewer-login takes <name>=<login>/);
+    const empty = await loginRun(["copilot="], [BOT]);
+    expect(empty.code).toBe(2);
+    const stranger = await loginRun([`someone=${BOT}`], [BOT]);
+    expect(stranger.code).toBe(2);
+    expect(stranger.err.join("\n")).toMatch(/--reviewer-login names 'someone', which --reviewers does not/);
+  });
+
   it("an EXPLICIT --approvers '' is still honoured as vacuous -- the escape hatch survives the fix", async () => {
     const emptyRepo = mkdtempSync(join(tmpdir(), "nen-pr-ready-flags-"));
     const commentedNotApproved = stubSource({
