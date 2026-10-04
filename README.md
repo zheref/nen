@@ -289,7 +289,9 @@ owner/name -- generated 2026-09-08T00:34:25.497Z
 ```
 
 **File the issue you just found.** `--dry-run` prints the exact `gh` call and
-makes no network call at all; the labels are checked against `--repo`'s own
+writes nothing, but it does READ: the private-name guard reads the target's
+visibility and, for a public target, your private repository list
+([#329](https://github.com/zheref/nen/issues/329)). The labels are checked against `--repo`'s own
 taxonomy first, where GitHub would silently create an unknown one instead:
 
 ```
@@ -297,8 +299,13 @@ $ nen issue file --target owner/name --repo src/schema/fixtures/bankai-repo \
   --title "watch until refuses a quoted --jq argument on a read-only gh api call" \
   --body-file ./body.md --label bankai:stage/idea,bankai:severity/medium \
   --assignee you --dry-run
-would run: gh issue create --repo owner/name --title watch until refuses a quoted --jq argument on a read-only gh api call --body-file ./body.md --assignee you --label bankai:stage/idea --label bankai:severity/medium
+would run: gh issue create --repo owner/name --title watch until refuses a quoted --jq argument on a read-only gh api call --body-file - --assignee you --label bankai:stage/idea --label bankai:severity/medium
+stdin: the 412 byte(s) read and checked from /path/to/nen/src/schema/fixtures/bankai-repo/body.md (gh reads these, not the file)
 ```
+
+`--body-file -` is deliberate: `gh` gets the bytes nen read and checked, on
+stdin, never a path it would re-read afterwards. A relative `--body-file`
+resolves against `--repo`'s root.
 
 **Wait for a check to go green without babysitting the terminal.**
 
@@ -355,7 +362,7 @@ that repository's `nen/` directory at the path given by `--repo`
 | `nen/labels.json` | The label set — names, colors, descriptions |
 | `nen/repos.json` | The repository registry — product codes, consumers, and the canon pin (the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry) |
 | `nen/colors.yml` | The status-color precedence for board rendering |
-| `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check |
+| `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check, and optionally `checks.excluded`: checks the maintainer ruled out of CON-32(a), each with its reason, ruling date and `until` — read at the pull request's **base**, never its head |
 | `nen/contract.json` | Optional. What this repository needs *from* Nen (`dependency`), and the stack declaration Nen reads *about* it (`project`). Parsed, validated and reported; nothing acts on it yet |
 | `nen/workflow.json` | Optional, and its absence is a full policy of defaults rather than none. The delivery loop's parameters: the branch template and trunk, the iteration checks, the coverage ladder, which attribution trailers a commit may carry, the reports directory, the model matrix, the self-hosted runner pools. Read by `nen commit format` and `nen runner`, and baked into the hooks `nen scaffold init` generates |
 
@@ -426,14 +433,14 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (43); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-126 verbs outside the binary — each one's purpose, arguments, exit codes and
+127 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
 - **Readiness & pull requests** — `pr` (ready, staleness, body-check, fetch,
   next-blocker, cascade-main, retarget, request-reviews, edit-body,
   mark-ready, threads, open, merge), `gate`, `split`, `wc` (classify, squash,
-  catch-up, publish, worktrees, swap), `stage`
+  catch-up, publish, worktrees, swap), `stage` (triage, list)
 - **Backlog & boards** — `backlog`, `board`, `epic`, `effort`, `loop`,
   `phase`, `usage` (the per-effort timing and spend ledgers),
   `warmup` (a *registry* stale-pin sweep — not `shu warmup`, below, which warms

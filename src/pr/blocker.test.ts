@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
-import { loadGateIdentities, type GateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PrSnapshot } from "./fetch.js";
 import type { CheckRun, Review } from "../github/types.js";
 import { nextBlocker } from "./blocker.js";
@@ -180,6 +182,57 @@ describe("nextBlocker -- round_quorum, on this repository's own nen/gates.json (
     });
   });
 
+  // zheref/nen#361 (ruling 2026-10-04): a met quorum fulfils its members'
+  // rounds, here as in `pr ready`'s row 4.
+  it("#361: Bugbot errored (NEUTRAL, enrolled) plus Copilot's review: no owed-round for the covered member", () => {
+    const result = nextBlocker(
+      OWN,
+      snapshot({ checks: [green, bugbotRun("NEUTRAL")], reviews: [review("copilot-pull-request-reviewer[bot]")] }),
+    );
+    expect(result.kind).toBe("none");
+  });
+
+  it("#361: Bugbot still IN FLIGHT plus Copilot's review: never `none` -- mid-review is not unavailable", () => {
+    const running: CheckRun = { ...green, name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null };
+    const result = nextBlocker(
+      OWN,
+      snapshot({ checks: [green, running], reviews: [review("copilot-pull-request-reviewer[bot]")] }),
+    );
+    expect(result.kind).not.toBe("none");
+  });
+
+  it("#361: Copilot requested and silent plus a Bugbot SUCCESS: no owed-round", () => {
+    const result = nextBlocker(
+      OWN,
+      snapshot({
+        checks: [green, bugbotRun("SUCCESS")],
+        reviewRequests: [{ login: "Copilot", name: null }],
+      }),
+    );
+    expect(result.kind).toBe("none");
+    // The request does make Copilot owed: with no other member's round, it is named.
+    const unmet = nextBlocker(
+      OWN,
+      snapshot({ checks: [green], reviewRequests: [{ login: "Copilot", name: null }] }),
+    );
+    expect(unmet.kind).toBe("owed-round");
+    expect(unmet.detail).toMatch(/^copilot \(review-requested-not-yet-posted\) — and round quorum not met/);
+  });
+
+  it("#361: a non-member owed is still an owed-round, quorum met or not", () => {
+    const raw = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as {
+      reviewers: unknown[];
+    } & Record<string, unknown>;
+    const withOutsider = parseGateIdentities("/fixture/nen/gates.json", {
+      ...raw,
+      reviewers: [...raw.reviewers, { name: "sasuke", login_pattern: { pattern: "^sasuke$", ignoreCase: true } }],
+    });
+    const result = nextBlocker(withOutsider, snapshot({ checks: [green, bugbotRun("SUCCESS")] }), {
+      reviewers: ["copilot", "bugbot", "sasuke"],
+    });
+    expect(result).toEqual({ kind: "owed-round", detail: "sasuke (no-round-at-head)" });
+  });
+
   it("Bugbot's review (as cursor[bot]) meets the quorum -- the blocker moves on", () => {
     expect(nextBlocker(OWN, snapshot({ checks: [green], reviews: [review("cursor[bot]")] })).kind).toBe("none");
   });
@@ -273,5 +326,54 @@ describe("nextBlocker -- round_quorum, on this repository's own nen/gates.json (
       { author: "tenma-bankai[bot]", state: "APPROVED", commitId: "head1", submittedAt: "2026-09-29T00:00:00Z" },
     ];
     expect(nextBlocker(IDENTITIES, snapshot({ checks: [green], reviews })).kind).toBe("none");
+  });
+});
+
+// zheref/nen#249 (Nobunaga N4): the declared exclusions, applied as pr ready
+// applies them. The caller hands in the BASE's declarations.
+describe("nextBlocker -- declared checks.excluded", () => {
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+  const run = (name: string, conclusion: "SUCCESS" | "FAILURE"): CheckRun => ({
+    kind: "check_run",
+    name,
+    status: "COMPLETED",
+    conclusion,
+    startedAt: null,
+    completedAt: null,
+    detailsUrl: null,
+  });
+  const green = run("ci", "SUCCESS");
+  const red = run(WINDOWS, "FAILURE");
+  const ruling = {
+    name: "check (Windows*",
+    match: "glob" as const,
+    reason: "no runner",
+    ruled: "2026-01-01",
+    until: "2026-12-31",
+    untilDate: "2026-12-31",
+  };
+  const NOW = "2026-10-04T00:00:00Z";
+
+  it("drops an honoured excluded check before the red-check step", () => {
+    const withExclusion = nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }), {
+      declaredExclusions: [ruling],
+      now: NOW,
+    });
+    expect(withExclusion.kind).not.toBe("red-check");
+    const without = nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }));
+    expect(without.kind).toBe("red-check");
+  });
+
+  it("an expired one, or one with no clock, drops nothing", () => {
+    expect(
+      nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }), { declaredExclusions: [ruling], now: "2027-01-01T00:00:00Z" }).kind,
+    ).toBe("red-check");
+    expect(nextBlocker(IDENTITIES, snapshot({ checks: [green, red] }), { declaredExclusions: [ruling] }).kind).toBe("red-check");
+  });
+
+  it("a rollup holding only excluded checks is still a red-check, named as such", () => {
+    const result = nextBlocker(IDENTITIES, snapshot({ checks: [red] }), { declaredExclusions: [ruling], now: NOW });
+    expect(result.kind).toBe("red-check");
+    expect(result.detail).toMatch(/^no checks remain after the declared exclusion\(s\): check \(Windows/);
   });
 });

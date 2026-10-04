@@ -94,9 +94,11 @@
 // "subset of a newer file's reviewer rules" the version exists to refuse. It is
 // accepted here because (1) the maintainer required the declaration to stay
 // VALID under the pinned v0.15.1, which a version bump would break outright for
-// every consumer on that pin; (2) the quorum only ever ADDS a requirement, so
-// the subset an older reader applies is the declaration's own per-reviewer
-// verdict -- never a reviewer excused that the file's per-reviewer rules owe;
+// every consumer on that pin; (2) the subset an older reader applies is the
+// declaration's own per-reviewer verdict -- never a reviewer excused that the
+// file's per-reviewer rules owe. (Since the 2026-10-04 ruling, zheref/nen#361,
+// a MET quorum also fulfils its own members' owed rounds; an older reader
+// still owes them, which is STRICTER there, never wider);
 // and (3) the file is written so that declaration is meaningful on its own
 // (see this repository's own `nen/gates.json` `$comment`). What an older reader
 // misses is exactly the quorum's floor -- "somebody reviewed". Making that
@@ -242,8 +244,9 @@ export interface DependabotCarveOut {
 /**
  * `round_quorum` -- at least `minimum` of the reviewers named in `anyOf` must
  * HAVE a round (maintainer ruling 2026-09-29; the header's `round_quorum`
- * section). A requirement ADDED to CON-32(b)'s rounds-owed row, never an
- * exemption: it excuses no reviewer the per-reviewer rules owe.
+ * section). Unmet, it ADDS a failure to CON-32(b)'s rounds-owed row. Met, it
+ * FULFILS the rounds owed by its own `anyOf` members (maintainer ruling
+ * 2026-10-04, zheref/nen#361); a reviewer outside `anyOf` is never excused.
  *
  * "Has a round" is decided by EXACTLY the rules that already satisfy one
  * reviewer (the round policy, a posted review under `login_pattern`, a
@@ -294,7 +297,64 @@ export interface GateIdentities {
    * that builder, and every other caller-built identity set, valid unchanged.
    */
   readonly roundQuorum?: RoundQuorum | null;
+  /**
+   * `checks.excluded` (zheref/nen#249), in the file's order; empty when the
+   * file declares none. OPTIONAL in the type for the reason `roundQuorum` is:
+   * the `--reviewers` identity path names no file and so declares no
+   * exclusion, and every caller-built identity set stays valid unchanged.
+   */
+  readonly excludedChecks?: readonly DeclaredCheckExclusion[];
   reviewer(name: string): ReviewerIdentity | undefined;
+}
+
+/**
+ * One `checks.excluded` entry (zheref/nen#249): a check the maintainer ruled
+ * out of CON-32(a), declared where the verdict already reads its policy rather
+ * than typed per invocation as `--exclude-check`.
+ *
+ * EVERY FIELD IS REQUIRED, because each is part of the binding's condition:
+ * WHICH check (`name`), WHY (`reason`), WHEN it was ruled (`ruled`) and WHEN IT
+ * LAPSES (`until`). An exclusion with no stated lapse is a permanent hole in
+ * the gate that nobody decided to make permanent.
+ *
+ *   name   the check's own rollup label (a CheckRun's name, a StatusContext's
+ *          context), compared WHOLE. A comma, a bracket or a quote inside it is
+ *          part of the name -- the file is JSON, so nothing splits it. Under
+ *          `match: "glob"` a `*` matches any run of characters (including none)
+ *          and NOTHING ELSE is special: `[`, `]`, `?`, `(` and `"` are literal,
+ *          because Actions matrix names carry them (`check (Windows,
+ *          ["self-hosted","Windows","X64"])`). A name containing a `*` MUST
+ *          state `match` -- it has two honest readings, a literal asterisk or a
+ *          wildcard -- and a name with no `*` is the same check under either.
+ *          MATCHING IS BY LABEL ONLY, WITH NO ORIGIN PINNING: any check run or
+ *          status that reports under a matching name -- whichever app or
+ *          workflow posted it -- is dropped. That is why a glob must carry a
+ *          literal prefix (see `readCheckExclusions`).
+ *   reason the ruling's reason, reported verbatim beside every check it drops.
+ *   ruled  the ruling's date, strictly `YYYY-MM-DD`. A ruling dated after the
+ *          evaluation day is not yet in force.
+ *   until  EXACTLY ONE OF TWO SHAPES, so a typo cannot change which one it is:
+ *          a strict `YYYY-MM-DD` string -- honoured through that UTC day and
+ *          IGNORED (reported as expired) from the next one -- or an object
+ *          `{ "condition": "<text>" }`, which nen cannot evaluate and so honours
+ *          until the file is edited, warning on every evaluation it applies to.
+ *          Any other string is refused at load: "2026/10/01" read as a
+ *          condition would never lapse.
+ */
+export interface DeclaredCheckExclusion {
+  readonly name: string;
+  readonly match: "exact" | "glob";
+  readonly reason: string;
+  readonly ruled: string;
+  /** As the file states it: the date string, or `{ condition }`. */
+  readonly until: string | { readonly condition: string };
+  /** `until` when it is a date, else `null` (a condition nen cannot evaluate). */
+  readonly untilDate: string | null;
+}
+
+/** `until` as one line of prose: the date, or the condition's own text. */
+export function untilText(until: DeclaredCheckExclusion["until"]): string {
+  return typeof until === "string" ? until : until.condition;
 }
 
 function readPattern(
@@ -368,12 +428,13 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
   return raw;
 }
 
-export function parseGateIdentities(path: string, value: unknown): GateIdentities {
-  const root = requireRecord(path, "$", value);
-
-  // The version is read FIRST, before any field is interpreted. Validating a
-  // file against the wrong schema and then complaining about its fields is how a
-  // version mismatch gets diagnosed as five unrelated defects.
+/**
+ * The `version` guard every reader of this file applies before interpreting
+ * any field -- `parseGateIdentities` and the base-only `parseCheckExclusions`
+ * alike (Copilot on zheref/nen#359): an exclusion read out of a file this build
+ * cannot version-check is a ruling read under rules nobody stated.
+ */
+function requireGatesVersion(path: string, root: Record<string, unknown>): void {
   const rawVersion = root["version"];
   if (rawVersion === undefined || rawVersion === null) {
     throw new SchemaError(
@@ -389,6 +450,15 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
       `is ${describeValue(rawVersion)}, and this build of nen understands version ${GATES_SCHEMA_VERSION} only. Refusing rather than reading the fields it happens to recognise: a gate that applied part of a repository's reviewer rules would report a readiness verdict nobody configured.`,
     );
   }
+}
+
+export function parseGateIdentities(path: string, value: unknown): GateIdentities {
+  const root = requireRecord(path, "$", value);
+
+  // The version is read FIRST, before any field is interpreted. Validating a
+  // file against the wrong schema and then complaining about its fields is how a
+  // version mismatch gets diagnosed as five unrelated defects.
+  requireGatesVersion(path, root);
 
   const rawReviewers = requireArray(path, "reviewers", root["reviewers"]);
   const reviewers: ReviewerIdentity[] = [];
@@ -530,6 +600,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   );
 
   const roundQuorum = readRoundQuorum(path, root["round_quorum"], declared);
+  const excludedChecks = readCheckExclusions(path, root["checks"]);
 
   // `round_policy.stallMinutes` -- OPTIONAL (zheref/nen#214 item 2). A
   // repository that does not declare it gets the caller's own fixed default,
@@ -645,6 +716,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     delivery,
     dependabotCarveOut,
     roundQuorum,
+    excludedChecks,
     reviewer: (name): ReviewerIdentity | undefined => byName.get(name),
   };
 }
@@ -742,6 +814,190 @@ function readRoundQuorum(
     );
   }
   return { anyOf, minimum: rawMinimum };
+}
+
+const ISO_DATE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/;
+
+/** Whether `text` is a real calendar date written `YYYY-MM-DD` (no `2026-02-30`). */
+export function isIsoDate(text: string): boolean {
+  const parts = ISO_DATE.exec(text);
+  if (parts === null) return false;
+  const date = new Date(`${text}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === text;
+}
+
+/**
+ * The shortest literal prefix a glob must carry before its first `*`
+ * (Feitan F4). Matching is by label with no origin pinning, so `*)` or `*e*`
+ * would drop checks nobody named -- any app's, any workflow's. Three
+ * characters is the least that still names a job (`ci *`, `check (*`).
+ */
+export const GLOB_MIN_LITERAL_PREFIX = 3;
+
+/**
+ * `checks.excluded` -- OPTIONAL, and REFUSED BY POINTER at load when malformed
+ * (zheref/nen#249). An exclusion only ever WIDENS the verdict -- it removes a
+ * check CON-32(a) would otherwise wait on -- so a malformed one must be a loud
+ * refusal, never an entry silently read as something its author did not write.
+ * Each refusal below is named for what it would have done instead:
+ *
+ *   * a missing or blank `name`, `reason`, `ruled` or `until` is a binding
+ *     with part of its condition unstated;
+ *   * surrounding whitespace on any field is refused on its own: a name with
+ *     it matches no label, and a date with it is not the strict shape;
+ *   * a name with a `*` and no `match` has two readings (literal or wildcard)
+ *     and the file has not said which; guessing changes which check is dropped;
+ *   * a glob whose literal prefix before the first `*` is shorter than
+ *     GLOB_MIN_LITERAL_PREFIX matches checks nobody named (`*`, `*)`, `?*`);
+ *   * a `ruled` or a string `until` that is not a strict, real `YYYY-MM-DD`
+ *     date has no day it was ruled on or lapses on -- and a near-date string
+ *     ("2026/10/01", "2026-10-1", a timestamp, fullwidth digits, a Unicode
+ *     hyphen) read as a condition would NEVER lapse, so it is refused rather
+ *     than reinterpreted; a condition is the explicit `{ "condition": ... }`;
+ *   * an `until` date BEFORE `ruled` is born expired;
+ *   * a key an entry (or its `until` object) does not define, `$comment`
+ *     aside, is a condition nobody reads;
+ *   * the same `name` twice (under the same `match`) is two reasons for one
+ *     exclusion, and the report could quote only one of them.
+ */
+export function parseCheckExclusions(path: string, rootValue: unknown): DeclaredCheckExclusion[] {
+  const root = requireRecord(path, "$", rootValue);
+  requireGatesVersion(path, root);
+  return readCheckExclusions(path, root["checks"]);
+}
+
+const ENTRY_KEYS: ReadonlySet<string> = new Set(["name", "match", "reason", "ruled", "until", "$comment"]);
+
+function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion[] {
+  if (raw === undefined || raw === null) return [];
+  const checks = requireRecord(path, "checks", raw);
+  const rawExcluded = checks["excluded"];
+  if (rawExcluded === undefined || rawExcluded === null) return [];
+  const exclusions: DeclaredCheckExclusion[] = [];
+  const seenAt = new Map<string, number>();
+  const text = (pointer: string, value: unknown): string => {
+    const stated = requireString(path, pointer, value);
+    if (stated.trim() === "") {
+      throw new SchemaError(
+        path,
+        pointer,
+        "is blank. A declared exclusion states which check, why, when it was ruled and when it lapses -- all four, because each is part of the condition the exclusion binds under.",
+      );
+    }
+    if (stated !== stated.trim()) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `(${JSON.stringify(stated)}) has leading or trailing whitespace. Every field is compared or parsed exactly as written -- a name against a check label that carries none, a date against the strict YYYY-MM-DD shape -- so the whitespace would silently change what it means. Remove it.`,
+      );
+    }
+    return stated;
+  };
+  const strictDate = (pointer: string, stated: string, what: string): string => {
+    if (!isIsoDate(stated)) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `expected ${what} as a strict, real YYYY-MM-DD date (ASCII digits and '-', nothing else), got ${describeValue(stated)}.`,
+      );
+    }
+    return stated;
+  };
+  requireArray(path, "checks.excluded", rawExcluded).forEach((entry, index): void => {
+    const pointer = `checks.excluded[${index}]`;
+    const record = requireRecord(path, pointer, entry);
+    // An unknown key is REFUSED (hanten round 2, N10), as in `until`'s object:
+    // a misspelt `untill` or `reasons` is a condition nobody reads, and a key
+    // a later build adds must not be silently ignored by this one.
+    const unknownKeys = Object.keys(record).filter((key): boolean => !ENTRY_KEYS.has(key));
+    if (unknownKeys.length > 0) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `carries ${unknownKeys.map((key): string => `'${key}'`).join(", ")}, which this build does not read. An entry is exactly name, match (optional), reason, ruled, until and an optional $comment; a key nobody reads is a condition nobody applies.`,
+      );
+    }
+    const name = text(`${pointer}.name`, record["name"]);
+    const rawMatch = record["match"];
+    let match: "exact" | "glob";
+    if (rawMatch === undefined || rawMatch === null) {
+      if (name.includes("*")) {
+        throw new SchemaError(
+          path,
+          `${pointer}.match`,
+          `is required because name '${name}' contains '*', which reads two ways: a literal asterisk or a wildcard. State "match": "glob" or "match": "exact"; a guess would change which check is dropped.`,
+        );
+      }
+      match = "exact";
+    } else if (rawMatch === "exact" || rawMatch === "glob") {
+      match = rawMatch;
+    } else {
+      throw new SchemaError(
+        path,
+        `${pointer}.match`,
+        `expected 'exact' or 'glob', got ${describeValue(rawMatch)}`,
+      );
+    }
+    if (match === "glob") {
+      const star = name.indexOf("*");
+      const prefix = star === -1 ? name : name.slice(0, star);
+      if (star !== -1 && prefix.length < GLOB_MIN_LITERAL_PREFIX) {
+        throw new SchemaError(
+          path,
+          `${pointer}.name`,
+          `('${name}') is a glob whose literal prefix before the first '*' is ${prefix.length === 0 ? "empty" : `'${prefix}'`}, shorter than ${GLOB_MIN_LITERAL_PREFIX} characters. Matching is by check label with no origin pinning, so it would drop checks nobody named -- any app's, any workflow's. Start it with the job's own name, e.g. 'check (*'.`,
+        );
+      }
+    }
+    const reason = text(`${pointer}.reason`, record["reason"]);
+    const ruled = strictDate(`${pointer}.ruled`, text(`${pointer}.ruled`, record["ruled"]), "the ruling's date");
+    const rawUntil = record["until"];
+    let until: DeclaredCheckExclusion["until"];
+    let untilDate: string | null = null;
+    if (typeof rawUntil === "string") {
+      until = strictDate(
+        `${pointer}.until`,
+        text(`${pointer}.until`, rawUntil),
+        `the lapse date (a condition nen cannot evaluate is written { "condition": "<text>" })`,
+      );
+      if (until < ruled) {
+        throw new SchemaError(
+          path,
+          `${pointer}.until`,
+          `(${until}) is before ruled (${ruled}): the exclusion lapsed before it was ruled, so it never applied. Delete it, or correct the date.`,
+        );
+      }
+      untilDate = until;
+    } else if (isRecord(rawUntil)) {
+      const unknown = Object.keys(rawUntil).filter((key): boolean => key !== "condition" && key !== "$comment");
+      if (unknown.length > 0) {
+        throw new SchemaError(
+          path,
+          `${pointer}.until`,
+          `carries ${unknown.map((key): string => `'${key}'`).join(", ")}, which this build does not read. A condition is exactly { "condition": "<text>" }; a key nobody reads is a lapse rule nobody applies.`,
+        );
+      }
+      until = { condition: text(`${pointer}.until.condition`, rawUntil["condition"]) };
+    } else {
+      throw new SchemaError(
+        path,
+        `${pointer}.until`,
+        `is required: a strict YYYY-MM-DD lapse date, or { "condition": "<text>" } for a lapse nen cannot evaluate. Got ${describeValue(rawUntil)}.`,
+      );
+    }
+    const key = `${match}\u0000${name}`;
+    const previous = seenAt.get(key);
+    if (previous !== undefined) {
+      throw new SchemaError(
+        path,
+        `${pointer}.name`,
+        `duplicates checks.excluded[${previous}].name ('${name}'); two declarations for one exclusion means the report could quote only one reason and one lapse`,
+      );
+    }
+    seenAt.set(key, index);
+    exclusions.push({ name, match, reason, ruled, until, untilDate });
+  });
+  return exclusions;
 }
 
 export function loadGateIdentities(repoRoot: string): GateIdentities {

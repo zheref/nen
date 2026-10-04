@@ -118,7 +118,12 @@ export type CommentRequest =
   | (CommentBase & { readonly source: "inline" })
   | (CommentBase & {
       readonly source: "file";
-      /** The path as the caller typed it -- what `gh` is handed. */
+      /**
+       * The path the body was read from -- reported, and NOT handed to `gh`:
+       * since zheref/nen#329 `gh` reads the already-read (and checked) `body`
+       * on stdin through `--body-file -`, so nothing written to the file
+       * between the private-name check and `gh`'s own read can be published.
+       */
       readonly bodyFile: string;
     });
 
@@ -135,7 +140,7 @@ export function commentArgv(target: Target, request: CommentRequest): readonly s
     "--repo",
     target.slug,
     ...(request.source === "file"
-      ? ["--body-file", request.bodyFile]
+      ? ["--body-file", "-"]
       : ["--body", request.body]),
   ];
 }
@@ -159,7 +164,7 @@ const COMMENT_URL = /https:\/\/\S+\/(?:issues|pull)\/\d+#issuecomment-\d+/;
  */
 export function postComment(seams: Seams, target: Target, request: CommentRequest): CommentResult {
   const argv = commentArgv(target, request);
-  const result = seams.run(GH, argv);
+  const result = seams.run(GH, argv, request.source === "file" ? { stdin: request.body } : {});
   if (result.spawnFailed || result.code !== 0) {
     throw new Error(
       `could not comment on ${target.slug}#${request.issue}: ${

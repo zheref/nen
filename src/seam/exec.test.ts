@@ -109,6 +109,28 @@ describe("spawnRunner -- the real Runner backing production Seams", () => {
     expect(result.stdout.trim()).toBe("hi");
   });
 
+  // zheref/nen#237: `bytes` keeps stdout raw -- a non-UTF-8 byte survives for a
+  // fatal decoder, and a CR/LF inside the output is not normalised away.
+  it("with `bytes`, returns stdout's raw bytes and leaves the decoded text un-normalised", () => {
+    const result = spawnRunner(
+      process.execPath,
+      ["-e", "process.stdout.write(Buffer.from([0x61, 0xff, 0x0d, 0x0a, 0x00]))"],
+      { bytes: true },
+    );
+    expect(result.code).toBe(0);
+    expect([...(result.stdoutBytes ?? [])]).toEqual([0x61, 0xff, 0x0d, 0x0a, 0x00]);
+    expect(result.stdout).toBe("a\uFFFD\r\n\0");
+  });
+
+  it("without `bytes`, carries no stdoutBytes", () => {
+    expect(spawnRunner(process.execPath, ["-e", "process.exit(0)"]).stdoutBytes).toBeUndefined();
+  });
+
+  it("with `bytes`, still reports a spawn failure as one", () => {
+    const result = spawnRunner("nen-no-such-binary-237", [], { bytes: true });
+    expect(result.spawnFailed).toBe(true);
+  });
+
   it("carries a non-zero exit code through without treating it as a spawn failure", () => {
     const result = spawnRunner(process.execPath, ["-e", "process.exit(3)"]);
     expect(result.spawnFailed).toBe(false);

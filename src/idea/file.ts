@@ -155,7 +155,10 @@ export function fileIdea(
   const refusals = validateFiling(request, taxonomy);
   if (refusals.length > 0) return { refusals };
 
-  const filed = fileIssue(seams, target, request);
+  // The body travels on stdin -- the same bytes the read-back is compared
+  // against, never a path `gh` re-reads (zheref/nen#329 moved 'issue file''s
+  // shared create call to `--body-file -`).
+  const filed = fileIssue(seams, target, request, submittedBody);
   const readBack = readIssueForVerification(seams, target, filed.number);
   const mismatches = compareReadBack(request, submittedBody, readBack);
   return { filed, readBack, mismatches };

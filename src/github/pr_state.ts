@@ -157,6 +157,15 @@ export interface PrStateSource {
    * `pullRequestCommits`.
    */
   commitCheckRuns?(repo: PrRef, sha: string): Promise<unknown>;
+  /**
+   * One file's UTF-8 text at one commit (REST `contents/{path}?ref=`), or
+   * `null` when the file does not exist there (404). Any other failure THROWS.
+   * Used by `nen pr ready` to read `nen/gates.json`'s `checks.excluded` at the
+   * pull request's BASE (zheref/nen#249, Feitan F1). OPTIONAL: a source
+   * without it cannot read the base, and the caller then honours no declared
+   * exclusion and says so -- the stricter verdict, never a wider one.
+   */
+  fileAtRef?(repo: PrRef, path: string, ref: string): Promise<string | null>;
 }
 
 export interface FetchStateOptions {
@@ -1197,6 +1206,10 @@ export async function fetchPrState(
       // falls back to the ordinary at-head rounds rather than to a wider gate.
       author: authorLogin(node.author),
       base_ref: typeof node.baseRefName === "string" ? node.baseRefName : "",
+      // The base's tip commit (zheref/nen#249, Feitan F1): where `pr ready`
+      // reads `checks.excluded`. "" when GitHub answered none, which honours
+      // no declared exclusion.
+      base_sha: typeof node.baseRefOid === "string" ? node.baseRefOid : "",
       head_ref: typeof node.headRefName === "string" ? node.headRefName : "",
       labels: labelNames(node.labels),
       // READ, never assumed to be the conventional trunk name, so a repository
