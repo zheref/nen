@@ -275,6 +275,7 @@ verb it invoked. The complete list:
 | every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
 | [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
 | [`shu coverage`](#nen-shu-coverage) | `8` | `--from-capture` refused the capture on disk: a declared report is missing, or older than a touched or uncommitted file; nothing measured, no document ([#250](https://github.com/zheref/nen/issues/250)) |
+| [`shu tools`](#nen-shu-tools) | `7` | every row passes, but nen is inside its `dependency.minimum` and **behind** `dependency.pinned_ref` (a BEHIND row): install the pinned ref the row's remedy names ([#327](https://github.com/zheref/nen/issues/327)) |
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
