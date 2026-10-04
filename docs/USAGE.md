@@ -292,6 +292,7 @@ verb it invoked. The complete list:
 | [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
 | [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body) | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329)). A check that could not run is `1`, never `4` and never `0` |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
+| [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
@@ -362,7 +363,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, read at the pull request's base) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
-| `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap) and `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) | [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
+| `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
 `nen/` holds committed configuration only. Generated output goes to a
@@ -717,7 +718,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
-| [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
+| [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path, its class (manifest / changelog / mirror / other, by `nen/contract.json`'s `mechanical` block) and the abort line, never picking one -- exit 3 when every path is mechanical, with the commands to run printed and none run; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort), nen/contract.json's `mechanical` block under --repo (only on a conflict) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
@@ -2865,7 +2866,7 @@ nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
 | `--strategy` | no | `rebase`, `merge` or `auto` (default) | **auto rebases when no commit of the branch is on its `@{upstream}`** and merges otherwise — the same published-commit detection [`wc squash`](#nen-wc-squash) refuses on, shared rather than copied. A rebase rewrites what somebody else may already hold |
 | `--abort` | no | back out an in-progress rebase or merge | runs the matching `git rebase --abort` / `git merge --abort`; refused at exit 2 when nothing is in progress |
 | `--dry-run` | no | print the strategy and the git line | fetches (a read), runs neither |
-| `--json` | no | machine-readable result | `nen.wc.catch-up/v0.1` — see below |
+| `--json` | no | machine-readable result | `nen.wc.catch-up/v0.2` — see below |
 
 **Mechanism.** `--base` is validated first (above), then a dirty tree is
 refused at exit 2 before the fetch. Then `git fetch --end-of-options origin
@@ -2887,7 +2888,7 @@ same name git holds it under; a stage the index lists but `git show` cannot
 read is an **error** at exit 1, never reported as a deletion. The text
 output prints the sides indented under the path with every control byte but
 the newline and tab stripped (`--json` keeps the bytes), then `to back out:
-git <strategy> --abort`. Exit 1. Nothing is resolved, aborted or pushed.
+git <strategy> --abort`, then each path's class (below). Exit 1, or 3 when every path is mechanical. Nothing is resolved, aborted or pushed.
 
 **Resuming.** Re-run the **same command on the same tree** once the
 resolutions are staged — Hatsu's `ao` already says so. The verb asks git
@@ -2909,13 +2910,95 @@ refused at exit 2, never read as "nothing in progress". A 128 counts as
 "no rebase" only once `git rev-parse --git-dir` shows git can answer in the
 repository at all, since git exits 128 on any fatal (#307).
 
-**`--json`** — `nen.wc.catch-up/v0.1`: `{ contract, base, strategy, before,
-after, behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
-resumed, aborted, dryRun }`. `strategy` is the one that ran (`auto` resolved);
-`after` is `null` on a dry run and on a conflict. Exit 0 on a clean catch-up,
-a resume, an abort, a dry run or `noOp`; exit 1 on a conflict (the document is
-still printed) or a git failure this verb did not expect; exit 2 on every
-refusal above.
+**Conflict classes** ([#326](https://github.com/zheref/nen/issues/326)). On
+a repository that releases in parallel the same three conflicts come back on
+every catch-up — both sides bumped the version manifests, both added the
+changelog's top section, both regenerated the mirrors. So on a stop every
+conflicted path carries a `class`: `manifest`, `changelog`, `mirror` or
+`other`, read off the **`mechanical`** block of the working tree's
+`nen/contract.json`, which is opened only when something conflicted:
+
+```json
+{
+  "mechanical": {
+    "manifests": ["package.json", ".claude-plugin/plugin.json"],
+    "changelog": ["CHANGELOG.md"],
+    "mirrors": [
+      { "paths": ["surfaces/codex/**"],
+        "regenerate": ["nen", "surface", "mirror", "generate", "--source", "skills",
+                       "--surface", "codex", "--out", "surfaces/codex"] }
+    ]
+  }
+}
+```
+
+Each list holds repo-relative globs (`*`, `**`, `?`; absolute or backslashed
+ones are refused at load, since git never reports a path that way). A path two
+globs match is the first class's: manifest, then changelog, then each mirror in
+declared order. A mirror glob covering the whole tree (any glob made only of `*` and `/`:
+`*`, `**`, `***`, `*/**`, `**/*`) is refused, since every conflict would then read as a mirror's. So is any glob that
+reaches `nen/contract.json` itself, because a conflict on the declaration is
+never mechanical. **A delete/modify conflict** on a manifest or changelog (one
+side's index stage missing) is classed `other`: whether the file should exist
+is a judgement, not the recurring release shape. A mirror's deletion stays a
+mirror's, since the generator decides what exists. The block alone satisfies the file's "declares neither block"
+guard; a block declaring nothing, a near-miss key (`manifest`, `mirror`,
+`path`), a mirror with no `paths` or no `regenerate`, and a `regenerate` given
+as a string are all refused by pointer.
+
+The text output counts each class and then lists, per class, the paths and the
+commands a caller runs, **none of which the verb runs**. Every command runs
+**from the working tree's root**: the text says `run from <root>`, the
+report carries `cwd` (top-level and on every `resolve[]` group), every git step
+is spelled `git -C <root> …`, and the declared `regenerate` argv is meant to run
+from that root too. Every path is a **literal**, root-anchored pathspec
+(`:(top,literal)<path>`), so a conflicted `x*.md` never reaches `xa.md`. A token
+carrying a tab or newline is printed in `$'…'` form, escaped rather than dropped,
+and a first token containing `=` is quoted so a shell cannot read it as an
+assignment.
+
+- **manifest** — `git add -- <paths>`, after writing the version this branch
+  ships. The version is a release decision nen does not make
+  ([zheref/hatsu#158](https://github.com/zheref/hatsu/issues/158)).
+- **changelog** — `git add -- <paths>`, after keeping both sides' entries.
+- **mirror**, one group per declared mirror — the base's side checked out
+  (`git checkout --theirs` on a merge, `--ours` on a rebase, the same reversal as
+  the report's labels; for a path already staged and flagged only for a leftover
+  marker, which has no stage to name, `git checkout MERGE_HEAD` on a merge and
+  `git checkout HEAD` on a rebase) or `git rm` where the base deleted the path, so that a
+  generator that will not overwrite a file it did not write can run; then the
+  declared `regenerate` argv, exactly as declared; then `git add -A --
+  ':(top,glob)<each glob>'`, each glob spelled in git's grammar with nen's meaning (a `[` or `]`, literal to nen and a class to git, is escaped). Run it after every non-mirror conflict, since a mirror
+  is generated from those sources.
+- **other** — listed by name: a judgement nen does not make.
+
+**When every conflicted path is in the declared set, the stop exits `3`**
+instead of `1`. **Exit `1` no longer covers every conflict: a caller that
+treats `1` as "conflict" must also treat `3` as one.** Exit 3 is still a stop,
+with nothing continued and nothing resolved. One `other` path, no `mechanical` block (`declaration:
+"absent"`), or a contract nen cannot read (`"unreadable"`, the reason in
+`declarationError`, every path reported as `other`) is the ordinary stop at exit
+`1`, with every path and both its sides reported as before. Either way nen picks
+no side and resolves nothing. **Resuming is unchanged:** stage the resolutions and
+re-run the same command. It finds the operation in progress, refuses again over
+anything still unmerged or carrying a marker, continues otherwise, and never
+pushes.
+
+**`--json`** — `nen.wc.catch-up/v0.2`: `{ contract, base, strategy, before,
+after, behindBefore, aheadBefore, noOp, conflicted: [{ path, class, ours,
+theirs }], resumed, aborted, dryRun, declaration, declarationError, classes:
+{ manifest, changelog, mirror, other }, mechanical, resolve: [{ class, globs,
+paths, cwd, note, steps: [argv, …] }], cwd }`. `cwd` is the working tree's root,
+where every step runs. `strategy` is the one that ran (`auto`
+resolved); `after` is `null` on a dry run and on a conflict. `declaration` is
+`not-read` whenever nothing conflicted (the file was not opened), and `classes`
+is then all zero. `mechanical` is `true` only when the block was read and every
+one of at least one conflicted path is in it. v0.2 adds `class` and the six
+trailing keys; every v0.1 key keeps its place and meaning. Exit 0 on a clean
+catch-up, a resume, an abort, a dry run or `noOp`; exit 1 on a conflict with
+any `other` path (the document is still printed) or a git failure this verb
+did not expect; exit 2 on every refusal above; exit 3 on an all-mechanical
+conflict.
 
 **Example**
 

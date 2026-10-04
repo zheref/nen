@@ -233,3 +233,40 @@ describe("nen review scopes", () => {
     expect(captured.err.join("\n")).toMatch(/unknown 'review' subcommand 'raise'\. Known: scopes\./);
   });
 });
+
+describe("this repository's own review.scopes (zheref/nen#311)", () => {
+  it("raises the security scope (Feitan) on the NN-PR-#303 diff -- the parse and watch classifier seams", () => {
+    const pr303 = [
+      "README.md",
+      "docs/USAGE.md",
+      "src/parse/command-line.test.ts",
+      "src/parse/command-line.ts",
+      "src/parse/izanami.gh-api.test.ts",
+      "src/parse/izanami.test.ts",
+      "src/parse/izanami.ts",
+      "src/parse/izanami.watch.test.ts",
+      "src/watch/command.test.ts",
+      "src/watch/command.ts",
+    ];
+    const classified = classifyScopes(pr303, loadWorkflow(process.cwd()).workflow.review.scopes);
+    const security = classified.scopes.find((scope): boolean => scope.scope === "security");
+    expect(security?.persona).toBe("feitan");
+    expect(security?.paths).toContain("src/parse/izanami.ts");
+    expect(security?.paths).toContain("src/watch/command.ts");
+    expect(security?.paths).not.toContain("README.md");
+  });
+});
+
+describe("this repository's own review.scopes -- the bounded-merge deciders (zheref/nen#311, ruling of 2026-10-04)", () => {
+  it("raises the security scope on the files that decide 'nen pr merge --release-unit'", () => {
+    const deciders = ["src/release/unitcheck.ts", "src/release/command.ts", "src/report/patterns.ts", "src/schema/workflow.ts", "src/verbs/pr_ready.ts"];
+    const classified = classifyScopes(deciders, loadWorkflow(process.cwd()).workflow.review.scopes);
+    const security = classified.scopes.find((scope): boolean => scope.scope === "security");
+    expect(security?.paths).toEqual(deciders);
+  });
+
+  it("does not widen security to a neighbour of those exact files", () => {
+    const classified = classifyScopes(["src/report/data.ts", "src/schema/repos.ts"], loadWorkflow(process.cwd()).workflow.review.scopes);
+    expect(classified.scopes.map((scope): string => scope.scope)).toEqual(["code"]);
+  });
+});

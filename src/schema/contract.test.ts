@@ -41,7 +41,7 @@ const PROJECT = {
   verbs: { web: { build: { exe: "pnpm", argv: ["run", "build"] } } },
 } as const;
 
-describe("the two blocks, and the empty file", () => {
+describe("the three blocks, and the empty file", () => {
   it("accepts a dependency-only file", () => {
     const contract = parse({ dependency: DEPENDENCY });
     expect(contract.dependency?.minimum).toBe("0.3");
@@ -95,6 +95,66 @@ describe("the two blocks, and the empty file", () => {
     expect(parse({ $schema: "nen.contract/v0.1", dependency: DEPENDENCY }).schema).toBe(
       "nen.contract/v0.1",
     );
+  });
+});
+
+describe("the mechanical block -- the conflict set 'nen wc catch-up' classifies (zheref/nen#326)", () => {
+  const MECHANICAL = {
+    manifests: ["package.json", ".claude-plugin/plugin.json"],
+    changelog: ["CHANGELOG.md"],
+    mirrors: [{ paths: ["surfaces/codex/**"], regenerate: ["nen", "surface", "mirror", "generate"], $note: "kept" }],
+  };
+
+  it("parses all three classes, alone satisfies the empty-file guard, and is summarised", () => {
+    const contract = parse({ mechanical: MECHANICAL });
+    expect(contract.dependency).toBeNull();
+    expect(contract.project).toBeNull();
+    expect(contract.mechanical).toMatchObject({
+      manifests: ["package.json", ".claude-plugin/plugin.json"],
+      changelog: ["CHANGELOG.md"],
+      mirrors: [{ paths: ["surfaces/codex/**"], regenerate: ["nen", "surface", "mirror", "generate"] }],
+    });
+    expect(contract.mechanical?.mirrors[0]?.raw["$note"]).toBe("kept");
+    expect(describeContract(contract)).toBe("mechanical (2 manifest globs, 1 changelog glob, 1 mirror)");
+    expect(parse({ dependency: DEPENDENCY }).mechanical).toBeNull();
+  });
+
+  it("refuses a near-miss key by the key it meant, where it would classify every conflict as 'other'", () => {
+    const manifest = refusal({ mechanical: { manifest: ["package.json"] } });
+    expect(manifest.pointer).toBe("mechanical.manifest");
+    expect(manifest.message).toContain("'manifests'");
+    expect(refusal({ mechanical: { mirror: [] } }).pointer).toBe("mechanical.mirror");
+    expect(refusal({ mechanical: { mirrors: [{ path: ["a/**"], regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].path");
+  });
+
+  it("refuses a block that declares nothing, a mirror with no paths or no regenerate, and a string argv", () => {
+    expect(refusal({ mechanical: {} }).message).toContain("declares no manifests, no changelog and no mirrors");
+    expect(refusal({ mechanical: { mirrors: [{ regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].paths");
+    expect(refusal({ mechanical: { mirrors: [{ paths: [], regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].paths");
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["a/**"] }] } }).pointer).toBe("mechanical.mirrors[0].regenerate");
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["a/**"], regenerate: "nen surface mirror generate" }] } }).message).toContain("argv ARRAY");
+  });
+
+  it("refuses a glob git could never report a conflicted path under: absolute, backslashed or empty", () => {
+    expect(refusal({ mechanical: { changelog: ["/CHANGELOG.md"] } }).pointer).toBe("mechanical.changelog[0]");
+    expect(refusal({ mechanical: { manifests: ["pkg\\package.json"] } }).pointer).toBe("mechanical.manifests[0]");
+    expect(refusal({ mechanical: { manifests: [""] } }).pointer).toBe("mechanical.manifests[0]");
+  });
+
+  it("refuses a mirror glob covering the whole tree, and any glob reaching nen/contract.json itself (hanten N7)", () => {
+    for (const glob of ["*", "**", "**/*", "***", "*/**"]) {
+      expect(refusal({ mechanical: { mirrors: [{ paths: ["gen/**", glob], regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].paths[1]");
+    }
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["*"], regenerate: ["x"] }] } }).message).toContain("covers the whole tree");
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["***"], regenerate: ["x"] }] } }).message).toContain("covers the whole tree");
+    // A star INSIDE a named directory is a real mirror glob, not a whole-tree one.
+    expect(parse({ mechanical: { mirrors: [{ paths: ["gen/**", "out*/**"], regenerate: ["x"] }] } }).mechanical?.mirrors[0]?.paths).toEqual(["gen/**", "out*/**"]);
+    const self = refusal({ mechanical: { manifests: ["**/*.json"] } });
+    expect(self.pointer).toBe("mechanical.manifests[0]");
+    expect(self.message).toContain("matches nen/contract.json");
+    expect(refusal({ mechanical: { changelog: ["nen/*"] } }).pointer).toBe("mechanical.changelog[0]");
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["nen/**"], regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].paths[0]");
+    expect(parse({ mechanical: { manifests: ["package.json", "**/plugin.json"] } }).mechanical?.manifests).toHaveLength(2);
   });
 });
 
