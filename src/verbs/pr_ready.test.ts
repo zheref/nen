@@ -712,6 +712,28 @@ function input(overrides: Partial<PrReadyInput> = {}): PrReadyInput {
 }
 
 describe("prReady -- usage errors (exit 2, never a verdict)", () => {
+  it("a nen/gates.json key this build does not read (zheref/nen#310): exit 2 before GitHub is read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-ready-unknown-key-"));
+    try {
+      const gates = JSON.parse(readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8")) as Record<string, unknown>;
+      gates["round_policy"] = { stallMinutes: 30, minimumRounds: 1 };
+      const path = join(dir, "gates.json");
+      writeFileSync(path, JSON.stringify(gates));
+      const { io, out, err } = capture();
+      const code = await prReady(
+        input({ values: { ...input().values, gates: path } }),
+        io,
+        stubDeps(null),
+      );
+      expect(code).toBe(2);
+      expect(out).toEqual([]); // no verdict, not even an unevaluated one
+      expect(err.join("\n")).toContain("at round_policy, carries 'minimumRounds', which this build does not read");
+      expect(err.join("\n")).toContain(`This is nen ${VERSION}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("an unknown 'pr' subcommand", async () => {
     const { io, err } = capture();
     const code = await prReady(input({ positionals: ["pr", "list"] }), io, stubDeps(null));

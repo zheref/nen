@@ -106,7 +106,10 @@
 // that reads `version: 2`, and a file that states it, which every older pin
 // then refuses outright. This build reads version 1 only, so that is not a
 // file-side switch today; it is a maintainer call about the schema, not this
-// loader's.
+// loader's. (Superseded going forward, without a version bump, by the
+// maintainer's 2026-10-03 ruling "Refuse unknown keys", zheref/nen#310: from
+// the release that ships the known-key table below, a key a binary does not
+// read fails its read. Releases before it still ignore what they do not know.)
 //
 // A REPOSITORY WITHOUT THE FILE GETS AN ERROR, NOT A DEFAULT SET. There is no
 // built-in reviewer table, not even the one this code was ported from: a
@@ -181,6 +184,7 @@ import {
 } from "./errors.js";
 import { patternHazard } from "./pattern.js";
 import { GATES_FILE, readSchemaJson } from "./source.js";
+import { VERSION } from "../version.js";
 
 export interface ReviewerIdentity {
   readonly name: string;
@@ -428,6 +432,276 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
   return raw;
 }
 
+// ── THE KNOWN-KEY TABLE, AND WHY AN UNKNOWN KEY IS REFUSED (zheref/nen#310) ──
+//
+// The maintainer's ruling of 2026-10-03, "Refuse unknown keys": this build
+// carries every key it reads in `nen/gates.json`, each with the nen release
+// that introduced it, and a key outside the table FAILS THE READ -- exit 2 in
+// `nen pr ready` and `nen schema check` -- where it used to be silently
+// ignored. Ignoring was the defect: v0.15.1 and v0.16.0 read a file carrying
+// `round_quorum` by dropping it, and `pr ready` answered ready without the
+// declared one-reviewer floor and without a word that it had. A declared gate
+// is never again dropped by a binary that does not know it.
+//
+// WHAT THE REFUSAL CAN AND CANNOT NAME. A binary knows the keys up to its own
+// release and nothing after. So the refusal names the running version, the
+// keys the level takes with each one's `introducedIn`, and the two possible
+// causes -- a key from a later nen (upgrade) or a misspelling (with the nearest
+// known key, when one is close). It cannot name WHICH later release introduced
+// a key it has never heard of; no table shipped before that release can carry
+// it. Every release from this one on refuses instead of ignoring, which is the
+// forward half of the fix; a release before it cannot refuse at all.
+//
+// THREE KINDS OF KEY ARE ALLOWED, AND NOTHING ELSE:
+//
+//   * nen's own keys, in the table below with `introducedIn`. A key is added
+//     here in the same change that makes nen read it, never earlier.
+//   * ANY key starting with `$`, at every level -- `$comment` and every other
+//     annotation (Hatsu's file carries `$check_exclusions`). The binding on
+//     nen that makes this safe: NEN NEVER INTRODUCES A GATE UNDER A `$` KEY,
+//     so a `$` key can be neither a misspelling of one nor a future one, and
+//     ignoring it can drop nothing. `gates.test.ts` pins that no table key
+//     starts with `$`.
+//   * CONSUMER-OWNED keys: raw data another tool reads out of this file, which
+//     nen carries without reading. Each is listed by name, with its owner and
+//     the reference that says so, and its value is never descended into or
+//     validated -- the shape is its owner's. Today these are Hatsu's four
+//     (`round_policy.minRounds`/`maxRounds`, read by sharingan § 6;
+//     `check_exclusions`, zheref/hatsu#104; `reviewer_fallback`, Hatsu's
+//     ROSTER ruling of 2026-09-29). A consumer-owned key nen later reads
+//     (zheref/nen#240 for the round caps, zheref/nen#275 for the fallback)
+//     moves into nen's own rows in that change. Chosen over requiring a `$`
+//     prefix because those keys are already deployed unprefixed and read by
+//     Hatsu's skills under those names; a rename there would be a breaking
+//     change in a second repository to admit a fix in this one.
+//
+// `introducedIn` for a key shipped after v0.19.0 is the next release's number,
+// 0.20.0 -- the release proposal corrects it if that release is cut under
+// another number.
+
+/** One key nen reads, or one it carries for a named consumer. */
+export type GatesKeySpec =
+  | {
+      readonly introducedIn: string;
+      /** The keys of this key's value when it is an object. */
+      readonly object?: GatesKeyLevel;
+      /** The keys of each element when this key's value is an array of objects. */
+      readonly items?: GatesKeyLevel;
+    }
+  | {
+      /** Who reads this key, and where that is stated. nen never does. */
+      readonly consumer: string;
+    };
+
+export type GatesKeyLevel = Readonly<Record<string, GatesKeySpec>>;
+
+const NEXT_RELEASE = "0.20.0";
+
+const pattern = (introducedIn: string): GatesKeySpec => ({
+  introducedIn,
+  object: { pattern: { introducedIn }, ignoreCase: { introducedIn } },
+});
+
+/**
+ * Every key this build reads in `nen/gates.json`, and every consumer-owned key
+ * it carries unread. `$`-prefixed keys are allowed at every level and appear
+ * nowhere here. See the section header above.
+ */
+export const GATES_KNOWN_KEYS: GatesKeyLevel = {
+  version: { introducedIn: "0.1.0" },
+  reviewers: {
+    introducedIn: "0.1.0",
+    items: {
+      name: { introducedIn: "0.1.0" },
+      login_pattern: pattern("0.1.0"),
+      review_check_pattern: pattern("0.1.0"),
+      round_check_pattern: pattern("0.1.0"),
+      enrolment_check_pattern: pattern("0.1.0"),
+      bounded_policy_exempt: { introducedIn: "0.1.0" },
+      delivery_holistic_pass: { introducedIn: "0.1.0" },
+      approves_when_posted_at_head: { introducedIn: "0.1.0" },
+    },
+  },
+  default_approvers: { introducedIn: "0.1.0" },
+  base_reviewers: { introducedIn: "0.1.0" },
+  delivery: {
+    introducedIn: "0.1.0",
+    object: {
+      author_pattern: pattern("0.1.0"),
+      head_ref_prefixes: { introducedIn: "0.1.0" },
+      labels: { introducedIn: "0.1.0" },
+    },
+  },
+  dependabot_carve_out: {
+    introducedIn: "0.7.0",
+    object: {
+      author_pattern: pattern("0.7.0"),
+      satisfied_by_context: { introducedIn: "0.7.0" },
+    },
+  },
+  approval_policy: { introducedIn: "0.10.0" },
+  round_policy: {
+    introducedIn: "0.11.0",
+    object: {
+      stallMinutes: { introducedIn: "0.11.0" },
+      minRounds: { consumer: "a consumer's round floor; nen reads it once zheref/nen#240 lands" },
+      maxRounds: { consumer: "a consumer's round ceiling; nen reads it once zheref/nen#240 lands" },
+    },
+  },
+  round_quorum: {
+    introducedIn: "0.17.0",
+    object: {
+      any_of: { introducedIn: "0.17.0" },
+      minimum: { introducedIn: "0.17.0" },
+    },
+  },
+  checks: {
+    introducedIn: NEXT_RELEASE,
+    object: {
+      excluded: {
+        introducedIn: NEXT_RELEASE,
+        items: {
+          name: { introducedIn: NEXT_RELEASE },
+          match: { introducedIn: NEXT_RELEASE },
+          reason: { introducedIn: NEXT_RELEASE },
+          ruled: { introducedIn: NEXT_RELEASE },
+          until: {
+            introducedIn: NEXT_RELEASE,
+            object: { condition: { introducedIn: NEXT_RELEASE } },
+          },
+        },
+      },
+    },
+  },
+  check_exclusions: { consumer: "a consumer's exclusion rows; nen's own form is checks.excluded (zheref/nen#249)" },
+  reviewer_fallback: {
+    consumer: "a consumer's reviewer fallback chain; nen reads it once zheref/nen#275 lands",
+  },
+};
+
+/** One key a file carries that this build does not read. */
+export interface UnreadGatesKey {
+  /** The object it sits in: `$` for the file's root, else e.g. `round_policy`. */
+  readonly pointer: string;
+  /** The key, as written. */
+  readonly key: string;
+}
+
+/**
+ * Every unknown key in one `nen/gates.json` -- a `SchemaError` (so every
+ * existing sink prints it whole), told apart so `nen schema check` can exit 2
+ * for it, as `nen pr ready` already does for any refused identity file. ALL of
+ * them, not the first: a file written for a newer nen usually carries several,
+ * and naming one per run turns one upgrade into a round of edits.
+ */
+export class GatesUnknownKeyError extends SchemaError {
+  readonly unread: readonly UnreadGatesKey[];
+  /** The nen version that refused them. */
+  readonly runningVersion: string;
+
+  constructor(path: string, unread: readonly UnreadGatesKey[], message: string) {
+    super(path, unread[0]?.pointer ?? "$", message);
+    this.name = "GatesUnknownKeyError";
+    this.unread = unread;
+    this.runningVersion = VERSION;
+  }
+}
+
+function describeLevel(level: GatesKeyLevel): string {
+  const nen: string[] = [];
+  const consumer: string[] = [];
+  for (const [key, spec] of Object.entries(level)) {
+    if ("consumer" in spec) consumer.push(key);
+    else nen.push(`${key} (nen >= ${spec.introducedIn})`);
+  }
+  return `${nen.join(", ")}${consumer.length === 0 ? "" : `; carried unread for a consumer: ${consumer.join(", ")}`}`;
+}
+
+/** Whether `a` is within two edits of `b`, ignoring case, `_` and `-`. */
+function closeTo(a: string, b: string): boolean {
+  const x = a.toLowerCase().replace(/[_-]/g, "");
+  const y = b.toLowerCase().replace(/[_-]/g, "");
+  if (x === y) return true;
+  if (Math.abs(x.length - y.length) > 2) return false;
+  let previous = Array.from({ length: y.length + 1 }, (_, index): number => index);
+  for (let i = 1; i <= x.length; i += 1) {
+    const current = [i];
+    for (let j = 1; j <= y.length; j += 1) {
+      const cost = x[i - 1] === y[j - 1] ? 0 : 1;
+      current.push(
+        Math.min((previous[j] ?? 0) + 1, (current[j - 1] ?? 0) + 1, (previous[j - 1] ?? 0) + cost),
+      );
+    }
+    previous = current;
+  }
+  return (previous[y.length] ?? Number.POSITIVE_INFINITY) <= 2;
+}
+
+interface UnreadAt extends UnreadGatesKey {
+  readonly level: GatesKeyLevel;
+}
+
+function collectUnknownKeys(
+  pointer: string,
+  record: Record<string, unknown>,
+  level: GatesKeyLevel,
+  found: UnreadAt[],
+): void {
+  for (const [key, value] of Object.entries(record)) {
+    if (key.startsWith("$")) continue;
+    const spec = Object.hasOwn(level, key) ? level[key] : undefined;
+    if (spec === undefined) {
+      found.push({ pointer, key, level });
+      continue;
+    }
+    if ("consumer" in spec) continue;
+    const here = pointer === "$" ? key : `${pointer}.${key}`;
+    if (spec.object !== undefined && isRecord(value)) {
+      collectUnknownKeys(here, value, spec.object, found);
+    }
+    const items = spec.items;
+    if (items !== undefined && Array.isArray(value)) {
+      value.forEach((item, index): void => {
+        if (isRecord(item)) collectUnknownKeys(`${here}[${index}]`, item, items, found);
+      });
+    }
+  }
+}
+
+/**
+ * Walk the file against GATES_KNOWN_KEYS and refuse it if any key is neither
+ * nen's, consumer-owned, nor `$`-prefixed -- naming every such key, grouped by
+ * the object it sits in. It refuses KEYS only: a value of the wrong type is
+ * left for that field's own reader to refuse by pointer, with the message it
+ * already gives.
+ */
+function refuseUnknownKeys(path: string, root: Record<string, unknown>): void {
+  const found: UnreadAt[] = [];
+  collectUnknownKeys("$", root, GATES_KNOWN_KEYS, found);
+  if (found.length === 0) return;
+  const groups = new Map<string, UnreadAt[]>();
+  for (const entry of found) groups.set(entry.pointer, [...(groups.get(entry.pointer) ?? []), entry]);
+  const sentences = [...groups.values()].map((group, index): string => {
+    const level = group[0]?.level ?? {};
+    const keys = group.map((entry): string => `'${entry.key}'`).join(", ");
+    const near = group
+      .map((entry): string | null => {
+        const known = Object.keys(level).find((candidate): boolean => closeTo(entry.key, candidate));
+        return known === undefined ? null : `'${entry.key}' -> '${known}'?`;
+      })
+      .filter((hint): hint is string => hint !== null);
+    const head = index === 0 ? `carries ${keys}` : `Also at ${group[0]?.pointer ?? "$"}: ${keys}`;
+    return `${head}${index === 0 ? ", which this build does not read" : ""}. ${
+      near.length === 0 ? "" : `Did you mean ${near.join(" ")} `
+    }That object takes ${describeLevel(level)}; and any '$'-prefixed annotation.`;
+  });
+  throw new GatesUnknownKeyError(
+    path,
+    found.map(({ pointer, key }): UnreadGatesKey => ({ pointer, key })),
+    `${sentences.join(" ")} This is nen ${VERSION}: a key a newer nen introduced is read only by that nen, so upgrade nen; a misspelling, correct or remove. Refused rather than ignored, so a declared gate is never dropped by a binary that does not know it (zheref/nen#310).`,
+  );
+}
+
 /**
  * The `version` guard every reader of this file applies before interpreting
  * any field -- `parseGateIdentities` and the base-only `parseCheckExclusions`
@@ -459,6 +733,10 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   // file against the wrong schema and then complaining about its fields is how a
   // version mismatch gets diagnosed as five unrelated defects.
   requireGatesVersion(path, root);
+  // Then the keys, before any field is read (zheref/nen#310): a key this build
+  // does not know is refused here, so a newer file meets "upgrade" rather than
+  // a subset of its own rules applied in silence.
+  refuseUnknownKeys(path, root);
 
   const rawReviewers = requireArray(path, "reviewers", root["reviewers"]);
   const reviewers: ReviewerIdentity[] = [];
@@ -855,18 +1133,18 @@ export const GLOB_MIN_LITERAL_PREFIX = 3;
  *     hyphen) read as a condition would NEVER lapse, so it is refused rather
  *     than reinterpreted; a condition is the explicit `{ "condition": ... }`;
  *   * an `until` date BEFORE `ruled` is born expired;
- *   * a key an entry (or its `until` object) does not define, `$comment`
- *     aside, is a condition nobody reads;
+ *   * a key an entry (or its `until` object) does not define, `$` keys
+ *     aside, is a condition nobody reads -- refused by the file-wide
+ *     known-key sweep (zheref/nen#310) before this reader runs;
  *   * the same `name` twice (under the same `match`) is two reasons for one
  *     exclusion, and the report could quote only one of them.
  */
 export function parseCheckExclusions(path: string, rootValue: unknown): DeclaredCheckExclusion[] {
   const root = requireRecord(path, "$", rootValue);
   requireGatesVersion(path, root);
+  refuseUnknownKeys(path, root);
   return readCheckExclusions(path, root["checks"]);
 }
-
-const ENTRY_KEYS: ReadonlySet<string> = new Set(["name", "match", "reason", "ruled", "until", "$comment"]);
 
 function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion[] {
   if (raw === undefined || raw === null) return [];
@@ -906,17 +1184,9 @@ function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion
   requireArray(path, "checks.excluded", rawExcluded).forEach((entry, index): void => {
     const pointer = `checks.excluded[${index}]`;
     const record = requireRecord(path, pointer, entry);
-    // An unknown key is REFUSED (hanten round 2, N10), as in `until`'s object:
-    // a misspelt `untill` or `reasons` is a condition nobody reads, and a key
-    // a later build adds must not be silently ignored by this one.
-    const unknownKeys = Object.keys(record).filter((key): boolean => !ENTRY_KEYS.has(key));
-    if (unknownKeys.length > 0) {
-      throw new SchemaError(
-        path,
-        pointer,
-        `carries ${unknownKeys.map((key): string => `'${key}'`).join(", ")}, which this build does not read. An entry is exactly name, match (optional), reason, ruled, until and an optional $comment; a key nobody reads is a condition nobody applies.`,
-      );
-    }
+    // An unknown key in an entry (a misspelt `untill`, hanten round 2, N10) or
+    // in its `until` object was refused before this function ran, by the
+    // file-wide known-key sweep (zheref/nen#310, `refuseUnknownKeys`).
     const name = text(`${pointer}.name`, record["name"]);
     const rawMatch = record["match"];
     let match: "exact" | "glob";
@@ -969,14 +1239,6 @@ function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion
       }
       untilDate = until;
     } else if (isRecord(rawUntil)) {
-      const unknown = Object.keys(rawUntil).filter((key): boolean => key !== "condition" && key !== "$comment");
-      if (unknown.length > 0) {
-        throw new SchemaError(
-          path,
-          `${pointer}.until`,
-          `carries ${unknown.map((key): string => `'${key}'`).join(", ")}, which this build does not read. A condition is exactly { "condition": "<text>" }; a key nobody reads is a lapse rule nobody applies.`,
-        );
-      }
       until = { condition: text(`${pointer}.until.condition`, rawUntil["condition"]) };
     } else {
       throw new SchemaError(

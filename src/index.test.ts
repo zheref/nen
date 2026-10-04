@@ -732,3 +732,64 @@ describe("nen schema check -- the policy row's own refusal sentence", () => {
     expect(result.err.join("\n")).toContain("no built-in copy to fall back on");
   });
 });
+
+describe("nen schema check -- an unknown nen/gates.json key is exit 2 (zheref/nen#310)", () => {
+  const withGates = (mutate: (gates: Record<string, unknown>) => void): string => {
+    const root = mkdtempSync(join(tmpdir(), "nen-cli-unknown-key-"));
+    mkdirSync(join(root, "nen"));
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+    mutate(gates);
+    writeFileSync(join(root, "nen", "gates.json"), JSON.stringify(gates));
+    return root;
+  };
+
+  it("fails the gates row naming the key, and exits 2 -- text and --json alike", async () => {
+    const root = withGates((gates): void => {
+      gates["round_quorom"] = { any_of: ["sasuke"], minimum: 1 };
+    });
+    try {
+      const text = await capture(["schema", "check", "--repo", root]);
+      expect(text.code).toBe(2);
+      expect(text.out.join("\n")).toMatch(/FAIL\s+nen\/gates\.json[\s\S]*carries 'round_quorom'/);
+      expect(text.out.join("\n")).toContain("'round_quorom' -> 'round_quorum'?");
+      expect(text.err.join("\n")).toContain("nen/gates.json: round_quorom");
+      expect(text.err.join("\n")).toContain(`(${VERSION})`);
+
+      const json = await capture(["schema", "check", "--repo", root, "--json"]);
+      expect(json.code).toBe(2);
+      expect(JSON.parse(json.out.join("\n"))).toMatchObject({ ok: false, unknownKeys: ["nen/gates.json: round_quorom"] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a gates.json carrying only known keys keeps its output and exit 0, with an empty unknownKeys", async () => {
+    const root = withGates((): void => undefined);
+    try {
+      const own = await capture(["schema", "check", "--repo", root]);
+      const fixture = await capture(["schema", "check", "--repo", BANKAI_REPO]);
+      expect(own.code).toBe(0);
+      expect(fixture.code).toBe(0);
+      const gatesRow = (lines: string[]): string | undefined => lines.find((line): boolean => line.includes("nen/gates.json"));
+      expect(gatesRow(own.out)).toBe(gatesRow(fixture.out));
+      const json = await capture(["schema", "check", "--repo", BANKAI_REPO, "--json"]);
+      expect(JSON.parse(json.out.join("\n"))).toMatchObject({ ok: true, unknownKeys: [] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("any other failure stays exit 1", async () => {
+    const root = withGates((gates): void => {
+      gates["base_reviewers"] = [];
+    });
+    try {
+      expect((await capture(["schema", "check", "--repo", root])).code).toBe(1);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});

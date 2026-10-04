@@ -1366,7 +1366,51 @@ Cursor Bugbot". `round_quorum` says it:
   the one that ships `round_quorum`** (v0.15.1 and v0.16.0 verified) ignores
   the key and applies the rest of the file. The file is still valid, and every
   requested or enrolled round is still owed, but there is no one-reviewer
-  floor.
+  floor. From v0.20.0 a key a binary does not read is refused instead of
+  ignored — see the next paragraph.
+
+**Unknown keys are refused, never ignored (zheref/nen#310; maintainer ruling
+2026-10-03, "Refuse unknown keys").** The binary carries every
+`nen/gates.json` key it reads, each with the nen release that introduced it.
+A key outside that set fails the read: `nen pr ready` exits **2** before
+GitHub is read, and [`nen schema check`](#nen-schema-check) fails the gates
+row and exits **2**. The refusal names every unread key by pointer, the keys
+that object takes with each one's release (`round_quorum (nen >= 0.17.0)`),
+the nearest known key when one is within two edits (`'minRound' ->
+'minRounds'?`), and the running version, so the reader can tell a key from a
+newer nen (upgrade) from a misspelling (correct it). Before this, an older
+binary meeting a newer key — `round_quorum` under v0.15.1 and v0.16.0 —
+applied the rest of the file and answered `pr ready` without the declared
+gate, and said nothing.
+
+| Key | Read by nen ≥ |
+|---|---|
+| `version`, `reviewers[]` (`name`, `login_pattern`, `review_check_pattern`, `round_check_pattern`, `enrolment_check_pattern`, `bounded_policy_exempt`, `delivery_holistic_pass`, `approves_when_posted_at_head`), each pattern's `pattern`/`ignoreCase`, `default_approvers`, `base_reviewers`, `delivery` (`author_pattern`, `head_ref_prefixes`, `labels`) | 0.1.0 |
+| `dependabot_carve_out` (`author_pattern`, `satisfied_by_context`) | 0.7.0 |
+| `approval_policy` | 0.10.0 |
+| `round_policy.stallMinutes` | 0.11.0 |
+| `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
+| `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
+
+Two kinds of key are allowed without being read:
+
+- **Any key starting with `$`, at every level** — `$comment` and any other
+  annotation. nen binds itself never to introduce a gate under a `$` key, so
+  such a key can be neither a misspelling of one nor a newer one.
+- **Consumer-owned keys**, carried unread by name for the tool that reads
+  them: `round_policy.minRounds` and `round_policy.maxRounds` (Hatsu's
+  sharingan § 6; zheref/nen#240 would make nen read them),
+  `check_exclusions` (Hatsu, zheref/hatsu#104) and `reviewer_fallback`
+  (Hatsu's ruling of 2026-09-29; zheref/nen#275). nen does not validate their
+  values; their shape is their owner's. Another consumer's raw data takes a
+  `$` key, or is added to this list by a nen change.
+
+**The limit of a forward fix.** A binary can name the release of every key it
+knows, and no key released after it. So the refusal says "this is nen
+<version>; a key a newer nen introduced is read only by that nen", not which
+release that was. And a release **before** this one (through v0.19.0) cannot
+refuse at all: it still ignores what it does not know. The mitigation for a
+pinned consumer is moving the pin (zheref/hatsu#168).
 
 **Consumer note: a round check must conclude `SUCCESS` (review of E7, finding
 C1).** Until this change, any `round_check_pattern` run that completed with a
@@ -5296,6 +5340,13 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 ```text
 nen schema check --repo <path> [--json]
 ```
+
+**Exit codes.** `0` every required file loaded; `1` one did not; `2` from v0.20.0 when
+`nen/gates.json` carries a key this build does not read (zheref/nen#310). The gates row FAILs naming
+every such key, the keys its object takes with the release that introduced each, and the running
+version; `--json` adds `unknownKeys: ["nen/gates.json: <pointer>.<key>", ...]`, empty when every key is
+known. `$`-prefixed keys and the named consumer-owned keys are allowed — see
+[unknown keys under `pr ready`](#nen-pr-ready) for the table.
 
 **Four POINTER rows (zheref/nen#220, #227).** Four rows name a pointer
 rather than a file — `nen/workflow.json#reports.sections`,

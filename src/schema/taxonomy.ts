@@ -22,7 +22,7 @@
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
 import { describeContract, loadContract } from "./contract.js";
-import { loadGateIdentities, type GateIdentities } from "./gates.js";
+import { GatesUnknownKeyError, loadGateIdentities, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
@@ -135,6 +135,14 @@ export interface CheckReport {
    * fully migrated repository, and for one carrying no legacy copy at all.
    */
   readonly deprecations: readonly string[];
+  /**
+   * Every key a file carries that this build does not read, as
+   * `<file>: <pointer>.<key>` (zheref/nen#310). Each is also a failed row; this
+   * list is what makes `nen schema check` exit 2 rather than 1 -- the file asks
+   * for a gate this binary cannot apply, which is a fact about the binary as
+   * much as the file. Empty when every key is known.
+   */
+  readonly unknownKeys: readonly string[];
 }
 
 // The ONE leftover-cleanup sentence, written once so a caller reading two
@@ -337,6 +345,7 @@ function pointerCheck(root: string, pointer: string, describe: (workflow: Workfl
 // once.
 export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
   const root = assertRepoRoot(options);
+  const unknownKeys: string[] = [];
   const checks: SchemaCheck[] = [
     run(LABELS_FILE, root, true, (): string => {
       const labels = loadLabelTaxonomy(root);
@@ -352,7 +361,19 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     }),
     colorsCheck(root),
     run(GATES_FILE, root, false, (): string => {
-      const gates = loadGateIdentities(root);
+      let gates: GateIdentities;
+      try {
+        gates = loadGateIdentities(root);
+      } catch (error) {
+        // Recorded for the exit code (zheref/nen#310), then failed as any other
+        // present-and-wrong gates.json: the row and its `detail` are unchanged.
+        if (error instanceof GatesUnknownKeyError) {
+          for (const { pointer, key } of error.unread) {
+            unknownKeys.push(`${GATES_FILE}: ${pointer === "$" ? "" : `${pointer}.`}${key}`);
+          }
+        }
+        throw error;
+      }
       // `checks.excluded` (zheref/nen#249) is counted only when declared, so a
       // file without it reads exactly as it did before the key existed.
       const excluded = gates.excludedChecks?.length ?? 0;
@@ -400,5 +421,6 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     deprecations: checks
       .map((check): string | null => (check.note === null ? null : `${check.file}: ${check.note}`))
       .filter((note): note is string => note !== null),
+    unknownKeys,
   };
 }

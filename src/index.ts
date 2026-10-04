@@ -159,10 +159,21 @@ migration -- run 'nen scaffold init --accept-detected', or copy it by hand. A
 schemas/ copy left beside a working nen/ one is a separate, harmless 'warn'
 row: delete it with git rm.
 
+A nen/gates.json key this build does not read is refused, never ignored
+(zheref/nen#310): the gates row fails naming every such key, the keys that
+object takes with the nen release that introduced each, and the exit is 2.
+'$'-prefixed keys are annotations and are allowed at every level; a few keys
+another tool reads (round_policy.minRounds and maxRounds, check_exclusions,
+reviewer_fallback) are carried unread by name.
+
+Exit: 0 every required file loaded; 1 one did not; 2 nen/gates.json carries a
+key this build does not read.
+
   --repo <path>    The target repository's working-tree root. Defaults to the
                    current directory.
   --json           Machine-readable output:
-                   { root, ok, checks: [...], deprecations: [...] }.`;
+                   { root, ok, checks: [...], deprecations: [...],
+                     unknownKeys: [...] }.`;
 
 // The flags the TWO pre-registry commands share. Left as one spec because
 // those two are parsed together, exactly as they always were; a registry
@@ -438,9 +449,12 @@ function bootstrap(
 
 function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
   const report = checkTaxonomy({ repoFlag });
+  // An unknown gates.json key is exit 2 (zheref/nen#310), as it is in
+  // `nen pr ready`: the file asks for a gate this binary cannot apply.
+  const failed = report.unknownKeys.length > 0 ? 2 : 1;
   if (json) {
     io.out(JSON.stringify(report, null, 2));
-    return report.ok ? 0 : 1;
+    return report.ok ? 0 : failed;
   }
   io.out(`repository: ${report.root}`);
   for (const check of report.checks) {
@@ -487,8 +501,13 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
         ? `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`
         : `${PROGRAM}: this repository's '${WORKFLOW_FILE}' is present and could not be read -- the pointer is named above. Every parameter in that file HAS a default, and nen is deliberately not applying one: a policy this repository states and nen cannot parse is not a policy nen may quietly replace with its own.`,
     );
+    if (report.unknownKeys.length > 0) {
+      io.err(
+        `${PROGRAM}: ${report.unknownKeys.join(", ")} -- a key this nen (${VERSION}) does not read. Exit 2: upgrade nen if a newer release introduced it, otherwise correct the file.`,
+      );
+    }
   }
-  return report.ok ? 0 : 1;
+  return report.ok ? 0 : failed;
 }
 
 /**
