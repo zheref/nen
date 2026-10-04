@@ -69,7 +69,7 @@ describe("nen idea file -- CLI wiring", () => {
       ],
       [
         {
-          match: `gh issue create --repo zheref/nen --title t --body-file ${bodyFile} --assignee me --label bankai:severity/high`,
+          match: `gh issue create --repo zheref/nen --title t --body-file - --assignee me --label bankai:severity/high`,
           result: { stdout: "https://github.com/zheref/nen/issues/5\n" },
         },
         {
@@ -106,7 +106,7 @@ describe("nen idea file -- CLI wiring", () => {
       ],
       [
         {
-          match: `gh issue create --repo zheref/nen --title t --body-file ${bodyFile} --assignee me --label bankai:severity/high`,
+          match: `gh issue create --repo zheref/nen --title t --body-file - --assignee me --label bankai:severity/high`,
           result: { stdout: "https://github.com/zheref/nen/issues/5\n" },
         },
         {
@@ -160,7 +160,7 @@ describe("nen idea file -- CLI wiring", () => {
       ],
       [
         {
-          match: `gh issue create --repo zheref/nen --title t --body-file ${bodyFile} --assignee me --label bankai:severity/high`,
+          match: `gh issue create --repo zheref/nen --title t --body-file - --assignee me --label bankai:severity/high`,
           result: { stdout: "https://github.com/zheref/nen/issues/5\n" },
         },
         {

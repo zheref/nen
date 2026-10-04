@@ -93,6 +93,17 @@ describe("private-name matching (zheref/nen#329)", () => {
     expect(hits(["o/my.app"], "my.app and myXapp")).toEqual(["body:1:#1"]);
   });
 
+  it("reads strikethrough, U+2212 and default-ignorable characters through the normalised pass (N6)", () => {
+    expect(hits(["o/secretproj"], "secret~~proj~~")).toEqual(["body:1:#1n"]);
+    expect(hits(["o/secret-proj"], "secret\u2212proj")).toEqual(["body:1:#1n"]);
+    expect(hits(["o/secretproj"], "secret\u034Fproj")).toEqual(["body:1:#1n"]);
+    expect(hits(["o/secretproj"], "secret\uFE0Fproj")).toEqual(["body:1:#1n"]);
+  });
+
+  it("never resolves an entity name through Object.prototype (N11)", () => {
+    expect(normalise("&constructor;&toString;&__proto__;")).toBe("&constructor;&toString;&__proto__;");
+  });
+
   it("normalise() folds dashes and drops format characters", () => {
     expect(normalise("a—b­c")).toBe("a-bc");
   });
@@ -112,12 +123,43 @@ describe("the ignore list", () => {
     expect(one.ignored.has("thing")).toBe(false);
   });
 
+  it("a blocking hit reports the first STILL-POLICED entry's index, never an exempt twin's (N7)", () => {
+    const matcher = compileMatcher(["a/thing", "b/thing"], parseIgnoreList("a/thing\n"));
+    expect(findPrivateNames(matcher, [{ field: "body", text: "thing" }])).toEqual([
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false },
+    ]);
+  });
+
+  it("refuses as unavailable when EVERY private name is ignored, unless --allow-all-ignored (N4)", () => {
+    const script = (): ScriptedSeams =>
+      new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault", "b/zeta"])]);
+    const ignoreAll = parseIgnoreList("vault\nzeta\n");
+    const refused = checkPrivateNames(script(), TARGET, [{ field: "body", text: "vault" }], false, ignoreAll);
+    expect(refused.result).toBe("unavailable");
+    expect(refused.error).toMatch(/every private name is ignored/);
+    expect(blockingExit(refused)).toBe(1);
+    const allowed = checkPrivateNames(script(), TARGET, [{ field: "body", text: "vault" }], false, ignoreAll, true);
+    expect(allowed.result).toBe("clean");
+    expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true }]);
+  });
+
+  it("reports the list's size and owner count, and never a name (N13)", () => {
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault", "Acme/other", "b/zeta"])]);
+    const check = checkPrivateNames(seams, TARGET, [{ field: "body", text: "clean" }], false);
+    expect(check.listSize).toBe(3);
+    expect(check.owners).toBe(2);
+    expect(JSON.stringify(check)).not.toMatch(/vault|other|zeta|acme/i);
+    const skipped = checkPrivateNames(new ScriptedSeams([]), TARGET, [], true);
+    expect(skipped.listSize).toBeNull();
+    expect(skipped.owners).toBeNull();
+  });
+
   it("marks an ignored hit, and a check with only ignored hits is clean but reports them", () => {
-    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault"])]);
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/other", "acme/vault"])]);
     const check = checkPrivateNames(seams, TARGET, [{ field: "body", text: "vault" }], false, parseIgnoreList("vault"));
     expect(check.result).toBe("clean");
-    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true }]);
-    expect(privateNameLines(check, TARGET)).toEqual(["nen issue: ignored: body:1: private repository #1 (ignore file)"]);
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 2, normalised: false, ignored: true }]);
+    expect(privateNameLines(check, TARGET)).toEqual(["nen issue: ignored: body:1: private repository #2 (ignore file)"]);
   });
 });
 

@@ -27,10 +27,11 @@ describe("commentArgv -- the argv a dry run prints IS the argv that runs", () =>
   });
 
   // A body of any size on argv is a body against the host's command-line limit
-  // (~32k on Windows, one of this repository's CI lanes) -- so a file body stays
-  // a file all the way to `gh`, even though its bytes were read here for the
-  // emptiness check and the dry-run transcript.
-  it("spells a file body as --body-file, carrying the path the caller typed", () => {
+  // (~32k on Windows, one of this repository's CI lanes) -- so a file body never
+  // goes on argv. Since zheref/nen#329 it goes on STDIN (`--body-file -`): the
+  // bytes read and checked here, never the path `gh` would re-read after the
+  // private-name check.
+  it("spells a file body as --body-file -, never the path", () => {
     expect(commentArgv(TARGET, fromFile(12, "read from disk", "notes/body.md"))).toEqual([
       "issue",
       "comment",
@@ -38,7 +39,7 @@ describe("commentArgv -- the argv a dry run prints IS the argv that runs", () =>
       "--repo",
       "zheref/nen",
       "--body-file",
-      "notes/body.md",
+      "-",
     ]);
   });
 });

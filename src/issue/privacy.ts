@@ -119,11 +119,18 @@ export interface CheckedText {
  * `skipped-by-flag` -- the opt-out was given; nothing was read.
  * `refused` -- at least one hit; nothing was written.
  * `unavailable` -- the check could not be performed (visibility or list
- *   unreadable, empty or possibly truncated); nothing was written.
+ *   unreadable, empty or possibly truncated, or every name on it ignored
+ *   without --allow-all-ignored); nothing was written.
  */
 export interface PrivateNameCheck {
   readonly result: "clean" | "skipped-private-target" | "skipped-by-flag" | "refused" | "unavailable";
   readonly targetVisibility: Visibility | null;
+  /**
+   * How many private repositories the list held, and under how many owners --
+   * COUNTS ONLY, never a name. Null when the list was never read.
+   */
+  readonly listSize: number | null;
+  readonly owners: number | null;
   readonly hits: readonly PrivateNameHit[];
   /** Why the check could not be performed; null unless `unavailable`. */
   readonly error: string | null;
@@ -240,6 +247,13 @@ export interface NameMatcher {
   readonly pattern: RegExp;
   readonly indexOf: ReadonlyMap<string, number>;
   /**
+   * Each still-policed name's index: the FIRST entry carrying it that the
+   * ignore list does not exempt. A blocking hit reports this one, so `#k`
+   * resolves to the repository that actually blocked -- never to an exempt
+   * twin that happens to sort first.
+   */
+  readonly policedIndexOf: ReadonlyMap<string, number>;
+  /**
    * Lowercase names the ignore list exempts: a name is exempt only when EVERY
    * list entry carrying it is -- ignoring `a/thing` leaves `b/thing` policed,
    * and the two share one index, so the name still blocks.
@@ -259,33 +273,37 @@ function escapeRegExp(text: string): string {
 export function compileMatcher(list: readonly string[], ignore: IgnoreList | null = null): NameMatcher {
   const indexOf = new Map<string, number>();
   const names: string[] = [];
-  const policed = new Set<string>();
+  const policedIndexOf = new Map<string, number>();
   list.forEach((entry, position): void => {
     const name = entry.replace(/^.*\//, "");
     const key = name.toLowerCase();
     if (name === "") return;
     const exempt = ignore !== null && (ignore.names.has(key) || ignore.slugs.has(entry.toLowerCase()));
-    if (!exempt) policed.add(key);
+    if (!exempt && !policedIndexOf.has(key)) policedIndexOf.set(key, position + 1);
     if (indexOf.has(key)) return;
     indexOf.set(key, position + 1);
     names.push(name);
   });
-  const ignored = new Set([...indexOf.keys()].filter((key): boolean => !policed.has(key)));
+  const ignored = new Set([...indexOf.keys()].filter((key): boolean => !policedIndexOf.has(key)));
   const alternation = names
     .sort((a, b): number => b.length - a.length)
     .map(escapeRegExp)
     .join("|");
   const pattern = new RegExp(`(?<![A-Za-z0-9-])(${alternation})(?![A-Za-z0-9-])`, "gi");
-  return { pattern, indexOf, ignored };
+  return { pattern, indexOf, policedIndexOf, ignored };
 }
 
-/** Named HTML entities the normalised reading decodes -- the script's own table. */
-const ENTITIES: Readonly<Record<string, string>> = {
-  amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " ",
-  hyphen: "-", dash: "-", minus: "-", ndash: "-", mdash: "-", lowbar: "_",
-  UnderBar: "_", period: ".", sol: "/", bsol: "\\", colon: ":", commat: "@",
-  num: "#", percnt: "%", shy: "", zwsp: "", zwj: "", zwnj: "", NewLine: " ",
-};
+/**
+ * Named HTML entities the normalised reading decodes -- the script's own
+ * table. A MAP, never an object literal: `&constructor;` or `&toString;` must
+ * not resolve through Object.prototype into a function's source text.
+ */
+const ENTITIES: ReadonlyMap<string, string> = new Map([
+  ["amp", "&"], ["lt", "<"], ["gt", ">"], ["quot", '"'], ["apos", "'"], ["nbsp", " "],
+  ["hyphen", "-"], ["dash", "-"], ["minus", "-"], ["ndash", "-"], ["mdash", "-"], ["lowbar", "_"],
+  ["UnderBar", "_"], ["period", "."], ["sol", "/"], ["bsol", "\\"], ["colon", ":"], ["commat", "@"],
+  ["num", "#"], ["percnt", "%"], ["shy", ""], ["zwsp", ""], ["zwj", ""], ["zwnj", ""], ["NewLine", " "],
+]);
 
 function codePoint(value: number): string {
   return value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff) ? "�" : String.fromCodePoint(value);
@@ -313,8 +331,9 @@ function percentDecode(line: string): string {
 /**
  * The first normalised reading: %XX decoded, UTF-8 decoded, HTML entities
  * decoded (twice, for a doubly-escaped one), inline tags and backslash escapes
- * before ASCII punctuation dropped, NFKC applied, format characters (zero
- * width, soft hyphen) deleted and every dash folded to `-`. Those
+ * before ASCII punctuation dropped, NFKC applied, format characters and
+ * default-ignorable code points (zero width, soft hyphen, U+034F, variation
+ * selectors) deleted and every dash, U+2212 included, folded to `-`. Those
  * transformations are what is handled; nothing else is claimed.
  */
 export function normalise(line: string): string {
@@ -322,27 +341,33 @@ export function normalise(line: string): string {
   for (let pass = 0; pass < 2; pass++) {
     text = text.replace(/&#[xX]([0-9A-Fa-f]{1,6});/g, (_m, hex: string): string => codePoint(Number.parseInt(hex, 16)));
     text = text.replace(/&#([0-9]{1,7});/g, (_m, dec: string): string => codePoint(Number.parseInt(dec, 10)));
-    text = text.replace(/&([A-Za-z][A-Za-z0-9]{1,31});/g, (whole, name: string): string => ENTITIES[name] ?? whole);
+    text = text.replace(/&([A-Za-z][A-Za-z0-9]{1,31});/g, (whole, name: string): string => ENTITIES.get(name) ?? whole);
   }
   text = text.replace(/<\/?[A-Za-z][^<>]*>/g, "");
   text = text.replace(/\\(?=[!-/:-@[-`{-~])/g, "");
   text = text.normalize("NFKC");
-  text = text.replace(/\p{Cf}/gu, "");
-  text = text.replace(/\p{Pd}/gu, "-");
+  // Format characters AND every default-ignorable code point (U+034F
+  // combining grapheme joiner, variation selectors, ...): each renders as
+  // nothing, so each can split a name invisibly.
+  text = text.replace(/[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu, "");
+  // Every dash, and U+2212 MINUS SIGN, which is a math symbol (Sm) rather than
+  // a dash (Pd) but renders as one.
+  text = text.replace(/[\p{Pd}\u2212]/gu, "-");
   return text;
 }
 
 /**
- * The second normalised reading: HTML comments, `*` and backticks removed, so
- * intraword emphasis and code spans that RENDER as one word read as one. `_`
- * stays: CommonMark never renders an intraword `_` as emphasis.
+ * The second normalised reading: HTML comments, `*`, `~` and backticks
+ * removed, so intraword emphasis, strikethrough (`~~`) and code spans that
+ * RENDER as one word read as one. `_` stays: CommonMark never renders an
+ * intraword `_` as emphasis.
  */
 export function normaliseMarkup(text: string): string {
-  return text.replace(/<!--.*?-->/g, "").replace(/[*`]/g, "");
+  return text.replace(/<!--.*?-->/g, "").replace(/[*~`]/g, "");
 }
 
 function needsNormalising(line: string): boolean {
-  return /[%&<\\*`]|[^\x00-\x7F]/.test(line);
+  return /[%&<\\*~`]|[^\x00-\x7F]/.test(line);
 }
 
 /** Every hit in the given fields, raw first, then each normalised reading. */
@@ -355,10 +380,11 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
         for (const match of candidate.matchAll(matcher.pattern)) {
           const key = (match[1] ?? "").toLowerCase();
           if (reported.has(key)) continue;
-          const index = matcher.indexOf.get(key);
+          const ignored = matcher.ignored.has(key);
+          const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (index === undefined) continue;
           reported.add(key);
-          hits.push({ field, line: offset + 1, index, normalised, ignored: matcher.ignored.has(key) });
+          hits.push({ field, line: offset + 1, index, normalised, ignored });
         }
       };
       scan(line, false);
@@ -385,28 +411,46 @@ export function checkPrivateNames(
   fields: readonly CheckedText[],
   skip: boolean,
   ignore: IgnoreList | null = null,
+  allowAllIgnored: boolean = false,
 ): PrivateNameCheck {
-  if (skip) return { result: "skipped-by-flag", targetVisibility: null, hits: [], error: null };
+  const unread = { listSize: null, owners: null };
+  if (skip) return { result: "skipped-by-flag", targetVisibility: null, ...unread, hits: [], error: null };
   let visibility: Visibility;
   try {
     visibility = readTargetVisibility(seams, target);
   } catch (error) {
     if (!(error instanceof PrivateListUnavailableError)) throw error;
-    return { result: "unavailable", targetVisibility: null, hits: [], error: error.message };
+    return { result: "unavailable", targetVisibility: null, ...unread, hits: [], error: error.message };
   }
   if (visibility !== "public") {
-    return { result: "skipped-private-target", targetVisibility: visibility, hits: [], error: null };
+    return { result: "skipped-private-target", targetVisibility: visibility, ...unread, hits: [], error: null };
   }
   let list: readonly string[];
   try {
     list = readPrivateList(seams);
   } catch (error) {
     if (!(error instanceof PrivateListUnavailableError)) throw error;
-    return { result: "unavailable", targetVisibility: visibility, hits: [], error: error.message };
+    return { result: "unavailable", targetVisibility: visibility, ...unread, hits: [], error: error.message };
   }
-  const hits = findPrivateNames(compileMatcher(list, ignore), fields);
+  const counts = {
+    listSize: list.length,
+    owners: new Set(list.map((entry): string => entry.replace(/\/.*$/, "").toLowerCase())).size,
+  };
+  const matcher = compileMatcher(list, ignore);
+  // EVERY NAME IGNORED is a check that polices nothing: refused as
+  // unavailable, the script's rule, unless the caller says it means it.
+  if (matcher.policedIndexOf.size === 0 && !allowAllIgnored) {
+    return {
+      result: "unavailable",
+      targetVisibility: visibility,
+      ...counts,
+      hits: [],
+      error: `every private name is ignored (the ignore file exempts all ${counts.listSize}), so nothing would be checked; pass --allow-all-ignored if that is meant`,
+    };
+  }
+  const hits = findPrivateNames(matcher, fields);
   const blocking = hits.some((hit): boolean => !hit.ignored);
-  return { result: blocking ? "refused" : "clean", targetVisibility: visibility, hits, error: null };
+  return { result: blocking ? "refused" : "clean", targetVisibility: visibility, ...counts, hits, error: null };
 }
 
 /** Whether a verdict stops the write. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -675,7 +675,7 @@ describe("nen issue comment -- the general comment primitive", () => {
       ["issue", "comment", "--target", "o/n", "--issue", "12", "--body-file", path],
       [
         {
-          match: `gh issue comment 12 --repo o/n --body-file ${path}`,
+          match: `gh issue comment 12 --repo o/n --body-file -`,
           result: { stdout: "https://github.com/o/n/issues/12#issuecomment-42\n" },
         },
       ],
@@ -700,7 +700,7 @@ describe("nen issue comment -- the general comment primitive", () => {
     );
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      `would run: gh issue comment 12 --repo o/n --body-file ${path}`,
+      `would run: gh issue comment 12 --repo o/n --body-file -`,
       "--- body as it would be posted ---",
       "## evidence",
       "",
@@ -731,14 +731,14 @@ describe("nen issue comment -- the general comment primitive", () => {
     ];
 
     expect((await capture(argv(withNewline), [])).out).toEqual([
-      `would run: gh issue comment 12 --repo o/n --body-file ${withNewline}`,
+      `would run: gh issue comment 12 --repo o/n --body-file -`,
       "--- body as it would be posted ---",
       "ship it",
       "",
       "--- end of body ---",
     ]);
     expect((await capture(argv(without), [])).out).toEqual([
-      `would run: gh issue comment 12 --repo o/n --body-file ${without}`,
+      `would run: gh issue comment 12 --repo o/n --body-file -`,
       "--- body as it would be posted ---",
       "ship it",
       "--- end of body (no trailing newline) ---",
@@ -815,7 +815,7 @@ describe("nen issue comment -- the general comment primitive", () => {
         { repoFlag: repoDir, json: true },
       );
       expect(result.code).toBe(0);
-      const parsed = JSON.parse(result.out.join("\n")) as { body: string; argv: string[] };
+      const parsed = JSON.parse(result.out.join("\n")) as { body: string; argv: string[]; bodyFile: string };
       expect(parsed.body).toBe("the file under --repo\n");
       // AND THE PATH HANDED TO `gh` IS THE SAME ONE (Copilot, PR #197). The
       // dry-run document carries the argv, so this asserts that the resolved
@@ -829,7 +829,11 @@ describe("nen issue comment -- the general comment primitive", () => {
       // of the three CI lanes -- the platform-conditional assertion this
       // repository's own test headers keep warning about, and it went red on
       // windows-latest before this line was written this way.
-      expect(parsed.argv).toContain(join(repoDir, "rel.md"));
+      // Since zheref/nen#329 `gh` is handed the BYTES on stdin (`--body-file
+      // -`), not a path -- so the resolved path is the one reported, and the
+      // argv names no file at all.
+      expect(parsed.bodyFile).toBe(join(repoDir, "rel.md"));
+      expect(parsed.argv).toContain("-");
       expect(parsed.argv).not.toContain("rel.md");
     } finally {
       process.chdir(previous);
@@ -850,7 +854,7 @@ describe("nen issue comment -- the general comment primitive", () => {
       source: "inline",
       argv: ["issue", "comment", "12", "--repo", "o/n", "--body", "hi"],
       body: "hi",
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
     });
   });
 
@@ -1104,7 +1108,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     const path = tempFile("body.md", "## plan\n\nreplaced wholesale.\n");
     const result = await capture(
       ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
-      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file ${path}`, result: {} }],
+      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file -`, result: {} }],
     );
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toBe("replaced o/n#12's body (29 byte(s))");
@@ -1112,7 +1116,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     // ahead of it would mean the object class was never actually checked.
     expect(result.calls).toEqual([
       "gh api repos/o/n/issues/12",
-      `gh issue edit 12 --repo o/n --body-file ${path}`,
+      `gh issue edit 12 --repo o/n --body-file -`,
     ]);
   });
 
@@ -1120,7 +1124,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     const path = tempFile("body.md", "hello");
     const result = await capture(
       ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
-      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file ${path}`, result: {} }],
+      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file -`, result: {} }],
       { json: true },
     );
     expect(result.code).toBe(0);
@@ -1135,7 +1139,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       outcome: "written",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
       currentBodyOut: null,
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
     });
   });
 
@@ -1149,7 +1153,8 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     );
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      `would run: gh issue edit 12 --repo o/n --body-file ${path}`,
+      `would run: gh issue edit 12 --repo o/n --body-file -`,
+      `stdin: the 28 byte(s) read and checked from ${path} (gh reads these, not the file)`,
       "target: o/n",
       "number: 12",
       "bytes: 28",
@@ -1175,7 +1180,8 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     );
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      `would run: gh issue edit 12 --repo o/n --body-file ${path}`,
+      `would run: gh issue edit 12 --repo o/n --body-file -`,
+      `stdin: the 31 byte(s) read and checked from ${path} (gh reads these, not the file)`,
       "target: o/n",
       "number: 12",
       "bytes: 31",
@@ -1205,7 +1211,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       outcome: "dry-run",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
       currentBodyOut: null,
-      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", hits: [], error: null },
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
     });
   });
 
@@ -1315,7 +1321,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     const path = tempFile("body.md", "hi");
     const result = await capture(
       ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
-      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file ${path}`, result: { code: 1, stderr: "HTTP 500" } }],
+      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file -`, result: { code: 1, stderr: "HTTP 500" } }],
     );
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/could not replace o\/n#12's body/);
@@ -1325,7 +1331,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     const path = tempFile("body.md", "hi");
     const result = await capture(
       ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
-      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file ${path}`, result: { code: 1, stderr: "HTTP 502" } }],
+      [CERTIFY_12, { match: `gh issue edit 12 --repo o/n --body-file -`, result: { code: 1, stderr: "HTTP 502" } }],
     );
     expect(result.code).toBe(1);
     expect(result.out).toEqual([]);
@@ -1364,7 +1370,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     result: { stdout: JSON.stringify({ number: 12, id: 100, title: "an issue", state: "open", labels: [], body }) },
   });
   const writeOf = (path: string, result: ScriptedCall["result"] = {}): ScriptedCall => ({
-    match: `gh issue edit 12 --repo o/n --body-file ${path}`,
+    match: `gh issue edit 12 --repo o/n --body-file -`,
     result,
   });
   const argv = (path: string, expected: string, ...rest: string[]): string[] => [
@@ -1377,7 +1383,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     expect(result.code).toBe(0);
     expect(result.out[0]).toBe("replaced o/n#12's body (12 byte(s))");
     expect(result.out[1]).toMatch(/matched --expect-body-sha256 .* NOT atomic/);
-    expect(result.calls).toEqual(["gh api repos/o/n/issues/12", `gh issue edit 12 --repo o/n --body-file ${path}`]);
+    expect(result.calls).toEqual(["gh api repos/o/n/issues/12", `gh issue edit 12 --repo o/n --body-file -`]);
   });
 
   it("accepts the hash in upper case, compared lowercase", async () => {
@@ -1492,7 +1498,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     readonly platform = this.delegate.platform;
     afterRead: (() => void) | null = null;
     constructor(public body: string) {}
-    readonly run = (command: string, args: readonly string[]): CommandResult => {
+    readonly run = (command: string, args: readonly string[], options: { stdin?: string } = {}): CommandResult => {
       const line = [command, ...args].join(" ");
       this.calls.push(line);
       const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "", spawnFailed: false });
@@ -1506,9 +1512,9 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
         hook?.();
         return ok(stdout);
       }
-      const write = /^gh issue edit 12 --repo o\/n --body-file (.+)$/.exec(line);
-      if (write?.[1] !== undefined) {
-        this.body = readFileSync(write[1], "utf8");
+      // The body arrives on stdin since zheref/nen#329: the checked bytes, never a path.
+      if (line === "gh issue edit 12 --repo o/n --body-file -" && options.stdin !== undefined) {
+        this.body = options.stdin;
         return ok();
       }
       throw new Error(`unscripted: '${line}'`);
@@ -1528,7 +1534,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     expect(backend.calls).toEqual([
       "gh api repos/o/n/issues/12",
       "gh api repos/o/n",
-      `gh issue edit 12 --repo o/n --body-file ${pathB}`,
+      `gh issue edit 12 --repo o/n --body-file -`,
       "gh api repos/o/n/issues/12",
     ]);
 
@@ -1585,7 +1591,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     expect((report["bodyCheck"] as { currentSha256: string }).currentSha256).toBe(sha(V1));
     expect(result.calls).toEqual([
       "gh api repos/o/n/issues/12",
-      `gh issue edit 12 --repo o/n --body-file ${path}`,
+      `gh issue edit 12 --repo o/n --body-file -`,
       "gh api repos/o/n/issues/12",
     ]);
   });
@@ -1644,7 +1650,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     expect(report["written"]).toBe(false);
     expect(report["error"]).toMatch(/gh could not be started \(spawn gh ENOENT\), so nothing was sent/);
     expect(report).not.toHaveProperty("readBack");
-    expect(json.calls).toEqual(["gh api repos/o/n/issues/12", `gh issue edit 12 --repo o/n --body-file ${path}`]);
+    expect(json.calls).toEqual(["gh api repos/o/n/issues/12", `gh issue edit 12 --repo o/n --body-file -`]);
 
     const plain = await capture(argv(path, sha(V1)), script);
     expect(plain.code).toBe(1);
@@ -2947,6 +2953,8 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(report["privateNameCheck"]).toEqual({
       result: "refused",
       targetVisibility: "public",
+      listSize: 2,
+      owners: 1,
       hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: false }],
       error: null,
     });
@@ -3033,7 +3041,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(result.err.join("\n")).toMatch(/body:2: private repository #1 \(spelt through/);
   });
 
-  it("file: a clean filing carries privateNameCheck under --json and hands gh the resolved --body-file", async () => {
+  it("file: a clean dry run carries privateNameCheck and the resolved bodyFile under --json, and argv names stdin", async () => {
     const path = tempFile("body.md", "a clean body\n");
     const result = await capture(
       [
@@ -3044,9 +3052,14 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       { ...guarded, repoFlag: BANKAI_REPO, json: true },
     );
     expect(result.code).toBe(0);
-    const report = JSON.parse(result.out.join("\n")) as { argv: string[]; privateNameCheck: { result: string } };
+    const report = JSON.parse(result.out.join("\n")) as {
+      argv: string[];
+      bodyFile: string;
+      privateNameCheck: { result: string };
+    };
     expect(report.privateNameCheck.result).toBe("clean");
-    expect(report.argv).toContain(path);
+    expect(report.bodyFile).toBe(path);
+    expect(report.argv).toContain("-");
   });
 
   it("edit-body: a name in the replacement refuses with exit 4 after certifying, before any write", async () => {
@@ -3104,6 +3117,8 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       expect(report.privateNameCheck).toEqual({
         result: "clean",
         targetVisibility: "public",
+        listSize: 2,
+        owners: 1,
         hits: [{ field: "body", line: 1, index: 2, normalised: false, ignored: true }],
         error: null,
       });
@@ -3170,6 +3185,160 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         guarded,
       );
       expect(edited.code).toBe(0);
+    });
+  });
+
+  describe("relative paths resolve against --repo's root, never the process's directory (N1)", () => {
+    /** A --repo checkout with a taxonomy, a decoy cwd, run with the cwd moved there. */
+    async function fromElsewhere<T>(setup: (repo: string, cwd: string) => void, run: (repo: string) => Promise<T>): Promise<T> {
+      const repo = mkdtempSync(join(tmpdir(), "nen-issue-repo-"));
+      cpSync(BANKAI_REPO, repo, { recursive: true });
+      const cwd = mkdtempSync(join(tmpdir(), "nen-issue-cwd-"));
+      setup(repo, cwd);
+      const previous = process.cwd();
+      try {
+        process.chdir(cwd);
+        return await run(repo);
+      } finally {
+        process.chdir(previous);
+      }
+    }
+    const fileArgs = (...extra: string[]): string[] => [
+      "issue", "file", "--target", "o/n", "--title", "t", "--body-file", "body.md",
+      "--label", "bankai:severity/low", "--assignee", "me", ...extra,
+    ];
+
+    it("file --body-file body.md: the guard reads <repo>/body.md, and gh gets exactly those bytes", async () => {
+      await fromElsewhere(
+        (repo, cwd) => {
+          writeFileSync(join(repo, "body.md"), "the body under --repo\n", "utf8");
+          writeFileSync(join(cwd, "body.md"), "a decoy beside the process, naming vault\n", "utf8");
+        },
+        async (repo) => {
+          const create = "gh issue create --repo o/n --title t --body-file - --assignee me --label bankai:severity/low";
+          const scripted = new ScriptedSeams([PUBLIC, LIST, { match: create, result: { stdout: "https://github.com/o/n/issues/7\n" } }]);
+          const out: string[] = [];
+          const io: Io = { out: (line): void => void out.push(line), err: (): void => undefined };
+          const code = await runFamily(issueCommand, fileArgs(), repo, true, io, scripted);
+          expect(code).toBe(0);
+          const report = JSON.parse(out.join("\n")) as { bodyFile: string };
+          expect(report.bodyFile).toBe(join(repo, "body.md"));
+          const write = scripted.calls.find((call): boolean => call.args[1] === "create");
+          expect(write?.stdin).toBe("the body under --repo\n");
+        },
+      );
+    });
+
+    it("file --body-file body.md: a private name in <repo>/body.md is what the guard refuses", async () => {
+      await fromElsewhere(
+        (repo, cwd) => {
+          writeFileSync(join(repo, "body.md"), "merge vault first\n", "utf8");
+          writeFileSync(join(cwd, "body.md"), "a clean decoy\n", "utf8");
+        },
+        async (repo) => {
+          const result = await capture(fileArgs(), [PUBLIC, LIST], { ...guarded, repoFlag: repo });
+          expect(result.code).toBe(4);
+          expect(result.err.join("\n")).toContain("body:1: private repository #2");
+        },
+      );
+    });
+
+    it("--private-names-ignore-file ignore.txt is read from --repo's root", async () => {
+      await fromElsewhere(
+        (repo, cwd) => {
+          writeFileSync(join(repo, "ignore.txt"), "vault\n", "utf8");
+          writeFileSync(join(cwd, "ignore.txt"), "# a decoy that ignores nothing\n", "utf8");
+        },
+        async (repo) => {
+          const result = await capture(
+            commentArgs("the vault", "--dry-run", "--private-names-ignore-file", "ignore.txt"),
+            [PUBLIC, LIST],
+            { ...guarded, repoFlag: repo },
+          );
+          expect(result.code).toBe(0);
+          expect(result.err).toEqual(["nen issue: ignored: body:1: private repository #2 (ignore file)"]);
+        },
+      );
+    });
+  });
+
+  describe("an ignore file that exempts EVERY private name (N4)", () => {
+    const ignoreAll = (): string => tempFile("redaction-ignore", "vault\nhidden-thing\n");
+
+    it("refuses as unavailable (exit 1) and writes nothing", async () => {
+      const result = await capture(commentArgs("the vault", "--private-names-ignore-file", ignoreAll()), [PUBLIC, LIST], guarded);
+      expect(result.code).toBe(1);
+      expect(writes(result.calls)).toEqual([]);
+      expect(result.err.join("\n")).toMatch(/every private name is ignored/);
+    });
+
+    it("--allow-all-ignored permits it: the post goes ahead, each ignored hit still reported", async () => {
+      const result = await capture(
+        commentArgs("the vault", "--private-names-ignore-file", ignoreAll(), "--allow-all-ignored"),
+        [PUBLIC, LIST, { match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
+        guarded,
+      );
+      expect(result.code).toBe(0);
+      expect(result.err).toEqual(["nen issue: ignored: body:1: private repository #2 (ignore file)"]);
+    });
+
+    it("--allow-all-ignored without an ignore file is a usage error (exit 2) before any gh call", async () => {
+      const result = await capture(commentArgs("x", "--allow-all-ignored"), [], guarded);
+      expect(result.code).toBe(2);
+      expect(result.calls).toEqual([]);
+    });
+  });
+
+  describe("gh is handed the CHECKED bytes on stdin, never the path (N10)", () => {
+    it("comment --body-file: a file rewritten after the check is NOT what is posted", async () => {
+      const path = tempFile("body.md", "a clean body\n");
+      const post = "gh issue comment 12 --repo o/n --body-file -";
+      const scripted = new ScriptedSeams([PUBLIC, LIST, { match: post, result: { stdout: "" } }]);
+      // A writer lands DURING the check -- after nen read the file, before gh runs.
+      const racing: Seams = {
+        ...scripted,
+        run: (command, args, options) => {
+          if (args[1]?.startsWith("user/repos") === true) writeFileSync(path, "now naming vault\n", "utf8");
+          return scripted.run(command, args, options);
+        },
+        runInteractive: scripted.runInteractive,
+        runStreamed: scripted.runStreamed,
+        probePort: scripted.probePort,
+        now: scripted.now,
+        env: scripted.env,
+        platform: scripted.platform,
+      };
+      const silent: Io = { out: (): void => undefined, err: (): void => undefined };
+      const code = await runFamily(
+        issueCommand,
+        ["issue", "comment", "--target", "o/n", "--issue", "12", "--body-file", path],
+        null,
+        false,
+        silent,
+        racing,
+      );
+      expect(code).toBe(0);
+      const write = scripted.calls.find((call): boolean => call.args[1] === "comment");
+      expect(write?.args).toContain("-");
+      expect(write?.args).not.toContain(path);
+      expect(write?.stdin).toBe("a clean body\n");
+    });
+
+    it("edit-body: the write carries the replacement on stdin, byte for byte (CRLF kept)", async () => {
+      const path = tempFile("body.md", "line one\r\nline two\r\n");
+      const write = "gh issue edit 12 --repo o/n --body-file -";
+      const scripted = new ScriptedSeams([CERTIFY, PUBLIC, LIST, { match: write, result: {} }]);
+      const silent: Io = { out: (): void => undefined, err: (): void => undefined };
+      const code = await runFamily(
+        issueCommand,
+        ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
+        null,
+        false,
+        silent,
+        scripted,
+      );
+      expect(code).toBe(0);
+      expect(scripted.calls.find((call): boolean => call.args[1] === "edit")?.stdin).toBe("line one\r\nline two\r\n");
     });
   });
 

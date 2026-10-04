@@ -132,15 +132,15 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "open-pr-check": { values: ["target", "issues"] },
   file: {
     values: ["target", "title", "body-file", "label", "assignee", "forbid-family", "private-names-ignore-file"],
-    booleans: ["dry-run", "skip-private-name-check"],
+    booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"],
   },
   comment: {
     values: ["target", "issue", "body", "body-file", "private-names-ignore-file"],
-    booleans: ["dry-run", "skip-private-name-check"],
+    booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"],
   },
   "edit-body": {
     values: ["target", "issue", "body-file", "expect-body-sha256", "current-body-out", "private-names-ignore-file"],
-    booleans: ["dry-run", "skip-private-name-check"],
+    booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"],
   },
   "attach-sub": { values: ["target", "parent", "children"], booleans: ["dry-run"] },
   "consolidate-close": {
@@ -352,7 +352,7 @@ usage:
                  --body-file <path> --label a,b --assignee <user>
                  [--forbid-family ns:family] [--dry-run]
                  [--skip-private-name-check]
-                 [--private-names-ignore-file <path>]
+                 [--private-names-ignore-file <path> [--allow-all-ignored]]
       Creates the issue with its labels and assignee IN THE CREATE CALL. Every
       label must exist in the target repository's taxonomy. --body-file
       resolves against --repo's root, and that resolved path is what 'gh'
@@ -361,7 +361,7 @@ usage:
   nen issue comment --target <owner/name> --issue <n>
                     (--body-file <path> | --body <text>) [--dry-run]
                     [--skip-private-name-check]
-                    [--private-names-ignore-file <path>]
+                    [--private-names-ignore-file <path> [--allow-all-ignored]]
       Posts ONE caller-supplied comment on ONE issue -- the general primitive
       every other verb here lacked, so a mechanized choreography no longer has
       to drop back to a hand-run 'gh issue comment' for the one step written in
@@ -381,7 +381,7 @@ usage:
                       --body-file <path> [--expect-body-sha256 <hex>]
                       [--current-body-out <path>] [--dry-run]
                       [--skip-private-name-check]
-                      [--private-names-ignore-file <path>]
+                      [--private-names-ignore-file <path> [--allow-all-ignored]]
       Replaces the issue's body OUTRIGHT with the file's bytes -- no
       trimming, no template, the file becomes the body exactly, through
       'gh issue edit --body-file'. --body-file is required; there is no
@@ -446,6 +446,8 @@ usage:
       readError }' on uncertain.
 
   PRIVATE REPOSITORY NAMES ('file', 'comment', 'edit-body'; zheref/nen#329).
+      Three of the verbs that put caller text on an issue; 'consolidate-close'
+      and the 'nen pr' writers are not guarded yet (zheref/nen#363).
       Before any write to a PUBLIC target -- and on --dry-run too, so its
       verdict is the real run's -- the title (for 'file') and the body are
       compared against the credential's LIVE private repository list
@@ -454,14 +456,19 @@ usage:
       and whole-word, taken literally: a word is a run of [A-Za-z0-9-], so
       '_' and '.' bound a word ('_name_', 'name.git', a sentence's 'name.'
       match) and 'owner/name' slugs and URLs match through the name. A line
-      holding %, &, <, \\, *, a backtick or a non-ASCII character is also read
-      normalised -- %XX and UTF-8 decoded, HTML entities decoded, inline tags
-      and backslash escapes dropped, NFKC, format characters deleted, dashes
-      folded, then HTML comments, '*' and backticks removed -- so a name spelt
+      holding %, &, <, \\, *, ~, a backtick or a non-ASCII character is also
+      read normalised -- %XX and UTF-8 decoded, HTML entities decoded, inline
+      tags and backslash escapes dropped, NFKC, format and default-ignorable
+      characters deleted, dashes and U+2212 folded, then HTML comments, '*',
+      '~' and backticks removed -- so a name spelt
       through an escape, entity, encoding, markup or invisible character is
       still found. A match REFUSES with exit 4 and writes nothing; the
-      refusal never prints the name: '<field>:<line>: private repository #k',
-      k a 1-based index into the list sorted bytewise. A PRIVATE or INTERNAL
+      refusal never prints the name: 'nen issue: <field>:<line>: private
+      repository #k', k a 1-based index into the list sorted bytewise (for a
+      name two owners share, the first entry the ignore file does not
+      exempt). The body that passed is the body sent: 'gh' gets it on stdin
+      ('--body-file -'), never the path, so nothing written to the file after
+      the check is published. A PRIVATE or INTERNAL
       target is not checked (naming a private repository there leaks
       nothing) and the list is never read. FAIL CLOSED: an unreadable target
       visibility, an unreadable list, a list that may be truncated or one
@@ -473,13 +480,16 @@ usage:
       generic to police: one per line, '#' comments and blank lines ignored,
       case-insensitive; a bare 'name' exempts that name under every owner,
       an 'owner/name' line that slug only. No default path is ever read, and
-      a missing file is a usage error (exit 2). An ignored hit never blocks
+      a missing file is a usage error (exit 2). An ignore file that exempts
+      EVERY private name refuses (exit 1, "every private name is ignored")
+      unless --allow-all-ignored is given. An ignored hit never blocks
       and is never silent: 'ignored: <field>:<line>: private repository #k
       (ignore file)' on stderr, without the name. --json carries
       'privateNameCheck: { result: clean | skipped-private-target |
-      skipped-by-flag | refused | unavailable, targetVisibility, hits: [{
-      field, line, index, normalised, ignored }], error }'; a refused
-      'comment' report carries no 'body'.
+      skipped-by-flag | refused | unavailable, targetVisibility, listSize,
+      owners, hits: [{ field, line, index, normalised, ignored }], error }'
+      (listSize/owners are counts, null when the list was not read); a
+      refused 'comment' report carries no 'body'.
 
   nen issue attach-sub --target <owner/name> --parent <n> --children 1,2
                        [--dry-run]
@@ -768,6 +778,7 @@ function guardPrivateNames(
     fields,
     context.args.booleans.has(SKIP_PRIVATE_NAME_CHECK_FLAG),
     ignore,
+    context.args.booleans.has("allow-all-ignored"),
   );
   for (const line of privateNameLines(check, target)) context.io.err(line);
   return check;
@@ -781,7 +792,14 @@ function guardPrivateNames(
  */
 function readIgnoreFlag(context: CommandContext): IgnoreList | null {
   const raw = context.args.values["private-names-ignore-file"];
-  if (raw === undefined) return null;
+  if (raw === undefined) {
+    if (context.args.booleans.has("allow-all-ignored")) {
+      throw new VerbUsageError(
+        "--allow-all-ignored permits an ignore file that exempts every private name; it means nothing without --private-names-ignore-file <path>.",
+      );
+    }
+    return null;
+  }
   const path = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), raw);
   return parseIgnoreList(
     readTextFile(
@@ -847,15 +865,18 @@ function file(context: CommandContext): number {
   if (context.args.booleans.has("dry-run")) {
     const argv = createArgv(target, request);
     if (context.json) {
-      context.io.out(JSON.stringify({ dryRun: true, argv, privateNameCheck }, null, 2));
+      context.io.out(JSON.stringify({ dryRun: true, argv, bodyFile: request.bodyFile, privateNameCheck }, null, 2));
       return 0;
     }
     context.io.out(`would run: gh ${argv.join(" ")}`);
+    context.io.out(stdinLine(request.bodyFile, body));
     return 0;
   }
-  const result = fileIssue(context.seams, target, request);
+  // THE CHECKED BYTES, on stdin -- never the path, which `gh` would re-read
+  // after the check (zheref/nen#329).
+  const result = fileIssue(context.seams, target, request, body);
   if (context.json) {
-    context.io.out(JSON.stringify({ ...result, labels: request.labels, privateNameCheck }, null, 2));
+    context.io.out(JSON.stringify({ ...result, labels: request.labels, bodyFile: request.bodyFile, privateNameCheck }, null, 2));
     return 0;
   }
   context.io.out(`filed #${result.number} ${result.url}`);
@@ -990,7 +1011,11 @@ function comment(context: CommandContext): number {
   if (context.args.booleans.has("dry-run")) {
     if (context.json) {
       context.io.out(
-        JSON.stringify({ dryRun: true, target: target.slug, issue, source: request.source, argv, body, privateNameCheck }, null, 2),
+        JSON.stringify(
+          { dryRun: true, target: target.slug, issue, source: request.source, ...bodyFileField(request), argv, body, privateNameCheck },
+          null,
+          2,
+        ),
       );
       return 0;
     }
@@ -1019,7 +1044,17 @@ function comment(context: CommandContext): number {
   if (context.json) {
     context.io.out(
       JSON.stringify(
-        { dryRun: false, target: target.slug, issue, source: request.source, argv, body, url: result.url, privateNameCheck },
+        {
+          dryRun: false,
+          target: target.slug,
+          issue,
+          source: request.source,
+          ...bodyFileField(request),
+          argv,
+          body,
+          url: result.url,
+          privateNameCheck,
+        },
         null,
         2,
       ),
@@ -1035,6 +1070,19 @@ function comment(context: CommandContext): number {
       : `commented on ${target.slug}#${issue} ${result.url}`,
   );
   return 0;
+}
+
+/**
+ * The dry-run line saying where `--body-file -`'s stdin comes from: the bytes
+ * already read (and checked) from that path, not the path itself.
+ */
+function stdinLine(path: string, body: string): string {
+  return `stdin: the ${Buffer.byteLength(body, "utf8")} byte(s) read and checked from ${path} (gh reads these, not the file)`;
+}
+
+/** `bodyFile` for a --json report: the path a file body was read from, absent for an inline one. */
+function bodyFileField(request: CommentRequest): { readonly bodyFile?: string } {
+  return request.source === "file" ? { bodyFile: request.bodyFile } : {};
 }
 
 /**
@@ -1142,7 +1190,7 @@ function editBody(context: CommandContext): number {
 
   const bytes = Buffer.byteLength(body, "utf8");
   const replacementSha256 = bodySha256(body);
-  const argv = editBodyArgv(target, issue, bodyPath);
+  const argv = editBodyArgv(target, issue);
   const dryRun = context.args.booleans.has("dry-run");
   const bodyCheck = {
     expectedSha256: check.expectedSha256,
@@ -1239,6 +1287,7 @@ function editBody(context: CommandContext): number {
     }
     const { first, last } = bodyBookends(body);
     context.io.out(`would run: gh ${argv.join(" ")}`);
+    context.io.out(stdinLine(bodyPath, body));
     context.io.out(`target: ${target.slug}`);
     context.io.out(`number: ${issue}`);
     context.io.out(`bytes: ${bytes}`);
@@ -1257,7 +1306,8 @@ function editBody(context: CommandContext): number {
   // The resolved path, for the reason comment() states: `gh` must be handed the
   // same file this verb read and counted (Copilot, PR #197).
   try {
-    writeIssueBody(context.seams, target, issue, bodyPath);
+    // The checked bytes on stdin, never the path (zheref/nen#329).
+    writeIssueBody(context.seams, target, issue, body);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // NOT SENT is certain: gh never started, so no request left this machine,
