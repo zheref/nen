@@ -65,6 +65,226 @@
       "color": "fbca04",
       "description": "Cosmetic, doc, or enhancement; backlog",
       "name": "priority: p3 (backlog)"
+    },
+    {
+      "color": "1d76db",
+      "description": "Needs Swift: SwiftUI, TCA, UIKit/AppKit, SwiftPM, the Apple toolchain",
+      "name": "lang/swift"
+    },
+    {
+      "color": "1d76db",
+      "description": "Needs Kotlin: Compose, UDF, Gradle, the Android toolchain",
+      "name": "lang/kotlin"
+    },
+    {
+      "color": "1d76db",
+      "description": "Needs TypeScript: React, Redux, Node and Bun CLIs, the web toolchain",
+      "name": "lang/typescript"
+    },
+    {
+      "color": "1d76db",
+      "description": "Needs C#: WinUI, UDF, .NET, MSBuild and NuGet, the Windows toolchain",
+      "name": "lang/csharp"
+    },
+    {
+      "color": "1d76db",
+      "description": "Needs no code language: canon, governance, documentation, agentic prose, specifications",
+      "name": "lang/prose"
+    },
+    {
+      "color": "5319e7",
+      "description": "Framing the problem, the user, the evidence, the non-goals and what success measures",
+      "name": "job/discovery"
+    },
+    {
+      "color": "5319e7",
+      "description": "Observable requirements, acceptance criteria, activation and divergence contracts",
+      "name": "job/requirements"
+    },
+    {
+      "color": "5319e7",
+      "description": "Impact mapping, archaeology, ownership, debt and test-gap analysis before a change",
+      "name": "job/analysis"
+    },
+    {
+      "color": "5319e7",
+      "description": "Filing with reconciliation, classification, consolidation, epic waves, delivery planning",
+      "name": "job/backlog"
+    },
+    {
+      "color": "5319e7",
+      "description": "Non-overlapping ownership, bounded parallelism, handoff schemas, fan-in verification",
+      "name": "job/orchestration"
+    },
+    {
+      "color": "5319e7",
+      "description": "Responsibilities, interfaces, dependency direction, state and effect design, large refactors",
+      "name": "job/architecture"
+    },
+    {
+      "color": "5319e7",
+      "description": "A library's public contract: names, types, errors, lifecycle, supported platforms and runtimes",
+      "name": "job/api-design"
+    },
+    {
+      "color": "5319e7",
+      "description": "Normal, loading, empty, offline, error and recovery journeys with no dead ends",
+      "name": "job/ux"
+    },
+    {
+      "color": "5319e7",
+      "description": "Hierarchy, layout, interaction, responsiveness, theming and every specified state",
+      "name": "job/ui"
+    },
+    {
+      "color": "5319e7",
+      "description": "Idiomatic code conforming to architecture and requirements, with passing builds and checks",
+      "name": "job/implementation"
+    },
+    {
+      "color": "5319e7",
+      "description": "Schemas, timeouts, retries, idempotency, serialization, platform-service substitution",
+      "name": "job/integration"
+    },
+    {
+      "color": "5319e7",
+      "description": "Data classes, permissions, secrets, supply chain, abuse and injection; remediation verified",
+      "name": "job/security"
+    },
+    {
+      "color": "5319e7",
+      "description": "Semantics, focus, scaling, contrast, assistive technologies, pluralization, string expansion",
+      "name": "job/accessibility"
+    },
+    {
+      "color": "5319e7",
+      "description": "Deterministic tests protecting pure logic, transitions, effects, cancellation and errors",
+      "name": "job/unit-tests"
+    },
+    {
+      "color": "5319e7",
+      "description": "Modules and external boundaries proven together; shared fixtures; cross-version matrices",
+      "name": "job/integration-tests"
+    },
+    {
+      "color": "5319e7",
+      "description": "Critical journeys on representative devices with stable selectors and visual evidence",
+      "name": "job/ui-automation"
+    },
+    {
+      "color": "5319e7",
+      "description": "Startup, responsiveness, memory, CPU, network, battery and throughput against budgets",
+      "name": "job/performance"
+    },
+    {
+      "color": "5319e7",
+      "description": "Challenging correctness, security, compatibility and tests; every finding disposed",
+      "name": "job/review"
+    },
+    {
+      "color": "5319e7",
+      "description": "Versioning, packaging, signing, provenance, rollout, hotfix branches and backports",
+      "name": "job/release"
+    },
+    {
+      "color": "5319e7",
+      "description": "Reproducibility, least privilege, cache correctness, gates, retries, idempotent deployment",
+      "name": "job/ci-cd"
+    },
+    {
+      "color": "5319e7",
+      "description": "Privacy-safe events, metrics, alerts, dashboards; production results against baselines",
+      "name": "job/observability"
+    },
+    {
+      "color": "5319e7",
+      "description": "Impact, severity, affected versions, timeline, containment, owner and priority",
+      "name": "job/triage"
+    },
+    {
+      "color": "5319e7",
+      "description": "The smallest reliable reproduction, the first violated invariant, the smallest correct change",
+      "name": "job/bug-fix"
+    },
+    {
+      "color": "5319e7",
+      "description": "Structure improved behind stable public contracts, with characterization evidence",
+      "name": "job/refactor"
+    },
+    {
+      "color": "5319e7",
+      "description": "Transitive changes, compatibility, deprecations, licenses, vulnerabilities, locks, rollback",
+      "name": "job/upgrades"
+    },
+    {
+      "color": "5319e7",
+      "description": "Deterministic compiler, project, generator, linter, bootstrap and policy-enforcement behaviour",
+      "name": "job/machinery"
+    },
+    {
+      "color": "5319e7",
+      "description": "Setup, architecture, operations, troubleshooting and examples aligned with released behaviour",
+      "name": "job/documentation"
+    },
+    {
+      "color": "5319e7",
+      "description": "Ordered, resumable, idempotent migrations with validation, rollback and consumer codemods",
+      "name": "job/migration"
+    },
+    {
+      "color": "5319e7",
+      "description": "Consumer inventory, warnings, migration paths, removal criteria, archival and provenance",
+      "name": "job/deprecation"
+    },
+    {
+      "color": "5319e7",
+      "description": "Deterministic transformations with no semantic drift, validated by build, tests and checks",
+      "name": "job/mechanical-edit"
+    },
+    {
+      "color": "5319e7",
+      "description": "Skills, personas, rules and canon: invariants, decision rules, outputs, failures, verification",
+      "name": "job/prose-authoring"
+    },
+    {
+      "color": "5319e7",
+      "description": "Versioned machine-readable contracts with validation, defaults, unknown fields, migrations",
+      "name": "job/schema"
+    },
+    {
+      "color": "5319e7",
+      "description": "Canonical semantics compiled into each surface; generated files marked and reproducible",
+      "name": "job/adapters"
+    },
+    {
+      "color": "5319e7",
+      "description": "Rubrics, fixtures, trajectories, grades and costs; a real failure added before prose changes",
+      "name": "job/evals"
+    },
+    {
+      "color": "5319e7",
+      "description": "Generated adapters and observed behaviour compared against canon; unexplained divergence blocked",
+      "name": "job/drift-review"
+    },
+    {
+      "color": "5319e7",
+      "description": "Porting a behaviour across platforms; sets the parity domain for every other job on the issue",
+      "name": "job/parity"
+    },
+    {
+      "color": "5319e7",
+      "description": "nen/contract.json, nen/workflow.json, labels, permission packs and surface placement",
+      "name": "job/onboarding"
+    },
+    {
+      "color": "5319e7",
+      "description": "Self-hosted runners, nen binding, device trust, signing identities and host toolchains",
+      "name": "job/provisioning"
+    },
+    {
+      "color": "5319e7",
+      "description": "Commits, PR preparation, reviewer rounds, thread settlement, catch-up, CI redrive, release PRs",
+      "name": "job/delivery-ops"
     }
   ]
 }
