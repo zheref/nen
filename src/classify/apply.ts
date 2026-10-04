@@ -236,13 +236,18 @@ export function runApply(context: CommandContext): number {
   );
   let ledgerFd: number | null = null;
   if (recorded) {
+    const notAppendable = (code: string | undefined): VerbUsageError =>
+      new VerbUsageError(
+        `--ledger '${ledgerPath}' cannot be appended to${code === undefined ? "" : ` (${code})`}: a label applied with no ledger line is the one outcome this verb refuses, so nothing was written to GitHub.`,
+      );
+    // A directory is refused by its own stat, not by the open: Windows opens a
+    // directory for append without complaint and fails only on the first write,
+    // which is exactly the half-applied state this guard exists to prevent.
+    if (statSync(ledgerPath, { throwIfNoEntry: false })?.isDirectory() === true) throw notAppendable("EISDIR");
     try {
       ledgerFd = openSync(ledgerPath, "a");
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      throw new VerbUsageError(
-        `--ledger '${ledgerPath}' cannot be appended to${code === undefined ? "" : ` (${code})`}: a label applied with no ledger line is the one outcome this verb refuses, so nothing was written to GitHub.`,
-      );
+      throw notAppendable((error as NodeJS.ErrnoException).code);
     }
   }
 
