@@ -38,7 +38,7 @@ usage:
                   [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                   [--error-exit-threshold <n>] [--repo <path>]
   nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
-                  [--interval-ms 5000] [--max-iterations <n>] [--repo <path>]
+                  [--interval-ms 30000] [--max-iterations <n>] [--repo <path>]
                   [<every 'nen pr ready' flag: --gh-repo --reviewers
                    --reviewer-login --approvers --round-policy --exclude-run
                    --exclude-check --gates --token-env --require-head>]
@@ -104,10 +104,6 @@ usage:
                   --error-exit-threshold and --cwd belong to --command and are
                   refused beside --pr (exit 2).
   --until         what --pr waits for, one of:
-                    checks-settled  every latest check (after the same
-                                    exclusions CON-32(a) applies) has a
-                                    verdict -- RED INCLUDED; an empty rollup is
-                                    never settled
                     checks-settled  every REPORTED latest check (after the
                                     same exclusions CON-32(a) applies) has a
                                     verdict -- RED INCLUDED; an empty rollup is

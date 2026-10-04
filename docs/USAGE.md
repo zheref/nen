@@ -4210,7 +4210,7 @@ nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                 [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                 [--error-exit-threshold <n>]
 nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
-                [--interval-ms 5000] [--max-iterations <n>]
+                [--interval-ms 30000] [--max-iterations <n>]
                 [every `nen pr ready` flag: --gh-repo --reviewers --reviewer-login --approvers --round-policy
                  --exclude-run --exclude-check --gates --token-env --require-head]
 ```
@@ -4262,9 +4262,13 @@ GitHub-sourced string in a human line is stripped of control characters (`--json
 read (a malformed ref, no identity source, a bad `--round-policy`) stops the watch at exit 2 on the
 first poll. Human output is one `[<n>] <predicate> is (not yet) true -- head <sha7>: <checks>; <reviews>;
 verdict <gateLine>` line per poll; `--json` adds `until`, `pr`, `readyAtWake` (whether the final read's
-verdict was `ready`; `null` when it decided none) and `last` — the final read's `{ verdict, gateLine,
-judgedHead, warnings, notes, declaredExclusions, settlement: { checksSettled, pendingChecks,
-roundsAtHead: [{ reviewer, via }] } }`, or `null` when the last read decided no verdict. **A wake is
+verdict was `ready`; `null` when that read was `unevaluated` or a head mismatch) and `last` — the
+final read's `{ verdict, gateLine, judgedHead, warnings, notes, declaredExclusions, settlement:
+{ checksSettled, pendingChecks, roundsAtHead: [{ reviewer, via }] } }`. `last` is an object whenever
+the read produced a report, **including an `unevaluated` one** — then `verdict` is `"unevaluated"`,
+`gateLine` says why, `judgedHead` is `null` and `settlement` is `null`; inside a decided `settlement`,
+`checksSettled` and `roundsAtHead` are each `null` when that fact could not be read. Only a
+`--require-head` mismatch, which decides no report at all, makes `last` itself `null`. **A wake is
 not a go**: `readyAtWake` reports a fact about one read, and only `--until ready` or a fresh
 `nen pr ready` is a merge signal. **It wakes the caller and rings nothing**: by the maintainer's ruling
 of 2026-10-03 notification rungs stay the host's, and `nen stop` does not ring them.

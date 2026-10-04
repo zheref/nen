@@ -736,3 +736,24 @@ describe("--reviewer-login and the anchored name-as-login fallback (zheref/nen#2
     expect(own.context.settlement.roundsAtHead).toEqual([{ reviewer: "ghost", via: "review" }]);
   });
 });
+
+describe("--json last: an object for every report, null only on a head mismatch (Copilot, NN-PR-#376)", () => {
+  it("an unevaluated final read is still an object: verdict unevaluated, settlement null, readyAtWake null", async () => {
+    const result = await watch([...BASE, "--until", "ready"], deps([null, null, null]), true);
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n")) as { readyAtWake: unknown; last: Record<string, unknown> | null };
+    expect(doc.readyAtWake).toBeNull();
+    expect(doc.last).not.toBeNull();
+    expect(doc.last?.["verdict"]).toBe("unevaluated");
+    expect(doc.last?.["settlement"]).toBeNull();
+    expect(doc.last?.["judgedHead"]).toBeNull();
+  });
+
+  it("a --require-head mismatch decides no report, so last is null", async () => {
+    const result = await watch([...BASE, "--until", "ready", "--require-head", "1234567", "--max-iterations", "1"], deps([READY]), true);
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n")) as { readyAtWake: unknown; last: unknown };
+    expect(doc.last).toBeNull();
+    expect(doc.readyAtWake).toBeNull();
+  });
+});
