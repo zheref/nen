@@ -751,8 +751,15 @@ describe("every field degrades on its own", () => {
     const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
     expect(row["readiness"]).toBeNull();
     // No complaint about a check run that simply is not there: a repository
-    // that publishes none is the ordinary case, not a degradation.
-    expect(row["notes"]).toEqual([]);
+    // that publishes none is the ordinary case, not a degradation. The one
+    // note is the GATE's reason for the null readiness (Nobunaga N7), with the
+    // checkout's absolute path kept off the row.
+    const notes = row["notes"] as string[];
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/^the readiness gate produced no report for zheref\/nen#217/);
+    expect(notes.join("\n")).not.toMatch(/check run/);
+    expect(notes.join("\n")).not.toContain(COVERAGE_REPO);
+    expect(notes[0]).toContain("<repo>/nen/gates.json");
   });
 });
 

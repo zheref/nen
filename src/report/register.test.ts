@@ -18,7 +18,10 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { reportCommand } from "./command.js";
-import type { ReportObject } from "./objects.js";
+import { checkRunsArgv, type ReportObject } from "./objects.js";
+import { viewArgv } from "../pr/fetch.js";
+import { listArgv } from "../pr/threads.js";
+import { parseTarget } from "../github/target.js";
 import type { ReportPhase, ReportUsage } from "./data.js";
 import {
   assembleRegister,
@@ -252,7 +255,8 @@ describe("nen report data --register", () => {
       threadsLine: "0/7 unresolved",
       linkedLine: "HA-IS-#85",
       head: PR_READY.head,
-      notes: [],
+      // The offline path says where its verdict came from, on the row.
+      notes: ["verdict read from objects.json, not from GitHub"],
     });
     const issue = rows.find((row): boolean => row["number"] === 85) as Record<string, unknown>;
     expect(issue).toMatchObject({
@@ -300,10 +304,12 @@ describe("nen report data --register", () => {
       "zheref/hatsu#85", "zheref/hatsu#87", "zheref/hatsu#90", "zheref/hatsu#91",
     ]);
     expect(document["footerNote"]).toBe(
-      "Rendered by verbs only. Object notation unresolved for zheref/hatsu (no readable nen/repos.json in --repo); those rows read <owner>/<name>#<n>.",
+      "Rendered by verbs only. Verdicts read from objects.json, not from GitHub. Object notation unresolved for zheref/hatsu (no readable nen/repos.json in --repo); those rows read <owner>/<name>#<n>.",
     );
-    // The page never carries the path the registry was looked for at.
+    // The page never carries the path the registry was looked for at; stderr
+    // carries the real reason for the operator.
     expect(String(document["footerNote"])).not.toContain(tmpdir());
+    expect(captured.err.join("\n")).toMatch(/register: object notation falls back to <owner>\/<name>#<n>: /);
   });
 
   it("prints a human register summary without --json", async () => {
@@ -339,15 +345,15 @@ describe("the desk is judgement only -- refusals at exit 2", () => {
 
   it("refuses an ask quoting a pull request the register did not read", async () => {
     const ask = { ...DESK.gates[0]?.asks[1], pr: 400 };
-    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "merge", asks: [ask] }] })).toMatch(/pull request 400, which is not in this register/);
+    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "merge", asks: [ask] }] })).toMatch(/ask 'Merge #87' names 400, which is not in this register's objects/);
   });
 
   it("refuses a row about an object not in scope", async () => {
-    expect(await refused({ ...DESK, rows: { "pr#88": { needs: "x" } } })).toMatch(/row for 'pr#88', which is not in this register's objects/);
+    expect(await refused({ ...DESK, rows: { "pr#88": { needs: "x" } } })).toMatch(/row 'pr#88' names 'pr#88', which is not in this register's objects/);
   });
 
   it("refuses a row key, or a row column, the desk does not write", async () => {
-    expect(await refused({ ...DESK, rows: { "88": {} } })).toMatch(/not keyed 'pr#<n>' or 'issue#<n>'/);
+    expect(await refused({ ...DESK, rows: { "x88": {} } })).toMatch(/is not keyed by an object reference/);
     expect(await refused({ ...DESK, rows: { "pr#87": { checksLine: "all green" } } })).toMatch(/names 'checksLine', which the desk does not write/);
   });
 
@@ -425,23 +431,23 @@ describe("render, without a builder (AC 2)", () => {
 
 // ── the pure halves ─────────────────────────────────────────────────────────
 
-const NO_CODES: NotationSource = { codeFor: (): null => null, unavailable: null };
+const NO_CODES: NotationSource = { codeFor: (): null => null, slugFor: (): null => null, unavailable: null };
 
 describe("assembleRegister", () => {
   it("resolves notation through the seam, and reads a slug off the URL on the offline path", () => {
     const desk = parseDesk({ ...DESK, rows: {} }, "desk.json");
     const objects = [ISSUE, PR_READY] as unknown as ReportObject[];
-    const codes: NotationSource = { codeFor: (slug): string | null => (slug === "zheref/hatsu" ? "HA" : null), unavailable: null };
-    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), objects, phases: [], usage: [], target: null, codes });
+    const codes: NotationSource = { codeFor: (slug): string | null => (slug === "zheref/hatsu" ? "HA" : null), slugFor: (): null => null, unavailable: null };
+    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), objects, phases: [], usage: [], target: null, codes, verdictFile: null });
     expect(register.objects.map((row): string => row.notation)).toEqual(["HA-IS-#85", "HA-PR-#87"]);
-    const fallback = assembleRegister({ ...desk, gates: [], footerNote: "" }, { generatedAt: NOW.toISOString(), objects, phases: [], usage: [], target: null, codes: NO_CODES });
+    const fallback = assembleRegister({ ...desk, gates: [], footerNote: "" }, { generatedAt: NOW.toISOString(), objects, phases: [], usage: [], target: null, codes: NO_CODES, verdictFile: null });
     expect(fallback.footerNote).toBe("Object notation unresolved for zheref/hatsu (no product code in nen/repos.json); those rows read <owner>/<name>#<n>.");
   });
 
   it("defaults generatedAtLocal to generatedAt, and blanks a URL that is not a link, naming it", () => {
     const desk = parseDesk({ ...DESK, rows: {}, generatedAtLocal: undefined }, "desk.json");
     const bad = { ...PR_READY, url: "javascript:alert(1)" } as unknown as ReportObject;
-    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), objects: [bad], phases: [], usage: [], target: "zheref/hatsu", codes: NO_CODES });
+    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), objects: [bad], phases: [], usage: [], target: "zheref/hatsu", codes: NO_CODES, verdictFile: null });
     expect(register.generatedAtLocal).toBe(NOW.toISOString());
     expect(register.objects[0]?.url).toBe("");
     expect(register.objects[0]?.notes.at(-1)).toMatch(/is not an http\(s\), mailto, # or \/ link/);
@@ -450,7 +456,7 @@ describe("assembleRegister", () => {
   it("uses #<n> when neither a target nor the URL names a repository", () => {
     const desk = parseDesk({ ...DESK, rows: {}, gates: [] }, "desk.json");
     const odd = { ...ISSUE, url: "/local/85" } as unknown as ReportObject;
-    const register = assembleRegister(desk, { generatedAt: NOW.toISOString(), objects: [odd], phases: [], usage: [], target: null, codes: NO_CODES });
+    const register = assembleRegister(desk, { generatedAt: NOW.toISOString(), objects: [odd], phases: [], usage: [], target: null, codes: NO_CODES, verdictFile: null });
     expect(register.objects[0]?.notation).toBe("#85");
     expect(register.footerNote).toMatch(/unresolved for #85/);
   });
@@ -516,7 +522,7 @@ describe("spend", () => {
 
   it("shows the desk's efforts in its order, or every recorded effort without one", () => {
     const desk = parseDesk({ ...DESK, rows: {}, gates: [], efforts: ["e2", "e1"], spendNotes: { e1: "kept" } }, "desk.json");
-    const input = { generatedAt: NOW.toISOString(), objects: [], phases: PHASES, usage: [usage({ effort: "e3" })], target: null, codes: NO_CODES };
+    const input = { generatedAt: NOW.toISOString(), objects: [], phases: PHASES, usage: [usage({ effort: "e3" })], target: null, codes: NO_CODES, verdictFile: null };
     expect(assembleRegister(desk, input).spendEfforts.map((effort): string => effort.name)).toEqual(["e2", "e1"]);
     expect(assembleRegister(desk, input).spendEfforts[1]?.spendNote).toBe("kept");
     const all = parseDesk({ ...DESK, rows: {}, gates: [] }, "desk.json");
@@ -543,15 +549,233 @@ describe("parseDesk's remaining refusals", () => {
 
   it("names an ask's and an option's malformed fields", () => {
     const option = { letter: "A", label: "x", command: "y", consequence: "z" };
-    const ask = { kind: "DO", rank: 1, title: "t", why: "w", options: [option] };
+    const ask = { kind: "DO", rank: 1, title: "t", why: "w", options: [{ ...option, star: true }] };
     const gate = (a: unknown): unknown => ({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [a] }] });
     expect(refuse(gate(3))).toThrow(/asks\[0\] is a number/);
     expect(refuse(gate({ ...ask, rank: 0 }))).toThrow(/'rank' of a number, not a positive whole number/);
-    expect(refuse(gate({ ...ask, pr: "87" }))).toThrow(/'pr' of '87', not a pull-request number/);
+    expect(refuse(gate({ ...ask, pr: true }))).toThrow(/'pr' of a boolean, not a pull-request reference/);
     expect(refuse(gate({ ...ask, options: [3] }))).toThrow(/options\[0\] is a number/);
     expect(refuse(gate({ ...ask, options: [{ ...option, star: "yes" }] }))).toThrow(/'star' of 'yes'/);
-    expect(refuse(gate({ ...ask, options: [{ ...option, letter: "" }] }))).toThrow(/empty 'letter'/);
+    expect(refuse(gate({ ...ask, options: [{ ...option, letter: "", star: true }] }))).toThrow(/empty 'letter'/);
     expect(refuse(gate({ ...ask, objects: [3] }))).toThrow(/objects\[0\] is a number/);
     expect(parseDesk(gate({ ...ask, pr: null }), "desk.json").gates[0]?.asks[0]?.pr).toBeNull();
+  });
+});
+
+// ── hanten round 1 (Nobunaga N1-N14) ─────────────────────────────────────────
+
+const NEN_87 = {
+  ...PR_READY,
+  url: "https://github.com/zheref/nen/pull/87",
+  title: "nen's own #87",
+  linked: [],
+  readiness: { verdict: "not-ready", reason: "not-ready: 2 unresolved threads", source: "computed" },
+};
+
+describe("references across repositories (N1)", () => {
+  const objects = [ISSUE, PR_READY, NEN_87];
+
+  async function run(desk: unknown): Promise<{ captured: Captured; document: Record<string, unknown> }> {
+    return registerDocument(repo({ objects, desk }));
+  }
+
+  it("refuses a bare reference two repositories answer to, naming both candidates", async () => {
+    for (const desk of [
+      { ...DESK, rows: { "pr#87": { needs: "x" } }, gates: [DESK.gates[1]] },
+      { ...DESK, rows: {}, gates: [{ gate: "G2", label: "m", asks: [{ ...DESK.gates[0]?.asks[1], pr: 87 }] }] },
+    ]) {
+      const { captured } = await run(desk);
+      expect(captured.code).toBe(2);
+      expect(captured.err.join("\n")).toMatch(/is ambiguous in this register: HA-PR-#87, NN-PR-#87/);
+    }
+  });
+
+  it("resolves notation and owner/name#n to the one object they name", async () => {
+    const { captured, document } = await run({
+      ...DESK,
+      rows: { "HA-PR-#87": { needs: "hatsu's" }, "zheref/nen#87": { needs: "nen's" } },
+      gates: [{ gate: "G2", label: "m", asks: [{ ...DESK.gates[0]?.asks[1], pr: "NN-PR-#87" }] }],
+    });
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const rows = document["objects"] as Record<string, unknown>[];
+    expect(rows.map((row): unknown => [row["notation"], row["needs"]])).toEqual([
+      ["HA-IS-#85", ""],
+      ["HA-PR-#87", "hatsu's"],
+      ["NN-PR-#87", "nen's"],
+    ]);
+    const gates = document["gates"] as { asks: { verdict: string }[] }[];
+    expect(gates[0]?.asks[0]?.verdict).toBe("not-ready: 2 unresolved threads");
+  });
+
+  it("accepts a bare reference that only one object answers to", async () => {
+    const { captured, document } = await run({ ...DESK, rows: { "85": { needs: "triage" } }, gates: [DESK.gates[1]] });
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    expect((document["objects"] as Record<string, unknown>[])[0]?.["needs"]).toBe("triage");
+  });
+
+  it("refuses notation whose kind is wrong, a code the registry lacks, two rows for one object, and an ask quoting an issue", async () => {
+    const cases: [unknown, RegExp][] = [
+      [{ ...DESK, rows: { "HA-IS-#87": {} }, gates: [DESK.gates[1]] }, /names 'HA-IS-#87', but HA-PR-#87 is a pull request/],
+      [{ ...DESK, rows: { "ZZ-PR-#87": {} }, gates: [DESK.gates[1]] }, /'ZZ' is not a product code in nen\/repos.json/],
+      [{ ...DESK, rows: { "HA-PR-#87": {}, "zheref/hatsu#87": {} }, gates: [DESK.gates[1]] }, /two rows for HA-PR-#87/],
+      [{ ...DESK, rows: {}, gates: [{ gate: "G2", label: "m", asks: [{ ...DESK.gates[0]?.asks[1], pr: "HA-IS-#85" }] }] }, /names HA-IS-#85, which is an issue/],
+    ];
+    for (const [desk, message] of cases) {
+      const { captured } = await run(desk);
+      expect(captured.code).toBe(2);
+      expect(captured.err.join("\n")).toMatch(message);
+    }
+  });
+});
+
+describe("linkedLine takes each number's kind from scope (N4)", () => {
+  it("writes an in-scope issue and PR in notation, and an unknown number kind-free", async () => {
+    const linking = { ...PR_READY, linked: [12, 85, 90] };
+    const { document } = await registerDocument(repo({ objects: [ISSUE, linking, PR_BLOCKED], desk: { ...DESK, rows: {} } }));
+    const row = (document["objects"] as Record<string, unknown>[]).find((r): boolean => r["number"] === 87);
+    expect(row?.["linkedLine"]).toBe("HA#12, HA-IS-#85, HA-PR-#90");
+  });
+});
+
+describe("every level of the desk refuses a key it does not read (N5/N13)", () => {
+  async function refused(desk: unknown): Promise<string> {
+    const { captured } = await registerDocument(repo({ desk }));
+    expect(captured.code).toBe(2);
+    return captured.err.join("\n");
+  }
+
+  it("refuses a verdict on a gate, an option and a legend row", async () => {
+    expect(await refused({ ...DESK, gates: [{ ...DESK.gates[1], verdict: "ready" }] })).toMatch(/gates\[0\] carries a 'verdict'/);
+    const ask = DESK.gates[0]?.asks[1] as { options: Record<string, unknown>[] };
+    const starred = { ...ask, options: [{ ...ask.options[0], verdict: "ready" }] };
+    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [starred] }] })).toMatch(/options\[0\] carries a 'verdict'/);
+    expect(await refused({ ...DESK, legendRows: [{ mark: "x", meaning: "y", verdict: "ready" }] })).toMatch(/legendRows\[0\] carries a 'verdict'/);
+  });
+
+  it("refuses any other unknown key, naming what that level reads", async () => {
+    expect(await refused({ ...DESK, colour: "red" })).toMatch(/the document names 'colour', which the desk does not write there -- it reads variant, title/);
+    expect(await refused({ ...DESK, gates: [{ ...DESK.gates[1], note: "x" }] })).toMatch(/gates\[0\] names 'note'.*it reads gate, label, cleared, asks/);
+    const ask = { ...DESK.gates[0]?.asks[1], objects: [{ label: "x", url: "/x", title: "t" }] };
+    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [ask] }] })).toMatch(/objects\[0\] names 'title'/);
+  });
+
+  it("refuses an ask that stars no option (N6)", async () => {
+    const ask = DESK.gates[0]?.asks[1] as { options: Record<string, unknown>[] };
+    const unstarred = { ...ask, options: [{ ...ask.options[0], star: false }] };
+    expect(await refused({ ...DESK, gates: [{ gate: "G2", label: "m", asks: [unstarred] }] })).toMatch(/stars 0 options; an ask recommends exactly one/);
+  });
+});
+
+describe("a blank verdict is explained on the page (N7)", () => {
+  it("notes a pull request with no readiness when the row arrived saying nothing", async () => {
+    const silent = { ...PR_UNREAD, notes: [] };
+    const { document } = await registerDocument(repo({ objects: [silent], desk: { ...DESK, rows: {}, gates: [DESK.gates[1]] } }));
+    const row = (document["objects"] as Record<string, unknown>[])[0];
+    expect(row?.["verdict"]).toBe("");
+    expect(row?.["notes"]).toEqual(["no readiness authority answered for this pull request, so its verdict is blank"]);
+  });
+});
+
+describe("render with the effort's ledgers (N8)", () => {
+  it("fills the spend block from .nen/phases and .nen/usage, null counters blank", async () => {
+    const root = repo({ workflow: true });
+    mkdirSync(join(root, ".nen", "phases"), { recursive: true });
+    mkdirSync(join(root, ".nen", "usage"), { recursive: true });
+    writeFileSync(
+      join(root, ".nen", "phases", "e1.json"),
+      JSON.stringify({
+        contract: "nen.phase.ledger/v0.1",
+        effort: "e1",
+        phases: [
+          { phase: "build", startedAt: "2026-10-04T10:00:00Z", endedAt: "2026-10-04T10:04:00Z", durationMs: 240_000, steps: [{ verb: "build", argv: "bun x", exitCode: 0, durationMs: 41_200 }] },
+          { phase: "review", startedAt: "2026-10-04T10:04:00Z", endedAt: null, durationMs: null, steps: [] },
+        ],
+      }),
+    );
+    writeFileSync(
+      join(root, ".nen", "usage", "e1.json"),
+      JSON.stringify({
+        contract: "nen.usage.ledger/v0.1",
+        effort: "e1",
+        entries: [
+          { recordedAt: "2026-10-04T10:05:00Z", surface: "claude-code", model: "opus", input: 1200, output: 300, source: "/cost" },
+          { recordedAt: "2026-10-04T10:06:00Z", surface: "cursor", notReported: true },
+          { recordedAt: "2026-10-04T10:07:00Z", surface: "cursor", input: 5 },
+        ],
+      }),
+    );
+    const { captured, document } = await registerDocument(root);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const spend = document["spendEfforts"] as { spendUsage: { surface: string; notReported: boolean; cacheRead: number | null }[] }[];
+    // ANY not-reported entry marks its group (N10).
+    expect(spend[0]?.spendUsage.map((row): unknown => [row.surface, row.notReported, row.cacheRead])).toEqual([
+      ["claude-code", false, null],
+      ["cursor", true, null],
+    ]);
+    writeFileSync(join(root, "data.json"), JSON.stringify(document));
+    const rendered = await capture(
+      ["report", "render", "--variant", "register", "--template", join(FIXTURES, "rikugan.html"), "--data", "data.json", "--out", "out.html"],
+      root,
+      [],
+    );
+    expect(rendered.code, rendered.err.join("\n")).toBe(0);
+    const page = readFileSync(join(root, "out.html"), "utf8");
+    expect(page).toContain("<h3>e1</h3>");
+    expect(page).toContain('<span class="lane">build</span><span class="track"><i style="--pct:100"></i></span><span class="amt">4 m 00 s</span><span class="steps">build 41.2 s</span>');
+    expect(page).toContain('<span class="amt">not ended</span>');
+    expect(page).toContain('<td class="n">1200</td><td class="n">300</td><td class="n"></td><td class="n"></td>');
+    expect(page).toContain('<td class="muted" colspan="6">not reported</td>');
+    expect(page).toContain("Actions minutes: not read");
+  });
+});
+
+describe("the live path, scripted (N8)", () => {
+  const TARGET = parseTarget("zheref/nen");
+  const HEAD = "7db8de509dfb8623125e9d523220c69d3c8dbad1";
+  const VIEW = {
+    number: 217,
+    headRefOid: HEAD,
+    labels: [{ name: "nen:lane/cli" }],
+    mergeStateStatus: "CLEAN",
+    body: "Closes #215 and refs #220.",
+    url: "https://github.com/zheref/nen/pull/217",
+    title: "feat(pr): review threads",
+    state: "OPEN",
+    statusCheckRollup: [],
+    reviewRequests: [],
+  };
+  const calls = (checkRuns: ScriptedCall["result"]): ScriptedCall[] => [
+    ...script(),
+    { match: `gh ${viewArgv(TARGET, 217).join(" ")}`, result: { code: 0, stdout: JSON.stringify(VIEW) } },
+    { match: `gh ${checkRunsArgv(TARGET, HEAD).join(" ")}`, result: checkRuns },
+    {
+      match: `gh ${listArgv(TARGET, 217).join(" ")}`,
+      result: { code: 0, stdout: JSON.stringify({ data: { repository: { pullRequest: { headRefOid: HEAD, reviewThreads: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }) },
+    },
+  ];
+  const argv = (root: string): string[] => [
+    "report", "data", "--repo", root, "--base", "main", "--target", "zheref/nen", "--prs", "217",
+    "--register", join(root, "desk.json"), "--json",
+  ];
+  const desk = { ...DESK, rows: { "NN-PR-#217": { needs: "your merge" } }, gates: [{ gate: "G2", label: "m", asks: [{ ...DESK.gates[0]?.asks[1], pr: "NN-PR-#217" }] }] };
+
+  it("quotes the check run's verdict line, with no offline provenance", async () => {
+    const run = { name: "readiness", status: "completed", conclusion: "SUCCESS", started_at: "2026-10-04T10:00:00Z", output: { title: "x", summary: "ready", text: null } };
+    const captured = await capture(argv(repo({ desk })), null, calls({ code: 0, stdout: JSON.stringify({ check_runs: [run] }) }));
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const document = JSON.parse(captured.out.join("\n")) as Record<string, unknown>;
+    const row = (document["objects"] as Record<string, unknown>[])[0];
+    expect(row).toMatchObject({ notation: "NN-PR-#217", verdict: "ready", needs: "your merge", linkedLine: "NN#215, NN#220", notes: [] });
+    expect((document["gates"] as { asks: { verdict: string }[] }[])[0]?.asks[0]?.verdict).toBe("ready");
+    expect(document["footerNote"]).toBe("Rendered by verbs only.");
+  });
+
+  it("puts the reason for a null readiness into the row's notes, not only stderr (N7)", async () => {
+    const captured = await capture(argv(repo({ desk })), null, calls({ code: 1, stdout: "", stderr: "HTTP 403\n" }));
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const row = (JSON.parse(captured.out.join("\n")) as { objects: Record<string, unknown>[] }).objects[0];
+    expect(row?.["verdict"]).toBe("");
+    expect((row?.["notes"] as string[]).join("\n")).toMatch(/^the readiness gate /m);
+    expect(captured.err.join("\n")).toMatch(/objects: the readiness gate/);
   });
 });

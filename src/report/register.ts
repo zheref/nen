@@ -16,11 +16,27 @@
 // A READINESS CELL IS QUOTED, NEVER WRITTEN. Every `verdict` on the page -- a
 // register row's and a desk ask's -- is the object's own `readiness.reason`
 // (the `nen pr ready` gate line, or the head's `readiness` check run's verdict
-// line), verbatim. The desk file may not carry a `verdict` anywhere: an ask
-// that wants one names the pull request (`pr: <n>`) and nen quotes that row's.
+// line), verbatim. The desk file may not carry a `verdict` anywhere -- every
+// level of it refuses a key it does not know, so that is a property of the
+// parser rather than of a list of places somebody remembered to check -- and an
+// ask that wants one names the pull request (`pr`) and nen quotes that row's.
 // A row with no readiness (an issue, or a pull request neither authority could
 // answer) has the empty verdict, which is the report-data convention for
-// "nothing to say" -- and that row's `notes[]` already says why.
+// "nothing to say" -- and that row's `notes[]` says why, on the page.
+//
+// ON THE OFFLINE PATH THE VERDICT'S AUTHORITY IS THE CALLER'S FILE. Rows read
+// through `--objects-from` carry whatever `readiness` that file carried; nen
+// quotes it exactly as it quotes a live one, and says on the page -- in
+// `footerNote` and in each such row's `notes[]` -- that it came from that file
+// and not from GitHub. "Quoted verbatim" is true on both paths; "from `nen pr
+// ready`" is true only on the live one.
+//
+// A DESK NAMES AN OBJECT BY ITS IDENTITY, NOT ITS NUMBER. A register can span
+// repositories, and `#87` exists in each of them. So desk rows and an ask's
+// `pr` are resolved against (repository, number) -- written as notation
+// (`HA-PR-#87`), as `owner/name#87`, or bare (`pr#87`, `87`) only when exactly
+// one object in scope answers to it; an ambiguous bare reference is refused
+// naming the candidates.
 //
 // EVERY KEY THE TEMPLATE ITERATES IS ALWAYS PRESENT. `nen report render`
 // refuses a token the document has not got, so an ask without an `objects`
@@ -30,6 +46,7 @@
 
 import { VerbUsageError } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
+import { formatRef, OBJECT_REF, parseRef, type ObjectKind } from "../ref/notation.js";
 import type { ReportPhase, ReportUsage } from "./data.js";
 import type { ReportObject } from "./objects.js";
 
@@ -67,8 +84,13 @@ export interface DeskAsk {
   readonly rank: number;
   readonly title: string;
   readonly why: string;
-  /** The pull request whose readiness this ask quotes, or null. */
-  readonly pr: number | null;
+  /**
+   * The pull request whose readiness this ask quotes, AS WRITTEN -- a number,
+   * notation, `owner/name#<n>` or `pr#<n>` -- or null. Resolved against the
+   * objects in scope by `assembleRegister`, which is the one place that knows
+   * them.
+   */
+  readonly pr: string | number | null;
   readonly options: readonly DeskOption[];
   readonly objects: readonly { readonly label: string; readonly url: string }[];
 }
@@ -90,7 +112,7 @@ export interface Desk {
   readonly footerNote: string;
   readonly architectureCaption: string;
   readonly gates: readonly DeskGate[];
-  /** Keyed `pr#<n>` / `issue#<n>`. */
+  /** Keyed by an object reference AS WRITTEN; resolved by `assembleRegister`. */
   readonly rows: ReadonlyMap<string, DeskRow>;
   readonly legendRows: readonly { readonly mark: string; readonly meaning: string }[];
   /** Which ledger efforts the spend block shows, in order; null = every one recorded. */
@@ -101,7 +123,7 @@ export interface Desk {
 // ── the desk file, validated at the read seam ───────────────────────────────
 
 const DESK_SHAPE =
-  '{ variant, title, scope, gate, generatedAtLocal?, footerNote?, architectureCaption?, gates: [{ gate, label, cleared?, asks: [{ kind: DECIDE|DO|MERGE, rank, title, why, pr?, options: [{ letter, label, command, consequence, star? }], objects?: [{ label, url }] }] }], rows?: { "pr#<n>"|"issue#<n>": { marks?, gate?, gateClass?, needs?, session?, lane?, thought? } }, legendRows?: [{ mark, meaning }], efforts?: [<effort>], spendNotes?: { "<effort>": "<line>" } }';
+  '{ variant, title, scope, gate, generatedAtLocal?, footerNote?, architectureCaption?, gates: [{ gate, label, cleared?, asks: [{ kind: DECIDE|DO|MERGE, rank, title, why, pr?, options: [{ letter, label, command, consequence, star? }], objects?: [{ label, url }] }] }], rows?: { "<CODE>-<IS|PR>-#<n>"|"<owner>/<name>#<n>"|"pr#<n>"|"issue#<n>": { marks?, gate?, gateClass?, needs?, session?, lane?, thought? } }, legendRows?: [{ mark, meaning }], efforts?: [<effort>], spendNotes?: { "<effort>": "<line>" } }';
 
 function refuseDesk(display: string, where: string, what: string): never {
   throw new VerbUsageError(
@@ -146,19 +168,36 @@ function url(value: string, display: string, where: string): string {
   return value;
 }
 
-/** A desk key never carries a verdict; the verb quotes it. */
-function forbidVerdict(record: Record<string, unknown>, display: string, where: string): void {
+/**
+ * Every level of the desk admits only its own keys (Nobunaga N5/N13).
+ *
+ * A KEY NOBODY READS IS AN INSTRUCTION SILENTLY DROPPED, and one of them is
+ * worse than the rest: a `verdict` written on a gate, an option or a legend
+ * row would be ignored by the renderer's scope chain one day and answer a
+ * `{{verdict}}` token the next. So `verdict` is refused by name with the
+ * reason, and anything else unknown is refused naming what IS read there.
+ */
+function allowKeys(record: Record<string, unknown>, allowed: readonly string[], display: string, where: string): void {
   if (Object.hasOwn(record, "verdict")) {
     refuseDesk(
       display,
       where,
-      "carries a 'verdict'. A readiness verdict is QUOTED from 'nen pr ready', never written -- name the pull request with 'pr: <n>' on an ask and nen quotes that row's verdict verbatim",
+      "carries a 'verdict'. A readiness verdict is QUOTED from the object's own readiness, never written -- name the pull request with 'pr' on an ask and nen quotes that row's verdict verbatim",
+    );
+  }
+  const unknown = Object.keys(record).filter((key): boolean => !allowed.includes(key));
+  if (unknown.length > 0) {
+    refuseDesk(
+      display,
+      where,
+      `names ${unknown.map((key): string => `'${key}'`).join(", ")}, which the desk does not write there -- it reads ${allowed.join(", ")}`,
     );
   }
 }
 
 function parseOption(entry: unknown, display: string, where: string): DeskOption {
   if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not an option object`);
+  allowKeys(entry, ["letter", "label", "command", "consequence", "star"], display, where);
   const star = entry["star"];
   if (star !== undefined && typeof star !== "boolean") {
     refuseDesk(display, where, `has 'star' of ${kindOf(star)}; it is true on the recommended option and absent or false elsewhere`);
@@ -176,7 +215,7 @@ function parseOption(entry: unknown, display: string, where: string): DeskOption
 
 function parseAsk(entry: unknown, display: string, where: string): DeskAsk {
   if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not an ask object`);
-  forbidVerdict(entry, display, where);
+  allowKeys(entry, ["kind", "rank", "title", "why", "pr", "options", "objects"], display, where);
   const kind = str(entry, "kind", display, where, true);
   if (!ASK_KINDS.includes(kind)) {
     refuseDesk(display, where, `has 'kind' of '${kind}'; an ask opens ${ASK_KINDS.join(", ")}`);
@@ -186,8 +225,13 @@ function parseAsk(entry: unknown, display: string, where: string): DeskAsk {
     refuseDesk(display, where, `has 'rank' of ${kindOf(rank)}, not a positive whole number (1 unblocks the most)`);
   }
   const pr = entry["pr"];
-  if (pr !== undefined && pr !== null && (typeof pr !== "number" || !Number.isInteger(pr) || pr <= 0)) {
-    refuseDesk(display, where, `has 'pr' of ${kindOf(pr)}, not a pull-request number`);
+  if (
+    pr !== undefined &&
+    pr !== null &&
+    !(typeof pr === "number" && Number.isInteger(pr) && pr > 0) &&
+    !(typeof pr === "string" && pr.trim() !== "")
+  ) {
+    refuseDesk(display, where, `has 'pr' of ${kindOf(pr)}, not a pull-request reference (a number, notation, or owner/name#<n>)`);
   }
   const options = list(entry, "options", display, where, true).map((option, index): DeskOption =>
     parseOption(option, display, `${where}.options[${index}]`),
@@ -196,12 +240,13 @@ function parseAsk(entry: unknown, display: string, where: string): DeskAsk {
   const duplicate = letters.find((letter, index): boolean => letters.indexOf(letter) !== index);
   if (duplicate !== undefined) refuseDesk(display, where, `letters two options '${duplicate}'; the picker cannot ask that`);
   const stars = options.filter((option): boolean => option.star).length;
-  if (stars > 1) {
-    refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one (or none, when the answer is the maintainer's word alone)`);
+  if (stars !== 1) {
+    refuseDesk(display, where, `stars ${stars} options; an ask recommends exactly one, the same one the surface's picker stars`);
   }
   const objects = list(entry, "objects", display, where, false).map((object, index): { label: string; url: string } => {
     const at = `${where}.objects[${index}]`;
     if (!isRecord(object)) refuseDesk(display, at, `is ${kindOf(object)}, not a { label, url } object`);
+    allowKeys(object, ["label", "url"], display, at);
     return { label: str(object, "label", display, at, true), url: url(str(object, "url", display, at, true), display, at) };
   });
   return {
@@ -209,7 +254,7 @@ function parseAsk(entry: unknown, display: string, where: string): DeskAsk {
     rank,
     title: str(entry, "title", display, where, true),
     why: str(entry, "why", display, where, true),
-    pr: typeof pr === "number" ? pr : null,
+    pr: typeof pr === "number" || typeof pr === "string" ? pr : null,
     options,
     objects,
   };
@@ -217,6 +262,7 @@ function parseAsk(entry: unknown, display: string, where: string): DeskAsk {
 
 function parseGate(entry: unknown, display: string, where: string): DeskGate {
   if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not a gate object`);
+  allowKeys(entry, ["gate", "label", "cleared", "asks"], display, where);
   const gate = str(entry, "gate", display, where, true);
   if (gate.trim() === "") refuseDesk(display, where, "has an empty 'gate'");
   const asks = list(entry, "asks", display, where, true).map((ask, index): DeskAsk =>
@@ -236,7 +282,6 @@ function parseGate(entry: unknown, display: string, where: string): DeskGate {
   return { gate, label: str(entry, "label", display, where, true), cleared, asks: ranked };
 }
 
-const ROW_KEY = /^(pr|issue)#([1-9][0-9]*)$/;
 const ROW_FIELDS: readonly (keyof DeskRow)[] = ["marks", "gate", "gateClass", "needs", "session", "lane", "thought"];
 
 function parseRows(value: unknown, display: string): ReadonlyMap<string, DeskRow> {
@@ -245,17 +290,11 @@ function parseRows(value: unknown, display: string): ReadonlyMap<string, DeskRow
   if (!isRecord(value)) refuseDesk(display, "'rows'", `is ${kindOf(value)}, not an object keyed 'pr#<n>' / 'issue#<n>'`);
   for (const [key, entry] of Object.entries(value)) {
     const where = `rows['${key}']`;
-    if (!ROW_KEY.test(key)) refuseDesk(display, where, "is not keyed 'pr#<n>' or 'issue#<n>'");
-    if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not an object`);
-    forbidVerdict(entry, display, where);
-    const unknown = Object.keys(entry).filter((field): boolean => !(ROW_FIELDS as readonly string[]).includes(field));
-    if (unknown.length > 0) {
-      refuseDesk(
-        display,
-        where,
-        `names ${unknown.map((field): string => `'${field}'`).join(", ")}, which the desk does not write -- a row's judgement is ${ROW_FIELDS.join(", ")}; every other column is a fact nen reads`,
-      );
+    if (parseReference(key) === null) {
+      refuseDesk(display, where, `is not keyed by an object reference -- ${REFERENCE_FORMS}`);
     }
+    if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not an object`);
+    allowKeys(entry, ROW_FIELDS, display, where);
     const row: Record<string, string> = {};
     for (const field of ROW_FIELDS) row[field] = str(entry, field, display, where, false);
     rows.set(key, row as unknown as DeskRow);
@@ -266,7 +305,12 @@ function parseRows(value: unknown, display: string): ReadonlyMap<string, DeskRow
 /** `--register <file>`'s parsed document, validated field by field. */
 export function parseDesk(document: unknown, display: string): Desk {
   if (!isRecord(document)) refuseDesk(display, "the document", `is ${kindOf(document)}, not an object`);
-  forbidVerdict(document, display, "the document");
+  allowKeys(
+    document,
+    ["variant", "title", "scope", "gate", "generatedAtLocal", "footerNote", "architectureCaption", "gates", "rows", "legendRows", "efforts", "spendNotes"],
+    display,
+    "the document",
+  );
   const variant = str(document, "variant", display, "the document", true);
   if (variant.trim() === "") refuseDesk(display, "the document", "has an empty 'variant'; it names the reports.sections variant this register renders as");
   const generatedAtLocal = document["generatedAtLocal"];
@@ -276,6 +320,7 @@ export function parseDesk(document: unknown, display: string): Desk {
   const legendRows = list(document, "legendRows", display, "the document", false).map((entry, index) => {
     const where = `legendRows[${index}]`;
     if (!isRecord(entry)) refuseDesk(display, where, `is ${kindOf(entry)}, not a { mark, meaning } object`);
+    allowKeys(entry, ["mark", "meaning"], display, where);
     return { mark: str(entry, "mark", display, where, true), meaning: str(entry, "meaning", display, where, true) };
   });
   const effortsRaw = document["efforts"];
@@ -313,16 +358,17 @@ export function parseDesk(document: unknown, display: string): Desk {
   };
 }
 
-// ── notation ────────────────────────────────────────────────────────────────
+// ── notation and references ─────────────────────────────────────────────────
 
 /**
- * `owner/name` → product code, from the registry, or null when unknown.
+ * `owner/name` <-> product code, from the registry.
  *
  * A SEAM, so the register is testable without a registry on disk and the
  * command layer owns the one read of `nen/repos.json`.
  */
 export interface NotationSource {
   readonly codeFor: (slug: string) => string | null;
+  readonly slugFor: (code: string) => string | null;
   /** Why no code could be read at all (no registry), or null when one was. */
   readonly unavailable: string | null;
 }
@@ -335,18 +381,126 @@ function slugOf(object: ReportObject, target: string | null): string | null {
   return OBJECT_URL.exec(object.url)?.[1] ?? null;
 }
 
-function notationOf(kind: "IS" | "PR", number: number, slug: string | null, codes: NotationSource): { text: string; resolved: boolean } {
+/**
+ * The notation for one object, through ../ref/notation.ts's own formatter --
+ * the bare token, no glyph or state mark (the page has its own `marks`
+ * column) -- or the `<owner>/<name>#<n>` fallback when no code resolves.
+ *
+ * `kind` NULL IS A NUMBER WHOSE KIND NOBODY READ (a `linked[]` entry that is
+ * not in scope), and it is written KIND-FREE, `<CODE>#<n>`: a reference whose
+ * IS/PR half is guessed is a reference that can be wrong (Nobunaga N4).
+ */
+function notationOf(kind: ObjectKind | null, number: number, slug: string | null, codes: NotationSource): { text: string; resolved: boolean } {
   const code = slug === null ? null : codes.codeFor(slug);
-  // `nen ref format`'s bare token, spelled through its own grammar. A code the
-  // registry holds is two or three uppercase letters by ../ref/notation.ts's
-  // rule; anything else falls back like an unknown one.
-  if (code !== null && /^[A-Z]{2,3}$/.test(code)) return { text: `${code}-${kind}-#${number}`, resolved: true };
+  if (code !== null) {
+    try {
+      const ref = formatRef({ code, kind: kind ?? "IS", number, glyphs: false }).ref;
+      return { text: kind === null ? `${code}#${number}` : ref, resolved: true };
+    } catch {
+      // A registry code that is not two or three uppercase letters is no code
+      // at all to the notation; it falls back like an unknown one.
+    }
+  }
   return { text: slug === null ? `#${number}` : `${slug}#${number}`, resolved: false };
+}
+
+/** The forms a desk may name an object in, said once for every refusal. */
+const REFERENCE_FORMS =
+  "notation ('HA-PR-#87'), '<owner>/<name>#87', or bare ('pr#87', 'issue#85', '87') when exactly one object in scope answers to it";
+
+type Reference =
+  | { readonly form: "notation"; readonly code: string; readonly kind: "pr" | "issue"; readonly number: number }
+  | { readonly form: "slug"; readonly slug: string; readonly number: number }
+  | { readonly form: "bare"; readonly kind: "pr" | "issue" | null; readonly number: number };
+
+const SLUG_REFERENCE = /^([^/\s#]+\/[^/\s#]+)#([1-9][0-9]*)$/;
+const BARE_REFERENCE = /^(?:(pr|issue)#|#)?([1-9][0-9]*)$/;
+
+/** A desk reference parsed, or null when it is none of the forms. */
+export function parseReference(raw: string | number): Reference | null {
+  if (typeof raw === "number") return Number.isInteger(raw) && raw > 0 ? { form: "bare", kind: null, number: raw } : null;
+  const text = raw.trim();
+  if (OBJECT_REF.test(text)) {
+    const ref = parseRef(text);
+    return { form: "notation", code: ref.code, kind: ref.kind === "PR" ? "pr" : "issue", number: ref.number };
+  }
+  const slug = SLUG_REFERENCE.exec(text);
+  if (slug !== null) return { form: "slug", slug: slug[1] as string, number: Number(slug[2]) };
+  const bare = BARE_REFERENCE.exec(text);
+  if (bare !== null) return { form: "bare", kind: (bare[1] as "pr" | "issue" | undefined) ?? null, number: Number(bare[2]) };
+  return null;
+}
+
+/** One object in scope, with the identity a desk reference resolves against. */
+interface Scoped {
+  readonly object: ReportObject;
+  readonly slug: string | null;
+  readonly notation: string;
+}
+
+function sameSlug(a: string | null, b: string | null): boolean {
+  return a !== null && b !== null && a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * A desk reference -> the one object in scope it names, or a refusal at exit 2.
+ *
+ * GITHUB NUMBERS ISSUES AND PULL REQUESTS FROM ONE SEQUENCE PER REPOSITORY, so
+ * (repository, number) is an identity and the kind is a check rather than a
+ * key: `HA-IS-#87` naming a pull request is a wrong reference, refused.
+ */
+function resolveReference(raw: string | number, scope: readonly Scoped[], codes: NotationSource, what: string, want: "pr" | null): Scoped {
+  const ref = parseReference(raw);
+  const shown = typeof raw === "number" ? String(raw) : `'${raw}'`;
+  if (ref === null) throw new VerbUsageError(`the register desk's ${what} names ${shown}, which is not an object reference -- ${REFERENCE_FORMS}.`);
+  let candidates: Scoped[];
+  if (ref.form === "notation") {
+    const slug = codes.slugFor(ref.code);
+    if (slug === null) {
+      throw new VerbUsageError(
+        `the register desk's ${what} names ${shown}, and '${ref.code}' is not a product code in nen/repos.json${codes.unavailable === null ? "" : ` (${codes.unavailable})`}. Write it as '<owner>/<name>#${ref.number}' instead.`,
+      );
+    }
+    candidates = scope.filter((entry): boolean => sameSlug(entry.slug, slug) && entry.object.number === ref.number);
+    const kind = ref.kind;
+    const wrong = candidates.find((entry): boolean => entry.object.kind !== kind);
+    if (wrong !== undefined) {
+      throw new VerbUsageError(`the register desk's ${what} names ${shown}, but ${wrong.notation} is ${wrong.object.kind === "pr" ? "a pull request" : "an issue"}.`);
+    }
+  } else if (ref.form === "slug") {
+    candidates = scope.filter((entry): boolean => sameSlug(entry.slug, ref.slug) && entry.object.number === ref.number);
+  } else {
+    const kind = ref.kind ?? want;
+    candidates = scope.filter((entry): boolean => entry.object.number === ref.number && (kind === null || entry.object.kind === kind));
+  }
+  if (candidates.length === 0) {
+    throw new VerbUsageError(
+      `the register desk's ${what} names ${shown}, which is not in this register's objects (${scope.map((entry): string => entry.notation).join(", ") || "none"}). Name it with --prs/--issues, or drop it: judgement about an object the page does not show is judgement nobody reads.`,
+    );
+  }
+  if (candidates.length > 1) {
+    throw new VerbUsageError(
+      `the register desk's ${what} names ${shown}, which is ambiguous in this register: ${candidates.map((entry): string => entry.notation).join(", ")}. Write the repository too -- notation or '<owner>/<name>#<n>'.`,
+    );
+  }
+  const found = candidates[0] as Scoped;
+  if (want !== null && found.object.kind !== want) {
+    throw new VerbUsageError(`the register desk's ${what} names ${found.notation}, which is an issue; a readiness verdict is a statement about a pull request.`);
+  }
+  return found;
 }
 
 // ── the rows ────────────────────────────────────────────────────────────────
 
-/** The verdict to quote, or `""` when no authority answered. Never composed. */
+/**
+ * The verdict to quote, or `""` when no authority answered. Never composed.
+ *
+ * THE BARE-WORD FALLBACK IS STILL A QUOTE (Nobunaga N9). `reason` is empty only
+ * when the authority gave a verdict word and no line -- a gate whose `gateLine`
+ * was empty. Its `verdict` (`ready`, `not-ready`) is then the whole of what it
+ * said, so that word is quoted rather than nothing: nen adds no text of its
+ * own to either.
+ */
 export function quotedVerdict(object: ReportObject): string {
   if (object.readiness === null) return "";
   return object.readiness.reason !== "" ? object.readiness.reason : object.readiness.verdict;
@@ -373,20 +527,32 @@ export type RegisterRow = ReportObject & {
 const EMPTY_ROW: DeskRow = { marks: "", gate: "", gateClass: "", needs: "", session: "", lane: "", thought: "" };
 
 function registerRow(
-  object: ReportObject,
+  entry: Scoped,
   desk: DeskRow,
-  target: string | null,
+  scope: readonly Scoped[],
   codes: NotationSource,
-  unresolved: Set<string>,
+  verdictFile: string | null,
 ): RegisterRow {
-  const slug = slugOf(object, target);
-  const own = notationOf(object.kind === "pr" ? "PR" : "IS", object.number, slug, codes);
-  if (!own.resolved) unresolved.add(slug ?? `#${object.number}`);
-  // A PULL REQUEST'S `linked[]` ARE ISSUES, AN ISSUE'S ARE PULL REQUESTS, both
-  // in the object's own repository -- which is how ./objects.ts reads them.
-  const linkedKind = object.kind === "pr" ? "IS" : "PR";
-  const linkedLine = object.linked.map((number): string => notationOf(linkedKind, number, slug, codes).text).join(", ");
+  const { object, slug } = entry;
+  // EACH LINKED NUMBER TAKES ITS KIND FROM THE OBJECT IN SCOPE THAT HAS IT, and
+  // is written kind-free when none does (Nobunaga N4): a PR body's `#12` may be
+  // an issue or another pull request, and `linked[]` does not say which.
+  const linkedLine = object.linked
+    .map((number): string => {
+      const known = scope.find((other): boolean => sameSlug(other.slug, slug) && other.object.number === number);
+      if (known !== undefined) return known.notation;
+      return notationOf(null, number, slug, codes).text;
+    })
+    .join(", ");
   const notes = [...object.notes];
+  if (object.kind === "pr" && object.readiness === null && !notes.some((line): boolean => /readiness/i.test(line))) {
+    // THE BLANK VERDICT IS EXPLAINED ON THE PAGE (Nobunaga N7), even when the
+    // row arrived with nothing to say about why.
+    notes.push("no readiness authority answered for this pull request, so its verdict is blank");
+  }
+  if (object.kind === "pr" && object.readiness !== null && verdictFile !== null) {
+    notes.push(`verdict read from ${verdictFile}, not from GitHub`);
+  }
   let link = object.url;
   if (link !== "" && !SAFE_URL.test(link)) {
     notes.push(`'url' '${plainLine(link)}' is not an http(s), mailto, # or / link, so it is not published as one`);
@@ -395,7 +561,7 @@ function registerRow(
   return {
     ...object,
     url: link,
-    notation: own.text,
+    notation: entry.notation,
     marks: desk.marks,
     gate: desk.gate,
     gateClass: desk.gateClass,
@@ -537,7 +703,11 @@ export function spendEffort(name: string, phases: readonly ReportPhase[], usage:
   }
   const spendUsage = [...groups.values()].map((entries): SpendUsage => {
     const first = entries[0] as ReportUsage;
-    const notReported = entries.every((entry): boolean => entry.notReported);
+    // ANY `--not-reported` ENTRY MARKS ITS GROUP (spiritual-message § 4,
+    // Nobunaga N10): a surface that could not report part of its spend has
+    // not reported its spend, and a sum of the parts it did report would read
+    // as the whole.
+    const notReported = entries.some((entry): boolean => entry.notReported);
     const sources = [...new Set(entries.map((entry): string | null => entry.source).filter((s): s is string => s !== null))];
     return {
       surface: first.surface,
@@ -574,6 +744,11 @@ export interface RegisterInput {
   /** `--target`'s slug, or null on the offline path. */
   readonly target: string | null;
   readonly codes: NotationSource;
+  /**
+   * `--objects-from`'s FILE NAME (never its path) when the rows -- and so
+   * their verdicts -- came from a caller's file; null on the live path.
+   */
+  readonly verdictFile: string | null;
 }
 
 /** The register keys, in backlog-board § 3's order, after `objects`. */
@@ -609,17 +784,23 @@ export interface RegisterKeys {
  * desk, and either way rendering it silently drops the judgement somebody wrote.
  */
 export function assembleRegister(desk: Desk, input: RegisterInput): RegisterKeys {
-  const byKey = new Map(input.objects.map((object): [string, ReportObject] => [`${object.kind}#${object.number}`, object]));
-  for (const key of desk.rows.keys()) {
-    if (!byKey.has(key)) {
-      throw new VerbUsageError(
-        `the register desk writes a row for '${key}', which is not in this register's objects (${[...byKey.keys()].join(", ") || "none"}). Name it with --prs/--issues, or drop the row: judgement about an object the page does not show is judgement nobody reads.`,
-      );
-    }
-  }
   const unresolved = new Set<string>();
-  const rows = input.objects.map((object): RegisterRow =>
-    registerRow(object, desk.rows.get(`${object.kind}#${object.number}`) ?? EMPTY_ROW, input.target, input.codes, unresolved),
+  const scope = input.objects.map((object): Scoped => {
+    const slug = slugOf(object, input.target);
+    const own = notationOf(object.kind === "pr" ? "PR" : "IS", object.number, slug, input.codes);
+    if (!own.resolved) unresolved.add(slug ?? `#${object.number}`);
+    return { object, slug, notation: own.text };
+  });
+  const deskRows = new Map<Scoped, DeskRow>();
+  for (const [key, row] of desk.rows) {
+    const found = resolveReference(key, scope, input.codes, `row '${key}'`, null);
+    if (deskRows.has(found)) {
+      throw new VerbUsageError(`the register desk writes two rows for ${found.notation}; one object, one row of judgement.`);
+    }
+    deskRows.set(found, row);
+  }
+  const rows = scope.map((entry): RegisterRow =>
+    registerRow(entry, deskRows.get(entry) ?? EMPTY_ROW, scope, input.codes, input.verdictFile),
   );
 
   const gates = desk.gates.map((gate) => ({
@@ -627,16 +808,8 @@ export function assembleRegister(desk: Desk, input: RegisterInput): RegisterKeys
     label: gate.label,
     cleared: gate.cleared,
     asks: gate.asks.map((ask) => {
-      let verdict = "";
-      if (ask.pr !== null) {
-        const object = byKey.get(`pr#${ask.pr}`);
-        if (object === undefined) {
-          throw new VerbUsageError(
-            `the register desk's ask '${ask.title}' quotes the readiness of pull request ${ask.pr}, which is not in this register's objects. A verdict is quoted from a row nen read, never from one it did not -- add ${ask.pr} to --prs.`,
-          );
-        }
-        verdict = quotedVerdict(object);
-      }
+      const verdict =
+        ask.pr === null ? "" : quotedVerdict(resolveReference(ask.pr, scope, input.codes, `ask '${ask.title}'`, "pr").object);
       return {
         kind: ask.kind,
         rank: ask.rank,
@@ -665,6 +838,9 @@ export function assembleRegister(desk: Desk, input: RegisterInput): RegisterKeys
   // resolution, and the footer names it rather than leaving the reader to
   // wonder why two notations share a page.
   const footer = [desk.footerNote];
+  if (input.verdictFile !== null) {
+    footer.push(`Verdicts read from ${input.verdictFile}, not from GitHub.`);
+  }
   if (unresolved.size > 0) {
     footer.push(
       `Object notation unresolved for ${[...unresolved].sort().join(", ")}${input.codes.unavailable === null ? " (no product code in nen/repos.json)" : ` (${input.codes.unavailable})`}; those rows read <owner>/<name>#<n>.`,

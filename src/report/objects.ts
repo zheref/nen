@@ -817,11 +817,25 @@ async function prRow(
   const title = degradedString(view, "title", note);
   const body = degradedString(view, "body", note);
 
+  // THE READINESS REASONS ARE HELD UNTIL THE ANSWER IS KNOWN (Nobunaga N7). A
+  // fall-through that the gate then answers is an operator's detail and goes
+  // to stderr only; a readiness that ends NULL is a blank verdict cell on a
+  // published page, so its reasons go into this row's `notes[]` as well --
+  // the reader of the page never saw the terminal.
+  const reasons: string[] = [];
+  const hold = (line: string): void => void reasons.push(line);
   const readiness =
     head === ""
       ? null
-      : (readinessFromCheck(seams, target, head, warn) ??
-        (await readinessFromGate(target, number, repoRoot, warn)));
+      : (readinessFromCheck(seams, target, head, hold) ??
+        (await readinessFromGate(target, number, repoRoot, hold)));
+  for (const line of reasons) {
+    warn(line);
+    // THE CHECKOUT'S ABSOLUTE PATH STAYS ON THE TERMINAL. The gate names the
+    // file it looked for, and a row's notes travel into published reports --
+    // ./data.ts's rule for `repo`, applied to a field that can now carry it.
+    if (readiness === null) notes.push(line.replace(/^objects: /, "").split(repoRoot).join("<repo>"));
+  }
 
   return {
     kind: "pr",
