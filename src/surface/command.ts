@@ -18,7 +18,8 @@
 // mirrored into. `check --installed` reads a copy somebody else installed and
 // says whether it is still the source's image; it copies nothing back.
 
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
 import {
   emit,
   requireSubcommand,
@@ -48,12 +49,28 @@ import {
   readRules,
   SurfacePackError,
 } from "./packs.js";
+import { commaList } from "../cli/comma.js";
+import { GIT } from "../seam/exec.js";
+import {
+  checkExplicitCopy,
+  checkRecordedCopies,
+  PluginCheckError,
+  pluginManifest,
+  resolveConfigDir,
+  safe,
+  validateTrees,
+  VERDICT_EXIT,
+  type CopyJudgement,
+  type Difference,
+  type JudgeContext,
+} from "./plugin.js";
 import { findSurface, SURFACES, surfaceNames, type SurfaceRow } from "./rules.js";
 import { CAPABILITIES, capabilityNames, findCapabilities, renderCapabilities } from "./capabilities.js";
 
 export const GENERATE_CONTRACT = "nen.surface.mirror.generate/v0.1";
 export const CHECK_CONTRACT = "nen.surface.mirror.check/v0.1";
 export const CHECK_INSTALLED_CONTRACT = "nen.surface.mirror.check-installed/v0.1";
+export const CHECK_PLUGIN_CONTRACT = "nen.surface.mirror.check-plugin/v0.1";
 
 /**
  * The surface whose aliases the SOURCE personas carry in `model:` when the
@@ -88,6 +105,11 @@ usage:
                               [the same inputs] [--stamp <version>] [--json]
   nen surface mirror check    --source <dir> --surface <name> --installed <dir>
                               [the same inputs] [--stamp <version>] [--json]
+  nen surface mirror check    --surface claude-code --plugin <name>
+                              --source <plugin root> --installed <dir>|auto
+                              --trees <dir,dir,...> [--config-dir <dir>]
+                              [--independent-source <dir>] [--repo <path>]
+                              [--json]
 
 capabilities: the primitives a RUNNING SESSION on a surface has -- which
 tool asks a human a multiple-choice question, which raises a subagent, which
@@ -217,6 +239,45 @@ ${SURFACE_LIST}
                               .cursor/, .agents/) compared against a fresh
                               in-memory generation under the check-installed
                               contract.
+  --plugin <name>             check only (zheref/nen#339): judge a Claude Code
+                              PLUGIN install in the plugin's own layout -- a
+                              plugin cache copy or a skills-directory install
+                              -- rather than a mirror. --source is then the
+                              plugin's source root (the directory holding
+                              .claude-plugin/plugin.json naming <name>), and
+                              --trees, plus the two manifests
+                              .claude-plugin/plugin.json and marketplace.json,
+                              are compared byte for byte, every differing path
+                              named by side. A symlink is compared by its
+                              target and never opened; a name with a control
+                              character (or not UTF-8) is never compared or
+                              printed raw; .DS_Store is ignored. The mirror
+                              inputs (--agents, --hooks, --stamp, --out, ...)
+                              are refused in this mode.
+  --installed auto            with --plugin: every copy the host has recorded --
+                              each installPath of each <name>@<marketplace>
+                              entry of <config>/plugins/installed_plugins.json,
+                              and <config>/skills/<name> when it exists -- each
+                              judged once by real path; the verdict is the
+                              worst (2 > 1 > 5 > 4 > 0).
+  --trees <a,b,...>           with --plugin, REQUIRED: the directories the plugin
+                              ships, relative to its root. Caller data: which
+                              trees a plugin ships is the plugin's fact.
+  --config-dir <dir>          with --plugin: Claude Code's config directory
+                              (default \$CLAUDE_CONFIG_DIR, else ~/.claude).
+  --independent-source <dir>  with --plugin: a source root named independently
+                              of the served copy. A COPY IS NEVER ITS OWN
+                              EVIDENCE: when the copy and --source are the same
+                              real path, the source is, in order, this flag,
+                              the <name>@<marketplace> entry's 'directory'
+                              source in known_marketplaces.json, then the
+                              checkout --repo (else the working directory)
+                              stands in -- only on its trunk (nen/workflow.json
+                              branch.base, else origin/HEAD, else main) or on
+                              the branch the served copy is at. When that source
+                              IS the copy and the copy is a git checkout, it is
+                              identical by link; with none it is NOT
+                              COMPARABLE, never identical.
   --dry-run                   generate only. Reports exactly what it would write
                               and writes nothing.
 
@@ -238,13 +299,30 @@ drift; 2 a missing or unknown flag, a --repo that is empty or does not exist,
 an --out inside --source, a --source with no SKILL.md, a skill missing a key
 the surface requires, a rules file over the surface's limit (its links
 re-aimed), a tier --models does not declare, or a destination that exists and
-carries no marker (this verb never overwrites a hand-written file).`;
+carries no marker (this verb never overwrites a hand-written file).
+
+check --plugin has six verdicts, each its own exit: 0 identical (or served by
+link to a git checkout named independently); 1 different, every differing path
+named; 2 wiring -- a bad flag, a --source or explicit --installed that is not a
+copy of the plugin, or a file or directory that could not be read (never read
+as missing); 3 not installed -- no <name>@ entry and no skills/<name>; 4 not
+comparable -- the copy is the source given and no independent source exists;
+5 broken install -- an entry with no usable installPath, a recorded path that
+is gone, a dangling or looping link, a path with a control character (one
+install, refused, never split), an install record that is not JSON, or a
+recorded copy of another plugin.`;
+
+/** `check --plugin`'s own flags (zheref/nen#339): read in that mode only, refused outside it. */
+const PLUGIN_VALUES = ["plugin", "trees", "config-dir", "independent-source"];
+
+/** The mirror inputs `check --plugin` does not read: the plugin's tree is compared as it ships. */
+const MIRROR_ONLY_VALUES = ["agents", "invocation-prefix", "hooks", "hooks-root", "manifest", "models", "source-surface", "rules", "permissions", "stamp", "out"];
 
 const INPUT_VALUES = ["source", "agents", "surface", "source-surface", "invocation-prefix", "hooks", "hooks-root", "manifest", "models", "rules", "permissions", "stamp"];
 
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
   generate: { values: [...INPUT_VALUES, "out"], booleans: ["dry-run"] },
-  check: { values: [...INPUT_VALUES, "out", "installed"], booleans: [] },
+  check: { values: [...INPUT_VALUES, "out", "installed", ...PLUGIN_VALUES], booleans: [] },
 };
 
 const FAMILY_VALUES = [
@@ -511,6 +589,18 @@ function runGenerate(context: CommandContext): number {
 }
 
 function runCheck(context: CommandContext): number {
+  if (context.args.values["plugin"] !== undefined) return runPluginCheck(context);
+  const pluginOnly = PLUGIN_VALUES.filter((flag): boolean => context.args.values[flag] !== undefined);
+  if (pluginOnly.length > 0) {
+    throw new VerbUsageError(
+      `--${pluginOnly.join(", --")} ${pluginOnly.length === 1 ? "is" : "are"} read only with --plugin <name>, which judges a Claude Code plugin install in its own layout. Give --plugin, or drop ${pluginOnly.length === 1 ? "it" : "them"}.`,
+    );
+  }
+  if (context.args.values["installed"] === "auto") {
+    throw new VerbUsageError(
+      "--installed auto reads the host's install record, which only --plugin <name> mode does. Give --plugin <name> (and --trees), or name the installed directory.",
+    );
+  }
   const inputs = readInputs(context, true);
   const { relocated, ...report } = checkSurfaceMirror(inputs.outDir, inputs.report.files, inputs.row, inputs.stamp);
   const contract = inputs.installed ? CHECK_INSTALLED_CONTRACT : CHECK_CONTRACT;
@@ -566,13 +656,118 @@ export const surfaceCommand: Command = {
       // other "you asked for something that cannot be done", carrying its own
       // message whole (../cli/command.ts's parseCallerToken makes the same
       // trade for the same reason).
-      if (error instanceof SurfaceMirrorError || error instanceof SurfacePackError) {
+      if (error instanceof SurfaceMirrorError || error instanceof SurfacePackError || error instanceof PluginCheckError) {
         throw new VerbUsageError(error.message);
       }
       throw error;
     }
   },
 };
+
+const DIFFERENCE_LABEL: Readonly<Record<Difference["kind"], string>> = {
+  "only-in-source": "only in source:",
+  "only-in-copy": "only in copy:  ",
+  differs: "differs:       ",
+  "differs-symlink": "differs:       ",
+  "unexpected-in-copy": "unexpected:    ",
+  "unexpected-in-source": "unexpected in source:",
+};
+
+function differenceLine(difference: Difference): string {
+  const tail =
+    difference.kind === "differs-symlink"
+      ? " (symlink; never opened)"
+      : difference.kind === "unexpected-in-copy" || difference.kind === "unexpected-in-source"
+        ? " (a name with a control character, or not UTF-8, is never compared)"
+        : "";
+  return `  ${DIFFERENCE_LABEL[difference.kind]} ${difference.path}${tail}`;
+}
+
+function copyLines(copy: CopyJudgement): string[] {
+  return [`${copy.verdict} -- ${copy.reason}`, ...copy.differences.map(differenceLine)];
+}
+
+/**
+ * `check --plugin <name> --installed <dir|auto>` (zheref/nen#339): a Claude
+ * Code plugin install judged in the plugin's OWN layout against --source,
+ * under ./plugin.ts's independence rule. Six verdicts, six exits.
+ */
+function runPluginCheck(context: CommandContext): number {
+  const plugin = required(context, "plugin", "It names the plugin whose install is judged.");
+  if (CONTROL_CHAR.test(plugin) || plugin.includes("@") || plugin.includes("/")) {
+    throw new VerbUsageError(`--plugin '${safe(plugin)}' is not a plugin name (no '@', no '/', no control character).`);
+  }
+  const surfaceName = required(context, "surface", "--plugin judges a Claude Code plugin install: give --surface claude-code.");
+  if (surfaceName !== "claude-code") {
+    throw new VerbUsageError(
+      `--plugin judges a Claude Code plugin install in its own layout; --surface '${surfaceName}' has no plugin cache. Give --surface claude-code, or drop --plugin to check a mirror.`,
+    );
+  }
+  const foreign = MIRROR_ONLY_VALUES.filter((flag): boolean => context.args.values[flag] !== undefined);
+  if (foreign.length > 0) {
+    throw new VerbUsageError(
+      `--${foreign.join(", --")} ${foreign.length === 1 ? "is" : "are"} not read with --plugin: the plugin's tree is compared byte for byte as it ships, so nothing is generated from mirror inputs. A flag accepted and ignored is worse than one refused.`,
+    );
+  }
+  const installed = required(context, "installed", "It names the installed copy to judge, or 'auto' for every copy the host has recorded.");
+  const trees = validateTrees(commaList(context.args.values["trees"]));
+  const sourceFlag = required(context, "source", "With --plugin it names the plugin's source root: the directory holding .claude-plugin/plugin.json.");
+  if (pluginManifest(sourceFlag, plugin) === null) {
+    throw new VerbUsageError(
+      `--source '${safe(sourceFlag)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`,
+    );
+  }
+  const independent = optionalPath(context, "independent-source");
+  const configDir = resolveConfigDir(optionalPath(context, "config-dir"), context.seams.env);
+  const judge: JudgeContext = {
+    plugin,
+    trees,
+    source: realpathSync(sourceFlag),
+    independentSource: independent,
+    configDir,
+    standIn: resolve(context.repoFlag ?? process.cwd()),
+    git: (cwd, args) => {
+      const result = context.seams.run(GIT, [...args], { cwd });
+      return { code: result.spawnFailed ? 127 : result.code, stdout: result.stdout.split("\n")[0]?.trim() ?? "" };
+    },
+  };
+  const report = installed === "auto" ? checkRecordedCopies(judge) : checkExplicitCopy(installed, judge);
+  const notInstalled =
+    report.verdict === "not installed"
+      ? [`not installed -- no ${plugin}@ entry in ${safe(join(configDir, "plugins", "installed_plugins.json"))} and no ${safe(join(configDir, "skills", plugin))}`]
+      : [];
+  emit(
+    context.io,
+    context.json,
+    {
+      contract: CHECK_PLUGIN_CONTRACT,
+      surface: "claude-code",
+      plugin,
+      source: judge.source,
+      installed: installed === "auto" ? "auto" : safe(installed),
+      configDir: safe(configDir),
+      trees,
+      record: report.record,
+      verdict: report.verdict,
+      exit: VERDICT_EXIT[report.verdict],
+      copies: report.copies,
+    },
+    [
+      `surface: claude-code (plugin ${plugin})`,
+      `source: ${safe(judge.source)}`,
+      `installed: ${installed === "auto" ? `auto (${safe(configDir)})` : safe(installed)}`,
+      `trees: ${trees.join(", ")} + ${PLUGIN_MANIFESTS_LINE}`,
+      ...(report.record === "not read" ? [] : [`install record: ${report.record}`]),
+      ...report.copies.flatMap(copyLines),
+      ...notInstalled,
+      `verdict: ${report.verdict}`,
+    ],
+  );
+  return VERDICT_EXIT[report.verdict];
+}
+
+const CONTROL_CHAR = /[\x00-\x1f\x7f-\x9f]/;
+const PLUGIN_MANIFESTS_LINE = ".claude-plugin/plugin.json, .claude-plugin/marketplace.json";
 
 function runCapabilities(context: CommandContext): number {
   const name = context.args.values["surface"] ?? null;
