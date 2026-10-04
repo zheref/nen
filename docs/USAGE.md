@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 41 command
-families, 118 verbs, every flag checked against the binary this repository
+families, 119 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -140,6 +140,7 @@ thing from the checkout on disk, so it gets a different flag. `--target
 [`pr next-blocker`](#nen-pr-next-blocker), [`pr retarget`](#nen-pr-retarget),
 [`pr request-reviews`](#nen-pr-request-reviews),
 [`pr edit-body`](#nen-pr-edit-body),
+[`pr mark-ready`](#nen-pr-mark-ready),
 [`run rerun-failed`](#nen-run-rerun-failed), the whole
 [`issue`](#family-issue) family (including
 [`issue edit-body`](#nen-issue-edit-body)), [`idea file`](#nen-idea-file),
@@ -175,12 +176,12 @@ change from a compatible one.
 [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
 here is the ruling rather than the silence. A `contract` field is **earned by a
 shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. Twenty-nine shapes
-qualify today and declare one (thirty-one ids: `nen.stop.mark` and
+document half-understood is worse than not reading it at all. Thirty shapes
+qualify today and declare one (thirty-two ids: `nen.stop.mark` and
 `nen.runner.plan` each have two versions):
 
 `nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.1` ·
-`nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.ready/v0.1` ·
+`nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.ready/v0.1` ·
 `nen.report.data/v0.1` · `nen.report.render/v0.1` · `nen.scaffold.init/v0.1` ·
 `nen.scaffold.new/v0.1` · `nen.shu.<verb>/v0.1` (per executing verb) ·
 `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
@@ -264,14 +265,24 @@ the wrong thing:
 | `4` | **unsupported verb for this lane** — the declaration says so, in its own words | not `2`: the invocation was correct and the answer is a fact about the repository. It is the *majority* case across the stacks the family covers |
 | `5` | **the declared program could not be started** — not installed, not on `PATH` | not `1`: "the tool is not installed" and "the tool ran and said no" want different reactions, and `src/seam/exec.ts` keeps them apart precisely so a caller need not guess |
 
-`shu` is the only *family* that returns `3` or `4`. The [`runner`](#family-runner)
-family returns `5` in exactly `shu`'s sense -- `gh` could not be started -- and
-nothing else above `2`: a GitHub refusal there is `1`, because this table
-reserves no code for a network failure. The one other place in this CLI where a
-code above `2` appears is [`bootstrap`](#nen-bootstrap), which
-is not on the three-code scheme at all — it relays the bootstrap script's own
-published `3`–`7` unchanged, and those numbers mean the script's things, not
-these. A caller branching on `3`/`4`/`5` must know which of the two it invoked.
+`shu` is the only *family* that returns `3` **and** `4` in that table's sense.
+Every code above `2` is per verb, and **the same number means different things
+in different verbs** — a caller branching on anything above `2` must know which
+verb it invoked. The complete list:
+
+| Verb | Code | Meaning |
+|---|---|---|
+| every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
+| [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
+| every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
+| [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
+| [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
+| [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
+| [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
+| [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
+| [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
+| [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded |
+| [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 
 One inconsistency is worth knowing before it surprises you: a missing
 `--target` exits `1` rather than `2` on eighteen verbs — every verb routed
@@ -311,6 +322,7 @@ verb does by default:
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, before printing the byte count and first/last line |
+| [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
 | [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, so it can print which route each name or `--add-bots` id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
@@ -666,7 +678,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 118 verbs, grouped as the README groups them. **Reads** is what a
+All 119 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -683,13 +695,14 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
-| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F) | yes |
+| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
@@ -765,7 +778,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) the repository's `subject-case` rule (commitlint's own when readable as data, else `commits.subjectCase`), and its body/footer line lengths, wrapping `--body` to them (commitlint's own when readable as data, else `commits.bodyMaxLineLength`, else 100) -- never its content | on every run: nen/workflow.json under --repo (the attribution-trailer policy, commits.subjectCase and commits.bodyMaxLineLength), and the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
-| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse) | yes |
+| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the written commit's trailer read-back -- exit 3 on an injected one, #273) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -811,7 +824,9 @@ state snapshot (`fetch`), the first blocking condition in a fixed order
 (`next-blocker`), a trunk cascade-merge (`cascade-main`), a narrow `gh pr
 edit` mutation (`retarget`), and reviewer requests routed by resolved kind
 (`request-reviews` — `gh pr edit --add-reviewer` for a User/Team, GitHub's
-`requestReviews` GraphQL mutation for a Bot). `ready` and `next-blocker`
+`requestReviews` GraphQL mutation for a Bot), and the one draft-to-ready
+transition (`mark-ready` — a write, and never the readiness verdict).
+`ready` and `next-blocker`
 read reviewer identities from `nen/gates.json` (or an explicit `--gates`
 file, or a reduced `--reviewers` set with no default); `ready`'s ref
 resolution also reads `nen/repos.json`'s `product_codes`. This family
@@ -971,8 +986,10 @@ commit. Three things make that visible:
   `head-mismatch`, prints both SHAs, and prints **no verdict**. A `8` is never
   `ready` or `not-ready`, because the question was about a commit GitHub does not
   hold as the head. The code collides with nothing else this CLI or its
-  bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s and
-  `pr threads`', and `3`–`7` are the bootstrap script's). Under `--json` the mismatch
+  bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s,
+  `commit write`'s and `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and
+  `shu coverage`'s, `9` is `pr request-reviews`', and `3`–`7` are the
+  bootstrap script's). Under `--json` the mismatch
   prints its own document with its own contract,
   `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
   `requiredHead`, `githubHead`, `message`, `evaluatedAt` and `generator`. It deliberately does
@@ -2051,6 +2068,101 @@ Run 'nen pr --help'.
 ```
 exit 2
 
+### `nen pr mark-ready`
+
+Moves ONE existing draft pull request out of draft, through GitHub's
+`markPullRequestReadyForReview` GraphQL mutation
+([#345](https://github.com/zheref/nen/issues/345)). It is **not**
+[`pr ready`](#nen-pr-ready): that verb is the read-only CON-32 verdict — and
+since a draft fails its first row ("a draft is never Ready"), this verb is the
+way out of that row. It changes one fact, `isDraft`, and decides nothing about
+readiness; a `ready` verdict never triggers it, and it never consults one.
+
+**Authorization boundary.** It runs on whatever credential `gh` is already
+authenticated as, and neither widens nor replaces it. It never merges, casts a
+review vote, applies a label, requests a reviewer or changes a permission. A
+refusal from GitHub (insufficient access, a branch rule) is reported as
+`refused` at exit 1, never routed around.
+
+**Order of operations.** One certifying GraphQL read (`repository.pullRequest(number:)`
+→ `id number state isDraft headRefOid url`) runs first, and every refusal is
+decided from it **before any write**: a number or repository that does not
+resolve (exit 2), a pull request that is `CLOSED` or `MERGED` (exit 3), a
+`--require-head` that is not a prefix of GitHub's head (exit 8, both SHAs
+printed). A pull request that is already not a draft answers `already-ready`
+at exit 0 with nothing sent. Otherwise the mutation is addressed by the node id
+that read produced — never re-resolved from the number — and GitHub is **read
+back**: `marked-ready` (exit 0) only when the same pull request now reads
+`isDraft: false`. Only a 200 carrying `errors` is `refused`, without a read
+back. A non-zero `gh` exit, a spawn failure or a non-JSON answer can follow a
+write GitHub did apply, so it is read back like a clean answer, and its own
+words ride along in the message. A read back that fails, still reads draft, or
+answers a different object is `unconfirmed`. `refused` and `unconfirmed` both
+exit 1, and neither is ever reported as ready. The mutation takes no expected
+head, so a push landing between the read and the write cannot be refused by
+GitHub. With `--require-head`, a head that moved by the read back is
+`marked-ready-head-moved` at exit 8: the pull request left draft, but the pin
+no longer holds. Without `--require-head`, `headMoved: true` is only reported.
+
+Every family flag this verb does not read is refused at exit 2 before any
+`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on gh's own
+credential"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
+`--exclude-check` and the rest, and other verbs' `--base`,
+`--add-reviewers`, `--policy` and so on. Accepted silently, `--token-env`
+would read as "this ran on that token" when the write ran on gh's.
+
+**Usage**
+
+```text
+nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The GitHub repository. | Missing or malformed exits 2. |
+| `--pr <n>` | yes | The pull request to move out of draft. | The strict reader [`pr edit-body`](#nen-pr-edit-body) uses — `1e3` or `0x0c` are refused (exit 2), because this verb WRITES. |
+| `--require-head <sha>` | no | Refuse before the write unless GitHub's head is this commit; the mutation itself is not pinned. | 7–40 hex digits, a prefix of GitHub's head, any case — `pr ready`'s own rule and exit code (8). Malformed exits 2. A head that moved by the read back is `marked-ready-head-moved`, exit 8. |
+| `--dry-run` | no | Run the certifying read and every refusal, then print the mutation argv and send nothing. | **Still reads GitHub** — a dry run whose refusals differed from the real run's would prove nothing. |
+
+**Output and exit codes** — the first human line is the status, the second the
+message, then the url and the head. `--json`: `{ contract:
+"nen.pr.mark-ready/v0.1", status, ok, target, number, url, stateBefore,
+wasDraft, isDraft, requiredHead, headBefore, headAfter, headMoved, sent,
+dryRun, mutationArgv, message }` — `status` is one of `marked-ready`,
+`marked-ready-head-moved`, `already-ready`, `dry-run`, `not-open`,
+`head-mismatch`, `refused`, `unconfirmed`; `isDraft` is `null` when a read
+back could not be read. The human lines strip control characters from
+GitHub-controlled strings (the url, the node id, gh's stderr); `--json`
+carries the original bytes. A head GitHub answers that is not a full
+40-hex-digit SHA, or a 200 missing `data`, `repository` or `pullRequest`, is
+an unreadable answer at exit 1 — only an explicit `null` means "does not
+resolve" (exit 2).
+
+| Exit | Status | Meaning |
+|---|---|---|
+| 0 | `marked-ready` · `already-ready` · `dry-run` | read back not a draft; already not a draft, nothing sent; or a dry run |
+| 1 | `refused` · `unconfirmed` | GitHub answered the mutation with `errors`; or the read back failed, still reads draft, or answered another object. Also a first read that failed or answered something unreadable (no document; the error is on stderr) |
+| 2 | — | usage: `--target`, `--pr`, `--require-head`, a flag this verb does not read, or a number/repository that does not resolve |
+| 3 | `not-open` | the pull request is `CLOSED` or `MERGED`; nothing sent |
+| 8 | `head-mismatch` · `marked-ready-head-moved` | `--require-head` is not GitHub's head, nothing sent; or the pull request left draft but its head moved from the pinned one by the read back |
+
+**Example**
+
+```bash
+nen pr mark-ready --target acme/widgets --pr 42 --require-head 0123456 --dry-run
+```
+```text
+dry-run
+would mark acme/widgets#42 ready for review (it is a draft at 0123456789abcdef0123456789abcdef01234567); nothing was sent.
+would run: gh api --method POST graphql -f 'query=mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{id isDraft}}}' -f id=PR_kwSYNTHETIC
+  https://github.com/acme/widgets/pull/42
+  head: 0123456789abcdef0123456789abcdef01234567
+  --require-head 0123456
+```
+(scripted — the repository, number and node id are synthetic)
+
 ### `nen pr threads`
 
 A pull request's **review threads**, which are not PR comments and not
@@ -2615,16 +2727,34 @@ base check ran against (or saying it was **NOT performed** because neither
 `origin/<base>` nor `<base>` resolves), then either the new commit line
 (`squashed into <sha>`) or, for `--dry-run`, the message that would have been
 committed. `--json`'s contract is `nen.wc.squash/v0.1`: `{ contract, onto,
-mergeBase, folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...] }`
+mergeBase, folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...],
+injected: [key, ...] }`
 — `folded` is oldest first; `newSha` is `null` for a dry run and for "nothing
 to squash"; `base` is the base branch's name and `baseRefs` the refs checked,
 **empty meaning the check was not performed** (no ref resolves, or nothing to
-squash), never that it passed. Exit 0 on a
+squash), never that it passed; `injected` is the read-back's verdict below,
+`null` whenever nothing was written (a dry run, nothing to squash). Exit 0 on a
 squash, a dry run, or "nothing to squash"; exit 2 on every refusal above,
 naming it; exit 1 when a git command this verb did not expect to fail fails
-anyway (an unresolvable `--onto`, a fetch that cannot reach the upstream) —
-never folded into one of the exit-2 refusals, exactly as
-[`wc classify`](#nen-wc-classify)'s own git-failure rule.
+anyway (an unresolvable `--onto`, a fetch that cannot reach the upstream, the
+read-back) — never folded into one of the exit-2 refusals, exactly as
+[`wc classify`](#nen-wc-classify)'s own git-failure rule — and when
+`nen/workflow.json` is present and malformed; **exit 3 when the fold landed
+and a hook injected a trailer the policy refuses**.
+
+**The folded commit is read back** ([#273](https://github.com/zheref/nen/issues/273)),
+exactly as [`commit write`](#nen-commit-write) reads its own and under the
+same three rules: the message file through `git interpret-trailers --parse
+--unfold --no-divider` before the reset, the folded commit through `git cat-file commit
+<newSha>` and the same parser after. An injected key is named in `injected[]`
+and on stderr with its source and rule, and the verb exits **3** — the squash
+is **left in place, never amended**; `git reset --soft ORIG_HEAD` restores the
+unsquashed commits (the fold changed no file). An added key nothing refuses is
+a `nen: note:` line, exit unchanged. Because the read-back needs the policy,
+`nen/workflow.json` is now loaded **once, before the message is judged and
+before anything moves, on every squash**: a malformed one is exit 1 even with
+`--base` and a message carrying no trailer, where it used to be read only for
+a trailer or for `branch.base`.
 
 **Example**
 
@@ -6552,9 +6682,66 @@ trailer: `--trailer "Signed-off-by: Name <email>"`. Typing `--sign-off`
 anyway is refused as an unknown option at exit 2, and the refusal says
 exactly this (`nen commit --help` does too).
 
+**Then the commit is read back** ([#273](https://github.com/zheref/nen/issues/273)).
+A hook that runs *inside* the verb's own `git commit` — `prepare-commit-msg`,
+`commit-msg`, or a harness's own (Cursor appends `Co-authored-by: Cursor
+<cursoragent@cursor.com>`, [zheref/hatsu#66](https://github.com/zheref/hatsu/issues/66))
+— can add a trailer to a message nen already validated. So after the write the
+verb asks git's own trailer parser what the commit carries and compares it
+with the message it wrote, case-insensitively on the key. **Both sides are read by git's own
+trailer parser**: the composed message through `git interpret-trailers --parse
+--unfold --no-divider` *before* the write (a git that cannot parse it stops the
+verb with nothing committed), and the written commit through `git cat-file
+commit <sha>` — plumbing, which no `log.*` setting such as `log.showSignature`
+can add a line to — and the same parser after. `--no-divider` keeps a
+standalone `---` line in the body from ending the read (without it git takes
+it for the start of a patch and sees no trailer below it), and the output is
+decoded with the **first character of `trailer.separators`** (`git config
+--get trailer.separators`, `:` when unset) — the character `--parse` prints
+with — so a repository declaring `=:` is read, not silently emptied. A refused key on the commit is
+**injected** when:
+
+- a hook **added** it (the message did not carry it) and this repository's
+  [`nen/workflow.json`](#nenworkflowjson) refuses it — an attribution trailer
+  not in `commits.allowedAttributionTrailers`, or a key in
+  `commits.forbiddenTrailers`, the same `trailerRefusal` `commit format` and
+  the generated hook ask;
+- a hook **added** it and its key ends in **`-by` or `-with`** (any case) and
+  `commits.allowedAttributionTrailers` does not admit it — Hatsu's own guard's
+  rule, which catches a harness stamp on no list (`Made-with: Cursor`). This
+  rule binds with **no** `nen/workflow.json` too, where the allow-list is
+  empty; it is the only one that does;
+- the **message itself** carried it and the policy refuses it — possible only
+  where git reads a trailer nen's stricter shape check did not (a
+  `Key:value` line with no space). It is worded as *carried by the message*,
+  never *added by a hook*, and the `-by`/`-with` rule is not applied to it.
+
+Every such key is named in `injected[]` and on stderr with its source and
+rule, and the verb exits **3**. The commit is **left in place — never
+amended**; the line names the way back, **parent-aware**, with the change kept
+staged: `git reset --soft HEAD~1` — or, when the written commit is the
+repository's **root** commit and there is no `HEAD~1`, `git update-ref -d
+HEAD` on a branch (the branch is unborn again, the index untouched) and `git
+checkout --orphan <branch>` on a detached HEAD, asked of `git symbolic-ref -q
+HEAD`. A key a hook added that nothing refuses (the repository's own
+`Hatsu-Agent`, Gerrit's `Change-Id`) is a `nen: note:` line and the exit is
+unchanged.
+
+A read-back git cannot answer is exit **1**: the commit exists, and the check
+was **not** performed — never rendered as `injected: []`.
+
+**Exit codes** — `0` committed, nothing refused added; `1` a broken config, a
+refused proof, an empty index, a failed `git commit` or read-back; `2` the
+message or a `--trailer` failing the shape; **`3` committed, and a hook
+injected a trailer the policy refuses**.
+
 **`--json`** — `nen.commit.write/v0.1`: `{ contract, sha, subject, trailers:
-[{ key, value }], dryRun }`. `sha` is `null` on a dry run; `trailers` is every
-trailer the committed message carries, the file's own first.
+[{ key, value }], injected: [key, ...], dryRun }`. `sha` is `null` on a dry
+run. On a real write `trailers` is **read back from the written commit**, so a
+trailer a hook added is in it; on a dry run it is the composed message's, the
+file's own first. `injected` is the keys above (`[]` when the read-back found
+none) and **`null` on a dry run** — nothing was written, so nothing was
+checked.
 
 **Example**
 
