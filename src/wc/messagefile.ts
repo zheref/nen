@@ -20,7 +20,7 @@
 // was MEANT as trailers, it only recognizes one that unambiguously is.
 
 import { COMMIT_TYPES, validateCommitMessage, type CommitMessageInput, type CommitType, type Trailer } from "../commit/format.js";
-import { attributionRefusalMessages, loadWorkflow } from "../schema/workflow.js";
+import { attributionRefusalMessages, loadWorkflow, type LoadedWorkflow } from "../schema/workflow.js";
 
 /**
  * `type(scope)!: subject` -- Conventional Commits' own header grammar.
@@ -140,13 +140,17 @@ export function parseCommitMessageFile(raw: string): ParseResult {
  * present and malformed, exactly as ../commit/command.ts's own policy read
  * does: a message shaped under a policy nen could not read is a message
  * nobody actually checked, which is worse than refusing outright.
+ *
+ * `policy`, when given, is the one nen/workflow.json the caller ALREADY
+ * loaded (`wc squash` loads it once, before anything else; zheref/nen#273,
+ * hanten N8) and is used instead of a second read -- which then cannot throw.
  */
-export function messageFileRefusals(root: string, raw: string): readonly string[] {
+export function messageFileRefusals(root: string, raw: string, policy?: LoadedWorkflow): readonly string[] {
   const parsed = parseCommitMessageFile(raw);
   if (!parsed.ok) return parsed.reasons;
   const refusals: string[] = [...validateCommitMessage(parsed.value.input)];
   if (parsed.value.input.trailers.length > 0) {
-    const loaded = loadWorkflow(root); // throws SchemaError on a malformed file
+    const loaded = policy ?? loadWorkflow(root); // throws SchemaError on a malformed file
     refusals.push(
       ...attributionRefusalMessages(
         loaded,

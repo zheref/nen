@@ -17,7 +17,8 @@ import {
 } from "../cli/command.js";
 import { readTextFile } from "../cli/inputs.js";
 import { SchemaError } from "../schema/errors.js";
-import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
+import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
+import { addedNote, admittedAdditions, injectedMessage, readBack, sentTrailers } from "../commit/readback.js";
 import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } from "./catchup.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 import { messageFileRefusals } from "./messagefile.js";
@@ -115,9 +116,28 @@ MECHANISM: 'git reset --soft <merge-base>' then 'git commit -F
 refusal above has passed. Never touches a remote except the read-only fetch
 the upstream check above makes, never pushes, never force-anything.
 
+THEN THE FOLDED COMMIT IS READ BACK (zheref/nen#273), exactly as 'nen
+commit write' reads its own: the message file through 'git interpret-trailers
+--parse --unfold --no-divider' before the reset, the folded commit through 'git cat-file
+commit <sha>' and the same parser after. An added key the policy refuses, or
+one ending in -by or -with that commits.allowedAttributionTrailers does not
+admit (with no ${WORKFLOW_FILE} too), and a refused key the message itself
+carried, are INJECTED -- exit 3, every key named with its source and rule, the
+commit LEFT IN PLACE, never amended ('git reset --soft ORIG_HEAD' restores the
+unsquashed commits). An added key nothing refuses is a 'note:' line, exit
+unchanged. ${WORKFLOW_FILE} is therefore loaded ONCE, before the message is
+judged and before anything moves, on every squash: a malformed one is exit 1
+even with --base and no trailer.
+
+Exits: 0 squashed, dry run, or nothing to squash; 1 a git failure or a
+policy nen cannot read; 2 every refusal above; 3 squashed, and a hook
+injected a refused trailer.
+
 --json's contract is '${SQUASH_CONTRACT}': { contract, onto, mergeBase,
-folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...] }. folded is
-oldest-first; newSha is null for a dry run and for 'nothing to squash'.
+folded: [sha, ...], newSha, dryRun, base, baseRefs: [ref, ...], injected:
+[key, ...] }. folded is oldest-first; newSha is null for a dry run and for
+'nothing to squash'; injected is null whenever nothing was written (not
+checked, never []).
 baseRefs are the refs the base check ran against; EMPTY means the check was
 NOT performed (neither ref resolves, or nothing to squash), never that it
 passed. Text output is one line per folded commit (sha and subject), a line
@@ -301,6 +321,7 @@ function squashJson(
   dryRun: boolean,
   base: string,
   baseRefs: readonly string[],
+  injected: readonly string[] | null = null,
 ): Readonly<Record<string, unknown>> {
   return {
     contract: SQUASH_CONTRACT,
@@ -311,6 +332,10 @@ function squashJson(
     dryRun,
     base,
     baseRefs,
+    // zheref/nen#273: keys a hook added to the written commit that the policy
+    // refuses. null when nothing was written (a dry run, nothing to squash) --
+    // not checked, never rendered as [].
+    injected,
   };
 }
 
@@ -354,20 +379,25 @@ function squash(context: CommandContext): number {
     root,
     "It is the message the folded commit will carry -- a squash reads no other source for it.",
   );
-  let shapeRefusals: readonly string[];
+  // THE POLICY, LOADED ONCE, BEFORE THE MESSAGE IS JUDGED AND BEFORE
+  // ANYTHING MOVES (zheref/nen#273; hanten N8). The message's trailers are
+  // judged under it, `branch.base` is read from it below, and the written
+  // commit is read back against it after the fold -- so a policy nen cannot
+  // read stops the squash HERE, at exit 1 (the invocation was correct, the
+  // repository's own file is not), even with --base and no trailer: after the
+  // reset it would be a check that could not run over a commit that already
+  // exists.
+  let policy: LoadedWorkflow;
   try {
-    shapeRefusals = messageFileRefusals(root, messageText);
+    policy = loadWorkflow(root);
   } catch (error) {
-    // A POLICY THAT WILL NOT LOAD IS EXIT 1, NOT 2, exactly as ../commit/
-    // command.ts's own trailer-policy read: the invocation was correct, the
-    // repository's own file is not, and a message shaped under a policy nen
-    // could not read is a message nobody actually checked.
     if (!(error instanceof SchemaError)) throw error;
     context.io.err(
-      `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry, and nen will not squash under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`,
+      `nen: ${error.message}. This repository's ${WORKFLOW_FILE} states which attribution trailers a commit may carry and names the base whose published commits a squash never folds, and nen will not squash under a policy it could not read. Run 'nen schema check' for the whole file's verdict.`,
     );
     return 1;
   }
+  const shapeRefusals = messageFileRefusals(root, messageText, policy);
   if (shapeRefusals.length > 0) {
     throw new VerbUsageError(
       [
@@ -392,19 +422,10 @@ function squash(context: CommandContext): number {
     if (refused !== null) throw new VerbUsageError(refused);
     base = { name: baseFlag, source: "--base" };
   } else {
-    try {
-      const loaded = loadWorkflow(root);
-      base = {
-        name: loaded.workflow.branch.base,
-        source: loaded.present ? `${WORKFLOW_FILE}'s branch.base` : `branch.base's default -- no ${WORKFLOW_FILE}`,
-      };
-    } catch (error) {
-      if (!(error instanceof SchemaError)) throw error;
-      context.io.err(
-        `nen: ${error.message}. This repository's ${WORKFLOW_FILE} names the base whose published commits a squash never folds, and nen will not squash under a policy it could not read. Run 'nen schema check' for the whole file's verdict, or pass --base.`,
-      );
-      return 1;
-    }
+    base = {
+      name: policy.workflow.branch.base,
+      source: policy.present ? `${WORKFLOW_FILE}'s branch.base` : `branch.base's default -- no ${WORKFLOW_FILE}`,
+    };
     // THE POLICY'S NAME IS HELD TO GIT'S RULE TOO. The schema admits names git
     // rejects as branches ('main/', 'foo//bar'); both refs built from one
     // would answer "absent" and the base guard would silently not run. Exit 1,
@@ -455,15 +476,33 @@ function squash(context: CommandContext): number {
     return 0;
   }
 
+  // THE SENT TRAILERS, BY GIT'S OWN PARSER (zheref/nen#273, hanten N2), asked
+  // before the reset: a git that cannot parse stops the squash with nothing
+  // moved, and the read-back below compares like with like.
+  const sent = sentTrailers(context.seams, root, messageText);
   const newSha = performSquash(context.seams, root, plan.mergeBase, messageFilePath);
+  // THE READ-BACK (../commit/readback.ts): the trailers the folded commit
+  // actually carries, against the ones the message file did and the policy
+  // loaded above. Never an amend.
+  const back = readBack(context.seams, root, newSha, sent, policy);
+  const admitted = admittedAdditions(back);
+  if (admitted.length > 0) context.io.err(`nen: note: ${addedNote(newSha, admitted)}`);
   if (context.json) {
     context.io.out(
-      JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false, base.name, plan.baseRefs), null, 2),
+      JSON.stringify(squashJson(plan.onto, plan.mergeBase, plan.folded, newSha, false, base.name, plan.baseRefs, back.injected), null, 2),
     );
   } else {
     printFoldedCommits(context, plan.folded);
     context.io.out(baseCheckLine(base, plan.baseRefs));
     context.io.out(`squashed into ${newSha}`);
+  }
+  // EXIT 3: the fold happened, and a hook put a refused trailer on it. Not 1
+  // (nothing failed to run) and not 2 (no refusal before the write fired).
+  if (back.findings.length > 0) {
+    context.io.err(
+      `nen wc: ${injectedMessage(newSha, back.findings, policy, "'git reset --soft ORIG_HEAD' restores the unsquashed commits; the fold changed no file")}`,
+    );
+    return 3;
   }
   return 0;
 }
