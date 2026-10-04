@@ -72,7 +72,7 @@ describe("nen direct registry", () => {
     expect(text).toMatch(/claude-code +Claude Code +models\.claude/);
     expect(text).toContain("live lookup:");
     expect(text).toMatch(/openai +cli: codex debug models/);
-    expect(result.out.at(-1)).toBe("10 alias(es), 4 surface(s), 39 routed job(s), 167 cell(s)");
+    expect(result.out.at(-1)).toBe("10 alias(es), 4 surface(s), 39 routed job(s), 204 cell(s)");
   });
 
   it("--json: contract, registry, snapshot, aliases, surfaces, liveLookup and counts", async () => {
@@ -83,7 +83,7 @@ describe("nen direct registry", () => {
     expect(document["contract"]).toBe("nen.direct.registry/v0.1");
     expect(document["registry"]).toBe(REAL_REGISTRY);
     expect(document["snapshot"]["asOf"]).toBe("2026-10-04");
-    expect(document["counts"]).toEqual({ aliases: 10, routingJobs: 39, routingCells: 167 });
+    expect(document["counts"]).toEqual({ aliases: 10, routingJobs: 39, routingCells: 204 });
   });
 
   it("resolves a relative --registry against --repo, not the process directory", async () => {

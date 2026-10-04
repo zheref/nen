@@ -1,11 +1,12 @@
 {
   "$schema": "hatsu.direct-registry/v1",
   "contract": "hatsu-direct-registry",
-  "$comment": "The model-selection registry hatsu:direct resolves through `nen direct resolve --registry <this path>` (the maintainer's rulings of 2026-10-04, docs/ROSTER.md section Rulings of 2026-10-04 -- classify and direct). It separates STABLE ALIASES (SEMANTIC_FRONTIER, EXECUTION_FRONTIER, ...) from REPLACEABLE VERSIONS, as the source document does: every routing cell names an alias and a surface, never a model version. An alias resolves to a provider, a model FAMILY, the Hatsu surface it runs on and the TIER of nen/workflow.json -> models.<surface> that surface spells it as (deep -> opus on Claude Code, frontier -> astra on Codex, ...), so the concrete alias the maintainer types comes from the consumer's own models block and the version is never in this file. The `snapshot` block is the document's dated version table and is the stated FALLBACK only: the latest recommended version is read LIVE at run time through `liveLookup` (a surface CLI where one lists models, the provider's model page fetched and quoted) and reported with its source; where the lookup fails the snapshot is quoted with its date. The actionable winner and runner-up always name one of Hatsu's four surfaces (claude-code, codex, cursor, antigravity); native IDE integrations (with the providers they offer), the Cursor IDE and GitHub Copilot appear as INTERACTIVE equivalents where the document names them. `routing` is keyed job -> domain -> cells, generated from the document's five tables: `*` is the cell every language shares and a language key appears only where the document differs; `prose` reads `*`. `effort` is the deterministic rule for the recommended effort level (low | medium | high | max) from the taxonomy's job weights, the job and language counts, the domain and the repository's gate. Nothing here is a fact about a machine: `nen direct resolve` reads this file and the consumer's nen/workflow.json and hard-codes none of it.",
+  "$comment": "The model-selection registry hatsu:direct resolves through `nen direct resolve --registry <this path>` (TRANSCRIBED from the source document's five tables by a one-off generator that is not shipped; source.documentSha256 identifies the document; `nen direct registry` validates the result) (the maintainer's rulings of 2026-10-04, docs/ROSTER.md section Rulings of 2026-10-04 -- classify and direct). It separates STABLE ALIASES (SEMANTIC_FRONTIER, EXECUTION_FRONTIER, ...) from REPLACEABLE VERSIONS, as the source document does: every routing cell names an alias and a surface, never a model version. An alias resolves to a provider, a model FAMILY, the Hatsu surface it runs on and the TIER of nen/workflow.json -> models.<surface> that surface spells it as (deep -> opus on Claude Code, frontier -> astra on Codex, ...), so the concrete alias the maintainer types comes from the consumer's own models block and the version is never in this file. The `snapshot` block is the document's dated version table and is the stated FALLBACK only: the latest recommended version is read LIVE at run time through `liveLookup` (a surface CLI where one lists models, the provider's model page fetched and quoted) and reported with its source; where the lookup fails the snapshot is quoted with its date. The actionable winner and runner-up always name one of Hatsu's four surfaces (claude-code, codex, cursor, antigravity); native IDE integrations (with the providers they offer), the Cursor IDE and GitHub Copilot appear as INTERACTIVE equivalents where the document names them. `routing` is keyed job -> domain -> cells, transcribed from the document's five tables (95 job x domain routes, 167 cells with their language overrides): `*` is the cell every language shares and a language key appears only where the document differs; `prose` reads `*`. `effort` is the deterministic rule for the recommended effort level (low | medium | high | max) from the taxonomy's job weights, the job and language counts, the domain and the repository's gate. Nothing here is a fact about a machine: `nen direct resolve` reads this file and the consumer's nen/workflow.json and hard-codes none of it.",
   "source": {
     "document": "Version-Decoupled Model Selection Matrix for Engineering Workflows, registry snapshot 2026-10-04",
     "rulings": "docs/ROSTER.md section Rulings of 2026-10-04 -- classify and direct",
     "taxonomy": "contracts/classify.taxonomy.json",
+    "documentSha256": "baf720e3ffac80dc84640751ed3e0567fe61940bd1a505688a17f49c17937a93",
     "readers": [
       "hatsu:direct",
       "hatsu:build",
@@ -898,6 +899,18 @@
             "winner": {
               "alias": "SEMANTIC_FRONTIER",
               "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
               "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
             },
             "runnerUp": {
@@ -906,11 +919,23 @@
               "interactive": null
             }
           },
-          "typescript": {
+          "kotlin": {
             "winner": {
               "alias": "SEMANTIC_FRONTIER",
               "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
               "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
             },
             "runnerUp": {
               "alias": "EXECUTION_FRONTIER",
@@ -1769,6 +1794,54 @@
             "winner": {
               "alias": "SEMANTIC_FRONTIER",
               "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
               "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
             },
             "runnerUp": {
@@ -1787,6 +1860,54 @@
         "alsoPhases": [],
         "cells": {
           "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
               "surface": "claude-code",
@@ -1809,6 +1930,54 @@
             "winner": {
               "alias": "BALANCED_AUTHOR",
               "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
               "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
             },
             "runnerUp": {
@@ -1825,6 +1994,54 @@
         "alsoPhases": [],
         "cells": {
           "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
               "surface": "claude-code",
@@ -2089,6 +2306,54 @@
             "winner": {
               "alias": "EXECUTION_FRONTIER",
               "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
               "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
             },
             "runnerUp": {
@@ -2105,6 +2370,54 @@
         "alsoPhases": [],
         "cells": {
           "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
             "winner": {
               "alias": "EXECUTION_FRONTIER",
               "surface": "codex",
@@ -2143,6 +2456,54 @@
         "alsoPhases": [],
         "cells": {
           "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
             "winner": {
               "alias": "EXECUTION_FRONTIER",
               "surface": "codex",
@@ -2620,6 +2981,30 @@
             "winner": {
               "alias": "SEMANTIC_FRONTIER",
               "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
               "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
             },
             "runnerUp": {
@@ -2638,6 +3023,18 @@
               "alias": "SEMANTIC_FRONTIER",
               "surface": "claude-code",
               "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
             }
           }
         }
@@ -2669,6 +3066,54 @@
         "alsoPhases": [],
         "cells": {
           "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
               "surface": "claude-code",

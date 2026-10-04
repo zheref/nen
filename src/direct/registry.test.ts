@@ -43,9 +43,9 @@ describe("parseDirectRegistry -- the real file", () => {
     expect(Object.entries(registry.aliases).filter(([, alias]): boolean => alias.reviewer)).toHaveLength(2);
   });
 
-  it("counts 39 routed jobs and 167 cells, every entry carrying the shared cell", () => {
+  it("counts 39 routed jobs and 204 cells, every entry carrying the shared cell", () => {
     expect(Object.keys(registry.routing)).toHaveLength(39);
-    expect(countRoutingCells(registry)).toBe(167);
+    expect(countRoutingCells(registry)).toBe(204);
     for (const domains of Object.values(registry.routing)) {
       for (const entry of Object.values(domains)) expect(entry.cells[SHARED_CELL]).toBeDefined();
     }
