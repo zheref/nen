@@ -1402,24 +1402,80 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/'pr merge <CODE>#<n> --delivery \.\.\.'/);
   });
 
-  it("--delivery refuses a pull request into the default branch at exit 2, naming the ruling", async () => {
-    const root = unitRepo();
-    const result = await capture(
-      ["pr", "merge", "zheref/example#9", "--delivery", "--run"],
-      root,
-      new ScriptedSeams([
-        { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } },
-        {
-          match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,body,isCrossRepository,author,state",
-          result: { code: 0, stdout: JSON.stringify({ headRefOid: "cafebabe", baseRefOid: "b", baseRefName: "main", body: "", isCrossRepository: false, author: { login: "someone" }, state: "OPEN" }) },
+  /** The reads a --delivery run makes before it refuses a PR into the default branch. */
+  function trunkRefusalSeams(): ScriptedSeams {
+    const workflow = JSON.stringify({ content: Buffer.from(JSON.stringify({ branch: { base: "main" } })).toString("base64"), encoding: "base64" });
+    const baseOid = "ba5e".repeat(10);
+    return new ScriptedSeams([
+      { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } },
+      {
+        match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state",
+        result: {
+          code: 0,
+          stdout: JSON.stringify({ headRefOid: "cafebabe", baseRefOid: baseOid, baseRefName: "main", headRefName: "opus/kurapika/x", body: "", isCrossRepository: false, author: { login: "someone" }, state: "OPEN" }),
         },
-        { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: "main" } }) } },
-        { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=b", result: { code: 1, stderr: "HTTP 404: Not Found" } },
-      ]),
-    );
+      },
+      { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: "main" } }) } },
+      { match: `gh api repos/zheref/example/contents/nen/workflow.json?ref=${baseOid}`, result: { code: 0, stdout: workflow } },
+      { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=main", result: { code: 0, stdout: workflow } },
+      { match: "gh api repos/zheref/example/branches/main", result: { code: 0, stdout: JSON.stringify({ protected: true }) } },
+      { match: "gh api repos/zheref/example/rules/branches/main", result: { code: 0, stdout: "[]" } },
+    ]);
+  }
+
+  it("--delivery refuses a pull request into the default branch at exit 2 -- refused by ruling, on stdout, not a usage error", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE, "--run"], unitRepo(), trunkRefusalSeams());
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/merge-authority ruling of 2026-09-30/);
+    expect(result.err).toEqual([]);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/^base: 'main' is the repository's default branch/m);
+    expect(out).toMatch(/nen pr merge: refused by ruling -- not merged \(exit 2\)\. Per the maintainer's merge-authority ruling of 2026-09-30/);
   });
+
+  it("--delivery --json emits its contract on a refusal too, baseOk false (N6)", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runFamily(
+      prCommand,
+      ["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE],
+      unitRepo(),
+      true,
+      { out: (line): void => void out.push(line), err: (line): void => void err.push(line) },
+      trunkRefusalSeams(),
+    );
+    expect(code).toBe(2);
+    const doc = JSON.parse(out.join("\n")) as { contract: string; refused: boolean; baseOk: boolean; ok: boolean; mergeArgv: unknown; base: string };
+    expect(doc.contract).toBe("nen.pr.merge-delivery/v0.1");
+    expect(doc.refused).toBe(true);
+    expect(doc.baseOk).toBe(false);
+    expect(doc.ok).toBe(false);
+    expect(doc.mergeArgv).toBeNull();
+    expect(doc.base).toBe("main");
+  });
+
+  it("--delivery requires --requirements-from (AC1, N5)", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--delivery"], unitRepo(), new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/requirements-from/);
+  });
+
+  // N11: 'pr ready''s own flags are refused on merge, before any gh call --
+  // an empty ScriptedSeams throws on the first call, so exit 2 proves zero.
+  for (const extra of [
+    ["--exclude-check", "ci / lint"],
+    ["--gates", "g.json"],
+    ["--reviewers", "a"],
+    ["--approvers", "a"],
+    ["--round-policy", "strict"],
+    ["--token-env", "TOKEN"],
+    ["--exclude-run", "1"],
+  ]) {
+    it(`${extra[0]} is refused on 'pr merge' (exit 2, zero gh calls)`, async () => {
+      const result = await capture(["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE, ...extra], unitRepo(), new ScriptedSeams([]));
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(new RegExp(`${extra[0]} is only read by 'pr ready'`));
+    });
+  }
 
   it("--require-head is refused with --release-unit", async () => {
     const result = await capture(["pr", "merge", "zheref/example#9", "--release-unit", "--require-head", "cafebabe", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
@@ -1435,7 +1491,8 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
 
   it("'nen pr --help' carries the --delivery usage line and its section", async () => {
     const help = (await capture(["pr", "--help"], null)).out.join("\n");
-    expect(help).toMatch(/nen pr merge <n\|owner\/name#n\|CODE#n> --delivery --repo <path> \[--require-head <sha>\]/);
+    expect(help).toMatch(/nen pr merge <n\|owner\/name#n\|CODE#n> --delivery --requirements-from <path> --repo <path> \[--require-head <sha>\]/);
+    expect(help).toMatch(/7 MERGED WITHOUT AUTHORITY/);
     expect(help).toMatch(/merge --delivery \(zheref\/nen#286\):/);
     expect(help).toMatch(/nen\.pr\.merge-delivery\/v0\.1/);
   });

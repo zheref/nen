@@ -745,6 +745,8 @@ export interface MergeExecution {
   readonly ran: boolean;
   readonly spawnFailed: boolean;
   readonly state: string | null;
+  /** The post-merge re-read as GitHub answered it (every field asked for), or `null` when there was none. */
+  readonly reread: Readonly<Record<string, unknown>> | null;
   readonly lines: readonly string[];
 }
 
@@ -754,19 +756,25 @@ export interface MergeExecution {
  * endpoint, so the refused/not-runnable/queued/merged distinctions cannot
  * drift between the two.
  */
-export function executeMerge(seams: Seams, target: Target, prNumber: number, mergeArgv: readonly string[]): MergeExecution {
+export function executeMerge(
+  seams: Seams,
+  target: Target,
+  prNumber: number,
+  mergeArgv: readonly string[],
+  rereadFields: string = "state,mergedAt",
+): MergeExecution {
   const lines: string[] = [];
   const result = seams.run(GH, mergeArgv);
   if (result.spawnFailed) {
     // F8(b): 'gh' could not be RUN at all -- distinct from gh running and
     // refusing (EXIT_GH_REFUSED below).
     lines.push(`nen pr merge: gh could not be run -- ${redact(result.stderr)}`);
-    return { ok: false, ran: false, spawnFailed: true, state: null, lines };
+    return { ok: false, ran: false, spawnFailed: true, state: null, reread: null, lines };
   }
   if (result.code !== 0) {
     lines.push(`nen pr merge: gh refused -- ${result.stderr.trim() === "" ? `exit ${result.code}` : redact(result.stderr.trim())}`);
     lines.push(`the exact command for a human to run once the refusal is resolved: gh ${mergeArgv.join(" ")}`);
-    return { ok: false, ran: false, spawnFailed: false, state: null, lines };
+    return { ok: false, ran: false, spawnFailed: false, state: null, reread: null, lines };
   }
 
   // Feitan FEI-5: `gh pr merge` exiting 0 is not itself proof the pull
@@ -774,17 +782,14 @@ export function executeMerge(seams: Seams, target: Target, prNumber: number, mer
   // and exit 0 immediately, before the merge itself happens. The pull
   // request's own state is re-read, and only `MERGED` is reported as merged.
   let state: string | null = null;
+  let reread: Readonly<Record<string, unknown>>;
   try {
-    const reread = mustJson<{ readonly state?: string; readonly mergedAt?: string | null }>(
-      seams,
-      GH,
-      ["pr", "view", String(prNumber), "--repo", target.slug, "--json", "state,mergedAt"],
-    );
-    state = reread.state ?? null;
+    reread = mustJson<Readonly<Record<string, unknown>>>(seams, GH, ["pr", "view", String(prNumber), "--repo", target.slug, "--json", rereadFields]);
+    state = typeof reread["state"] === "string" ? reread["state"] : null;
   } catch (error) {
     if (error instanceof ToolError) {
       lines.push(`nen pr merge: gh accepted the merge, but its outcome could not be confirmed (${redact(error.message)}).`);
-      return { ok: true, ran: true, spawnFailed: false, state: null, lines };
+      return { ok: true, ran: true, spawnFailed: false, state: null, reread: null, lines };
     }
     throw error;
   }
@@ -794,5 +799,5 @@ export function executeMerge(seams: Seams, target: Target, prNumber: number, mer
   } else {
     lines.push(`queued (auto-merge or merge queue): gh accepted 'gh ${mergeArgv.join(" ")}', but the pull request's state is '${state ?? "(unknown)"}', not MERGED yet.`);
   }
-  return { ok: true, ran: true, spawnFailed: false, state, lines };
+  return { ok: true, ran: true, spawnFailed: false, state, reread, lines };
 }

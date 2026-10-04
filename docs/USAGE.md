@@ -294,7 +294,7 @@ verb it invoked. The complete list:
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
-| [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
+| [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
@@ -713,7 +713,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
-| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json, nen/repos.json (a `CODE#n` ref) | yes |
+| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -1004,7 +1004,7 @@ commit. Three things make that visible:
   hold as the head. The code collides with nothing else this CLI or its
   bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s,
   `commit write`'s and `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and
-  `shu coverage`'s, `9` is `pr request-reviews`', and `3`–`7` are the
+  `shu coverage`'s, `7` is `pr merge --delivery`'s, `9` is `pr request-reviews`', and `3`–`7` are the
   bootstrap script's). Under `--json` the mismatch
   prints its own document with its own contract,
   `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
@@ -2338,8 +2338,11 @@ would run: gh pr create --repo zheref/nen --base main --head feature/x --title "
 
 ### `nen pr merge`
 
-THE ONE BOUNDED MERGE THIS BINARY PERFORMS — never a general-purpose merge.
-The second of the maintainer's 2026-09-26 "make it deterministic" trio: it
+THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms — a release
+unit (`--release-unit`, this section) and a run's own delivery into a
+non-main base (`--delivery`, [below](#nen-pr-merge-delivery)) — never a
+general-purpose merge: neither flag, or both, is exit 2. `--release-unit`,
+the second of the maintainer's 2026-09-26 "make it deterministic" trio,
 evaluates, IN ORDER, five gates, EVERY ONE regardless of an earlier
 failure, and every verdict line is printed VERBATIM, the same sentence the
 standalone verb would print:
@@ -2387,7 +2390,7 @@ nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> -
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `<n\|owner/name#n\|CODE#n>` | **yes** | the pull request to merge | positional; a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` and `CODE#n` must name the SAME repository `--repo`'s `origin` does, or exit 2 — see *The ref* below |
-| `--release-unit` | **yes** | says explicitly that this is a bounded release-unit merge | omitted: exit 2, "nen pr merge only merges a release unit" — there is no general-purpose merge here |
+| `--release-unit` | **yes** (or `--delivery`) | says explicitly that this is a bounded release-unit merge | neither form: exit 2, "nen pr merge only merges a release unit (--release-unit) or a run's own delivery pull request into a non-main base (--delivery)"; both: exit 2 — there is no general-purpose merge here |
 | `--requirements-from <path>` | **yes** | the same `{ name, pattern }` JSON array `pr body-check` takes | validated (exists, non-empty, parseable) BEFORE any `gh` call; checked against the pull request's CURRENT body, read live over `gh` — never a `--body-from` file, which could have drifted from what GitHub will merge |
 | `--repo <path>` | **yes** | the checkout whose `origin` remote and `nen/gates.json` this merge is judged against | required, exit 2 if omitted; `release.unitPaths` itself is read from the PULL REQUEST'S BASE, not this checkout |
 | `--run` | no | execute the merge once every gate passes | omit to see the plan only |
@@ -2438,7 +2441,11 @@ GitHub's own `MERGED` state is reported as `merged:`; anything else prints
 `queued (auto-merge or merge queue):`, naming the state read back.
 
 **Exit codes:** 0 merged, or a passing plan printed without `--run`; 1 at
-least one gate did not pass; 2 usage (missing `--release-unit`, a bad ref,
+least one gate did not pass; 2 usage (neither or both of `--release-unit`
+and `--delivery`, `--require-head` (read by `--delivery` only), a `pr
+ready`-only flag (`--gates`, `--reviewers`, `--approvers`, `--round-policy`,
+`--token-env`, `--exclude-run`, `--exclude-check`, `--gh-repo`, `--explain`
+— refused before any `gh` call), a bad ref,
 an unknown product code or an unreadable `nen/repos.json`,
 missing/empty/unparseable `--requirements-from`, `--repo`'s origin naming a
 different repository than the ref or its code resolves to, or an unknown
@@ -2471,6 +2478,87 @@ whose pr: authored by the viewer ('someone'), same repository
 plan only (pass --run to execute): gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe
 ```
 (from `src/pr/mergeunit.test.ts`'s scripted fixture)
+
+<a id="nen-pr-merge-delivery"></a>
+
+#### The `--delivery` form
+
+A RUN'S OWN PULL REQUEST INTO A NON-MAIN, UNPROTECTED BASE, and nothing
+wider ([zheref/nen#286](https://github.com/zheref/nen/issues/286)). Narrowed by
+the maintainer's ruling of 2026-10-03 ("Narrow to non-main bases"), under the
+merge-authority ruling of 2026-09-30: a merge into the trunk is the
+maintainer's, and a run merges only into its own non-main integration branch.
+
+**Usage**
+
+```text
+nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `<n\|owner/name#n\|CODE#n>` | **yes** | the pull request to merge | the same grammar, and the same "must name `--repo`'s origin" rule, as `--release-unit` |
+| `--delivery` | **yes** | says explicitly that this is a run's own delivery merge | exclusive with `--release-unit` (exit 2) |
+| `--requirements-from <path>` | **yes** | the `pr body-check` requirements | validated before any `gh` call, exactly as `--release-unit` |
+| `--repo <path>` | **yes** | the checkout whose `origin` names the repository and whose `nen/workflow.json` `branch.base` is one protected name | — |
+| `--require-head <sha>` | no | pin the commit (7–40 hex digits) | passed to `pr ready`, which gives no verdict on any other head; restated on the head-pin gate |
+| `--run` | no | execute the merge once every gate passes | omit to see the plan only |
+| `--json` | no | machine-readable result | emitted on a refusal by ruling too |
+
+**Refused by ruling — exit 2, before any other gate.** The base (a `refs/heads/`
+prefix stripped) is compared with every **protected name**: GitHub's default
+branch; `branch.base` in this checkout's `nen/workflow.json` (`main` when
+absent); `branch.base` in `nen/workflow.json` **at the pull request's base
+commit** (so a head that edits `branch.base` cannot dodge it) and **at the
+default branch**. It is also refused when GitHub reports the base `protected`
+(`gh api repos/{slug}/branches/{base}`), when a ruleset targets it (`gh api
+repos/{slug}/rules/branches/{base}` non-empty), or when an open pull request
+whose head is the base aims at a protected name with auto-merge enabled
+(`gh pr list --head <base> --state open`). The transcript and the `--json`
+document are still emitted (`refused: true`, `baseOk: false`), the last line
+reads `nen pr merge: refused by ruling -- not merged (exit 2)` naming the
+ruling, and the maintainer is handed `nen pr ready <n> --gh-repo <slug>
+--require-head <head>` **before** `gh pr merge ... --match-head-commit
+<head>`, because `pr ready` was not evaluated. A usage error writes only
+stderr; a refusal by ruling writes its transcript on stdout.
+
+**Gates, in order, every one evaluated:**
+
+1. **base** — fails (exit 1, nothing merged) when ANY read above fails or is
+   empty: the pull request, its `baseRefName`, a `baseRefOid` that is not a
+   SHA, the default branch, either remote `nen/workflow.json` (an absent file
+   included — the contents route answers both alike), the protection or
+   rules reads, or the auto-merge chain. Unknown is never a pass.
+2. **`pr ready`** — in-process, `--require-head` passed through.
+3. **head pin** — as `--release-unit`'s.
+4. **`pr body-check`** — as `--release-unit`'s.
+5. **whose pr** — author is the viewer, never cross-repository, **and** the
+   head ref is in the run form of `branch.template` read at the base commit:
+   every `{token}` is one non-empty segment, so `{model}/{persona}/{descriptor}`
+   is three.
+
+**Under `--run`**, the base is re-read immediately before `gh pr merge` (which
+pins the head, not the base) and a `base (re-read)` gate is appended: a
+retarget onto a protected name is refused by ruling (exit 2); a failed read,
+an empty name or any other retarget fails the gate (exit 1, `ran: false`,
+`mergeArgv: null`). After a merge the state re-read also asks for
+`baseRefName`: merged into a protected name, into any base but the one gated,
+or into one GitHub will not name is **exit 7 — merged without authority**,
+printed as `MERGED INTO '<base>' WITHOUT AUTHORITY ... Tell the maintainer
+now`. The window between the pre-merge re-read and GitHub's own merge is the
+one nothing here can close; exit 7 is what makes it loud.
+
+**Exit codes:** 0 merged, or a passing plan without `--run`; 1 a gate did not
+pass; 2 usage, **or refused by ruling**; 5 `gh` refused the merge; 6 `gh`
+could not be started; 7 merged without authority.
+
+**`--json`** — `nen.pr.merge-delivery/v0.1`: `{ contract, target, pr, base,
+baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
+defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk, wholeOk,
+ok, ran, spawnFailed, judgedHead, requiredHead, state, mergedBase,
+outsideAuthority, mergeArgv, gates: [{ name, ok, lines }] }`.
 
 <a id="family-gate"></a>
 

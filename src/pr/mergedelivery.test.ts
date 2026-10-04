@@ -1,7 +1,8 @@
 // src/pr/mergedelivery.test.ts -- `nen pr merge <ref> --delivery`
-// (zheref/nen#286, narrowed by the maintainer's ruling of 2026-10-03): a run's
-// own pull request into a NON-MAIN base. The trunk is refused by
-// construction; every other gate is ./mergeunit.ts's.
+// (zheref/nen#286, narrowed by the maintainer's ruling of 2026-10-03, hardened
+// by hanten round 1 on NN#286): a run's own pull request into a NON-MAIN,
+// UNPROTECTED base. A protected name is refused by ruling (exit 2, document
+// still emitted); every base read that fails is "unknown" (exit 1).
 
 import { describe, expect, it } from "vitest";
 import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -13,10 +14,22 @@ import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import { MergeUnitUsageError } from "./mergeunit.js";
-import { MERGE_DELIVERY_CONTRACT, mergeDelivery } from "./mergedelivery.js";
+import {
+  deliveryExit,
+  EXIT_MERGED_OUTSIDE_AUTHORITY,
+  EXIT_REFUSED_BY_RULING,
+  MERGE_DELIVERY_CONTRACT,
+  mergeDelivery,
+  runBranchPattern,
+  stripHeads,
+  type MergeDeliveryReport,
+} from "./mergedelivery.js";
 
 const HEAD = "cafebabe";
+const BASE_OID = "ba5e".repeat(10);
 const INTEGRATION = "opus/kurapika/futon-integration";
+const RUN_HEAD = "opus/kurapika/the-change";
+const REQUIREMENTS = [{ name: "how to verify", pattern: "## How to verify" }];
 
 function tmpRoot(workflow: unknown = null): string {
   const dir = mkdtempSync(join(tmpdir(), "nen-merge-delivery-"));
@@ -34,9 +47,9 @@ function readySource(head: string = HEAD): PrStateSource {
       mergeable: "MERGEABLE",
       isDraft: false,
       headRefOid: head,
-      headRefName: "feature/x",
+      headRefName: RUN_HEAD,
       baseRefName: INTEGRATION,
-      baseRefOid: "basebase",
+      baseRefOid: BASE_OID,
       author: { login: "someone" },
       labels: [],
       reviewRequests: [],
@@ -80,15 +93,28 @@ const ORIGIN_CALL: ScriptedCall = {
   result: { code: 0, stdout: "https://github.com/zheref/example.git\n" },
 };
 
-function prOnceCall(overrides: Partial<{ headRefOid: string; baseRefName: string; body: string; author: string; isCrossRepository: boolean }> = {}): ScriptedCall {
+interface PrFields {
+  headRefOid: string;
+  baseRefOid: unknown;
+  baseRefName: unknown;
+  headRefName: unknown;
+  body: string;
+  author: string;
+  isCrossRepository: boolean;
+}
+
+const PR_VIEW = "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state";
+
+function prOnceCall(overrides: Partial<PrFields> = {}): ScriptedCall {
   return {
-    match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,body,isCrossRepository,author,state",
+    match: PR_VIEW,
     result: {
       code: 0,
       stdout: JSON.stringify({
         headRefOid: overrides.headRefOid ?? HEAD,
-        baseRefOid: "basebase",
-        baseRefName: overrides.baseRefName ?? INTEGRATION,
+        baseRefOid: "baseRefOid" in overrides ? overrides.baseRefOid : BASE_OID,
+        baseRefName: "baseRefName" in overrides ? overrides.baseRefName : INTEGRATION,
+        headRefName: "headRefName" in overrides ? overrides.headRefName : RUN_HEAD,
         body: overrides.body ?? "## How to verify\nrun it\n",
         isCrossRepository: overrides.isCrossRepository ?? false,
         author: { login: overrides.author ?? "someone" },
@@ -98,213 +124,414 @@ function prOnceCall(overrides: Partial<{ headRefOid: string; baseRefName: string
   };
 }
 
-function defaultBranchCall(name: string = "main"): ScriptedCall {
-  return { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name } }) } };
+function defaultBranchCall(name: string | null = "main"): ScriptedCall {
+  return {
+    match: "gh repo view zheref/example --json defaultBranchRef",
+    result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: name === null ? null : { name } }) },
+  };
 }
 
-/** `nen/workflow.json` at the PR's base commit ('basebase'); `null` body = the read fails. */
-function baseWorkflowCall(workflow: unknown = { branch: { base: "main" } }): ScriptedCall {
-  if (workflow === null) {
-    return { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=basebase", result: { code: 1, stderr: "HTTP 404: Not Found" } };
-  }
+/** `nen/workflow.json` at one ref; `null` = the read fails. */
+function workflowAt(ref: string, workflow: unknown = { branch: { base: "main" } }): ScriptedCall {
+  const match = `gh api repos/zheref/example/contents/nen/workflow.json?ref=${encodeURIComponent(ref)}`;
+  if (workflow === null) return { match, result: { code: 1, stderr: "HTTP 404: Not Found" } };
   const content = Buffer.from(JSON.stringify(workflow)).toString("base64");
-  return { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=basebase", result: { code: 0, stdout: JSON.stringify({ content, encoding: "base64" }) } };
+  return { match, result: { code: 0, stdout: JSON.stringify({ content, encoding: "base64" }) } };
+}
+
+function protectionCalls(base: string = INTEGRATION, isProtected: unknown = false, rules: unknown = []): ScriptedCall[] {
+  return [
+    { match: `gh api repos/zheref/example/branches/${base}`, result: { code: 0, stdout: JSON.stringify({ name: base, protected: isProtected }) } },
+    { match: `gh api repos/zheref/example/rules/branches/${base}`, result: { code: 0, stdout: JSON.stringify(rules) } },
+  ];
+}
+
+function chainMatch(base: string = INTEGRATION): string {
+  return `gh pr list --repo zheref/example --head ${base} --state open --json number,baseRefName,autoMergeRequest`;
+}
+
+function chainCall(base: string = INTEGRATION, entries: unknown = []): ScriptedCall {
+  return { match: chainMatch(base), result: { code: 0, stdout: JSON.stringify(entries) } };
 }
 
 const VIEWER_CALL: ScriptedCall = { match: "gh api user --jq .login", result: { code: 0, stdout: "someone\n" } };
 
-function baseRereadCall(base: string = INTEGRATION): ScriptedCall {
+function baseRereadCall(base: unknown = INTEGRATION): ScriptedCall {
   return { match: "gh pr view 9 --repo zheref/example --json baseRefName", result: { code: 0, stdout: JSON.stringify({ baseRefName: base }) } };
 }
 
-const MERGE_CALL: ScriptedCall = { match: "gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe", result: { code: 0, stdout: "" } };
-const STATE_CALL: ScriptedCall = {
-  match: "gh pr view 9 --repo zheref/example --json state,mergedAt",
-  result: { code: 0, stdout: JSON.stringify({ state: "MERGED", mergedAt: "2025-01-02T00:00:00Z" }) },
-};
+const MERGE_MATCH = "gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe";
+const MERGE_CALL: ScriptedCall = { match: MERGE_MATCH, result: { code: 0, stdout: "" } };
 
-function passingScript(): ScriptedCall[] {
-  return [ORIGIN_CALL, prOnceCall(), defaultBranchCall(), baseWorkflowCall(), VIEWER_CALL];
+function stateCall(baseRefName: unknown = INTEGRATION): ScriptedCall {
+  return {
+    match: "gh pr view 9 --repo zheref/example --json state,mergedAt,baseRefName",
+    result: { code: 0, stdout: JSON.stringify({ state: "MERGED", mergedAt: "2025-01-02T00:00:00Z", baseRefName }) },
+  };
+}
+
+type Slot = "pr" | "default" | "baseWorkflow" | "defaultWorkflow" | "chain" | "viewer";
+
+/** Every read a fully-passing plan makes, each replaceable (or droppable, with `null`) by name. */
+function script(overrides: Partial<Record<Slot, ScriptedCall | null>> & { protection?: ScriptedCall[] } = {}): ScriptedCall[] {
+  const pick = (slot: Slot, fallback: ScriptedCall): ScriptedCall[] => {
+    const value = overrides[slot];
+    if (value === null) return [];
+    return [value ?? fallback];
+  };
+  return [
+    ORIGIN_CALL,
+    ...pick("pr", prOnceCall()),
+    ...pick("default", defaultBranchCall()),
+    ...pick("baseWorkflow", workflowAt(BASE_OID)),
+    ...pick("defaultWorkflow", workflowAt("main")),
+    ...(overrides.protection ?? protectionCalls()),
+    ...pick("chain", chainCall()),
+    ...pick("viewer", VIEWER_CALL),
+  ];
 }
 
 async function run(
   root: string,
-  script: readonly ScriptedCall[],
+  calls: readonly ScriptedCall[],
   overrides: Partial<Parameters<typeof mergeDelivery>[0]> = {},
 ): ReturnType<typeof mergeDelivery> {
   return mergeDelivery({
     typedRef: "zheref/example#9",
     repoFlag: root,
-    requirements: null,
+    requirements: REQUIREMENTS,
     requireHead: null,
     run: false,
-    seams: new ScriptedSeams(script),
+    seams: new ScriptedSeams(calls),
     root,
     deps: readyDeps(readySource()),
     ...overrides,
   });
 }
 
-describe("mergeDelivery -- the trunk is refused by construction", () => {
-  it("refuses (usage, exit 2) a base that is the repository's default branch, naming the ruling and handing the command over", async () => {
-    const root = tmpRoot();
-    // No viewer call, no merge call: an unscripted call would throw, so the
-    // refusal provably lands before any other gate runs.
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "main" }), defaultBranchCall("main"), baseWorkflowCall()];
-    const error = await run(root, script).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(MergeUnitUsageError);
-    const message = (error as Error).message;
-    expect(message).toMatch(/its base 'main' is the repository's default branch \('main'\) and this checkout's nen\/workflow\.json branch\.base \('main'\) and the base commit's nen\/workflow\.json branch\.base \('main'\)/);
-    expect(message).toMatch(/merge-authority ruling of 2026-09-30/);
-    expect(message).toMatch(/gh pr merge 9 --repo zheref\/example --merge --match-head-commit cafebabe$/);
-  });
+/** The adapter's mapping, with ../pr/command.ts's shared code reproduced for the 0/1/5/6 half. */
+function exitOf(report: MergeDeliveryReport): number {
+  return deliveryExit(report, (r): number => (r.ok ? 0 : r.ran === false && r.mergeArgv !== null ? (r.spawnFailed ? 6 : 5) : 1));
+}
 
-  it("refuses a base equal to the configured branch.base even when GitHub's default branch differs", async () => {
-    const root = tmpRoot({ branch: { base: "trunk" } });
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "trunk" }), defaultBranchCall("main"), baseWorkflowCall({ branch: { base: "trunk" } })];
-    await expect(run(root, script)).rejects.toThrow(/its base 'trunk' is this checkout's nen\/workflow\.json branch\.base \('trunk'\) and the base commit's/);
-  });
+/** A protected-name base: the reads before the refusal, nothing after it. */
+function refusedScript(base: string, baseWorkflow: unknown = { branch: { base: "main" } }, defaultWorkflow: unknown = { branch: { base: "main" } }): ScriptedCall[] {
+  return [
+    ORIGIN_CALL,
+    prOnceCall({ baseRefName: base }),
+    defaultBranchCall(),
+    workflowAt(BASE_OID, baseWorkflow),
+    workflowAt("main", defaultWorkflow),
+    ...protectionCalls(stripHeads(base)),
+  ];
+}
 
-  it("refuses a base equal to GitHub's default branch even when branch.base names another", async () => {
-    const root = tmpRoot({ branch: { base: "trunk" } });
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "develop" }), defaultBranchCall("develop"), baseWorkflowCall({ branch: { base: "trunk" } })];
-    await expect(run(root, script)).rejects.toThrow(/its base 'develop' is the repository's default branch \('develop'\)\./);
-  });
-
-  it("refuses a head that edits branch.base to dodge the refusal: the base commit's branch.base still matches", async () => {
-    // The checkout is the head: its nen/workflow.json was edited to name
-    // another branch. The base commit still says 'trunk', which is this PR's
-    // base -- refused at exit 2 all the same, and before any other gate.
-    const root = tmpRoot({ branch: { base: "dodged" } });
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "trunk" }), defaultBranchCall("main"), baseWorkflowCall({ branch: { base: "trunk" } })];
-    const error = await run(root, script).catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(MergeUnitUsageError);
-    expect((error as Error).message).toMatch(/its base 'trunk' is the base commit's nen\/workflow\.json branch\.base \('trunk'\)\./);
-  });
-
-  it("treats an unreadable base-commit nen/workflow.json as 'configured base unknown': exit 1, nothing merged", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, [ORIGIN_CALL, prOnceCall(), defaultBranchCall(), baseWorkflowCall(null), VIEWER_CALL], { run: true });
-    expect(outcome.report.ok).toBe(false);
+describe("mergeDelivery -- refused by ruling (exit 2, the document still emitted)", () => {
+  it("refuses the default branch before any other gate, handing over 'nen pr ready' before 'gh pr merge'", async () => {
+    const outcome = await run(tmpRoot(), refusedScript("main"));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.baseOk).toBe(false);
     expect(outcome.report.ran).toBe(false);
-    expect(outcome.report.baseOk).toBe(false);
-    expect(outcome.report.baseCommitBase).toBeNull();
     expect(outcome.report.mergeArgv).toBeNull();
-    expect(outcome.lines[0]).toMatch(/^base: could not read branch\.base from nen\/workflow\.json at the pull request's base commit \(basebase\) -- the configured base is unknown/);
+    expect(outcome.report.contract).toBe(MERGE_DELIVERY_CONTRACT);
+    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base"]);
+    expect(exitOf(outcome.report)).toBe(EXIT_REFUSED_BY_RULING);
+    const text = outcome.lines.join("\n");
+    expect(text).toMatch(/^base: 'main' is the repository's default branch \('main'\)/m);
+    expect(text).toMatch(/'pr ready' was NOT evaluated/);
+    const check = text.indexOf("nen pr ready 9 --gh-repo zheref/example --require-head cafebabe");
+    expect(check).toBeGreaterThanOrEqual(0);
+    expect(check).toBeLessThan(text.indexOf("gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe"));
+    expect(outcome.lines.at(-1)).toMatch(/^nen pr merge: refused by ruling -- not merged \(exit 2\)\. Per the maintainer's merge-authority ruling of 2026-09-30/);
   });
 
-  it("still refuses at exit 2 on the default branch when the base-commit file is unreadable", async () => {
-    const root = tmpRoot();
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "main" }), defaultBranchCall("main"), baseWorkflowCall(null)];
-    await expect(run(root, script)).rejects.toThrow(/its base 'main' is the repository's default branch/);
+  it("strips refs/heads/ before comparing (F7)", async () => {
+    const outcome = await run(tmpRoot(), refusedScript("refs/heads/main"));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.base).toBe("main");
   });
 
-  it("a base-commit file that states no branch.base falls back to the schema default", async () => {
-    const root = tmpRoot({ branch: { base: "trunk" } });
-    const script = [ORIGIN_CALL, prOnceCall({ baseRefName: "main" }), defaultBranchCall("develop"), baseWorkflowCall({})];
-    await expect(run(root, script)).rejects.toThrow(/its base 'main' is the base commit's nen\/workflow\.json branch\.base \('main'\)\./);
+  it("refuses this checkout's branch.base", async () => {
+    const outcome = await run(tmpRoot({ branch: { base: "trunk" } }), refusedScript("trunk"));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.lines[0]).toMatch(/this checkout's nen\/workflow\.json branch\.base \('trunk'\)/);
   });
 
-  it("fails the base gate (exit 1, not a pass) when the default branch cannot be read", async () => {
-    const root = tmpRoot();
-    const script = [
-      ORIGIN_CALL,
-      prOnceCall(),
-      { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 1, stderr: "HTTP 502" } },
-      baseWorkflowCall(),
-      VIEWER_CALL,
-    ];
-    const outcome = await run(root, script);
+  it("refuses a head that edits branch.base to dodge it: the base commit's branch.base still matches", async () => {
+    // The checkout is the head, edited to name another branch; the base commit
+    // still says 'trunk', which is this PR's base.
+    const outcome = await run(tmpRoot({ branch: { base: "dodged" } }), refusedScript("trunk", { branch: { base: "trunk" } }));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.lines[0]).toMatch(/^base: 'trunk' is the base commit's nen\/workflow\.json branch\.base \('trunk'\) --/);
+  });
+
+  it("refuses the default branch's own branch.base (F7)", async () => {
+    const outcome = await run(tmpRoot(), refusedScript("trunk", {}, { branch: { base: "trunk" } }));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.defaultBranchBase).toBe("trunk");
+    expect(outcome.lines[0]).toMatch(/the default branch's nen\/workflow\.json branch\.base \('trunk'\)/);
+  });
+
+  it("still refuses the default branch when the base-commit file is unreadable", async () => {
+    const outcome = await run(tmpRoot(), refusedScript("main", null));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.baseCommitBase).toBeNull();
+  });
+
+  it("refuses a base GitHub reports protected (F2)", async () => {
+    const outcome = await run(tmpRoot(), script({ protection: protectionCalls(INTEGRATION, true), chain: null, viewer: null }));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.baseProtected).toBe(true);
+    expect(outcome.lines[0]).toMatch(/a protected branch \(GitHub branch protection\)/);
+  });
+
+  it("refuses a base a ruleset targets (F2)", async () => {
+    const outcome = await run(tmpRoot(), script({ protection: protectionCalls(INTEGRATION, false, [{ type: "deletion", ruleset_id: 1 }]), chain: null, viewer: null }));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.baseRulesets).toBe(1);
+    expect(outcome.lines[0]).toMatch(/targeted by 1 ruleset\(s\)/);
+  });
+
+  it("refuses an auto-merge chain from the base into a protected name (F4), naming it", async () => {
+    const outcome = await run(tmpRoot(), script({ chain: chainCall(INTEGRATION, [{ number: 12, baseRefName: "main", autoMergeRequest: { enabledAt: "x" } }]), viewer: null }));
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.lines[0]).toMatch(/is the head of #12 into 'main' with auto-merge enabled/);
+  });
+
+  it("lets a chain through when its auto-merge is off or its target is unprotected", async () => {
+    const outcome = await run(
+      tmpRoot(),
+      script({
+        chain: chainCall(INTEGRATION, [
+          { number: 12, baseRefName: "main", autoMergeRequest: null },
+          { number: 13, baseRefName: "other/integration", autoMergeRequest: { enabledAt: "x" } },
+        ]),
+      }),
+    );
+    expect(outcome.report.refused).toBe(false);
+    expect(outcome.report.ok).toBe(true);
+  });
+});
+
+describe("mergeDelivery -- a base nobody could establish is a failed gate (exit 1)", () => {
+  async function expectUnknown(calls: readonly ScriptedCall[], pattern: RegExp, root: string = tmpRoot()): Promise<void> {
+    const outcome = await run(root, calls);
+    expect(outcome.report.refused).toBe(false);
     expect(outcome.report.ok).toBe(false);
     expect(outcome.report.baseOk).toBe(false);
     expect(outcome.report.mergeArgv).toBeNull();
-    expect(outcome.lines[0]).toMatch(/^base: could not read the repository's default branch/);
+    expect(exitOf(outcome.report)).toBe(1);
+    expect(outcome.lines.filter((line) => line.startsWith("base: ")).join("\n")).toMatch(pattern);
+  }
+
+  it("the pull-request fetch fails", async () => {
+    await expectUnknown([ORIGIN_CALL, { match: PR_VIEW, result: { code: 1, stderr: "HTTP 502" } }, defaultBranchCall(), workflowAt("main"), VIEWER_CALL], /could not fetch the pull request/);
+  });
+
+  it("defaultBranchRef is null", async () => {
+    await expectUnknown(script({ default: defaultBranchCall(null), defaultWorkflow: null }), /answered no default branch/);
+  });
+
+  it("the default branch read fails", async () => {
+    await expectUnknown(
+      script({ default: { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 1, stderr: "HTTP 502" } }, defaultWorkflow: null }),
+      /could not read the repository's default branch/,
+    );
+  });
+
+  it("the base commit's nen/workflow.json cannot be read", async () => {
+    await expectUnknown(script({ baseWorkflow: workflowAt(BASE_OID, null) }), /at the pull request's base commit .* -- the configured base is unknown/);
+  });
+
+  it("the base commit's 'branch' is not an object", async () => {
+    await expectUnknown(script({ baseWorkflow: workflowAt(BASE_OID, { branch: "main" }) }), /the configured base is unknown/);
+  });
+
+  it("the base commit's 'branch.base' is not a string", async () => {
+    await expectUnknown(script({ baseWorkflow: workflowAt(BASE_OID, { branch: { base: 7 } }) }), /the configured base is unknown/);
+  });
+
+  it("the default branch's nen/workflow.json cannot be read (F7)", async () => {
+    await expectUnknown(script({ defaultWorkflow: workflowAt("main", null) }), /at the default branch \('main'\)/);
+  });
+
+  it("GitHub's protection cannot be read (F2)", async () => {
+    await expectUnknown(
+      script({ protection: [{ match: `gh api repos/zheref/example/branches/${INTEGRATION}`, result: { code: 1, stderr: "HTTP 403" } }] }),
+      /could not read GitHub's protection/,
+    );
+  });
+
+  it("the rules answer is not a list (F2)", async () => {
+    await expectUnknown(script({ protection: protectionCalls(INTEGRATION, false, { message: "nope" }) }), /rules for .* are not a list/);
+  });
+
+  it("the auto-merge chain cannot be listed (F4)", async () => {
+    await expectUnknown(script({ chain: { match: chainMatch(), result: { code: 1, stderr: "HTTP 502" } } }), /could not list the open pull requests whose head is/);
+  });
+
+  it("an empty baseRefName (F5)", async () => {
+    await expectUnknown(script({ pr: prOnceCall({ baseRefName: "" }), protection: [], chain: null }), /answered no base branch name/);
+  });
+
+  it("a missing baseRefName (F5)", async () => {
+    await expectUnknown(script({ pr: prOnceCall({ baseRefName: undefined }), protection: [], chain: null }), /answered no base branch name/);
+  });
+
+  it("a baseRefOid that is not a SHA (N4)", async () => {
+    await expectUnknown(script({ pr: prOnceCall({ baseRefOid: "basebase" }), baseWorkflow: null }), /baseRefOid 'basebase' is not a commit SHA/);
   });
 });
 
 describe("mergeDelivery -- a non-main base, every gate reused", () => {
   it("prints the plan without --run, in --release-unit's transcript shape", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, passingScript());
-    expect(outcome.report.contract).toBe(MERGE_DELIVERY_CONTRACT);
+    const outcome = await run(tmpRoot(), script());
     expect(outcome.report.ok).toBe(true);
     expect(outcome.report.ran).toBe(false);
     expect(outcome.report.base).toBe(INTEGRATION);
-    expect(outcome.report.defaultBranch).toBe("main");
-    expect(outcome.report.configuredBase).toBe("main");
     expect(outcome.report.baseCommitBase).toBe("main");
-    expect(outcome.report.bodyOk).toBeNull();
-    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "whose pr"]);
-    expect(outcome.lines.at(-1)).toBe("plan only (pass --run to execute): gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe");
+    expect(outcome.report.defaultBranchBase).toBe("main");
+    expect(outcome.report.baseProtected).toBe(false);
+    expect(outcome.report.baseRulesets).toBe(0);
+    expect(outcome.report.bodyOk).toBe(true);
+    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "pr body-check", "whose pr"]);
+    expect(outcome.lines.at(-1)).toBe(`plan only (pass --run to execute): gh ${MERGE_MATCH.slice(3)}`);
+    expect(exitOf(outcome.report)).toBe(0);
   });
 
-  it("merges with --run, re-reading the base first and reporting merged only on a MERGED re-read", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, [...passingScript(), baseRereadCall(), MERGE_CALL, STATE_CALL], { run: true });
+  it("refuses a head ref outside the run form of branch.template (F1)", async () => {
+    const outcome = await run(tmpRoot(), script({ pr: prOnceCall({ headRefName: "feature/x" }) }));
+    expect(outcome.report.wholeOk).toBe(false);
+    expect(outcome.lines.join("\n")).toMatch(/head 'feature\/x' is not in the run form of branch\.template '\{model\}\/\{persona\}\/\{descriptor\}'/);
+  });
+
+  it("reads the template from the base commit (F1)", async () => {
+    const outcome = await run(
+      tmpRoot(),
+      script({ pr: prOnceCall({ headRefName: "runs/the-change" }), baseWorkflow: workflowAt(BASE_OID, { branch: { base: "main", template: "runs/{descriptor}" } }) }),
+    );
     expect(outcome.report.ok).toBe(true);
-    expect(outcome.report.ran).toBe(true);
-    expect(outcome.report.state).toBe("MERGED");
-    expect(outcome.lines.at(-1)).toBe("merged: gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe");
-  });
-
-  it("refuses (exit 2) under --run when the pull request was retargeted onto the trunk after the gates read it", async () => {
-    const root = tmpRoot();
-    await expect(run(root, [...passingScript(), baseRereadCall("main")], { run: true })).rejects.toThrow(/its base 'main' is the repository's default branch/);
-  });
-
-  it("does not merge under --run when the base moved to another non-main branch", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, [...passingScript(), baseRereadCall("other/integration")], { run: true });
-    expect(outcome.report.ok).toBe(false);
-    expect(outcome.report.ran).toBe(false);
-    expect(outcome.lines.join("\n")).toMatch(/retargeted from '.*futon-integration' to 'other\/integration'/);
   });
 
   it("refuses a pull request the viewer did not author", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, [ORIGIN_CALL, prOnceCall({ author: "someone-else" }), defaultBranchCall(), baseWorkflowCall(), VIEWER_CALL]);
-    expect(outcome.report.ok).toBe(false);
+    const outcome = await run(tmpRoot(), script({ pr: prOnceCall({ author: "someone-else" }) }));
     expect(outcome.report.wholeOk).toBe(false);
     expect(outcome.lines.join("\n")).toMatch(/whose pr: this pull request's author is 'someone-else'/);
   });
 
   it("is not ready when 'pr ready' is not -- the verdict line is quoted", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, passingScript(), { deps: readyDeps(null) });
+    const outcome = await run(tmpRoot(), script(), { deps: readyDeps(null) });
     expect(outcome.report.ready).toBe(false);
-    expect(outcome.report.ok).toBe(false);
     expect(outcome.lines.some((line) => line.startsWith("pr ready: "))).toBe(true);
   });
 
   it("refuses when GitHub's head is not the head 'pr ready' judged", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, [ORIGIN_CALL, prOnceCall({ headRefOid: "0badf00d" }), defaultBranchCall(), baseWorkflowCall(), VIEWER_CALL]);
+    const outcome = await run(tmpRoot(), script({ pr: prOnceCall({ headRefOid: "0badf00d" }) }));
     expect(outcome.report.pinOk).toBe(false);
     expect(outcome.lines.join("\n")).toMatch(/head pin: 'pr ready' judged cafebabe, but the pull request's head is now 0badf00d/);
   });
 
   it("honours --require-head: a match pins, a mismatch refuses", async () => {
     const root = tmpRoot();
-    const matched = await run(root, passingScript(), { requireHead: "cafebab" });
+    const matched = await run(root, script(), { requireHead: "cafebab" });
     expect(matched.report.ok).toBe(true);
-    expect(matched.report.requiredHead).toBe("cafebab");
     expect(matched.lines.join("\n")).toMatch(/head pin: --require-head cafebab matches/);
-
-    const mismatched = await run(root, passingScript(), { requireHead: "1234567" });
+    const mismatched = await run(root, script(), { requireHead: "1234567" });
     expect(mismatched.report.ok).toBe(false);
     expect(mismatched.report.pinOk).toBe(false);
-    expect(mismatched.report.ready).toBe(false);
   });
 
   it("refuses a malformed --require-head before any call", async () => {
-    const root = tmpRoot();
-    await expect(run(root, [], { requireHead: "not-a-sha" })).rejects.toThrow(/--require-head takes a commit SHA/);
+    await expect(run(tmpRoot(), [], { requireHead: "not-a-sha" })).rejects.toThrow(MergeUnitUsageError);
   });
 
-  it("adds the body gate only when requirements are given", async () => {
-    const root = tmpRoot();
-    const outcome = await run(root, passingScript(), { requirements: [{ name: "summary", pattern: "## Summary" }] });
+  it("fails the body gate on a body that misses a requirement", async () => {
+    const outcome = await run(tmpRoot(), script(), { requirements: [{ name: "summary", pattern: "## Summary" }] });
     expect(outcome.report.bodyOk).toBe(false);
-    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "pr body-check", "whose pr"]);
+  });
+});
+
+describe("mergeDelivery -- under --run", () => {
+  it("merges after the base re-read, and reports merged on a MERGED re-read into the gated base", async () => {
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall(), MERGE_CALL, stateCall()], { run: true });
+    expect(outcome.report.ok).toBe(true);
+    expect(outcome.report.ran).toBe(true);
+    expect(outcome.report.mergedBase).toBe(INTEGRATION);
+    expect(outcome.report.outsideAuthority).toBe(false);
+    expect(outcome.report.gates.at(-1)).toEqual({ name: "base (re-read)", ok: true, lines: [`base (re-read): still '${INTEGRATION}'`] });
+    expect(outcome.lines.at(-1)).toBe(`merged: gh ${MERGE_MATCH.slice(3)}`);
+    expect(exitOf(outcome.report)).toBe(0);
+  });
+
+  it("is exit 7 when GitHub reports the merge landed in a protected name (F3)", async () => {
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall(), MERGE_CALL, stateCall("main")], { run: true });
+    expect(outcome.report.ran).toBe(true);
+    expect(outcome.report.outsideAuthority).toBe(true);
+    expect(outcome.report.ok).toBe(false);
+    expect(exitOf(outcome.report)).toBe(EXIT_MERGED_OUTSIDE_AUTHORITY);
+    expect(outcome.lines.at(-1)).toMatch(/MERGED INTO 'main' WITHOUT AUTHORITY .* Tell the maintainer now \(exit 7\)/);
+  });
+
+  it("is exit 7 when the merged base cannot be confirmed (F3/F5)", async () => {
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall(), MERGE_CALL, stateCall("")], { run: true });
+    expect(outcome.report.outsideAuthority).toBe(true);
+    expect(outcome.lines.at(-1)).toMatch(/MERGED INTO AN UNCONFIRMED BASE/);
+  });
+
+  it("appends a failed 'base (re-read)' gate when the re-read fails (N7): ran false, mergeArgv null", async () => {
+    const outcome = await run(tmpRoot(), [...script(), { match: "gh pr view 9 --repo zheref/example --json baseRefName", result: { code: 1, stderr: "HTTP 502" } }], {
+      run: true,
+    });
+    expect(outcome.report.ran).toBe(false);
+    expect(outcome.report.mergeArgv).toBeNull();
+    expect(outcome.report.baseOk).toBe(false);
+    expect(outcome.report.gates.at(-1)).toMatchObject({ name: "base (re-read)", ok: false });
+    expect(exitOf(outcome.report)).toBe(1);
+  });
+
+  it("an empty base on the re-read is a failed gate (F5)", async () => {
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall("")], { run: true });
+    expect(outcome.report.ran).toBe(false);
+    expect(outcome.report.baseOk).toBe(false);
+    expect(outcome.lines.join("\n")).toMatch(/no base branch name on the re-read/);
+  });
+
+  it("refuses by ruling a retarget onto the trunk between the gates and the merge", async () => {
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall("refs/heads/main")], { run: true });
+    expect(outcome.report.refused).toBe(true);
+    expect(outcome.report.baseOk).toBe(false);
+    expect(outcome.report.ready).toBe(true);
+    expect(outcome.report.gates.at(-1)?.name).toBe("base (re-read)");
+    expect(exitOf(outcome.report)).toBe(2);
+  });
+
+  it("does not merge when the base moved to another non-main branch (N7)", async () => {
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall("other/integration")], { run: true });
+    expect(outcome.report.ran).toBe(false);
+    expect(outcome.report.baseOk).toBe(false);
+    expect(outcome.report.gates.at(-1)).toMatchObject({ name: "base (re-read)", ok: false });
+  });
+
+  it("maps gh refusing the merge to exit 5", async () => {
+    const outcome = await run(tmpRoot(), [...script(), baseRereadCall(), { match: MERGE_MATCH, result: { code: 1, stderr: "protected branch" } }], { run: true });
+    expect(outcome.report.ran).toBe(false);
+    expect(outcome.report.mergeArgv).not.toBeNull();
+    expect(exitOf(outcome.report)).toBe(5);
+  });
+});
+
+describe("helpers", () => {
+  it("runBranchPattern: three non-empty segments for the default template", () => {
+    const pattern = runBranchPattern("{model}/{persona}/{descriptor}");
+    expect(pattern.test("opus/kurapika/x")).toBe(true);
+    expect(pattern.test("opus/kurapika")).toBe(false);
+    expect(pattern.test("opus//x")).toBe(false);
+    expect(pattern.test("a/b/c/d")).toBe(false);
+    expect(runBranchPattern("runs.{descriptor}").test("runsXy")).toBe(false);
+  });
+
+  it("stripHeads", () => {
+    expect(stripHeads("refs/heads/main")).toBe("main");
+    expect(stripHeads("main")).toBe("main");
   });
 });

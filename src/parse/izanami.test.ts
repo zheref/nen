@@ -431,6 +431,16 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen epic next-wave --body-file b.md").classification).toBe("read-only");
   });
 
+  // zheref/nen#286 (N10/F6): both merge forms are mutating in every
+  // spelling -- the plan form is not certified watchable either.
+  it("classifies 'pr merge --delivery' as mutating with and without --run, --dry-run or a pre-verb --json", () => {
+    expect(classifyCommand("nen pr merge 9 --delivery --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --delivery --repo . --run").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --delivery --repo . --dry-run").classification).toBe("mutating");
+    expect(classifyCommand("nen --json pr merge 9 --delivery --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --release-unit --repo . --requirements-from r.json").classification).toBe("mutating");
+  });
+
   it("classifies through the pre-verb global flags", () => {
     expect(classifyCommand("nen --repo ../elsewhere wc classify").classification).toBe("read-only");
     expect(classifyCommand("nen --json pr ready 925 --gh-repo owner/repo").classification).toBe("read-only");
