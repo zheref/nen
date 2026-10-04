@@ -4065,7 +4065,7 @@ naming it, rather than reported as an unlabelled issue.
 **Usage**
 
 ```text
-nen classify status --taxonomy <path> --repo <path> --target <owner/name> (--issue <n>[,<n>...] | --open) [--json]
+nen classify status --taxonomy <path> --repo <path> --target <owner/name> (--issue <n>[,<n>...] | --open) [--with-body] [--json]
 ```
 
 **Arguments**
@@ -4077,6 +4077,7 @@ nen classify status --taxonomy <path> --repo <path> --target <owner/name> (--iss
 | `--target <owner/name>` | yes | The GitHub repository whose issues and labels are read. | Missing or malformed -> exit 2. |
 | `--issue <n>[,<n>...]` | one of | Comma list of positive whole numbers. | Duplicates collapse; a non-number -> exit 2. Exclusive with `--open`. |
 | `--open` | one of (boolean) | Every open issue, paginated. | |
+| `--with-body` | no (boolean) | Adds `body` and `comments` to each issue. | Read from the same payload — the `issues/{n}` read for `--issue`, the list page for `--open` — so it costs no extra call; it spares a classifying skill a per-issue `gh issue view`. Human rendering is unchanged either way; the fields are in `--json`. Without the flag the output is unchanged. |
 
 **Output and exit codes** — human rendering is one row per issue (`#N  lang: swift,kotlin  job:
 implementation  missing: -`, with an `unknown:` column only when there is one), then the summary line
@@ -4084,7 +4085,7 @@ implementation  missing: -`, with an `unknown:` column only when there is one), 
 and `github:` lines (`ok`, or `missing <n>` naming the labels). `--json` prints one document;
 top-level keys: `contract` (`nen.classify.status/v0.1`), `target`, `truncated` (whether `--open` hit
 its page ceiling), `issues` (an array of `{ number, title, labels, lang, job, unknown, missing,
-classified }`, where `lang` and `job` are the keys found on each axis), `summary` (`total`,
+classified }`, where `lang` and `job` are the keys found on each axis; with `--with-body` each also carries `body`, the issue body as GitHub returns it (`""` when it has none), and `comments`, the issue's comment count), `summary` (`total`,
 `classified`, `missingLang`, `missingJob`, `missingBoth`), `declared` (`{ status, missing }`) and
 `github` (`{ status, missing, truncated }`). Exit 0 whatever the state — a status is an answer; exit 1
 when `gh` failed or a number names a pull request; exit 2 for a missing flag, neither or both of

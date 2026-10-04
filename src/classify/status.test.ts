@@ -204,6 +204,66 @@ describe("nen classify status --open", () => {
   });
 });
 
+describe("nen classify status --with-body", () => {
+  const payloadFor = (number: number, extra: Record<string, unknown>): Record<string, unknown> =>
+    rawIssue(number, ["lang/alpha"], extra);
+
+  it("--issue: each issue carries body and comments from the issues/{n} read already made -- no extra call", async () => {
+    const result = await capture(
+      status(landedRepo(), "--issue", "12,13", "--with-body", "--json"),
+      [issueCall(12, ["lang/alpha"], { body: "Fix the thing.", comments: 3 }), issueCall(13, [], { body: null }), ALL_ON_GITHUB],
+    );
+    expect(result.code).toBe(0);
+    const json = JSON.parse(result.out.join("\n")) as { issues: Record<string, unknown>[] };
+    expect(json.issues[0]).toMatchObject({ number: 12, body: "Fix the thing.", comments: 3 });
+    expect(json.issues[1]).toMatchObject({ number: 13, body: "", comments: 0 });
+    expect(Object.keys(json.issues[0] as object)).toEqual([
+      "number", "title", "labels", "lang", "job", "unknown", "missing", "classified", "body", "comments",
+    ]);
+    // One read per issue plus the label list: nothing more.
+    expect(result.seams.calls.map((call): string => call.args.join(" "))).toEqual([
+      `api repos/${SLUG}/issues/12`,
+      `api repos/${SLUG}/issues/13`,
+      "label list --repo zheref/nen --limit 500 --json name,color,description",
+    ]);
+  });
+
+  it("--open: body and comments come from the list payload", async () => {
+    const result = await capture(status(landedRepo(), "--open", "--with-body", "--json"), [
+      openPage(1, [payloadFor(7, { body: "Seven", comments: 2 }), payloadFor(8, { body: null }), payloadFor(9, {})]),
+      ALL_ON_GITHUB,
+    ]);
+    const json = JSON.parse(result.out.join("\n")) as { issues: Record<string, unknown>[] };
+    expect(json.issues.map((issue): unknown => [issue["body"], issue["comments"]])).toEqual([
+      ["Seven", 2],
+      ["", 0],
+      ["", 0],
+    ]);
+  });
+
+  it("without the flag the output is unchanged: no body or comments key, though the payload carries them", async () => {
+    const withPayload = [issueCall(12, ["lang/alpha"], { body: "Fix the thing.", comments: 3 }), ALL_ON_GITHUB];
+    const plain = await capture(status(landedRepo(), "--issue", "12", "--json"), withPayload);
+    const issue = (JSON.parse(plain.out.join("\n")) as { issues: Record<string, unknown>[] }).issues[0] as Record<string, unknown>;
+    expect("body" in issue).toBe(false);
+    expect("comments" in issue).toBe(false);
+
+    const open = await capture(status(landedRepo(), "--open", "--json"), [openPage(1, [payloadFor(7, { body: "x", comments: 1 })]), ALL_ON_GITHUB]);
+    expect(open.out.join("\n")).not.toMatch(/"body"|"comments"/);
+  });
+
+  it("leaves the human rows exactly as they were", async () => {
+    const withFlag = await capture(status(landedRepo(), "--issue", "12", "--with-body"), [issueCall(12, ["lang/alpha"], { body: "b", comments: 1 }), ALL_ON_GITHUB]);
+    const without = await capture(status(landedRepo(), "--issue", "12"), [issueCall(12, ["lang/alpha"], { body: "b", comments: 1 }), ALL_ON_GITHUB]);
+    expect(withFlag.out).toEqual(without.out);
+  });
+
+  it("still refuses a pull request under --with-body", async () => {
+    const result = await capture(status(landedRepo(), "--issue", "13", "--with-body"), [issueCall(13, [], { pull_request: {} })]);
+    expect(result.code).toBe(1);
+  });
+});
+
 describe("nen classify status -- usage", () => {
   it("needs exactly one of --issue and --open, a --target and a --repo", async () => {
     const repo = landedRepo();

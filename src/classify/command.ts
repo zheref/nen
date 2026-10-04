@@ -33,7 +33,7 @@ const USAGE = `nen classify -- the mechanical half of issue classification on tw
 usage:
   nen classify labels  --taxonomy <path> [--repo <path>] [--json]
   nen classify install --taxonomy <path> --repo <path> [--write | --sync --target <owner/name>] [--dry-run] [--json]
-  nen classify status  --taxonomy <path> --repo <path> --target <owner/name> (--issue <n>[,<n>...] | --open) [--json]
+  nen classify status  --taxonomy <path> --repo <path> --target <owner/name> (--issue <n>[,<n>...] | --open) [--with-body] [--json]
   nen classify apply   --taxonomy <path> --repo <path> --target <owner/name> --plan <path.json> [--run] [--include-low] [--reason <text>] [--ledger <path>] [--json]
 
 The taxonomy file (--taxonomy) is the single source of the vocabulary: each
@@ -69,7 +69,9 @@ it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
       (missing). Then the summary, whether nen/labels.json declares every
       taxonomy label, and whether every one exists on the repository. Exactly
       one of --issue (a comma list of positive numbers) or --open (every open
-      issue; pull requests are skipped). Exit 0 whatever the state; 1 when gh
+      issue; pull requests are skipped). --with-body adds each issue's body
+      ("" when it has none) and comment count to the output, from the same
+      read -- no extra call per issue. Exit 0 whatever the state; 1 when gh
       failed or a number names a pull request.
 
   nen classify apply
@@ -107,7 +109,7 @@ export const classifyCommand: Command = {
   usage: USAGE,
   flags: {
     values: ["taxonomy", "target", "issue", "plan", "reason", "ledger"],
-    booleans: ["write", "sync", "dry-run", "open", "run", "include-low"],
+    booleans: ["write", "sync", "dry-run", "open", "run", "include-low", "with-body"],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("classify", context.args, ["labels", "install", "status", "apply"]);

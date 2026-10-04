@@ -14,6 +14,12 @@
 //   github    whether every taxonomy label exists on the repository (the sync
 //             ran). Existence only -- drift is `install`'s question.
 //
+// `--with-body` ADDS `body` and `comments` TO EACH ISSUE so a classifying skill
+// needs no second read per issue (an N+1 a reviewer flagged): both ride the
+// payload this verb already fetches -- the `issues/{n}` read for --issue, the
+// list page for --open -- so the flag costs no extra call. Without it the
+// output is byte for byte what it was.
+//
 // A STATUS IS AN ANSWER, so the exit is 0 whatever the state; it is 1 only when
 // gh itself failed. A number that names a PULL REQUEST is refused rather than
 // reported as an unlabelled issue: it is not an issue and a sweep must not try.
@@ -31,9 +37,8 @@ import {
 import { splitList } from "../cli/inputs.js";
 import { fetchPaginated } from "../backlog/fetch.js";
 import type { Target } from "../github/target.js";
-import { readIssue } from "../issue/subissue.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
-import { GH, mustJson, type Seams } from "../seam/exec.js";
+import { GH, mustJson, outputLines, type Seams } from "../seam/exec.js";
 import { loadRequiringRepo, requireTarget } from "./common.js";
 import { compareDeclaration, notLanded } from "./install.js";
 import { AXES, axisOfLabel, taxonomyLabels, type AxisName, type ClassifyTaxonomy } from "./taxonomy.js";
@@ -48,7 +53,17 @@ export type IssueStatus = Record<AxisName, string[]> & {
   unknown: string[];
   missing: AxisName[];
   classified: boolean;
+  /** Only with --with-body: the issue body as GitHub returns it, "" when null. */
+  body?: string;
+  /** Only with --with-body: the issue's `comments` count from the same read. */
+  comments?: number;
 };
+
+/** What `--with-body` reads off the payload. */
+export interface BodyFields {
+  readonly body: string;
+  readonly comments: number;
+}
 
 export type Summary = Record<string, number> & { total: number; classified: number; missingBoth: number };
 
@@ -67,6 +82,7 @@ export function classifyLabels(
   number: number,
   title: string,
   labels: readonly string[],
+  extra: BodyFields | null = null,
 ): IssueStatus {
   const keys = Object.fromEntries(AXES.map((name): [AxisName, string[]] => [name, []])) as Record<AxisName, string[]>;
   const unknown: string[] = [];
@@ -77,7 +93,8 @@ export function classifyLabels(
     else unknown.push(name);
   }
   const missing = AXES.filter((name): boolean => keys[name].length === 0);
-  return { number, title, labels: [...labels], ...keys, unknown, missing, classified: missing.length === 0 };
+  const base: IssueStatus = { number, title, labels: [...labels], ...keys, unknown, missing, classified: missing.length === 0 };
+  return extra === null ? base : { ...base, body: extra.body, comments: extra.comments };
 }
 
 /** `missing` + the axis name with its first letter raised: `missingLang`. */
@@ -112,6 +129,25 @@ interface RawOpenIssue {
   readonly title: string;
   readonly labels: readonly ({ readonly name: string } | string)[];
   readonly pull_request?: unknown;
+  readonly body?: string | null;
+  readonly comments?: number;
+}
+
+function bodyFields(item: { readonly body?: unknown; readonly comments?: unknown }): BodyFields {
+  return {
+    body: typeof item.body === "string" ? item.body : "",
+    comments: typeof item.comments === "number" ? item.comments : 0,
+  };
+}
+
+/** One `issues/{n}` read: the labels, whether it is a pull request, and the body fields. */
+function readOne(seams: Seams, target: Target, number: number): { fields: BodyFields; raw: Partial<RawOpenIssue> } {
+  const result = seams.run(GH, ["api", `repos/${target.slug}/issues/${number}`]);
+  if (result.spawnFailed || result.code !== 0) {
+    throw new Error(`could not read ${target.slug}#${number}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
+  }
+  const raw = JSON.parse(result.stdout) as Partial<RawOpenIssue>;
+  return { fields: bodyFields(raw), raw };
 }
 
 interface Gathered {
@@ -119,17 +155,28 @@ interface Gathered {
   readonly truncated: boolean;
 }
 
-function gather(seams: Seams, target: Target, taxonomy: ClassifyTaxonomy, issueFlag: string | undefined): Gathered {
+function gather(seams: Seams, target: Target, taxonomy: ClassifyTaxonomy, issueFlag: string | undefined, withBody: boolean): Gathered {
   if (issueFlag !== undefined) {
     const numbers = parseIssueList(issueFlag);
-    const read = numbers.map((number) => readIssue(seams, target, number));
-    const prs = read.filter((issue): boolean => issue.isPullRequest);
+    const read = numbers.map((number) => ({ number, ...readOne(seams, target, number) }));
+    const prs = read.filter((entry): boolean => entry.raw.pull_request !== undefined && entry.raw.pull_request !== null);
     if (prs.length > 0) {
       throw new Error(
-        `${prs.map((issue): string => `#${issue.number}`).join(", ")} name${prs.length === 1 ? "s" : ""} a pull request in ${target.slug}, not an issue. Nothing was reported.`,
+        `${prs.map((entry): string => `#${entry.number}`).join(", ")} name${prs.length === 1 ? "s" : ""} a pull request in ${target.slug}, not an issue. Nothing was reported.`,
       );
     }
-    return { issues: read.map((issue): IssueStatus => classifyLabels(taxonomy, issue.number, issue.title, issue.labels)), truncated: false };
+    return {
+      issues: read.map((entry): IssueStatus =>
+        classifyLabels(
+          taxonomy,
+          entry.raw.number ?? entry.number,
+          entry.raw.title ?? "",
+          (entry.raw.labels ?? []).map((label): string => (typeof label === "string" ? label : label.name)),
+          withBody ? entry.fields : null,
+        ),
+      ),
+      truncated: false,
+    };
   }
   // `issues?state=open` answers issues AND pull requests; a PR is not an issue.
   const fetched = fetchPaginated<RawOpenIssue>(seams, `repos/${target.slug}/issues?state=open`, null);
@@ -141,6 +188,7 @@ function gather(seams: Seams, target: Target, taxonomy: ClassifyTaxonomy, issueF
         item.number,
         item.title,
         item.labels.map((label): string => (typeof label === "string" ? label : label.name)),
+        withBody ? bodyFields(item) : null,
       ),
     );
   return { issues, truncated: fetched.truncated };
@@ -155,6 +203,7 @@ function row(issue: IssueStatus): string {
 export function runStatus(context: CommandContext): number {
   const issueFlag = context.args.values["issue"];
   const open = context.args.booleans.has("open");
+  const withBody = context.args.booleans.has("with-body");
   if ((issueFlag === undefined) === !open) {
     throw new VerbUsageError(
       issueFlag === undefined
@@ -172,7 +221,7 @@ export function runStatus(context: CommandContext): number {
     missing: absent.map((entry): string => entry.name),
   };
 
-  const { issues, truncated } = gather(context.seams, target, taxonomy, issueFlag);
+  const { issues, truncated } = gather(context.seams, target, taxonomy, issueFlag, withBody);
   const summary = summarize(issues);
 
   const onGithub = mustJson<readonly { readonly name: string }[]>(context.seams, GH, labelListArgv(target));
