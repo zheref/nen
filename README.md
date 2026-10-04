@@ -289,7 +289,9 @@ owner/name -- generated 2026-09-08T00:34:25.497Z
 ```
 
 **File the issue you just found.** `--dry-run` prints the exact `gh` call and
-makes no network call at all; the labels are checked against `--repo`'s own
+writes nothing, but it does READ: the private-name guard reads the target's
+visibility and, for a public target, your private repository list
+([#329](https://github.com/zheref/nen/issues/329)). The labels are checked against `--repo`'s own
 taxonomy first, where GitHub would silently create an unknown one instead:
 
 ```
@@ -297,8 +299,13 @@ $ nen issue file --target owner/name --repo src/schema/fixtures/bankai-repo \
   --title "watch until refuses a quoted --jq argument on a read-only gh api call" \
   --body-file ./body.md --label bankai:stage/idea,bankai:severity/medium \
   --assignee you --dry-run
-would run: gh issue create --repo owner/name --title watch until refuses a quoted --jq argument on a read-only gh api call --body-file ./body.md --assignee you --label bankai:stage/idea --label bankai:severity/medium
+would run: gh issue create --repo owner/name --title watch until refuses a quoted --jq argument on a read-only gh api call --body-file - --assignee you --label bankai:stage/idea --label bankai:severity/medium
+stdin: the 412 byte(s) read and checked from /path/to/nen/src/schema/fixtures/bankai-repo/body.md (gh reads these, not the file)
 ```
+
+`--body-file -` is deliberate: `gh` gets the bytes nen read and checked, on
+stdin, never a path it would re-read afterwards. A relative `--body-file`
+resolves against `--repo`'s root.
 
 **Wait for a check to go green without babysitting the terminal.**
 

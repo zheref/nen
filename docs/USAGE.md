@@ -50,7 +50,7 @@ a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`canon resolve`](#nen-canon-resolve),
 [`parse futon`](#nen-parse-futon) and
 [`report data`](#nen-report-data).
-Twenty-nine verbs accept it and never read it at all — they work entirely from
+Twenty-eight verbs accept it and never read it at all — they work entirely from
 the paths and slugs they are handed. Every verb of
 [`effort`](#family-effort), [`epic`](#family-epic), [`loop`](#family-loop),
 [`quality`](#family-quality), [`run`](#family-run), [`split`](#family-split),
@@ -62,11 +62,14 @@ the paths and slugs they are handed. Every verb of
 [`pr request-reviews`](#nen-pr-request-reviews),
 [`ref parse`](#nen-ref-parse), [`repo inventory`](#nen-repo-inventory),
 [`parse <skill>`](#nen-parse-skill), [`parse izanagi`](#nen-parse-izanagi),
-[`parse izanami`](#nen-parse-izanami), and six of the eight
-[`issue`](#family-issue) verbs — every one except
+[`parse izanami`](#nen-parse-izanami), and five of the nine
+[`issue`](#family-issue) subcommands — every one except
 [`issue file`](#nen-issue-file) and
-[`issue consolidate-close`](#nen-issue-consolidate-close). Their argument
-tables say so.
+[`issue consolidate-close`](#nen-issue-consolidate-close), which require it,
+and [`issue comment`](#nen-issue-comment) and
+[`issue edit-body`](#nen-issue-edit-body), which read it as the base their
+relative `--body-file`, `--current-body-out` and
+`--private-names-ignore-file` resolve against. Their argument tables say so.
 
 One verb reads it **conditionally**, which is a third thing again:
 [`stop`](#nen-stop) writes under it only with `--mark`.
@@ -84,7 +87,8 @@ the root `--repo` names — `--rows-from`, `--board-from`, `--gates`,
 `--requirements-from`, `--ledger`, `--questions-from`, `--answers-from`,
 `--tiers`, `--template`, `--data`, `--out`, `--body-file`, `--input`,
 `--efforts`, `--original`, `--branches`, `--table`, `--rules-dir`,
-`--canon-values`, `--markdown-out`, `--plan`, and every
+`--canon-values`, `--markdown-out`, `--plan`, `--private-names-ignore-file`,
+`--current-body-out`, and every
 taxonomy file a verb opens for itself. `--repo` itself defaults to the process's
 current directory, so a caller standing in the repository sees no difference
 between the two.
@@ -105,9 +109,14 @@ The root wins, which is the decision
 [#86](https://github.com/zheref/nen/issues/86) already made for `--gates`, and
 its reasoning generalises without change: every other path a verb reads is
 anchored there, and the failure the exception produced was silent and wrong.
-Where a path also travels onward — `issue comment`/`issue edit-body` hand
-`--body-file` to `gh` — the **resolved** path is what travels, so nen and
-`gh` cannot disagree about which file it is. The root is resolved before the
+Where a file's contents also travel onward — `issue file`, `issue comment` and
+`issue edit-body` publish `--body-file` through `gh` — nen reads the
+**resolved** path once and hands `gh` those very bytes on stdin (`--body-file
+-`, since [#329](https://github.com/zheref/nen/issues/329)), so nen and `gh`
+cannot disagree about which file it is, and nothing written to it after nen's
+checks is published. (`issue file` resolved the path for its own reading only
+from #329; before that it handed `gh` the typed string, read against the
+process's directory.) The root is resolved before the
 read, so a malformed `--repo` stays the usage error (exit 2) it is rather than
 becoming a "could not read" at exit 1 about a file nobody had a path to yet.
 
@@ -278,6 +287,7 @@ verb it invoked. The complete list:
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
+| [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body) | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329)). A check that could not run is `1`, never `4` and never `0` |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
@@ -306,8 +316,8 @@ verb does by default:
 
 | Verb | Safe by default? | Flag | Notes |
 |---|---|---|---|
-| [`issue file`](#nen-issue-file) | no | `--dry-run` | fully offline — no network call at all |
-| [`issue comment`](#nen-issue-comment) | no | `--dry-run` | fully offline; also prints the exact bytes of the body |
+| [`issue file`](#nen-issue-file) | no | `--dry-run` | writes nothing, but **reads GitHub**: the [private-name guard](#the-private-name-guard) reads the target's visibility and, for a public target, the private repository list ([#329](https://github.com/zheref/nen/issues/329)); offline only with `--skip-private-name-check` |
+| [`issue comment`](#nen-issue-comment) | no | `--dry-run` | writes nothing, but **reads GitHub** for the [private-name guard](#the-private-name-guard), as `issue file` does; also prints the exact bytes of the body |
 | [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count, first/last line, `current body sha256:` and a `body check:` line saying what was and was not checked; with `--expect-body-sha256` it also compares, and a mismatch exits **3** (conflict, nothing written) exactly as a real run would; `--current-body-out <path>` writes the read's exact bytes |
 | [`issue attach-sub`](#nen-issue-attach-sub) | no | `--dry-run` | **still reads GitHub** to certify every number is an issue, not a PR |
 | [`issue consolidate-close`](#nen-issue-consolidate-close) | no | `--dry-run` | **still reads GitHub** for the object-class check and the open-PR guard |
@@ -5596,6 +5606,8 @@ Creates the issue with its labels and assignee IN the create call -- never a fol
 nen issue file --target <owner/name> --repo <path> --title <t>
                --body-file <path> --label a,b --assignee <user>
                [--forbid-family ns:family] [--dry-run]
+               [--skip-private-name-check]
+               [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -5605,13 +5617,16 @@ nen issue file --target <owner/name> --repo <path> --title <t>
 | `--target <owner/name>` | yes | The GitHub repository to file into. | Missing exits 1. |
 | `--repo <path>` | yes | The checkout whose `nen/labels.json` validates every `--label`. | Listed unbracketed in usage: omitted, this exits **2** by name, never silently reads the cwd's own taxonomy. |
 | `--title <t>` | yes | The issue title. | Empty title is refused as part of the batch below (exit 1), not at the parser. |
-| `--body-file <path>` | yes | Path to the issue body. A body typed inline on the command line is a body nobody reviewed, so there is no `--body`. | Omitted entirely exits **2** (checked ahead of the batch); an unreadable path is a separate refusal. |
+| `--body-file <path>` | yes | Path to the issue body. A body typed inline on the command line is a body nobody reviewed, so there is no `--body`. | Omitted entirely exits **2** (checked ahead of the batch); an unreadable path is refused at exit **2** before any `gh` call. Resolves against `--repo`'s root, and the **resolved** path is what `gh` is handed (since [#329](https://github.com/zheref/nen/issues/329): the private-name guard reads the file, and it and `gh` must read the same one). |
 | `--label a,b` | yes | Comma-separated labels, applied in the create call. | Every label must exist in `--repo`'s taxonomy; an empty list is refused. |
 | `--assignee <user>` | yes | A single GitHub login. | Empty is refused: an unassigned issue reaches nobody by notification. |
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Caller data -- nen carries no repository's own "which family means released" convention. |
-| `--dry-run` | no | Print the exact `gh issue create` argv and write nothing. | No network call is made in this mode at all -- safe to run against any target. |
+| `--dry-run` | no | Print the exact `gh issue create` argv and write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs here too, so a dry run's verdict is the real run's. |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; every run that uses it says so on stderr, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- human rendering: `filed #<n> <url>` on success, or `would run: gh issue create ...` under `--dry-run`. `--json`: `{ ...FileResult, labels }` on success (`FileResult` = `{ url, number }`), `{ dryRun: true, argv }` under `--dry-run`. Refusals are ALWAYS printed as plain `nen: <reason>` lines to stderr, even under `--json` -- a caller in JSON mode still gets prose for a refusal, only the success path is machine-shaped. Exit 0 on a successful file (dry or real); exit 1 when title/labels/assignee/label-taxonomy/forbidden-family checks fail (every failing check is reported at once, not one round trip at a time); exit 2 when `--repo` or `--body-file` was omitted outright, or the label taxonomy itself could not be loaded.
+**Output and exit codes** -- human rendering: `filed #<n> <url>` on success, or `would run: gh issue create ... --body-file - ...` and a `stdin:` line naming the file the checked bytes came from under `--dry-run`. `--json`: `{ ...FileResult, labels, bodyFile, privateNameCheck }` on success (`FileResult` = `{ url, number }`), `{ dryRun: true, argv, bodyFile, privateNameCheck }` under `--dry-run` (`bodyFile` the resolved path the body was read from), `{ dryRun, filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses. Refusals are ALWAYS printed as plain `nen: <reason>` lines to stderr, even under `--json` -- a caller in JSON mode still gets prose for a refusal, only the success path is machine-shaped. Exit 0 on a successful file (dry or real); exit 1 when title/labels/assignee/label-taxonomy/forbidden-family checks fail (every failing check is reported at once, not one round trip at a time); exit 2 when `--repo` or `--body-file` was omitted outright, `--body-file` cannot be read, or the label taxonomy itself could not be loaded; exit **4** when the [private-name guard](#the-private-name-guard) finds a private repository named in the title or body of a filing to a PUBLIC target, and exit 1 when that guard could not run.
 
 **Example**
 
@@ -5622,9 +5637,10 @@ nen issue file --target zheref/bankai-core --repo src/schema/fixtures/bankai-rep
   --label bankai:stage/idea,bankai:severity/medium --assignee zheref --dry-run
 ```
 ```text
-would run: gh issue create --repo zheref/bankai-core --title wake verify does not paginate PR comments past one page --body-file /tmp/body.md --assignee zheref --label bankai:stage/idea --label bankai:severity/medium
+would run: gh issue create --repo zheref/bankai-core --title wake verify does not paginate PR comments past one page --body-file - --assignee zheref --label bankai:stage/idea --label bankai:severity/medium
+stdin: the 611 byte(s) read and checked from /tmp/body.md (gh reads these, not the file)
 ```
-(from a real run in `--dry-run` mode — no GitHub write, no network)
+(a `--dry-run` — no GitHub write. Captured before [#329](https://github.com/zheref/nen/issues/329) and updated to its shape: the argv's `--body-file -` and the `stdin:` line are #329's, the byte count illustrative; a dry run now also reads the target's visibility and, for a public target, the private list)
 
 ### `nen issue comment`
 
@@ -5635,6 +5651,8 @@ The general primitive the rest of the family lacked: post ONE caller-supplied co
 ```text
 nen issue comment --target <owner/name> --issue <n>
                   (--body-file <path> | --body <text>) [--dry-run]
+                  [--skip-private-name-check]
+                  [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -5645,9 +5663,12 @@ nen issue comment --target <owner/name> --issue <n>
 | `--issue <n>` | yes | The issue or PR number to comment on. | Read with a strict `/^\d+$/` guard (unlike `--parent`/`chain-position`'s looser `Number(...)` read elsewhere in this family) -- `1e3` or `0x0c` are refused rather than silently accepted as 1000/12. |
 | `--body <text>` | one of these two | The comment text, inline. | Exactly one of `--body`/`--body-file`; giving both, or neither, is refused (exit 2). A value starting with `-` must be spelled `--body=<text>`. |
 | `--body-file <path>` | one of these two | The comment text, from a file -- keeps a body of any size off the command line. | An unreadable path, or one holding only whitespace, is refused. |
-| `--dry-run` | no | Print the exact `gh` call AND the exact bytes it would send; write nothing. | No network call at all in this mode. |
+| `--dry-run` | no | Print the exact `gh` call AND the exact bytes it would send; write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs first, and a refusal prints no body. |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; named on stderr in every run that uses it. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- prints `commented on <target>#<issue> <url>` (or, when `gh` printed no URL, says so explicitly rather than inventing one). `--dry-run` prints `would run: gh ...` plus the body fenced between `--- body as it would be posted ---` / `--- end of body ...---`, stating explicitly whether the body ends with a trailing newline. `--json`: `{ dryRun, target, issue, source, argv, body, url? }`. Exit 0 on a successful post (dry or real); exit 2 on a malformed/absent body or issue number.
+**Output and exit codes** -- prints `commented on <target>#<issue> <url>` (or, when `gh` printed no URL, says so explicitly rather than inventing one). `--dry-run` prints `would run: gh ...` plus the body fenced between `--- body as it would be posted ---` / `--- end of body ...---`, stating explicitly whether the body ends with a trailing newline. `--json`: `{ dryRun, target, issue, source, bodyFile?, argv, body, url?, privateNameCheck }` (`bodyFile` the resolved path, present for a file body; the argv then reads `--body-file -`, the body travelling on stdin); when the [private-name guard](#the-private-name-guard) refuses, `{ dryRun, target, issue, source, posted: false, privateNameCheck }` -- with **no `body`**, because the body is the text that names it. Exit 0 on a successful post (dry or real); exit 2 on a malformed/absent body or issue number; exit **4** when the guard finds a private repository named in a comment bound for a PUBLIC target; exit 1 when the guard could not run.
 
 **Example**
 
@@ -5661,7 +5682,7 @@ would run: gh issue comment 90 --repo zheref/bankai-core --body Filed as part of
 Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up.
 --- end of body (no trailing newline) ---
 ```
-(from a real run in `--dry-run` mode — no GitHub write, no network)
+(from a real run in `--dry-run` mode — no GitHub write, no network; captured before [#329](https://github.com/zheref/nen/issues/329), since when a dry run reads the target's visibility and, for a public target, the private list)
 
 ### `nen issue edit-body`
 
@@ -5681,7 +5702,8 @@ write.
 ```text
 nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
                     [--expect-body-sha256 <hex>] [--current-body-out <path>]
-                    [--dry-run]
+                    [--dry-run] [--skip-private-name-check]
+                    [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -5693,25 +5715,29 @@ nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
 | `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) so `gh` reads the same bytes this verb previewed. | There is no inline `--body` — that flag belongs to [`issue comment`](#nen-issue-comment). An unreadable path, or one holding only whitespace, is refused (exit 2). |
 | `--expect-body-sha256 <hex>` | no | The sha256 (64 hex digits, either case) of the body your replacement was **prepared from**: the UTF-8 bytes of the REST payload's `body` field exactly — untrimmed, no newline normalisation, a `null` body hashing as `""`. The certifying read compares it with the current body; a mismatch writes nothing and exits **3**. | A malformed value is a usage error (exit 2), never a conflict. A read carrying no `body` field at all (not `null` — absent) is refused at exit 1, never hashed as `""`. **Not atomic** — see *Lost updates* below. Without it nothing is compared. |
 | `--current-body-out <path>` | no | Write the **exact bytes of the certifying read** to `<path>`, on a dry run and on a conflict — the safe source for the next expectation: fold from that file, and its sha256 is the one the report printed. | Never written on a real write that proceeds. Refused (exit 2) when it names the `--body-file` — the same path, or, when both exist, the same file by identity (device + inode, following links: a symlink, a hard link or a case-insensitive alias) — because a conflict would overwrite your fold. A dry run that cannot write it exits 1; a conflict that cannot write it stays exit 3 and says so (`currentBodyOut.written: false`). |
-| `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has. |
+| `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has — and runs the [private-name guard](#the-private-name-guard). |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
 **Output and exit codes** — human line on a real write: `replaced
 <target>#<issue>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh
 issue edit ...` followed by `target:`/`number:`/`bytes:`/`first line:`/`last
 line:`/`current body sha256:`/`body check:`. `--json`: `{ contract:
-"nen.issue.edit-body/v0.2", target, number, bytes, bodySha256, written,
+"nen.issue.edit-body/v0.3", target, number, bytes, bodySha256, written,
 dryRun, outcome, bodyCheck: { expectedSha256, currentSha256, currentBytes,
-result, atomic }, currentBodyOut }` — `bodySha256` is the sha256 of the
+result, atomic }, currentBodyOut, privateNameCheck }` — `bodySha256` is the sha256 of the
 **replacement bytes read from `--body-file`**, populated on every outcome
 (dry run, conflict and not-sent included, where nothing was sent), `outcome` is `written` | `dry-run` | `conflict` | `uncertain` |
-`not-sent`, `bodyCheck.result` is `none` | `matched` | `conflict`, `atomic`
+`not-sent` | `private-name` | `private-name-check-unavailable`, `privateNameCheck` is the
+[guard's verdict](#the-private-name-guard) (`null` on a conflict, which refuses first), `bodyCheck.result` is `none` | `matched` | `conflict`, `atomic`
 is always `false`, and `currentBodyOut` is `null` or `{ path, written, error
 }`. An uncertain outcome sets `written: null` and adds `error` and `readBack:
 { currentSha256, matchesSubmitted, matchesPrevious, readError }` —
 `matchesSubmitted` compares the body now on GitHub with `bodySha256`, the
 replacement bytes read from `--body-file`; `matchesPrevious` compares with `bodyCheck.currentSha256`, the version the
 certifying read saw. A not-sent outcome sets `written: false` and adds
-`error`. (v0.1 carried only the first six fields.) Exit 0 on success (dry or real); exit 2 on a malformed/absent
+`error`. (v0.1 carried only the first six fields; v0.3, [#329](https://github.com/zheref/nen/issues/329), adds `privateNameCheck` and the two private-name outcomes.) Exit 0 on success (dry or real); exit 2 on a malformed/absent
 `--issue`, an empty/unreadable `--body-file`, a malformed
 `--expect-body-sha256`, a `--current-body-out` naming the `--body-file`, or a
 number that certifies as a pull request (that refusal comes before the hash
@@ -5720,7 +5746,10 @@ version, nothing was written; exit 1 if `gh issue edit` fails after
 certification passed (reported as **uncertain**, or as **not sent** when `gh`
 could not be started, never as written), on a read with no `body` field under
 `--expect-body-sha256`/`--current-body-out`, or on a dry run whose
-`--current-body-out` could not be written.
+`--current-body-out` could not be written, or when the private-name guard
+could not run; exit **4** when the guard finds a private repository named in
+the replacement for a PUBLIC target (checked after the conflict comparison,
+before the dry run and the write).
 
 **Where the expected hash comes from.** The safe source is the verb itself:
 `nen issue edit-body … --dry-run --current-body-out base.md` writes the exact
@@ -5769,7 +5798,8 @@ nen issue edit-body --target zheref/nen --issue 93 \
   --body-file body.md --dry-run
 ```
 ```text
-would run: gh issue edit 93 --repo zheref/nen --body-file body.md
+would run: gh issue edit 93 --repo zheref/nen --body-file -
+stdin: the 259 byte(s) read and checked from /path/to/nen/body.md (gh reads these, not the file)
 target: zheref/nen
 number: 93
 bytes: 259
@@ -5779,7 +5809,10 @@ last line: permanently.
 (a real run against `zheref/nen#93` — read-only: the certifying `gh api
 repos/zheref/nen/issues/93` call reached GitHub, `gh issue edit` did not)
 — captured before `v0.2` of the shape; a run today also prints `current body
-sha256: <hex>` and a `body check:` line after `last line:`.
+sha256: <hex>` and a `body check:` line after `last line:`, and since
+[#329](https://github.com/zheref/nen/issues/329) the `--body-file -` argv and
+the `stdin:` line shown above (path illustrative), after the private-name
+guard's reads.
 
 Handed a pull request's number instead, the certification refuses before
 anything is written — this is `zheref/nen#141`, a genuine (closed) pull
@@ -5793,6 +5826,94 @@ request's body instead.
 Run 'nen issue --help'.
 ```
 exit 2
+
+### The private-name guard
+
+[`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment) and
+[`issue edit-body`](#nen-issue-edit-body) are three of the verbs that put
+caller text on an issue. [`issue consolidate-close`](#nen-issue-consolidate-close)
+(its `--close-comment`/`--close-comment-map`) and the [`pr`](#family-pr)
+writers are **not guarded yet**
+([#363](https://github.com/zheref/nen/issues/363)). Before any write to a **PUBLIC**
+target — on `--dry-run` too, so its verdict is the real run's — they compare
+that text (the title and body for `file`, the body for the other two) against
+the credential's **live** private repository list
+([#329](https://github.com/zheref/nen/issues/329)). Behaviour matched:
+zheref/hatsu's `scripts/private_name_check.sh`.
+
+- **The list** is `gh api user/repos?visibility=private`, every page of 100,
+  read on every call and never cached or written to disk. A private or
+  **internal** target is not checked and the list is never read: naming a
+  private repository there leaks nothing. The target's visibility is
+  `repos/{owner}/{name}`'s `visibility`, or its `private` boolean on a server
+  that carries no `visibility`.
+- **The match** is each repository's NAME (the part after the owner),
+  case-insensitive and whole-word, taken literally. A word is a run of
+  `[A-Za-z0-9-]`, so `name` inside `name-tools` is another word, while `_` and
+  `.` **bound** a word, failing closed: `_name_`, `__name__`, `my_name`,
+  `name.git` and a sentence's `name.` all match, and `owner/name` slugs and URLs
+  match through the name.
+- **The normalised second pass.** A line holding `%`, `&`, `<`, `\`, `*`,
+  `~`, a backtick or a non-ASCII character is also read normalised: `%XX`
+  decoded, UTF-8 decoded, HTML entities decoded, inline tags and backslash
+  escapes before punctuation dropped, NFKC applied, format characters and
+  default-ignorable code points (zero-width, soft hyphen, U+034F, variation
+  selectors) deleted and every dash, U+2212 MINUS SIGN included, folded to `-`;
+  then once more with HTML comments, `*`, `~` and backticks removed, so
+  `na**me**`, `na~~me~~`, ``na`m`e`` and `na<!-- -->me` read as the name. The
+  decoded text is scanned with inline tags kept as well as stripped, so a name
+  inside an autolink (`<https://…/v%61ult>`) or an `href="…"` is found. Each
+  name is matched on its own, overlaps included, before any exemption applies:
+  an ignored `vault.tools` or `my_vault` never hides a policed `vault`. Those transformations are what is handled;
+  nothing else is claimed.
+- **The refusal** exits **4**, writes nothing, and never prints the name:
+  each hit is `nen issue: <field>:<line>: private repository #<k>`, `k` a
+  1-based index into the list sorted bytewise (`LC_ALL=C sort -u` of the
+  `full_name`s; for a name two owners share, the first entry the ignore file
+  does not exempt), and the refusal
+  prints the command that resolves `k` on your own terminal. nen never rewrites
+  the text: redact and retry.
+- **Fail closed.** An unreadable target visibility, an unreadable or malformed
+  list (including any entry whose `full_name` is not exactly `owner/name`, both
+  halves non-empty and whitespace-free), a list that fills 100 pages (and so may be truncated) and a list that
+  reads **EMPTY** are each a refusal at exit **1** — never a pass. A token that
+  cannot see private repositories would otherwise read green.
+- **The ignore file** is `--private-names-ignore-file <path>`: private
+  repositories the caller has ruled too generic to police — one per line, `#`
+  comments and blank lines ignored, case-insensitive. A bare `name` exempts
+  that name under every owner; an `owner/name` line exempts that slug only (a
+  name shared by two owners stays policed until both are exempt). **No default
+  path is ever read**: a caller that keeps one passes it (a caller such as Hatsu
+  can pass its own `~/.config/hatsu/redaction-ignore`), and a missing or unreadable file is a
+  usage error (exit **2**) before any `gh` call, never an empty list. An
+  ignore file that exempts **every** private name is a refusal at exit **1**
+  (`every private name is ignored`) — it would police nothing — unless
+  `--allow-all-ignored` is given; that flag without an ignore file is a usage
+  error (exit 2). An
+  ignored hit does not block and is **never silent**: stderr prints `nen issue:
+  ignored: <field>:<line>: private repository #<k> (ignore file)`, without the
+  name, and `--json` records it with `ignored: true`.
+- **The opt-out** is `--skip-private-name-check`, for a caller that has run its
+  own check. Nothing is read, the run says so on stderr every time, and
+  `--json` reports it.
+
+**The checked bytes are the bytes sent.** All three verbs read the body once,
+check it, and hand `gh` those bytes on stdin (`--body-file -`) — never the
+path, which `gh` would re-read after the check — so nothing written to the file
+between the check and the write is published unchecked.
+
+**Its output.** Every line the guard prints goes to stderr and begins
+`nen issue:` — a hit, an `ignored:` hit, the skip notice, and an
+unavailable check's reason — so a caller can tell the guard's lines from the
+verb's own and from `gh`'s.
+
+Every `--json` report of the three verbs carries `privateNameCheck: { result,
+targetVisibility, listSize, owners, hits: [{ field, line, index, normalised,
+ignored }], error }` — `listSize` and `owners` are counts (never names), `null`
+when the list was not read — where `result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
+`refused` | `unavailable`; a run whose only hits are ignored is `clean` and
+still lists them. A clean run with no hits and a private target add nothing to
+the human output.
 
 ### `nen issue attach-sub`
 

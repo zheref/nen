@@ -119,6 +119,13 @@ export interface RecordedRun {
    * somewhere the value is supposed to be.
    */
   readonly env: Readonly<Record<string, string | undefined>> | null;
+  /**
+   * The text the caller wrote to the child's stdin, present only when it wrote
+   * some -- so every recorded run that predates it keeps its exact shape. A
+   * verb that hands `gh` its payload on stdin (`--body-file -`) is asserted
+   * here, because the argv then names no file.
+   */
+  readonly stdin?: string;
 }
 
 export class ScriptedSeams implements Seams {
@@ -205,6 +212,7 @@ export class ScriptedSeams implements Seams {
       interactive: false,
       cwd: options.cwd ?? null,
       env: options.env ?? null,
+      ...(options.stdin === undefined ? {} : { stdin: options.stdin }),
     });
     const found = this.find(command, args, "subprocess");
     return {
