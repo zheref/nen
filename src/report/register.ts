@@ -751,6 +751,11 @@ export function spendEffort(name: string, phases: readonly ReportPhase[], usage:
 
 export interface RegisterInput {
   readonly generatedAt: string;
+  /**
+   * `report data`'s derived local clock (zheref/nen#258), or null when the
+   * zone could not be named. The desk's own `generatedAtLocal` still wins.
+   */
+  readonly generatedAtLocal: string | null;
   readonly objects: readonly ReportObject[];
   readonly phases: readonly ReportPhase[];
   readonly usage: readonly ReportUsage[];
@@ -889,7 +894,7 @@ export function assembleRegister(desk: Desk, input: RegisterInput): RegisterKeys
     title: desk.title,
     scope: desk.scope,
     gate: desk.gate,
-    generatedAtLocal: desk.generatedAtLocal ?? input.generatedAt,
+    generatedAtLocal: desk.generatedAtLocal ?? input.generatedAtLocal ?? input.generatedAt,
     footerNote: footer.filter((line): boolean => line !== "").join(" "),
     footerCount: `${rows.length} object${rows.length === 1 ? "" : "s"} in scope · ${asks} ask${asks === 1 ? "" : "s"} on the desk`,
     ...counts,

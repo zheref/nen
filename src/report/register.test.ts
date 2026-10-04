@@ -44,6 +44,11 @@ function script(): ScriptedCall[] {
     { match: "git symbolic-ref --short HEAD", result: { code: 0, stdout: "feat/register\n" } },
     { match: `git log main..HEAD --format=${LOG_FORMAT}`, result: { code: 0, stdout: "" } },
     { match: "git diff --name-status main...HEAD", result: { code: 0, stdout: "" } },
+    // The context reads (zheref/nen#258): owner/name, the worktree, origin, HEAD.
+    { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/nen.git\n" } },
+    { match: "git rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel", result: { code: 0, stdout: "/w/.git\n/w/.git\n/w\n" } },
+    { match: "git rev-parse --verify --quiet refs/remotes/origin/feat/register", result: { code: 1, stdout: "" } },
+    { match: "git rev-parse --verify --quiet HEAD", result: { code: 0, stdout: "0000000000000000000000000000000000000000\n" } },
   ];
 }
 
@@ -213,6 +218,9 @@ describe("nen report data --register", () => {
       "tallyScope", "tallyNeedsYou", "tallyBlockers", "tallyReady", "tallyInFlight",
       "gates", "architectureCaption", "graphJson", "graphMermaid", "graphNodes", "graphEdges",
       "spendEfforts", "legendRows",
+      // The derived context (zheref/nen#258), AFTER the register; its `gate`
+      // and `generatedAtLocal` are the register's own, in their places above.
+      "worktree", "effortStage", "stageClass", "turnNumber", "generatedDateLocal", "timeZone",
     ]);
     // The offline path stays offline.
     expect(captured.seams.calls.every((call): boolean => call.command === "git")).toBe(true);
@@ -438,16 +446,16 @@ describe("assembleRegister", () => {
     const desk = parseDesk({ ...DESK, rows: {} }, "desk.json");
     const objects = [ISSUE, PR_READY] as unknown as ReportObject[];
     const codes: NotationSource = { codeFor: (slug): string | null => (slug === "zheref/hatsu" ? "HA" : null), slugFor: (): null => null, unavailable: null };
-    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), objects, phases: [], usage: [], target: null, codes, verdictFile: null });
+    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), generatedAtLocal: null, objects, phases: [], usage: [], target: null, codes, verdictFile: null });
     expect(register.objects.map((row): string => row.notation)).toEqual(["HA-IS-#85", "HA-PR-#87"]);
-    const fallback = assembleRegister({ ...desk, gates: [], footerNote: "" }, { generatedAt: NOW.toISOString(), objects, phases: [], usage: [], target: null, codes: NO_CODES, verdictFile: null });
+    const fallback = assembleRegister({ ...desk, gates: [], footerNote: "" }, { generatedAt: NOW.toISOString(), generatedAtLocal: null, objects, phases: [], usage: [], target: null, codes: NO_CODES, verdictFile: null });
     expect(fallback.footerNote).toBe("Object notation unresolved for zheref/hatsu (no product code in nen/repos.json); those rows read <owner>/<name>#<n>.");
   });
 
   it("defaults generatedAtLocal to generatedAt, and blanks a URL that is not a link, naming it", () => {
     const desk = parseDesk({ ...DESK, rows: {}, generatedAtLocal: undefined }, "desk.json");
     const bad = { ...PR_READY, url: "javascript:alert(1)" } as unknown as ReportObject;
-    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), objects: [bad], phases: [], usage: [], target: "zheref/hatsu", codes: NO_CODES, verdictFile: null });
+    const register = assembleRegister({ ...desk, gates: [] }, { generatedAt: NOW.toISOString(), generatedAtLocal: null, objects: [bad], phases: [], usage: [], target: "zheref/hatsu", codes: NO_CODES, verdictFile: null });
     expect(register.generatedAtLocal).toBe(NOW.toISOString());
     expect(register.objects[0]?.url).toBe("");
     expect(register.objects[0]?.notes.at(-1)).toMatch(/is not an http\(s\), mailto, # or \/ link/);
@@ -456,7 +464,7 @@ describe("assembleRegister", () => {
   it("uses #<n> when neither a target nor the URL names a repository", () => {
     const desk = parseDesk({ ...DESK, rows: {}, gates: [] }, "desk.json");
     const odd = { ...ISSUE, url: "/local/85" } as unknown as ReportObject;
-    const register = assembleRegister(desk, { generatedAt: NOW.toISOString(), objects: [odd], phases: [], usage: [], target: null, codes: NO_CODES, verdictFile: null });
+    const register = assembleRegister(desk, { generatedAt: NOW.toISOString(), generatedAtLocal: null, objects: [odd], phases: [], usage: [], target: null, codes: NO_CODES, verdictFile: null });
     expect(register.objects[0]?.notation).toBe("#85");
     expect(register.footerNote).toMatch(/unresolved for #85/);
   });
@@ -522,7 +530,7 @@ describe("spend", () => {
 
   it("shows the desk's efforts in its order, or every recorded effort without one", () => {
     const desk = parseDesk({ ...DESK, rows: {}, gates: [], efforts: ["e2", "e1"], spendNotes: { e1: "kept" } }, "desk.json");
-    const input = { generatedAt: NOW.toISOString(), objects: [], phases: PHASES, usage: [usage({ effort: "e3" })], target: null, codes: NO_CODES, verdictFile: null };
+    const input = { generatedAt: NOW.toISOString(), generatedAtLocal: null, objects: [], phases: PHASES, usage: [usage({ effort: "e3" })], target: null, codes: NO_CODES, verdictFile: null };
     expect(assembleRegister(desk, input).spendEfforts.map((effort): string => effort.name)).toEqual(["e2", "e1"]);
     expect(assembleRegister(desk, input).spendEfforts[1]?.spendNote).toBe("kept");
     const all = parseDesk({ ...DESK, rows: {}, gates: [] }, "desk.json");

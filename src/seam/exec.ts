@@ -316,6 +316,13 @@ export interface Seams {
    * than only on the lane that happens to be the host.
    */
   readonly platform: NodeJS.Platform;
+  /**
+   * The IANA zone this host names for itself, or null when it names none
+   * (zheref/nen#258). OPTIONAL, so a hand-built Seams in a test that never
+   * reads a clock need not say anything about one; a reader treats an absent
+   * seam exactly as a host that names no zone -- `null`, with the reason.
+   */
+  readonly hostTimeZone?: () => string | null;
 }
 
 // CRLF IS NORMALIZED AT THE SEAM, once, for every caller.
@@ -648,6 +655,12 @@ export function defaultSeams(): Seams {
     now: (): Date => new Date(),
     env: process.env,
     platform: process.platform,
+    hostTimeZone: (): string | null => {
+      // The runtime's own reading of /etc/localtime (or the OS's zone on a
+      // host with none). "Etc/Unknown" is ICU's word for "could not tell".
+      const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return zone === "" || zone === "Etc/Unknown" ? null : zone;
+    },
   };
 }
 

@@ -33,6 +33,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { loadWorkflow, type ReportSection } from "../schema/workflow.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
+import { assembleContext, deriveClock, type ReportContext } from "./context.js";
 import { assembleObjects, renderObjects } from "./objects.js";
 import { assembleRegister, parseDesk, renderRegister, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
@@ -43,7 +44,7 @@ import { renderReport } from "./render.js";
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
 usage:
-  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--register <desk>] [--json]
+  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
 
@@ -66,6 +67,33 @@ data      One document describing this branch against --base: the commits, the
                    { "<tier>": ["<path prefix or glob>", ...] }. The file's key
                    order is the precedence -- the first tier whose patterns
                    match a path wins. Without it every file's tier is null.
+
+  --tz <zone>      The IANA zone the local clock is read in. It must be a
+                   COMPILED zone in this host's zoneinfo database ($TZDIR, else
+                   /usr/share/zoneinfo, /var/db/timezone/zoneinfo,
+                   /usr/lib/zoneinfo): a file whose first four bytes are
+                   'TZif'. Anything else -- a misspelling, 'zone.tab', a path --
+                   is refused at exit 2 before any GitHub read. Without it, $TZ,
+                   then the zone the host names.
+  --open-stop      A G5 stop is open this turn: effortStage is 'blocked'. The
+                   only way to 'blocked' -- a .nen/last-stop.json on disk is a
+                   record, not an open stop.
+
+  THE DERIVED CONTEXT (zheref/nen#258) follows 'objects': worktree (the
+  checkout's directory name when --git-dir and --git-common-dir differ, else
+  'core'), effortStage / gate / stageClass (authoring 'none — local' info;
+  published 'none — pushed' info; in review '<G2|G4> — pending' warn; ready
+  '<G2|G4> — yours' red; blocked 'G5 — yours' red; landed 'none — landed' ok --
+  pushed is refs/remotes/origin/<branch>, the PR is the 'objects' row whose
+  head is HEAD or origin/<branch>, ready is its readiness verdict, G2/G4 is the
+  repository's role in --repo's nen/repos.json), turnNumber (the 'report'
+  phase entries of the effort's ledger), and generatedAtLocal /
+  generatedDateLocal / timeZone. 'repo' is owner/name from the origin remote --
+  'nen repo resolve --from''s answer -- never the directory's name. EACH IS
+  null, WITH THE REASON ON STDERR, WHEN IT CANNOT BE DERIVED; none is guessed.
+  Under --register the register's own 'gate' and 'generatedAtLocal' keep their
+  places (the desk's, else the derived clock, else generatedAt) and the other
+  six follow the register keys.
 
   The 'objects' REGISTER -- the issues and pull requests this effort is about
   -- is [] unless one of the five flags below is given, which keeps this
@@ -168,8 +196,8 @@ has not got.`;
 /** Per-subcommand flags, so a flag meant for the other verb is refused, not ignored. */
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
   data: {
-    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register"],
-    booleans: ["backlog"],
+    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz"],
+    booleans: ["backlog", "open-stop"],
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
   mermaid: { values: ["graph"], booleans: [] },
@@ -353,10 +381,40 @@ function readObjectOptions(
   };
 }
 
+/** `--tz`, or null for the host's zone; an empty value is refused like every other flag here. */
+function readTz(context: CommandContext): string | null {
+  const flag = context.args.values["tz"];
+  if (flag === undefined) return null;
+  if (flag.trim() === "") {
+    throw new VerbUsageError("--tz was given an empty value. Omit it entirely to read the clock in the host's own zone.");
+  }
+  return flag.trim();
+}
+
+/**
+ * The context keys a register document carries AFTER its own: every one but
+ * `gate` and `generatedAtLocal`, which the register already has (the desk's
+ * page gate; the desk's local stamp, else the derived one) in the places
+ * NN-PR-#365 gave them. Re-spreading them would overwrite the desk's word with
+ * the effort's, in a page about more than one effort.
+ */
+function registerTail(derived: ReportContext): Omit<ReportContext, "gate" | "generatedAtLocal"> {
+  return {
+    worktree: derived.worktree,
+    effortStage: derived.effortStage,
+    stageClass: derived.stageClass,
+    turnNumber: derived.turnNumber,
+    generatedDateLocal: derived.generatedDateLocal,
+    timeZone: derived.timeZone,
+  };
+}
+
 async function runData(context: CommandContext): Promise<number> {
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It names the working tree this report describes."),
   });
+  const warn = (line: string): void => context.io.err(line);
+  const tz = readTz(context);
   const document = assembleData(
     context.seams,
     root,
@@ -369,8 +427,11 @@ async function runData(context: CommandContext): Promise<number> {
       tiers: readTiers(context, root),
       lane: resolveLane(context, root),
     },
-    (line): void => context.io.err(line),
+    warn,
   );
+  // THE CLOCK BEFORE THE NETWORK: a refused --tz costs no GitHub read. Read off
+  // `generatedAt` itself, so the two stamps are one instant by construction.
+  const clock = deriveClock(context.seams, tz, new Date(document.generatedAt), warn);
   const objectOptions = readObjectOptions(context, root);
   // `objects` IS APPENDED AT THE END OF THE KEY ORDER, deliberately and once:
   // every consumer reading the twelve v0.11 keys reads the same twelve here,
@@ -379,10 +440,26 @@ async function runData(context: CommandContext): Promise<number> {
   const objects =
     objectOptions === null
       ? []
-      : await assembleObjects(context.seams, objectOptions, (line): void => context.io.err(line));
+      : await assembleObjects(context.seams, objectOptions, warn);
+  // THE CONTEXT KEYS (zheref/nen#258) come AFTER `objects` -- new information
+  // after everything a v0.13 consumer already reads, on both paths.
+  const derived = assembleContext(
+    context.seams,
+    {
+      root,
+      repo: document.repo,
+      branch: document.branch,
+      phases: document.phases,
+      objects,
+      objectsAsked: objectOptions !== null,
+      openStop: context.args.booleans.has("open-stop"),
+    },
+    clock,
+    warn,
+  );
   const deskFlag = context.args.values["register"];
   if (deskFlag === undefined) {
-    const full = { ...document, objects };
+    const full = { ...document, objects, ...derived };
     emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects)]);
     return 0;
   }
@@ -399,18 +476,20 @@ async function runData(context: CommandContext): Promise<number> {
   );
   const register = assembleRegister(desk, {
     generatedAt: document.generatedAt,
+    generatedAtLocal: derived.generatedAtLocal,
     objects,
     phases: document.phases,
     usage: document.usage,
     target: objectOptions?.target?.slug ?? null,
-    codes: notationSource(root, (line): void => context.io.err(line)),
+    codes: notationSource(root, warn),
     // THE FILE'S NAME, NEVER ITS PATH: footerNote is pasted into pull requests.
     verdictFile: objectOptions?.from === null || objectOptions?.from === undefined ? null : basename(objectOptions.from.display),
   });
   // `objects` STAYS WHERE IT WAS -- after `usage` -- and the register keys
   // follow it, so a consumer of the v0.13 document reads the same keys in the
-  // same order and the register is new information after them.
-  const full = { ...document, ...register };
+  // same order and the register is new information after them; the derived
+  // context follows the register.
+  const full = { ...document, ...register, ...registerTail(derived) };
   emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects), ...renderRegister(register)]);
   return 0;
 }

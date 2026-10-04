@@ -44,6 +44,11 @@ function script(): ScriptedCall[] {
     { match: "git symbolic-ref --short HEAD", result: { code: 0, stdout: "feat/register\n" } },
     { match: `git log main..HEAD --format=${LOG_FORMAT}`, result: { code: 0, stdout: "" } },
     { match: "git diff --name-status main...HEAD", result: { code: 0, stdout: "" } },
+    // The context reads (zheref/nen#258): owner/name, the worktree, origin, HEAD.
+    { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/nen.git\n" } },
+    { match: "git rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel", result: { code: 0, stdout: "/w/.git\n/w/.git\n/w\n" } },
+    { match: "git rev-parse --verify --quiet refs/remotes/origin/feat/register", result: { code: 1, stdout: "" } },
+    { match: "git rev-parse --verify --quiet HEAD", result: { code: 0, stdout: "0000000000000000000000000000000000000000\n" } },
   ];
 }
 
@@ -216,7 +221,13 @@ describe("nen report data --objects-from", () => {
     ]);
     expect(captured.code).toBe(0);
     const document = JSON.parse(captured.out.join("\n")) as Record<string, unknown>;
-    expect(Object.keys(document).at(-1)).toBe("objects");
+    // `objects` is still the last of the v0.13 keys; the derived context
+    // (zheref/nen#258) is new information appended after it.
+    const keys = Object.keys(document);
+    expect(keys.slice(keys.indexOf("objects"))).toEqual([
+      "objects", "worktree", "effortStage", "gate", "stageClass", "turnNumber",
+      "generatedAtLocal", "generatedDateLocal", "timeZone",
+    ]);
     const objects = document["objects"] as ReportObject[];
     expect(objects.map((row): number => row.number)).toEqual([85, 87]);
     // And no gh call was made: the offline path is offline.
