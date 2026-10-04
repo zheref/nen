@@ -1479,20 +1479,31 @@ export interface QuorumMember {
  * The 2026-10-04 ruling (zheref/nen#361): a MET `round_quorum` FULFILS the
  * round owed by its own `any_of` members -- "if Bugbot is unavailable because
  * it is exhausted, Copilot's round satisfies the review gate, and the other way
- * around". Splits the per-reviewer owed list into what still fails CON-32(b)
- * and what the met quorum excuses. A member owed under an UNMET quorum, a
- * non-member, and every owed round when no quorum is declared (`null`) stay
- * owed exactly as before. Pure: callers decide how to render the excused.
+ * around". It covers an UNAVAILABLE member, never one MID-REVIEW (the
+ * maintainer's clarification of the same ruling): a member is excused only when
+ * it has no round-check run at head, or one that COMPLETED without a round
+ * (NEUTRAL/Error, CANCELLED, SKIPPED, FAILURE). A member whose round-check run
+ * at head is still IN FLIGHT (QUEUED, IN_PROGRESS, PENDING, WAITING -- no
+ * conclusion yet, state `pending`) stays owed: its review is coming, and
+ * excusing it would let a pull request read ready minutes before its findings
+ * land. Splits the owed list into what still fails CON-32(b) and what the met
+ * quorum excuses. A member owed under an UNMET quorum, a non-member, and every
+ * owed round when no quorum is declared (`null`) stay owed exactly as before.
+ * Pure: `pr ready`'s row 4 and `pr next-blocker` both call it, so they agree.
  */
 export function quorumExcusedRounds(
   owed: readonly OwedRound[],
   quorum: QuorumResult | null | undefined,
 ): { readonly owed: readonly OwedRound[]; readonly excused: readonly OwedRound[] } {
   if (quorum === null || quorum === undefined || !quorum.met) return { owed, excused: [] };
-  const members = new Set(quorum.anyOf);
+  const unavailable = new Set(
+    quorum.members
+      .filter((member): boolean => member.roundCheck?.state !== "pending")
+      .map((member): string => member.reviewer),
+  );
   return {
-    owed: owed.filter((round): boolean => !members.has(round.reviewer)),
-    excused: owed.filter((round): boolean => members.has(round.reviewer)),
+    owed: owed.filter((round): boolean => !unavailable.has(round.reviewer)),
+    excused: owed.filter((round): boolean => unavailable.has(round.reviewer)),
   };
 }
 

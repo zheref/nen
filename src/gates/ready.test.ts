@@ -1242,9 +1242,13 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       expect(evaluation.context.reviewers).toEqual(enrolled ? ["copilot", "bugbot"] : ["copilot"]);
       const owedRow = rowOf(evaluation, "rounds-owed");
       // The 2026-10-04 ruling (zheref/nen#361): a MET quorum fulfils the owed
-      // rounds of its own members, and both reviewers here are members -- so
-      // the row is exactly the quorum's verdict.
-      expect(owedRow.status).toBe(quorumMet ? "ready" : "failed");
+      // rounds of its own UNAVAILABLE members, and both reviewers here are
+      // members. A Bugbot whose run at head is still IN FLIGHT is mid-review,
+      // not unavailable, and stays owed (the maintainer's clarification).
+      const bugbotInFlight = combo.bugbotCheck === "in-progress";
+      const bugbotStillOwed = bugbotOwed && (!quorumMet || bugbotInFlight);
+      const copilotStillOwed = copilotOwed && !quorumMet;
+      expect(owedRow.status).toBe(quorumMet && !bugbotStillOwed ? "ready" : "failed");
 
       // The quorum is carried on the row whatever its outcome.
       expect(owedRow.roundQuorum).toMatchObject({
@@ -1256,8 +1260,8 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
 
       // Each failure is named, and nothing that did not fail is.
       const reason = owedRow.reason ?? "";
-      expect(reason.includes("copilot (review requested, not yet posted)")).toBe(copilotOwed && !quorumMet);
-      expect(reason.includes("bugbot (no round at head)")).toBe(bugbotOwed && !quorumMet);
+      expect(reason.includes("copilot (review requested, not yet posted)")).toBe(copilotStillOwed);
+      expect(reason.includes("bugbot (no round at head)")).toBe(bugbotStillOwed);
       expect(reason.includes("round quorum not met")).toBe(!quorumMet);
       if (!quorumMet) {
         const lack = {
@@ -1527,19 +1531,56 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
     expect(evaluation.line).toBe("ready");
   });
 
-  // SUPERSEDED by the 2026-10-04 ruling: a still-running member is excused
-  // by a met quorum like any other owed member. Its findings, if it posts any,
-  // still hold row 6 until resolved -- but a PR may read ready before it posts.
-  it("a Cursor Bugbot check still RUNNING is excused once Copilot's round meets the quorum (ruling 2026-10-04)", () => {
+  // The 2026-10-04 ruling covers an UNAVAILABLE member, not one mid-review:
+  // a run still in flight at head keeps it owed even though the quorum is met.
+  it("a Cursor Bugbot check still RUNNING keeps bugbot owed even though Copilot's round meets the quorum", () => {
     const evaluation = evaluateReady(
       OWN,
       stateFor({ copilotReview: true, bugbotReview: false, copilotRequested: false, bugbotCheck: "in-progress" }),
       OPTIONS,
     );
     const row = rowOf(evaluation, "rounds-owed");
+    expect(evaluation.ready).toBe(false);
+    expect(row.status).toBe("failed");
+    // The met quorum rides on the row; it does not excuse a member mid-review.
     expect(row.roundQuorum?.met).toBe(true);
-    expect(row.status).toBe("ready");
-    expect(row.note).toContain("bugbot (no round at head; covered by round quorum)");
+    expect(row.reason).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
+    );
+  });
+
+  it("...while a Cursor Bugbot run that COMPLETED without a round (errored, cancelled, failed, skipped) is excused", () => {
+    for (const conclusion of ["NEUTRAL", "CANCELLED", "FAILURE", "TIMED_OUT"]) {
+      const evaluation = evaluateReady(
+        OWN,
+        readyState({
+          checks: [greenCheck(), { name: "Cursor Bugbot", status: "COMPLETED", conclusion }],
+          reviews: [{ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+          reviewers: "copilot,bugbot",
+        }),
+        OPTIONS,
+      );
+      const row = rowOf(evaluation, "rounds-owed");
+      expect(row.status, conclusion).toBe("ready");
+      expect(row.note, conclusion).toContain("bugbot (no round at head; covered by round quorum)");
+    }
+  });
+
+  it("every in-flight status keeps the member owed: QUEUED, IN_PROGRESS, PENDING, WAITING", () => {
+    for (const status of ["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"]) {
+      const evaluation = evaluateReady(
+        OWN,
+        readyState({
+          checks: [greenCheck(), { name: "Cursor Bugbot", status, conclusion: null }],
+          reviews: [{ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+          reviewers: "copilot,bugbot",
+        }),
+        OPTIONS,
+      );
+      expect(rowOf(evaluation, "rounds-owed").reason, status).toBe(
+        "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
+      );
+    }
   });
 
   it("the stall bound is unchanged: a stalled Copilot request is row 3's line; row 4 carries owed AND quorum", () => {

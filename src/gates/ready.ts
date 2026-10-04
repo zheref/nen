@@ -165,9 +165,12 @@
 //     failure"): "a declared round_quorum must fulfil the round requirement
 //     for its members. If Bugbot is unavailable because it is exhausted,
 //     Copilot's round satisfies the review gate, and the other way around."
-//     So once the quorum is met, an owed round of a reviewer NAMED IN
-//     `any_of` no longer fails row 4; the row's note names the quorum and
-//     each excused member. A reviewer outside `any_of` is owed exactly as
+//     So once the quorum is met, an owed round of an UNAVAILABLE reviewer
+//     NAMED IN `any_of` -- an unavailable member: no run at head, or one that
+//     completed without a round -- no longer fails row 4; the row's note names
+//     the quorum and each excused member. A member whose round-check run at
+//     head is still in flight is MID-REVIEW, not unavailable, and stays owed
+//     (the maintainer's clarification of the same ruling). A reviewer outside `any_of` is owed exactly as
 //     before, an UNMET quorum fails exactly as before, and rows 3 (a stalled
 //     request) and 6 (unresolved threads) are untouched -- an excused
 //     member's posted findings must still be resolved.
@@ -1388,8 +1391,9 @@ export function evaluateReady(
       // `round_quorum` (maintainer rulings 2026-09-29 and 2026-10-04) --
       // ADOPTION DIVERGENCE (9) in the header. The quorum is judged on the
       // SAME row. Unmet, it fails the row even when nothing is owed. MET, it
-      // FULFILS the owed rounds of its own `any_of` members
-      // (`quorumExcusedRounds`); a non-member is still owed. It is read from
+      // FULFILS the owed rounds of its own UNAVAILABLE `any_of` members
+      // (`quorumExcusedRounds`); a member still in flight at head, and a
+      // non-member, are still owed. It is read from
       // the FILE, so it applies under `--reviewers` too -- the configured set
       // decides who is OWED, the quorum is the repository's declared rule on
       // who HAS reviewed -- and it is `null` on the `--reviewers`-only

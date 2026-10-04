@@ -44,7 +44,10 @@ import {
   type OwedRound,
   type RoundInputs,
   checkExclusionMatches,
+  quorumExcusedRounds,
   utcDay,
+  type QuorumMember,
+  type QuorumResult,
 } from "./predicates.js";
 import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
@@ -2884,5 +2887,57 @@ describe("checkExclusionMatches -- declared checks.excluded", () => {
   it("utcDay reads an ISO instant's UTC day and refuses an unreadable one", () => {
     expect(utcDay("2026-10-02T23:30:00-05:00")).toBe("2026-10-03");
     expect(utcDay("nope")).toBeNull();
+  });
+});
+
+// ADDED (zheref/nen#361, ruling 2026-10-04 and its clarification): a met quorum
+// excuses an UNAVAILABLE member's owed round, never one still in flight.
+describe("quorumExcusedRounds", () => {
+  const member = (
+    reviewer: string,
+    state: "absent" | "pending" | "unsuccessful" | "skipped" | null,
+  ): QuorumMember => ({
+    reviewer,
+    round: null,
+    reading: "any-head" as const,
+    requested: false,
+    roundCheck:
+      state === null
+        ? null
+        : { pattern: "^x$", name: state === "absent" ? null : "x", state, conclusion: null, from: "head" as const, sha: null },
+  });
+  const quorum = (met: boolean, members: QuorumMember[]): QuorumResult => ({
+    anyOf: members.map((m): string => m.reviewer),
+    minimum: 1,
+    count: met ? 1 : 0,
+    met,
+    members,
+  });
+  const owed = [
+    { reviewer: "copilot", reason: "review-requested-not-yet-posted" as const },
+    { reviewer: "bugbot", reason: "no-round-at-head" as const },
+    { reviewer: "sasuke", reason: "no-round-at-head" as const },
+  ];
+
+  it("no quorum or an unmet one excuses nothing", () => {
+    expect(quorumExcusedRounds(owed, null)).toEqual({ owed, excused: [] });
+    expect(quorumExcusedRounds(owed, quorum(false, [member("copilot", null), member("bugbot", "absent")]))).toEqual({
+      owed,
+      excused: [],
+    });
+  });
+
+  it("a met quorum excuses unavailable members (no run, or one completed without a round), never a non-member", () => {
+    for (const state of ["absent", "unsuccessful", "skipped"] as const) {
+      const split = quorumExcusedRounds(owed, quorum(true, [member("copilot", null), member("bugbot", state)]));
+      expect(split.excused.map((r): string => r.reviewer), state).toEqual(["copilot", "bugbot"]);
+      expect(split.owed.map((r): string => r.reviewer), state).toEqual(["sasuke"]);
+    }
+  });
+
+  it("a member whose run at head is still IN FLIGHT stays owed", () => {
+    const split = quorumExcusedRounds(owed, quorum(true, [member("copilot", null), member("bugbot", "pending")]));
+    expect(split.excused.map((r): string => r.reviewer)).toEqual(["copilot"]);
+    expect(split.owed.map((r): string => r.reviewer)).toEqual(["bugbot", "sasuke"]);
   });
 });

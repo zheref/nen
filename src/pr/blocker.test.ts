@@ -192,6 +192,15 @@ describe("nextBlocker -- round_quorum, on this repository's own nen/gates.json (
     expect(result.kind).toBe("none");
   });
 
+  it("#361: Bugbot still IN FLIGHT plus Copilot's review: never `none` -- mid-review is not unavailable", () => {
+    const running: CheckRun = { ...green, name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null };
+    const result = nextBlocker(
+      OWN,
+      snapshot({ checks: [green, running], reviews: [review("copilot-pull-request-reviewer[bot]")] }),
+    );
+    expect(result.kind).not.toBe("none");
+  });
+
   it("#361: Copilot requested and silent plus a Bugbot SUCCESS: no owed-round", () => {
     const result = nextBlocker(
       OWN,

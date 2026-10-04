@@ -1262,17 +1262,20 @@ Cursor Bugbot". `round_quorum` says it:
   around.* So:
   - fewer than `minimum` members with a round fails row 4 (`rounds-owed`,
     CON-32(b)), even when nothing is owed, exactly as before;
-  - once the quorum is **met**, a round owed by a reviewer **named in
-    `any_of`** no longer fails row 4. That covers a member with a pending
-    request, an enrolled `Cursor Bugbot` whose check is still running, and one
-    whose check errored (`NEUTRAL`, for example "usage limit reached"). The row
+  - once the quorum is **met**, a round owed by an **unavailable** reviewer
+    **named in `any_of`** no longer fails row 4. An unavailable member is one
+    with no round-check run at head, or one whose run completed without a
+    round (`NEUTRAL`/Error such as "usage limit reached", `CANCELLED`,
+    `SKIPPED`, `FAILURE`); a member with only a pending review request and no
+    round check (Copilot) counts too. A member whose run at head is still **in
+    flight** (`QUEUED`, `IN_PROGRESS`, `PENDING`, `WAITING`) is mid-review, not
+    unavailable, and **stays owed** even when the quorum is met. The row
     passes, and its note names the quorum and each excused member:
     `round quorum met (1 of 2 …): …; excused by the met round quorum (ruling
     2026-10-04): bugbot (no round at head; covered by round quorum)`;
   - a reviewer **not** in `any_of` is owed exactly as before;
   - row 3 (a stalled request) and row 6 (unresolved threads) are unchanged,
-    so a member's posted findings must still be resolved, and an excused
-    member that is still running can post findings after the row reads ready;
+    so a member's posted findings must still be resolved;
   - `nen pr next-blocker` agrees: it reports no `owed-round` for a member the
     met quorum covers;
   - a file with no `round_quorum` gets byte-identical output.
@@ -1392,7 +1395,7 @@ one of the two:
 | Bugbot posted a review (as `cursor[bot]`) at any earlier head | ready |
 | Bugbot's run concluded `SUCCESS` on an earlier commit that GitHub lists against this PR, nothing at head, no review | ready under `bounded`, noted `bugbot (round: 'Cursor Bugbot' check completed at earlier head <sha>)`. FAILED under `strict` |
 | Copilot posted a review at any earlier head | ready |
-| `Cursor Bugbot` still running, Copilot reviewed earlier | ready (ruling 2026-10-04): the met quorum excuses it, noted `bugbot (no round at head; covered by round quorum)`. Under the 2026-09-29 reading this FAILED |
+| `Cursor Bugbot` still running, Copilot reviewed earlier | FAILED: `bugbot (no round at head)`. It is mid-review, not unavailable, so the met quorum does not excuse it; it is owed until its run concludes `SUCCESS`, it posts a review, or its run completes without a round |
 | `Cursor Bugbot` errored (`NEUTRAL`, "usage limit reached"), Copilot reviewed earlier | ready (ruling 2026-10-04), noted the same way |
 | Copilot re-requested and not yet posted, Bugbot reviewed | ready (ruling 2026-10-04), noted `copilot (review requested, not yet posted; covered by round quorum)`. Row 3 still fails if the request has stalled |
 
