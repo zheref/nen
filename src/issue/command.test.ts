@@ -23,11 +23,34 @@ function tempFile(name: string, contents: string): string {
   return path;
 }
 
+/** The three verbs that run the private-name guard (zheref/nen#329). */
+const GUARDED_SUBCOMMANDS: readonly string[] = ["file", "comment", "edit-body"];
+
+/**
+ * THE DEFAULT PRIVATE-NAME GUARD ANSWER, for every test that is not about it.
+ *
+ * `file`, `comment` and `edit-body` read the target's visibility before any
+ * write (zheref/nen#329). A test about something else gets that read answered
+ * "private" -- so the guard skips and reads no list -- and the read is left out
+ * of `calls`, so those tests keep asserting the calls THEIR behaviour makes.
+ * The guard's own describe block passes `privateGuard: "scripted"`, scripts
+ * every read itself and sees every call.
+ */
+function privateTargetRow(argv: readonly string[]): ScriptedCall | null {
+  if (argv[0] !== "issue" || !GUARDED_SUBCOMMANDS.includes(argv[1] ?? "")) return null;
+  const at = argv.indexOf("--target");
+  const slug = at >= 0 ? argv[at + 1] : undefined;
+  if (slug === undefined) return null;
+  return { match: `gh api repos/${slug}`, result: { stdout: JSON.stringify({ visibility: "private" }) } };
+}
+
 async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
-  options: { repoFlag?: string | null; json?: boolean; now?: Date } = {},
+  options: { repoFlag?: string | null; json?: boolean; now?: Date; privateGuard?: "private-target" | "scripted" } = {},
 ): Promise<{ code: number; out: string[]; err: string[]; calls: readonly string[] }> {
+  const guardRow = options.privateGuard === "scripted" ? null : privateTargetRow(argv);
+  if (guardRow !== null) script = [guardRow, ...script];
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -54,7 +77,9 @@ async function capture(
     err,
     // The shim log, so a refusal test can assert "and it wrote NOTHING"
     // positively rather than only by the absence of a scripted write.
-    calls: scripted.calls.map((call): string => [call.command, ...call.args].join(" ")),
+    calls: scripted.calls
+      .map((call): string => [call.command, ...call.args].join(" "))
+      .filter((line): boolean => guardRow === null || line !== guardRow.match),
   };
 }
 
@@ -661,12 +686,16 @@ describe("nen issue comment -- the general comment primitive", () => {
   // "--dry-run prints exactly what would be posted" is only true if the bytes
   // have been READ by the time it prints -- the argv alone names a path, and the
   // path's contents are the thing that becomes public.
-  it("--dry-run prints the exact call AND the exact bytes, and makes no gh call at all", async () => {
+  // Since zheref/nen#329 the dry run READS (the private-name guard's
+  // visibility read, answered by capture()'s default row) and still WRITES
+  // nothing.
+  it("--dry-run prints the exact call AND the exact bytes, and makes no gh write", async () => {
     const path = tempFile("body.md", "## evidence\n\nthe log line is on stderr.");
     const result = await capture(
       ["issue", "comment", "--target", "o/n", "--issue", "12", "--body-file", path, "--dry-run"],
-      // No scripted calls: ScriptedSeams throws on the first unscripted one, so
-      // a dry run that posted would be a red test rather than a silent write.
+      // No scripted calls beyond the guard's default: ScriptedSeams throws on
+      // the first unscripted one, so a dry run that posted would be a red test
+      // rather than a silent write.
       [],
     );
     expect(result.code).toBe(0);
@@ -821,6 +850,7 @@ describe("nen issue comment -- the general comment primitive", () => {
       source: "inline",
       argv: ["issue", "comment", "12", "--repo", "o/n", "--body", "hi"],
       body: "hi",
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", hits: [], error: null },
     });
   });
 
@@ -1086,7 +1116,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     ]);
   });
 
-  it("--json carries the v0.2 contract, written: true on a real run, and says the (absent) check is not atomic", async () => {
+  it("--json carries the v0.3 contract, written: true on a real run, and says the (absent) check is not atomic", async () => {
     const path = tempFile("body.md", "hello");
     const result = await capture(
       ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
@@ -1095,7 +1125,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     );
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out.join("\n"))).toEqual({
-      contract: "nen.issue.edit-body/v0.2",
+      contract: "nen.issue.edit-body/v0.3",
       target: "o/n",
       number: 12,
       bytes: 5,
@@ -1105,6 +1135,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       outcome: "written",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
       currentBodyOut: null,
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", hits: [], error: null },
     });
   });
 
@@ -1164,7 +1195,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     );
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out.join("\n"))).toEqual({
-      contract: "nen.issue.edit-body/v0.2",
+      contract: "nen.issue.edit-body/v0.3",
       target: "o/n",
       number: 12,
       bytes: 2,
@@ -1174,6 +1205,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       outcome: "dry-run",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
       currentBodyOut: null,
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", hits: [], error: null },
     });
   });
 
@@ -1311,7 +1343,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     expect(out).toMatch(/prints 'null' for a null body/);
     expect(out).toMatch(/NOT-SENT/);
     expect(out).toMatch(/exits 3 \(conflict\)/);
-    expect(out).toMatch(/nen\.issue\.edit-body\/v0\.2/);
+    expect(out).toMatch(/nen\.issue\.edit-body\/v0\.3/);
   });
 
   it("issue --help documents edit-body, its --body-file-only shape and the pull-request refusal", async () => {
@@ -1377,7 +1409,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     const result = await capture(argv(path, sha(V1)), [readReturning(V2)], { json: true });
     expect(result.code).toBe(3);
     expect(JSON.parse(result.out.join("\n"))).toEqual({
-      contract: "nen.issue.edit-body/v0.2",
+      contract: "nen.issue.edit-body/v0.3",
       target: "o/n",
       number: 12,
       bytes: 15,
@@ -1393,6 +1425,8 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
         atomic: false,
       },
       currentBodyOut: null,
+      // Never reached: the conflict refuses first.
+      privateNameCheck: null,
     });
     expect(result.calls).toEqual(["gh api repos/o/n/issues/12"]);
   });
@@ -1462,6 +1496,9 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
       const line = [command, ...args].join(" ");
       this.calls.push(line);
       const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "", spawnFailed: false });
+      // The private-name guard's visibility read (zheref/nen#329): private, so
+      // it skips and reads no list. Recorded in `calls` like every other call.
+      if (line === "gh api repos/o/n") return ok(JSON.stringify({ visibility: "private" }));
       if (line === "gh api repos/o/n/issues/12") {
         const stdout = JSON.stringify({ number: 12, id: 100, title: "t", state: "open", labels: [], body: this.body });
         const hook = this.afterRead;
@@ -1490,6 +1527,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     expect(backend.body).toBe(V2);
     expect(backend.calls).toEqual([
       "gh api repos/o/n/issues/12",
+      "gh api repos/o/n",
       `gh issue edit 12 --repo o/n --body-file ${pathB}`,
       "gh api repos/o/n/issues/12",
     ]);
@@ -2856,5 +2894,199 @@ describe("nen issue attach-sub / consolidate-close -- a pull request is refused 
       /Every number must name an ISSUE\. --parent and each --children entry are\s+read and checked BEFORE the first write/,
     );
     expect(out).toMatch(/Every number must name an ISSUE, exactly as 'attach-sub' requires/);
+  });
+});
+
+describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen#329)", () => {
+  const PUBLIC: ScriptedCall = { match: "gh api repos/o/n", result: { stdout: JSON.stringify({ visibility: "public" }) } };
+  const PRIVATE: ScriptedCall = { match: "gh api repos/o/n", result: { stdout: JSON.stringify({ visibility: "private" }) } };
+  const listOf = (names: readonly string[]): ScriptedCall => ({
+    match: "gh api user/repos?visibility=private&per_page=100&page=1",
+    result: { stdout: JSON.stringify(names.map((full_name): { full_name: string } => ({ full_name }))) },
+  });
+  const LIST = listOf(["acme/hidden-thing", "acme/vault"]);
+  const CERTIFY: ScriptedCall = {
+    match: "gh api repos/o/n/issues/12",
+    result: { stdout: JSON.stringify({ number: 12, id: 100, title: "an issue", state: "open", labels: [], body: null }) },
+  };
+  const guarded = { privateGuard: "scripted" as const };
+  const commentArgs = (body: string, ...extra: string[]): string[] => [
+    "issue", "comment", "--target", "o/n", "--issue", "12", `--body=${body}`, ...extra,
+  ];
+
+  it("comment: a bare name on a PUBLIC target refuses with exit 4, posts nothing, and never prints the name", async () => {
+    const result = await capture(commentArgs("ported from vault last week"), [PUBLIC, LIST], guarded);
+    expect(result.code).toBe(4);
+    expect(writes(result.calls)).toEqual([]);
+    expect(result.calls).toEqual(["gh api repos/o/n", "gh api user/repos?visibility=private&per_page=100&page=1"]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("body:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("comment: an owner/name slug, a case variant and markdown emphasis are each refused", async () => {
+    for (const body of ["see acme/hidden-thing", "VAULT", "_vault_", "**Hidden-Thing**"]) {
+      const result = await capture(commentArgs(body), [PUBLIC, LIST], guarded);
+      expect(result.code, body).toBe(4);
+      expect(writes(result.calls), body).toEqual([]);
+    }
+  });
+
+  it("comment: --dry-run runs the same check and refuses the same way, before printing the body", async () => {
+    const result = await capture(commentArgs("the vault", "--dry-run"), [PUBLIC, LIST], guarded);
+    expect(result.code).toBe(4);
+    expect(result.out).toEqual([]);
+  });
+
+  it("comment --json: the refusal carries the verdict and NO body", async () => {
+    const result = await capture(commentArgs("the vault"), [PUBLIC, LIST], { ...guarded, json: true });
+    expect(result.code).toBe(4);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report["body"]).toBeUndefined();
+    expect(report["posted"]).toBe(false);
+    expect(report["privateNameCheck"]).toEqual({
+      result: "refused",
+      targetVisibility: "public",
+      hits: [{ field: "body", line: 1, index: 2, normalised: false }],
+      error: null,
+    });
+    expect(result.out.join("\n")).not.toMatch(/vault/i);
+  });
+
+  it("comment: a clean body on a PUBLIC target posts, and says nothing extra", async () => {
+    const result = await capture(
+      commentArgs("nothing private here"),
+      [PUBLIC, LIST, { match: "gh issue comment 12 --repo o/n --body nothing private here", result: { stdout: "" } }],
+      guarded,
+    );
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([]);
+  });
+
+  it("comment: an EMPTY private list is a refusal (exit 1), never a pass", async () => {
+    const result = await capture(commentArgs("anything"), [PUBLIC, listOf([])], guarded);
+    expect(result.code).toBe(1);
+    expect(writes(result.calls)).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/read EMPTY/);
+  });
+
+  it("comment: an unreadable visibility or list is a refusal (exit 1)", async () => {
+    const noVisibility = await capture(commentArgs("anything"), [{ match: "gh api repos/o/n", result: { code: 1 } }], guarded);
+    expect(noVisibility.code).toBe(1);
+    expect(noVisibility.err.join("\n")).toMatch(/could not run/);
+    const noList = await capture(
+      commentArgs("anything"),
+      [PUBLIC, { match: "gh api user/repos?visibility=private&per_page=100&page=1", result: { code: 1, stderr: "HTTP 401" } }],
+      guarded,
+    );
+    expect(noList.code).toBe(1);
+    expect(writes(noList.calls)).toEqual([]);
+  });
+
+  it("comment: a PRIVATE target is not checked -- the list is never read, and the post goes ahead", async () => {
+    const result = await capture(
+      commentArgs("the vault"),
+      [PRIVATE, { match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
+      guarded,
+    );
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual(["gh api repos/o/n", "gh issue comment 12 --repo o/n --body the vault"]);
+  });
+
+  it("comment: --skip-private-name-check reads nothing, posts, and is NAMED in the output", async () => {
+    const result = await capture(
+      commentArgs("the vault", "--skip-private-name-check"),
+      [{ match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
+      guarded,
+    );
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual(["gh issue comment 12 --repo o/n --body the vault"]);
+    expect(result.err.join("\n")).toMatch(/SKIPPED by --skip-private-name-check/);
+  });
+
+  it("file: a name in the TITLE refuses with exit 4 before the create call", async () => {
+    const path = tempFile("body.md", "a clean body\n");
+    const result = await capture(
+      [
+        "issue", "file", "--target", "o/n", "--title", "Port the Vault adapter", "--body-file", path,
+        "--label", "bankai:severity/low", "--assignee", "me",
+      ],
+      [PUBLIC, LIST],
+      { ...guarded, repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(4);
+    expect(writes(result.calls)).toEqual([]);
+    expect(result.err.join("\n")).toContain("title:1: private repository #2");
+  });
+
+  it("file: a name spelt through an entity in the body is found on its own line, and the dry run refuses too", async () => {
+    const path = tempFile("body.md", "line one\nsee hidden&#45;thing\n");
+    const result = await capture(
+      [
+        "issue", "file", "--target", "o/n", "--title", "t", "--body-file", path,
+        "--label", "bankai:severity/low", "--assignee", "me", "--dry-run",
+      ],
+      [PUBLIC, LIST],
+      { ...guarded, repoFlag: BANKAI_REPO },
+    );
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toMatch(/body:2: private repository #1 \(spelt through/);
+  });
+
+  it("file: a clean filing carries privateNameCheck under --json and hands gh the resolved --body-file", async () => {
+    const path = tempFile("body.md", "a clean body\n");
+    const result = await capture(
+      [
+        "issue", "file", "--target", "o/n", "--title", "t", "--body-file", path,
+        "--label", "bankai:severity/low", "--assignee", "me", "--dry-run",
+      ],
+      [PUBLIC, LIST],
+      { ...guarded, repoFlag: BANKAI_REPO, json: true },
+    );
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { argv: string[]; privateNameCheck: { result: string } };
+    expect(report.privateNameCheck.result).toBe("clean");
+    expect(report.argv).toContain(path);
+  });
+
+  it("edit-body: a name in the replacement refuses with exit 4 after certifying, before any write", async () => {
+    const path = tempFile("body.md", "## plan\n\nmerge vault first\n");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
+      [CERTIFY, PUBLIC, LIST],
+      { ...guarded, json: true },
+    );
+    expect(result.code).toBe(4);
+    expect(writes(result.calls)).toEqual([]);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report["contract"]).toBe("nen.issue.edit-body/v0.3");
+    expect(report["outcome"]).toBe("private-name");
+    expect(report["written"]).toBe(false);
+    expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([
+      { field: "body", line: 3, index: 2, normalised: false },
+    ]);
+  });
+
+  it("edit-body: an unavailable check is outcome private-name-check-unavailable, exit 1", async () => {
+    const path = tempFile("body.md", "anything\n");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
+      [CERTIFY, PUBLIC, listOf([])],
+      { ...guarded, json: true },
+    );
+    expect(result.code).toBe(1);
+    expect((JSON.parse(result.out.join("\n")) as { outcome: string }).outcome).toBe("private-name-check-unavailable");
+  });
+
+  it("the opt-out belongs to the three writing verbs only: 'search' refuses it as foreign (exit 2)", async () => {
+    const result = await capture(["issue", "search", "--target", "o/n", "--subject", "x", "--skip-private-name-check"]);
+    expect(result.code).toBe(2);
+  });
+
+  it("issue --help documents the guard, exit 4 and the opt-out", async () => {
+    const out = (await capture(["issue", "--help"])).out.join("\n");
+    expect(out).toMatch(/PRIVATE REPOSITORY NAMES/);
+    expect(out).toMatch(/REFUSES with exit 4/);
+    expect(out).toMatch(/--skip-private-name-check/);
   });
 });

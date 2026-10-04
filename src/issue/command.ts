@@ -56,6 +56,15 @@ import {
 } from "./subissue.js";
 import { commentArgv, postComment, type CommentRequest } from "./comment.js";
 import {
+  blockingExit,
+  blocksWrite,
+  checkPrivateNames,
+  privateNameLines,
+  SKIP_PRIVATE_NAME_CHECK_FLAG,
+  type CheckedText,
+  type PrivateNameCheck,
+} from "./privacy.js";
+import {
   bodySha256,
   certifyIssue,
   checkExpectedBody,
@@ -121,12 +130,12 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "open-pr-check": { values: ["target", "issues"] },
   file: {
     values: ["target", "title", "body-file", "label", "assignee", "forbid-family"],
-    booleans: ["dry-run"],
+    booleans: ["dry-run", "skip-private-name-check"],
   },
-  comment: { values: ["target", "issue", "body", "body-file"], booleans: ["dry-run"] },
+  comment: { values: ["target", "issue", "body", "body-file"], booleans: ["dry-run", "skip-private-name-check"] },
   "edit-body": {
     values: ["target", "issue", "body-file", "expect-body-sha256", "current-body-out"],
-    booleans: ["dry-run"],
+    booleans: ["dry-run", "skip-private-name-check"],
   },
   "attach-sub": { values: ["target", "parent", "children"], booleans: ["dry-run"] },
   "consolidate-close": {
@@ -337,11 +346,15 @@ usage:
   nen issue file --target <owner/name> --repo <path> --title <t>
                  --body-file <path> --label a,b --assignee <user>
                  [--forbid-family ns:family] [--dry-run]
+                 [--skip-private-name-check]
       Creates the issue with its labels and assignee IN THE CREATE CALL. Every
-      label must exist in the target repository's taxonomy.
+      label must exist in the target repository's taxonomy. --body-file
+      resolves against --repo's root, and that resolved path is what 'gh'
+      is handed. Private-name guard: see PRIVATE REPOSITORY NAMES below.
 
   nen issue comment --target <owner/name> --issue <n>
                     (--body-file <path> | --body <text>) [--dry-run]
+                    [--skip-private-name-check]
       Posts ONE caller-supplied comment on ONE issue -- the general primitive
       every other verb here lacked, so a mechanized choreography no longer has
       to drop back to a hand-run 'gh issue comment' for the one step written in
@@ -354,11 +367,13 @@ usage:
       next flag. --dry-run prints the exact 'gh' call AND the exact bytes it
       would send, and writes nothing. A number that names a PULL REQUEST is
       accepted, deliberately -- ./comment.ts records why, and why that is not
-      the same decision chain-position/terminus made.
+      the same decision chain-position/terminus made. Private-name guard:
+      see PRIVATE REPOSITORY NAMES below.
 
   nen issue edit-body --target <owner/name> --issue <n>
                       --body-file <path> [--expect-body-sha256 <hex>]
                       [--current-body-out <path>] [--dry-run]
+                      [--skip-private-name-check]
       Replaces the issue's body OUTRIGHT with the file's bytes -- no
       trimming, no template, the file becomes the body exactly, through
       'gh issue edit --body-file'. --body-file is required; there is no
@@ -405,17 +420,51 @@ usage:
       STARTED sent nothing: that is NOT-SENT (exit 1, written false, no
       read-back). Exits: 0 written (or dry run),
       1 not sent / uncertain / unreadable body / --current-body-out not
-      written on a dry run, 2 usage (including a malformed hash), 3
-      conflict. --json: '{ contract: "nen.issue.edit-body/v0.2", target,
+      written on a dry run / private-name check could not run, 2 usage
+      (including a malformed hash), 3 conflict, 4 a private repository
+      named (see PRIVATE REPOSITORY NAMES below; checked after the
+      conflict comparison). --json: '{ contract: "nen.issue.edit-body/v0.3", target,
       number, bytes, bodySha256, written, dryRun, outcome, bodyCheck: {
       expectedSha256, currentSha256, currentBytes, result, atomic: false },
-      currentBodyOut: null | { path, written, error } }' -- bodySha256 is
+      currentBodyOut: null | { path, written, error }, privateNameCheck }'
+      -- bodySha256 is
       the sha256 of the replacement bytes read from --body-file, on every
       outcome, whether or not they were sent; outcome is
-      written | dry-run | conflict | uncertain | not-sent; written is null
+      written | dry-run | conflict | uncertain | not-sent | private-name |
+      private-name-check-unavailable; privateNameCheck is null on a
+      conflict (never reached); written is null
       when uncertain; 'error' is added on uncertain and not-sent, and
       'readBack: { currentSha256, matchesSubmitted, matchesPrevious,
       readError }' on uncertain.
+
+  PRIVATE REPOSITORY NAMES ('file', 'comment', 'edit-body'; zheref/nen#329).
+      Before any write to a PUBLIC target -- and on --dry-run too, so its
+      verdict is the real run's -- the title (for 'file') and the body are
+      compared against the credential's LIVE private repository list
+      ('gh api user/repos?visibility=private', every page, read on every call
+      and never cached). Each repository's NAME is matched case-insensitively
+      and whole-word, taken literally: a word is a run of [A-Za-z0-9-], so
+      '_' and '.' bound a word ('_name_', 'name.git', a sentence's 'name.'
+      match) and 'owner/name' slugs and URLs match through the name. A line
+      holding %, &, <, \\, *, a backtick or a non-ASCII character is also read
+      normalised -- %XX and UTF-8 decoded, HTML entities decoded, inline tags
+      and backslash escapes dropped, NFKC, format characters deleted, dashes
+      folded, then HTML comments, '*' and backticks removed -- so a name spelt
+      through an escape, entity, encoding, markup or invisible character is
+      still found. A match REFUSES with exit 4 and writes nothing; the
+      refusal never prints the name: '<field>:<line>: private repository #k',
+      k a 1-based index into the list sorted bytewise. A PRIVATE or INTERNAL
+      target is not checked (naming a private repository there leaks
+      nothing) and the list is never read. FAIL CLOSED: an unreadable target
+      visibility, an unreadable list, a list that may be truncated or one
+      that reads EMPTY refuses with exit 1 -- never a pass. nen never
+      rewrites the text: redact and retry. --skip-private-name-check is the
+      opt-out for a caller that has run its own check; nothing is read, and
+      every run that uses it says so on stderr. --json carries
+      'privateNameCheck: { result: clean | skipped-private-target |
+      skipped-by-flag | refused | unavailable, targetVisibility, hits: [{
+      field, line, index, normalised }], error }'; a refused 'comment' report
+      carries no 'body'.
 
   nen issue attach-sub --target <owner/name> --parent <n> --children 1,2
                        [--dry-run]
@@ -685,6 +734,24 @@ function openPr(context: CommandContext): number {
   return report.findings.some((finding): boolean => finding.blocked) ? 1 : 0;
 }
 
+/**
+ * THE PRIVATE-NAME GUARD, as the three text-writing verbs run it
+ * (zheref/nen#329; ./privacy.ts has the matching rules). Runs on a dry run
+ * too: a dry run whose verdict differs from the real run's is not a dry run.
+ * Its human lines go to stderr in every mode, so a passing run's stdout is
+ * unchanged and the opt-out is named even under --json.
+ */
+function guardPrivateNames(context: CommandContext, target: Target, fields: readonly CheckedText[]): PrivateNameCheck {
+  const check = checkPrivateNames(
+    context.seams,
+    target,
+    fields,
+    context.args.booleans.has(SKIP_PRIVATE_NAME_CHECK_FLAG),
+  );
+  for (const line of privateNameLines(check, target)) context.io.err(line);
+  return check;
+}
+
 function file(context: CommandContext): number {
   const target = requireTarget(context);
   // `--body` is `comment`'s flag, and filing keeps its own rule (see the
@@ -699,9 +766,14 @@ function file(context: CommandContext): number {
     repoFlag: requireRepoFlag(context, "It is the checkout whose nen/labels.json validates every label in the filing."),
   });
   const taxonomy = loadLabelTaxonomy(root);
+  // --body-file RESOLVED AGAINST --repo's ROOT and the resolved path handed to
+  // `gh` (zheref/nen#100's rule, which this verb had not yet followed): the
+  // private-name guard reads the file below, and the guard and `gh` must agree
+  // about which file it is, or the check vouches for bytes nobody sends.
+  const rawBodyFile = context.args.values["body-file"] ?? "";
   const request: FileRequest = {
     title: context.args.values["title"] ?? "",
-    bodyFile: context.args.values["body-file"] ?? "",
+    bodyFile: rawBodyFile === "" ? "" : resolveAgainstRepo(root, rawBodyFile),
     labels: commaList(context.args.values["label"]),
     assignee: context.args.values["assignee"] ?? "",
     forbiddenFamilies: commaList(context.args.values["forbid-family"]),
@@ -714,10 +786,27 @@ function file(context: CommandContext): number {
     for (const refusal of refusals) context.io.err(`nen: ${refusal.reason}`);
     return 1;
   }
+  // Read here, not by `gh`, so the guard sees the bytes `gh` is about to send.
+  const body = readTextFile(
+    request.bodyFile,
+    process.cwd(),
+    "--body-file names the bytes this verb files as the issue's body, and they are checked for private repository names before anything is sent.",
+    true,
+  );
+  const privateNameCheck = guardPrivateNames(context, target, [
+    { field: "title", text: request.title },
+    { field: "body", text: body },
+  ]);
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) {
+      context.io.out(JSON.stringify({ dryRun: context.args.booleans.has("dry-run"), filed: false, privateNameCheck }, null, 2));
+    }
+    return blockingExit(privateNameCheck);
+  }
   if (context.args.booleans.has("dry-run")) {
     const argv = createArgv(target, request);
     if (context.json) {
-      context.io.out(JSON.stringify({ dryRun: true, argv }, null, 2));
+      context.io.out(JSON.stringify({ dryRun: true, argv, privateNameCheck }, null, 2));
       return 0;
     }
     context.io.out(`would run: gh ${argv.join(" ")}`);
@@ -725,7 +814,7 @@ function file(context: CommandContext): number {
   }
   const result = fileIssue(context.seams, target, request);
   if (context.json) {
-    context.io.out(JSON.stringify({ ...result, labels: request.labels }, null, 2));
+    context.io.out(JSON.stringify({ ...result, labels: request.labels, privateNameCheck }, null, 2));
     return 0;
   }
   context.io.out(`filed #${result.number} ${result.url}`);
@@ -840,10 +929,26 @@ function comment(context: CommandContext): number {
       : { issue, body, source: "file", bodyFile: bodyPath };
   const argv = commentArgv(target, request);
 
+  // Checked BEFORE the dry run prints the body, and before the post. A refusal
+  // under --json carries no `body`: the body is the text that names it.
+  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }]);
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify(
+          { dryRun: context.args.booleans.has("dry-run"), target: target.slug, issue, source: request.source, posted: false, privateNameCheck },
+          null,
+          2,
+        ),
+      );
+    }
+    return blockingExit(privateNameCheck);
+  }
+
   if (context.args.booleans.has("dry-run")) {
     if (context.json) {
       context.io.out(
-        JSON.stringify({ dryRun: true, target: target.slug, issue, source: request.source, argv, body }, null, 2),
+        JSON.stringify({ dryRun: true, target: target.slug, issue, source: request.source, argv, body, privateNameCheck }, null, 2),
       );
       return 0;
     }
@@ -871,7 +976,11 @@ function comment(context: CommandContext): number {
   const result = postComment(context.seams, target, request);
   if (context.json) {
     context.io.out(
-      JSON.stringify({ dryRun: false, target: target.slug, issue, source: request.source, argv, body, url: result.url }, null, 2),
+      JSON.stringify(
+        { dryRun: false, target: target.slug, issue, source: request.source, argv, body, url: result.url, privateNameCheck },
+        null,
+        2,
+      ),
     );
     return 0;
   }
@@ -1047,7 +1156,7 @@ function editBody(context: CommandContext): number {
     // fact a caller branches on, and the report says the file did not land.
     writeCurrentBody();
     if (context.json) {
-      context.io.out(report("conflict", false));
+      context.io.out(report("conflict", false, { privateNameCheck: null }));
     } else {
       context.io.err(
         `nen issue: conflict -- ${target.slug}#${issue}'s body is not the version this replacement was prepared from, so nothing was written.`,
@@ -1062,13 +1171,27 @@ function editBody(context: CommandContext): number {
     return EDIT_BODY_CONFLICT_EXIT;
   }
 
+  // THE PRIVATE-NAME GUARD, after the conflict (which writes nothing either way)
+  // and before the dry run and the write -- zheref/nen#329.
+  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }]);
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) {
+      context.io.out(
+        report(privateNameCheck.result === "refused" ? "private-name" : "private-name-check-unavailable", false, {
+          privateNameCheck,
+        }),
+      );
+    }
+    return blockingExit(privateNameCheck);
+  }
+
   if (dryRun) {
     writeCurrentBody();
     // A dry run asked for the file and did not produce it: that is a failed
     // dry run (exit 1), never a quiet success a fold is then prepared from.
     const outFailed = currentBodyOut !== null && !currentBodyOut.written;
     if (context.json) {
-      context.io.out(report("dry-run", false));
+      context.io.out(report("dry-run", false, { privateNameCheck }));
       return outFailed ? 1 : 0;
     }
     const { first, last } = bodyBookends(body);
@@ -1098,7 +1221,7 @@ function editBody(context: CommandContext): number {
     // and a read-back would need the same missing gh.
     if (error instanceof BodyNotSentError) {
       if (context.json) {
-        context.io.out(report("not-sent", false, { error: message }));
+        context.io.out(report("not-sent", false, { error: message, privateNameCheck }));
       } else {
         context.io.err(`nen issue: ${message}.`);
         context.io.err("  Nothing reached GitHub; the body is unchanged by this run.");
@@ -1109,7 +1232,7 @@ function editBody(context: CommandContext): number {
     // either: a request whose answer was lost may still have been applied.
     const readBack = readBackAfterFailedWrite(context.seams, target, issue, replacementSha256, check.currentSha256);
     if (context.json) {
-      context.io.out(report("uncertain", null, { error: message, readBack }));
+      context.io.out(report("uncertain", null, { error: message, readBack, privateNameCheck }));
     } else {
       context.io.err(`nen issue: ${message}`);
       context.io.err(
@@ -1129,7 +1252,7 @@ function editBody(context: CommandContext): number {
     return 1;
   }
   if (context.json) {
-    context.io.out(report("written", true));
+    context.io.out(report("written", true, { privateNameCheck }));
     return 0;
   }
   context.io.out(`replaced ${target.slug}#${issue}'s body (${bytes} byte(s))`);
@@ -1166,8 +1289,12 @@ function currentBodyOutLine(out: { readonly path: string; readonly written: bool
     : `current body NOT written to ${out.path}: ${out.error ?? "unknown error"}`;
 }
 
-/** The `--json` contract id. v0.2 adds bodySha256/outcome/bodyCheck (zheref/nen#205). */
-const EDIT_BODY_CONTRACT = "nen.issue.edit-body/v0.2";
+/**
+ * The `--json` contract id. v0.2 adds bodySha256/outcome/bodyCheck
+ * (zheref/nen#205); v0.3 adds privateNameCheck and the private-name outcomes
+ * (zheref/nen#329).
+ */
+const EDIT_BODY_CONTRACT = "nen.issue.edit-body/v0.3";
 
 /** Exit 3: the body changed since the expected version; nothing was written. */
 export const EDIT_BODY_CONFLICT_EXIT = 3;
