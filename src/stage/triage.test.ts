@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LARGE_BYTES, parseStatusPorcelain, triageStage } from "./triage.js";
+import { addListFrom, DEFAULT_LARGE_BYTES, parseStatusPorcelain, pathspecLine, triageStage } from "./triage.js";
 
 describe("parseStatusPorcelain -- -z / NUL-delimited format", () => {
   it("parses ordinary modified/added/deleted/untracked entries", () => {
@@ -206,5 +206,73 @@ describe("triageStage -- unusually large files", () => {
       { sizes: new Map([["dump.local.json", 5_000_000]]) },
     );
     expect(result.flagged[0]?.reasons).toEqual(["local-config", "large"]);
+  });
+});
+
+// zheref/nen#237: the add list is triage's complement, computed from the same
+// entries -- never re-derived.
+describe("addListFrom -- the exact add list", () => {
+  function listOf(status: string, mentions = ""): ReturnType<typeof addListFrom> {
+    const entries = parseStatusPorcelain(status);
+    return addListFrom(entries, triageStage(entries, { mentionedText: mentions }));
+  }
+
+  it("keeps every modified, added, renamed, mentioned-deleted and UNTRACKED path, in git's order", () => {
+    const list = listOf(
+      " M src/a.ts\0A  src/b.ts\0R  src/new.ts\0src/old.ts\0 D src/gone.ts\0?? packages/core/src/utils/oauthReturnQuery.ts\0",
+      "drops gone.ts",
+    );
+    expect(list.verdict).toBe("ready");
+    expect(list.add).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+      "src/new.ts",
+      "src/gone.ts",
+      "packages/core/src/utils/oauthReturnQuery.ts",
+    ]);
+    expect(list.excluded).toEqual([]);
+  });
+
+  it("never lists a flagged or an ignored path, and names each exclusion with its reasons", () => {
+    const list = listOf(" M src/a.ts\0?? .env\0!! node_modules/x.js\0");
+    expect(list.add).toEqual(["src/a.ts"]);
+    expect(list.excluded).toEqual([{ path: ".env", reasons: ["secret-shape"] }]);
+    expect(list.ignored).toEqual([{ path: "node_modules/x.js", reasons: ["ignored"] }]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("moves a deletion already staged to alreadyStaged -- git add would refuse its pathspec", () => {
+    const list = listOf("D  src/staged-gone.ts\0 M src/a.ts\0", "staged-gone.ts");
+    expect(list.add).toEqual(["src/a.ts"]);
+    expect(list.alreadyStaged).toEqual(["src/staged-gone.ts"]);
+  });
+
+  it("is 'empty' on an all-ignored tree, and 'empty' on a tree with nothing at all", () => {
+    expect(listOf("!! node_modules/x.js\0").verdict).toBe("empty");
+    expect(listOf("").verdict).toBe("empty");
+    expect(listOf("").add).toEqual([]);
+  });
+
+  it("calls a tree whose every change is flagged 'flagged', never 'empty'", () => {
+    const list = listOf("?? .env\0");
+    expect(list.add).toEqual([]);
+    expect(list.verdict).toBe("flagged");
+  });
+});
+
+describe("pathspecLine -- one path, one line git add reads back exactly", () => {
+  it("writes ordinary paths raw: spaces, edge whitespace, non-ASCII, glob characters", () => {
+    for (const path of ["src/a.ts", "with space.ts", " lead", "trail ", "secrëts/a.ts", "st*r[1].ts"]) {
+      expect(pathspecLine(path)).toBe(path);
+    }
+  });
+
+  it("C-quotes a path carrying a control character, or starting with a double quote", () => {
+    expect(pathspecLine("new\nline.ts")).toBe('"new\\nline.ts"');
+    expect(pathspecLine("cr\r")).toBe('"cr\\r"');
+    expect(pathspecLine("tab\there")).toBe('"tab\\there"');
+    expect(pathspecLine("bell\u0001")).toBe('"bell\\001"');
+    expect(pathspecLine('"quoted')).toBe('"\\"quoted"');
+    expect(pathspecLine('a\\b\n"c')).toBe('"a\\\\b\\n\\"c"');
   });
 });

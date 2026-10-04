@@ -206,3 +206,102 @@ export function triageStage(entries: readonly StatusEntry[], options: TriageOpti
 
   return { clean, flagged, ignored };
 }
+
+// ---------------------------------------------------------------------------
+// THE ADD LIST (zheref/nen#237) -- the complement triage never printed.
+//
+// `triageStage` answers "what must NOT be staged blind". A checkpoint needs the
+// other half, "what SHOULD be staged", and deriving it by re-walking `git
+// status` in shell is how two untracked files were dropped from a commit on
+// zheref/kro-pwa#95: a hand-written filter loses exactly the untracked rows,
+// and the diff still looks whole locally because the file is on disk.
+//
+// So the list is computed HERE, from the same entries and the same triage, and
+// never re-derived: every path triage called clean is on it, every flagged path
+// is off it WITH its reasons, every ignored path is off it as the fact it is.
+// It composes with triage rather than changing it -- no detector, no reason
+// and no triage exit code moves for this.
+//
+// ONE CLEAN SHAPE IS NOT ADDABLE, and it is a fact about git rather than a
+// policy: a deletion already staged (`D ` -- gone from the index AND the
+// working tree) matches no pathspec, and `git add` answers it with `fatal:
+// pathspec did not match any files`, staging NOTHING from the whole list. It
+// is already in the commit-to-be, so it is reported in `alreadyStaged` rather
+// than put on a list whose one job is to be fed to `git add` verbatim.
+
+export type AddVerdict = "ready" | "flagged" | "empty";
+
+export interface AddList {
+  /**
+   * `ready` -- the list is non-empty and nothing was flagged. `flagged` --
+   * something needs a human's yes; it outranks `empty`, because a tree whose
+   * every change is flagged is not a tree with nothing to add. `empty` --
+   * nothing to add and nothing flagged.
+   */
+  readonly verdict: AddVerdict;
+  /** The exact add list, in `git status` order. Flagged and ignored paths are never on it. */
+  readonly add: readonly string[];
+  /** Triage's flagged paths, each with every reason it matched -- "excluded on purpose", never "not seen". */
+  readonly excluded: readonly FlaggedFile[];
+  /** Clean deletions already staged: in the commit-to-be, and a pathspec `git add` would refuse. */
+  readonly alreadyStaged: readonly string[];
+  /** Git-ignored paths, exactly as triage's `ignored` bucket carries them. */
+  readonly ignored: readonly FlaggedFile[];
+}
+
+export function addListFrom(entries: readonly StatusEntry[], triage: TriageResult): AddList {
+  const byPath = new Map<string, StatusEntry>();
+  for (const entry of entries) byPath.set(entry.path, entry);
+
+  const add: string[] = [];
+  const alreadyStaged: string[] = [];
+  for (const path of triage.clean) {
+    const entry = byPath.get(path);
+    if (entry !== undefined && entry.indexStatus === "D" && entry.worktreeStatus === " ") alreadyStaged.push(path);
+    else add.push(path);
+  }
+
+  const verdict: AddVerdict = triage.flagged.length > 0 ? "flagged" : add.length === 0 ? "empty" : "ready";
+  return { verdict, add, excluded: triage.flagged, alreadyStaged, ignored: triage.ignored };
+}
+
+const NAMED_ESCAPES: Readonly<Record<string, string>> = {
+  "\u0007": "\\a",
+  "\b": "\\b",
+  "\t": "\\t",
+  "\n": "\\n",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\r": "\\r",
+  '"': '\\"',
+  "\\": "\\\\",
+};
+
+/**
+ * One path as one LINE `git add --pathspec-from-file=-` reads back as that
+ * exact path.
+ *
+ * Without `--pathspec-file-nul`, git reads one pathspec per line and C-unquotes
+ * a line that BEGINS with a double quote, exactly as `core.quotePath` writes
+ * one. So an ordinary path -- spaces, leading or trailing ones included, and
+ * non-ASCII -- is written raw, and only a path that could not survive a line
+ * is quoted: one carrying a control character (a newline would split it, a
+ * trailing carriage return would be eaten as CR/LF) or one that itself starts
+ * with `"` (which git would otherwise try to unquote). Inside the quotes `"` and
+ * `\` are escaped, the usual control characters take their C names and the rest
+ * are three-digit octal. Non-ASCII stays raw: git's unquote copies every byte it
+ * does not recognise as an escape.
+ */
+export function pathspecLine(path: string): string {
+  const needsQuoting = path.startsWith('"') || /[\u0000-\u001f\u007f]/.test(path);
+  if (!needsQuoting) return path;
+  let quoted = '"';
+  for (const char of path) {
+    const named = NAMED_ESCAPES[char];
+    const code = char.codePointAt(0) ?? 0;
+    if (named !== undefined) quoted += named;
+    else if (code < 0x20 || code === 0x7f) quoted += `\\${code.toString(8).padStart(3, "0")}`;
+    else quoted += char;
+  }
+  return `${quoted}"`;
+}

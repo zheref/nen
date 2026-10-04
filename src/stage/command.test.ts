@@ -186,3 +186,104 @@ describe("nen stage triage -- an ignored path is never measured", () => {
     expect(triage.clean).toEqual(["src.txt"]);
   });
 });
+
+// zheref/nen#237: `nen stage list` -- the exact add list, triage's complement.
+describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
+  const STATUS = "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall";
+
+  async function list(
+    argv: readonly string[],
+    stdout: string,
+    json = false,
+    withWrite = false,
+  ): Promise<{ code: number; out: string[]; err: string[]; written: string[] }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const written: string[] = [];
+    const io: Io = {
+      out: (line): void => void out.push(line),
+      err: (line): void => void err.push(line),
+      ...(withWrite ? { write: (chunk: string): void => void written.push(chunk) } : {}),
+    };
+    const code = await runFamily(
+      stageCommand,
+      ["stage", "list", ...argv],
+      BANKAI_REPO,
+      json,
+      io,
+      new ScriptedSeams([{ match: STATUS, result: { stdout } }]),
+    );
+    return { code, out, err, written };
+  }
+
+  it("refuses an OMITTED --repo at exit 2", async () => {
+    const result = await capture(["stage", "list"], [], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
+  it("prints only the paths on stdout, untracked ones included, at exit 0", async () => {
+    const result = await list([], " M src/a.ts\0?? src/new.ts\0!! node_modules/x\0");
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["src/a.ts", "src/new.ts"]);
+    expect(result.err).toEqual(["ignored: 1 file(s), not listed"]);
+  });
+
+  it("withholds the list on a flag (exit 1) and names each exclusion with its reasons on stderr", async () => {
+    const result = await list([], " M src/a.ts\0?? .env\0");
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/^excluded: \.env {2}\[secret-shape\]$/m);
+    expect(err).toMatch(/1 path\(s\) flagged -- the add list \(1 path\(s\)\) is withheld/);
+  });
+
+  it("--json carries the whole classification at the flagged exit", async () => {
+    const result = await list([], " M src/a.ts\0?? .env\0!! node_modules/x\0", true);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({
+      verdict: "flagged",
+      add: ["src/a.ts"],
+      excluded: [{ path: ".env", reasons: ["secret-shape"] }],
+      alreadyStaged: [],
+      ignored: [{ path: "node_modules/x", reasons: ["ignored"] }],
+    });
+  });
+
+  it("exits 3 on an empty tree, with nothing on stdout", async () => {
+    const result = await list([], "");
+    expect(result.code).toBe(3);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/nothing to add/);
+  });
+
+  it("exits 3 on an all-ignored tree, and --json says 'empty'", async () => {
+    const result = await list([], "!! node_modules/x\0", true);
+    expect(result.code).toBe(3);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ verdict: "empty", add: [] });
+  });
+
+  it("--nul writes every path NUL-terminated through the raw sink, with no trailing newline", async () => {
+    const result = await list(["--nul"], " M with space.ts\0?? new\nline.ts\0", false, true);
+    expect(result.code).toBe(0);
+    expect(result.written).toEqual(["with space.ts\0new\nline.ts\0"]);
+    expect(result.out).toEqual([]);
+  });
+
+  it("the newline form C-quotes a path with a newline so git reads it back whole", async () => {
+    const result = await list([], "?? new\nline.ts\0");
+    expect(result.out).toEqual(['"new\\nline.ts"']);
+  });
+
+  it("names an already-staged deletion on stderr and keeps it off the list", async () => {
+    const result = await list(["--mentions", "gone.ts"], "D  src/gone.ts\0 M src/a.ts\0");
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["src/a.ts"]);
+    expect(result.err.join("\n")).toMatch(/^already staged: src\/gone\.ts {2}\[deletion in the index/m);
+  });
+
+  it("refuses --nul with --json, and --nul on triage, at exit 2", async () => {
+    expect((await list(["--nul"], "", true)).code).toBe(2);
+    expect((await capture(["stage", "triage", "--nul"])).code).toBe(2);
+  });
+});

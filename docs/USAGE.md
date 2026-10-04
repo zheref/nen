@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 41 command
-families, 119 verbs, every flag checked against the binary this repository
+families, 120 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -30,7 +30,7 @@ directory, resolved at the call site and never from wherever the executable
 itself lives (so a bootstrap-cached binary under `~/.cache/nen` still reads the
 checkout you are standing in).
 
-Seventeen verbs require it by name instead of defaulting, because each one either
+Eighteen verbs require it by name instead of defaulting, because each one either
 mutates or reports on whatever it is pointed at, and a silent cwd default turned
 a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`pr next-blocker`](#nen-pr-next-blocker),
@@ -38,6 +38,7 @@ a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`wc classify`](#nen-wc-classify),
 [`wc squash`](#nen-wc-squash),
 [`stage triage`](#nen-stage-triage),
+[`stage list`](#nen-stage-list),
 [`release resolve-target`](#nen-release-resolve-target),
 [`release self-check`](#nen-release-self-check),
 [`tag cut`](#nen-tag-cut),
@@ -248,7 +249,8 @@ always exit 0 ([`pr staleness`](#nen-pr-staleness),
 [`fanout compute`](#nen-fanout-compute), [`board diff`](#nen-board-diff)); the
 guard-shaped ones exit 1 to stop a shell loop
 ([`issue open-pr-check`](#nen-issue-open-pr-check),
-[`loop slots`](#nen-loop-slots), [`stage triage`](#nen-stage-triage)). Each
+[`loop slots`](#nen-loop-slots), [`stage triage`](#nen-stage-triage),
+[`stage list`](#nen-stage-list)). Each
 verb's own **Output and exit codes** paragraph is authoritative.
 [`bootstrap`](#nen-bootstrap) is the one exception to the three-code scheme: it
 relays the bootstrap script's own published codes unchanged (see [Getting the
@@ -273,6 +275,7 @@ verb it invoked. The complete list:
 | Verb | Code | Meaning |
 |---|---|---|
 | every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
+| [`stage list`](#nen-stage-list) | `3` | the add list is empty and nothing is flagged — a tree with no stageable change, never a tree the verb failed to read (that is `1`) ([#237](https://github.com/zheref/nen/issues/237)) |
 | [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
@@ -679,7 +682,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 119 verbs, grouped as the README groups them. **Reads** is what a
+All 120 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -709,6 +712,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
+| [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
 | [`board`](#family-board) | [`nen board build`](#nen-board-build) | assembles a Board from already-computed rows (gate from 'gate derive', colour from 'color status') | local file (--rows-from) | yes |
@@ -3073,7 +3077,8 @@ Flags what should never be staged blind, tensho §3's own table: secret
 shapes, binaries, out-of-scope paths and unmentioned deletions. It detects,
 never decides — the yes to stage a flagged file is always the human's. A
 git-ignored path is reported separately, never as a flag: it cannot be staged
-without `-f`, so there is nothing to ask.
+without `-f`, so there is nothing to ask. [`stage list`](#nen-stage-list) is
+the complement: the exact add list, from the same triage.
 
 ### `nen stage triage`
 
@@ -3177,6 +3182,116 @@ clean: 0 file(s)
 ignored: 2 file(s), not listed
 ```
 (exit 0 — same scratch repository, with the in-scope edit and the untracked `.env` committed away first, leaving only the ignored `node_modules/` tree dirty)
+
+
+### `nen stage list`
+
+The exact add list — the paths a checkpoint stages — computed from the **same
+triage** [`stage triage`](#nen-stage-triage) runs, never re-derived in shell
+([#237](https://github.com/zheref/nen/issues/237)). Every modified, added,
+renamed (the new path), deleted and **untracked** path triage called clean is
+on it, in `git status` order; every flagged path and every git-ignored path is
+off it, and each exclusion is named with its reasons, so "excluded on purpose"
+is never confused with "not seen". It was filed because a hand-written
+`git status --short | awk` listing dropped two untracked files from a commit on
+`zheref/kro-pwa#95`, and the pushed head failed CI. The verb **never runs
+`git add`**, never commits, and changes none of triage's detectors or its exit
+contract.
+
+One clean shape is not on the list: a deletion **already staged** (`D `, gone
+from the index and the working tree). It is already in the commit-to-be, and
+`git add` answers its pathspec with `fatal: pathspec … did not match any files`,
+staging nothing from the whole list — so it is reported as `alreadyStaged`
+instead.
+
+**Usage**
+
+```text
+nen stage list --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
+               [--large-bytes <n>] [--nul | --json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | **yes** | the working tree whose add list is emitted | unbracketed in usage; omitted is refused at exit 2 (#28) |
+| `--scope <a,b>` | no | in-scope path prefixes, exactly as `stage triage` | an out-of-scope path is flagged, so it is excluded |
+| `--mentions <text>` | no | free text searched for a deleted path's basename, exactly as `stage triage` | an unmentioned deletion is flagged, so pass the commit message draft to keep an intended deletion on the list |
+| `--large-bytes <n>` | no | the `large` threshold, exactly as `stage triage` | default **1048576** |
+| `--nul` | no | NUL-terminate every path instead of newline-terminating it | for `git add --pathspec-file-nul`; refused at exit 2 alongside `--json`, or on `stage triage` |
+| `--json` | no | the whole classification | — |
+
+**Feeding it to git.** Stdout is the list and nothing else, so it goes to
+`git add` with no `awk`, `grep` or `cut` between them:
+
+```bash
+nen stage list --repo . --nul | git --literal-pathspecs add --pathspec-from-file=- --pathspec-file-nul
+```
+
+`--literal-pathspecs` makes a path containing `*`, `?` or `[` match only
+itself. In the default newline form a path carrying a control character (a
+newline, a trailing carriage return) or one starting with `"` is C-quoted, the
+way `--pathspec-from-file` unquotes it; every other path — spaces, leading or
+trailing ones, non-ASCII — is written raw. The `--nul` form is written raw to
+stdout with no trailing newline, because a stray `\n` after the last NUL reaches
+git as one more pathspec matching nothing, and git then stages nothing.
+
+**Output and exit codes** — stdout carries the list, one path per line (or
+NUL-terminated under `--nul`), and nothing else. Stderr carries, for a human:
+`excluded: <path>  [<reasons>]` per flagged path, `already staged: <path>
+[…]` per staged deletion, `ignored: <n> file(s), not listed`, and on exit 1 or
+3 a `nen:` line saying why the list is empty. `--json` top-level keys, at
+**every** exit: `verdict` (`ready`, `flagged` or `empty`), `add[]`,
+`excluded[]` and `ignored[]` (each `{ path, reasons[] }`, as triage's
+`flagged[]` and `ignored[]`), and `alreadyStaged[]`.
+
+| Exit | Meaning |
+|---|---|
+| `0` | `ready` — the list is non-empty and nothing is flagged |
+| `1` | `flagged` — something needs a human's yes; the list is **withheld from stdout** (read it from `--json`), so a pipe that ignores the exit code stages nothing rather than a partial set that looks whole. Also `1`: `git status` failed — the tree was never read, and stdout is empty |
+| `2` | usage — a missing `--repo`, `--nul` with `--json`, a bad `--large-bytes` |
+| `3` | `empty` — nothing to add and nothing flagged (a clean tree, or one dirty only in ignored paths). A tree whose every change is flagged is `1`, never `3` |
+
+**Example**
+
+```bash
+nen stage list --repo . --mentions "drops src/gone.ts"
+```
+```text
+src/a.ts
+src/gone.ts
+packages/core/src/utils/__tests__/oauthReturnQuery.test.ts
+packages/core/src/utils/oauthReturnQuery.ts
+with space.ts
+```
+(stdout, exit 0, in `git status`'s own order — tracked changes, then untracked
+paths, each byte-sorted; stderr carries `ignored: 1 file(s), not listed`. The
+tree is the shape `src/stage/list.integration.test.ts` builds against the real
+git: a modified `src/a.ts`, a deleted `src/gone.ts`, the two untracked
+`oauthReturnQuery` files `zheref/kro-pwa#95` dropped, an untracked
+`with space.ts` and an ignored `node_modules/` file)
+
+```bash
+nen stage list --repo . --mentions "drops src/gone.ts" --json
+```
+```json
+{
+  "verdict": "flagged",
+  "add": [
+    "src/a.ts",
+    "src/gone.ts",
+    "packages/core/src/utils/__tests__/oauthReturnQuery.test.ts",
+    "packages/core/src/utils/oauthReturnQuery.ts",
+    "with space.ts"
+  ],
+  "excluded": [{ "path": ".env", "reasons": ["secret-shape"] }],
+  "alreadyStaged": [],
+  "ignored": [{ "path": "node_modules/leftpad/index.js", "reasons": ["ignored"] }]
+}
+```
+(exit 1 — the same tree with an untracked `.env`; the text form prints nothing
+on stdout and `excluded: .env  [secret-shape]` on stderr)
 
 ## Backlog & boards
 
