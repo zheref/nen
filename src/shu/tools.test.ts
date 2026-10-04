@@ -1013,6 +1013,27 @@ describe("the nen row -- behind dependency.pinned_ref, inside the minimum (#327)
     expect(behindPinnedRef("4f2a9c1", "0.18.1")).toBeNull();
   });
 
+  it("compares only a ref shaped like a release tag -- never an all-digit SHA or a year (N1)", () => {
+    // Each of these parses as a one-component VERSION, which is exactly the
+    // trap: compared, a SHA pin would read "not behind" on every host.
+    expect(behindPinnedRef("1234567", "0.18.1")).toBeNull();
+    expect(behindPinnedRef("1234567890123456789012345678901234567890", "0.18.1")).toBeNull();
+    expect(behindPinnedRef("2026", "0.18.1")).toBeNull();
+    // Two components is not a tag either, nor is a leading anything but v.
+    expect(behindPinnedRef("v0.18", "0.17.1")).toBeNull();
+    expect(behindPinnedRef("release-0.18.2", "0.18.1")).toBeNull();
+    // The tag shapes that ARE compared: v or V, pre-release, build.
+    expect(behindPinnedRef("V0.18.2", "0.18.1")).toBe(true);
+    expect(behindPinnedRef("v0.18.2-rc.1", "0.18.1")).toBe(true);
+    expect(behindPinnedRef("0.18.2+build.5", "0.18.2")).toBe(false);
+  });
+
+  it("does not compare an all-digit SHA pinned_ref end to end, and exits on the minimum alone", async () => {
+    const result = await withDeclaration(pinnedAt("1234567"), ["--json"], { script: nenAt("0.18.1") });
+    expect(result.code).toBe(0);
+    expect(row(result, "nen")).toMatchObject({ state: "present-and-matching", behindPinnedRef: null });
+  });
+
   it("reports a host AT the pin as ok, exit 0, unchanged", async () => {
     const result = await withDeclaration(pinnedAt("v0.18.2"), ["--json"], { script: nenAt("0.18.2") });
     expect(result.code).toBe(0);
@@ -1063,6 +1084,22 @@ describe("the nen row -- behind dependency.pinned_ref, inside the minimum (#327)
     expect(text.err.join("\n")).not.toMatch(/--install/);
   });
 
+  it("prints a WRONG row byte-for-byte as before #327, with no ref suffix and no not-compared line (N2)", async () => {
+    const below = await withDeclaration(pinnedAt("v0.18.2"), [], { script: nenAt("0.17.9") });
+    expect(below.code).toBe(5);
+    const nenLines = below.out.filter((line): boolean => /^\s+WRONG\s+nen\b/.test(line));
+    expect(nenLines).toHaveLength(1);
+    expect(nenLines[0]).toMatch(/^\s+WRONG\s+nen\s+0\.17\.9\s+pinned >=0\.18\.0 <\S+$/);
+    expect(below.out.join("\n")).not.toMatch(/pinned_ref v0\.18\.2/);
+    // Exit 5, and no behind row: the advice never names exit 7.
+    expect(below.err.join("\n")).not.toMatch(/Exit 7|behind the pinned ref/);
+
+    // A WRONG row with an uncomparable ref prints no not-compared line either.
+    const sha = await withDeclaration(pinnedAt("main"), [], { script: nenAt("0.17.9") });
+    expect(sha.code).toBe(5);
+    expect(sha.out.join("\n")).not.toMatch(/NOT checked/);
+  });
+
   it("leaves a host BELOW the minimum exactly as before: WRONG, exit 5", async () => {
     const result = await withDeclaration(pinnedAt("v0.18.2"), ["--json"], { script: nenAt("0.17.9") });
     expect(result.code).toBe(5);
@@ -1091,6 +1128,8 @@ describe("the nen row -- behind dependency.pinned_ref, inside the minimum (#327)
     expect(result.code).toBe(5);
     expect(result.out.join("\n")).toMatch(/BEHIND\s+nen/);
     expect(result.err.join("\n")).toMatch(/behind the pinned ref/);
+    // The code this run did NOT return is never named (N6).
+    expect(result.err.join("\n")).not.toMatch(/Exit 7/);
   });
 
   it("carries no ref and makes no comparison on a toolchain row, or with no dependency block", async () => {
@@ -1111,7 +1150,7 @@ describe("the nen row -- behind dependency.pinned_ref, inside the minimum (#327)
       behindPinnedRef: null,
     });
     const text = await withDeclaration(pinnedAt("main"), [], { script: nenAt("0.18.1") });
-    expect(text.out.join("\n")).toMatch(/pinned_ref main is not a version nen can compare, so whether this host is behind it was NOT checked/);
+    expect(text.out.join("\n")).toMatch(/pinned_ref main is not a release tag \(\[v\]X\.Y\.Z\) nen can compare, so whether this host is behind it was NOT checked/);
   });
 
   it("never exits 7 under --install or --dry-run", async () => {

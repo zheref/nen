@@ -735,9 +735,10 @@ flags:
                    that ref verbatim on the dependency row and null on every
                    toolchain row; 'behindPinnedRef' is true (behind), false (at
                    or above) or null when NO comparison was made -- no ref,
-                   nothing read, or a pinned_ref that is not a version, which
+                   nothing read, or a pinned_ref that is not a release tag, which
                    the table says in a line rather than reading as "at the
-                   pin". summary.behind counts BEHIND rows, which are NOT in
+                   pin". summary.satisfied counts present-and-matching rows
+                   ONLY; summary.behind counts BEHIND rows, which are NOT in
                    summary.satisfied, so the five state counts sum to checked.
                    'packMinimum' is ADVISORY: the version nen has been tested
                    against, from the bundled profiles pack. It never moves the
@@ -929,7 +930,10 @@ exit codes:
      ('nen bootstrap --ref <pinned_ref> ...'); this verb never performs it.
      5 wins when a row is also missing or wrong. Never under --install (the
      row is verify-only) and never under --dry-run (nothing was probed). A
-     pinned_ref that is not a version is not compared and never yields 7.
+     pinned_ref that is not a release tag ([v]X.Y.Z[-pre][+build]: a branch,
+     a SHA -- all-digit ones included -- a bare year) is not compared and
+     never yields 7. A CI file 'nen scaffold' writes treats 7 as a warning
+     (NEN_REF older than dependency.pinned_ref) and goes on.
 
   Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91); 6 is
   'coverage' --touched's own (zheref/nen#236); 7 is the 'tools' check's own

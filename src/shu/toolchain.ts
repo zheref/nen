@@ -38,7 +38,7 @@ import { COMPATIBLE_MINOR_FLOOR, VERSION } from "../version.js";
 /**
  * What one tool's row says about the host.
  *
- * THREE OBSERVED STATES AND ONE UNOBSERVED. `not-probed` appears only when nen
+ * FOUR OBSERVED STATES AND ONE UNOBSERVED. `not-probed` appears only when nen
  * ran nothing at all -- a `--dry-run`, whose whole contract is that it spawns
  * nothing -- and it exists rather than reusing `missing` because a tool nobody
  * looked for is not a tool that is absent. Reporting an unprobed row as
@@ -531,11 +531,23 @@ export function minimumBelowFloor(floor: Floor, build: Build = thisBuild()): str
 }
 
 /**
+ * The one ref shape `behindPinnedRef` compares: a RELEASE TAG, three numeric
+ * components, an optional leading `v`, an optional pre-release and build.
+ *
+ * `parseVersion` alone is too generous for a ref: it reads `2026` and
+ * `1234567` -- an all-digit abbreviated SHA -- as one-component versions, so a
+ * SHA pin would have been compared as if it were release 1234567 and read "not
+ * behind" on every host. A ref that is not tag-shaped is not compared at all.
+ */
+const RELEASE_TAG = /^[vV]?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
+
+/**
  * Whether an observed version is LOWER than the ref a bootstrap installs.
  *
- * `true` / `false` when both read as versions; `null` WHEN THE COMPARISON WAS
- * NOT MADE, because `pinned_ref` is not a version (a branch, a SHA) or the
- * found value is not one. Null is never rendered as "not behind": an
+ * `true` / `false` when the ref is a release tag (`RELEASE_TAG`) and the found
+ * value reads as a version; `null` WHEN THE COMPARISON WAS NOT MADE, because
+ * `pinned_ref` is not a release tag (a branch, a SHA -- all-digit ones
+ * included -- a bare year) or the found value is not a version. Null is never rendered as "not behind": an
  * unperformed comparison must not read as one that came back clean
  * (zheref/nen#83), so the row keeps its other verdict and the report says the
  * pin was not compared.
@@ -545,6 +557,7 @@ export function minimumBelowFloor(floor: Floor, build: Build = thisBuild()): str
  * the ref is accepted, which is how every tag this contract pins is spelled.
  */
 export function behindPinnedRef(pinnedRef: string, found: string): boolean | null {
+  if (!RELEASE_TAG.test(pinnedRef)) return null;
   const wanted = parseVersion(pinnedRef);
   const observed = parseVersion(found);
   if (wanted === null || observed === null) return null;

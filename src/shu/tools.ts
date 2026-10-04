@@ -162,8 +162,8 @@ export interface ToolRow {
   /**
    * The host's version against `pinnedRef`: `true` behind it, `false` at or
    * above it, `null` when NO COMPARISON WAS MADE -- no ref on this row, nothing
-   * observed or no version read, or a `pinned_ref` that is not a version (a
-   * branch, a SHA). Null is never "not behind".
+   * observed or no version read, or a `pinned_ref` that is not a release tag
+   * (a branch, a SHA, a bare year). Null is never "not behind".
    */
   readonly behindPinnedRef: boolean | null;
 }
@@ -174,7 +174,7 @@ export interface ToolRow {
  *
  * THE FIVE STATE COUNTS SUM TO `checked`, always (`satisfied`, `behind`,
  * `missing`, `wrong`, `notProbed` -- `behind` appended last, zheref/nen#327) -- which is what makes them
- * readable as a whole rather than as four unrelated numbers, and is why
+ * readable as a whole rather than as five unrelated numbers, and is why
  * `notProbed` is here even though it is only ever non-zero under `--dry-run`.
  *
  * `notInstallable` IS THE ONE THAT EXPLAINS AN EXIT CODE. Under `--install` the
@@ -767,16 +767,20 @@ export function renderToolsReport(report: ToolsReport): readonly string[] {
     const pack = row.packMinimum === null ? "" : `  (tested minimum ${row.packMinimum})`;
     // THE BEHIND ROW NAMES THE REF ON ITS OWN LINE, beside the range it is
     // inside, so the one line a reader scans says both facts (zheref/nen#327).
-    const ref = row.behindPinnedRef === true && row.pinnedRef !== null ? `  pinned_ref ${row.pinnedRef}` : "";
+    // GATED ON THE STATE, not on the comparison: a WRONG row that also happens
+    // to be below the ref prints byte-for-byte what it printed before #327.
+    const ref = row.state === "present-but-behind-pin" && row.pinnedRef !== null ? `  pinned_ref ${row.pinnedRef}` : "";
     lines.push(
       `  ${MARKS[row.state].padEnd(MARK_WIDTH)}${row.name.padEnd(nameWidth)}  ${foundColumn(row).padEnd(foundWidth)}  ${pinnedColumn(row).padEnd(pinWidth)}${ref}${pack}`.trimEnd(),
     );
     // A REF NEN COULD NOT COMPARE IS SAID, never left to read as "at the pin":
     // a branch or a SHA in `pinned_ref` is not a version, and an unperformed
     // comparison must not render as one that came back clean (#83).
-    if (row.pinnedRef !== null && row.found !== null && row.behindPinnedRef === null) {
+    // SATISFIED ROWS ONLY: on a WRONG row the stronger finding is already
+    // printed, and that row stays exactly as it read before #327.
+    if (row.pinnedRef !== null && row.found !== null && row.satisfied === true && row.behindPinnedRef === null) {
       lines.push(
-        `${indent}pinned_ref ${row.pinnedRef} is not a version ${PROGRAM} can compare, so whether this host is behind it was NOT checked.`,
+        `${indent}pinned_ref ${row.pinnedRef} is not a release tag ([v]X.Y.Z) ${PROGRAM} can compare, so whether this host is behind it was NOT checked.`,
       );
     }
     if (mode === "dry-run") lines.push(`${indent}would probe: ${row.probe}`);
@@ -830,6 +834,7 @@ export function renderAdvice(report: ToolsReport, invocation: string): readonly 
   const failing = report.tools.filter((row): boolean => row.satisfied !== true);
   const fixable = failing.filter((row): boolean => row.installCommand !== null);
   const behind = behindAdvice(report);
+  // `behindAdvice` names exit 7 only when this run's code IS 7.
   if (failing.length === 0) return behind;
   const head = `${failing.length} of ${report.tools.length} declared tool${report.tools.length === 1 ? " is" : "s are"} missing or not the pinned version.`;
   if (fixable.length === 0) {
@@ -856,7 +861,13 @@ function behindAdvice(report: ToolsReport): readonly string[] {
   const behind = report.tools.filter((row): boolean => row.state === "present-but-behind-pin");
   if (behind.length === 0) return [];
   const named = behind.map((row): string => `${row.name} ${row.found ?? "?"} < ${row.pinnedRef ?? "?"}`).join(", ");
+  // THE CODE IS NAMED ONLY WHEN IT IS THE CODE: beside a 5, "exit 7 means
+  // exactly that" would describe a code this run did not return.
+  const code =
+    report.exitCode === EXIT_BEHIND_PINNED_REF
+      ? ` Exit ${EXIT_BEHIND_PINNED_REF} means exactly that:`
+      : "";
   return [
-    `${behind.length} declared tool${behind.length === 1 ? " satisfies its" : "s satisfy their"} minimum and ${behind.length === 1 ? "is" : "are"} behind the pinned ref (${named}). Exit ${EXIT_BEHIND_PINNED_REF} means exactly that: install the pinned ref -- the row above names the command. ${PROGRAM} shu tools never installs it.`,
+    `${behind.length} declared tool${behind.length === 1 ? " satisfies its" : "s satisfy their"} minimum and ${behind.length === 1 ? "is" : "are"} behind the pinned ref (${named}).${code} Install the pinned ref -- the row above names the command. ${PROGRAM} shu tools never installs it.`,
   ];
 }

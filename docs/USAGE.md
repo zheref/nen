@@ -5663,6 +5663,8 @@ It still never generates scenario-specific project *code* — a framework's own 
 
 **Templates are data, not code.** Each stack the [profiles pack](#nen-shu-detect) gives a `scaffoldTemplate` name gets that template's files from `templates/<name>/template.json` at the repository root — versioned with nen, readable end to end by a reviewer, and static-imported so `bun build --compile` embeds it. No module under `src/scaffold/` names a build tool, a package manager or a test runner; a test sweeps for one. Two stacks (`compose-desktop`, `dotnet-winui`) carry `scaffoldTemplate: null` and get no workflow, and two more (`gradle-android`, `xcode-ios`) have a workflow but **no fresh-tree form**, because their stack marker is a downloaded jar or an IDE-authored project document and a fabricated marker is a declaration that lies.
 
+**The CI workflow's `toolchain` step reads `shu tools`'s exit code.** It runs the check and fails the job on any non-zero code **except 7** — [behind `pinned_ref`](#behind-the-pinned-ref), meaning the workflow's own `NEN_REF` is older than the `dependency.pinned_ref` in `nen/contract.json`. That is drift in the CI file rather than a broken runner, so the step prints a `::warning::` naming it (repin `NEN_REF`) and the job goes on. Exit 5 — a pinned tool missing or out of range — still fails it.
+
 ### `nen scaffold init`
 
 Eleven steps, each reporting `created` / `appended` / `skipped` / `would-create` / `would-append` / `refused` with the reason. In order: resolve the stack **and the policy** (**before any write**, so a refusal leaves the tree untouched); create every `--directories` entry that does not exist; install the trailer-enforcing commit-msg hook; install the trunk-guarding pre-commit hook; write the canon-values template when `--canon-values-path` is given and nothing is there; **copy** any of the four taxonomy files still under `schemas/` into `nen/` and print the `git rm` line; write `nen/contract.json`'s `project` block into absence; write [`nen/workflow.json`](#nenworkflowjson)'s policy into absence; add the stack's CI workflow; append `.nen/` and the policy's `reports.dir` to `.gitignore`; and run [`nen shu tools`](#nen-shu-tools) in **check** mode, printing what this host is missing and the `--install` command rather than running it.
@@ -8355,8 +8357,10 @@ A check whose rows are all satisfied and one of them `BEHIND` exits **7**. At
 or above the pin the row is `ok` exactly as before; outside the minimum it is
 `WRONG` and exit 5 exactly as before, whatever the pin says. The comparison is
 full semver precedence with a leading `v` dropped, so `0.18.2-rc.1` is behind
-`v0.18.2`. A `pinned_ref` that is **not a version** (a branch, a SHA) is not
-compared: `behindPinnedRef` is `null`, the table prints a line saying the
+`v0.18.2`. Only a ref shaped like a **release tag** is compared —
+`[v]X.Y.Z`, optionally with a pre-release and build suffix. Anything else (a
+branch, a SHA — including an all-digit abbreviated one like `1234567` — or a
+bare `2026`) is not compared: `behindPinnedRef` is `null`, the table prints a line saying the
 comparison was not made, and the row keeps its other verdict — it is never
 rendered as "at the pin". `shu tools` still installs nothing for this row,
 under `--install` included.
@@ -8505,8 +8509,9 @@ block.
 
 `summary` is `{ checked, satisfied, missing, wrong, notProbed, installed,
 refused, notInstallable, behind }`. The five state counts — `satisfied`,
-`behind`, `missing`, `wrong`, `notProbed` — always sum to `checked`; `behind`
-counts `present-but-behind-pin` rows, which are **not** in `satisfied`.
+`behind`, `missing`, `wrong`, `notProbed` — always sum to `checked`;
+`satisfied` counts `present-and-matching` rows **only**, and `behind` counts
+`present-but-behind-pin` rows, which are **not** in `satisfied`.
 `refused` counts rows carrying a pin this release will not act on;
 **`notInstallable` counts rows that do not pass and that nen has no installer
 for** — the number that explains an `--install` run exiting 0 beside a host that
@@ -8525,7 +8530,7 @@ install, why, pinnedRef, behindPinnedRef }`, in that order:
 | `installCommand` | The rendered commands, non-null only for an installer nen runs *and* only when there is something to do. |
 | `remedy` | The way out **in words**, for a row with no command: `verify-only: install by hand — …`, `corepack: REFUSED — …`, `sdkmanager: not enabled in this release — …`, `wrapper: nothing to install — …`. Exactly one of `installCommand` and `remedy` is non-null on a row that needs a way out; both are null on a row that passes. Without it a refused `corepack` row and a `verify-only` row were the same row to a machine reader, because `why` is the *declaration's* reason for the pin and is null on most refusing rows. |
 | `pinnedRef` | `dependency.pinned_ref`, verbatim, on the `dependency` row; `null` on every `project.toolchain` row, which pins a version rather than a ref. |
-| `behindPinnedRef` | The host version against `pinnedRef`: `true` behind it (the `BEHIND` row), `false` at or above it, `null` when **no comparison was made** — no ref on the row, nothing observed or no version read, or a `pinned_ref` that is not a version. `null` never means "not behind". |
+| `behindPinnedRef` | The host version against `pinnedRef`: `true` behind it (the `BEHIND` row), `false` at or above it, `null` when **no comparison was made** — no ref on the row, nothing observed or no version read, or a `pinned_ref` that is not a release tag. `null` never means "not behind". |
 | `install` | What `--install` ran for this row — `{ steps: [{ exe, argv, exitCode, durationMs }], outcome, failure }` — and `null` in every mode that installs nothing. `outcome` is `installed` (every step nen ran exited 0), `failed`, or `skipped` (nen acted on nothing here). It describes the **installer**, never the host: `installed` beside `state: "missing"` is the real finding "it installed somewhere not on this `PATH`", which is why this verb re-probes. There is no `refused` outcome, because a refusal stops the run before the first install and this CLI answers a refusal with a stderr line and exit 2 rather than a document (below). |
 
 **A refusal prints no document.** Every family in this CLI answers exit 2 with a
