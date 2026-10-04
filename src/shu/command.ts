@@ -93,7 +93,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   dev: { values: ["lane", "target", "effort"], booleans: ["dry-run"] },
   run: { values: ["lane", "target", "effort"], booleans: ["dry-run"] },
   deploy: { values: ["lane", "target", "effort"], booleans: ["dry-run", "run"] },
-  coverage: { values: ["lane", "threshold", "base", "effort"], booleans: ["dry-run", "touched"] },
+  coverage: { values: ["lane", "threshold", "base", "effort"], booleans: ["dry-run", "touched", "from-capture"] },
   "test-report": { values: ["lane", "effort"], booleans: ["dry-run", "from-artifacts"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "carry", "tests", "dry-run"] },
@@ -199,7 +199,9 @@ verbs:
               reads; a lane that names none is exit 1 saying so.
               --touched --base <ref> narrows the rows to the files a change
               touched, reading EVERY such artifact and resolving each one's
-              paths against its own root, per --touched below.
+              paths against its own root, per --touched below. With
+              --from-capture it runs NOTHING and reads the capture already on
+              disk, once nen has judged it current, per --from-capture below.
   test-report Run the lane's declared 'test', then PARSE the results file
               that run produced: a row per test, and the four counts. The
               report is the first path under the TEST verb's 'artifacts' nen
@@ -528,6 +530,30 @@ flags:
                    it, exit 2: it names the ref --touched diffs against and
                    has nothing to do on its own. No default: nen never
                    invents a base to compare against.
+  --from-capture   'coverage' only, and only WITH --touched (zheref/nen#250).
+                   Do not run the lane's coverage command: build the touched
+                   table from the reports its 'artifacts' name, ALREADY ON
+                   DISK. The lane, verb and host are resolved exactly as a
+                   run resolves them (a seated 'coverage' is still exit 4);
+                   the declared argv and its preconditions are never spawned
+                   -- only 'git diff --name-only <base>...HEAD' and 'git diff
+                   --name-only HEAD'. NEN DECIDES WHETHER THE CAPTURE IS
+                   CURRENT, never the caller: every declared report nen reads
+                   must be on disk and modified no earlier than every touched
+                   file and every tracked file with an uncommitted change
+                   (files no longer on disk, and the reports themselves, are
+                   not compared). The capture's commit is not the test -- a
+                   report records none, and the ordinary loop commits AFTER
+                   it measures. A report that is missing or older than any
+                   of those files is REFUSED, every one named with its
+                   reason, at exit 8 with no document: nothing is ever
+                   reused silently, and never a subset. A current capture
+                   gets exactly the parse, join, ladder, 'touched' shape and
+                   exit 6 a run's report gets, with 'exitCode' about the
+                   read. Not compared, and so not caught: untracked files,
+                   and a capture copied in from another checkout. Given
+                   without --touched, with --dry-run, or with --effort: exit
+                   2.
   --from-artifacts 'test-report' only. Do not run anything: read the results
                    file the lane's 'test' verb declares under 'artifacts' and
                    parse whatever is on disk. The lane, the verb and the host
@@ -860,7 +886,8 @@ exit codes:
      without --dry-run, a path that resolves outside the repository, or a
      PRECONDITION that is not satisfied.
      On 'coverage' also: --touched given without --base, or --base given
-     without --touched -- each names the flag with nothing to do.
+     without --touched -- each names the flag with nothing to do; and
+     --from-capture given without --touched, with --dry-run, or with --effort.
      On 'tools' also: an --only naming a tool the declaration does not carry, a
      'version' in a form nen cannot evaluate, and -- under --install -- a pin
      this release will not act on (a range where the installer activates one
@@ -935,9 +962,17 @@ exit codes:
      never yields 7. A CI file 'nen scaffold' writes treats 7 as a warning
      (NEN_REF older than dependency.pinned_ref) and goes on.
 
+  8  'coverage --touched --from-capture' only (zheref/nen#250): the capture
+     on disk cannot be reused -- a declared report is missing, or was
+     modified before a touched or uncommitted file it must postdate. Nothing
+     was run or measured, and no document is printed: stderr names every
+     report and its reason. Not 1, which is a failed tool or an unreadable
+     report; not 6, which is a CURRENT capture that joined nothing. Route it
+     to one action: measure again (the same line without --from-capture).
+
   Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91); 6 is
   'coverage' --touched's own (zheref/nen#236); 7 is the 'tools' check's own
-  (zheref/nen#327).
+  (zheref/nen#327); 8 is 'coverage' --from-capture's own (zheref/nen#250).
 
 placeholders:
   Only the reference pack's own tokens are refused -- {pm}, {scheme},
@@ -1271,6 +1306,7 @@ export const shuCommand: Command = {
           threshold: context.args.values["threshold"] ?? null,
           touched: context.args.booleans.has("touched"),
           base: context.args.values["base"] ?? null,
+          fromCapture: context.args.booleans.has("from-capture"),
           advisories: coverageAdvisories(),
           effort: context.args.values["effort"] ?? null,
         }));

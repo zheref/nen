@@ -15,7 +15,7 @@
 //   3. a dry run that parses the report sitting on disk from a previous run.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -1922,3 +1922,224 @@ function shuRepoWithout(): string {
     verbs: { only: { build: { exe: "x", argv: ["y"] } } },
   });
 }
+
+// ── --touched --from-capture (zheref/nen#250) ───────────────────────────────
+
+describe("--touched --from-capture: the table from a capture on disk, no run", () => {
+  const diff = (base: string): string => `git diff --name-only ${base}...HEAD`;
+  const DIRTY = "git diff --name-only HEAD";
+  const CAPTURE = "coverage/coverage-summary.json";
+  /** The capture's own time; every file below is stamped against it. */
+  const WRITTEN = new Date("2026-09-22T12:00:00Z");
+  const BEFORE = new Date("2026-09-22T11:00:00Z");
+  const AFTER = new Date("2026-09-22T13:00:00Z");
+
+  /** A one-lane repository whose capture and source files carry stated times. */
+  function captureRepo(
+    files: Readonly<Record<string, Date>>,
+    capture: Date | null = WRITTEN,
+    coverage: unknown = { exe: "x", argv: ["y"], artifacts: [CAPTURE] },
+  ): string {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage } },
+    });
+    for (const [path, time] of Object.entries(files)) {
+      mkdirSync(join(repo, path, ".."), { recursive: true });
+      writeFileSync(join(repo, path), "export {};\n");
+      utimesSync(join(repo, path), time, time);
+    }
+    if (capture !== null) {
+      mkdirSync(join(repo, "coverage"), { recursive: true });
+      writeFileSync(
+        join(repo, CAPTURE),
+        JSON.stringify({
+          total: { lines: { total: 10, covered: 8 } },
+          "src/a.ts": { lines: { total: 6, covered: 6 } },
+          "src/b.ts": { lines: { total: 4, covered: 2 } },
+        }),
+      );
+      utimesSync(join(repo, CAPTURE), capture, capture);
+    }
+    return repo;
+  }
+
+  function git(touched: string, dirty = ""): ScriptedCall[] {
+    return [
+      { match: diff("main"), result: { code: 0, stdout: touched } },
+      { match: DIRTY, result: { code: 0, stdout: dirty } },
+    ];
+  }
+
+  const lines = (result: Captured): readonly string[] =>
+    result.seams.calls.map((call): string => [call.command, ...call.args].join(" "));
+
+  it("reuses a CURRENT capture and never spawns the declared coverage command", async () => {
+    const repo = captureRepo({ "src/a.ts": BEFORE, "src/b.ts": BEFORE });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture", "--json"], {
+        repo,
+        script: git("src/a.ts\nREADME.md\n"),
+      });
+      expect(result.code).toBe(0);
+      // THE MUTANT: a reuse path that still ran 'x y' first. Only nen's own
+      // two git reads are allowed, and nothing else is scripted.
+      expect(lines(result)).toEqual([diff("main"), DIRTY]);
+      const parsed = document(result);
+      expect(parsed.exitCode).toBe(0);
+      expect(parsed.targets.map((row): string => row.name)).toEqual(["src/a.ts"]);
+      expect(parsed.touched?.matched).toEqual(["src/a.ts"]);
+      expect(parsed.touched?.unmatched).toEqual(["README.md"]);
+      expect(parsed.report).toEqual({ format: "istanbul-summary", path: CAPTURE });
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("produces the SAME document the run form produces on the same capture", async () => {
+    // Acceptance 3 from the other side: the reuse path is not a second
+    // parser. The run form (tool scripted to succeed without writing) and the
+    // capture form read the same bytes and must emit the same document.
+    const repo = captureRepo({ "src/a.ts": BEFORE, "src/b.ts": BEFORE });
+    try {
+      const reused = await capture(["coverage", "--touched", "--base", "main", "--from-capture", "--json"], {
+        repo,
+        script: git("src/a.ts\nsrc/b.ts\n"),
+      });
+      const ran = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+        repo,
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "src/a.ts\nsrc/b.ts\n" } }],
+      });
+      expect(reused.code).toBe(ran.code);
+      expect(document(reused)).toEqual(document(ran));
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("REFUSES a capture older than a touched file, at 8, naming both, with no document", async () => {
+    const repo = captureRepo({ "src/a.ts": AFTER, "src/b.ts": BEFORE });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture", "--json"], {
+        repo,
+        script: git("src/a.ts\nsrc/b.ts\n"),
+      });
+      expect(result.code).toBe(8);
+      expect(result.out).toEqual([]);
+      const said = result.err.join("\n");
+      expect(said).toContain(`'${CAPTURE}' is STALE`);
+      expect(said).toContain("'src/a.ts'");
+      expect(said).not.toContain("'src/b.ts'");
+      expect(said).toContain("without --from-capture");
+      expect(lines(result)).toEqual([diff("main"), DIRTY]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("REFUSES a capture older than an UNCOMMITTED file the touched set does not name", async () => {
+    const repo = captureRepo({ "src/a.ts": BEFORE, "src/helper.ts": AFTER });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], {
+        repo,
+        script: git("src/a.ts\n", "src/helper.ts\n"),
+      });
+      expect(result.code).toBe(8);
+      expect(result.err.join("\n")).toContain("'src/helper.ts'");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("REFUSES a missing capture at 8 rather than reporting the read as exit 1", async () => {
+    const repo = captureRepo({ "src/a.ts": BEFORE }, null);
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], {
+        repo,
+        script: git("src/a.ts\n"),
+      });
+      expect(result.code).toBe(8);
+      expect(result.out).toEqual([]);
+      expect(result.err.join("\n")).toContain(`'${CAPTURE}' is not on disk`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("treats an equal time as current, and ignores a touched file the change deleted", async () => {
+    const repo = captureRepo({ "src/a.ts": WRITTEN });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture", "--json"], {
+        repo,
+        script: git("src/a.ts\nsrc/gone.ts\n"),
+      });
+      expect(result.code).toBe(0);
+      expect(document(result).touched?.unmatched).toEqual(["src/gone.ts"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a current capture that joins nothing is still exit 6, exactly as a run's report is", async () => {
+    const repo = captureRepo({ "docs/x.md": BEFORE });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture", "--json"], {
+        repo,
+        script: git("docs/x.md\n"),
+      });
+      expect(result.code).toBe(6);
+      expect(document(result).exitCode).toBe(6);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("prints a header saying nothing ran, in place of the executor's report", async () => {
+    const repo = captureRepo({ "src/a.ts": BEFORE });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], {
+        repo,
+        script: git("src/a.ts\n"),
+      });
+      expect(result.code).toBe(0);
+      const said = result.out.join("\n");
+      expect(said).toContain("--from-capture -- nothing was run");
+      expect(said).toContain(`Reused ${CAPTURE}`);
+      expect(said).toContain("1 touched or uncommitted file");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a seated 'coverage' is still exit 4 in the declaration's own words", async () => {
+    const repo = captureRepo({}, null, { unsupported: "no coverage tool on this lane" });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], { repo });
+      expect(result.code).toBe(4);
+      expect(result.err.join("\n")).toContain("no coverage tool on this lane");
+      expect(result.seams.calls).toEqual([]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [["coverage", "--from-capture"], /--from-capture is read only with --touched/],
+    [["coverage", "--touched", "--base", "main", "--from-capture", "--dry-run"], /both --dry-run and --from-capture/],
+    [["coverage", "--touched", "--base", "main", "--from-capture", "--effort", "e1"], /--effort is not read with --from-capture/],
+    [["build", "--from-capture"], /--from-capture is not read by 'shu build'/],
+  ])("refuses %j at 2 before anything is read", async (argv, message) => {
+    const result = await capture(argv);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(message);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("certifies the --from-capture form read-only, and only that form", () => {
+    expect(
+      classifyCommand("nen shu coverage --repo /x --touched --base main --from-capture").classification,
+    ).toBe("read-only");
+    expect(classifyCommand("nen shu coverage --repo /x --touched --base main").classification).toBe("mutating");
+  });
+});

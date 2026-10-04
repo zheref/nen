@@ -46,8 +46,10 @@ import { GIT, must } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { advisoryFor, type CoverageAdvisory } from "./coverage/advisory.js";
+import { captureRefusal, judgeCapture, type CaptureStat, type WatchedFile } from "./coverage/capture.js";
 import { openDeclaration } from "./declaration.js";
-import { EXIT_COVERAGE_UNJOINED, ShuRefusal } from "./exit.js";
+import { EXIT_COVERAGE_STALE_CAPTURE, EXIT_COVERAGE_UNJOINED, ShuRefusal } from "./exit.js";
+import { renderInvocation } from "./render.js";
 import { XCCOV, parseXccovFiles } from "./coverage/formats/xccov.js";
 import {
   formatNamedBy,
@@ -59,6 +61,7 @@ import {
 import {
   assembleCoverage,
   renderCoverage,
+  renderFromCapture,
   type CoverageLadderReport,
   type CoverageReport,
   type CoverageSource,
@@ -98,6 +101,13 @@ export interface CoverageOptions {
   /** `--base <ref>`. `git diff --name-only <base>...HEAD` names the touched set. */
   readonly base: string | null;
   /**
+   * `--from-capture`: build the `--touched` table from the reports already on
+   * disk and run NOTHING (zheref/nen#250) -- after nen has judged them current
+   * (./coverage/capture.ts). Only with `--touched`; never with `--dry-run` or
+   * `--effort`. See validateFromCapture().
+   */
+  readonly fromCapture?: boolean;
+  /**
    * The reference pack's advisory report locations, by stack.
    *
    * PASSED IN, NEVER READ HERE. This module imports ./run.ts and therefore
@@ -130,6 +140,44 @@ export function validateTouched(options: Pick<CoverageOptions, "touched" | "base
   if (!options.touched && options.base !== null) {
     throw new VerbUsageError(
       `--base is read only with --touched -- it names the ref '--touched' diffs against, and does nothing on its own. Add --touched, or drop --base.`,
+    );
+  }
+}
+
+/**
+ * `--from-capture` is read only under `--touched`, and with neither `--dry-run`
+ * nor `--effort` (zheref/nen#250).
+ *
+ * CHECKED BEFORE ANYTHING IS READ, like the pairing above. Each refusal is a
+ * flag that would otherwise be accepted and ignored:
+ *
+ *   * WITHOUT --touched there is no touched set, so "current" would be judged
+ *     against the uncommitted files alone -- a weaker test than the one this
+ *     flag promises, on the table it was not asked for.
+ *   * WITH --dry-run, both forms run nothing and they answer different
+ *     questions: one prints the command and parses nothing, the other parses
+ *     what is on disk. nen will not pick one (`test-report`'s own rule for
+ *     `--from-artifacts`, for the same reason).
+ *   * WITH --effort, there is no step to append to the phase ledger: the
+ *     ledger records what RAN, and this form runs nothing.
+ */
+export function validateFromCapture(
+  options: Pick<CoverageOptions, "touched" | "dryRun" | "effort" | "fromCapture">,
+): void {
+  if (options.fromCapture !== true) return;
+  if (!options.touched) {
+    throw new VerbUsageError(
+      `--from-capture is read only with --touched --base <ref>: nen reuses a capture only after judging it current against the files a change touched, and without --touched there is no touched set to judge it against.`,
+    );
+  }
+  if (options.dryRun) {
+    throw new VerbUsageError(
+      `'coverage' was given both --dry-run and --from-capture. --dry-run prints the coverage command this lane declares and parses nothing; --from-capture runs nothing and parses the capture already on disk. Both start no declared process and they answer different questions, so nen will not pick one for you.`,
+    );
+  }
+  if (options.effort !== undefined && options.effort !== null) {
+    throw new VerbUsageError(
+      `--effort is not read with --from-capture: the phase ledger records the steps a run performed, and --from-capture runs nothing, so there is nothing to append. Drop --effort, or drop --from-capture to measure with a run the ledger records.`,
     );
   }
 }
@@ -297,6 +345,16 @@ export function relativiseTargets(
     return name === row.name ? row : { ...row, name };
   });
 }
+
+/**
+ * What the parse needs to know about where the reports came from: the lane, its
+ * stack and absolute cwd, and the declared artifacts.
+ *
+ * A `ShuReport` IS ONE, and so is the resolved-but-not-run invocation
+ * `--from-capture` builds (zheref/nen#250) -- the one parse, reached two ways,
+ * rather than a second parse that could come to disagree with the first.
+ */
+type CoverageRun = Pick<ShuReport, "lane" | "stack" | "cwd" | "artifacts">;
 
 interface Parsed {
   readonly total: CoverageMeasure | null;
@@ -500,7 +558,7 @@ interface TouchedSources {
  * (Raised by Copilot on zheref/nen#254.)
  */
 function readTouchedSources(
-  run: ShuReport,
+  run: CoverageRun,
   repoRoot: string,
   primary: PrimaryRead,
 ): TouchedSources {
@@ -633,7 +691,7 @@ function chooseArtifacts(artifacts: readonly ShuArtifactReport[]): readonly ShuA
  * outcome says plainly that nothing was parsed.
  */
 function parseAfterRun(
-  run: ShuReport,
+  run: CoverageRun,
   repoRoot: string,
   options: CoverageOptions,
   exitCode: number,
@@ -787,7 +845,9 @@ export async function runCoverage(
 ): Promise<number> {
   const threshold = parseThreshold(options.threshold);
   validateTouched(options);
+  validateFromCapture(options);
   const ladder = readLadder(repoRoot, options, threshold);
+  if (options.fromCapture === true) return fromCapture(context, repoRoot, options, threshold, ladder);
   // A HOLDER RATHER THAN A `let`: the assignment happens inside a callback, and
   // a `let` narrowed to `null` at its declaration is a type error at every read
   // below -- the compiler does not follow a closure it did not call.
@@ -821,7 +881,7 @@ export async function runCoverage(
     // reader needs. So it is rendered, with a document carrying the refusal's
     // own code, and the refusal then goes on to ../shu/command.ts unchanged.
     if (error instanceof ShuRefusal && captured.report !== null) {
-      report(context, captured.report, repoRoot, options, threshold, ladder, error.code);
+      report(context, captured.report, renderReport(captured.report), repoRoot, options, threshold, ladder, error.code, null);
     }
     throw error;
   }
@@ -829,7 +889,110 @@ export async function runCoverage(
   const run = captured.report;
   /* c8 ignore next 2 -- runVerb emits exactly once on every path that returns */
   if (run === null) return exitCode;
-  return report(context, run, repoRoot, options, threshold, ladder, exitCode);
+  return report(context, run, renderReport(run), repoRoot, options, threshold, ladder, exitCode, null);
+}
+
+/**
+ * `--touched --from-capture`: the table from the reports already on disk, with
+ * NO run (zheref/nen#250) -- once nen has judged them current.
+ *
+ * THE INVOCATION IS RESOLVED, NOT RUN, and that is deliberate: the reports are
+ * a property of `project.verbs.<lane>.coverage.artifacts`, so reading them
+ * means rendering that invocation, with every refusal it carries -- a lane
+ * that seats `coverage` is still exit 4 in its own words, a host the
+ * declaration excludes still 3, an unknown lane still 2. `test-report
+ * --from-artifacts` reads its results the same way. ./run.ts is never called,
+ * so neither the declared argv nor a precondition probe is spawned: the only
+ * subprocesses are the two `git diff` reads below, both nen's own.
+ *
+ * THE JUDGEMENT COMES BEFORE THE PARSE. A capture nen cannot judge current is
+ * refused at EXIT_COVERAGE_STALE_CAPTURE naming each report and why, with no
+ * document -- nothing was measured, and a document would be a table of another
+ * tree's numbers with a refusal code beside it. A current one is handed to the
+ * SAME parse, join, banding and document a run's report gets, at exit 0 for
+ * the read, so the `touched` shape and the 6 for "joined nothing" are exactly
+ * what the run form produces.
+ */
+function fromCapture(
+  context: CommandContext,
+  repoRoot: string,
+  options: CoverageOptions,
+  threshold: number | null,
+  ladder: CoverageLadderReport | null,
+): number {
+  const { project } = openDeclaration(repoRoot);
+  const plan = renderInvocation(project, {
+    lane: options.lane,
+    verb: "coverage",
+    platform: context.seams.platform,
+  });
+  const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
+  const pointer = `project.verbs.${plan.lane}.coverage.artifacts`;
+  const captures: CaptureStat[] = plan.artifacts
+    .filter((value): boolean => recognisedByName(value))
+    .map((value): CaptureStat => ({ path: value, mtimeMs: fileMtime(insideRepo(repoRoot, value, pointer)) }));
+  const files = touchedFiles(context, repoRoot, options.base as string);
+  const uncommitted = rawLines(
+    must(context.seams, GIT, ["diff", "--name-only", "HEAD"], { cwd: repoRoot }).stdout,
+  );
+  const watched = watchedFiles(repoRoot, [...files, ...uncommitted], plan.artifacts);
+  const problems = judgeCapture(captures, watched);
+  if (problems.length > 0) {
+    throw new ShuRefusal(EXIT_COVERAGE_STALE_CAPTURE, captureRefusal(problems, watched.length));
+  }
+  const run: CoverageRun = {
+    lane: plan.lane,
+    stack: plan.stack,
+    cwd,
+    artifacts: plan.artifacts.map(
+      (value): ShuArtifactReport => ({
+        kind: "path",
+        value,
+        exists: fileMtime(insideRepo(repoRoot, value, pointer)) !== null,
+      }),
+    ),
+  };
+  const header = renderFromCapture(
+    plan.lane,
+    plan.stack,
+    captures.map((capture): string => capture.path),
+    watched.length,
+  );
+  return report(context, run, header, repoRoot, { ...options, dryRun: false }, threshold, ladder, 0, files);
+}
+
+/** A file's modification time, or null when there is no FILE at the path. */
+function fileMtime(absolute: string): number | null {
+  try {
+    const stats = statSync(absolute);
+    return stats.isFile() ? stats.mtimeMs : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The files a capture must postdate: each path named once, the declared
+ * reports themselves left out (a tracked report is "uncommitted" the moment a
+ * run rewrites it, and it cannot postdate itself), and a path with no file on
+ * disk -- deleted by the change -- left out too, since it has no time to
+ * compare and no row to report.
+ */
+function watchedFiles(
+  repoRoot: string,
+  paths: readonly string[],
+  artifacts: readonly string[],
+): readonly WatchedFile[] {
+  const skip = new Set(artifacts);
+  const seen = new Set<string>();
+  const watched: WatchedFile[] = [];
+  for (const path of paths) {
+    if (path === "" || seen.has(path) || skip.has(path)) continue;
+    seen.add(path);
+    const mtimeMs = fileMtime(join(repoRoot, path));
+    if (mtimeMs !== null) watched.push({ path, mtimeMs });
+  }
+  return watched;
 }
 
 /**
@@ -882,21 +1045,24 @@ function readLadder(
  */
 function report(
   context: CommandContext,
-  run: ShuReport,
+  run: CoverageRun,
+  header: readonly string[],
   repoRoot: string,
   options: CoverageOptions,
   threshold: number | null,
   ladder: CoverageLadderReport | null,
   exitCode: number,
+  files: readonly string[] | null,
 ): number {
-  // The executor's own rendering, first: to stdout as text, to stderr under
-  // --json so the one document on stdout stays one document.
+  // The executor's own rendering (or --from-capture's header), first: to
+  // stdout as text, to stderr under --json so the one document on stdout
+  // stays one document.
   const write = context.json ? context.io.err : context.io.out;
-  for (const line of renderReport(run)) write(line);
+  for (const line of header) write(line);
 
   const parsed = parseAfterRun(run, repoRoot, options, exitCode);
   const touched = options.touched
-    ? computeTouched(context, repoRoot, options.base as string, parsed, threshold)
+    ? computeTouched(context, repoRoot, options.base as string, parsed, threshold, files)
     : null;
   // THE LADDER WAS DECIDED BEFORE THE RUN (see readLadder above): it is null
   // exactly when this invocation has none -- no --touched, or an explicit
@@ -1006,7 +1172,19 @@ function computeTouched(
   base: string,
   parsed: Parsed,
   threshold: number | null,
+  known: readonly string[] | null,
 ): { readonly files: readonly string[]; readonly filter: TouchedFilter; readonly grain: CoverageGrain | null } {
+  // --from-capture has already read the touched set to judge the capture
+  // against it; asking git twice could only produce a second answer.
+  const files = known ?? touchedFiles(context, repoRoot, base);
+  // EVERY DECLARED REPORT, EACH AT ITS OWN GRAIN (zheref/nen#236): `groups`
+  // is one entry per report nen read, already rebased onto that report's
+  // root, and empty on every path that parsed nothing.
+  return { files, filter: filterTouchedGroups(parsed.groups, files, threshold), grain: touchedGrain(parsed) };
+}
+
+/** `git diff --name-only <base>...HEAD`, in the repository root, one path per line. */
+function touchedFiles(context: CommandContext, repoRoot: string, base: string): readonly string[] {
   const result = must(context.seams, GIT, ["diff", "--name-only", `${base}...HEAD`], { cwd: repoRoot });
   // `rawLines`, NEVER `outputLines`: THESE ARE PATHS, AND A PATH'S SPACES ARE
   // PART OF IT. ../seam/lines.ts exists for exactly this distinction --
@@ -1016,11 +1194,7 @@ function computeTouched(
   // a trimmed copy of that name matches no coverage row, so the one file the
   // caller most needs banded would be reported `unmatched` with nothing to say
   // why. (Raised by Copilot on zheref/nen#147.)
-  const files = rawLines(result.stdout);
-  // EVERY DECLARED REPORT, EACH AT ITS OWN GRAIN (zheref/nen#236): `groups`
-  // is one entry per report nen read, already rebased onto that report's
-  // root, and empty on every path that parsed nothing.
-  return { files, filter: filterTouchedGroups(parsed.groups, files, threshold), grain: touchedGrain(parsed) };
+  return rawLines(result.stdout);
 }
 
 /**

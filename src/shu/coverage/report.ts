@@ -287,6 +287,28 @@ function labelled(label: string, value: string): string {
   return `${`${label}:`.padEnd(LABEL_WIDTH)}${value}`;
 }
 
+/**
+ * The lines `--from-capture` prints INSTEAD OF an executor report (zheref/
+ * nen#250): nothing ran, so there is no argv, no step and no duration to show
+ * -- only which lane, which reports were reused, and what they were judged
+ * current against. Same streams as the executor's report: stdout in text
+ * mode, stderr under `--json`.
+ */
+export function renderFromCapture(
+  lane: string,
+  stack: string,
+  captures: readonly string[],
+  checked: number,
+): readonly string[] {
+  return [
+    labelled("lane", `${lane}  (${stack})`),
+    labelled(
+      "read",
+      `--from-capture -- nothing was run. ${captures.length === 0 ? "No declared report to reuse" : `Reused ${captures.join(", ")}`}, judged current: written after every one of the ${checked} touched or uncommitted file${checked === 1 ? "" : "s"} still on disk.`,
+    ),
+  ];
+}
+
 /** `82.35%` -- or `--%` where there was nothing to divide. */
 export function formatPercent(counts: CoverageCounts): string {
   return counts.percent === null ? "--" : `${counts.percent.toFixed(2)}%`;

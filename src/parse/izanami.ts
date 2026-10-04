@@ -795,8 +795,8 @@ const MUTATING_PATTERNS: readonly RegExp[] = [
 //   * "dry-run-gated"    -- WRITES BY DEFAULT; a named read gate is what
 //                           certifies a form of it, so read-only requires one
 //                           of those tokens present. `--dry-run` is always a
-//                           gate; `alsoRead` names any others, and one row
-//                           carries one (see that field).
+//                           gate; `alsoRead` names any others, and two rows
+//                           carry one (see that field).
 //   * "write-flag-gated" -- READS BY DEFAULT; any of the named flags makes it
 //                           write, so read-only requires them all absent.
 //
@@ -881,12 +881,14 @@ export type NenVerbPolicy =
    * WRITES BY DEFAULT; a named read gate is what certifies a form of it.
    *
    * `--dry-run` IS ALWAYS ONE OF THE GATES and `alsoRead` names any others. It
-   * is empty on twelve of the thirteen rows that carry this kind, and it is not
+   * is empty on eleven of the thirteen rows that carry this kind, and it is not
    * a way to widen the certified set cheaply: a flag belongs there only when
    * the form it selects starts NO PROCESS AT ALL -- a property of nen, pinned
    * from both sides by that verb's own suite -- rather than one that merely
-   * looks harmless. `nen shu test-report --from-artifacts` is the one: it reads
-   * a file the declaration names and never reaches ../shu/run.ts. A flag whose
+   * looks harmless. `nen shu test-report --from-artifacts` is one: it reads
+   * a file the declaration names and never reaches ../shu/run.ts. `nen shu
+   * coverage --from-capture` is the other (zheref/nen#250): it reads the
+   * reports the declaration names and spawns only nen's own `git diff` reads. A flag whose
    * safety depended on somebody else's argv would belong in `writeFlags` on a
    * different kind, or nowhere.
    */
@@ -1344,8 +1346,17 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // (../shu/run.test.ts pins zero recorded calls for a targeted dry run).
       dev: DRY("starts a long-running debug process on this terminal unless --dry-run is given -- and with --target <name> also spawns the declared device probe before it and the target's after-steps once it exits"),
       run: DRY("starts a long-running production process on this terminal unless --dry-run is given -- and with --target <name> also spawns the declared device probe before it and the target's after-steps once it exits"),
-      coverage: DRY("spawns the lane's declared coverage command unless --dry-run is given -- a coverage run writes its report tree by definition"),
-      // THE ONE ROW IN THIS TABLE WITH A SECOND READ GATE, and it is a
+      // A SECOND READ GATE, for the same reason `test-report` has one below:
+      // `--from-capture` (zheref/nen#250) resolves the lane's `coverage`
+      // invocation, reads the reports it NAMES, and never reaches
+      // ../shu/run.ts -- its only subprocesses are two `git diff --name-only`
+      // reads nen itself chose, which ../shu/coverage.test.ts pins against a
+      // scripted seam. Every other form spawns the declared argv.
+      coverage: DRY_OR(
+        ["--from-capture"],
+        "spawns the lane's declared coverage command unless --dry-run or --from-capture is given -- a coverage run writes its report tree by definition",
+      ),
+      // THE OTHER ROW IN THIS TABLE WITH A SECOND READ GATE, and it is a
       // property of nen rather than of anybody's declaration: `--from-artifacts`
       // resolves the lane's `test` invocation, reads the results file that
       // invocation NAMES, and never reaches ../shu/run.ts at all -- which
