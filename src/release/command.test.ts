@@ -1043,6 +1043,33 @@ describe("nen release preflight -- every missing or invalid flag in one refusal 
     expect(toolCalls).toEqual([]);
   });
 
+  // Copilot, NN-PR-#353: --repo is ASSERTED, so a path that does not exist or
+  // names a regular file is a usage problem gathered before any tool runs --
+  // even with every other flag valid and every file flag absolute.
+  function absoluteValidArgs(dir: string): string[] {
+    writeFileSync(join(dir, "CHANGELOG.md"), "x\n");
+    writeFileSync(join(dir, "live-chores.json"), "[]");
+    return validArgs(dir, { changelog: join(dir, "CHANGELOG.md"), "live-chores-from": join(dir, "live-chores.json"), "fragment-dir": join(dir, "changelog.d") });
+  }
+
+  it("refuses a --repo naming a NONEXISTENT path, by name, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const missing = join(dir, "no-such-checkout");
+    const { code, err, toolCalls } = await refuse(absoluteValidArgs(dir), missing);
+    expect(code).toBe(2);
+    expect(err).toContain(`--repo ${missing} resolves to '${missing}', which does not exist.`);
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("refuses a --repo naming a REGULAR FILE, by name, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const file = join(dir, "CHANGELOG.md");
+    const { code, err, toolCalls } = await refuse(absoluteValidArgs(dir), file);
+    expect(code).toBe(2);
+    expect(err).toContain(`--repo ${file} resolves to '${file}', which is a file, not a directory.`);
+    expect(toolCalls).toEqual([]);
+  });
+
   it("reports an EMPTY --fragment-dir even when --repo did not resolve", async () => {
     const { code, err } = await refuse(["--tag", "v1.1.0", "--fragment-dir", ""], "");
     expect(code).toBe(2);

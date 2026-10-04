@@ -20,7 +20,7 @@ import {
 import { optionalDirectoryFlag, readJsonFile, readTextFile, splitList } from "../cli/inputs.js";
 import { DEFAULT_FRAGMENT_DIR } from "../changelog/completeness.js";
 import { reconcileChangelog, refuseOptionShapedRange } from "../changelog/reconcile.js";
-import { assertRepoRoot, RepoRootError, resolveRepoRoot } from "../repo/root.js";
+import { assertRepoRoot, RepoRootError } from "../repo/root.js";
 import { GH, GIT, must, outputLines, ToolError, type CommandResult } from "../seam/exec.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflight.js";
@@ -301,7 +301,12 @@ export const releaseCommand: Command = {
 
     // The caller-named files below resolve against --repo, so they are only
     // checked once it resolved; an unresolvable --repo is itself refused.
-    const root = gather(() => resolveRepoRoot({ repoFlag: context.repoFlag }));
+    // ASSERTED, not merely resolved (Copilot, NN-PR-#353): resolveRepoRoot
+    // accepts a path that does not exist or names a regular file, and with
+    // absolute file flags the run then reached 'gh variable get' before git
+    // failed on the bad cwd -- a tool run for a refused invocation, blaming
+    // the wrong cause. assertRepoRoot refuses both by name, here, with the rest.
+    const root = gather(() => assertRepoRoot({ repoFlag: context.repoFlag }));
 
     const liveChoresPath = context.args.values["live-chores-from"];
     const liveChores: LiveChoreCandidate[] | null | undefined =
