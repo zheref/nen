@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadLabelTaxonomy } from "../schema/labels.js";
@@ -20,7 +20,7 @@ const apply = (repo: string, planFile: string, ...rest: string[]): string[] => [
 
 const edit = (issue: number, label: string): string => gh(...addLabelArgv(TARGET, issue, label));
 const ledgerOf = (path: string): Record<string, unknown>[] =>
-  readFileSync(path, "utf8").trim().split("\n").map((line): Record<string, unknown> => JSON.parse(line) as Record<string, unknown>);
+  readFileSync(path, "utf8").split("\n").filter((line): boolean => line !== "").map((line): Record<string, unknown> => JSON.parse(line) as Record<string, unknown>);
 
 describe("validatePlan -- every refusal named, nothing partial", () => {
   const taxonomy = loadClassifyTaxonomy("/", MINI);
@@ -302,7 +302,7 @@ describe("nen classify apply --run", () => {
         if (args[0] === "issue") seen.push(existsSync(ledger) ? ledgerOf(ledger).length : 0);
       },
     );
-    // At the first edit the ledger is absent (0 lines); at the second it holds exactly the first's line.
+    // At the first edit the ledger is open but empty (0 lines); at the second it holds exactly the first's line.
     expect(seen).toEqual([0, 1]);
     expect(ledgerOf(ledger).map((entry): unknown => entry["outcome"])).toEqual(["applied", "applied"]);
   });
@@ -362,6 +362,57 @@ describe("nen classify apply --run", () => {
     const json = JSON.parse(result.out.join("\n")) as { run: boolean; issues: { wouldApply: string[] }[] };
     expect(json.run).toBe(false);
     expect(json.issues[0]?.wouldApply).toEqual(["lang/alpha"]);
+  });
+});
+
+describe("nen classify apply -- the ledger must be appendable BEFORE the first edit", () => {
+  const edits = (calls: readonly { args: readonly string[] }[]): number => calls.filter((call): boolean => call.args[0] === "issue").length;
+
+  it("refuses a directory named as the ledger at exit 2, with no gh edit and the plan not aborted half way", async () => {
+    const repo = landedRepo();
+    mkdirSync(join(repo, "nen-ledger-dir"));
+    const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run", "--ledger", "nen-ledger-dir"), [
+      issueCall(1, []),
+      { match: edit(1, "lang/alpha"), result: {} },
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/cannot be appended to \(EISDIR\)/);
+    expect(edits(result.seams.calls)).toBe(0);
+  });
+
+  it("refuses an existing ledger that is not writable at exit 2, before any edit", async () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return; // modes mean nothing there
+    const repo = landedRepo();
+    const ledger = join(repo, "locked.jsonl");
+    writeFileSync(ledger, "");
+    chmodSync(ledger, 0o444);
+    const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run", "--ledger", "locked.jsonl"), [
+      issueCall(1, []),
+      { match: edit(1, "lang/alpha"), result: {} },
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/cannot be appended to \(EACCES\)/);
+    expect(edits(result.seams.calls)).toBe(0);
+  });
+
+  it("opens it only when something will be recorded: an all-already plan leaves no ledger", async () => {
+    const repo = landedRepo();
+    const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run"), [issueCall(1, ["lang/alpha"])]);
+    expect(result.code).toBe(0);
+    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+  });
+
+  it("strips control bytes from gh's diagnostics in the human output, keeping the ledger and --json raw", async () => {
+    const ESC = String.fromCharCode(0x1b);
+    const repo = landedRepo();
+    const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run"), [
+      issueCall(1, []),
+      { match: edit(1, "lang/alpha"), result: { code: 1, stderr: `HTTP 403${ESC}[2K forbidden` } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("HTTP 403[2K forbidden");
+    expect(result.err.join("\n")).not.toContain(ESC);
+    expect(result.out.join("\n")).not.toContain(ESC);
   });
 });
 

@@ -35,6 +35,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { splitList } from "../cli/inputs.js";
+import { plainLine } from "../cli/plain.js";
 import { fetchPaginated } from "../backlog/fetch.js";
 import type { Target } from "../github/target.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
@@ -144,7 +145,7 @@ function bodyFields(item: { readonly body?: unknown; readonly comments?: unknown
 function readOne(seams: Seams, target: Target, number: number): { fields: BodyFields; raw: Partial<RawOpenIssue> } {
   const result = seams.run(GH, ["api", `repos/${target.slug}/issues/${number}`]);
   if (result.spawnFailed || result.code !== 0) {
-    throw new Error(`could not read ${target.slug}#${number}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
+    throw new Error(plainLine(`could not read ${target.slug}#${number}: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`));
   }
   const raw = JSON.parse(result.stdout) as Partial<RawOpenIssue>;
   return { fields: bodyFields(raw), raw };
@@ -245,16 +246,19 @@ export function runStatus(context: CommandContext): number {
     return 0;
   }
 
-  for (const issue of issues) context.io.out(row(issue));
+  // Every HUMAN line passes plainLine: a label name is text GitHub holds, not
+  // text nen wrote. The --json document above carries the raw data.
+  const out = (line: string): void => context.io.out(plainLine(line));
+  for (const issue of issues) out(row(issue));
   if (truncated) {
-    context.io.out("TRUNCATED at a defensive page ceiling: the open-issue list may not be complete.");
+    out("TRUNCATED at a defensive page ceiling: the open-issue list may not be complete.");
   }
   const missingCounts = AXES.map((name): string => `missing ${name}: ${summary[missingField(name)]}`).join(", ");
-  context.io.out(
+  out(
     `${summary.total} issue(s): ${summary.classified} classified, ${missingCounts}, missing both: ${summary.missingBoth}`,
   );
-  context.io.out(`declared: ${declared.status}${declared.missing.length === 0 ? "" : ` (${declared.missing.join(", ")})`}`);
-  context.io.out(
+  out(`declared: ${declared.status}${declared.missing.length === 0 ? "" : ` (${declared.missing.join(", ")})`}`);
+  out(
     `github: ${github.status}${github.missing.length === 0 ? "" : ` (${github.missing.join(", ")})`}${labelListTruncated ? ` -- the label list hit its ${LABEL_LIST_LIMIT} limit and may be incomplete` : ""}`,
   );
   return 0;

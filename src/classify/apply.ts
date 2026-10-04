@@ -32,9 +32,10 @@
 // would assert a label a 403 never applied. `listed` and `already` are not
 // applications and write none. The object is spelled `<owner/name>#<N>`.
 
-import { appendFileSync, statSync } from "node:fs";
+import { closeSync, openSync, statSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { requireValue, VerbUsageError, type CommandContext } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import type { Target } from "../github/target.js";
 import { readIssue } from "../issue/subissue.js";
@@ -198,7 +199,7 @@ export function runApply(context: CommandContext): number {
   const declared = loadLabelTaxonomy(root);
   const { rows, refusals } = validatePlan(taxonomy, declared, planPath, parsed);
   if (refusals.length > 0) {
-    for (const refusal of refusals) context.io.err(`nen: ${refusal}`);
+    for (const refusal of refusals) context.io.err(plainLine(`nen: ${refusal}`));
     context.io.err(`nen: the plan was refused whole (${refusals.length} refusal(s)); nothing was read from GitHub and nothing was written.`);
     return 2;
   }
@@ -221,6 +222,37 @@ export function runApply(context: CommandContext): number {
     return 1;
   }
 
+  // THE LEDGER IS OPENED FOR APPEND BEFORE THE FIRST MUTATION, and that one
+  // descriptor serves every entry. A parent-directory check proves nothing about
+  // the file: a directory named as the ledger, or an unwritable file, would pass
+  // it and then fail AFTER the first edit -- a label applied with no ledger line
+  // and the plan aborted half way. Opening it here refuses both at exit 2 while
+  // nothing has changed. It is opened only when some row will be recorded, so a
+  // refused or listed-only plan still leaves no ledger behind.
+  const recorded = current.some(
+    ({ row, issue }): boolean =>
+      (!taxonomy.confidence.listed.includes(row.confidence) || includeLow) &&
+      row.labels.some((label): boolean => !issue.labels.includes(label)),
+  );
+  let ledgerFd: number | null = null;
+  if (recorded) {
+    try {
+      ledgerFd = openSync(ledgerPath, "a");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      throw new VerbUsageError(
+        `--ledger '${ledgerPath}' cannot be appended to${code === undefined ? "" : ` (${code})`}: a label applied with no ledger line is the one outcome this verb refuses, so nothing was written to GitHub.`,
+      );
+    }
+  }
+
+  try {
+    return finishApply();
+  } finally {
+    if (ledgerFd !== null) closeSync(ledgerFd);
+  }
+
+  function finishApply(): number {
   const now = context.seams.now().toISOString();
   const object = (issue: number): string => `${target.slug}#${issue}`;
   const reasonFor = (row: PlanRow): string | null => {
@@ -228,6 +260,10 @@ export function runApply(context: CommandContext): number {
     return parts.length === 0 ? null : parts.join("; ");
   };
   const failures: string[] = [];
+  // Every HUMAN line passes plainLine (gh's diagnostics are text nen did not
+  // write); the --json document carries the raw data.
+  const out = (line: string): void => context.io.out(plainLine(line));
+  const err = (line: string): void => context.io.err(plainLine(line));
 
   const outcomes = current.map(({ row, issue }): IssueOutcome => {
     const outcome: IssueOutcome = { number: row.issue, applied: [], wouldApply: [], already: [], failed: [], listed: [] };
@@ -252,10 +288,10 @@ export function runApply(context: CommandContext): number {
         }
       }
       // AFTER the mutation resolves, never before: see the header.
-      appendFileSync(
-        ledgerPath,
+      if (ledgerFd === null) throw new Error("unreachable: an application with no ledger descriptor");
+      writeSync(
+        ledgerFd,
         `${ledgerLine({ object: object(row.issue), label, time: now, outcome: result, reason: reasonFor(row) })}\n`,
-        "utf8",
       );
       if (result === "applied") outcome.applied.push(label);
       else if (result === "failed") outcome.failed.push(label);
@@ -286,7 +322,7 @@ export function runApply(context: CommandContext): number {
     return exit;
   }
 
-  if (!run) context.io.out("(dry run) nothing was written to GitHub; pass --run to apply.");
+  if (!run) out("(dry run) nothing was written to GitHub; pass --run to apply.");
   const heading: Record<(typeof BUCKETS)[number], string> = {
     applied: "applied",
     wouldApply: "would apply",
@@ -298,15 +334,16 @@ export function runApply(context: CommandContext): number {
     const parts = BUCKETS.filter((bucket): boolean => outcome[bucket].length > 0).map(
       (bucket): string => `${heading[bucket]}: ${outcome[bucket].join(", ")}`,
     );
-    context.io.out(`#${outcome.number}  ${parts.join("  ") || "nothing to apply"}`);
+    out(`#${outcome.number}  ${parts.join("  ") || "nothing to apply"}`);
   }
-  context.io.out(
+  out(
     `${totals.issues} issue(s): ${totals.applied} applied, ${totals.wouldApply} would apply, ${totals.already} already, ${totals.failed} failed, ${totals.listed} listed`,
   );
-  context.io.out(`ledger: ${ledgerPath}`);
+  out(`ledger: ${ledgerPath}`);
   if (totals.failed > 0) {
-    for (const failure of failures) context.io.err(`nen: could not apply ${failure}`);
-    context.io.err(`nen: ${totals.failed} application(s) failed; the ledger records each as "failed".`);
+    for (const failure of failures) err(`nen: could not apply ${failure}`);
+    err(`nen: ${totals.failed} application(s) failed; the ledger records each as "failed".`);
   }
   return exit;
+  }
 }

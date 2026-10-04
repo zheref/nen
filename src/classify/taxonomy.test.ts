@@ -70,6 +70,28 @@ describe("parseClassifyTaxonomy -- every refusal names its pointer", () => {
     expect(error.message).toMatch(/missing/);
   });
 
+  it("skips $-prefixed metadata beside and inside the axes: a $comment is not a third axis", () => {
+    const taxonomy = parseClassifyTaxonomy("/x/tax.json", ((): Json => {
+      const v = readJson(MINI);
+      v["axes"]["$comment"] = "a note about the axes";
+      v["axes"]["$meta"] = { nested: { anything: [1, 2] } };
+      v["axes"]["lang"]["$code"] = "metadata on an axis";
+      v["axes"]["lang"]["keys"][0]["$note"] = "metadata on a key";
+      return v;
+    })());
+    expect(Object.keys(taxonomy.axes)).toEqual(["lang", "job"]);
+    expect(taxonomy.axes.lang.keys[0]?.key).toBe("alpha");
+  });
+
+  it("still refuses a real third axis", () => {
+    expect(
+      refusal((v): void => {
+        v["axes"]["$comment"] = "fine";
+        v["axes"]["extra"] = v["axes"]["lang"];
+      }).pointer,
+    ).toBe("axes.extra");
+  });
+
   it("refuses an axis the contract does not carry", () => {
     const error = refusal((v): void => {
       v["axes"]["domain"] = v["axes"]["lang"];
