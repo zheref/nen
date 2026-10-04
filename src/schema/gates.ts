@@ -842,6 +842,8 @@ export const GLOB_MIN_LITERAL_PREFIX = 3;
  *     hyphen) read as a condition would NEVER lapse, so it is refused rather
  *     than reinterpreted; a condition is the explicit `{ "condition": ... }`;
  *   * an `until` date BEFORE `ruled` is born expired;
+ *   * a key an entry (or its `until` object) does not define, `$comment`
+ *     aside, is a condition nobody reads;
  *   * the same `name` twice (under the same `match`) is two reasons for one
  *     exclusion, and the report could quote only one of them.
  */
@@ -849,6 +851,8 @@ export function parseCheckExclusions(path: string, rootValue: unknown): Declared
   const root = requireRecord(path, "$", rootValue);
   return readCheckExclusions(path, root["checks"]);
 }
+
+const ENTRY_KEYS: ReadonlySet<string> = new Set(["name", "match", "reason", "ruled", "until", "$comment"]);
 
 function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion[] {
   if (raw === undefined || raw === null) return [];
@@ -888,6 +892,17 @@ function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion
   requireArray(path, "checks.excluded", rawExcluded).forEach((entry, index): void => {
     const pointer = `checks.excluded[${index}]`;
     const record = requireRecord(path, pointer, entry);
+    // An unknown key is REFUSED (hanten round 2, N10), as in `until`'s object:
+    // a misspelt `untill` or `reasons` is a condition nobody reads, and a key
+    // a later build adds must not be silently ignored by this one.
+    const unknownKeys = Object.keys(record).filter((key): boolean => !ENTRY_KEYS.has(key));
+    if (unknownKeys.length > 0) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `carries ${unknownKeys.map((key): string => `'${key}'`).join(", ")}, which this build does not read. An entry is exactly name, match (optional), reason, ruled, until and an optional $comment; a key nobody reads is a condition nobody applies.`,
+      );
+    }
     const name = text(`${pointer}.name`, record["name"]);
     const rawMatch = record["match"];
     let match: "exact" | "glob";

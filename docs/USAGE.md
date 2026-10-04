@@ -1107,12 +1107,27 @@ add an exclusion for its own red check. So:
   at the pull request's base (<owner>/<repo>@<sha>:nen/gates.json) — NOT
   honoured until it is merged there.`;
 - a base read that **fails** (no base commit, a 403, a transport that cannot
-  read files, a base file that is not JSON or whose block does not validate)
-  honours **no** exclusion and says so in `meta.warnings`
-  (`declared check exclusions NOT honoured: …`);
+  read files, a payload that is not a base64-encoded file — a directory, a
+  symlink, a file too large to be delivered inline, named by its type or size —
+  or a base file that is not JSON or whose block does not validate) honours
+  **no** exclusion. When the local file (or `--gates`) declares at least one
+  entry, that is a `meta.warnings` line (`declared check exclusions NOT
+  honoured: …`); when it declares **none**, nothing anybody can see was lost,
+  so it is a quiet `meta.notes` line instead (`could not confirm the base
+  declares no exclusion: <reason>`), rendered by `--explain` only — the verdict
+  is the stricter one either way;
 - a base with **no** `nen/gates.json` declares nothing; that is not a failure;
 - identities from `--reviewers` declare no exclusion, as they declare no
   carve-out, and the base is not read.
+
+**The base is only as trusted as its branch protection.** Reading the base
+stops a pull request from exempting its own checks, but anyone who can push to
+the base branch directly can write a ruling there; a ruling binds when it lives
+on a protected base.
+
+**Consumer note:** `nen pr ready` (and `pr next-blocker`, through `gh`) now
+reads `nen/gates.json` at the base through the REST contents API, so the token
+needs `contents:read` for declared exclusions to apply.
 
 What `nen pr ready` does with what it read:
 
@@ -1134,6 +1149,11 @@ What `nen pr ready` does with what it read:
   or — **only on an unevaluated report**, where GitHub and therefore the base
   were never read — `in-force`: the LOCAL file's entry is in force by its dates,
   but nothing was applied, so it is not `honoured`, and `matched` is `null`.
+- `meta.declaredExclusionsSource` says where the entries came from:
+  `<owner>/<repo>@<sha>` (the base, on a decided report) or `local-unverified`
+  (an unevaluated report's entries, the checkout's own file, never checked
+  against the base; `--explain` says `local, not verified at base`). It is
+  `null` for identities from `--reviewers`. `meta.notes` is always an array.
 - A rollup that held **only** excluded checks is still
   `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
   names from both sources listed once. An exclusion never turns an empty or
@@ -1142,6 +1162,7 @@ What `nen pr ready` does with what it read:
   whether CON-30's carve-out fires. `meta.excludedChecks` stays the **flag's**
   names only.
 - `nen pr next-blocker` applies the same base-read exclusions; see its section.
+- An entry carrying a key it does not define (`$comment` aside) is refused.
 
 The block is validated at load wherever it is read — the local file by
 `nen pr ready` (exit `2`) and by `nen schema check` (whose `gates.json` row adds
@@ -1658,8 +1679,15 @@ the round owed. It is stricter than `pr ready` there, never looser.
 file, dated against the current UTC day, and the honoured labels dropped
 before the step judges the rollup. A rollup holding only excluded checks is a
 `red-check` whose detail begins `no checks remain after the declared
-exclusion(s): …`. Any failure to read the base (no base commit, the file absent
-or unreadable, a malformed block) applies **no** exclusion. This verb does not
+exclusion(s): …`. Any failure to read the base (no base commit, a 403, a
+malformed block) applies **no** exclusion; a base with no `nen/gates.json`
+declares none. Nothing is applied or refused silently: under the result line
+it prints `  excluded by declaration: …` for each honoured entry that removed a
+check, and `  warning: …` for every base-read failure (when the local file
+declares an entry), local-only entry, expired, not-yet-ruled or
+condition-`until` entry — the same wording `pr ready` uses. `--json` adds
+`warnings` (those lines) and `notes` (the quiet "could not confirm the base
+declares no exclusion" line, when nothing is declared locally). This verb does not
 take `--exclude-check` or `--exclude-run`, so where a `pr ready` call passed
 one of those it can name a check `pr ready` dropped — stricter, never looser.
 

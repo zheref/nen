@@ -184,7 +184,10 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     readonly gateLine?: string;
     readonly message?: string;
     readonly judgedHead?: string | null;
-    readonly meta?: { readonly declaredExclusions?: readonly DeclaredExclusionReport[] };
+    readonly meta?: {
+      readonly declaredExclusions?: readonly DeclaredExclusionReport[];
+      readonly warnings?: readonly string[];
+    };
   };
   try {
     parsed = JSON.parse(raw) as typeof parsed;
@@ -207,6 +210,12 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     lines: [
       `pr ready: ${line}`,
       ...declaredNoticeLines(parsed.meta?.declaredExclusions).map((notice): string => `pr ready: ${notice}`),
+      // Every other warning the verdict carried (hanten round 2, N2) -- a
+      // refused base read, a local-only exclusion, an expired ruling -- minus
+      // the notices just printed.
+      ...(Array.isArray(parsed.meta?.warnings) ? parsed.meta.warnings : [])
+        .filter((warning): boolean => typeof warning === "string" && !warning.startsWith("excluded by declaration: "))
+        .map((warning): string => `pr ready: warning: ${redact(warning)}`),
       ...captured.errLines.map(redact),
     ],
   };

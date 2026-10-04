@@ -706,6 +706,14 @@ describe("parseGateIdentities -- checks.excluded (zheref/nen#249)", () => {
     }
   });
 
+  it("refuses an entry key it does not define, $comment aside (N10)", () => {
+    expect(() => parseGateIdentities(at, withExcluded(entry({ untill: "2026-12-31" })))).toThrow(
+      /checks\.excluded\[0\][\s\S]*carries 'untill', which this build does not read/,
+    );
+    expect(() => parseGateIdentities(at, withExcluded(entry({ reasons: "x", owner: "y" })))).toThrow(/'reasons', 'owner'/);
+    expect(() => parseGateIdentities(at, withExcluded(entry({ $comment: "the ruling of 2026-09-22" })))).not.toThrow();
+  });
+
   it("refuses a glob whose literal prefix before the first '*' is under 3 characters (Feitan F4)", () => {
     for (const name of ["*", "**", "*)", "*e*", "* *", "?*", "ab*", "a*bcdef"]) {
       expect(() => parseGateIdentities(at, withExcluded(entry({ name, match: "glob" }))), name).toThrow(

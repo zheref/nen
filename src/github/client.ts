@@ -67,6 +67,7 @@ import {
 } from "./graphql.js";
 // PORT ADDITION: this binary's own name and version, for the user-agent below.
 import { PROGRAM, VERSION } from "../version.js";
+import { decodeContentsPayload } from "../gates/base_exclusions.js";
 
 // The GraphQL wire shape is ./graphql.ts's alone (see its header), but these
 // three are part of this module's published surface and are re-exported so a
@@ -314,18 +315,7 @@ export class GitHubClient {
       }
       throw error;
     }
-    const content =
-      typeof data === "object" && data !== null && !Array.isArray(data)
-        ? (data as { content?: unknown }).content
-        : undefined;
-    if (typeof content !== "string") {
-      throw new Error(`contents/${path}@${ref} answered no file content`);
-    }
-    const base64 = content.replace(/\n/g, "");
-    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 !== 0) {
-      throw new Error(`contents/${path}@${ref} answered content that is not base64`);
-    }
-    return Buffer.from(base64, "base64").toString("utf8");
+    return decodeContentsPayload(data, path, ref);
   }
 
   // The issue TIMELINE, paginated, raw.

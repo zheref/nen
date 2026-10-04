@@ -682,7 +682,7 @@ export function declarationNotice(outcome: DeclaredExclusionOutcome): string {
  * something, because each of the others is either a widened verdict or a
  * ruling the reader believes applies and does not.
  */
-function declarationWarnings(outcome: DeclaredExclusionOutcome, source: string, now: string): string[] {
+export function declarationWarnings(outcome: DeclaredExclusionOutcome, source: string, now: string): string[] {
   const until = untilText(outcome.until);
   const counted =
     outcome.matched.length === 0

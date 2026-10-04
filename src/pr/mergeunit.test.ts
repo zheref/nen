@@ -307,6 +307,60 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     );
   });
 
+  describe("checks.excluded the head declares but the base does not (zheref/nen#249, hanten round 2)", () => {
+    const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+    const RULING = { name: "check (Windows*", match: "glob", reason: "no Windows runner", ruled: "2024-12-01", until: "2025-06-30" };
+    /** A checkout whose OWN nen/gates.json -- the PR's head, in a worktree -- declares the exclusion. */
+    function headDeclaringRoot(): string {
+      const root = tmpRoot();
+      const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      writeFileSync(join(root, "nen", "gates.json"), JSON.stringify({ ...gates, checks: { excluded: [RULING] } }));
+      return root;
+    }
+    function redWindows(fileAtRef: () => Promise<string | null>): PrStateSource {
+      const plain = readySource();
+      return {
+        ...plain,
+        pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => {
+          const snapshot = await plain.pullRequestSnapshot(repo, n);
+          return {
+            ...snapshot,
+            checkRollup: [...(snapshot.checkRollup as unknown[]), { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" }],
+          };
+        },
+        fileAtRef,
+      };
+    }
+
+    it("a head-only exclusion is NOT honoured: the merge is refused and the transcript says why (N8)", async () => {
+      const outcome = await run(headDeclaringRoot(), passingScript(), {
+        deps: readyDeps(redWindows(async (): Promise<string | null> => null)),
+      });
+      expect(outcome.report.ok).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/pr ready: not-ready: required checks reported but are not all green/);
+      expect(outcome.lines).toContain(
+        "pr ready: warning: declared exclusion 'check (Windows*' is in the local nen/gates.json but not at the pull request's base (zheref/example@basebase:nen/gates.json) — NOT honoured until it is merged there.",
+      );
+      expect(outcome.lines.join("\n")).not.toContain("excluded by declaration");
+    });
+
+    it("a base read refused with 403 is in the transcript as a pr ready warning (N2)", async () => {
+      const outcome = await run(headDeclaringRoot(), passingScript(), {
+        deps: readyDeps(
+          redWindows(async (): Promise<string | null> => {
+            throw new Error("HTTP 403: Resource not accessible by integration");
+          }),
+        ),
+      });
+      expect(outcome.report.ok).toBe(false);
+      expect(
+        outcome.lines.some((line): boolean =>
+          line.startsWith("pr ready: warning: declared check exclusions NOT honoured: the base could not be read (HTTP 403"),
+        ),
+      ).toBe(true);
+    });
+  });
+
   it("merges with --run when every gate passes, carrying the judged SHA in argv (item 3)", async () => {
     const root = tmpRoot();
     const script = [

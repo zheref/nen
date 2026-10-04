@@ -586,6 +586,8 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       requiredHead: null,
       excludedChecks: [],
       declaredExclusions: [],
+      declaredExclusionsSource: "zheref/example@basebase",
+      notes: [],
       deliveryPr: false,
       identities: { source: "schema", path: "/repo/nen/gates.json" },
       dependabotCarveOut: false,
@@ -1817,6 +1819,31 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(report?.meta.declaredExclusions).toEqual([{ ...RULING, status: "honoured", matched: [WINDOWS] }]);
     expect(report?.conjuncts.find((c): boolean => c.id === "checks-green")?.note).toContain(NOTICE);
     expect(report?.meta.warnings).toContain(NOTICE);
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+    expect(report?.meta.notes).toEqual([]);
+  });
+
+  it("without --gates, reads the CHECKOUT's own nen/gates.json for identities -- and still takes exclusions from the base (N8)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-249-checkout-"));
+    dirs.push(root);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "gates.json"), gatesText([RULING]));
+    const own = async (source: PrStateSource): Promise<ReadyReport> => {
+      const { io, out } = capture();
+      await prReady(
+        input({ values: { "gh-repo": "zheref/example" }, repoFlag: root }),
+        io,
+        stubDeps(source),
+      );
+      return JSON.parse(out.join("\n")) as ReadyReport;
+    };
+    const atBase = await own(withRedWindows(baseDeclares([RULING])));
+    expect(atBase.meta.identities.path).toBe(join(root, "nen", "gates.json"));
+    expect(atBase.verdict).toBe("ready");
+    expect(atBase.meta.declaredExclusions[0]?.status).toBe("honoured");
+    const headOnly = await own(withRedWindows(baseDeclares(null)));
+    expect(headOnly.verdict).toBe("not-ready");
+    expect(headOnly.meta.warnings.join("\n")).toMatch(/in the local nen\/gates\.json but not at the pull request's base/);
   });
 
   it("a PR whose HEAD adds an exclusion for its own red check reads not-ready, and says why (Feitan F1)", async () => {
@@ -1849,17 +1876,34 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
   });
 
   it("a malformed block AT THE BASE honours nothing, and says so", async () => {
-    const { code, report } = await run(withRedWindows(baseDeclares([{ ...RULING, until: "2025/06/30" }])), null);
+    const { code, report } = await run(withRedWindows(baseDeclares([{ ...RULING, until: "2025/06/30" }])), [RULING]);
     expect(code).toBe(1);
     expect(report?.meta.warnings.join("\n")).toMatch(/NOT honoured: [\s\S]*checks\.excluded\[0\]\.until/);
+  });
+
+  it("with NOTHING declared locally, a failed base read is a quiet note, not a warning -- the verdict stays strict (N3)", async () => {
+    const failing = withRedWindows(async (): Promise<string | null> => {
+      throw new Error("HTTP 403: Resource not accessible by integration");
+    });
+    const json = await run(failing, null);
+    expect(json.code).toBe(1);
+    expect(json.report?.meta.warnings).toEqual([]);
+    expect(json.report?.meta.notes).toEqual([
+      "could not confirm the base declares no exclusion: the base could not be read (HTTP 403: Resource not accessible by integration). No declared exclusion was applied; every check counts on CON-32(a).",
+    ]);
+    const plain = await run(failing, null, "plain");
+    expect(plain.out.join("\n")).not.toMatch(/could not confirm|NOT honoured/);
+    const explain = await run(failing, null, "explain");
+    expect(explain.out.join("\n")).toContain("  note: could not confirm the base declares no exclusion");
   });
 
   it("a transport that cannot read files, or a PR with no base commit, honours none", async () => {
     const noReader = withRedWindows(baseDeclares([RULING]));
     delete (noReader as { fileAtRef?: unknown }).fileAtRef;
-    const a = await run(noReader, null);
+    const a = await run(noReader, [RULING]);
     expect(a.code).toBe(1);
-    expect(a.report?.meta.warnings.join("\n")).toMatch(/cannot read files at a commit/);    const withBase = withRedWindows(baseDeclares([RULING]));
+    expect(a.report?.meta.warnings.join("\n")).toMatch(/cannot read files at a commit/);
+    const withBase = withRedWindows(baseDeclares([RULING]));
     const noBase: PrStateSource = {
       ...withBase,
       pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
@@ -1867,7 +1911,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
         return { ...snapshot, pullRequest: { ...snapshot.pullRequest, baseRefOid: undefined } } as PullRequestSnapshot;
       },
     };
-    const b = await run(noBase, null);
+    const b = await run(noBase, [RULING]);
     expect(b.code).toBe(1);
     expect(b.report?.meta.warnings.join("\n")).toMatch(/GitHub answered no base commit/);
   });
@@ -1904,6 +1948,17 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     const { report } = await run(null, [RULING]);
     expect(report?.verdict).toBe("unevaluated");
     expect(report?.meta.declaredExclusions).toEqual([{ ...RULING, status: "in-force", matched: null }]);
+    // ...marked as the LOCAL file's, never checked against the base (N5).
+    expect(report?.meta.declaredExclusionsSource).toBe("local-unverified");
+    const { io, out } = capture();
+    await prReady(
+      input({ values: { ...input().values, gates: localGates([RULING]) }, booleans: new Set(["explain"]) }),
+      io,
+      stubDeps(null),
+    );
+    expect(out.join("\n")).toContain(
+      "declared exclusion (in force by its dates; not applied): glob 'check (Windows*' — no Windows runner exists (ruled 2024-12-01, until 2025-06-30) · local, not verified at base",
+    );
   });
 
   it("a malformed LOCAL declaration is refused at load, never read as something else", async () => {

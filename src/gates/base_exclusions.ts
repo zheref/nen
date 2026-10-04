@@ -33,7 +33,47 @@ export type BaseGatesRead =
 export interface BaseExclusions {
   /** The exclusions to apply: the base's, or none. */
   readonly exclusions: readonly DeclaredCheckExclusion[];
+  /** Loud: a ruling someone declared did not apply, and why. */
   readonly warnings: readonly string[];
+  /**
+   * Quiet (hanten round 2, N3): the base could not be read, but NEITHER the
+   * local file declares an exclusion, so no ruling anybody can see was lost.
+   * The verdict is still the stricter one; this only says it could not be
+   * confirmed that the base declares none. `--json` and `--explain` carry it.
+   */
+  readonly notes: readonly string[];
+}
+
+/**
+ * The file content a REST `contents/{path}?ref=` payload carries, decoded --
+ * or a thrown Error naming why there is none (hanten round 2, N6). Refuses a
+ * payload that is not a single file (`type` other than `file`, or an array
+ * for a directory), one whose `encoding` is not `base64` (GitHub answers
+ * `none` with empty content for a file over its inline limit, so the size is
+ * named), and content outside the base64 alphabet, which `Buffer.from` would
+ * otherwise silently mangle (the reason ../release/unitcheck.ts's
+ * `fetchJsonAtRef` validates it too).
+ */
+export function decodeContentsPayload(data: unknown, path: string, ref: string): string {
+  const where = `contents/${path}@${ref}`;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    throw new Error(`${where} answered ${Array.isArray(data) ? "a directory listing" : "no object"}, not a file`);
+  }
+  const record = data as { type?: unknown; encoding?: unknown; content?: unknown; size?: unknown };
+  if (record.type !== "file") {
+    throw new Error(`${where} is of type ${JSON.stringify(record.type ?? null)}, not a file`);
+  }
+  if (record.encoding !== "base64") {
+    throw new Error(
+      `${where} answered encoding ${JSON.stringify(record.encoding ?? null)} (size ${JSON.stringify(record.size ?? null)} bytes), not base64, so its content was not delivered inline`,
+    );
+  }
+  if (typeof record.content !== "string") throw new Error(`${where} answered no file content`);
+  const base64 = record.content.replace(/\n/g, "");
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 !== 0) {
+    throw new Error(`${where} answered content that is not base64`);
+  }
+  return Buffer.from(base64, "base64").toString("utf8");
 }
 
 /** The file the exclusions are read from, at the base. */
@@ -50,12 +90,26 @@ export function exclusionsAtBase(
   source: string,
   local: readonly DeclaredCheckExclusion[],
 ): BaseExclusions {
-  const refused = (why: string): BaseExclusions => ({
-    exclusions: [],
-    warnings: [
-      `declared check exclusions NOT honoured: ${why}. They are read from ${source}, the pull request's BASE, so a pull request cannot exempt its own checks; every check counts on CON-32(a).`,
-    ],
-  });
+  // LOUD when the local file declares something -- a ruling the reader
+  // believes in did not apply. QUIET otherwise (N3): nothing visible was lost,
+  // and a repository that never uses the feature should not read a warning on
+  // every run because its token lacks contents:read.
+  const refused = (why: string): BaseExclusions =>
+    local.length > 0
+      ? {
+          exclusions: [],
+          warnings: [
+            `declared check exclusions NOT honoured: ${why}. They are read from ${source}, the pull request's BASE, so a pull request cannot exempt its own checks; every check counts on CON-32(a).`,
+          ],
+          notes: [],
+        }
+      : {
+          exclusions: [],
+          warnings: [],
+          notes: [
+            `could not confirm the base declares no exclusion: ${why}. No declared exclusion was applied; every check counts on CON-32(a).`,
+          ],
+        };
   let exclusions: DeclaredCheckExclusion[] = [];
   if (read.kind === "failed") return refused(`the base could not be read (${read.message})`);
   if (read.kind === "read") {
@@ -79,5 +133,5 @@ export function exclusionsAtBase(
       (entry): string =>
         `declared exclusion '${entry.name}' is in the local nen/gates.json but not at the pull request's base (${source}) — NOT honoured until it is merged there.`,
     );
-  return { exclusions, warnings };
+  return { exclusions, warnings, notes: [] };
 }

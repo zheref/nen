@@ -343,7 +343,7 @@ describe("GitHubClient.fileAtRef -- one file at one commit (zheref/nen#249, Feit
     const text = '{"version":1,"checks":{"excluded":[]}}';
     const b64 = Buffer.from(text).toString("base64");
     const wrapped = `${b64.slice(0, 20)}\n${b64.slice(20)}\n`;
-    const { fetch: stub, calls } = recordingFetch(() => ({ body: { content: wrapped, encoding: "base64" } }));
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: { type: "file", content: wrapped, encoding: "base64" } }));
     expect(await drive(clientWith(stub).fileAtRef(REPO, "nen/gates.json", "base123"))).toBe(text);
     expect(calls[0]?.method).toBe("GET");
     expect(calls[0]?.url).toContain("/repos/zheref/nen/contents/nen/gates.json");
@@ -358,10 +358,21 @@ describe("GitHubClient.fileAtRef -- one file at one commit (zheref/nen#249, Feit
   it("throws on any other failure, and on content that is not base64, so the caller can say the base was unread", async () => {
     const { fetch: forbidden } = recordingFetch(() => ({ status: 403, body: { message: "Resource not accessible" } }));
     expect(await rejection(clientWith(forbidden).fileAtRef(REPO, "nen/gates.json", "b"))).toMatchObject({ status: 403 });
-    const { fetch: garbled } = recordingFetch(() => ({ body: { content: "not*base64!" } }));
+    const { fetch: garbled } = recordingFetch(() => ({ body: { type: "file", encoding: "base64", content: "not*base64!" } }));
     expect(String(await rejection(clientWith(garbled).fileAtRef(REPO, "nen/gates.json", "b")))).toMatch(/not base64/);
     const { fetch: directory } = recordingFetch(() => ({ body: [{ name: "gates.json" }] }));
-    expect(String(await rejection(clientWith(directory).fileAtRef(REPO, "nen", "b")))).toMatch(/no file content/);
+    expect(String(await rejection(clientWith(directory).fileAtRef(REPO, "nen", "b")))).toMatch(/directory listing, not a file/);
+  });
+
+  it("refuses a payload that is not a base64-encoded file, naming its type or size (N6)", async () => {
+    const { fetch: symlink } = recordingFetch(() => ({ body: { type: "symlink", target: "../x", encoding: "base64", content: "" } }));
+    expect(String(await rejection(clientWith(symlink).fileAtRef(REPO, "nen/gates.json", "b")))).toMatch(
+      /is of type "symlink", not a file/,
+    );
+    const { fetch: big } = recordingFetch(() => ({ body: { type: "file", encoding: "none", content: "", size: 2_000_000 } }));
+    expect(String(await rejection(clientWith(big).fileAtRef(REPO, "nen/gates.json", "b")))).toMatch(
+      /encoding "none" \(size 2000000 bytes\), not base64/,
+    );
   });
 });
 

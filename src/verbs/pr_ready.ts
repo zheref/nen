@@ -475,8 +475,14 @@ export interface ReadyMeta {
   readonly excludedChecks: readonly string[];
   /**
    * `nen/gates.json`'s `checks.excluded` (zheref/nen#249), every declared
-   * exclusion with its reason, ruling date, `until`, its `status`
-   * (`honoured` | `expired` | `unknown-date`) and the rollup labels it named.
+   * exclusion with its reason, ruling date, `until`, its `status` and the
+   * rollup labels it named. `status` is one of five:
+   *   `honoured`      applied: every label in `matched` was dropped;
+   *   `expired`       its date `until` has passed: not applied;
+   *   `not-yet-ruled` its `ruled` date is after today (UTC): not applied;
+   *   `unknown-date`  the evaluation time could not be read: not applied;
+   *   `in-force`      ONLY on an unevaluated report: in force by its dates,
+   *                   but nothing was applied (see `declaredExclusionsSource`).
    * `matched` is `null` on an unevaluated report -- the rollup was never read,
    * so nothing was matched and "matched nothing" would be a claim about it.
    * Always the array, empty when the file declares none or identities came
@@ -485,6 +491,22 @@ export interface ReadyMeta {
    * per-invocation choice and the other a standing ruling.
    */
   readonly declaredExclusions: readonly DeclaredExclusionReport[];
+  /**
+   * WHERE `declaredExclusions` came from (hanten round 2, N5):
+   * `<owner>/<repo>@<sha>` -- the pull request's base, the only source a
+   * decided verdict honours (`@(unknown base)` when GitHub answered none) --
+   * or `local-unverified` on an unevaluated report, whose entries are the
+   * checkout's own file, never checked against the base. `null` when
+   * identities came from `--reviewers`, which declares no exclusion. Additive.
+   */
+  readonly declaredExclusionsSource: string | null;
+  /**
+   * Quiet facts that changed nothing a reader could see (hanten round 2, N3):
+   * today, only "could not confirm the base declares no exclusion" when the
+   * base read failed and the local file declares none. Rendered by `--explain`,
+   * never by the default output. Always the array. Additive.
+   */
+  readonly notes: readonly string[];
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -1067,7 +1089,7 @@ function renderDeclaredExclusions(report: ReadyReport): string[] {
     const applied = exclusion.status === "honoured";
     const matched =
       exclusion.matched === null
-        ? "rollup not read, nothing applied"
+        ? "local, not verified at base; rollup not read, nothing applied"
         : exclusion.matched.length === 0
           ? "names no check at this head"
           : applied
@@ -1149,6 +1171,7 @@ export function renderExplain(report: ReadyReport): string[] {
   for (const warning of report.meta.warnings) {
     if (!isDeclarationNotice(warning)) lines.push(`  warning: ${warning}`);
   }
+  for (const note of report.meta.notes) lines.push(`  note: ${note}`);
   lines.push("");
   lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
   lines.push("  when every row is ready, and the line above is the first failing row's reason.");
@@ -1485,7 +1508,7 @@ export async function prReady(
   const base =
     identities.source === "schema"
       ? await readBaseExclusions(opened.source, ref, fetched.state, identities.identities.excludedChecks ?? [])
-      : { exclusions: [], warnings: [], source: undefined };
+      : { exclusions: [], warnings: [], notes: [], source: undefined, origin: null };
   const evaluation: ReadyEvaluation = evaluateReady(
     { ...identities.identities, excludedChecks: base.exclusions },
     fetched.state,
@@ -1522,6 +1545,8 @@ export async function prReady(
       requiredHead: requiredHead ?? null,
       excludedChecks: excludeCheckNames,
       declaredExclusions: evaluation.context.declaredExclusions,
+      declaredExclusionsSource: base.origin,
+      notes: base.notes,
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,
@@ -1552,9 +1577,10 @@ async function readBaseExclusions(
   ref: ResolvedRef,
   state: Record<string, unknown>,
   local: readonly DeclaredCheckExclusion[],
-): Promise<BaseExclusions & { readonly source: string }> {
+): Promise<BaseExclusions & { readonly source: string; readonly origin: string }> {
   const baseSha = typeof state["base_sha"] === "string" ? state["base_sha"] : "";
-  const where = `${ref.owner}/${ref.repo}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
+  const origin = `${ref.owner}/${ref.repo}@${baseSha === "" ? "(unknown base)" : baseSha}`;
+  const where = `${origin}:${BASE_GATES_PATH}`;
   let read: BaseGatesRead;
   if (baseSha === "") {
     read = { kind: "failed", message: "GitHub answered no base commit for the pull request" };
@@ -1568,7 +1594,7 @@ async function readBaseExclusions(
       read = { kind: "failed", message: error instanceof Error ? error.message : String(error) };
     }
   }
-  return { ...exclusionsAtBase(read, where, local), source: `${where} checks.excluded` };
+  return { ...exclusionsAtBase(read, where, local), source: `${where} checks.excluded`, origin };
 }
 
 /** The document `--require-head` prints on a mismatch, in place of a verdict. */
@@ -1679,6 +1705,8 @@ function unevaluatedReport(
               }),
             )
           : [],
+      declaredExclusionsSource: identities.source === "schema" ? "local-unverified" : null,
+      notes: [],
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
       // The gate never ran, so it never asked -- `false` here would read as
