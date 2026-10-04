@@ -4,6 +4,7 @@ import {
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
   parseStatusPorcelain,
+  parseStatusPorcelainBytes,
   pathspecLine,
   triageStage,
 } from "./triage.js";
@@ -321,11 +322,34 @@ describe("addListFrom -- what a list may never carry, and the rename it must", (
     expect(list.verdict).toBe("flagged");
   });
 
-  it("holds a path carrying U+FFFD off the list as undecodable", () => {
-    const list = listOf("?? bad�.ts\0?? src/new.ts\0");
-    expect(list.undecodable).toEqual(["bad�.ts"]);
+  it("lists a REAL U+FFFD in a filename as an ordinary path -- it is a legal character", () => {
+    const list = listOf("?? bad\uFFFD.ts\0?? src/new.ts\0");
+    expect(list.undecodable).toEqual([]);
+    expect(list.add).toEqual(["bad\uFFFD.ts", "src/new.ts"]);
+    expect(list.verdict).toBe("ready");
+  });
+
+  it("holds a name whose RAW bytes are not UTF-8 off the list as undecodable", () => {
+    const enc = new TextEncoder();
+    const bytes = new Uint8Array([...enc.encode("?? bad"), 0xff, ...enc.encode(".ts\0?? src/new.ts\0")]);
+    const entries = parseStatusPorcelainBytes(bytes);
+    expect(entries.map((e): boolean => e.undecodable === true)).toEqual([true, false]);
+    const list = addListFrom(entries, triageStage(entries));
+    expect(list.undecodable).toEqual(["bad\uFFFD.ts"]);
     expect(list.add).toEqual(["src/new.ts"]);
     expect(list.verdict).toBe("flagged");
+  });
+
+  it("marks a rename undecodable when only its ORIGINAL's bytes are bad, and carries that to the expanded deletion", () => {
+    const enc = new TextEncoder();
+    const bytes = new Uint8Array([...enc.encode(" R new.ts\0old"), 0xfe, ...enc.encode(".ts\0")]);
+    const expanded = expandWorktreeRenames(parseStatusPorcelainBytes(bytes));
+    expect(expanded.map((e): boolean => e.undecodable === true)).toEqual([true, true]);
+  });
+
+  it("parses valid bytes exactly as the text parser does, CR/LF inside a path included", () => {
+    const text = " M a\r\nb.ts\0R  new.ts\0old.ts\0?? x y.ts\0";
+    expect(parseStatusPorcelainBytes(new TextEncoder().encode(text))).toEqual(parseStatusPorcelain(text));
   });
 
   it("dedupes the add list, keeping first-seen order", () => {

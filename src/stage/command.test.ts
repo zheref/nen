@@ -198,6 +198,8 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
     json = false,
     withWrite = false,
     toplevel: string = BANKAI_REPO,
+    stdoutBytes?: Uint8Array,
+    repo: string = BANKAI_REPO,
   ): Promise<{ code: number; out: string[]; err: string[]; written: string[] }> {
     const out: string[] = [];
     const err: string[] = [];
@@ -210,12 +212,12 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
     const code = await runFamily(
       stageCommand,
       ["stage", "list", ...argv],
-      BANKAI_REPO,
+      repo,
       json,
       io,
       new ScriptedSeams([
         { match: TOPLEVEL, result: { stdout: `${toplevel}\n` } },
-        { match: STATUS, result: { stdout } },
+        { match: STATUS, result: { stdout, ...(stdoutBytes === undefined ? {} : { stdoutBytes }) } },
       ]),
     );
     return { code, out, err, written };
@@ -318,10 +320,32 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
     expect(result.err.join("\n")).toMatch(/^embedded repository: vendor\/lib\/ {2}\[/m);
   });
 
-  it("names a path carrying U+FFFD as undecodable and withholds the list", async () => {
-    const result = await list([], "?? bad\uFFFDname.ts\0 M src/a.ts\0", true);
+  it("names a path whose raw bytes are not UTF-8 as undecodable and withholds the list", async () => {
+    const enc = new TextEncoder();
+    const bytes = new Uint8Array([...enc.encode("?? bad"), 0xff, ...enc.encode("name.ts\0 M src/a.ts\0")]);
+    const result = await list([], "", true, false, BANKAI_REPO, bytes);
     expect(result.code).toBe(1);
     expect(JSON.parse(result.out.join("\n"))).toMatchObject({ verdict: "flagged", undecodable: ["bad\uFFFDname.ts"] });
+  });
+
+  it("lists a literal U+FFFD filename as an ordinary path at exit 0", async () => {
+    const result = await list([], "?? bad\uFFFDname.ts\0 M src/a.ts\0");
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["bad\uFFFDname.ts", "src/a.ts"]);
+  });
+
+  it("counts a path in two buckets once: a DD is unmerged AND an unmentioned deletion", async () => {
+    const result = await list([], "DD src/gone.ts\0 M src/a.ts\0");
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/nen: 1 path\(s\) need a human/);
+  });
+
+  it.skipIf(process.platform === "win32")("accepts a --repo whose toplevel ends in a space -- the path is read exactly", async () => {
+    const top = join(mkdtempSync(join(tmpdir(), "nen-stage-top-")), "repo ");
+    mkdirSync(top);
+    const result = await list([], " M src/a.ts\0", false, false, top, undefined, top);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["src/a.ts"]);
   });
 
   it("lists a worktree rename's original as a deletion, flagged unless mentioned", async () => {

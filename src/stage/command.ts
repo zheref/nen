@@ -20,6 +20,7 @@ import {
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
   parseStatusPorcelain,
+  parseStatusPorcelainBytes,
   pathspecLine,
   triageStage,
   type StatusEntry,
@@ -81,7 +82,9 @@ nested repository, 'undecodable:' for a name that is not UTF-8, 'already
 staged:' for a deletion already in the index (a pathspec git add would
 refuse) -- plus the ignored count. --json carries { verdict, add[],
 excluded[], alreadyStaged[], ignored[], unmerged[], embeddedRepos[],
-undecodable[] } at every exit.
+undecodable[] } at every exit reached after a successful status read (0, the
+classification 1, and 3). A git read failure (1) and a usage error (2) emit
+no document.
 
 Exit codes: 0 the list is non-empty and nothing needs a human; 1 something
 does (any of the first four above) -- the list is WITHHELD from stdout (read
@@ -102,7 +105,9 @@ function readAndTriage(
   const result = context.seams.run(
     GIT,
     ["-c", "core.quotePath=false", "status", "--porcelain=v1", "-z", "--ignored", "-uall"],
-    { cwd: root },
+    // RAW BYTES, so a name that is not UTF-8 is detected by a fatal decoder
+    // rather than guessed from a U+FFFD a real filename may carry.
+    { cwd: root, bytes: true },
   );
   if (result.code !== 0) {
     context.io.err(`nen: could not read working-copy status: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
@@ -116,7 +121,8 @@ function readAndTriage(
     );
   }
 
-  const parsed = parseStatusPorcelain(result.stdout);
+  const parsed =
+    result.stdoutBytes === undefined ? parseStatusPorcelain(result.stdout) : parseStatusPorcelainBytes(result.stdoutBytes);
   const entries = expandRenames ? expandWorktreeRenames(parsed) : parsed;
   // MEASURED HERE, NOT IN THE PURE MODULE. ./triage.ts has no filesystem --
   // that is what makes every one of its branches testable as data -- so the
@@ -190,8 +196,11 @@ function canonical(path: string): string {
  */
 function requireToplevel(context: CommandContext, root: string): string | null {
   const result = context.seams.run(GIT, ["rev-parse", "--show-toplevel"], { cwd: root });
-  const toplevel = outputLines(result.stdout)[0];
-  if (result.code !== 0 || toplevel === undefined || toplevel === "") {
+  // EXACT BYTES, minus git's one terminating newline -- never `outputLines`,
+  // which trims and redacts: a repository whose name ends in a space would
+  // then refuse its own correct --repo (Copilot round 1 on #237).
+  const toplevel = result.stdout.replace(/\r?\n$/, "");
+  if (result.code !== 0 || toplevel === "") {
     context.io.err(
       `nen: ${root} is not inside a git working tree: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,
     );
@@ -213,7 +222,9 @@ function runList(context: CommandContext, entries: readonly StatusEntry[], triag
   const code = list.verdict === "flagged" ? 1 : list.verdict === "empty" ? EXIT_EMPTY : 0;
 
   if (context.json) {
-    // EVERY EXIT CARRIES THE WHOLE DOCUMENT, `add` included: the JSON reader
+    // EVERY EXIT REACHED HERE -- every one after a successful status read --
+    // CARRIES THE WHOLE DOCUMENT, `add` included. A git read failure returned
+    // 1 before this point and a usage error threw 2; neither emits one. The JSON reader
     // branches on `verdict`, and withholding a field it might want to show a
     // human buys nothing a structured caller needs protecting from.
     context.io.out(JSON.stringify(list, null, 2));
@@ -250,7 +261,14 @@ function runList(context: CommandContext, entries: readonly StatusEntry[], triag
   }
   context.io.err(`ignored: ${list.ignored.length} file(s), not listed`);
   if (list.verdict === "flagged") {
-    const needing = list.excluded.length + list.unmerged.length + list.embeddedRepos.length + list.undecodable.length;
+    // UNIQUE PATHS, not a sum of buckets: a `DD` is unmerged AND an
+    // unmentioned deletion, and is one path a human has to look at.
+    const needing = new Set([
+      ...list.excluded.map((file): string => file.path),
+      ...list.unmerged,
+      ...list.embeddedRepos,
+      ...list.undecodable,
+    ]).size;
     context.io.err(
       `nen: ${needing} path(s) need a human -- the add list (${list.add.length} path(s)) is withheld from stdout. A flagged file is never staged without an explicit yes; resolve each one, or read the list from --json.`,
     );

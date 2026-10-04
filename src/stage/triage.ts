@@ -34,6 +34,15 @@ export interface StatusEntry {
    * file. Absent on every entry that is not a rename or copy.
    */
   readonly origPath?: string;
+  /**
+   * The bytes git printed for this path (or its rename's original) are not
+   * UTF-8 -- read by a FATAL decoder on the raw status output, never inferred
+   * from the decoded text (Copilot round 1 on #237: U+FFFD is a legal
+   * character, and a real file named with one is an ordinary path). The path
+   * string is the lenient decode and cannot name the file on disk. Absent
+   * unless set.
+   */
+  readonly undecodable?: true;
 }
 
 // `git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall`.
@@ -56,10 +65,52 @@ export interface StatusEntry {
 // NEW path is kept, since that is what would be staged; the ORIG_PATH record
 // is consumed and never treated as an entry of its own.
 export function parseStatusPorcelain(text: string): readonly StatusEntry[] {
+  return parseRecords(
+    text
+      .split("\0")
+      .filter((record): boolean => record !== "")
+      .map((record): StatusRecord => ({ text: record, undecodable: false })),
+  );
+}
+
+interface StatusRecord {
+  readonly text: string;
+  readonly undecodable: boolean;
+}
+
+/**
+ * `parseStatusPorcelain` over the RAW bytes of `git status -z`: each
+ * NUL-terminated record is decoded on its own by a FATAL UTF-8 decoder, and a
+ * record that is not UTF-8 is decoded leniently instead and its entry marked
+ * `undecodable`. Splitting on the byte 0 first is exact -- UTF-8 never puts a
+ * 0 byte inside a multi-byte character -- so one bad name cannot spoil the
+ * records around it.
+ */
+export function parseStatusPorcelainBytes(bytes: Uint8Array): readonly StatusEntry[] {
+  const fatal = new TextDecoder("utf-8", { fatal: true });
+  const lenient = new TextDecoder("utf-8");
+  const records: StatusRecord[] = [];
+  let start = 0;
+  for (let i = 0; i <= bytes.length; i++) {
+    if (i < bytes.length && bytes[i] !== 0) continue;
+    if (i > start) {
+      const slice = bytes.subarray(start, i);
+      try {
+        records.push({ text: fatal.decode(slice), undecodable: false });
+      } catch {
+        records.push({ text: lenient.decode(slice), undecodable: true });
+      }
+    }
+    start = i + 1;
+  }
+  return parseRecords(records);
+}
+
+function parseRecords(records: readonly StatusRecord[]): readonly StatusEntry[] {
   const entries: StatusEntry[] = [];
-  const records = text.split("\0").filter((record): boolean => record !== "");
   for (let i = 0; i < records.length; i++) {
-    const raw = records[i] ?? "";
+    const record = records[i];
+    const raw = record?.text ?? "";
     const indexStatus = raw[0] ?? " ";
     const worktreeStatus = raw[1] ?? " ";
     const path = raw.slice(3);
@@ -68,11 +119,19 @@ export function parseStatusPorcelain(text: string): readonly StatusEntry[] {
     if (isRenameOrCopy) {
       // The next record is ORIG_PATH -- consumed here, never its own entry,
       // and carried on this one as `origPath`.
-      const origPath = records[i + 1];
+      const orig = records[i + 1];
       i++;
-      entries.push({ path, indexStatus, worktreeStatus, ignored, ...(origPath === undefined ? {} : { origPath }) });
+      const undecodable = record?.undecodable === true || orig?.undecodable === true;
+      entries.push({
+        path,
+        indexStatus,
+        worktreeStatus,
+        ignored,
+        ...(orig === undefined ? {} : { origPath: orig.text }),
+        ...(undecodable ? { undecodable: true as const } : {}),
+      });
     } else {
-      entries.push({ path, indexStatus, worktreeStatus, ignored });
+      entries.push({ path, indexStatus, worktreeStatus, ignored, ...(record?.undecodable === true ? { undecodable: true as const } : {}) });
     }
   }
   return entries;
@@ -262,7 +321,13 @@ export function expandWorktreeRenames(entries: readonly StatusEntry[]): readonly
   for (const entry of entries) {
     expanded.push(entry);
     if (entry.worktreeStatus === "R" && entry.origPath !== undefined) {
-      expanded.push({ path: entry.origPath, indexStatus: " ", worktreeStatus: "D", ignored: false });
+      expanded.push({
+        path: entry.origPath,
+        indexStatus: " ",
+        worktreeStatus: "D",
+        ignored: false,
+        ...(entry.undecodable === true ? { undecodable: true as const } : {}),
+      });
     }
   }
   return expanded;
@@ -302,10 +367,11 @@ export interface AddList {
    */
   readonly embeddedRepos: readonly string[];
   /**
-   * Paths carrying U+FFFD, the replacement character: `git status` emitted
-   * bytes that are not UTF-8, the decode replaced them, and the string can no
-   * longer name the file on disk (hanten N7). Listing it would stage nothing,
-   * or the wrong thing.
+   * Paths whose bytes in `git status` are not UTF-8, found by a fatal decoder
+   * on the raw output (`StatusEntry.undecodable`): the string shown is a
+   * lenient decode and can no longer name the file on disk (hanten N7).
+   * Listing it would stage nothing, or the wrong thing. A real U+FFFD in a
+   * name is NOT this -- it is an ordinary path, listed like any other.
    */
   readonly undecodable: readonly string[];
 }
@@ -328,7 +394,7 @@ export function addListFrom(entries: readonly StatusEntry[], triage: TriageResul
     if (entry.ignored) continue;
     if (UNMERGED.has(`${entry.indexStatus}${entry.worktreeStatus}`)) hold(unmerged, entry.path);
     if (entry.indexStatus === "?" && entry.path.endsWith("/")) hold(embeddedRepos, entry.path);
-    if (entry.path.includes("\uFFFD")) hold(undecodable, entry.path);
+    if (entry.undecodable === true) hold(undecodable, entry.path);
   }
 
   // DEDUPED, FIRST-SEEN ORDER KEPT (hanten N8): a path reached twice -- a

@@ -3214,8 +3214,9 @@ than a transcription: a triage **flag**; an **unmerged** path (`UU AA DD AU
 UA DU UD` — `git add` on one records a resolution); an **embedded
 repository** (an untracked path git prints with a trailing `/` — `git add`
 would record a gitlink with no `.gitmodules` entry); and an **undecodable**
-name (one carrying U+FFFD, where `git status` printed bytes that are not
-UTF-8 and the string can no longer reach the file).
+name (`git status` printed bytes that are not UTF-8, found by a fatal
+decoder on its raw output, so the string can no longer reach the file). A
+real U+FFFD in a filename is an ordinary path and is listed.
 
 **`--repo` must be the top of the working tree.** `git status` names every
 path relative to the top whatever directory it runs in, so a list read from a
@@ -3263,7 +3264,9 @@ NUL-terminated under `--nul`), and nothing else. Stderr carries, for a human:
 `embedded repository: <path>  […]`, `undecodable: <path>  […]`,
 `already staged: <path>  […]` per staged deletion, `ignored: <n> file(s), not
 listed`, and on exit 1 or 3 a `nen:` line saying why stdout is empty.
-`--json` top-level keys, at **every** exit: `verdict` (`ready`, `flagged` or
+`--json` top-level keys, at every exit reached **after a successful status
+read** (`0`, the classification `1`, and `3`; a git read failure at `1` and a
+usage error at `2` emit no document): `verdict` (`ready`, `flagged` or
 `empty`), `add[]`, `excluded[]` and `ignored[]` (each `{ path, reasons[] }`,
 as triage's `flagged[]` and `ignored[]`), `alreadyStaged[]`, `unmerged[]`,
 `embeddedRepos[]` and `undecodable[]` (each an array of paths).
@@ -3271,8 +3274,8 @@ as triage's `flagged[]` and `ignored[]`), `alreadyStaged[]`, `unmerged[]`,
 | Exit | Meaning |
 |---|---|
 | `0` | `ready` — the list is non-empty and nothing needs a human |
-| `1` | `flagged` — a triage flag, an unmerged path, an embedded repository or an undecodable name; the list is **withheld from stdout** (read it from `--json`), so a pipe that ignores the exit code stages nothing rather than a partial set that looks whole. Also `1`: git could not read the tree (`--repo` is not in a working tree, or `git status` failed) — stdout is empty |
-| `2` | usage — a missing `--repo`, a `--repo` that is not the top of its working tree, `--nul` with `--json`, a bad `--large-bytes` |
+| `1` | `flagged` — a triage flag, an unmerged path, an embedded repository or an undecodable name; the list is **withheld from stdout** (read it from `--json`), so a pipe that ignores the exit code stages nothing rather than a partial set that looks whole. Also `1`: git could not read the tree (`--repo` is not in a working tree, or `git status` failed) — stdout is empty and **no `--json` document** is emitted |
+| `2` | usage — a missing `--repo`, a `--repo` that is not the top of its working tree, `--nul` with `--json`, a bad `--large-bytes`; no `--json` document |
 | `3` | `empty` — nothing to add and nothing needing a human (a clean tree, or one dirty only in ignored paths). A tree whose every change needs a human is `1`, never `3` |
 
 **Example**

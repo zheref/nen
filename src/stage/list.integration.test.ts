@@ -15,7 +15,8 @@
 // `--initial-branch` floor; `--pathspec-from-file` needs only 2.26), exactly as
 // ../shu/warmup.integration.test.ts does, and for the same reason. A path
 // carrying a newline or a double quote cannot exist on Windows, so those two
-// rows are POSIX-only; every other row runs everywhere.
+// rows are POSIX-only, and so is a name carrying `*`; every other row runs
+// everywhere.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -119,8 +120,11 @@ describe.skipIf(!HAVE_GIT)("nen stage list, against the real git (zheref/nen#237
     "packages/core/src/utils/oauthReturnQuery.ts",
     "packages/core/src/utils/__tests__/oauthReturnQuery.test.ts",
     "with space.ts",
-    "st*r[1].ts",
-    ...(POSIX ? ["new\nline.ts", '"quoted.ts'] : []),
+    // `[1]` is a glob character class and legal in a Windows filename, so it
+    // runs everywhere; `*`, a newline and `"` cannot exist in one there
+    // (ENOENT on the CI's windows leg), so those rows are POSIX-only.
+    "lit[1].ts",
+    ...(POSIX ? ["st*r[1].ts", "new\nline.ts", '"quoted.ts'] : []),
   ];
 
   beforeAll(() => {
@@ -304,5 +308,55 @@ describe.skipIf(!HAVE_GIT)("nen stage list, against the real git -- hanten round
     expect(stdout[stdout.length - 1]).toBe(0);
     expect(stdout.includes(0x0a)).toBe(false);
     expect(stdout.toString("utf8")).toBe("src/new.ts\0with space.ts\0");
+  });
+});
+
+// Copilot round 1 on #237: undecodable is a fact about BYTES, never a guess
+// from a U+FFFD a real filename may carry.
+describe.skipIf(!HAVE_GIT)("nen stage list, against the real git -- undecodable names (zheref/nen#237)", () => {
+  let root = "";
+
+  beforeAll(() => {
+    root = mkdtempSync(join(tmpdir(), "nen-stage-list-bytes-"));
+  });
+
+  afterAll(() => {
+    if (root !== "") rmSync(root, { recursive: true, force: true });
+  });
+
+  it("a real file named with U+FFFD is an ordinary path: listed, and git add stages it", async () => {
+    const repo = freshRepo(root, "replacement-char");
+    write(repo, "bad\uFFFD.ts");
+    const result = await stageList(repo, ["--nul"]);
+    expect(result.code).toBe(0);
+    expect(result.written).toBe("bad\uFFFD.ts\0");
+    mustGit(repo, ["--literal-pathspecs", "add", "--pathspec-from-file=-", "--pathspec-file-nul"], result.written);
+    expect(stagedPaths(repo)).toEqual(["bad\uFFFD.ts"]);
+  });
+
+  // A filename that is not UTF-8 can only be made where the filesystem takes
+  // raw bytes -- Linux, typically; APFS and NTFS refuse one. Probed, not assumed.
+  const BAD_NAME = Buffer.from([0x62, 0x61, 0x64, 0xff, 0x2e, 0x74, 0x73]); // "bad\xff.ts"
+  function canMakeBadName(): boolean {
+    const probe = mkdtempSync(join(tmpdir(), "nen-stage-badname-"));
+    try {
+      writeFileSync(Buffer.concat([Buffer.from(`${probe}/`), BAD_NAME]), "x\n");
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  }
+
+  it.skipIf(!canMakeBadName())("a file whose name is not UTF-8 is undecodable: never listed, exit 1", async () => {
+    const repo = freshRepo(root, "bad-bytes");
+    writeFileSync(Buffer.concat([Buffer.from(`${repo}/`), BAD_NAME]), "x\n");
+    write(repo, "src/new.ts");
+    const json = await stageList(repo, [], true);
+    expect(json.code).toBe(1);
+    const doc = JSON.parse(json.out.join("\n")) as { add: string[]; undecodable: string[] };
+    expect(doc.undecodable).toEqual(["bad\uFFFD.ts"]);
+    expect(doc.add).toEqual(["src/new.ts"]);
   });
 });

@@ -92,6 +92,14 @@ export interface RunOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Text written to the child's stdin. */
   readonly stdin?: string;
+  /**
+   * Keep stdout's RAW BYTES as `stdoutBytes`, and leave `stdout` exactly as
+   * decoded -- no CRLF normalisation (zheref/nen#237, Copilot round 1). For a
+   * NUL-delimited read such as `git status -z`, where a byte sequence that is
+   * not UTF-8 must be told apart from a real U+FFFD in a filename, and where a
+   * `\r\n` inside a path is two bytes of the path rather than a line ending.
+   */
+  readonly bytes?: boolean;
 }
 
 export interface CommandResult {
@@ -112,6 +120,8 @@ export interface CommandResult {
    * --show-current-patch` must not read as a paused rebase).
    */
   readonly signal?: string | null;
+  /** Stdout's raw bytes. Present only when the call asked for `bytes`. */
+  readonly stdoutBytes?: Uint8Array;
 }
 
 export type Runner = (
@@ -367,6 +377,7 @@ export function outputLines(text: string): string[] {
 }
 
 export const spawnRunner: Runner = (command, args, options = {}): CommandResult => {
+  if (options.bytes === true) return spawnBytes(command, args, options);
   const result = spawnSync(command, [...args], {
     ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     ...(options.env === undefined
@@ -395,6 +406,30 @@ export const spawnRunner: Runner = (command, args, options = {}): CommandResult 
     signal: result.signal ?? null,
   };
 };
+
+/** `spawnRunner` with `bytes`: stdout kept raw, decoded leniently, never EOL-normalised. */
+function spawnBytes(command: string, args: readonly string[], options: RunOptions): CommandResult {
+  const result = spawnSync(command, [...args], {
+    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+    ...(options.env === undefined
+      ? {}
+      : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
+    ...(options.stdin === undefined ? {} : { input: options.stdin }),
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error !== undefined) {
+    return { code: -1, stdout: "", stderr: result.error.message, spawnFailed: true };
+  }
+  const stdoutBytes = new Uint8Array(result.stdout ?? new Uint8Array());
+  return {
+    code: result.status ?? 1,
+    stdout: new TextDecoder("utf-8").decode(stdoutBytes),
+    stderr: normalizeEol(new TextDecoder("utf-8").decode(result.stderr ?? new Uint8Array())),
+    spawnFailed: false,
+    signal: result.signal ?? null,
+    stdoutBytes,
+  };
+}
 
 /**
  * The interactive runner. Nothing is captured and nothing is parsed: the child

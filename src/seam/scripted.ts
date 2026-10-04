@@ -214,6 +214,14 @@ export class ScriptedSeams implements Seams {
       spawnFailed: found.spawnFailed ?? false,
       // Named only when a script names it, so no existing script changes shape.
       ...(found.signal === undefined ? {} : { signal: found.signal }),
+      // A `bytes` call gets the script's own bytes, or its stdout as UTF-8 --
+      // what the real runner returns for text that IS UTF-8. A call without
+      // `bytes` never sees the field, so no existing script changes shape.
+      ...(found.stdoutBytes !== undefined
+        ? { stdoutBytes: found.stdoutBytes }
+        : options.bytes === true
+          ? { stdoutBytes: new TextEncoder().encode(found.stdout ?? "") }
+          : {}),
     };
   };
 
