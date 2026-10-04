@@ -6,7 +6,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 
 Release unit for `v0.18.3..v0.19.0`. It brings interactive desktop runners, the runner trust fixes, and stricter readiness:
 - the deliveries: [#334](https://github.com/zheref/nen/pull/334), [#335](https://github.com/zheref/nen/pull/335), [#336](https://github.com/zheref/nen/pull/336), [#342](https://github.com/zheref/nen/pull/342) and [#343](https://github.com/zheref/nen/pull/343);
-- [#PROPOSAL](https://github.com/zheref/nen/pull/PROPOSAL), the release proposal.
+- [#358](https://github.com/zheref/nen/pull/358), the release proposal.
 
 The compatibility floor moves to `0.19`.
 
