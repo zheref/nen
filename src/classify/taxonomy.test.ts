@@ -262,14 +262,14 @@ describe("parseClassifyTaxonomy -- the optional facts nen direct reads", () => {
   it("refuses a rule row naming a domain outside domains.keys, and a repeated order", () => {
     expect(
       refusal((v): void => {
-        v["domains"] = { keys: ["one"], rule: [{ order: 1, when: "w", domain: "two" }], fallback: "f" };
+        v["domains"] = { keys: ["one"], rule: [{ order: 1, when: "otherwise", domain: "two" }], fallback: "f" };
       }).pointer,
     ).toBe("domains.rule[0].domain");
     expect(
       refusal((v): void => {
         v["domains"] = {
           keys: ["one"],
-          rule: [{ order: 1, when: "w", domain: "one" }, { order: 1, when: "w", domain: "one" }],
+          rule: [{ order: 1, when: "otherwise", domain: "one" }, { order: 1, when: "otherwise", domain: "one" }],
           fallback: "f",
         };
       }).pointer,

@@ -24,6 +24,14 @@
 // falls back to -- which is a field of the contract the way ../schema/labels.ts
 // knows the word `labels`, not a value of the vocabulary.
 //
+// A CELL'S SURFACE IS ITS ALIAS'S SURFACE (the registry's `surfaceRule`): the
+// consumer's workflow maps an alias onto a tier and a tier onto the surface's own
+// alias, so a cell that moved an alias to another surface would name a tier that
+// surface lacks. The parser refuses it by pointer. A reviewer alias as a runner-up
+// must name its `also` stand-in, so a runner-up always resolves to an actionable
+// alias. Every `$`-prefixed key (`$comment`, `$collapsed`) is metadata and is
+// skipped wherever the file is walked, the house rule of ../schema/source.ts.
+//
 // A BAD FILE IS A LOUD, POINTED REFUSAL (../schema/errors.ts): the path, the
 // pointer into the file and what was found. The refusals the contract names:
 // a routing cell whose alias or surface the registry does not declare, a
@@ -104,6 +112,11 @@ export interface PlusOne {
   readonly key: string;
   /** Present on a count add, absent on a domain add. */
   readonly threshold: number | null;
+  /**
+   * A domain add's target domain when the file names one beside the key; null
+   * otherwise, and the verb then reads the taxonomy's first rule row's domain.
+   */
+  readonly domain: string | null;
 }
 
 export interface EffortRule {
@@ -315,14 +328,18 @@ function parseEffort(path: string, value: unknown, surfaceNames: readonly string
     } else if (threshold !== undefined) {
       throw new SchemaError(path, `${pointer}.threshold`, `only a count add (${COUNT_ADD_KEYS.join(", ")}) carries a threshold; ${describeValue(key)} adds on the derived domain`);
     }
-    return { when: requireString(path, `${pointer}.when`, row["when"]), key, threshold: counted ? (threshold as number) : null };
+    const domain = row["domain"] === undefined ? null : requireString(path, `${pointer}.domain`, row["domain"]);
+    if (counted && domain !== null) {
+      throw new SchemaError(path, `${pointer}.domain`, `only a domain add names a domain; ${describeValue(key)} is a count add`);
+    }
+    return { when: requireString(path, `${pointer}.when`, row["when"]), key, threshold: counted ? (threshold as number) : null, domain };
   });
 
   // The bands partition the score line: each level has one, ascending in level
   // order, each beginning exactly where the one below ended. A gap leaves a score
   // no level owns; an overlap gives it two -- either way the verb would be guessing.
   const rawBands = requireRecord(path, "effort.rule.bands", rule["bands"]);
-  for (const declared of Object.keys(rawBands)) {
+  for (const declared of Object.keys(rawBands).filter((name): boolean => !name.startsWith("$"))) {
     if (!levels.includes(declared)) {
       throw new SchemaError(path, `effort.rule.bands.${declared}`, `is not one of effort.levels [${levels.join(", ")}]`);
     }
@@ -401,9 +418,11 @@ function parseSide(
   path: string,
   pointer: string,
   value: unknown,
-  aliasNames: readonly string[],
+  aliases: Readonly<Record<string, RegistryAlias>>,
   surfaceNames: readonly string[],
+  isRunnerUp: boolean,
 ): RoutedSide {
+  const aliasNames = Object.keys(aliases);
   const row = requireRecord(path, pointer, value);
   const alias = requireString(path, `${pointer}.alias`, row["alias"]);
   if (!aliasNames.includes(alias)) {
@@ -413,6 +432,17 @@ function parseSide(
   if (surface !== null && !surfaceNames.includes(surface)) {
     throw new SchemaError(path, `${pointer}.surface`, `names surface ${describeValue(surface)}, which is not one of surfaces [${surfaceNames.join(", ")}]`);
   }
+  // A cell's surface is ALWAYS its alias's surface (the registry's surfaceRule): the
+  // workflow maps an alias onto a tier and a tier onto the surface's own alias, so a
+  // cell that moved an alias to another surface would name a tier that surface lacks.
+  const aliasSurface = (aliases[alias] as RegistryAlias).surface;
+  if (surface !== aliasSurface) {
+    throw new SchemaError(
+      path,
+      `${pointer}.surface`,
+      `is ${describeValue(surface)} but alias ${describeValue(alias)} runs on ${describeValue(aliasSurface)}; a cell's surface must equal its alias's surface`,
+    );
+  }
   const interactive = row["interactive"] === undefined ? null : stringOrNull(path, `${pointer}.interactive`, row["interactive"]);
   let also: string | null = null;
   if (row["also"] !== undefined) {
@@ -420,6 +450,13 @@ function parseSide(
     if (!aliasNames.includes(also)) {
       throw new SchemaError(path, `${pointer}.also`, `names alias ${describeValue(also)}, which is not one of aliases [${aliasNames.join(", ")}]`);
     }
+    if ((aliases[also] as RegistryAlias).reviewer) {
+      throw new SchemaError(path, `${pointer}.also`, `names reviewer alias ${describeValue(also)}; a stand-in has to be an actionable alias`);
+    }
+  }
+  // A runner-up always resolves to an actionable alias, so a reviewer there names its stand-in.
+  if (isRunnerUp && (aliases[alias] as RegistryAlias).reviewer && also === null) {
+    throw new SchemaError(path, `${pointer}.also`, `is missing. A reviewer alias as a runner-up has to name the actionable alias it resolves to`);
   }
   const note = row["note"] === undefined ? null : requireString(path, `${pointer}.note`, row["note"]);
   return { alias, surface, interactive, also, note };
@@ -429,7 +466,7 @@ function parseRouting(
   path: string,
   value: unknown,
   phaseIds: readonly string[],
-  aliasNames: readonly string[],
+  aliases: Readonly<Record<string, RegistryAlias>>,
   surfaceNames: readonly string[],
 ): Record<string, Record<string, RoutingEntry>> {
   const record = requireRecord(path, "routing", value);
@@ -454,8 +491,8 @@ function parseRouting(
         const cellPointer = `${pointer}.cells.${lang}`;
         const cellRecord = requireRecord(path, cellPointer, cell);
         cells[lang] = {
-          winner: parseSide(path, `${cellPointer}.winner`, cellRecord["winner"], aliasNames, surfaceNames),
-          runnerUp: parseSide(path, `${cellPointer}.runnerUp`, cellRecord["runnerUp"], aliasNames, surfaceNames),
+          winner: parseSide(path, `${cellPointer}.winner`, cellRecord["winner"], aliases, surfaceNames, false),
+          runnerUp: parseSide(path, `${cellPointer}.runnerUp`, cellRecord["runnerUp"], aliases, surfaceNames, true),
         };
       }
       byDomain[domain] = { phase, phaseName: requireString(path, `${pointer}.phaseName`, row["phaseName"]), alsoPhases, cells };
@@ -511,7 +548,7 @@ export function parseDirectRegistry(path: string, value: unknown): DirectRegistr
     precedence: parsePrecedence(path, root["aggregation"], aliasNames),
     mismatch: parseMismatch(path, root["mismatch"]),
     phases,
-    routing: parseRouting(path, root["routing"], Object.keys(phases), aliasNames, surfaceNames),
+    routing: parseRouting(path, root["routing"], Object.keys(phases), aliases, surfaceNames),
   };
 }
 

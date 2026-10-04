@@ -19,6 +19,7 @@ import {
 
 const verdict = (...rest: string[]): ReturnType<typeof capture> =>
   capture(resolveArgs(consumerRepo(), "--lang", "swift", "--job", "implementation,unit-tests", "--kind", "product", ...rest));
+const CLASSIFIED = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
 
 describe("nen direct -- registration and dispatch", () => {
   it("is registered between dev and effort, with its two subcommands", () => {
@@ -106,39 +107,78 @@ describe("nen direct registry", () => {
 
 describe("nen direct resolve -- human output over the real fixtures", () => {
   it("prints the verdict table, the pairs, the domain and effort lines, in that order", async () => {
-    const result = await verdict("--surface", "codex", "--tier", "opus", "--effort", "medium");
+    const result = await verdict("--surface", "codex", "--model", "opus", "--effort", "medium");
     expect(result.code).toBe(0);
     const text = result.out.join("\n");
     expect(result.out[0]).toMatch(/^\| +\| alias +\| surface\/tier +\| model alias +\| restart +\|$/);
-    expect(result.out[2]).toMatch(/^\| winner +\| SEMANTIC_FRONTIER +\| claude-code\/deep +\| opus +\| claude --model opus/);
+    expect(result.out[2]).toMatch(/^\| winner +\| SEMANTIC_FRONTIER +\| claude-code\/deep +\| opus +\| claude --model opus \(then \/effort low\)/);
     expect(result.out[3]).toMatch(/^\| runner-up +\| BALANCED_AUTHOR +\| claude-code\/fast +\| sonnet +\|/);
     expect(text).toContain("interactive: the Claude desktop app or claude.ai, the same model family");
     expect(text).toContain("pair implementation x swift: SEMANTIC_FRONTIER, runner-up BALANCED_AUTHOR  [feature, FEAT.DEV.013 Feature implementation, cell swift]");
-    expect(text).toContain("domain: feature (rule 5: nothing above applied)");
+    expect(text).toMatch(/domain: feature \(rule 5: .+\)/);
     expect(text).toContain("effort: weight 2 = 2 -> low (claude-code: low)");
-    expect(text).toContain("mismatch: surface codex != claude-code; effort medium != low");
+    expect(text).toContain("mismatch: yes (surface codex != claude-code; model match; effort medium != low)");
     expect(text.indexOf("pair ")).toBeLessThan(text.indexOf("domain:"));
     expect(text.indexOf("domain:")).toBeLessThan(text.indexOf("effort:"));
     expect(text.indexOf("effort:")).toBeLessThan(text.indexOf("mismatch:"));
   });
 
-  it("a mismatch is an answer: exit 0, and a match says so", async () => {
+  it("a mismatch is an answer: exit 0, and a match says so; unread is reported, never a mismatch", async () => {
     expect((await verdict("--surface", "codex")).code).toBe(0);
-    const matched = await verdict("--surface", "claude-code", "--tier", "opus", "--effort", "low");
+    const matched = await verdict("--surface", "claude-code", "--model", "opus", "--effort", "low");
     expect(matched.code).toBe(0);
-    expect(matched.out.join("\n")).toContain("mismatch: none (session matches on surface, tier, effort)");
+    expect(matched.out.join("\n")).toContain("mismatch: no (surface match; model match; effort match)");
+    const unread = await verdict("--surface", "unread", "--model", "unread", "--effort", "unread");
+    expect(unread.code).toBe(0);
+    expect(unread.out.join("\n")).toContain("mismatch: no (surface unread; model unread; effort unread)");
   });
 
   it("prints no mismatch line when the session gave nothing", async () => {
     expect((await verdict()).out.join("\n")).not.toContain("mismatch");
   });
 
-  it("derives the process domain and the max effort for a canon repository's heavy jobs", async () => {
+  it("derives the process domain and the max effort for a canon repository's heavy jobs, from --kind and --role verbatim", async () => {
     const result = await capture(resolveArgs(consumerRepo(), "--lang", "prose", "--job", "requirements,architecture,review", "--kind", "process", "--role", "canon", "--json"));
     expect(result.code).toBe(0);
     const document = JSON.parse(result.out.join("\n")) as Json;
     expect(document["domain"]).toMatchObject({ rule: 1 });
     expect(document["effort"]).toMatchObject({ weight: 4, level: "max", derivation: ["weight 4", "manyJobs", "aigov"], score: 6 });
+  });
+
+  it("derives the maintenance domain from a bug label, plain or namespaced, passed as --labels", async () => {
+    for (const labels of ["bug", "ns:bug", "enhancement,ns:bug"]) {
+      const result = await capture(resolveArgs(consumerRepo(), ...CLASSIFIED, "--labels", labels, "--json"));
+      expect(((JSON.parse(result.out.join("\n")) as Json)["domain"] as Json)["rule"], labels).toBe(4);
+    }
+    const none = await capture(resolveArgs(consumerRepo(), ...CLASSIFIED, "--labels", "enhancement", "--json"));
+    expect(((JSON.parse(none.out.join("\n")) as Json)["domain"] as Json)["rule"]).toBe(5);
+  });
+
+  it("an empty --job, or none, is the answer 'undirectable: job axis empty': one line, exit 0", async () => {
+    for (const job of [["--job", ""], []]) {
+      const result = await capture(resolveArgs(consumerRepo(), "--lang", "swift", "--kind", "product", ...job, "--surface", "codex"));
+      expect(result.code).toBe(0);
+      expect(result.out).toEqual(["undirectable: job axis empty"]);
+    }
+    const json = JSON.parse((await capture(resolveArgs(consumerRepo(), "--kind", "product", "--json"))).out.join("\n")) as Json;
+    expect(json).toMatchObject({ undirectable: "job axis empty", domain: null, winner: null, runnerUp: null, effort: null, mismatch: null, pairs: [] });
+  });
+
+  it("an empty --lang, or none, reads the shared cell for every job", async () => {
+    for (const lang of [["--lang", ""], []]) {
+      const result = await capture(resolveArgs(consumerRepo(), "--job", "implementation", "--kind", "product", ...lang, "--json"));
+      expect(result.code).toBe(0);
+      expect(((JSON.parse(result.out.join("\n")) as Json)["pairs"] as Json[]).map((pair): string => pair["cell"])).toEqual(["*"]);
+    }
+  });
+
+  it("names the codex restart with the workflow's alias and the effort map's dial", async () => {
+    const repo = consumerRepo({ codex: { frontier: "gpt-astra-alias", deep: "gpt-sol-alias" } });
+    const result = await capture(resolveArgs(repo, "--lang", "typescript", "--job", "release", "--kind", "product", "--json"));
+    const winner = (JSON.parse(result.out.join("\n")) as Json)["winner"] as Json;
+    expect(winner["surface"]).toBe("codex");
+    expect(winner["restart"]).toBe(`codex -m ${winner["surfaceAlias"]} -c model_reasoning_effort=${((JSON.parse(result.out.join("\n")) as Json)["effort"] as Json)["surfaceEffort"]}`);
+    expect(winner["surfaceAlias"]).toBe("gpt-astra-alias");
   });
 });
 
@@ -147,11 +187,13 @@ describe("nen direct resolve --json", () => {
     const result = await verdict("--json");
     expect(result.code).toBe(0);
     const document = JSON.parse(result.out.join("\n")) as Json;
-    expect(Object.keys(document)).toEqual(["contract", "inputs", "domain", "pairs", "aggregate", "winner", "runnerUp", "effort", "mismatch", "record"]);
+    expect(Object.keys(document)).toEqual(["contract", "inputs", "undirectable", "domain", "pairs", "aggregate", "winner", "runnerUp", "effort", "mismatch", "effortId", "record"]);
     expect(document["contract"]).toBe("nen.direct.resolve/v0.1");
-    expect(document["inputs"]).toEqual({ langs: ["swift"], jobs: ["implementation", "unit-tests"], kind: "product", role: null, issueKind: "none", surface: null, tier: null, effort: null });
+    expect(document["inputs"]).toEqual({ langs: ["swift"], jobs: ["implementation", "unit-tests"], kind: "product", role: null, labels: [], surface: null, model: null, effort: null });
+    expect(document["undirectable"]).toBeNull();
     expect(document["domain"]).toMatchObject({ domain: "feature", rule: 5, fallbacks: [] });
     expect(document["pairs"]).toHaveLength(2);
+    expect(document["pairs"][0]).toMatchObject({ job: "implementation", lang: "swift", fallbackFrom: null, cell: "swift" });
     expect(document["winner"]).toMatchObject({
       alias: "SEMANTIC_FRONTIER",
       provider: "anthropic",
@@ -165,21 +207,36 @@ describe("nen direct resolve --json", () => {
     expect(document["winner"]["liveLookup"]["docs"]).toHaveLength(2);
     expect(document["effort"]).toMatchObject({ score: 2, level: "low", surfaceEffort: "low" });
     expect(document["mismatch"]).toBeNull();
+    expect(document["effortId"]).toBeNull();
     expect(document["record"]).toBeNull();
   });
 
-  it("carries the mismatch object, differences by field", async () => {
-    const document = JSON.parse((await verdict("--json", "--surface", "codex", "--tier", "opus")).out.join("\n")) as Json;
+  it("carries mismatch.compares with a verdict per value the session gave", async () => {
+    const document = JSON.parse((await verdict("--json", "--surface", "codex", "--model", "opus", "--effort", "unread")).out.join("\n")) as Json;
     expect(document["mismatch"]).toEqual({
-      compared: ["surface", "tier"],
       match: false,
-      differences: [{ field: "surface", session: "codex", recommended: "claude-code" }],
+      compares: [
+        { field: "surface", session: "codex", recommended: "claude-code", verdict: "mismatch" },
+        { field: "model", session: "opus", recommended: "opus", verdict: "match" },
+        { field: "effort", session: "unread", recommended: "low", verdict: "unread" },
+      ],
     });
+  });
+
+  it("compares effort in dial space: a session at high on a collapsed surface matches a recommended max", async () => {
+    // the process-and-canon route drives the real taxonomy to max; cursor and antigravity have no top setting
+    const argv = (surface: string, effort: string): string[] =>
+      resolveArgs(consumerRepo(), "--lang", "prose", "--job", "requirements", "--kind", "process", "--role", "canon", "--surface", surface, "--effort", effort, "--json");
+    const collapsed = JSON.parse((await capture(argv("cursor", "high"))).out.join("\n")) as Json;
+    expect(collapsed["effort"]["level"]).toBe("max");
+    expect(collapsed["mismatch"]["compares"].at(-1)).toMatchObject({ field: "effort", recommended: "high", verdict: "match" });
+    const dialed = JSON.parse((await capture(argv("claude-code", "high"))).out.join("\n")) as Json;
+    expect(dialed["mismatch"]["compares"].at(-1)).toMatchObject({ recommended: "max", verdict: "mismatch" });
   });
 
   it("reports the surface alias as 'unspelled' when the workflow has no models block, or no workflow at all", async () => {
     for (const repo of [consumerRepo(null), tmpRepo()]) {
-      const result = await capture(resolveArgs(repo, "--lang", "swift", "--job", "implementation", "--kind", "product", "--json"));
+      const result = await capture(resolveArgs(repo, ...CLASSIFIED, "--json"));
       expect(result.code).toBe(0);
       expect((JSON.parse(result.out.join("\n")) as Json)["winner"]["surfaceAlias"]).toBe("unspelled");
     }
@@ -187,7 +244,7 @@ describe("nen direct resolve --json", () => {
 
   it("spells the alias from the workflow's models block through the existing loader", async () => {
     const repo = consumerRepo({ ...MODELS, claude: { deep: "a-different-alias" } });
-    const document = JSON.parse((await capture(resolveArgs(repo, "--lang", "swift", "--job", "implementation", "--kind", "product", "--json"))).out.join("\n")) as Json;
+    const document = JSON.parse((await capture(resolveArgs(repo, ...CLASSIFIED, "--json"))).out.join("\n")) as Json;
     expect(document["winner"]["surfaceAlias"]).toBe("a-different-alias");
   });
 });
@@ -195,10 +252,10 @@ describe("nen direct resolve --json", () => {
 describe("nen direct resolve -- exit codes", () => {
   const base = (repo: string, ...rest: string[]): string[] => resolveArgs(repo, ...rest);
 
-  it("exits 2 on every missing flag, naming it", async () => {
+  it("exits 2 on every missing required flag, naming it", async () => {
     const repo = consumerRepo();
-    const full = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
-    for (const flag of ["--registry", "--taxonomy", "--repo", "--lang", "--job", "--kind"]) {
+    const full = ["--kind", "product"];
+    for (const flag of ["--registry", "--taxonomy", "--repo", "--kind"]) {
       const argv = base(repo, ...full);
       const at = argv.indexOf(flag);
       const without = [...argv.slice(0, at), ...argv.slice(at + 2)];
@@ -218,16 +275,16 @@ describe("nen direct resolve -- exit codes", () => {
     expect(job.err.join("\n")).toMatch(/unknown job key 'dancing'. Valid: discovery/);
   });
 
-  it("exits 2 on an unknown kind, role, issue kind, surface or effort level", async () => {
+  it("exits 2 on an empty --kind or --role, a surface the registry lacks, or an effort outside its levels; the old flags are gone", async () => {
     const repo = consumerRepo();
-    const classified = (kind: string, ...flags: string[]): string[] =>
-      base(repo, "--lang", "swift", "--job", "implementation", "--kind", kind, ...flags);
+    const classified = (...flags: string[]): string[] => base(repo, "--lang", "swift", "--job", "implementation", ...flags);
     const cases: [string[], RegExp][] = [
-      [classified("service"), /--kind 'service' is not one of: product, process, library, unknown/],
-      [classified("product", "--role", "owner"), /--role 'owner' is not one of: canon, consumer, unregistered/],
-      [classified("product", "--issue-kind", "chore"), /--issue-kind 'chore' is not one of: bug, enhancement, none/],
-      [classified("product", "--surface", "nowhere"), /--surface 'nowhere' is not one of: claude-code, codex, cursor, antigravity/],
-      [classified("product", "--effort", "extreme"), /--effort 'extreme' is not one of: low, medium, high, max/],
+      [classified("--kind", ""), /--kind/],
+      [classified("--kind", "product", "--role", ""), /--role is empty/],
+      [classified("--kind", "product", "--surface", "nowhere"), /--surface 'nowhere' is not one of: claude-code, codex, cursor, antigravity, unread/],
+      [classified("--kind", "product", "--effort", "extreme"), /--effort 'extreme' is not one of: low, medium, high, max, unread/],
+      [classified("--kind", "product", "--issue-kind", "bug"), /issue-kind/],
+      [classified("--kind", "product", "--tier", "opus"), /tier/],
     ];
     for (const [argv, pattern] of cases) {
       const result = await capture(argv);
@@ -236,27 +293,38 @@ describe("nen direct resolve -- exit codes", () => {
     }
   });
 
-  it("exits 1, not 2, for an invalid registry, an invalid taxonomy, or a malformed workflow", async () => {
-    const ok = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
+  it("passes a kind and role the verb has never heard of through verbatim", async () => {
+    const result = await capture(resolveArgs(consumerRepo(), "--lang", "swift", "--job", "implementation", "--kind", "unheard-of", "--role", "also-new", "--json"));
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out.join("\n")) as Json)["inputs"]).toMatchObject({ kind: "unheard-of", role: "also-new" });
+  });
+
+  it("exits 1, not 2, for an invalid registry, an invalid taxonomy, an unknown predicate shape, or a malformed workflow", async () => {
     const badRegistry = mutatedRegistry((v): void => {
       v["routing"]["implementation"]["feature"]["cells"]["*"]["winner"]["alias"] = "GHOST";
     });
-    const a = await capture(["direct", "resolve", "--registry", badRegistry, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), ...ok]);
+    const a = await capture(["direct", "resolve", "--registry", badRegistry, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), ...CLASSIFIED]);
     expect(a.code).toBe(1);
     expect(a.err.join("\n")).toMatch(/GHOST/);
     const badTaxonomy = mutatedTaxonomy((v): void => {
       delete v["axes"]["job"];
     });
-    expect((await capture(["direct", "resolve", "--registry", REAL_REGISTRY, "--taxonomy", badTaxonomy, "--repo", consumerRepo(), ...ok])).code).toBe(1);
+    expect((await capture(["direct", "resolve", "--registry", REAL_REGISTRY, "--taxonomy", badTaxonomy, "--repo", consumerRepo(), ...CLASSIFIED])).code).toBe(1);
+    const unknownShape = mutatedTaxonomy((v): void => {
+      v["domains"]["rule"][0]["when"] = { repoSize: ["big"] };
+    });
+    const shape = await capture(["direct", "resolve", "--registry", REAL_REGISTRY, "--taxonomy", unknownShape, "--repo", consumerRepo(), ...CLASSIFIED]);
+    expect(shape.code).toBe(1);
+    expect(shape.err.join("\n")).toMatch(/at domains\.rule\[0\]\.when\.repoSize/);
     const malformed = tmpRepo({ "nen/workflow.json": "{ not json" });
-    expect((await capture(resolveArgs(malformed, ...ok))).code).toBe(1);
+    expect((await capture(resolveArgs(malformed, ...CLASSIFIED))).code).toBe(1);
   });
 
   it("exits 1 when the registry cannot route what the taxonomy names", async () => {
     const registry = mutatedRegistry((v): void => {
       delete v["routing"]["implementation"];
     });
-    const result = await capture(["direct", "resolve", "--registry", registry, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), "--lang", "swift", "--job", "implementation", "--kind", "product"]);
+    const result = await capture(["direct", "resolve", "--registry", registry, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), ...CLASSIFIED]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/there is no job 'implementation'/);
   });
@@ -265,7 +333,7 @@ describe("nen direct resolve -- exit codes", () => {
     const taxonomy = mutatedTaxonomy((v): void => {
       delete v["axes"]["job"]["keys"].find((entry: Json): boolean => entry["key"] === "implementation")["weight"];
     });
-    const result = await capture(["direct", "resolve", "--registry", REAL_REGISTRY, "--taxonomy", taxonomy, "--repo", consumerRepo(), "--lang", "swift", "--job", "implementation", "--kind", "product"]);
+    const result = await capture(["direct", "resolve", "--registry", REAL_REGISTRY, "--taxonomy", taxonomy, "--repo", consumerRepo(), ...CLASSIFIED]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/job 'implementation' has no weight/);
   });
@@ -275,7 +343,7 @@ describe("nen direct resolve -- exit codes", () => {
       "r.json": JSON.parse(readFileSync(REAL_REGISTRY, "utf8")),
       "t.json": JSON.parse(readFileSync(REAL_TAXONOMY, "utf8")),
     });
-    const result = await capture(["direct", "resolve", "--registry", "r.json", "--taxonomy", "t.json", "--repo", repo, "--lang", "swift", "--job", "implementation", "--kind", "product"]);
+    const result = await capture(["direct", "resolve", "--registry", "r.json", "--taxonomy", "t.json", "--repo", repo, ...CLASSIFIED]);
     expect(result.code).toBe(0);
   });
 
@@ -290,38 +358,58 @@ describe("nen direct resolve -- exit codes", () => {
 });
 
 describe("nen direct resolve --record", () => {
-  const classification = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
-
-  it("writes the whole result plus recordedAt under .nen/direct/, creating the directories", async () => {
+  it("writes the whole result plus effortId and recordedAt under .nen/direct/, the id percent-encoded like nen usage record", async () => {
     const repo = consumerRepo();
-    const result = await capture(resolveArgs(repo, ...classification, "--record", "sonnet/kurapika/direct-verbs", "--json"));
+    const id = "NN-IS-#12";
+    const result = await capture(resolveArgs(repo, ...CLASSIFIED, "--record", id, "--json"));
     expect(result.code).toBe(0);
-    const file = join(repo, ".nen", "direct", "sonnet", "kurapika", "direct-verbs.json");
+    const file = join(repo, ".nen", "direct", `${encodeURIComponent(id)}.json`);
+    expect(file.endsWith("NN-IS-%2312.json")).toBe(true);
     expect(existsSync(file)).toBe(true);
     const written = JSON.parse(readFileSync(file, "utf8")) as Json;
     expect(written["recordedAt"]).toBe("2026-10-04T12:00:00.000Z");
+    expect(written["effortId"]).toBe(id);
     expect(written["contract"]).toBe("nen.direct.resolve/v0.1");
     expect(written["winner"]["alias"]).toBe("SEMANTIC_FRONTIER");
     expect(written["record"]).toBe(file);
-    expect((JSON.parse(result.out.join("\n")) as Json)["record"]).toBe(file);
+    const printed = JSON.parse(result.out.join("\n")) as Json;
+    expect(printed["record"]).toBe(file);
+    expect(printed["effortId"]).toBe(id);
     // never under the repository's declarations
     expect(readdirSync(repo).sort()).toEqual([".nen", "nen"]);
     expect(readdirSync(join(repo, "nen"))).toEqual(["workflow.json"]);
   });
 
+  it("encodes a slash or a colon in the id, so the file stays directly under .nen/direct/", async () => {
+    const repo = consumerRepo();
+    for (const id of ["sonnet/kurapika/direct-verbs", "inline-2026-10-04T12:00:00Z"]) {
+      expect((await capture(resolveArgs(repo, ...CLASSIFIED, "--record", id))).code).toBe(0);
+    }
+    expect(readdirSync(join(repo, ".nen", "direct")).sort()).toEqual([
+      "inline-2026-10-04T12%3A00%3A00Z.json",
+      "sonnet%2Fkurapika%2Fdirect-verbs.json",
+    ]);
+  });
+
   it("names the written path in the human output, last", async () => {
     const repo = consumerRepo();
-    const result = await capture(resolveArgs(repo, ...classification, "--record", "an-effort"));
+    const result = await capture(resolveArgs(repo, ...CLASSIFIED, "--record", "an-effort"));
     expect(result.out.at(-1)).toBe(`recorded ${join(repo, ".nen", "direct", "an-effort.json")}`);
   });
 
+  it("records an undirectable answer too", async () => {
+    const repo = consumerRepo();
+    const result = await capture(resolveArgs(repo, "--kind", "product", "--record", "inline-x"));
+    expect(result.out).toEqual(["undirectable: job axis empty", `recorded ${join(repo, ".nen", "direct", "inline-x.json")}`]);
+  });
+
   it("refuses a traversal at exit 2 and writes nothing, anywhere", async () => {
-    for (const name of ["..", "../escape", "a/../../escape", "/abs/path", "C:/abs", "a\\b", "a//b", "a/./b", "trailing/", ""]) {
+    for (const id of ["..", "../escape", "a/../../escape", "/abs/path", "C:/abs", "a\\b", ""]) {
       const repo = consumerRepo();
-      const result = await capture(resolveArgs(repo, ...classification, "--record", name));
-      expect(result.code, `--record '${name}'`).toBe(2);
+      const result = await capture(resolveArgs(repo, ...CLASSIFIED, "--record", id));
+      expect(result.code, `--record '${id}'`).toBe(2);
       expect(result.err.join("\n")).toMatch(/--record .* is refused/);
-      expect(existsSync(join(repo, ".nen")), `--record '${name}' wrote`).toBe(false);
+      expect(existsSync(join(repo, ".nen")), `--record '${id}' wrote`).toBe(false);
     }
   });
 
@@ -329,7 +417,7 @@ describe("nen direct resolve --record", () => {
     const bad = mutatedRegistry((v): void => {
       delete v["aliases"];
     });
-    const result = await capture(["direct", "resolve", "--registry", bad, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), ...classification, "--record", "../x"]);
+    const result = await capture(["direct", "resolve", "--registry", bad, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), ...CLASSIFIED, "--record", "../x"]);
     expect(result.code).toBe(2);
   });
 

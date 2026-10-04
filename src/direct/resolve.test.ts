@@ -8,13 +8,21 @@ import {
   compareSession,
   DirectError,
   deriveDomain,
+  evaluatePredicate,
   fallbackOrder,
   parseInputs,
   parseSession,
   renderEffort,
   resolveDirection,
+  UNDIRECTABLE_JOB,
+  UNREAD,
   UNSPELLED,
   type DirectInputs,
+  type DomainFacts,
+  type DomainVerdict,
+  type EffortVerdict,
+  type Resolution,
+  type ResolvedSide,
   type ResolveContext,
   type SessionValues,
 } from "./resolve.js";
@@ -28,7 +36,7 @@ import {
 } from "./fixtures/harness.js";
 
 const MODELS = { k1: { deep: "opus", frontier: "maxx", fast: "quick" }, k2: { deep: "exec" } };
-const NO_SESSION: SessionValues = { surface: null, tier: null, effort: null };
+const NO_SESSION: SessionValues = { surface: null, model: null, effort: null };
 
 function context(
   editRegistry: (value: Json) => void = (): void => {},
@@ -43,57 +51,155 @@ function context(
   };
 }
 
+/** A resolution known to be directable, so a test reads its winner without a null check at every line. */
+type Directed = Omit<Resolution, "winner" | "runnerUp" | "effort" | "domain"> & {
+  readonly winner: ResolvedSide;
+  readonly runnerUp: ResolvedSide;
+  readonly effort: EffortVerdict;
+  readonly domain: DomainVerdict;
+};
+
+function direct(c: ResolveContext, given: DirectInputs, session: SessionValues): Directed {
+  const result = resolveDirection(c, given, session);
+  if (result.winner === null || result.runnerUp === null || result.effort === null || result.domain === null) {
+    throw new Error(`expected a directable resolution, got ${result.undirectable ?? "nothing"}`);
+  }
+  return result as Directed;
+}
+
 const inputs = (over: Partial<DirectInputs> = {}): DirectInputs => ({
   langs: ["alpha"],
   jobs: ["plain"],
   kind: "product",
   role: null,
-  issueKind: "none",
+  labels: [],
   ...over,
 });
 
-describe("deriveDomain -- the five rules, each decided on the inputs", () => {
+describe("evaluatePredicate -- every shape the taxonomy admits", () => {
+  const { taxonomy } = context();
+  const facts = (over: Partial<DomainFacts> = {}): DomainFacts => ({ kind: "product", role: null, labels: [], jobs: ["plain"], ...over });
+  const holds = (when: Json | string, over: Partial<DomainFacts> = {}): boolean => {
+    const loaded = context((): void => {}, (v): void => {
+      v["domains"]["rule"] = [{ order: 1, domain: "dev", when }, { order: 2, domain: "dev", when: "otherwise" }];
+    });
+    const row = loaded.taxonomy.domains?.rule[0];
+    if (row === undefined) throw new Error("no row");
+    return evaluatePredicate(taxonomy, row.when, facts(over));
+  };
+
+  it("otherwise always matches", () => {
+    expect(holds("otherwise")).toBe(true);
+  });
+
+  it("repoKind and repoRole: the value is in the list, verbatim; an absent role matches nothing", () => {
+    expect(holds({ repoKind: ["process", "library"] }, { kind: "library" })).toBe(true);
+    expect(holds({ repoKind: ["process"] }, { kind: "product" })).toBe(false);
+    expect(holds({ repoRole: ["canon"] }, { role: "canon" })).toBe(true);
+    expect(holds({ repoRole: ["canon"] }, { role: "consumer" })).toBe(false);
+    expect(holds({ repoRole: ["canon"] }, { role: null })).toBe(false);
+    // verbatim: nothing here knows the vocabulary
+    expect(holds({ repoKind: ["whatever"] }, { kind: "whatever" })).toBe(true);
+  });
+
+  it("issueLabels.any: an exact label, or a '*:name' pattern under any namespace", () => {
+    expect(holds({ issueLabels: { any: ["bug"] } }, { labels: ["bug"] })).toBe(true);
+    expect(holds({ issueLabels: { any: ["bug"] } }, { labels: ["ns:bug"] })).toBe(false);
+    expect(holds({ issueLabels: { any: ["*:bug"] } }, { labels: ["ns:bug"] })).toBe(true);
+    expect(holds({ issueLabels: { any: ["*:bug"] } }, { labels: ["other:ns:bug"] })).toBe(false);
+    expect(holds({ issueLabels: { any: ["*:bug"] } }, { labels: ["bug"] })).toBe(false);
+    expect(holds({ issueLabels: { any: ["*:bug"] } }, { labels: [":bug", "ns:bugfix", "bug:ns"] })).toBe(false);
+    expect(holds({ issueLabels: { any: ["bug", "*:bug"] } }, { labels: ["x", "ns:bug"] })).toBe(true);
+    expect(holds({ issueLabels: { any: ["bug"] } }, { labels: [] })).toBe(false);
+  });
+
+  it("jobs.anyKey: the issue carries one of the keys", () => {
+    expect(holds({ jobs: { anyKey: ["port-only", "heavy"] } }, { jobs: ["plain", "heavy"] })).toBe(true);
+    expect(holds({ jobs: { anyKey: ["port-only"] } }, { jobs: ["plain"] })).toBe(false);
+    expect(holds({ jobs: { anyKey: ["port-only"] } }, { jobs: [] })).toBe(false);
+  });
+
+  it("jobs.nonEmpty + everyListsOnly: at least one job and each lists phases only under that domain", () => {
+    const only = { jobs: { nonEmpty: true, everyListsOnly: "ops" } };
+    expect(holds(only, { jobs: ["ops-a", "ops-b"] })).toBe(true);
+    expect(holds(only, { jobs: ["ops-a", "plain"] })).toBe(false);
+    expect(holds(only, { jobs: [] })).toBe(false);
+    // a job whose taxonomy entry states no phases cannot be maintenance-only
+    expect(holds(only, { jobs: ["ops-a", "bare"] })).toBe(false);
+  });
+
+  it("anyOf: any member matches, nested", () => {
+    const either = { anyOf: [{ repoKind: ["process"] }, { anyOf: [{ repoRole: ["canon"] }, { issueLabels: { any: ["x"] } }] }] };
+    expect(holds(either, { kind: "process" })).toBe(true);
+    expect(holds(either, { role: "canon" })).toBe(true);
+    expect(holds(either, { labels: ["x"] })).toBe(true);
+    expect(holds(either)).toBe(false);
+  });
+
+  it("an unknown predicate shape is refused when the taxonomy loads, by pointer (exit 1 in the verb)", () => {
+    for (const [when, pointer] of [
+      [{ repoSize: ["big"] }, "domains.rule[0].when.repoSize"],
+      [{ repoKind: ["a"], repoRole: ["b"] }, "domains.rule[0].when"],
+      [{ jobs: { nonEmpty: false } }, "domains.rule[0].when.jobs"],
+      [{ jobs: { nonEmpty: true, everyListsOnly: "nowhere" } }, "domains.rule[0].when.jobs.everyListsOnly"],
+      [{ jobs: { anyKey: ["no-such-job"] } }, "domains.rule[0].when.jobs.anyKey[0]"],
+      [{ anyOf: [{ bogus: 1 }] }, "domains.rule[0].when.anyOf[0].bogus"],
+      [{ repoKind: [] }, "domains.rule[0].when.repoKind"],
+      [["otherwise"], "domains.rule[0].when"],
+      ["sometimes", "domains.rule[0].when"],
+    ] as [Json | string, string][]) {
+      let caught: unknown = null;
+      try {
+        context((): void => {}, (v): void => {
+          v["domains"]["rule"][0]["when"] = when;
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { pointer?: string } | null)?.pointer, JSON.stringify(when)).toBe(pointer);
+    }
+  });
+});
+
+describe("deriveDomain -- the rows, first match wins", () => {
   const { taxonomy } = context();
   const domainOf = (over: Partial<DirectInputs>): [string, number] => {
     const verdict = deriveDomain(taxonomy, inputs(over));
     return [verdict.domain, verdict.rule];
   };
 
-  it("rule 1: the process kind, or the canon role, derives row 1's domain", () => {
+  it("row 1: the process kind, or the canon role", () => {
     expect(domainOf({ kind: "process" })).toEqual(["gov", 1]);
     expect(domainOf({ kind: "product", role: "canon" })).toEqual(["gov", 1]);
-    expect(deriveDomain(taxonomy, inputs({ role: "canon" })).because).toBe("the role is canon");
-    expect(deriveDomain(taxonomy, inputs({ kind: "process" })).because).toBe("the kind is process");
+    expect(deriveDomain(taxonomy, inputs({ role: "canon" })).because).toBe("process or canon");
   });
 
-  it("rule 1 outranks every later rule", () => {
-    expect(domainOf({ kind: "process", jobs: ["port-only"], issueKind: "bug" })).toEqual(["gov", 1]);
+  it("row 1 outranks every later row", () => {
+    expect(domainOf({ kind: "process", jobs: ["port-only"], labels: ["bug"] })).toEqual(["gov", 1]);
   });
 
-  it("rule 2: the library kind derives row 2's domain", () => {
+  it("row 2: the library kind", () => {
     expect(domainOf({ kind: "library" })).toEqual(["lib", 2]);
   });
 
-  it("rule 3: a carried job whose phases name only row 3's domain, the marker job", () => {
+  it("row 3: the marker job, which outranks the bug label", () => {
     expect(domainOf({ jobs: ["plain", "port-only"] })).toEqual(["port", 3]);
-    // the marker outranks the bug kind (rule 3 sits above rule 4)
-    expect(domainOf({ jobs: ["port-only"], issueKind: "bug" })).toEqual(["port", 3]);
-    expect(deriveDomain(taxonomy, inputs({ jobs: ["port-only"] })).because).toBe("job port-only lists only the port domain");
+    expect(domainOf({ jobs: ["port-only"], labels: ["bug"] })).toEqual(["port", 3]);
   });
 
-  it("rule 4: the bug kind derives row 4's domain; an enhancement does not", () => {
-    expect(domainOf({ issueKind: "bug" })).toEqual(["ops", 4]);
-    expect(domainOf({ issueKind: "enhancement" })).toEqual(["dev", 5]);
+  it("row 4: a bug label (plain or namespaced) derives maintenance; another label does not", () => {
+    expect(domainOf({ labels: ["bug"] })).toEqual(["ops", 4]);
+    expect(domainOf({ labels: ["ns:bug"] })).toEqual(["ops", 4]);
+    expect(domainOf({ labels: ["enhancement"] })).toEqual(["dev", 5]);
   });
 
-  it("rule 4: every job carried listing only row 4's domain derives it; one other job breaks that", () => {
+  it("row 4: every job listing only maintenance phases derives it; one other job breaks that", () => {
     expect(domainOf({ jobs: ["ops-a", "ops-b"] })).toEqual(["ops", 4]);
     expect(domainOf({ jobs: ["ops-a", "plain"] })).toEqual(["dev", 5]);
-    // a job whose taxonomy entry states no phases cannot count as maintenance-only
     expect(domainOf({ jobs: ["ops-a", "bare"] })).toEqual(["dev", 5]);
   });
 
-  it("rule 5: otherwise row 5's domain; a library-only job alone is not the library kind", () => {
+  it("row 5: otherwise; a library-only job alone is not the library kind", () => {
     expect(domainOf({})).toEqual(["dev", 5]);
     expect(domainOf({ jobs: ["lib-only"] })).toEqual(["dev", 5]);
   });
@@ -103,26 +209,31 @@ describe("deriveDomain -- the five rules, each decided on the inputs", () => {
     const rows = real.domains?.rule.map((row): string => row.domain) ?? [];
     const real_ = (over: Partial<DirectInputs>): string => deriveDomain(real, inputs({ jobs: ["implementation"], ...over })).domain;
     expect(real_({ kind: "process" })).toBe(rows[0]);
+    expect(real_({ role: "canon" })).toBe(rows[0]);
     expect(real_({ kind: "library" })).toBe(rows[1]);
     expect(real_({ jobs: ["parity"] })).toBe(rows[2]);
-    expect(real_({ issueKind: "bug" })).toBe(rows[3]);
-    expect(real_({})).toBe(rows[4]);
+    expect(real_({ labels: ["bankai:bug"] })).toBe(rows[3]);
     expect(real_({ jobs: ["ci-cd", "refactor"] })).toBe(rows[3]);
+    expect(real_({})).toBe(rows[4]);
   });
 
-  it("refuses a taxonomy with no domains block, or with other than five rows (a failure, not a typo)", () => {
+  it("refuses, as failures, a taxonomy with no domains block, no rows, or no matching row", () => {
     const none = context((): void => {}, (v): void => {
       delete v["domains"];
     });
     expect(() => deriveDomain(none.taxonomy, inputs())).toThrow(DirectError);
-    const four = context((): void => {}, (v): void => {
+    const empty = context((): void => {}, (v): void => {
+      v["domains"]["rule"] = [];
+    });
+    expect(() => deriveDomain(empty.taxonomy, inputs())).toThrow(/there are no rows/);
+    const open = context((): void => {}, (v): void => {
       v["domains"]["rule"].pop();
     });
-    expect(() => deriveDomain(four.taxonomy, inputs())).toThrow(/found 4 rows/);
+    expect(() => deriveDomain(open.taxonomy, inputs())).toThrow(/no row matched/);
   });
 });
 
-describe("fallbackOrder -- the taxonomy's sentence, derived domain first", () => {
+describe("fallbackOrder -- the taxonomy's sentence after its colon, derived domain first", () => {
   const { taxonomy } = context();
   const domains = taxonomy.domains;
   if (domains === null) throw new Error("fixture lost its domains block");
@@ -135,6 +246,11 @@ describe("fallbackOrder -- the taxonomy's sentence, derived domain first", () =>
   it("appends a domain the sentence does not name, in keys order, and matches whole words only", () => {
     const quiet = { ...domains, fallback: "try ops first, then devices" };
     expect(fallbackOrder(quiet, "lib")).toEqual(["lib", "ops", "dev", "port", "gov"]);
+  });
+
+  it("reads only what follows the colon: a domain named in the clause before it does not set the order", () => {
+    const clause = { ...domains, fallback: "port work routes on gov first, in this order: the derived domain, lib, ops." };
+    expect(fallbackOrder(clause, "dev")).toEqual(["dev", "lib", "ops", "port", "gov"]);
   });
 });
 
@@ -154,6 +270,7 @@ describe("collectPairs -- one cell per (job, language)", () => {
     const c = context();
     const result = collectPairs(c.registry, c.taxonomy, inputs({ jobs: ["lib-only", "plain"] }), "dev");
     expect(result.fallbacks).toEqual(["fallback: lib-only has no dev phase; routed on lib"]);
+    expect(result.pairs.map((pair): string | null => pair.fallbackFrom)).toEqual(["dev", null]);
     expect(result.pairs.map((pair): [string, string, string] => [pair.job, pair.domain, pair.phase])).toEqual([
       ["lib-only", "lib", "L.1"],
       ["plain", "dev", "D.1"],
@@ -171,6 +288,15 @@ describe("collectPairs -- one cell per (job, language)", () => {
       delete v["routing"]["plain"];
     });
     expect(() => collectPairs(c.registry, c.taxonomy, inputs(), "dev")).toThrow(/there is no job 'plain'/);
+  });
+
+  it("reads the shared cell for every job when no language is given", () => {
+    const c = context();
+    const { pairs } = collectPairs(c.registry, c.taxonomy, inputs({ langs: [], jobs: ["plain", "heavy"] }), "dev");
+    expect(pairs.map((pair): [string, string, string] => [pair.job, pair.lang, pair.cell])).toEqual([
+      ["plain", "*", "*"],
+      ["heavy", "*", "*"],
+    ]);
   });
 
   it("reads the shared cell for a prose language in the real registry", () => {
@@ -250,34 +376,36 @@ describe("aggregate -- the winner and the runner-up", () => {
 
 describe("resolveDirection -- each side resolved", () => {
   it("spells the surface alias from the consumer's models block, and the restart line with it", () => {
-    const result = resolveDirection(context(), inputs(), NO_SESSION);
+    const result = direct(context(), inputs(), NO_SESSION);
     expect(result.winner).toMatchObject({ alias: "A_TOP", surface: "s1", tier: "deep", surfaceAlias: "opus", restart: "s1 --model opus", effortControl: "/effort <level>" });
     expect(result.runnerUp).toMatchObject({ alias: "A_FAST", surfaceAlias: "quick" });
   });
 
   it("reports 'unspelled' when the workflow has no models block, or no such tier, and keeps the placeholder", () => {
-    const none = resolveDirection(context((): void => {}, (): void => {}, {}), inputs(), NO_SESSION);
+    const none = direct(context((): void => {}, (): void => {}, {}), inputs(), NO_SESSION);
     expect(none.winner.surfaceAlias).toBe(UNSPELLED);
     expect(none.winner.restart).toBe("s1 --model <alias>");
-    const noTier = resolveDirection(context((): void => {}, (): void => {}, { k1: { fast: "quick" } }), inputs(), NO_SESSION);
+    const noTier = direct(context((): void => {}, (): void => {}, { k1: { fast: "quick" } }), inputs(), NO_SESSION);
     expect(noTier.winner.surfaceAlias).toBe(UNSPELLED);
     expect(noTier.runnerUp.surfaceAlias).toBe("quick");
   });
 
-  it("lets the cell's surface override the alias's default", () => {
+  it("reads the surface from the alias, and fills the restart's <alias> and <level> from the workflow and the effort map", () => {
     const c = context((v): void => {
-      setCell(v, "plain", "dev", "*", side("A_TOP", "s2"));
+      setCell(v, "plain", "dev", "*", side("A_EXEC", "s2"));
     });
-    const winner = resolveDirection(c, inputs(), NO_SESSION).winner;
-    expect(winner).toMatchObject({ surface: "s2", surfaceAlias: "exec", restart: "s2 -m exec", effortControl: "reasoning <level>" });
+    const result = direct(c, inputs(), NO_SESSION);
+    expect(result.winner).toMatchObject({ surface: "s2", surfaceAlias: "exec", restart: "s2 -m exec -c level=lo", effortControl: "reasoning <level>" });
+    // the same level through the other surface's own map
+    expect(result.runnerUp?.restart).toBe("s1 --model quick");
   });
 
-  it("gives a reviewer runner-up no surface, no spelling and no restart", () => {
+  it("resolves a reviewer runner-up to its stand-in, always an actionable alias with a surface", () => {
     const c = context((v): void => {
-      setCell(v, "plain", "dev", "*", side("A_TOP", "s1"), side("R_BOT", null));
+      setCell(v, "plain", "dev", "*", side("A_TOP", "s1"), side("R_BOT", null, { also: "A_EXEC" }));
     });
-    const runnerUp = resolveDirection(c, inputs(), NO_SESSION).runnerUp;
-    expect(runnerUp).toMatchObject({ alias: "R_BOT", reviewer: true, surface: null, surfaceAlias: null, restart: null, effortControl: null });
+    const runnerUp = direct(c, inputs(), NO_SESSION).runnerUp;
+    expect(runnerUp).toMatchObject({ alias: "A_EXEC", reviewer: false, surface: "s2", surfaceAlias: "exec" });
   });
 
   it("builds the interactive list: surface, each language's tool, the cell's, deduplicated, nulls dropped", () => {
@@ -285,13 +413,13 @@ describe("resolveDirection -- each side resolved", () => {
       setCell(v, "plain", "dev", "*", side("A_TOP", "s1", { interactive: "the alpha IDE" }));
       setCell(v, "heavy", "dev", "*", side("A_TOP", "s1", { interactive: "a cell tool" }));
     });
-    const result = resolveDirection(c, inputs({ langs: ["alpha", "delta", "beta"], jobs: ["plain", "heavy"] }), NO_SESSION);
+    const result = direct(c, inputs({ langs: ["alpha", "delta", "beta"], jobs: ["plain", "heavy"] }), NO_SESSION);
     // delta shares alpha's tool; the first cell's tool repeats alpha's; the second cell adds one
     expect(result.winner.interactive).toEqual(["the s1 desktop", "the alpha IDE", "the beta IDE", "a cell tool"]);
   });
 
   it("quotes the dated snapshot and the provider's live-lookup sources, or null when there are none", () => {
-    const result = resolveDirection(context(), inputs(), NO_SESSION);
+    const result = direct(context(), inputs(), NO_SESSION);
     expect(result.winner.snapshot).toEqual({ asOf: "2026-01-02", primary: "Top 1", modelId: "top-1", fallback: "Max 1" });
     expect(result.winner.liveLookup).toEqual({ cli: "p1 models", docs: ["https://p1.example/models"] });
     expect(result.runnerUp.snapshot).toBeNull();
@@ -300,7 +428,7 @@ describe("resolveDirection -- each side resolved", () => {
 
 describe("scoreEffort -- the rule, band by band", () => {
   const effortOf = (over: Partial<DirectInputs>, c: ResolveContext = context()): [number, string] => {
-    const effort = resolveDirection(c, inputs(over), NO_SESSION).effort;
+    const effort = direct(c, inputs(over), NO_SESSION).effort;
     return [effort.score, effort.level];
   };
 
@@ -328,89 +456,130 @@ describe("scoreEffort -- the rule, band by band", () => {
   it("adds one when the derived domain is the one the registry's rule names, read from the data", () => {
     expect(effortOf({ jobs: ["plain"], kind: "process" })).toEqual([3, "medium"]);
     expect(effortOf({ jobs: ["plain"], role: "canon" })).toEqual([3, "medium"]);
-    // a rule naming another domain adds on that one instead
+    // a rule naming its own domain beside the key adds on that one instead
     const moved = context((v): void => {
-      v["effort"]["rule"]["plusOne"][2] = { when: "the derived domain is lib", key: "lib" };
+      v["effort"]["rule"]["plusOne"][2] = { when: "the derived domain is lib", key: "libAdd", domain: "lib" };
     });
     expect(effortOf({ jobs: ["plain"], kind: "process" }, moved)).toEqual([2, "low"]);
     expect(effortOf({ jobs: ["lib-only"], kind: "library" }, moved)).toEqual([3, "medium"]);
   });
 
   it("reports the derivation as the sum's terms, then the one-line rendering", () => {
-    const effort = resolveDirection(context(), inputs({ jobs: ["heavy", "light", "plain"], kind: "process" }), NO_SESSION).effort;
+    const effort = direct(context(), inputs({ jobs: ["heavy", "light", "plain"], kind: "process" }), NO_SESSION).effort;
     expect(effort.derivation).toEqual(["weight 4", "manyJobs", "gov"]);
     expect(renderEffort(effort)).toBe("weight 4 + manyJobs + gov = 6 -> max");
-    expect(renderEffort(resolveDirection(context(), inputs({ jobs: ["light"] }), NO_SESSION).effort)).toBe("weight 1 = 1 -> low");
+    expect(renderEffort(direct(context(), inputs({ jobs: ["light"] }), NO_SESSION).effort)).toBe("weight 1 = 1 -> low");
   });
 
   it("maps the level through the winner surface's own control", () => {
-    const onS1 = resolveDirection(context(), inputs({ jobs: ["heavy"], langs: ["alpha", "beta"] }), NO_SESSION);
+    const onS1 = direct(context(), inputs({ jobs: ["heavy"], langs: ["alpha", "beta"] }), NO_SESSION);
     expect(onS1.effort.surfaceEffort).toBe("max");
     const c = context((v): void => {
       setCell(v, "heavy", "dev", "*", side("A_EXEC", "s2"));
     });
-    const onS2 = resolveDirection(c, inputs({ jobs: ["heavy"], langs: ["alpha", "beta"] }), NO_SESSION);
+    const onS2 = direct(c, inputs({ jobs: ["heavy"], langs: ["alpha", "beta"] }), NO_SESSION);
     expect(onS2.effort.surfaceEffort).toBe("xhi");
   });
 
   it("refuses, as failures, a job with no weight and a domain add the taxonomy does not know", () => {
-    expect(() => resolveDirection(context(), inputs({ jobs: ["bare"] }), NO_SESSION)).toThrow(/job 'bare' has no weight/);
+    expect(() => direct(context(), inputs({ jobs: ["bare"] }), NO_SESSION)).toThrow(/job 'bare' has no weight/);
     const typo = context((v): void => {
-      v["effort"]["rule"]["plusOne"][2] = { when: "x", key: "nowhere" };
+      v["effort"]["rule"]["plusOne"][2] = { when: "x", key: "x", domain: "nowhere" };
     });
-    expect(() => resolveDirection(typo, inputs(), NO_SESSION)).toThrow(/neither a count rule nor one of the taxonomy's domains/);
+    expect(() => direct(typo, inputs(), NO_SESSION)).toThrow(/targets 'nowhere', which is not one of the taxonomy's domains/);
   });
 });
 
-describe("compareSession -- a mismatch is an answer", () => {
-  const winner = resolveDirection(context(), inputs(), NO_SESSION).winner;
+describe("undirectable and empty axes -- answers, not errors", () => {
+  it("an empty job axis is undirectable: nulls everywhere, nothing asked of the registry", () => {
+    const result = resolveDirection(context(), inputs({ jobs: [] }), { surface: "s1", model: "opus", effort: "max" });
+    expect(result).toMatchObject({ undirectable: UNDIRECTABLE_JOB, domain: null, pairs: [], winner: null, runnerUp: null, effort: null, mismatch: null });
+    expect(UNDIRECTABLE_JOB).toBe("job axis empty");
+  });
+
+  it("an empty language axis reads the shared cell for every job, and counts no code language", () => {
+    const result = direct(context(), inputs({ langs: [], jobs: ["heavy"] }), NO_SESSION);
+    expect(result.pairs.map((pair): string => pair.cell)).toEqual(["*"]);
+    expect(result.effort).toMatchObject({ score: 4, level: "high" });
+  });
+});
+
+describe("compareSession -- a mismatch is an answer, compared in the session's own terms", () => {
+  const c = context();
+  const winner = direct(c, inputs(), NO_SESSION).winner;
+  if (winner === null) throw new Error("fixture lost its winner");
+  const compare = (session: Partial<SessionValues>, level = "low"): ReturnType<typeof compareSession> =>
+    compareSession(c.registry, { surface: null, model: null, effort: null, ...session }, winner, level);
 
   it("is null when the session gave nothing to compare", () => {
-    expect(compareSession(NO_SESSION, winner, "low")).toBeNull();
+    expect(compare({})).toBeNull();
   });
 
   it("matches when every given value equals the recommendation, comparing only what was given", () => {
-    expect(compareSession({ surface: "s1", tier: "opus", effort: "low" }, winner, "low")).toEqual({
-      compared: ["surface", "tier", "effort"],
+    expect(compare({ surface: "s1", model: "opus", effort: "low" })).toEqual({
       match: true,
-      differences: [],
+      compares: [
+        { field: "surface", session: "s1", recommended: "s1", verdict: "match" },
+        { field: "model", session: "opus", recommended: "opus", verdict: "match" },
+        { field: "effort", session: "low", recommended: "low", verdict: "match" },
+      ],
     });
-    expect(compareSession({ surface: "s1", tier: null, effort: null }, winner, "low")?.compared).toEqual(["surface"]);
+    expect(compare({ surface: "s1" })?.compares.map((entry): string => entry.field)).toEqual(["surface"]);
   });
 
-  it("reports each differing field with the session's value and the recommended one", () => {
-    expect(compareSession({ surface: "s2", tier: null, effort: null }, winner, "low")?.differences).toEqual([
-      { field: "surface", session: "s2", recommended: "s1" },
-    ]);
-    expect(compareSession({ surface: null, tier: "quick", effort: null }, winner, "low")?.differences).toEqual([
-      { field: "tier", session: "quick", recommended: "opus" },
-    ]);
-    const effort = compareSession({ surface: null, tier: null, effort: "max" }, winner, "low");
+  it("reports each differing field, and the model by alias against the workflow's spelling", () => {
+    expect(compare({ surface: "s2" })?.compares[0]).toEqual({ field: "surface", session: "s2", recommended: "s1", verdict: "mismatch" });
+    expect(compare({ model: "quick" })?.compares[0]).toEqual({ field: "model", session: "quick", recommended: "opus", verdict: "mismatch" });
+    const effort = compare({ effort: "max" });
     expect(effort?.match).toBe(false);
-    expect(effort?.differences).toEqual([{ field: "effort", session: "max", recommended: "low" }]);
+    expect(effort?.compares[0]).toEqual({ field: "effort", session: "max", recommended: "low", verdict: "mismatch" });
   });
 
-  it("reports all three at once, and flows through resolveDirection without refusing", () => {
-    const result = resolveDirection(context(), inputs(), { surface: "s2", tier: "x", effort: "max" });
-    expect(result.mismatch?.differences.map((difference): string => difference.field)).toEqual(["surface", "tier", "effort"]);
+  it("compares effort in DIAL space: a collapsed top matches a session at the dial below it", () => {
+    // s3 maps max -> high, so a session at high on s3 matches a recommended max
+    expect(compare({ surface: "s3", effort: "high" }, "max")?.compares.at(-1)).toMatchObject({ recommended: "high", verdict: "match" });
+    expect(compare({ surface: "s3", effort: "max" }, "high")?.compares.at(-1)).toMatchObject({ verdict: "match" });
+    expect(compare({ surface: "s3", effort: "medium" }, "max")?.compares.at(-1)).toMatchObject({ verdict: "mismatch" });
+    // on a surface with a dial for every level, max stays distinct from high
+    expect(compare({ surface: "s1", effort: "high" }, "max")?.compares.at(-1)).toMatchObject({ verdict: "mismatch" });
+    // the dial is read through the session's surface when it gave one
+    expect(compare({ surface: "s2", effort: "max" }, "max")?.compares.at(-1)).toMatchObject({ recommended: "xhi", verdict: "match" });
   });
 
-  it("compares a tier against 'unspelled' when the workflow does not spell the alias", () => {
-    const result = resolveDirection(context((): void => {}, (): void => {}, {}), inputs(), { surface: null, tier: "opus", effort: null });
-    expect(result.mismatch?.differences).toEqual([{ field: "tier", session: "opus", recommended: UNSPELLED }]);
+  it("reads the winner's surface for the dial when the session did not say which it is on", () => {
+    expect(compare({ effort: "low" }, "low")?.compares[0]).toMatchObject({ recommended: "low", verdict: "match" });
+    expect(compare({ surface: UNREAD, effort: "low" }, "low")?.compares.at(-1)).toMatchObject({ verdict: "match" });
+  });
+
+  it("marks an unread value unread, never a mismatch, and keeps comparing the rest", () => {
+    const result = compare({ surface: UNREAD, model: "quick", effort: UNREAD });
+    expect(result?.compares.map((entry): string => entry.verdict)).toEqual(["unread", "mismatch", "unread"]);
+    expect(result?.match).toBe(false);
+    const allUnread = compare({ surface: UNREAD, model: UNREAD, effort: UNREAD });
+    expect(allUnread?.match).toBe(true);
+    expect(allUnread?.compares.every((entry): boolean => entry.verdict === "unread")).toBe(true);
+  });
+
+  it("flows through resolveDirection without refusing, and compares a model against 'unspelled' when the workflow does not spell it", () => {
+    const result = direct(context(), inputs(), { surface: "s2", model: "x", effort: "max" });
+    expect(result.mismatch?.compares.map((entry): string => entry.field)).toEqual(["surface", "model", "effort"]);
+    const bare = direct(context((): void => {}, (): void => {}, {}), inputs(), { surface: null, model: "opus", effort: null });
+    expect(bare.mismatch?.compares).toEqual([{ field: "model", session: "opus", recommended: UNSPELLED, verdict: "mismatch" }]);
   });
 });
 
 describe("parseInputs and parseSession -- usage refusals name the valid set", () => {
   const { registry, taxonomy } = context();
-  const raw = { langs: ["alpha"], jobs: ["plain"], kind: "product", role: null, issueKind: null };
+  const raw = { langs: ["alpha"], jobs: ["plain"], kind: "product", role: null, labels: [] };
 
-  it("accepts a valid classification and defaults the issue kind to none", () => {
-    expect(parseInputs(taxonomy, raw)).toEqual({ langs: ["alpha"], jobs: ["plain"], kind: "product", role: null, issueKind: "none" });
+  it("accepts a valid classification, passing kind and role through verbatim", () => {
+    expect(parseInputs(taxonomy, raw)).toEqual({ langs: ["alpha"], jobs: ["plain"], kind: "product", role: null, labels: [] });
+    expect(parseInputs(taxonomy, { ...raw, kind: "anything", role: "else", labels: ["a", "a", "b"] })).toMatchObject({ kind: "anything", role: "else", labels: ["a", "b"] });
   });
 
-  it("drops a repeated key", () => {
+  it("drops a repeated key, and accepts empty axes", () => {
     expect(parseInputs(taxonomy, { ...raw, langs: ["alpha", "alpha"] }).langs).toEqual(["alpha"]);
+    expect(parseInputs(taxonomy, { ...raw, langs: [], jobs: [] })).toMatchObject({ langs: [], jobs: [] });
   });
 
   it("refuses an unknown language or job key, naming the valid keys", () => {
@@ -418,17 +587,15 @@ describe("parseInputs and parseSession -- usage refusals name the valid set", ()
     expect(() => parseInputs(taxonomy, { ...raw, jobs: ["nope", "plain"] })).toThrow(/unknown job key 'nope'. Valid: plain, heavy/);
   });
 
-  it("refuses an empty list, an unknown kind, role or issue kind", () => {
-    expect(() => parseInputs(taxonomy, { ...raw, langs: [] })).toThrow(VerbUsageError);
-    expect(() => parseInputs(taxonomy, { ...raw, jobs: [] })).toThrow(VerbUsageError);
-    expect(() => parseInputs(taxonomy, { ...raw, kind: "service" })).toThrow(/--kind 'service' is not one of: product, process, library, unknown/);
-    expect(() => parseInputs(taxonomy, { ...raw, role: "owner" })).toThrow(/--role 'owner' is not one of: canon, consumer, unregistered/);
-    expect(() => parseInputs(taxonomy, { ...raw, issueKind: "chore" })).toThrow(/--issue-kind 'chore' is not one of: bug, enhancement, none/);
+  it("refuses only an empty kind or role", () => {
+    expect(() => parseInputs(taxonomy, { ...raw, kind: " " })).toThrow(VerbUsageError);
+    expect(() => parseInputs(taxonomy, { ...raw, role: "" })).toThrow(VerbUsageError);
   });
 
-  it("refuses a surface the registry lacks and an effort outside its levels", () => {
-    expect(() => parseSession(registry, { surface: "nowhere", tier: null, effort: null })).toThrow(/--surface 'nowhere' is not one of: s1, s2/);
-    expect(() => parseSession(registry, { surface: null, tier: null, effort: "extreme" })).toThrow(/--effort 'extreme' is not one of: low, medium, high, max/);
-    expect(parseSession(registry, { surface: "s1", tier: "anything", effort: "max" })).toEqual({ surface: "s1", tier: "anything", effort: "max" });
+  it("refuses a surface the registry lacks and an effort outside its levels, both accepting unread", () => {
+    expect(() => parseSession(registry, { surface: "nowhere", model: null, effort: null })).toThrow(/--surface 'nowhere' is not one of: s1, s3, s2, unread/);
+    expect(() => parseSession(registry, { surface: null, model: null, effort: "extreme" })).toThrow(/--effort 'extreme' is not one of: low, medium, high, max, unread/);
+    expect(parseSession(registry, { surface: UNREAD, model: UNREAD, effort: UNREAD })).toEqual({ surface: UNREAD, model: UNREAD, effort: UNREAD });
+    expect(parseSession(registry, { surface: "s1", model: "anything", effort: "max" })).toEqual({ surface: "s1", model: "anything", effort: "max" });
   });
 });

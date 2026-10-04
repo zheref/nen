@@ -97,6 +97,59 @@ describe("parseDirectRegistry -- every refusal names its pointer", () => {
     ).toBe("aliases.SEMANTIC_FRONTIER.surface");
   });
 
+  it("refuses a cell whose surface is not its alias's surface, in either direction", () => {
+    const moved = refusal((v): void => {
+      v["routing"]["discovery"]["feature"]["cells"]["*"]["winner"]["surface"] = "codex";
+    });
+    expect(moved.pointer).toBe("routing.discovery.feature.cells.*.winner.surface");
+    expect(moved.message).toMatch(/must equal its alias's surface/);
+    expect(
+      refusal((v): void => {
+        v["routing"]["discovery"]["feature"]["cells"]["*"]["runnerUp"]["surface"] = null;
+      }).pointer,
+    ).toBe("routing.discovery.feature.cells.*.runnerUp.surface");
+  });
+
+  it("refuses a reviewer runner-up with no stand-in, and a stand-in that is itself a reviewer", () => {
+    expect(
+      refusal((v): void => {
+        delete v["routing"]["review"]["maintenance"]["cells"]["*"]["runnerUp"]["also"];
+      }).pointer,
+    ).toBe("routing.review.maintenance.cells.*.runnerUp.also");
+    expect(
+      refusal((v): void => {
+        v["routing"]["review"]["maintenance"]["cells"]["*"]["runnerUp"]["also"] = "PR_SECURITY_REVIEW";
+      }).message,
+    ).toMatch(/names reviewer alias/);
+  });
+
+  it("refuses a domain add that names a domain on a count add", () => {
+    expect(
+      refusal((v): void => {
+        v["effort"]["rule"]["plusOne"][0]["domain"] = "x";
+      }).pointer,
+    ).toBe("effort.rule.plusOne[0].domain");
+  });
+
+  it("skips every $-prefixed key it walks: a metadata key is never an alias, surface, domain or row", () => {
+    const value = readJson(REAL_REGISTRY);
+    value["aliases"]["$note"] = "ignored";
+    value["surfaces"]["$note"] = "ignored";
+    value["effort"]["surfaceMap"]["$note"] = "ignored";
+    value["routing"]["$note"] = "ignored";
+    value["routing"]["discovery"]["$note"] = "ignored";
+    value["routing"]["discovery"]["feature"]["cells"]["$note"] = "ignored";
+    value["nativeInteractive"]["$note"] = "ignored";
+    value["phases"]["$note"] = "ignored";
+    value["effort"]["rule"]["bands"]["$note"] = "ignored";
+    const registry = parseDirectRegistry("/x/registry.json", value);
+    expect(Object.keys(registry.surfaces)).toHaveLength(4);
+    expect(Object.keys(registry.aliases)).toHaveLength(10);
+    expect(Object.keys(registry.effort.surfaceMap)).toHaveLength(4);
+    expect(Object.keys(registry.routing)).toHaveLength(39);
+    expect(Object.keys(registry.routing["discovery"]?.["feature"]?.cells ?? {})).toEqual(["*"]);
+  });
+
   it("refuses a surface whose modelsKey is not a string", () => {
     const error = refusal((v): void => {
       v["surfaces"]["codex"]["modelsKey"] = 7;

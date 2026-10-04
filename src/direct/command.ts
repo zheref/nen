@@ -33,9 +33,9 @@ const USAGE = `nen direct -- the mechanical half of choosing a model for an issu
 usage:
   nen direct registry --registry <path> [--repo <path>] [--json]
   nen direct resolve  --registry <path> --taxonomy <path> --repo <path>
-                      --lang <a,b> --job <c,d> --kind <product|process|library|unknown>
-                      [--role <canon|consumer|unregistered>] [--issue-kind <bug|enhancement|none>]
-                      [--surface <s>] [--tier <alias>] [--effort <level>] [--record <effort-branch>] [--json]
+                      --kind <kind> [--role <role>] [--labels <a,b>] --lang <a,b> --job <c,d>
+                      [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>]
+                      [--record <effort-id>] [--json]
 
 The registry file (--registry) names ALIASES (roles such as the frontier author or
 the execution model), the surfaces they run on, a routing table per (job, domain,
@@ -50,59 +50,71 @@ resolves against --repo's root.
       Validates the registry file and prints: the snapshot date, one line per alias
       (provider, family, surface/tier, the snapshot quote), the surfaces table and the
       live-lookup sources per provider. Exit 0 valid, 1 invalid (the refusal names the
-      pointer: an alias or surface a routing cell names that is not declared, bands
-      that do not partition the scores, a precedence that does not rank every alias,
-      a snapshot date that is not a date).
+      pointer: an alias or surface a routing cell names that is not declared, a cell
+      whose surface is not its alias's, bands that do not partition the scores, a
+      precedence that does not rank every alias, a snapshot date that is not a date).
 
   nen direct resolve
       Resolves one classification, step by step, each step reported:
-        domain     the taxonomy's five ordered rules, decided on --kind, --role and
-                   --issue-kind and on the jobs' phases (the rows' prose is reported,
-                   never parsed);
+        domain     the taxonomy's ordered rows, each a STRUCTURED predicate (otherwise,
+                   anyOf, repoKind, repoRole, issueLabels with '*:name' matching any
+                   namespace, jobs.anyKey, jobs.nonEmpty + everyListsOnly), evaluated in
+                   order, the first match winning. The facts are the flags: --kind and
+                   --role verbatim as 'nen repo classify --json' printed them (never
+                   re-derived from --repo), --labels the issue's labels, --job the job
+                   keys. An unknown predicate shape is refused when the taxonomy loads
+                   (exit 1, by pointer);
         cells      for every (job, language) pair the registry's cell, the language's
                    own or the shared one; a job with no phase in the domain is routed
-                   on the first domain it lists, in the taxonomy's fallback order, and
+                   on the first domain it lists, in the order the taxonomy's fallback
+                   sentence names them after its colon (the derived domain first), and
                    the substitution is named;
         aggregate  the alias that wins the most pairs (a tie goes to the registry's
                    precedence); the runner-up is the next most frequent alias, else
                    the winning pairs' most frequent runner-up. A reviewer alias is
-                   never the winner: its cell's stand-in is used, or the pair is
+                   never the winner: a pair it wins counts for its stand-in, or is
                    skipped and the skip is reported;
-        resolve    the winner's surface (the cell's wins over the alias's default),
-                   the model alias nen/workflow.json spells for that surface and tier
-                   ('unspelled' when it does not), the restart line, the effort
-                   control, the interactive tools, the dated snapshot quote and the
-                   live-lookup sources;
+        resolve    the winner's surface (its alias's), the model alias nen/workflow.json
+                   spells for that surface and tier ('unspelled' when it does not), the
+                   restart line (<alias> from the workflow, <level> from the effort map),
+                   the effort control, the interactive tools, the dated snapshot quote
+                   and the live-lookup sources;
         effort     score = the highest job weight + 1 for each add the registry's rule
                    states that holds (many jobs, many CODE languages -- a language
                    counts only when its taxonomy entry's code flag is not false -- and
                    the derived domain a rule names), banded into a level and mapped to
                    the winner surface's own control;
-        mismatch   only when --surface, --tier or --effort is given: each given value
-                   is compared with the winner's surface, surface alias and level.
-      A mismatch is an ANSWER and exits 0; it never blocks (the skill asks once).
-      --record <effort-branch> writes the whole result plus recordedAt to
-      .nen/direct/<effort-branch>.json under --repo (never under nen/); a name that is
-      absolute, has a backslash, or an empty, '.' or '..' segment is refused at exit 2.
+        mismatch   only for the flags given: --surface by name, --model by alias against
+                   the winner's spelled alias, --effort in DIAL space (both levels mapped
+                   through the session surface's effort map, so a collapsed top equals
+                   the dial below it). The literal 'unread' on a flag marks that compare
+                   unread: reported, never a mismatch.
+      An EMPTY --job (or none) is the answer 'undirectable: job axis empty' (winner,
+      runner-up, effort and mismatch null; exit 0); an empty --lang reads the shared
+      cell for every job. A mismatch is an ANSWER and exits 0; it never blocks.
+      --record <effort-id> writes the whole result plus effortId and recordedAt to
+      .nen/direct/<id>.json under --repo (never under nen/), the id percent-encoded as
+      'nen usage record' encodes --effort; an id that is empty, absolute, has a
+      backslash or a '..' segment is refused at exit 2.
       Exit 0 every resolution, 1 an invalid registry or taxonomy, an unreadable workflow
       or a registry that cannot route what the taxonomy names, 2 a missing flag, an
-      unknown language or job key, kind, role, issue kind, surface or level (each names
-      the valid set), or a refused --record.
+      unknown language or job key, a surface or level the registry lacks (each names the
+      valid set), or a refused --record.
 
   --registry <path>    The model-direction registry file. Required.
   --taxonomy <path>    The classification taxonomy file. Required by resolve.
   --repo <path>        The checkout whose nen/workflow.json spells the aliases.
                        Required by resolve; optional on registry, where it only
                        anchors a relative --registry (default: the current directory).
-  --lang <a,b>         The language keys the issue carries (comma list).
-  --job <c,d>          The job keys the issue carries (comma list).
-  --kind <k>           The repository kind, as 'nen repo classify' reports it.
-  --role <r>           The repository role, as 'nen repo classify' reports it.
-  --issue-kind <k>     The issue's kind: bug, enhancement or none (default none).
-  --surface <s>        The surface the running session is on.
-  --tier <alias>       The model alias the running session is on.
-  --effort <level>     The effort level the running session is at.
-  --record <name>      File the result under .nen/direct/<name>.json.
+  --kind <kind>        The repository kind, verbatim from 'nen repo classify --json'.
+  --role <role>        The repository role, verbatim from 'nen repo classify --json'.
+  --labels <a,b>       The issue's labels, as GitHub reports them.
+  --lang <a,b>         The language keys the issue carries (comma list; may be empty).
+  --job <c,d>          The job keys the issue carries (comma list; empty is undirectable).
+  --surface <s>        The surface the running session is on, or unread.
+  --model <alias>      The model alias the running session is on, or unread.
+  --effort <level>     The effort level the running session is at, or unread.
+  --record <id>        File the result under .nen/direct/<encoded id>.json.
   --json               Every verb prints one document with a
                        "contract": "nen.direct.<verb>/v0.1" key.`;
 
@@ -112,7 +124,7 @@ export const directCommand: Command = {
   summary: "Choose the model, surface and effort for an issue's classification: validate the registry, resolve a recommendation.",
   usage: USAGE,
   flags: {
-    values: ["registry", "taxonomy", "lang", "job", "kind", "role", "issue-kind", "surface", "tier", "effort", "record"],
+    values: ["registry", "taxonomy", "lang", "job", "kind", "role", "labels", "surface", "model", "effort", "record"],
     booleans: [],
   },
   run(context: CommandContext): number {

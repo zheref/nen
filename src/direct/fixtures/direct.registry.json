@@ -143,6 +143,7 @@
     }
   },
   "surfaces": {
+    "$comment": "Hatsu's four actionable surfaces. A `restart` line's placeholders are filled ONLY from the consumer's nen/workflow.json -> models.<modelsKey>.<tier> (<alias>) and from effort.surfaceMap (<level>) -- never from a fetched page and never from the snapshot; the live-read version is quoted beside the line, never inside it (Feitan, 2026-10-04). `interactive` is the surface's own conversational twin.",
     "claude-code": {
       "label": "Claude Code",
       "modelsKey": "claude",
@@ -154,7 +155,7 @@
     "codex": {
       "label": "Codex",
       "modelsKey": "codex",
-      "restart": "codex -m <model id> -c model_reasoning_effort=<level>",
+      "restart": "codex -m <alias> -c model_reasoning_effort=<level>",
       "interactive": "ChatGPT's Codex web app or the Codex IDE extension, the same model family",
       "effortControl": "model_reasoning_effort low|medium|high|xhigh",
       "lookup": "codex debug models"
@@ -228,7 +229,7 @@
       "max"
     ],
     "rule": {
-      "$comment": "score = the highest job weight among the issue's jobs (1..4) + 1 when it carries three or more jobs + 1 when it needs two or more code languages + 1 when the derived domain is aigov (a canon repository, G4). low <= 2, medium = 3, high = 4, max >= 5. A job of weight 4 (requirements, architecture, api-design, security) in a canon repository is therefore max on its own; a mechanical edit alone is low.",
+      "$comment": "score = the highest job weight among the issue's jobs (1..4), plus one for EACH of: three or more jobs; two or more code languages (a lang key whose taxonomy entry has code false does not count); the derived domain is aigov (kind process or role canon). The adds are cumulative. low <= 2, medium = 3, high = 4, max >= 5. A job of weight 4 (requirements, architecture, api-design, security) in an aigov domain is therefore max on its own; a mechanical edit alone is low. An empty job axis has no score: see emptyAxis.",
       "base": "max job weight",
       "plusOne": [
         {
@@ -282,18 +283,19 @@
         "low": "low",
         "medium": "medium",
         "high": "high",
-        "max": "high (no top setting; said)"
+        "max": "high"
       },
       "antigravity": {
         "low": "low",
         "medium": "medium",
         "high": "high",
-        "max": "high (no top setting; said)"
-      }
+        "max": "high"
+      },
+      "$collapsed": "cursor and antigravity have no top setting: max maps to high there, said in the report; a session at high on those surfaces MATCHES a recommended max because effort is compared in dial space (see mismatch)."
     }
   },
   "aggregation": {
-    "$comment": "An issue carrying several jobs or languages resolves ONE actionable recommendation: each (job, language) pair yields its cell; the winner is the alias that wins the most pairs, ties broken by `precedence` (reasoning-dominant work outranks execution, which outranks authoring, which outranks mechanical); the runner-up is the next most frequent alias, else the winning cell's runner-up. Every per-pair cell is still reported so the maintainer can see where the aggregate departs from a pair.",
+    "$comment": "An issue carrying several jobs or languages resolves ONE actionable recommendation. Each (job, language) pair yields its cell. WINNER: count winner positions only; the alias with the most wins, ties broken by `precedence` (earlier wins). A reviewer alias (aliases.<a>.reviewer true) is never the winner: a pair it wins counts for its `also` alias. RUNNER-UP: the alias with the next-highest winner count among the other winning aliases, ties by `precedence`; when the winner won every pair, the most frequent runnerUp alias across the winner's pairs, a reviewer alias resolving to its `also`, ties by `precedence`. Every reviewer runnerUp in this file carries an `also`, so a runner-up always resolves to an actionable alias. Every per-pair cell is still reported so the maintainer can see where the aggregate departs from a pair.",
     "precedence": [
       "SEMANTIC_MAX",
       "SEMANTIC_FRONTIER",
@@ -308,14 +310,26 @@
     ]
   },
   "mismatch": {
-    "$comment": "What hatsu:build compares when it runs direct: the session's surface, its model tier (the alias nen/workflow.json -> models.<surface> spells for the winner's tier) and its effort. A difference on any of the three is a mismatch: build asks ONCE through the surface's picker (nen/decisions.json row direct-mismatch; continue here is the starred default, never a gate) and records the answer in the direct ledger. It never blocks the work.",
+    "$comment": "What hatsu:build compares when it runs direct: the session's surface (one of surfaces), its model ALIAS (compared to models.<surface>.<winner tier> -- aliases, not tiers, because frontier and deep both read grok on Cursor) and its effort, compared in DIAL space after effort.surfaceMap (a collapsed top equals its dial). A session value the harness does not expose is passed as `unread` and that compare is reported unread, never a mismatch. A difference on any readable compare is a mismatch: build asks ONCE through the surface's picker (nen/decisions.json row direct-mismatch; continue here is the starred default, never a gate) and records the answer in the direct ledger. It never blocks the work.",
     "compares": [
       "surface",
-      "tier",
+      "model",
       "effort"
     ],
-    "ledger": ".nen/direct/<effort>.json"
+    "sessionFlags": {
+      "surface": "--surface <s>",
+      "model": "--model <alias>",
+      "effort": "--effort <level|unread>"
+    },
+    "ledger": ".nen/direct/<effort>.json",
+    "effortId": "the effort's identity, known before any branch exists: <CODE>-IS-#<N> for an issue (nen ref format), `inline-<ISO-8601 UTC seconds>` for a textual effort; percent-encoded in the file name as nen usage record encodes --effort; written under --repo's .nen/ (core, before a worktree exists). The verb refuses `..`, an absolute path or any resolved path outside .nen/direct/ at exit 2."
   },
+  "emptyAxis": {
+    "job": "undirectable: the job axis is empty -- one line in the report, no cell, no effort, no mismatch asked; the caller (build) continues on its own session",
+    "lang": "the shared `*` cell, as the prose language reads it",
+    "$comment": "An axis classify left empty (undecidable, or every key low) reaches direct as an empty list. Inside build classify has already run (build § 2b), so direct never re-classifies: an empty axis is reported, never filled."
+  },
+  "surfaceRule": "A routing cell's surface is always its alias's surface (SEMANTIC_* and BALANCED_AUTHOR on claude-code, EXECUTION_* on codex, VISUAL_* on antigravity, MECHANICAL_EDITOR on cursor), so WORKFLOW § models holds: an alias maps onto a tier, a tier onto the surface's own alias. Where the source document preferred Cursor, Xcode, Android Studio, Visual Studio, the browser toolchain or GitHub Copilot, that preference is the cell's `interactive` equivalent.",
   "phases": {
     "FEAT.DEV.001": {
       "name": "Product discovery and problem framing"
@@ -869,8 +883,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           }
         }
@@ -1143,8 +1157,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           }
         }
@@ -1174,8 +1188,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -1238,8 +1252,8 @@
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "VISUAL_ORCHESTRATOR",
@@ -1305,8 +1319,8 @@
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "VISUAL_ORCHESTRATOR",
@@ -1376,8 +1390,8 @@
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "SEMANTIC_FRONTIER",
@@ -1443,8 +1457,8 @@
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "SEMANTIC_FRONTIER",
@@ -1512,8 +1526,8 @@
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "SEMANTIC_FRONTIER",
@@ -1650,7 +1664,8 @@
             "runnerUp": {
               "alias": "PR_SECURITY_REVIEW",
               "surface": null,
-              "interactive": null
+              "interactive": null,
+              "also": "EXECUTION_FRONTIER"
             }
           }
         }
@@ -1722,13 +1737,13 @@
           "typescript": {
             "winner": {
               "alias": "SEMANTIC_FRONTIER",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -1935,8 +1950,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -2002,8 +2017,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -2045,8 +2060,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -2317,8 +2332,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           }
         }
@@ -2616,8 +2631,8 @@
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "SEMANTIC_FRONTIER",
@@ -2662,7 +2677,7 @@
             "runnerUp": {
               "alias": "MECHANICAL_EDITOR",
               "surface": "cursor",
-              "interactive": null
+              "interactive": "the Cursor IDE"
             }
           }
         }
@@ -2718,8 +2733,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -2806,8 +2821,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -2937,19 +2952,19 @@
             "runnerUp": {
               "alias": "MECHANICAL_EDITOR",
               "surface": "cursor",
-              "interactive": null
+              "interactive": "the Cursor IDE"
             }
           },
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "MECHANICAL_EDITOR",
               "surface": "cursor",
-              "interactive": null
+              "interactive": "the Cursor IDE"
             }
           }
         }
@@ -3045,7 +3060,7 @@
             "winner": {
               "alias": "MECHANICAL_EDITOR",
               "surface": "cursor",
-              "interactive": null
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
@@ -3057,12 +3072,12 @@
             "winner": {
               "alias": "MECHANICAL_EDITOR",
               "surface": "cursor",
-              "interactive": null
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           }
         }
@@ -3076,7 +3091,7 @@
             "winner": {
               "alias": "MECHANICAL_EDITOR",
               "surface": "cursor",
-              "interactive": null
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
@@ -3286,8 +3301,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -3355,8 +3370,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           },
           "csharp": {
@@ -3414,8 +3429,8 @@
           "typescript": {
             "winner": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             },
             "runnerUp": {
               "alias": "EXECUTION_VALUE",
@@ -3450,8 +3465,8 @@
             },
             "runnerUp": {
               "alias": "BALANCED_AUTHOR",
-              "surface": "cursor",
-              "interactive": null
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
             }
           }
         }

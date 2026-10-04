@@ -9,10 +9,16 @@
 // exit codes, the rendering, and the optional record.
 //
 // EXIT CODES (docs/USAGE.md, "Exit codes"): 0 an answer -- a mismatch with the
-// running session IS an answer and still exits 0; 1 a failure (an invalid
-// registry or taxonomy, an unreadable workflow, a registry that cannot route
-// what the taxonomy names); 2 a usage error (a missing flag, an unknown key, kind,
-// role, level or surface -- each names the valid set -- or a refused --record).
+// running session IS an answer and still exits 0, and so is `undirectable` (an
+// empty job axis: the caller carries on on its own session); 1 a failure (an
+// invalid registry or taxonomy, an unreadable workflow, a registry that cannot route
+// what the taxonomy names); 2 a usage error (a missing flag, an unknown language or
+// job key, a surface or level outside the registry's -- each names the valid set --
+// or a refused --record).
+//
+// KIND AND ROLE ARE THE FLAGS' VERBATIM VALUES, as `nen repo classify --json` printed
+// them; the verb never re-derives them from --repo, which only names the checkout the
+// workflow is read from and the root every path resolves against.
 //
 // EVERY PATH FLAG resolves against --repo's root (zheref/nen#100); --repo is
 // REQUIRED here because the consumer's workflow is read from it, and a silent cwd
@@ -41,20 +47,25 @@ export const RESOLVE_CONTRACT = "nen.direct.resolve/v0.1";
 
 function sideRow(label: string, side: ResolvedSide): string[] {
   const where = side.surface === null ? "-" : `${side.surface}${side.tier === null ? "" : `/${side.tier}`}`;
-  const spelled = side.surfaceAlias === null ? "-" : side.surfaceAlias;
-  return [label, `${side.alias}${side.reviewer ? " (reviewer)" : ""}`, where, spelled, side.restart ?? "-"];
+  return [label, side.alias, where, side.surfaceAlias === null ? "-" : side.surfaceAlias, side.restart ?? "-"];
 }
 
 function mismatchLine(mismatch: Mismatch): string {
-  if (mismatch.match) return `mismatch: none (session matches on ${mismatch.compared.join(", ")})`;
-  const parts = mismatch.differences.map(
-    (difference): string => `${difference.field} ${difference.session} != ${difference.recommended ?? "-"}`,
-  );
-  return `mismatch: ${parts.join("; ")}`;
+  const parts = mismatch.compares.map((compare): string => {
+    if (compare.verdict === "match") return `${compare.field} match`;
+    if (compare.verdict === "unread") return `${compare.field} unread`;
+    return `${compare.field} ${compare.session} != ${compare.recommended ?? "-"}`;
+  });
+  return `mismatch: ${mismatch.match ? "no" : "yes"} (${parts.join("; ")})`;
 }
 
 export function renderResolution(resolution: Resolution, recorded: string | null): string[] {
   const { winner, runnerUp, domain, effort } = resolution;
+  if (resolution.undirectable !== null || winner === null || runnerUp === null || domain === null || effort === null) {
+    const lines = [`undirectable: ${resolution.undirectable ?? "nothing to direct"}`];
+    if (recorded !== null) lines.push(`recorded ${recorded}`);
+    return lines;
+  }
   const lines = renderPipeTable([
     ["", "alias", "surface/tier", "model alias", "restart"],
     sideRow("winner", winner),
@@ -81,10 +92,10 @@ export function renderResolution(resolution: Resolution, recorded: string | null
       `pair ${pair.job} x ${pair.lang}: ${pair.winner.alias}${pair.winner.substituted === null ? "" : ` (for ${pair.winner.substituted})`}, runner-up ${pair.runnerUp.alias}${pair.runnerUp.substituted === null ? "" : ` (for ${pair.runnerUp.substituted})`}  [${pair.domain}, ${phase}, cell ${pair.cell}]`,
     );
   }
-  for (const skip of resolution.aggregate.skipped) {
+  for (const skip of resolution.aggregate?.skipped ?? []) {
     lines.push(`skipped: ${skip.job} x ${skip.lang}, winner ${skip.alias} is a reviewer with no stand-in`);
   }
-  lines.push(`domain: ${domain.domain} (rule ${domain.rule}: ${domain.because})`);
+  lines.push(`domain: ${domain.domain} (rule ${domain.rule}${domain.because === null ? "" : `: ${domain.because}`})`);
   lines.push(...domain.fallbacks);
   lines.push(`effort: ${renderEffort(effort)}${effort.surfaceEffort === null ? "" : ` (${winner.surface ?? "-"}: ${effort.surfaceEffort})`}`);
   if (resolution.mismatch !== null) lines.push(mismatchLine(resolution.mismatch));
@@ -96,9 +107,7 @@ export function runResolve(context: CommandContext): number {
   const args = context.args;
   const registryFlag = requireValue(args, "registry", "It is the model-direction registry file (relative paths resolve against --repo).");
   const taxonomyFlag = requireValue(args, "taxonomy", "It is the classification taxonomy file the languages, jobs and domains are read from (relative paths resolve against --repo).");
-  const langs = commaList(requireValue(args, "lang", "It is a comma list of the taxonomy's language keys the issue carries."));
-  const jobs = commaList(requireValue(args, "job", "It is a comma list of the taxonomy's job keys the issue carries."));
-  const kind = requireValue(args, "kind", "It is the repository's kind, as 'nen repo classify' reports it.");
+  const kind = requireValue(args, "kind", "It is the repository's kind, exactly as 'nen repo classify --json' printed it.");
   const repoFlag = requireRepoFlag(context, "It is the checkout whose nen/workflow.json spells the model aliases per surface.");
   const root = assertRepoRoot({ repoFlag });
   const record = args.values["record"];
@@ -110,16 +119,17 @@ export function runResolve(context: CommandContext): number {
   const taxonomy = loadClassifyTaxonomy(root, taxonomyFlag);
   const loaded = loadWorkflow(root);
 
+  // --job and --lang may be empty or omitted: an empty axis is an ANSWER (see ./resolve.ts).
   const inputs = parseInputs(taxonomy, {
-    langs,
-    jobs,
+    langs: commaList(args.values["lang"]),
+    jobs: commaList(args.values["job"]),
     kind,
     role: args.values["role"] ?? null,
-    issueKind: args.values["issue-kind"] ?? null,
+    labels: commaList(args.values["labels"]),
   });
   const session = parseSession(registry, {
     surface: args.values["surface"] ?? null,
-    tier: args.values["tier"] ?? null,
+    model: args.values["model"] ?? null,
     effort: args.values["effort"] ?? null,
   });
 
@@ -132,18 +142,20 @@ export function runResolve(context: CommandContext): number {
       jobs: inputs.jobs,
       kind: inputs.kind,
       role: inputs.role,
-      issueKind: inputs.issueKind,
+      labels: inputs.labels,
       surface: session.surface,
-      tier: session.tier,
+      model: session.model,
       effort: session.effort,
     },
-    domain: { domain: resolution.domain.domain, rule: resolution.domain.rule, when: resolution.domain.when, because: resolution.domain.because, fallbacks: resolution.domain.fallbacks },
+    undirectable: resolution.undirectable,
+    domain: resolution.domain,
     pairs: resolution.pairs,
     aggregate: resolution.aggregate,
     winner: resolution.winner,
     runnerUp: resolution.runnerUp,
     effort: resolution.effort,
     mismatch: resolution.mismatch,
+    effortId: record ?? null,
     record: target,
   };
 

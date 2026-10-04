@@ -3947,7 +3947,7 @@ date, one line per alias (`provider  family  surface/tier  snapshot: <primary> (
 reviewer alias marked), the surfaces table (label, the `models.<key>` it reads, its effort control)
 and the live-lookup sources per provider (the CLI that lists the served models, the docs). A bad file
 is refused at exit 1 naming the pointer into it: a routing cell whose alias or surface is not
-declared, a surface without a string `modelsKey`, an effort block that does not have four levels or
+declared, a cell whose surface is not its alias's surface, a reviewer runner-up with no `also`, a surface without a string `modelsKey`, an effort block that does not have four levels or
 whose surface map misses one, effort bands that overlap or leave a score unplaced, a precedence that
 does not rank every alias exactly once, a snapshot date that is not a calendar date.
 
@@ -3975,42 +3975,71 @@ refusal names the pointer) or cannot be read; exit 2 when `--registry` is missin
 
 Answers "which model, where, at what effort" for one classification, reporting each step:
 
-1. **Domain.** The taxonomy's five ordered `domains.rule` rows are applied to the inputs, the domain
-   *names* read from the rows by their order: (1) the kind is the process kind, or the role is canon;
-   (2) the kind is library; (3) a carried job whose phases list only row 3's domain (the marker job);
-   (4) the issue kind is bug, or every carried job lists only row 4's domain; (5) otherwise. The rows'
-   `when` prose is reported, never parsed. Reported as `domain: <d> (rule <n>: <why>)`.
+1. **Domain.** The taxonomy's `domains.rule` rows are **structured data**, evaluated in `order`, **the
+   first row that matches wins**. A row's `when` is `"otherwise"` (always), or one of:
+   `{"anyOf": [<predicate>, …]}` (any member matches), `{"repoKind": [<values>]}` and
+   `{"repoRole": [<values>]}` (the input is in the list), `{"issueLabels": {"any": [<patterns>]}}` (a
+   label equals a pattern; a `*:name` pattern matches `<ns>:name` under any namespace),
+   `{"jobs": {"anyKey": [<keys>]}}` (the issue carries one of the job keys) and
+   `{"jobs": {"nonEmpty": true, "everyListsOnly": "<domain>"}}` (at least one job, and every carried
+   job's taxonomy `phases` name only that domain). The facts are the flags and nothing else: `--kind`
+   and `--role` verbatim as [`repo classify --json`](#nen-repo-classify) printed them (their vocabulary
+   is not checked here, and the verb never re-derives them from `--repo`), `--labels` the issue's
+   labels, `--job` the job keys. A `when` of any other shape is refused when the taxonomy loads —
+   exit 1, naming the pointer (`domains.rule[0].when.<shape>`). Reported as `domain: <d> (rule <n>:
+   <the row's $comment>)`.
 2. **Cells.** For every (job, language) pair, the registry's `routing[job][domain]` cell for that
    language, else its shared (`*`) cell. A job with no phase in the domain is routed on the first
-   domain it lists, in the order the taxonomy's `domains.fallback` sentence names them (the derived
-   domain first), and the substitution is named (`fallback: <job> has no <domain> phase; routed on
-   <other>`).
+   domain it lists, in the order the taxonomy's `domains.fallback` sentence names them **after its
+   colon** (the derived domain first, then any domain the sentence omits in `domains.keys` order), and
+   the substitution is named (`fallback: <job> has no <domain> phase; routed on <other>`; each pair
+   carries `fallbackFrom` in `--json`).
 3. **Aggregate.** The alias that wins the most pairs wins; a tie goes to the registry's
-   `aggregation.precedence` (earlier first). The runner-up is the next most frequent alias, else the
-   winning pairs' most frequent runner-up, else the first pair's. **A reviewer alias is never the
-   aggregate winner**: its cell's stand-in (`also`) is used, or the pair is skipped and the skip is
-   reported. A frontier alias may be recommended — the verdict is for the maintainer's own session.
-4. **Resolve each side.** Provider, family and tier from the alias; the surface from the cell when it
-   names one, else the alias's default; the surface alias from the workflow's
-   `models.<modelsKey>.<tier>` (else `unspelled`); the surface's restart line with `<alias>`
-   substituted, its effort control, the interactive tools (the surface's, each language's native one,
-   the cell's, deduplicated), the dated snapshot quote and the provider's live-lookup sources.
+   `aggregation.precedence` (earlier first). A reviewer alias is never the winner: a pair it wins
+   counts for its `also` stand-in (or is skipped, reported). The runner-up is the next most frequent
+   winning alias (ties by precedence); when the winner won every pair, the most frequent `runnerUp`
+   alias across the winner's pairs, a reviewer resolving to its `also` (the registry parser refuses a
+   reviewer runner-up with none). A frontier alias may be recommended — the verdict is for the
+   maintainer's own session.
+4. **Resolve each side.** Provider, family and tier from the alias; the surface from the alias (the
+   registry parser refuses a cell whose surface is not its alias's); the surface alias from the
+   workflow's `models.<modelsKey>.<tier>` (else `unspelled`); the surface's restart line with
+   `<alias>` filled from that spelling and `<level>` from `effort.surfaceMap` — never from the
+   snapshot or anything fetched — its effort control, the interactive tools (the surface's, each
+   language's native one, the cell's, deduplicated), the dated snapshot quote and the provider's
+   live-lookup sources.
 5. **Effort.** `score` is the highest job weight plus one for each add of the registry's rule that
    holds — many jobs (the rule's threshold), many **code** languages (a language counts unless its
-   taxonomy entry says `"code": false`; the flag is read, never the key's name), and the derived
-   domain a domain add names — banded into a level and mapped through the winner surface's own
-   control. Reported as `weight 4 + manyJobs + <domain> = 6 -> max`.
-6. **Mismatch** — only when `--surface`, `--tier` or `--effort` is given: each given value is compared
-   with the winner's surface, surface alias and level.
-7. **Record** — with `--record <effort-branch>`, the whole result plus `recordedAt` is written to
-   `.nen/direct/<effort-branch>.json` under `--repo` (directories created; `.nen/` is gitignored
-   output, never `nen/`). A name that is absolute, carries a backslash, or has an empty, `.` or `..`
-   segment is refused at exit 2 before anything is read.
+   taxonomy entry says `"code": false`; the flag is read, never the key's name), and a domain add
+   (the domain named beside its key, else the first rule row's domain) — banded into a level and
+   mapped through the winner surface's own control. Reported as `weight 4 + manyJobs + <domain add> =
+   6 -> max`.
+6. **Mismatch** — for the session flags given: `--surface` is compared by name, `--model` by **alias**
+   against `models.<modelsKey>.<winner tier>` (aliases, not tiers), and `--effort` in **dial space**:
+   the recommended level and the session's level are both mapped through `effort.surfaceMap` for the
+   session's surface (the winner's when none was given), so a collapsed top (`max` -> `high` on
+   cursor and antigravity) matches a session at `high`. The literal **`unread`** on any flag marks
+   that compare `unread` — reported, never a mismatch (the harness could not read it). A mismatch is
+   an answer; the skill asks once.
+7. **Record** — with `--record <effort-id>`, the whole result plus `effortId` and `recordedAt` is
+   written to `.nen/direct/<encoded id>.json` under `--repo` (directories created; `.nen/` is
+   gitignored output, never `nen/`). The id is the caller's string (`<CODE>-IS-#<N>` for an issue,
+   `inline-<ISO-8601 UTC>` for a textual effort) **percent-encoded with `encodeURIComponent`, exactly as
+   [`usage record`](#nen-usage) encodes `--effort`** for `.nen/usage/<effort>.json` (that helper is bound
+   to the usage directory, so the expression is mirrored), which makes a `/` or a `:` in an id a
+   file-name character. An id that is empty, absolute, carries a backslash or has a `..` segment is
+   refused at exit 2 before anything is read.
+
+**Empty axes are answers, not errors.** No job (`--job ""`, or the flag omitted) is
+`undirectable: job axis empty` — one line, `winner`, `runnerUp`, `effort` and `mismatch` null, exit 0
+(the caller carries on on its own session); no language (`--lang ""` or omitted) reads the shared `*`
+cell for every job. Inside `hatsu:build` classification has already run, so an empty axis is reported,
+never filled.
 
 **Usage**
 
 ```text
-nen direct resolve --registry <path> --taxonomy <path> --repo <path> --lang <a,b> --job <c,d> --kind <product|process|library|unknown> [--role <canon|consumer|unregistered>] [--issue-kind <bug|enhancement|none>] [--surface <s>] [--tier <alias>] [--effort <level>] [--record <effort-branch>] [--json]
+nen direct resolve --registry <path> --taxonomy <path> --repo <path> --kind <kind> [--role <role>] [--labels <a,b>] --lang <a,b> --job <c,d> [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>] [--record <effort-id>] [--json]
 ```
 
 **Arguments**
@@ -4019,61 +4048,65 @@ nen direct resolve --registry <path> --taxonomy <path> --repo <path> --lang <a,b
 |---|---|---|---|
 | `--registry <path>` | yes | The model-direction registry file. | Relative paths resolve against `--repo`'s root. |
 | `--taxonomy <path>` | yes | The classification taxonomy file. | The file `classify` reads; it must carry job weights and the `domains` block. |
-| `--repo <path>` | yes | The checkout whose `nen/workflow.json` spells the aliases. | Unbracketed in usage; omitted is refused at exit 2. An absent workflow or `models` block is `unspelled`, not an error. |
-| `--lang <a,b>` | yes | The taxonomy's language keys the issue carries. | An unknown key -> exit 2, naming the valid set. |
-| `--job <c,d>` | yes | The taxonomy's job keys the issue carries. | An unknown key -> exit 2, naming the valid set. |
-| `--kind <k>` | yes | The repository's kind, as [`repo classify`](#nen-repo-classify) reports it. | `product`, `process`, `library` or `unknown`; else exit 2. |
-| `--role <r>` | no | The repository's role, as `repo classify` reports it. | `canon`, `consumer` or `unregistered`; else exit 2. |
-| `--issue-kind <k>` | no | The issue's kind. | `bug`, `enhancement` or `none` (the default); else exit 2. |
-| `--surface <s>` | no | The surface the running session is on. | One of the registry's surfaces; else exit 2. |
-| `--tier <alias>` | no | The model alias the running session is on. | Compared with the winner's surface alias. |
-| `--effort <level>` | no | The effort level the running session is at. | One of the registry's levels; else exit 2. |
-| `--record <name>` | no | File the result under `.nen/direct/<name>.json`. | A traversal is refused at exit 2. |
+| `--repo <path>` | yes | The checkout whose `nen/workflow.json` spells the aliases, and the root every path resolves against. | Unbracketed in usage; omitted is refused at exit 2. An absent workflow or `models` block is `unspelled`, not an error. |
+| `--kind <kind>` | yes | The repository's kind, verbatim from [`repo classify --json`](#nen-repo-classify). | Only non-empty is checked; the taxonomy's predicates decide what it means. |
+| `--role <role>` | no | The repository's role, verbatim from `repo classify --json`. | An absent role matches no `repoRole` predicate. |
+| `--labels <a,b>` | no | The issue's labels, as GitHub reports them. | Replaces the former `--issue-kind`: a bug is a label the taxonomy's `issueLabels` predicate names. |
+| `--lang <a,b>` | no | The taxonomy's language keys the issue carries. | An unknown key -> exit 2, naming the valid set. Empty or omitted reads the shared cell. |
+| `--job <c,d>` | no | The taxonomy's job keys the issue carries. | An unknown key -> exit 2, naming the valid set. Empty or omitted is `undirectable`. |
+| `--surface <s>` | no | The surface the running session is on. | One of the registry's surfaces, or `unread`; else exit 2. |
+| `--model <alias>` | no | The model alias the running session is on. | Compared with the winner's spelled alias; `unread` marks it unread. Replaces the former `--tier`. |
+| `--effort <level>` | no | The effort level the running session is at. | One of the registry's levels, or `unread`; else exit 2. Compared in dial space. |
+| `--record <effort-id>` | no | File the result under `.nen/direct/<encoded id>.json`. | A traversal is refused at exit 2. |
 
 **Output and exit codes** — human rendering is the verdict table (winner and runner-up rows: alias,
 surface/tier, the spelled model alias, the restart line), one `interactive:` line per tool, the
 winner's snapshot quote and live-lookup sources, one `pair` line per (job, language), the `domain` and
-`effort` lines, the `mismatch` line when asked, and `recorded <path>` when written. `--json` prints
-one document; top-level keys, in this order: `contract` (`nen.direct.resolve/v0.1`), `inputs`
-(`langs`, `jobs`, `kind`, `role`, `issueKind`, and the session's `surface`, `tier`, `effort`),
-`domain` (`domain`, `rule`, `when`, `because`, `fallbacks`), `pairs` (an array of `{ job, lang,
-domain, phase, phaseName, cell, winner, runnerUp }`), `aggregate` (`skipped`, `tally`), `winner` and
-`runnerUp` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias, restart,
-effortControl, interactive, note, snapshot, liveLookup }`), `effort` (`score`, `weight`, `level`,
-`derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ compared, match, differences: [{ field,
-session, recommended }] }`) and `record` (the written path, or `null`). Exit 0 for every resolution,
-**including a mismatch**; exit 1 for an invalid registry or taxonomy, an unreadable workflow, a
-taxonomy with no weight on a carried job, or a registry that cannot route a job the taxonomy names;
-exit 2 for a missing flag, an unknown language or job key, kind, role, issue kind, surface or level,
-or a refused `--record`.
+`effort` lines, the `mismatch` line when asked (`mismatch: yes|no (surface match; model fable != opus;
+effort unread)`), and `recorded <path>` when written; `undirectable: job axis empty` alone for an empty
+job axis. `--json` prints one document; top-level keys, in this order: `contract`
+(`nen.direct.resolve/v0.1`), `inputs` (`langs`, `jobs`, `kind`, `role`, `labels`, and the session's
+`surface`, `model`, `effort`), `undirectable` (`null`, or the reason), `domain` (`domain`, `rule` — the
+matched row's `order` — `because`, `fallbacks`), `pairs` (an array of `{ job, lang, domain,
+fallbackFrom, phase, phaseName, cell, winner, runnerUp }`), `aggregate` (`skipped`, `tally`),
+`winner` and `runnerUp` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
+restart, effortControl, interactive, note, snapshot, liveLookup }`), `effort` (`score`, `weight`,
+`level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, compares: [{ field, session,
+recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread`), `effortId` and
+`record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp` and `effort` are
+`null` when undirectable. Exit 0 for every resolution, **including a mismatch and an
+undirectable one**; exit 1 for an invalid registry or taxonomy (an unknown predicate shape, a cell
+whose surface is not its alias's), an unreadable workflow, a taxonomy with no weight on a carried job,
+or a registry that cannot route a job the taxonomy names; exit 2 for a missing flag, an unknown
+language or job key, a surface or level outside the registry's, or a refused `--record`.
 
 **Example** (a real run against the real registry and taxonomy, in a consumer whose
-`nen/workflow.json` spells `models.claude.deep` as `opus`; the session says it is on `opus` at
-`medium`, and the rule says `low`)
+`nen/workflow.json` spells `models.claude.deep` as `opus`; a canon repository's two prose jobs, the
+session on the right surface but at another model, its effort unreadable)
 
 ```bash
 nen direct resolve --registry direct.registry.json --taxonomy classify.taxonomy.json --repo . \
-  --lang swift --job implementation,unit-tests --kind product \
-  --surface claude-code --tier opus --effort medium
+  --lang prose --job prose-authoring,schema --kind process --role canon --labels enhancement \
+  --surface claude-code --model fable --effort unread
 ```
 ```text
-|           | alias             | surface/tier     | model alias | restart                                      |
-| --------- | ----------------- | ---------------- | ----------- | -------------------------------------------- |
-| winner    | SEMANTIC_FRONTIER | claude-code/deep | opus        | claude --model opus (then /effort <level>)   |
-| runner-up | BALANCED_AUTHOR   | claude-code/fast | sonnet      | claude --model sonnet (then /effort <level>) |
+|           | alias              | surface/tier     | model alias | restart                                         |
+| --------- | ------------------ | ---------------- | ----------- | ----------------------------------------------- |
+| winner    | SEMANTIC_FRONTIER  | claude-code/deep | opus        | claude --model opus (then /effort high)         |
+| runner-up | EXECUTION_FRONTIER | codex/frontier   | unspelled   | codex -m <alias> -c model_reasoning_effort=high |
 interactive: the Claude desktop app or claude.ai, the same model family
-interactive: Xcode's native integration (Apple Intelligence; ChatGPT and Claude where Xcode offers them)
-interactive: Xcode's native integration
+interactive: the Claude desktop app or claude.ai
 snapshot 2026-10-04: Claude Opus 5.5 (claude-opus-5-5); fallback Claude Fable 5.1
 live lookup (anthropic): the Claude Code model picker (/model), read in-session; https://platform.claude.com/docs/en/models/overview; https://platform.claude.com/docs/en/release-notes/overview
-pair implementation x swift: SEMANTIC_FRONTIER, runner-up BALANCED_AUTHOR  [feature, FEAT.DEV.013 Feature implementation, cell swift]
-pair unit-tests x swift: BALANCED_AUTHOR, runner-up EXECUTION_VALUE  [feature, FEAT.DEV.015 Unit and state-transition tests, cell *]
-domain: feature (rule 5: nothing above applied)
-effort: weight 2 = 2 -> low (claude-code: low)
-mismatch: effort medium != low
+pair prose-authoring x prose: SEMANTIC_FRONTIER, runner-up BALANCED_AUTHOR  [aigov, AIGOV.REPO.005 Instruction and agentic-prose authoring, cell *]
+pair schema x prose: EXECUTION_FRONTIER, runner-up SEMANTIC_FRONTIER  [aigov, AIGOV.REPO.008 Canonical schema and metadata design, cell *]
+domain: aigov (rule 1: nen repo classify reports kind process, or role canon)
+effort: weight 3 + aigov = 4 -> high (claude-code: high)
+mismatch: yes (surface match; model fable != opus; effort unread)
 ```
-(the two jobs split one pair each between the frontier author and the balanced author; the tie goes to
-the registry's precedence, and the surface, tier and alias match while the effort differs — exit 0)
+(row 1 matched on the canon role, so the domain is the first row's and its domain add fires; the two
+pairs split between the frontier author and the execution model and the tie goes to the registry's
+precedence; the surface matches, the model differs, the effort is unread — exit 0)
 
 <a id="family-label"></a>
 

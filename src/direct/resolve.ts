@@ -18,42 +18,45 @@
 //
 // EVERY NAME IS DATA. No alias, surface, domain, job, language or provider is
 // written into this module (src/taxonomy-purity.test.ts). What is written is the
-// SHAPE of the derivation -- which is why the five domain rows are found by their
-// ORDER and their domain NAMES are read from `taxonomy.domains.rule[i].domain`,
-// and why the three effort adds are found by the registry's own `plusOne` keys.
-// Three closed sets are written here, because they are nen's own vocabulary and
-// not the taxonomy's: a repository's role and kind (../repo/classify.ts, which
-// `nen repo classify` answers in) and an issue's kind. The five rules, in order:
+// SHAPE of the derivation.
 //
-//   1  the kind is the process kind, OR the role is canon       -> row 1's domain
-//   2  the kind is the library kind                             -> row 2's domain
-//   3  a carried job lists ONLY row 3's domain in its phases    -> row 3's domain
-//      (the marker job: the one whose phases name that domain alone)
-//   4  the issue kind is bug, OR every job carried lists ONLY
-//      row 4's domain                                           -> row 4's domain
-//   5  otherwise                                                -> row 5's domain
-//
-// The rows' `when` prose is reported, never parsed: the inputs decide.
+// THE DOMAIN IS A PREDICATE WALK. The taxonomy's `domains.rule` rows are STRUCTURED
+// DATA (../classify/taxonomy.ts parses and validates each `when`; an unknown shape
+// is refused there, by pointer, at exit 1). The rows are evaluated in `order` and
+// the FIRST row whose predicate holds wins -- `evaluatePredicate` below, one case
+// per shape: otherwise, anyOf, repoKind, repoRole, issueLabels (a `*:name` pattern
+// matches any `<ns>:name`), jobs.anyKey, and jobs.nonEmpty + everyListsOnly. The
+// facts are the flags' verbatim values: the repository's kind and role as
+// `nen repo classify --json` prints them (nothing here knows their vocabulary),
+// the issue's labels, and the job keys. The verb never re-derives kind or role.
 //
 // THE DOMAIN FALLBACK ORDER (when a job has no phase in the derived domain). The
-// taxonomy states it as a SENTENCE (`domains.fallback`): the derived domain, then
-// a list of domain names in the order the maintainer wants them tried. This module
-// parses the names out of that sentence in order of first appearance (whole words
-// only), puts the derived domain first, and appends any domain of `domains.keys`
-// the sentence does not mention in `keys` order -- so the order the maintainer
-// wrote wins, and a domain they forgot to name is still reachable. It is NOT the
-// `keys` order alone: the two differ in the shipped file, and the sentence is the
-// declaration that is about this question.
+// taxonomy states it as a SENTENCE (`domains.fallback`): a clause, a colon, then
+// the derived domain and the names in the order the maintainer wants them tried.
+// This module reads the domain names that appear AFTER THE COLON, in order of first
+// appearance (whole words), puts the derived domain first, and appends any domain
+// of `domains.keys` the sentence does not name, in `keys` order -- so the order the
+// maintainer wrote wins and a domain they forgot is still reachable.
 //
-// A REVIEWER ALIAS IS NEVER THE AGGREGATE WINNER. An alias the registry marks
-// `reviewer` (an automated PR reviewer, not an author) is replaced by the cell's
-// `also` stand-in where one is given; with none, the pair is skipped from the
-// tally and the skip is reported. A reviewer may still appear as a RUNNER-UP
-// where the data says so (it is a second opinion, not the work).
+// A REVIEWER ALIAS IS NEVER THE AGGREGATE WINNER (registry `aggregation`): a pair
+// it wins counts for its `also` stand-in; with none the pair is skipped and the
+// skip is reported. A reviewer RUNNER-UP always carries an `also` (the registry
+// parser refuses one without), so a runner-up always resolves to an actionable alias.
+//
+// EMPTY AXES ARE ANSWERS (registry `emptyAxis`): no job is `undirectable` (no cell,
+// no effort, no mismatch asked; the caller continues on its own session), and no
+// language reads the shared cell for every job. A cell's surface is its alias's
+// surface (the registry parser enforces it), so a side's surface is read from the alias.
+//
+// THE MISMATCH IS COMPARED IN THE SESSION'S OWN TERMS: the surface by name, the
+// model by ALIAS (against `models.<modelsKey>.<winner tier>` -- aliases, not
+// tiers, because two tiers can spell one alias), and the effort in DIAL space: the
+// level on both sides is mapped through `effort.surfaceMap` for the session's
+// surface, so a collapsed top equals the dial below it. The literal `unread` on a
+// flag marks that compare unread: reported, never a mismatch.
 
 import { VerbUsageError } from "../cli/command.js";
-import type { RepoKind, RepoRole } from "../repo/classify.js";
-import type { ClassifyTaxonomy, DomainPolicy } from "../classify/taxonomy.js";
+import type { ClassifyTaxonomy, DomainPolicy, DomainPredicate } from "../classify/taxonomy.js";
 import {
   MANY_JOBS,
   MANY_LANGS,
@@ -63,24 +66,13 @@ import {
   type RoutingEntry,
 } from "./registry.js";
 
-/** The closed sets `nen repo classify` answers in (../repo/classify.ts), as the flags spell them. */
-export const REPO_KINDS: readonly RepoKind[] = ["product", "process", "library", "unknown"];
-export const REPO_ROLES: readonly RepoRole[] = ["canon", "consumer", "unregistered"];
-export type IssueKind = "bug" | "enhancement" | "none";
-export const ISSUE_KINDS: readonly IssueKind[] = ["bug", "enhancement", "none"];
-
-const PROCESS_KIND: RepoKind = "process";
-const LIBRARY_KIND: RepoKind = "library";
-const CANON_ROLE: RepoRole = "canon";
-const BUG_KIND: IssueKind = "bug";
-
 /** What a surface alias reads when the consumer's workflow does not spell it. */
 export const UNSPELLED = "unspelled";
 
-/** The number of rows `domains.rule` must carry for this derivation. */
-const RULE_ROWS = 5;
+/** The session value a harness that cannot read a fact passes: that compare is reported, never a mismatch. */
+export const UNREAD = "unread";
 
-/** A registry or taxonomy that cannot answer the question asked of it -- a failure (exit 1), never a typo. */
+/** A failure the registry or taxonomy causes (exit 1), never a typo. */
 export class DirectError extends Error {
   constructor(message: string) {
     super(message);
@@ -93,19 +85,26 @@ function own<T>(record: Readonly<Record<string, T>>, key: string): T | undefined
   return Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
 }
 
+function unique(values: readonly string[]): string[] {
+  return values.filter((value, index): boolean => values.indexOf(value) === index);
+}
+
 // ── inputs ──────────────────────────────────────────────────────────────────
 
 export interface DirectInputs {
   readonly langs: readonly string[];
   readonly jobs: readonly string[];
-  readonly kind: RepoKind;
-  readonly role: RepoRole | null;
-  readonly issueKind: IssueKind;
+  /** The repository's kind, verbatim from `nen repo classify --json`. */
+  readonly kind: string;
+  /** The repository's role, verbatim, or null when none was given. */
+  readonly role: string | null;
+  /** The issue's labels as GitHub reports them. */
+  readonly labels: readonly string[];
 }
 
 export interface SessionValues {
   readonly surface: string | null;
-  readonly tier: string | null;
+  readonly model: string | null;
   readonly effort: string | null;
 }
 
@@ -114,33 +113,19 @@ export interface RawInputs {
   readonly jobs: readonly string[];
   readonly kind: string;
   readonly role: string | null;
-  readonly issueKind: string | null;
-}
-
-function oneOf<T extends string>(flag: string, value: string, valid: readonly T[]): T {
-  const found = valid.find((candidate): boolean => candidate === value);
-  if (found === undefined) {
-    throw new VerbUsageError(`--${flag} '${value}' is not one of: ${valid.join(", ")}.`);
-  }
-  return found;
-}
-
-function unique(values: readonly string[]): string[] {
-  return values.filter((value, index): boolean => values.indexOf(value) === index);
+  readonly labels: readonly string[];
 }
 
 /**
  * Validate what the caller typed. Every refusal is a usage error (exit 2) naming
- * the valid set, because "you typed it wrong" must stay distinguishable from "the
- * registry cannot answer".
+ * the valid set. An EMPTY axis is not a refusal -- it is an answer (see the header);
+ * kind and role are passed through verbatim and only held to being non-empty.
  */
 export function parseInputs(taxonomy: ClassifyTaxonomy, raw: RawInputs): DirectInputs {
   const langKeys = taxonomy.axes.lang.keys.map((entry): string => entry.key);
   const jobKeys = taxonomy.axes.job.keys.map((entry): string => entry.key);
   const langs = unique(raw.langs);
   const jobs = unique(raw.jobs);
-  if (langs.length === 0) throw new VerbUsageError(`--lang needs at least one language key. Valid: ${langKeys.join(", ")}.`);
-  if (jobs.length === 0) throw new VerbUsageError(`--job needs at least one job key. Valid: ${jobKeys.join(", ")}.`);
   const unknownLangs = langs.filter((lang): boolean => !langKeys.includes(lang));
   if (unknownLangs.length > 0) {
     throw new VerbUsageError(`--lang names unknown language key${unknownLangs.length === 1 ? "" : "s"} ${unknownLangs.map((key): string => `'${key}'`).join(", ")}. Valid: ${langKeys.join(", ")}.`);
@@ -149,40 +134,37 @@ export function parseInputs(taxonomy: ClassifyTaxonomy, raw: RawInputs): DirectI
   if (unknownJobs.length > 0) {
     throw new VerbUsageError(`--job names unknown job key${unknownJobs.length === 1 ? "" : "s"} ${unknownJobs.map((key): string => `'${key}'`).join(", ")}. Valid: ${jobKeys.join(", ")}.`);
   }
-  return {
-    langs,
-    jobs,
-    kind: oneOf("kind", raw.kind, REPO_KINDS),
-    role: raw.role === null ? null : oneOf("role", raw.role, REPO_ROLES),
-    issueKind: raw.issueKind === null ? "none" : oneOf("issue-kind", raw.issueKind, ISSUE_KINDS),
-  };
+  if (raw.kind.trim() === "") throw new VerbUsageError("--kind is empty. Pass the kind 'nen repo classify --json' printed.");
+  if (raw.role !== null && raw.role.trim() === "") throw new VerbUsageError("--role is empty. Pass the role 'nen repo classify --json' printed, or omit it.");
+  return { langs, jobs, kind: raw.kind, role: raw.role, labels: unique(raw.labels) };
 }
 
 /** Validate the session's own values against the registry; each refusal names the valid set. */
 export function parseSession(
   registry: DirectRegistry,
-  raw: { readonly surface: string | null; readonly tier: string | null; readonly effort: string | null },
+  raw: { readonly surface: string | null; readonly model: string | null; readonly effort: string | null },
 ): SessionValues {
   const surfaces = Object.keys(registry.surfaces);
-  if (raw.surface !== null && !surfaces.includes(raw.surface)) {
-    throw new VerbUsageError(`--surface '${raw.surface}' is not one of: ${surfaces.join(", ")}.`);
+  if (raw.surface !== null && raw.surface !== UNREAD && !surfaces.includes(raw.surface)) {
+    throw new VerbUsageError(`--surface '${raw.surface}' is not one of: ${[...surfaces, UNREAD].join(", ")}.`);
   }
-  if (raw.effort !== null && !registry.effort.levels.includes(raw.effort)) {
-    throw new VerbUsageError(`--effort '${raw.effort}' is not one of: ${registry.effort.levels.join(", ")}.`);
+  if (raw.effort !== null && raw.effort !== UNREAD && !registry.effort.levels.includes(raw.effort)) {
+    throw new VerbUsageError(`--effort '${raw.effort}' is not one of: ${[...registry.effort.levels, UNREAD].join(", ")}.`);
   }
-  return { surface: raw.surface, tier: raw.tier, effort: raw.effort };
+  if (raw.model !== null && raw.model.trim() === "") {
+    throw new VerbUsageError(`--model is empty. Pass the model alias the session runs, or ${UNREAD}.`);
+  }
+  return { surface: raw.surface, model: raw.model, effort: raw.effort };
 }
 
 // ── step 1: the domain ──────────────────────────────────────────────────────
 
 export interface DomainVerdict {
   readonly domain: string;
-  /** The `order` of the rule row that decided. */
+  /** The `order` of the rule row that matched. */
   readonly rule: number;
-  /** That row's own prose condition, as the taxonomy states it. */
-  readonly when: string;
-  /** Which input decided it, in words. */
-  readonly because: string;
+  /** That row's own sentence for a reader, or null. */
+  readonly because: string | null;
   /** One note per job that had no phase in the domain and was routed elsewhere. */
   readonly fallbacks: readonly string[];
 }
@@ -195,53 +177,72 @@ function jobDomains(taxonomy: ClassifyTaxonomy, job: string): readonly string[] 
 
 function listsOnly(taxonomy: ClassifyTaxonomy, job: string, domain: string): boolean {
   const domains = jobDomains(taxonomy, job);
-  return domains !== null && domains.length === 1 && domains[0] === domain;
+  return domains !== null && domains.length > 0 && domains.every((name): boolean => name === domain);
+}
+
+/** The facts a predicate is evaluated over: the flags' values, verbatim. */
+export interface DomainFacts {
+  readonly kind: string;
+  readonly role: string | null;
+  readonly labels: readonly string[];
+  readonly jobs: readonly string[];
+}
+
+/** A label pattern: exact, or `*:name` for `<ns>:name` under any namespace. */
+function labelMatches(label: string, pattern: string): boolean {
+  if (!pattern.startsWith("*:")) return label === pattern;
+  const colon = label.indexOf(":");
+  return colon > 0 && label.slice(colon + 1) === pattern.slice(2);
+}
+
+/** Evaluate one structured predicate. Exhaustive over the shapes the taxonomy parser admits. */
+export function evaluatePredicate(taxonomy: ClassifyTaxonomy, predicate: DomainPredicate, facts: DomainFacts): boolean {
+  switch (predicate.kind) {
+    case "otherwise":
+      return true;
+    case "anyOf":
+      return predicate.members.some((member): boolean => evaluatePredicate(taxonomy, member, facts));
+    case "repoKind":
+      return predicate.values.includes(facts.kind);
+    case "repoRole":
+      return facts.role !== null && predicate.values.includes(facts.role);
+    case "issueLabels":
+      return facts.labels.some((label): boolean => predicate.any.some((pattern): boolean => labelMatches(label, pattern)));
+    case "jobsAnyKey":
+      return facts.jobs.some((job): boolean => predicate.keys.includes(job));
+    case "jobsEveryListsOnly":
+      return facts.jobs.length > 0 && facts.jobs.every((job): boolean => listsOnly(taxonomy, job, predicate.domain));
+  }
 }
 
 export function requireDomains(taxonomy: ClassifyTaxonomy): DomainPolicy {
   if (taxonomy.domains === null) {
     throw new DirectError(`${taxonomy.path}: has no 'domains' block. nen direct resolve derives the domain from it.`);
   }
-  if (taxonomy.domains.rule.length !== RULE_ROWS) {
-    throw new DirectError(
-      `${taxonomy.path}: at domains.rule, found ${taxonomy.domains.rule.length} rows; the derivation implements exactly ${RULE_ROWS}, in order (process-or-canon, library, marker job, bug-or-maintenance-only, otherwise).`,
-    );
+  if (taxonomy.domains.rule.length === 0) {
+    throw new DirectError(`${taxonomy.path}: at domains.rule, there are no rows. nen direct resolve derives the domain from them.`);
   }
   return taxonomy.domains;
 }
 
+/** The first rule row whose predicate holds, in `order`. */
 export function deriveDomain(taxonomy: ClassifyTaxonomy, inputs: DirectInputs): Omit<DomainVerdict, "fallbacks"> {
-  const [processRow, libraryRow, markerRow, bugRow, otherwiseRow] = requireDomains(taxonomy).rule;
-  if (processRow === undefined || libraryRow === undefined || markerRow === undefined || bugRow === undefined || otherwiseRow === undefined) {
-    throw new DirectError(`${taxonomy.path}: at domains.rule, the five rows are not all present`);
+  const facts: DomainFacts = { kind: inputs.kind, role: inputs.role, labels: inputs.labels, jobs: inputs.jobs };
+  for (const row of requireDomains(taxonomy).rule) {
+    if (evaluatePredicate(taxonomy, row.when, facts)) return { domain: row.domain, rule: row.order, because: row.note };
   }
-  const verdict = (row: typeof processRow, because: string): Omit<DomainVerdict, "fallbacks"> => ({
-    domain: row.domain,
-    rule: row.order,
-    when: row.when,
-    because,
-  });
-
-  if (inputs.kind === PROCESS_KIND || inputs.role === CANON_ROLE) {
-    return verdict(processRow, inputs.role === CANON_ROLE ? `the role is ${CANON_ROLE}` : `the kind is ${PROCESS_KIND}`);
-  }
-  if (inputs.kind === LIBRARY_KIND) return verdict(libraryRow, `the kind is ${LIBRARY_KIND}`);
-  const marker = inputs.jobs.find((job): boolean => listsOnly(taxonomy, job, markerRow.domain));
-  if (marker !== undefined) return verdict(markerRow, `job ${marker} lists only the ${markerRow.domain} domain`);
-  if (inputs.issueKind === BUG_KIND) return verdict(bugRow, `the issue kind is ${BUG_KIND}`);
-  if (inputs.jobs.length > 0 && inputs.jobs.every((job): boolean => listsOnly(taxonomy, job, bugRow.domain))) {
-    return verdict(bugRow, `every job carried lists only ${bugRow.domain} phases`);
-  }
-  return verdict(otherwiseRow, "nothing above applied");
+  throw new DirectError(`${taxonomy.path}: at domains.rule, no row matched. The last row is expected to be "otherwise".`);
 }
 
 /** The order domains are tried in when a job has none in the derived one (see the header). */
 export function fallbackOrder(domains: DomainPolicy, derived: string): string[] {
   const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const colon = domains.fallback.indexOf(":");
+  const listed = colon >= 0 ? domains.fallback.slice(colon + 1) : domains.fallback;
   const mentioned = domains.keys
     .map((key): { key: string; at: number } => ({
       key,
-      at: domains.fallback.search(new RegExp(`(?<![A-Za-z0-9-])${escape(key)}(?![A-Za-z0-9-])`)),
+      at: listed.search(new RegExp(`(?<![A-Za-z0-9-])${escape(key)}(?![A-Za-z0-9-])`)),
     }))
     .filter((hit): boolean => hit.at >= 0)
     .sort((a, b): number => a.at - b.at)
@@ -262,8 +263,11 @@ export interface PairSide {
 
 export interface Pair {
   readonly job: string;
+  /** The language, or the shared cell's key when no language was given. */
   readonly lang: string;
   readonly domain: string;
+  /** The derived domain, when the job was routed on another one; else null. */
+  readonly fallbackFrom: string | null;
   readonly phase: string;
   readonly phaseName: string;
   /** The cell key read: the language's own, or the shared one. */
@@ -278,7 +282,7 @@ function stand(registry: DirectRegistry, side: RoutedSide): PairSide {
     const standIn = own(registry.aliases, side.also);
     return {
       alias: side.also,
-      surface: side.surface ?? standIn?.surface ?? null,
+      surface: standIn?.surface ?? null,
       interactive: side.interactive,
       note: side.note,
       substituted: side.alias,
@@ -294,6 +298,8 @@ export function collectPairs(
   domain: string,
 ): { readonly pairs: readonly Pair[]; readonly fallbacks: readonly string[] } {
   const order = fallbackOrder(requireDomains(taxonomy), domain);
+  // No language reads the shared cell for every job (the registry's emptyAxis).
+  const langs = inputs.langs.length === 0 ? [SHARED_CELL] : inputs.langs;
   const pairs: Pair[] = [];
   const fallbacks: string[] = [];
   for (const job of inputs.jobs) {
@@ -312,7 +318,7 @@ export function collectPairs(
       used = other;
       fallbacks.push(`fallback: ${job} has no ${domain} phase; routed on ${other}`);
     }
-    for (const lang of inputs.langs) {
+    for (const lang of langs) {
       const specific = own(entry.cells, lang);
       const cell = specific ?? own(entry.cells, SHARED_CELL);
       if (cell === undefined) {
@@ -322,6 +328,7 @@ export function collectPairs(
         job,
         lang,
         domain: used,
+        fallbackFrom: used === domain ? null : domain,
         phase: entry.phase,
         phaseName: entry.phaseName,
         cell: specific === undefined ? SHARED_CELL : lang,
@@ -402,8 +409,9 @@ export function aggregate(registry: DirectRegistry, pairs: readonly Pair[]): Agg
       tally,
     };
   }
-  // Every counted pair agreed on the winner: the second opinion is the winning
-  // pairs' own most frequent runner-up, else the first pair's.
+  // The winner won every counted pair: the second opinion is the winning pairs' own
+  // most frequent runner-up (a reviewer already resolved to its stand-in), ties by
+  // precedence; the first pair's when none differs from the winner.
   const seconds = rank(registry, winning.map((pair): string => pair.runnerUp.alias).filter((alias): boolean => alias !== winner));
   const runnerUp = seconds[0] ?? (pairs[0] as Pair).runnerUp.alias;
   return {
@@ -444,13 +452,10 @@ export interface ResolvedSide {
   readonly liveLookup: { readonly cli: string | null; readonly docs: readonly string[] } | null;
 }
 
-/** The surface most of the contributing sides name, first appearance breaking a tie; the alias default when none names one. */
-function chooseSurface(defaultSurface: string | null, sides: readonly PairSide[]): string | null {
-  const named = sides.map((side): string | null => side.surface).filter((surface): surface is string => surface !== null);
-  if (named.length === 0) return defaultSurface;
-  const counts = new Map<string, number>();
-  for (const surface of named) counts.set(surface, (counts.get(surface) ?? 0) + 1);
-  return [...counts.keys()].sort((a, b): number => (counts.get(b) ?? 0) - (counts.get(a) ?? 0) || named.indexOf(a) - named.indexOf(b))[0] ?? defaultSurface;
+/** What a surface's own control is told for a level: `effort.surfaceMap[surface][level]`, or null. */
+export function dial(registry: DirectRegistry, surface: string | null, level: string): string | null {
+  const row = surface === null ? undefined : own(registry.effort.surfaceMap, surface);
+  return row === undefined ? null : (own(row, level) ?? null);
 }
 
 export function resolveSide(
@@ -459,11 +464,12 @@ export function resolveSide(
   alias: string,
   sides: readonly PairSide[],
   langs: readonly string[],
+  level: string,
 ): ResolvedSide {
   const row = own(registry.aliases, alias);
   if (row === undefined) throw new DirectError(`${registry.path}: at aliases, there is no alias '${alias}'.`);
-  // The cell's surface wins over the alias's default when it names one.
-  const surface = chooseSurface(row.surface, sides);
+  // A cell's surface is its alias's surface (the registry parser enforces it), so the alias says where it runs.
+  const surface = row.surface;
   const surfaceRow = surface === null ? undefined : own(registry.surfaces, surface);
   const spelled =
     surfaceRow === undefined || row.tier === null ? undefined : own(own(models, surfaceRow.modelsKey) ?? {}, row.tier);
@@ -477,6 +483,17 @@ export function resolveSide(
     ].filter((entry): entry is string => entry !== null),
   );
   const quote = own(registry.snapshot.aliases, alias);
+  // `<alias>` and `<level>` are the registry's placeholders, filled ONLY from the
+  // consumer's workflow and the effort map -- never from the snapshot or a fetched
+  // page. An unspelled alias leaves its placeholder as typed.
+  const restart =
+    surfaceRow === undefined
+      ? null
+      : surfaceRow.restart
+          .split("<alias>")
+          .join(spelled ?? "<alias>")
+          .split("<level>")
+          .join(dial(registry, surface, level) ?? "<level>");
   return {
     alias,
     provider: row.provider,
@@ -485,8 +502,7 @@ export function resolveSide(
     surface,
     tier: row.tier,
     surfaceAlias,
-    // `<alias>` is the registry's placeholder; an unspelled alias leaves it as typed.
-    restart: surfaceRow === undefined ? null : surfaceRow.restart.split("<alias>").join(spelled ?? "<alias>"),
+    restart,
     effortControl: surfaceRow?.effortControl ?? null,
     interactive,
     note: notes.length === 0 ? null : notes.join("; "),
@@ -513,8 +529,7 @@ export function scoreEffort(
   taxonomy: ClassifyTaxonomy,
   inputs: DirectInputs,
   domain: string,
-  winnerSurface: string | null,
-): EffortVerdict {
+): Omit<EffortVerdict, "surfaceEffort"> {
   const jobEntries = inputs.jobs.map((job): { job: string; weight: number | null } => ({
     job,
     weight: taxonomy.axes.job.keys.find((entry): boolean => entry.key === job)?.weight ?? null,
@@ -526,7 +541,7 @@ export function scoreEffort(
   const weight = Math.max(...jobEntries.map((entry): number => entry.weight as number));
   // A language is a CODE language unless its taxonomy entry says `code: false`: the flag is read, never the key's name.
   const codeLangs = inputs.langs.filter((lang): boolean => taxonomy.axes.lang.keys.find((entry): boolean => entry.key === lang)?.code !== false).length;
-  const domainKeys = requireDomains(taxonomy).keys;
+  const domains = requireDomains(taxonomy);
 
   const applied: string[] = [];
   for (const add of registry.effort.rule.plusOne) {
@@ -536,11 +551,13 @@ export function scoreEffort(
     } else if (add.key === MANY_LANGS) {
       holds = codeLangs >= (add.threshold as number);
     } else {
-      // A domain add: the key IS a domain's name, and it adds when that domain was derived.
-      if (!domainKeys.includes(add.key)) {
-        throw new DirectError(`${registry.path}: at effort.rule.plusOne, the add '${add.key}' is neither a count rule nor one of the taxonomy's domains [${domainKeys.join(", ")}].`);
+      // A domain add: the domain the file names beside the key, else the first
+      // rule row's domain (the one a canon or process repository derives).
+      const target = add.domain ?? (domains.rule[0] as DomainPolicy["rule"][number]).domain;
+      if (!domains.keys.includes(target)) {
+        throw new DirectError(`${registry.path}: at effort.rule.plusOne, the add '${add.key}' targets '${target}', which is not one of the taxonomy's domains [${domains.keys.join(", ")}].`);
       }
-      holds = domain === add.key;
+      holds = domain === target;
     }
     if (holds) applied.push(add.key);
   }
@@ -552,53 +569,61 @@ export function scoreEffort(
   if (level === undefined) {
     throw new DirectError(`${registry.path}: at effort.rule.bands, no band holds the score ${score}.`);
   }
-  const row = winnerSurface === null ? undefined : own(registry.effort.surfaceMap, winnerSurface);
-  return {
-    score,
-    weight,
-    level,
-    derivation: [`weight ${weight}`, ...applied],
-    surfaceEffort: row === undefined ? null : (own(row, level) ?? null),
-  };
+  return { score, weight, level, derivation: [`weight ${weight}`, ...applied] };
 }
 
-/** `weight 4 + manyJobs + aigov = 6 -> max`, the one-line derivation the human output prints. */
-export function renderEffort(effort: EffortVerdict): string {
+/** `weight 4 + manyJobs + <domain add> = 6 -> max`, the one-line derivation the human output prints. */
+export function renderEffort(effort: Pick<EffortVerdict, "derivation" | "score" | "level">): string {
   return `${effort.derivation.join(" + ")} = ${effort.score} -> ${effort.level}`;
 }
 
 // ── step 6: the mismatch ────────────────────────────────────────────────────
 
-export interface Difference {
-  readonly field: "surface" | "tier" | "effort";
+export type Verdict = "match" | "mismatch" | "unread";
+
+export interface Compare {
+  readonly field: "surface" | "model" | "effort";
   readonly session: string;
+  /** What the recommendation says in the session's own terms (the effort as the session surface's dial). */
   readonly recommended: string | null;
+  readonly verdict: Verdict;
 }
 
 export interface Mismatch {
-  /** The fields the session gave, in the order they are compared. */
-  readonly compared: readonly string[];
+  /** True when no compare is a mismatch; an unread compare never makes one. */
   readonly match: boolean;
-  readonly differences: readonly Difference[];
+  /** One entry per value the session gave, in the order surface, model, effort. */
+  readonly compares: readonly Compare[];
 }
 
 /**
  * Compare what the running session says about itself with the recommendation.
  * It is an ANSWER, never a refusal: a difference is reported and the caller
- * (the skill) asks once and carries on.
+ * (the skill) asks once and carries on. EFFORT is compared in dial space: both
+ * the session's level and the recommended one go through the session surface's
+ * `effort.surfaceMap` row (the winner's surface when the session gave none or
+ * `unread`), so a collapsed top equals the dial below it.
  */
-export function compareSession(session: SessionValues, winner: ResolvedSide, level: string): Mismatch | null {
-  const given: [Difference["field"], string | null, string | null][] = [
-    ["surface", session.surface, winner.surface],
-    ["tier", session.tier, winner.surfaceAlias],
-    ["effort", session.effort, level],
-  ];
-  const asked = given.filter((row): row is [Difference["field"], string, string | null] => row[1] !== null);
-  if (asked.length === 0) return null;
-  const differences = asked
-    .filter(([, mine, recommended]): boolean => mine !== recommended)
-    .map(([field, mine, recommended]): Difference => ({ field, session: mine, recommended }));
-  return { compared: asked.map(([field]): string => field), match: differences.length === 0, differences };
+export function compareSession(
+  registry: DirectRegistry,
+  session: SessionValues,
+  winner: ResolvedSide,
+  level: string,
+): Mismatch | null {
+  const compares: Compare[] = [];
+  const decide = (field: Compare["field"], given: string, recommended: string | null, same: boolean): void => {
+    compares.push({ field, session: given, recommended, verdict: given === UNREAD ? "unread" : same ? "match" : "mismatch" });
+  };
+  if (session.surface !== null) decide("surface", session.surface, winner.surface, session.surface === winner.surface);
+  if (session.model !== null) decide("model", session.model, winner.surfaceAlias, session.model === winner.surfaceAlias);
+  if (session.effort !== null) {
+    const readSurface = session.surface !== null && session.surface !== UNREAD ? session.surface : winner.surface;
+    const recommended = dial(registry, readSurface, level);
+    const given = session.effort === UNREAD ? null : dial(registry, readSurface, session.effort);
+    decide("effort", session.effort, recommended, given !== null && given === recommended);
+  }
+  if (compares.length === 0) return null;
+  return { match: compares.every((compare): boolean => compare.verdict !== "mismatch"), compares };
 }
 
 // ── the whole resolution ────────────────────────────────────────────────────
@@ -606,12 +631,14 @@ export function compareSession(session: SessionValues, winner: ResolvedSide, lev
 export interface Resolution {
   readonly inputs: DirectInputs;
   readonly session: SessionValues;
-  readonly domain: DomainVerdict;
+  /** Set when there is nothing to direct (no job); every other field is then null or empty. */
+  readonly undirectable: string | null;
+  readonly domain: DomainVerdict | null;
   readonly pairs: readonly Pair[];
-  readonly aggregate: Pick<Aggregate, "skipped" | "tally">;
-  readonly winner: ResolvedSide;
-  readonly runnerUp: ResolvedSide;
-  readonly effort: EffortVerdict;
+  readonly aggregate: Pick<Aggregate, "skipped" | "tally"> | null;
+  readonly winner: ResolvedSide | null;
+  readonly runnerUp: ResolvedSide | null;
+  readonly effort: EffortVerdict | null;
   readonly mismatch: Mismatch | null;
 }
 
@@ -622,23 +649,30 @@ export interface ResolveContext {
   readonly models: Readonly<Record<string, Readonly<Record<string, string>>>>;
 }
 
+/** The reason an empty job axis answers with. */
+export const UNDIRECTABLE_JOB = "job axis empty";
+
 export function resolveDirection(context: ResolveContext, inputs: DirectInputs, session: SessionValues): Resolution {
   const { registry, taxonomy, models } = context;
+  if (inputs.jobs.length === 0) {
+    return { inputs, session, undirectable: UNDIRECTABLE_JOB, domain: null, pairs: [], aggregate: null, winner: null, runnerUp: null, effort: null, mismatch: null };
+  }
   const derived = deriveDomain(taxonomy, inputs);
   const { pairs, fallbacks } = collectPairs(registry, taxonomy, inputs, derived.domain);
   const decided = aggregate(registry, pairs);
-  const winner = resolveSide(registry, models, decided.winner, decided.winnerSides, inputs.langs);
-  const runnerUp = resolveSide(registry, models, decided.runnerUp, decided.runnerUpSides, inputs.langs);
-  const effort = scoreEffort(registry, taxonomy, inputs, derived.domain, winner.surface);
+  const scored = scoreEffort(registry, taxonomy, inputs, derived.domain);
+  const winner = resolveSide(registry, models, decided.winner, decided.winnerSides, inputs.langs, scored.level);
+  const runnerUp = resolveSide(registry, models, decided.runnerUp, decided.runnerUpSides, inputs.langs, scored.level);
   return {
     inputs,
     session,
+    undirectable: null,
     domain: { ...derived, fallbacks },
     pairs,
     aggregate: { skipped: decided.skipped, tally: decided.tally },
     winner,
     runnerUp,
-    effort,
-    mismatch: compareSession(session, winner, effort.level),
+    effort: { ...scored, surfaceEffort: dial(registry, winner.surface, scored.level) },
+    mismatch: compareSession(registry, session, winner, scored.level),
   };
 }
