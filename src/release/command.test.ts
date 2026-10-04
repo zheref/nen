@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runFamily, type Io } from "../index.js";
+import { run, runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { defaultSeams, spawnRunner, type CommandResult, type Seams } from "../seam/exec.js";
@@ -957,5 +957,175 @@ describe("nen release preflight -- the SAME CON-33(c) verdict as 'nen changelog 
     expect(result.err.join("\n")).toMatch(/has a revision beginning with '-'/);
     expect(toolCalls).toEqual([]);
     expect(existsSync(target)).toBe(false);
+  });
+});
+
+// --- zheref/nen#309: every usage problem in ONE refusal, not one per run ---
+describe("nen release preflight -- every missing or invalid flag in one refusal (zheref/nen#309)", () => {
+  async function refuse(argv: readonly string[], repoFlag: string | null = null): Promise<{ code: number; err: string; toolCalls: string[] }> {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const toolCalls: string[] = [];
+    const result = await capture(["release", "preflight", ...argv], repoFlag ?? dir, (command, args): CommandResult => {
+      toolCalls.push([command, ...args].join(" "));
+      return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+    });
+    return { code: result.code, err: result.err.join("\n"), toolCalls };
+  }
+
+  it("names ALL FIVE required flags when every one is missing, exits 2 once, and runs no tool", async () => {
+    const { code, err, toolCalls } = await refuse([]);
+    expect(code).toBe(2);
+    expect(err).toMatch(/release preflight refused for 5 reasons -- nothing was run:/);
+    for (const flag of ["repo-slug", "tag", "range", "changelog", "owner-repo"]) {
+      expect(err).toContain(`  - --${flag} is required.`);
+    }
+    // One refusal, one pointer to the help -- not five.
+    expect(err.match(/Run 'nen release --help'\./g)).toHaveLength(1);
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("names exactly the missing subset, in usage order", async () => {
+    const { code, err } = await refuse(["--repo-slug", "o/r", "--range", "v1.0.0..v1.1.0", "--owner-repo", "o/r"]);
+    expect(code).toBe(2);
+    expect(err).toMatch(/refused for 2 reasons/);
+    expect(err.indexOf("--tag is required.")).toBeLessThan(err.indexOf("--changelog is required."));
+    expect(err).not.toContain("--repo-slug is required.");
+    expect(err).not.toContain("--range is required.");
+  });
+
+  it("keeps a SINGLE missing flag's refusal byte for byte what it always was", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    writeFileSync(join(dir, "CHANGELOG.md"), "x\n");
+    const { code, err } = await refuse(
+      ["--repo-slug", "o/r", "--range", "v1.0.0..v1.1.0", "--changelog", "CHANGELOG.md", "--owner-repo", "o/r"],
+      dir,
+    );
+    expect(code).toBe(2);
+    expect(err).toBe("nen release: --tag is required. The tag being proposed for this cut.\nRun 'nen release --help'.");
+  });
+
+  // THE ORDERING CHANGE, PINNED (hanten N4): the caller-named files are now
+  // read BEFORE 'gh variable get', so an unreadable one is refused with no
+  // tool run at all -- and, alone, with the message it always had.
+  function validArgs(dir: string, overrides: Record<string, string>): string[] {
+    writeFileSync(join(dir, "CHANGELOG.md"), "x\n");
+    writeFileSync(join(dir, "live-chores.json"), "[]");
+    const flags: Record<string, string> = {
+      "repo-slug": "o/r",
+      tag: "v1.1.0",
+      range: "v1.0.0..v1.1.0",
+      changelog: "CHANGELOG.md",
+      "owner-repo": "o/r",
+      "critical-issues": "",
+      "live-chores-from": "live-chores.json",
+      ...overrides,
+    };
+    return Object.entries(flags).flatMap(([flag, value]): string[] => [`--${flag}`, value]);
+  }
+
+  it("refuses ONLY an unreadable --changelog with its old message byte for byte, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const { code, err, toolCalls } = await refuse(validArgs(dir, { changelog: "missing-CHANGELOG.md" }), dir);
+    expect(code).toBe(2);
+    expect(err).toBe(
+      `nen release: could not read '${join(dir, "missing-CHANGELOG.md")}' (ENOENT). A verb that fell back to an empty input here would report a clean verdict for a check it never ran.\nRun 'nen release --help'.`,
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("refuses ONLY an unreadable --live-chores-from with its old message byte for byte, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const { code, err, toolCalls } = await refuse(validArgs(dir, { "live-chores-from": "missing-chores.json" }), dir);
+    expect(code).toBe(2);
+    expect(err).toBe(
+      `nen release: could not read '${join(dir, "missing-chores.json")}' (ENOENT). A verb that fell back to an empty input here would report a clean verdict for a check it never ran.\nRun 'nen release --help'.`,
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  // Copilot, NN-PR-#353: --repo is ASSERTED, so a path that does not exist or
+  // names a regular file is a usage problem gathered before any tool runs --
+  // even with every other flag valid and every file flag absolute.
+  function absoluteValidArgs(dir: string): string[] {
+    writeFileSync(join(dir, "CHANGELOG.md"), "x\n");
+    writeFileSync(join(dir, "live-chores.json"), "[]");
+    return validArgs(dir, { changelog: join(dir, "CHANGELOG.md"), "live-chores-from": join(dir, "live-chores.json"), "fragment-dir": join(dir, "changelog.d") });
+  }
+
+  it("refuses a --repo naming a NONEXISTENT path, by name, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const missing = join(dir, "no-such-checkout");
+    const { code, err, toolCalls } = await refuse(absoluteValidArgs(dir), missing);
+    expect(code).toBe(2);
+    expect(err).toContain(`--repo ${missing} resolves to '${missing}', which does not exist.`);
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("refuses a --repo naming a REGULAR FILE, by name, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const file = join(dir, "CHANGELOG.md");
+    const { code, err, toolCalls } = await refuse(absoluteValidArgs(dir), file);
+    expect(code).toBe(2);
+    expect(err).toContain(`--repo ${file} resolves to '${file}', which is a file, not a directory.`);
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("reports an EMPTY --fragment-dir even when --repo did not resolve", async () => {
+    const { code, err } = await refuse(["--tag", "v1.1.0", "--fragment-dir", ""], "");
+    expect(code).toBe(2);
+    expect(err).toMatch(/refused for 6 reasons/);
+    expect(err).toMatch(/--repo was given an empty value/);
+    expect(err).toMatch(/--fragment-dir was given an empty value/);
+  });
+
+  it("gathers an INVALID flag and an unreadable file beside the missing ones", async () => {
+    const { code, err, toolCalls } = await refuse([
+      "--range=--output=x..HEAD",
+      "--critical-issues",
+      "3,abc",
+      "--changelog",
+      "no-such-CHANGELOG.md",
+      "--live-chores-from",
+      "no-such-chores.json",
+      "--fragment-dir",
+      "",
+    ]);
+    expect(code).toBe(2);
+    expect(err).toMatch(/refused for 8 reasons/);
+    expect(err).toContain("--repo-slug is required.");
+    expect(err).toContain("--tag is required.");
+    expect(err).toContain("--owner-repo is required.");
+    expect(err).toMatch(/--range '--output=x\.\.HEAD' has a revision beginning with '-'/);
+    expect(err).toMatch(/--critical-issues takes a comma-separated list .* 'abc'/);
+    expect(err).toMatch(/could not read '.*no-such-chores\.json'/);
+    expect(err).toMatch(/--fragment-dir was given an empty value/);
+    expect(err).toMatch(/could not read '.*no-such-CHANGELOG\.md'/);
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("counts an unresolvable --repo as one more reason rather than hiding the others", async () => {
+    const { code, err } = await refuse(["--tag", "v1.1.0"], "");
+    expect(code).toBe(2);
+    expect(err).toMatch(/refused for 5 reasons/);
+    expect(err).toMatch(/--repo was given an empty value/);
+    expect(err).toContain("--repo-slug is required.");
+  });
+
+  it("--help marks which flags are required and which optional", async () => {
+    const out: string[] = [];
+    const io: Io = {
+      out: (line): void => {
+        out.push(line);
+      },
+      err: (): void => undefined,
+    };
+    expect(await run(["release", "preflight", "--help"], io)).toBe(0);
+    const help = out.join("\n");
+    const required = help.slice(help.indexOf("REQUIRED -- refused at exit 2"), help.indexOf("OPTIONAL TO PARSE"));
+    for (const flag of ["--repo-slug", "--tag", "--range", "--changelog", "--owner-repo"]) expect(required).toContain(`${flag} <`);
+    const optional = help.slice(help.indexOf("OPTIONAL TO PARSE"), help.indexOf("resolve-target:\n"));
+    for (const flag of ["--critical-issues", "--live-chores-from", "--hold-var", "--fragment-dir", "--repo"]) expect(optional).toContain(`${flag} <`);
+    expect(optional).toContain("OPTIONAL -- defaulted when omitted:");
+    expect(optional).not.toMatch(/^ {2}--(?:repo-slug|tag|range|changelog|owner-repo) </m);
   });
 });

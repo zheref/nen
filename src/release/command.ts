@@ -20,7 +20,7 @@ import {
 import { optionalDirectoryFlag, readJsonFile, readTextFile, splitList } from "../cli/inputs.js";
 import { DEFAULT_FRAGMENT_DIR } from "../changelog/completeness.js";
 import { reconcileChangelog, refuseOptionShapedRange } from "../changelog/reconcile.js";
-import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
+import { assertRepoRoot, RepoRootError } from "../repo/root.js";
 import { GH, GIT, must, outputLines, ToolError, type CommandResult } from "../seam/exec.js";
 import { loadWorkflow } from "../schema/workflow.js";
 import { runPreflight, type HoldState, type LiveChoreCandidate } from "./preflight.js";
@@ -112,15 +112,47 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
   return { kind: "held", value, recognizedTruthy: HOLD_TRUTHY.has(lowered) };
 }
 
-const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>]
+const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
 nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 
 preflight:
   Every precondition of the release preflight table, checked and reported
-  whole -- never the first failure (getsuga SKILL.md §2).
+  whole -- never the first failure (getsuga SKILL.md §2). Every usage
+  problem is reported whole too: each missing or invalid flag, an
+  unresolvable --repo, and each caller-named file that cannot be read (files
+  are checked once --repo resolves) is named in ONE refusal at exit 2,
+  before any tool runs (zheref/nen#309).
 
+  REQUIRED -- refused at exit 2 when absent or empty:
+  --repo-slug <owner/name>  The repository whose hold variable 'gh variable
+                            get' reads. The tag is not checked here.
+  --tag <vX.Y.Z>            Checked against 'git ls-remote --tags origin',
+                            run in --repo's checkout.
+  --range <vPrev>..<cut-point>
+                            Same contract as 'nen changelog completeness'; a
+                            revision beginning with '-' is refused.
+  --changelog <path>        The CHANGELOG.md at the cut point; same contract
+                            as 'nen changelog completeness'.
+  --owner-repo <owner/name> Scopes changelog link matching to this
+                            repository; same contract as 'nen changelog
+                            completeness'.
+
+  OPTIONAL TO PARSE, REQUIRED FOR THEIR ROW TO PASS -- omitting either is not
+  a usage error; the row reports "not supplied -- not checked" and FAILS:
+  --critical-issues <n,n>   Open critical-severity issue numbers, gathered by
+                            the caller (this repository's own severity label
+                            is not this binary's to know). Pass
+                            --critical-issues '' to assert there are none.
+  --live-chores-from <path> A JSON array of { name, issueOpen,
+                            integrationBranchExists,
+                            openPrTargetsIntegrationOrMain } -- the CON-36
+                            three-part test's inputs, per chore, gathered by
+                            the caller. Point it at a file containing '[]'
+                            to assert none are live.
+
+  OPTIONAL -- defaulted when omitted:
   --hold-var <name>         'gh variable get <name>' at --repo-slug. Defaults
                             to RELEASE_HOLD. Case-insensitive true/1/yes
                             reads as a recognized active hold; false/0/no (or
@@ -130,28 +162,19 @@ preflight:
                             hold. A gh that cannot be reached (missing,
                             unauthenticated, no variable-read scope) fails
                             this check rather than reading as "not set".
-  --critical-issues <n,n>   Open critical-severity issue numbers, gathered by
-                            the caller (this repository's own severity label
-                            is not this binary's to know). REQUIRED to pass
-                            this row -- omitting the flag reports "not
-                            supplied -- not checked" and fails the table; pass
-                            --critical-issues '' to assert there are none.
-  --live-chores-from <path> A JSON array of { name, issueOpen,
-                            integrationBranchExists,
-                            openPrTargetsIntegrationOrMain } -- the CON-36
-                            three-part test's inputs, per chore, gathered by
-                            the caller. REQUIRED to pass this row -- omitting
-                            it reports "not supplied -- not checked"; point it
-                            at a file containing '[]' to assert none are live.
   --fragment-dir <dir>      Defaults to changelog.d, the same default 'nen
                             changelog completeness' uses. Omit the flag to
                             use it; an EMPTY value is refused (it would
                             resolve to the repository root), and so is a path
                             that is not a directory. A directory that is not
                             there contributes no fragments.
-  --range, --changelog, --owner-repo  Same contract as
-                            'nen changelog completeness'.
-  --tag <vX.Y.Z>            Checked against 'git ls-remote --tags origin'.
+  --repo <path>             The checkout whose origin the tag is checked
+                            against and whose history is reconciled; it
+                            resolves the relative --changelog,
+                            --live-chores-from and --fragment-dir, which are
+                            checked once --repo resolves (an empty
+                            --fragment-dir is refused either way). Defaults
+                            to the current directory.
 
 resolve-target:
   getsuga §1: resolves the token to a SHA (re-fetching origin/--trunk
@@ -232,16 +255,39 @@ export const releaseCommand: Command = {
     if (subcommand === "self-check") return selfCheck(context);
     if (subcommand === "unit-check") return unitCheck(context);
 
-    const repoSlug = requireValue(context.args, "repo-slug", "The owner/name to check RELEASE_HOLD and the tag against.");
-    const tag = requireValue(context.args, "tag", "The tag being proposed for this cut.");
-    const range = requireValue(context.args, "range", "The <vPrev>..<cut-point> range CON-33(c) reconciles.");
+    // EVERY USAGE PROBLEM, IN ONE REFUSAL (zheref/nen#309). Each required
+    // flag used to be refused on its own, so an invocation missing five of
+    // them took five round trips to discover -- the same serial discovery
+    // the table below exists to avoid for the preconditions. Every flag and
+    // every caller-named input is now validated before anything runs, each
+    // usage error (and a bad --repo) is collected rather than thrown, and the
+    // run is refused once, at exit 2, naming them all. A single problem is
+    // rethrown as it was raised, so its message stays byte for byte.
+    const problems: Error[] = [];
+    const gather = <T>(check: () => T): T | undefined => {
+      try {
+        return check();
+      } catch (error) {
+        // RepoRootError is exit 2 at runFamily too: a bad --repo is one more
+        // usage problem, not a reason to hide the others.
+        if (error instanceof VerbUsageError || error instanceof RepoRootError) {
+          problems.push(error);
+          return undefined;
+        }
+        throw error;
+      }
+    };
+
+    const repoSlug = gather(() => requireValue(context.args, "repo-slug", "The owner/name whose hold variable 'gh variable get' reads; the tag is checked with 'git ls-remote --tags origin' in --repo's checkout."));
+    const tag = gather(() => requireValue(context.args, "tag", "The tag being proposed for this cut."));
+    const range = gather(() => requireValue(context.args, "range", "The <vPrev>..<cut-point> range CON-33(c) reconciles."));
     // Refused HERE, with the other usage checks, as well as inside the shared
     // reconciliation: a --range git would read as an option is a usage error,
     // and this verb reaches GitHub (`gh variable get`) before it reconciles --
     // no tool should run for an invocation that is refused.
-    refuseOptionShapedRange(range);
-    const changelogPath = requireValue(context.args, "changelog", "The CHANGELOG.md at the cut point.");
-    const ownerRepo = requireValue(context.args, "owner-repo", "Scopes changelog link matching to this repository.");
+    if (range !== undefined) gather(() => refuseOptionShapedRange(range));
+    const changelogPath = gather(() => requireValue(context.args, "changelog", "The CHANGELOG.md at the cut point."));
+    const ownerRepo = gather(() => requireValue(context.args, "owner-repo", "Scopes changelog link matching to this repository."));
     const holdVar = context.args.values["hold-var"] ?? DEFAULT_HOLD_VAR;
     // `undefined` (the flag was never given) and `""` (the caller explicitly
     // asserted "none") are DIFFERENT inputs (review finding): omitting
@@ -251,27 +297,75 @@ export const releaseCommand: Command = {
     const criticalIssues =
       criticalIssuesRaw === undefined
         ? null
-        : splitIntegerList(splitList(criticalIssuesRaw), "critical-issues");
+        : gather(() => splitIntegerList(splitList(criticalIssuesRaw), "critical-issues"));
 
-    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-
-    const holdResult = context.seams.run(GH, ["variable", "get", holdVar, "--repo", repoSlug]);
-    const hold = resolveHoldState(holdResult, holdVar);
+    // The caller-named files below resolve against --repo, so they are only
+    // checked once it resolved; an unresolvable --repo is itself refused.
+    // ASSERTED, not merely resolved (Copilot, NN-PR-#353): resolveRepoRoot
+    // accepts a path that does not exist or names a regular file, and with
+    // absolute file flags the run then reached 'gh variable get' before git
+    // failed on the bad cwd -- a tool run for a refused invocation, blaming
+    // the wrong cause. assertRepoRoot refuses both by name, here, with the rest.
+    const root = gather(() => assertRepoRoot({ repoFlag: context.repoFlag }));
 
     const liveChoresPath = context.args.values["live-chores-from"];
-    const liveChores: LiveChoreCandidate[] | null =
-      liveChoresPath === undefined ? null : readJsonFile(liveChoresPath, root);
+    const liveChores: LiveChoreCandidate[] | null | undefined =
+      liveChoresPath === undefined
+        ? null
+        : root === undefined
+          ? undefined
+          : gather(() => readJsonFile<LiveChoreCandidate[]>(liveChoresPath, root));
 
     // THE SAME SEAM ../changelog/command.ts USES for the same flag, so the two
     // verbs cannot drift again: absent directory -> no fragments, `''` and a
     // non-directory path -> exit 2 naming the flag. See ../cli/inputs.ts.
-    const fragmentDirFull = optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root);
+    // The EMPTY-value refusal needs no root, so it is reported whether or
+    // not --repo resolved; only the stat of a real path waits for one.
+    const fragmentDirRaw = context.args.values["fragment-dir"];
+    const fragmentDirFull =
+      root !== undefined
+        ? gather(() => optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root))
+        : fragmentDirRaw !== undefined && fragmentDirRaw.trim() === ""
+          ? gather(() => optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, ""))
+          : undefined;
+
+    const changelog =
+      changelogPath === undefined || root === undefined ? undefined : gather(() => readTextFile(changelogPath, root));
+
+    const [onlyProblem] = problems;
+    if (problems.length === 1 && onlyProblem !== undefined) throw onlyProblem;
+    if (problems.length > 1) {
+      throw new VerbUsageError(
+        `release preflight refused for ${problems.length} reasons -- nothing was run:\n  - ${problems.map((problem): string => problem.message).join("\n  - ")}`,
+      );
+    }
+    // Every one of these is undefined only when it pushed a problem, refused
+    // just above; this narrows the types and is unreachable.
+    /* c8 ignore start */
+    if (
+      repoSlug === undefined ||
+      tag === undefined ||
+      range === undefined ||
+      changelogPath === undefined ||
+      ownerRepo === undefined ||
+      criticalIssues === undefined ||
+      liveChores === undefined ||
+      fragmentDirFull === undefined ||
+      changelog === undefined ||
+      root === undefined
+    ) {
+      throw new Error("release preflight: an input was left unresolved without a refusal");
+    }
+    /* c8 ignore stop */
+
+    const holdResult = context.seams.run(GH, ["variable", "get", holdVar, "--repo", repoSlug]);
+    const hold = resolveHoldState(holdResult, holdVar);
+
     const fragmentFiles =
       fragmentDirFull === null
         ? []
         : readdirSync(fragmentDirFull).filter((name): boolean => name.endsWith(".md"));
 
-    const changelog = readTextFile(changelogPath, root);
     // THE SAME RECONCILIATION `nen changelog completeness` RUNS
     // (../changelog/reconcile.ts), release-PR allowance included
     // (zheref/nen#229). This used to be a second hand-spelling of the merge
