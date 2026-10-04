@@ -20,6 +20,7 @@ import { SchemaError } from "../schema/errors.js";
 import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
 import { addedNote, admittedAdditions, injectedMessage, readBack, sentTrailers } from "../commit/readback.js";
 import { CATCH_UP_CONTRACT, catchUp, renderConflicts, type RequestedStrategy } from "./catchup.js";
+import { EXIT_ALL_MECHANICAL, loadMechanical, renderClassification } from "./mechanical.js";
 import { classifyWorkingCopy, readWorkingCopyState } from "./classify.js";
 import { messageFileRefusals } from "./messagefile.js";
 import { looksLikeRefspecOrForce, PUBLISH_CONTRACT, publish } from "./publish.js";
@@ -167,7 +168,8 @@ true. ON A CONFLICT nen picks no side: the tree is left exactly as git left
 it, every conflicted path is reported with OUR side (always this branch's,
 whichever index stage holds it -- 2 on a merge, 3 on a rebase) and THEIR
 side (always the base's), capped, '(binary, N bytes)' for a blob with a
-NUL, and the abort line is printed, at exit 1.
+NUL, and the abort line is printed, at exit 1 (3 when every path is
+mechanical -- see CONFLICT CLASSES below).
 RESUMING is the same command on the same tree: once the resolutions are
 staged, re-run 'nen wc catch-up' with the same --base and --strategy and it
 finds the rebase or merge in progress (git rebase --show-current-patch /
@@ -180,10 +182,58 @@ continued: one paused at a 'break' or a failed 'exec' line is refused at
 exit 2 naming 'git rebase --continue' / '--abort', and only --abort acts on
 it; a probe git does not answer is refused at exit 2 too.
 
+CONFLICT CLASSES (zheref/nen#326). On a stop, every conflicted path is
+classed manifest, changelog, mirror or other by nen/contract.json's
+'mechanical' block -- read from the working tree, and only when something
+conflicted:
+
+  "mechanical": {
+    "manifests": ["package.json", ".claude-plugin/plugin.json"],
+    "changelog": ["CHANGELOG.md"],
+    "mirrors": [{ "paths": ["surfaces/codex/**"],
+                  "regenerate": ["nen", "surface", "mirror", "generate", ...] }]
+  }
+
+Globs take '*', '**' and '?'; a path two globs match is the first class's
+(manifest, changelog, then each mirror in order). A mirror glob covering the
+whole tree (any glob of only '*' and '/': '*', '**', '***', '*/**')
+and any glob reaching nen/contract.json itself are
+refused when the file is read. A DELETE/MODIFY conflict (one side's stage
+missing) on a manifest or changelog is 'other': whether the file should
+exist is a judgement. A mirror's deletion stays a mirror's.
+
+The text output counts each class and lists, per class, the paths and the
+commands a caller runs, from the working tree's root ('run from <root>';
+every git step also carries 'git -C <root>', and the declared regenerate
+argv runs from there too). Every path is a literal, root-anchored pathspec
+(':(top,literal)<path>'), so 'x*.md' never reaches 'xa.md'. 'git add' for a
+manifest (the version is a release decision nen does not make) and the
+changelog (both sides kept); for a mirror, the base's side checked out
+('--theirs' on a merge, '--ours' on a rebase; for a path already staged with
+a leftover marker, 'MERGE_HEAD' on a merge and 'HEAD' on a rebase) or 'git
+rm' where the base deleted it, the declared 'regenerate' argv exactly as
+declared, then 'git add -A' over the mirror's globs. A token with a tab or
+newline is shown in $'...' form rather than dropped. NONE OF IT IS RUN: nen
+still picks no side and resolves nothing.
+
+When EVERY conflicted path is in the declared set the stop exits 3 instead
+of 1. EXIT 1 NO LONGER COVERS EVERY CONFLICT: a caller that treats 1 as
+"conflict" must also treat 3 as one. One 'other' path, no 'mechanical'
+block, or a contract nen cannot read is the ordinary exit 1 with every path
+reported as before. Resuming is unchanged: stage the resolutions and re-run
+the same command; it continues the rebase or merge and pushes nothing.
+
+Exits: 0 caught up, resumed, aborted, dry run or noOp; 1 a conflict with
+any 'other' path, or a git failure; 2 every refusal above; 3 a conflict
+whose every path is mechanical -- still a conflict, nothing continued.
+
 --json's contract is '${CATCH_UP_CONTRACT}': { contract, base, strategy
 (the one that ran), before, after (null on a dry run or a conflict),
-behindBefore, aheadBefore, noOp, conflicted: [{ path, ours, theirs }],
-resumed, aborted, dryRun }.
+behindBefore, aheadBefore, noOp, conflicted: [{ path, class, ours, theirs }],
+resumed, aborted, dryRun, declaration (not-read | absent | declared |
+unreadable), declarationError, classes: { manifest, changelog, mirror,
+other }, mechanical, resolve: [{ class, globs, paths, cwd, note, steps:
+[argv, ...] }], cwd (the working tree's root) }.
 
 publish:
   nen wc publish --repo <path> [--set-upstream] [--remote <name>] [--dry-run]
@@ -525,11 +575,22 @@ function doCatchUp(context: CommandContext): number {
     strategy: strategyRaw as RequestedStrategy,
     dryRun: context.args.booleans.has("dry-run"),
     abort: context.args.booleans.has("abort"),
+    declaration: () => loadMechanical(root),
   });
   if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
-  const { report, lines } = outcome;
-  emit(context.io, context.json, report, [...lines, ...renderConflicts(report.conflicted)]);
-  return report.conflicted.length > 0 ? 1 : 0;
+  const { report, lines, classified } = outcome;
+  const classification = classified === null
+    ? []
+    : renderClassification(
+        classified.classification,
+        classified.read,
+        report.conflicted.filter((conflict): boolean => conflict.class === "other").map((conflict): string => conflict.path),
+      );
+  emit(context.io, context.json, report, [...lines, ...renderConflicts(report.conflicted), ...classification]);
+  if (report.conflicted.length === 0) return 0;
+  // EXIT 3 ONLY WHEN EVERY PATH IS IN THE DECLARED SET (zheref/nen#326); one
+  // 'other', or no declaration read, is the ordinary stop.
+  return report.mechanical ? EXIT_ALL_MECHANICAL : 1;
 }
 
 function doPublish(context: CommandContext): number {
