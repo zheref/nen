@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LARGE_BYTES, parseStatusPorcelain, triageStage } from "./triage.js";
+import {
+  addListFrom,
+  DEFAULT_LARGE_BYTES,
+  expandWorktreeRenames,
+  parseStatusPorcelain,
+  parseStatusPorcelainBytes,
+  pathspecLine,
+  triageStage,
+} from "./triage.js";
 
 describe("parseStatusPorcelain -- -z / NUL-delimited format", () => {
   it("parses ordinary modified/added/deleted/untracked entries", () => {
@@ -206,5 +214,147 @@ describe("triageStage -- unusually large files", () => {
       { sizes: new Map([["dump.local.json", 5_000_000]]) },
     );
     expect(result.flagged[0]?.reasons).toEqual(["local-config", "large"]);
+  });
+});
+
+// zheref/nen#237: the add list is triage's complement, computed from the same
+// entries -- never re-derived.
+describe("addListFrom -- the exact add list", () => {
+  function listOf(status: string, mentions = ""): ReturnType<typeof addListFrom> {
+    const entries = parseStatusPorcelain(status);
+    return addListFrom(entries, triageStage(entries, { mentionedText: mentions }));
+  }
+
+  it("keeps every modified, added, renamed, mentioned-deleted and UNTRACKED path, in git's order", () => {
+    const list = listOf(
+      " M src/a.ts\0A  src/b.ts\0R  src/new.ts\0src/old.ts\0 D src/gone.ts\0?? packages/core/src/utils/oauthReturnQuery.ts\0",
+      "drops gone.ts",
+    );
+    expect(list.verdict).toBe("ready");
+    expect(list.add).toEqual([
+      "src/a.ts",
+      "src/b.ts",
+      "src/new.ts",
+      "src/gone.ts",
+      "packages/core/src/utils/oauthReturnQuery.ts",
+    ]);
+    expect(list.excluded).toEqual([]);
+  });
+
+  it("never lists a flagged or an ignored path, and names each exclusion with its reasons", () => {
+    const list = listOf(" M src/a.ts\0?? .env\0!! node_modules/x.js\0");
+    expect(list.add).toEqual(["src/a.ts"]);
+    expect(list.excluded).toEqual([{ path: ".env", reasons: ["secret-shape"] }]);
+    expect(list.ignored).toEqual([{ path: "node_modules/x.js", reasons: ["ignored"] }]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("moves a deletion already staged to alreadyStaged -- git add would refuse its pathspec", () => {
+    const list = listOf("D  src/staged-gone.ts\0 M src/a.ts\0", "staged-gone.ts");
+    expect(list.add).toEqual(["src/a.ts"]);
+    expect(list.alreadyStaged).toEqual(["src/staged-gone.ts"]);
+  });
+
+  it("is 'empty' on an all-ignored tree, and 'empty' on a tree with nothing at all", () => {
+    expect(listOf("!! node_modules/x.js\0").verdict).toBe("empty");
+    expect(listOf("").verdict).toBe("empty");
+    expect(listOf("").add).toEqual([]);
+  });
+
+  it("calls a tree whose every change is flagged 'flagged', never 'empty'", () => {
+    const list = listOf("?? .env\0");
+    expect(list.add).toEqual([]);
+    expect(list.verdict).toBe("flagged");
+  });
+});
+
+describe("pathspecLine -- one path, one line git add reads back exactly", () => {
+  it("writes ordinary paths raw: spaces, edge whitespace, non-ASCII, glob characters", () => {
+    for (const path of ["src/a.ts", "with space.ts", " lead", "trail ", "secrëts/a.ts", "st*r[1].ts"]) {
+      expect(pathspecLine(path)).toBe(path);
+    }
+  });
+
+  it("C-quotes a path carrying a control character, or starting with a double quote", () => {
+    expect(pathspecLine("new\nline.ts")).toBe('"new\\nline.ts"');
+    expect(pathspecLine("cr\r")).toBe('"cr\\r"');
+    expect(pathspecLine("tab\there")).toBe('"tab\\there"');
+    expect(pathspecLine("bell\u0001")).toBe('"bell\\001"');
+    expect(pathspecLine('"quoted')).toBe('"\\"quoted"');
+    expect(pathspecLine('a\\b\n"c')).toBe('"a\\\\b\\n\\"c"');
+  });
+});
+
+// hanten round 1 on #237 (N1, N3, N4, N7, N8).
+describe("addListFrom -- what a list may never carry, and the rename it must", () => {
+  function listOf(status: string, mentions = ""): ReturnType<typeof addListFrom> {
+    const entries = expandWorktreeRenames(parseStatusPorcelain(status));
+    return addListFrom(entries, triageStage(entries, { mentionedText: mentions }));
+  }
+
+  it("keeps a rename's ORIG_PATH on the entry", () => {
+    expect(parseStatusPorcelain(" R src/new.ts\0src/old.ts\0")[0]).toMatchObject({
+      path: "src/new.ts",
+      origPath: "src/old.ts",
+    });
+  });
+
+  it("expands a WORKTREE rename into its original's deletion, and leaves index renames and copies alone", () => {
+    const paths = (status: string): string[] =>
+      expandWorktreeRenames(parseStatusPorcelain(status)).map((e): string => `${e.indexStatus}${e.worktreeStatus} ${e.path}`);
+    expect(paths(" R new.ts\0old.ts\0")).toEqual([" R new.ts", " D old.ts"]);
+    expect(paths("R  new.ts\0old.ts\0")).toEqual(["R  new.ts"]);
+    expect(paths(" C copy.ts\0orig.ts\0")).toEqual([" C copy.ts"]);
+  });
+
+  it("holds every unmerged pair off the list, verdict flagged", () => {
+    const status = ["UU", "AA", "DD", "AU", "UA", "DU", "UD"].map((xy, i): string => `${xy} c${i}.ts\0`).join("");
+    const list = listOf(`${status} M ok.ts\0`, "c2.ts c5.ts c6.ts");
+    expect(list.unmerged).toEqual(["c0.ts", "c1.ts", "c2.ts", "c3.ts", "c4.ts", "c5.ts", "c6.ts"]);
+    expect(list.add).toEqual(["ok.ts"]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("holds an embedded repository (an untracked path ending in '/') off the list", () => {
+    const list = listOf("?? vendor/lib/\0?? src/new.ts\0");
+    expect(list.embeddedRepos).toEqual(["vendor/lib/"]);
+    expect(list.add).toEqual(["src/new.ts"]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("lists a REAL U+FFFD in a filename as an ordinary path -- it is a legal character", () => {
+    const list = listOf("?? bad\uFFFD.ts\0?? src/new.ts\0");
+    expect(list.undecodable).toEqual([]);
+    expect(list.add).toEqual(["bad\uFFFD.ts", "src/new.ts"]);
+    expect(list.verdict).toBe("ready");
+  });
+
+  it("holds a name whose RAW bytes are not UTF-8 off the list as undecodable", () => {
+    const enc = new TextEncoder();
+    const bytes = new Uint8Array([...enc.encode("?? bad"), 0xff, ...enc.encode(".ts\0?? src/new.ts\0")]);
+    const entries = parseStatusPorcelainBytes(bytes);
+    expect(entries.map((e): boolean => e.undecodable === true)).toEqual([true, false]);
+    const list = addListFrom(entries, triageStage(entries));
+    expect(list.undecodable).toEqual(["bad\uFFFD.ts"]);
+    expect(list.add).toEqual(["src/new.ts"]);
+    expect(list.verdict).toBe("flagged");
+  });
+
+  it("marks a rename undecodable when only its ORIGINAL's bytes are bad, and carries that to the expanded deletion", () => {
+    const enc = new TextEncoder();
+    const bytes = new Uint8Array([...enc.encode(" R new.ts\0old"), 0xfe, ...enc.encode(".ts\0")]);
+    const expanded = expandWorktreeRenames(parseStatusPorcelainBytes(bytes));
+    expect(expanded.map((e): boolean => e.undecodable === true)).toEqual([true, true]);
+  });
+
+  it("parses valid bytes exactly as the text parser does, CR/LF inside a path included", () => {
+    const text = " M a\r\nb.ts\0R  new.ts\0old.ts\0?? x y.ts\0";
+    expect(parseStatusPorcelainBytes(new TextEncoder().encode(text))).toEqual(parseStatusPorcelain(text));
+  });
+
+  it("dedupes the add list, keeping first-seen order", () => {
+    // A worktree rename whose original git ALSO reports as its own deletion row.
+    const list = listOf(" R b.ts\0a.ts\0 D a.ts\0 M c.ts\0", "a.ts");
+    expect(list.add).toEqual(["b.ts", "a.ts", "c.ts"]);
   });
 });

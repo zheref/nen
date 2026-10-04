@@ -63,6 +63,15 @@ import { PROGRAM, VERSION } from "./version.js";
 export interface Io {
   readonly out: (line: string) => void;
   readonly err: (line: string) => void;
+  /**
+   * Raw stdout, no newline appended. Optional because almost nothing needs it:
+   * it exists for a NUL-delimited form (`nen stage list --nul`, zheref/nen#237),
+   * where the newline `out` appends would reach `git add --pathspec-file-nul`
+   * as one more pathspec -- `"\n"`, matching nothing, and git then stages
+   * nothing at all. A sink that does not supply it gets the NUL form through
+   * `out`, which is only ever a test harness's capture.
+   */
+  readonly write?: (chunk: string) => void;
 }
 
 const USAGE = `${PROGRAM} ${VERSION} -- the local dev CLI for repository-driven agentic delivery.
@@ -555,6 +564,9 @@ if (import.meta.main) {
   const pending = run(process.argv.slice(2), {
     out: (line): void => {
       process.stdout.write(`${line}\n`);
+    },
+    write: (chunk): void => {
+      process.stdout.write(chunk);
     },
     err: stderr,
   });
