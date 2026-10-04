@@ -5,8 +5,8 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 ## v0.19.0 — 2026-10-04
 
 Release unit for `v0.18.3..v0.19.0`. It brings interactive desktop runners, the runner trust fixes, and stricter readiness:
-- the deliveries: [#334](https://github.com/zheref/nen/pull/334), [#335](https://github.com/zheref/nen/pull/335), [#336](https://github.com/zheref/nen/pull/336), [#342](https://github.com/zheref/nen/pull/342) and [#343](https://github.com/zheref/nen/pull/343);
-- [#358](https://github.com/zheref/nen/pull/358), the release proposal.
+- the deliveries: [#334](https://github.com/zheref/nen/pull/334), [#335](https://github.com/zheref/nen/pull/335), [#336](https://github.com/zheref/nen/pull/336), [#342](https://github.com/zheref/nen/pull/342), [#343](https://github.com/zheref/nen/pull/343), [#355](https://github.com/zheref/nen/pull/355) and [#357](https://github.com/zheref/nen/pull/357);
+- [#358](https://github.com/zheref/nen/pull/358), the release proposal, and [#362](https://github.com/zheref/nen/pull/362), which folds in #355 and #357. Those two merged while #358 was open, ahead of its merge.
 
 The compatibility floor moves to `0.19`.
 
@@ -34,6 +34,17 @@ The compatibility floor moves to `0.19`.
   - It also names the target's own runners left on such an account.
   - Nothing is refused, and nen never creates an account.
 
+- **pr** ([#355](https://github.com/zheref/nen/pull/355), closes [#345](https://github.com/zheref/nen/issues/345)) — `nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run]` is the explicit draft-to-ready transition, now that `pr ready` fails a draft at row 1. Its contract is `nen.pr.mark-ready/v0.1`.
+  - It reads the PR first. Exit 2 means a target that does not resolve, exit 3 a closed or merged PR, and exit 8 a head-pin mismatch. A PR already out of draft is `already-ready` at exit 0, with nothing sent.
+  - It sends `markPullRequestReadyForReview` by node id, on gh's own credential.
+  - It reports `marked-ready` only when a read-back shows `isDraft:false`. A head that moved during the call is `marked-ready-head-moved` at exit 8.
+  - Every other `pr` flag is refused at exit 2, with no gh call.
+- **commit** ([#357](https://github.com/zheref/nen/pull/357), closes [#273](https://github.com/zheref/nen/issues/273)) — `nen commit write` and `nen wc squash` read the commit they just wrote back through git's own trailer parser (`git cat-file commit` piped through `git interpret-trailers --parse --unfold`).
+  - A new `injected` member lists every refused trailer the written commit carries: a key a hook added that the policy refuses or that ends in `-by`/`-with` without being admitted, or a refused key the message itself carried.
+  - Either case is exit 3. The commit is left in place, never amended, and stderr names the undo.
+  - On a real write, `commit write --json`'s `trailers` is read back from the commit.
+  - USAGE § Exit codes gains one table of every verb that returns a code above 2.
+
 ### Fixed
 
 - **runner** ([#334](https://github.com/zheref/nen/pull/334), closes [#319](https://github.com/zheref/nen/issues/319)) — `runner enable` certifies only a `workflow_dispatch` run on the default branch that ran the default branch's own preflight blob.
@@ -47,10 +58,12 @@ The compatibility floor moves to `0.19`.
 
 ### Breaking / consumer notes
 
-- **Repin: `"0.18"` → `"0.19"`, and `v0.18.3` → `v0.19.0`.** The maintainer moved the floor for this release because three changes alter meaning on unchanged inputs. A repository whose `dependency.minimum` is below `0.19` is refused by this build at exit 5, and must raise its minimum and repin. zheref/hatsu declares `0.18` (bootstrap ref `v0.18.2`); its repin rides with zheref/hatsu#206, which adopts `mode` and `@@MODE@@`.
+- **Repin: `"0.18"` → `"0.19"`, and `v0.18.3` → `v0.19.0`.** The maintainer moved the floor for this release because changes in #334, #335, #342 and #357 alter meaning on unchanged inputs. A repository whose `dependency.minimum` is below `0.19` is refused by this build at exit 5, and must raise its minimum and repin. zheref/hatsu declares `0.18` (bootstrap ref `v0.18.2`); its repin rides with zheref/hatsu#206, which adopts `mode` and `@@MODE@@`.
 - **gates** — `pr ready` answers not-ready where it answered ready ([#342](https://github.com/zheref/nen/pull/342)): for a head whose checks are all skipped, for a draft, and for a check whose latest run is a queued re-run. A repository whose only checks are conditional must make one job run and succeed on every head.
 - **runner** — `runner enable` exits 1 for a run it accepted before ([#334](https://github.com/zheref/nen/pull/334)): a `push` run, or a run on a branch other than the default. Dispatch with `nen runner preflight` on the default branch and pass that run id.
 - **runner** — `runner plan --json` / `--out` names the contract `nen.runner.plan/v0.2`, where it named `v0.1`, and carries `mode` and `dailyAccount` ([#335](https://github.com/zheref/nen/pull/335)). A reader that matches the contract string must accept `v0.2`. `runner script` still reads a v0.1 plan.
+- **commit** — `commit write` and `wc squash` exit `3` when the written commit carries a refused trailer ([#357](https://github.com/zheref/nen/pull/357)). **Exit 3 means the commit exists**, so a caller that reads any non-zero exit as "nothing was committed" must handle it.
+- **wc** — `wc squash` loads `nen/workflow.json` on every run, before anything moves ([#357](https://github.com/zheref/nen/pull/357)). A malformed file is exit 1 even with `--base` and a message with no trailers, and a broken policy with a bad message is exit 1, not 2.
 - **surface** — on repin, Hatsu's `surfaces/codex/ten/SKILL.md` reads stale until one `nen surface mirror generate` for codex: its `summary:` gains double quotes ([#343](https://github.com/zheref/nen/pull/343)).
 
 ## v0.18.3 — 2026-10-01
