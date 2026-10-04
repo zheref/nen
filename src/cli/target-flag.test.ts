@@ -7,7 +7,7 @@
 // places to keep agreeing -- so this drives the verbs through the real CLI and
 // asserts one answer.
 //
-// FOURTEEN OF THE SIXTEEN are in the table below, and the two that are not are
+// FIFTEEN OF THE SEVENTEEN are in the table below, and the two that are not are
 // named with their reasons rather than quietly dropped (Copilot, PR #195):
 // `pr cascade-main` just under this comment, and `pr edit-body`, whose
 // `--body-file` is read before `--target` so a row for it would assert a file
@@ -34,6 +34,7 @@ const VERBS: readonly (readonly [Command, readonly string[]])[] = [
   [prCommand, ["pr", "next-blocker", "--pr", "1", "--repo", "."]],
   [prCommand, ["pr", "retarget", "--pr", "1"]],
   [prCommand, ["pr", "request-reviews", "--pr", "1", "--add-reviewers", "x"]],
+  [prCommand, ["pr", "mark-ready", "--pr", "1"]],
   [issueCommand, ["issue", "search", "--subject", "x"]],
   [issueCommand, ["issue", "open-pr-check", "--issues", "1"]],
   [issueCommand, ["issue", "attach-sub", "--parent", "1", "--children", "2"]],
