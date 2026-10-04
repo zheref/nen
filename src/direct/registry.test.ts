@@ -166,6 +166,51 @@ describe("parseDirectRegistry -- every refusal names its pointer", () => {
     ).toBe("mismatch.ledger");
   });
 
+  it("refuses a non-reviewer alias without a surface or without a tier; a reviewer may have neither", () => {
+    expect(
+      refusal((v): void => {
+        v["aliases"]["BALANCED_AUTHOR"]["surface"] = null;
+      }).pointer,
+    ).toBe("aliases.BALANCED_AUTHOR.surface");
+    const noTier = refusal((v): void => {
+      v["aliases"]["BALANCED_AUTHOR"]["tier"] = null;
+    });
+    expect(noTier.pointer).toBe("aliases.BALANCED_AUTHOR.tier");
+    expect(noTier.message).toMatch(/Only an alias marked 'reviewer: true'/);
+    // the real file's two reviewers carry neither and still load
+    expect(() => loadDirectRegistry("/", REAL_REGISTRY)).not.toThrow();
+  });
+
+  it("refuses a top band that ends below the highest reachable score, naming it", () => {
+    // 4 (the highest job weight) + 3 adds = 7; a top band ending at 5 leaves 6 and 7 placed nowhere
+    const error = refusal((v): void => {
+      v["effort"]["rule"]["bands"]["max"] = [5, 5];
+    });
+    expect(error.pointer).toBe("effort.rule.bands.max");
+    expect(error.message).toMatch(/ends at 5, but the highest reachable score is 7/);
+    // exactly the reachable maximum is enough
+    expect(() =>
+      refusal((v): void => {
+        v["effort"]["rule"]["bands"]["max"] = [5, 7];
+      }),
+    ).toThrow(/expected a SchemaError, the file was accepted/);
+    // another add raises the bar
+    expect(
+      refusal((v): void => {
+        v["effort"]["rule"]["bands"]["max"] = [5, 7];
+        v["effort"]["rule"]["plusOne"].push({ when: "x", key: "extra" });
+      }).pointer,
+    ).toBe("effort.rule.bands.max");
+  });
+
+  it("refuses a routing phaseName that differs from phases[phase].name", () => {
+    const error = refusal((v): void => {
+      v["routing"]["discovery"]["feature"]["phaseName"] = "A different name";
+    });
+    expect(error.pointer).toBe("routing.discovery.feature.phaseName");
+    expect(error.message).toMatch(/phases\.FEAT\.DEV\.001\.name is/);
+  });
+
   it("refuses a surface whose modelsKey is not a string", () => {
     const error = refusal((v): void => {
       v["surfaces"]["codex"]["modelsKey"] = 7;

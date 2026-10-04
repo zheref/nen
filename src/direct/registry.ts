@@ -43,6 +43,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolveAgainstRepo } from "../cli/inputs.js";
+import { WEIGHT_MAX } from "../classify/taxonomy.js";
 import {
   describeValue,
   isRecord,
@@ -234,12 +235,24 @@ function parseAliases(path: string, value: unknown, surfaceNames: readonly strin
         `names surface ${describeValue(surface)}, which is not one of surfaces [${surfaceNames.join(", ")}]`,
       );
     }
+    const tier = stringOrNull(path, `${pointer}.tier`, row["tier"]);
+    const reviewer = row["reviewer"] === undefined ? false : requireBoolean(path, `${pointer}.reviewer`, row["reviewer"]);
+    // Only a reviewer (an automated PR reviewer, not an author) may run nowhere: every
+    // other alias is spelled for a surface by a tier of the consumer's workflow, so
+    // one without both could never be recommended or spelled.
+    if (!reviewer) {
+      for (const [field, found] of [["surface", surface], ["tier", tier]] as const) {
+        if (found === null) {
+          throw new SchemaError(path, `${pointer}.${field}`, `is null. Only an alias marked 'reviewer: true' may have no ${field}; an author alias carries both surface and tier`);
+        }
+      }
+    }
     aliases[name] = {
       provider: requireString(path, `${pointer}.provider`, row["provider"]),
       family: requireString(path, `${pointer}.family`, row["family"]),
       surface,
-      tier: stringOrNull(path, `${pointer}.tier`, row["tier"]),
-      reviewer: row["reviewer"] === undefined ? false : requireBoolean(path, `${pointer}.reviewer`, row["reviewer"]),
+      tier,
+      reviewer,
       selection: requireString(path, `${pointer}.selection`, row["selection"]),
     };
   }
@@ -375,6 +388,20 @@ function parseEffort(path: string, value: unknown, surfaceNames: readonly string
     bands[level] = [low, high];
     previousEnd = high;
   }
+  // The bands must reach every score the rule can produce. The registry is validated
+  // ALONE here, so the highest job weight is taken as WEIGHT_MAX (4), the ceiling the
+  // taxonomy parser holds every job weight to; a taxonomy cannot exceed it, so the
+  // bound is never looser than the real file's. Every `plusOne` row can add at once.
+  const reachable = WEIGHT_MAX + plusOne.length;
+  const topLevel = levels[levels.length - 1] as string;
+  const topEnd = (bands[topLevel] as readonly [number, number])[1];
+  if (topEnd < reachable) {
+    throw new SchemaError(
+      path,
+      `effort.rule.bands.${topLevel}`,
+      `ends at ${topEnd}, but the highest reachable score is ${reachable} (the highest job weight ${WEIGHT_MAX} plus ${plusOne.length} add${plusOne.length === 1 ? "" : "s"}); a score above the top band would belong to no level`,
+    );
+  }
 
   const rawMap = requireRecord(path, "effort.surfaceMap", record["surfaceMap"]);
   const surfaceMap: Record<string, Record<string, string>> = {};
@@ -478,7 +505,7 @@ function parseSide(
 function parseRouting(
   path: string,
   value: unknown,
-  phaseIds: readonly string[],
+  phaseNames: Readonly<Record<string, string>>,
   aliases: Readonly<Record<string, RegistryAlias>>,
   surfaceNames: readonly string[],
 ): Record<string, Record<string, RoutingEntry>> {
@@ -493,7 +520,7 @@ function parseRouting(
       const phase = requireString(path, `${pointer}.phase`, row["phase"]);
       const alsoPhases = row["alsoPhases"] === undefined ? [] : requireStringList(path, `${pointer}.alsoPhases`, row["alsoPhases"]);
       for (const [where, id] of [[`${pointer}.phase`, phase], ...alsoPhases.map((id, index): [string, string] => [`${pointer}.alsoPhases[${index}]`, id])] as [string, string][]) {
-        if (!phaseIds.includes(id)) throw new SchemaError(path, where, `names phase ${describeValue(id)}, which is not declared in phases`);
+        if (!Object.prototype.hasOwnProperty.call(phaseNames, id)) throw new SchemaError(path, where, `names phase ${describeValue(id)}, which is not declared in phases`);
       }
       const rawCells = requireRecord(path, `${pointer}.cells`, row["cells"]);
       if (rawCells[SHARED_CELL] === undefined) {
@@ -508,7 +535,13 @@ function parseRouting(
           runnerUp: parseSide(path, `${cellPointer}.runnerUp`, cellRecord["runnerUp"], aliases, surfaceNames, true),
         };
       }
-      byDomain[domain] = { phase, phaseName: requireString(path, `${pointer}.phaseName`, row["phaseName"]), alsoPhases, cells };
+      // `phaseName` is a copy of `phases[phase].name`; a copy that disagrees with its
+      // source is two statements of one fact, so it is refused (never silently derived).
+      const phaseName = requireString(path, `${pointer}.phaseName`, row["phaseName"]);
+      if (phaseName !== phaseNames[phase]) {
+        throw new SchemaError(path, `${pointer}.phaseName`, `is ${describeValue(phaseName)} but phases.${phase}.name is ${describeValue(phaseNames[phase])}; the routing entry must carry its phase's name`);
+      }
+      byDomain[domain] = { phase, phaseName, alsoPhases, cells };
     }
     if (Object.keys(byDomain).length === 0) {
       throw new SchemaError(path, `routing.${job}`, "lists no domain. A routed job has at least one phase to route on.");
@@ -561,7 +594,7 @@ export function parseDirectRegistry(path: string, value: unknown): DirectRegistr
     precedence: parsePrecedence(path, root["aggregation"], aliasNames),
     mismatch: parseMismatch(path, root["mismatch"]),
     phases,
-    routing: parseRouting(path, root["routing"], Object.keys(phases), aliases, surfaceNames),
+    routing: parseRouting(path, root["routing"], phases, aliases, surfaceNames),
   };
 }
 

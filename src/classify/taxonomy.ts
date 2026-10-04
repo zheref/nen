@@ -165,11 +165,12 @@ function parseWeight(path: string, pointer: string, value: unknown): number | nu
 function parsePhases(path: string, pointer: string, value: unknown): Record<string, string[]> | null {
   if (value === undefined) return null;
   const record = requireRecord(path, pointer, value);
+  // A `$`-prefixed key (`$comment`, ...) is metadata, never a domain: skipped before
+  // its value is read, the loader policy of ../schema/source.ts.
   return Object.fromEntries(
-    Object.entries(record).map(([domain, ids]): [string, string[]] => [
-      domain,
-      requireStringList(path, `${pointer}.${domain}`, ids),
-    ]),
+    Object.entries(record)
+      .filter(([domain]): boolean => !domain.startsWith("$"))
+      .map(([domain, ids]): [string, string[]] => [domain, requireStringList(path, `${pointer}.${domain}`, ids)]),
   );
 }
 

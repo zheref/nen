@@ -4256,8 +4256,8 @@ date, one line per alias (`provider  family  surface/tier  snapshot: <primary> (
 reviewer alias marked), the surfaces table (label, the `models.<key>` it reads, its effort control)
 and the live-lookup sources per provider (the CLI that lists the served models, the docs). A bad file
 is refused at exit 1 naming the pointer into it: a routing cell whose alias or surface is not
-declared, a cell whose surface is not its alias's surface, a reviewer runner-up with no `also`, a surface without a string `modelsKey`, an effort block that does not have four levels or
-whose surface map misses one, effort bands that overlap or leave a score unplaced, a precedence that
+declared, a cell whose surface is not its alias's surface, a reviewer runner-up with no `also`, a non-reviewer alias without a `surface` or a `tier`, a routing `phaseName` that is not its phase's name in `phases`, a surface without a string `modelsKey`, an effort block that does not have four levels or
+whose surface map misses one, effort bands that overlap, leave a score unplaced, or end below the highest reachable score (the highest job weight, 4, plus one per `plusOne` row), a precedence that
 does not rank every alias exactly once, a snapshot date that is not a calendar date.
 
 **Usage**
@@ -4345,7 +4345,10 @@ Answers "which model, where, at what effort" for one classification, reporting e
    is not**: the usage ledger's own id alphabet refuses `#` and `:`, so it cannot hold the two ids above,
    while this ledger accepts any id that is not a traversal (that alphabet disagreement belongs to
    the usage verb's owner and is not changed here). An id that is empty, absolute, carries a backslash
-   or has a `..` segment is refused at exit 2 before anything is read.
+   or has a `..` segment is refused at exit 2 before anything is read. The write is also checked against
+   the **real** filesystem path (`repo/contain.ts`'s `realContainment`): a `.nen/direct` directory or an
+   existing record that is a symlink out of `--repo`, and a record that is itself a symlink (even a
+   dangling one), are refused at exit 2 and nothing is written.
 
 **The two files must agree.** After both load, a routing cell key that is neither the shared `*`
 cell nor one of the taxonomy's language keys, and a routing domain that is not one of its
@@ -4357,6 +4360,10 @@ is refused when the registry loads. Likewise a predicate carrying a key that is 
 (`issueLabels` takes only `any`; `jobs` takes `anyKey` alone, or `nonEmpty` with `everyListsOnly`) and a
 `domains.firstMatchWins` other than `true` are refused when the taxonomy loads.
 
+**Each verb takes only its own flags.** A flag another verb of the family owns (`--record` on
+`registry`, `--taxonomy` on `answer`, `--answer` on `resolve`) is refused at exit 2 naming the flag
+and the verbs that own it, rather than parsed and silently ignored.
+
 **Empty axes are answers, not errors.** No job (`--job ""`, or the flag omitted) is
 `undirectable: job axis empty` — one line, `winner`, `runnerUp`, `effort` and `mismatch` null, exit 0
 (the caller carries on on its own session); no language (`--lang ""` or omitted) reads the shared `*`
@@ -4366,7 +4373,7 @@ never filled.
 **Usage**
 
 ```text
-nen direct resolve --registry <path> --taxonomy <path> --repo <path> --kind <kind> [--role <role>] [--labels <a,b>] --lang <a,b> --job <c,d> [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>] [--record <effort-id>] [--json]
+nen direct resolve --registry <path> --taxonomy <path> --repo <path> --kind <kind> [--role <role>] [--labels <a,b>] [--lang <a,b>] [--job <c,d>] [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>] [--record <effort-id>] [--json]
 ```
 
 **Arguments**

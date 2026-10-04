@@ -24,9 +24,10 @@
 // The encoding makes the last check unreachable today; it stays because it is the
 // property the refusal exists for, not the encoding's side effect.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
+import { realContainment } from "../repo/contain.js";
 import { encodeEffortId } from "../usage/ledger.js";
 
 /** The one directory a record may be written under, relative to `--repo`'s root. */
@@ -48,8 +49,39 @@ export function recordPath(root: string, id: string): string {
   return full;
 }
 
-/** Write the document at `path`, creating its directories. */
-export function writeRecord(path: string, document: unknown): void {
+/**
+ * Refuse a record path the FILESYSTEM would send somewhere else (exit 2). The
+ * lexical check in `recordPath` cannot see a `.nen/direct` directory, or an
+ * existing target file, that is a symlink out of `--repo`: `writeFileSync` follows
+ * both. So the path is asked of ../repo/contain.ts's `realContainment` -- the real
+ * path the kernel would reach must stay under the real root -- and a record that is
+ * ITSELF a symlink is refused outright, even a dangling one or one pointing back
+ * inside, because a record is a plain file this verb owns and `realContainment`
+ * cannot prove a dangling link stays in. Called immediately before every read or
+ * write of a record, so nothing is followed that this check has not seen.
+ */
+export function assertRecordContained(root: string, path: string): void {
+  const refuse = (why: string): never => {
+    throw new VerbUsageError(`the record '${path}' is refused: ${why}. A record is written only as a plain file under ${RECORD_DIR}/ inside --repo.`);
+  };
+  const real = realContainment(root, path);
+  if (!real.contained) {
+    refuse(`it resolves to '${real.real}', outside the repository${real.link === null ? "" : ` (through the link '${real.link}' -> '${real.target ?? "?"}')`}`);
+  }
+  let stats;
+  try {
+    stats = lstatSync(path, { throwIfNoEntry: false });
+  } catch {
+    stats = undefined;
+  }
+  if (stats !== undefined && stats.isSymbolicLink()) refuse("it is a symbolic link");
+}
+
+/** Write the document at `path` (under `root`), creating its directories, after the containment check. */
+export function writeRecord(root: string, path: string, document: unknown): void {
+  assertRecordContained(root, path);
   mkdirSync(dirname(path), { recursive: true });
+  // mkdir may have created a directory a racing link redirected; ask again before the bytes go.
+  assertRecordContained(root, path);
   writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
 }

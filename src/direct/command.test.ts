@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { COMMANDS } from "../cli/registry.js";
@@ -572,5 +573,90 @@ describe("nen direct answer", () => {
     const file = await recorded(repo, "sonnet/kurapika/x");
     expect((await answer(repo, "--record", "sonnet/kurapika/x", "--answer", "continue")).code).toBe(0);
     expect((JSON.parse(readFileSync(file, "utf8")) as Json)["decision"]["answer"]).toBe("continue");
+  });
+});
+
+describe("nen direct -- each verb takes only its own flags", () => {
+  const repo = consumerRepo();
+  const classified = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
+
+  it("refuses a flag another verb owns, at exit 2, naming the flag and its owners", async () => {
+    const cases: [string[], RegExp][] = [
+      [["direct", "registry", "--registry", REAL_REGISTRY, "--record", "x"], /--record is not a flag of 'direct registry'; it belongs to 'direct resolve', 'direct answer'/],
+      [["direct", "registry", "--registry", REAL_REGISTRY, "--taxonomy", REAL_TAXONOMY], /--taxonomy is not a flag of 'direct registry'; it belongs to 'direct resolve'/],
+      [resolveArgs(repo, ...classified, "--answer", "stop"), /--answer is not a flag of 'direct resolve'; it belongs to 'direct answer'/],
+      [["direct", "answer", "--repo", repo, "--record", "x", "--answer", "stop", "--registry", REAL_REGISTRY], /--registry is not a flag of 'direct answer'; it belongs to 'direct registry', 'direct resolve'/],
+      [["direct", "answer", "--repo", repo, "--record", "x", "--answer", "stop", "--job", "plan"], /--job is not a flag of 'direct answer'/],
+    ];
+    for (const [argv, pattern] of cases) {
+      const result = await capture(argv);
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n")).toMatch(pattern);
+    }
+  });
+
+  it("still passes every flag a verb owns", async () => {
+    expect((await capture(["direct", "registry", "--registry", REAL_REGISTRY, "--repo", repo, "--json"])).code).toBe(0);
+    const everyFlag = resolveArgs(repo, ...classified, "--role", "consumer", "--labels", "bug", "--surface", "claude-code", "--model", "opus", "--effort", "low", "--record", "all-flags", "--json");
+    expect((await capture(everyFlag)).code).toBe(0);
+    expect((await capture(["direct", "answer", "--repo", repo, "--record", "all-flags", "--answer", "continue", "--json"])).code).toBe(0);
+  });
+});
+
+describe("nen direct --record -- the filesystem is asked, not just the spelling", () => {
+  const classified = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
+  const outside = (): string => mkdtempSync(join(tmpdir(), "nen-direct-outside-"));
+
+  it("refuses at exit 2 a .nen/direct directory that is a symlink out of --repo, and writes nothing there", async () => {
+    const repo = consumerRepo();
+    const away = outside();
+    mkdirSync(join(repo, ".nen"));
+    symlinkSync(away, join(repo, ".nen", "direct"), "dir");
+    const result = await capture(resolveArgs(repo, ...classified, "--record", "an-effort"));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/outside the repository/);
+    expect(readdirSync(away)).toEqual([]);
+  });
+
+  it("refuses an existing record that is a symlink to a file outside, and leaves that file untouched", async () => {
+    const repo = consumerRepo();
+    const away = outside();
+    const victim = join(away, "victim.json");
+    writeFileSync(victim, "{}\n");
+    mkdirSync(join(repo, ".nen", "direct"), { recursive: true });
+    symlinkSync(victim, join(repo, ".nen", "direct", "an-effort.json"), "file");
+    const resolved = await capture(resolveArgs(repo, ...classified, "--record", "an-effort"));
+    expect(resolved.code).toBe(2);
+    expect(readFileSync(victim, "utf8")).toBe("{}\n");
+    const answered = await capture(["direct", "answer", "--repo", repo, "--record", "an-effort", "--answer", "stop"]);
+    expect(answered.code).toBe(2);
+    expect(readFileSync(victim, "utf8")).toBe("{}\n");
+  });
+
+  it("refuses a dangling symlink record, which would otherwise create its target outside", async () => {
+    const repo = consumerRepo();
+    const away = outside();
+    mkdirSync(join(repo, ".nen", "direct"), { recursive: true });
+    symlinkSync(join(away, "not-yet.json"), join(repo, ".nen", "direct", "an-effort.json"), "file");
+    const result = await capture(resolveArgs(repo, ...classified, "--record", "an-effort"));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/symbolic link|outside the repository/);
+    expect(readdirSync(away)).toEqual([]);
+  });
+
+  it("a symlinked directory that stays inside the repository is still a plain contained path", async () => {
+    const repo = consumerRepo();
+    mkdirSync(join(repo, "real-direct"), { recursive: true });
+    mkdirSync(join(repo, ".nen"));
+    symlinkSync(join(repo, "real-direct"), join(repo, ".nen", "direct"), "dir");
+    expect((await capture(resolveArgs(repo, ...classified, "--record", "an-effort"))).code).toBe(0);
+    expect(readdirSync(join(repo, "real-direct"))).toEqual(["an-effort.json"]);
+  });
+});
+
+describe("nen direct resolve -- --lang and --job are optional in the synopsis", () => {
+  it("brackets both in the usage text", async () => {
+    const text = (await capture(["direct", "--help"])).out.join("\n");
+    expect(text).toContain("[--lang <a,b>] [--job <c,d>]");
   });
 });

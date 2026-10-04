@@ -21,7 +21,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { requireRepoFlag, requireValue, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
-import { recordPath, writeRecord } from "./record.js";
+import { assertRecordContained, recordPath, writeRecord } from "./record.js";
 
 export const ANSWER_CONTRACT = "nen.direct.answer/v0.1";
 
@@ -39,6 +39,8 @@ export function runAnswer(context: CommandContext): number {
     throw new VerbUsageError(`--answer '${answer}' is not one of: ${ANSWERS.join(", ")}.`);
   }
 
+  // Before anything is read: a record the filesystem redirects is not this effort's.
+  assertRecordContained(root, path);
   if (!existsSync(path)) {
     context.io.err(`nen: no record at '${path}'. The answer belongs to a resolution that exists: run 'nen direct resolve --record ${id}' first.`);
     return 1;
@@ -56,7 +58,7 @@ export function runAnswer(context: CommandContext): number {
   }
 
   const decision = { answer, answeredAt: context.seams.now().toISOString() };
-  writeRecord(path, { ...(document as Record<string, unknown>), decision });
+  writeRecord(root, path, { ...(document as Record<string, unknown>), decision });
 
   if (context.json) {
     context.io.out(JSON.stringify({ contract: ANSWER_CONTRACT, record: path, decision }, null, 2));

@@ -283,3 +283,19 @@ describe("parseClassifyTaxonomy -- the optional facts nen direct reads", () => {
     expect(error.pointer).toBe("axes.job.keys[0].phases.elsewhere");
   });
 });
+
+describe("parseClassifyTaxonomy -- metadata keys inside phases", () => {
+  it("skips a $-prefixed key in a job's phases: it is never a domain", () => {
+    const value = readJson(MINI);
+    value["axes"]["job"]["keys"][0]["phases"] = { one: ["P.1"], $comment: "a note, not a domain" };
+    const taxonomy = parseClassifyTaxonomy("/x/tax.json", value);
+    expect(taxonomy.axes.job.keys[0]?.phases).toEqual({ one: ["P.1"] });
+  });
+
+  it("still refuses a non-$ phase key outside domains.keys, with the $ key beside it", () => {
+    const error = refusal((v): void => {
+      v["axes"]["job"]["keys"][0]["phases"] = { elsewhere: ["P.1"], $comment: "x" };
+    });
+    expect(error.pointer).toBe("axes.job.keys[0].phases.elsewhere");
+  });
+});

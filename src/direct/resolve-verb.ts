@@ -164,7 +164,7 @@ export function runResolve(context: CommandContext): number {
   };
 
   if (target !== null) {
-    writeRecord(target, { ...document, recordedAt: context.seams.now().toISOString() });
+    writeRecord(root, target, { ...document, recordedAt: context.seams.now().toISOString() });
   }
 
   if (context.json) {

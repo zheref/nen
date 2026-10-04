@@ -25,7 +25,7 @@
 // EXIT CODES (docs/USAGE.md, "Exit codes"): 0 an answer (a mismatch is an
 // answer), 1 a failure (an invalid file, an unreadable workflow), 2 a usage error.
 
-import { requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
+import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { runAnswer } from "./answer-verb.js";
 import { runRegistry } from "./registry-verb.js";
 import { runResolve } from "./resolve-verb.js";
@@ -35,7 +35,7 @@ const USAGE = `nen direct -- the mechanical half of choosing a model for an issu
 usage:
   nen direct registry --registry <path> [--repo <path>] [--json]
   nen direct resolve  --registry <path> --taxonomy <path> --repo <path>
-                      --kind <kind> [--role <role>] [--labels <a,b>] --lang <a,b> --job <c,d>
+                      --kind <kind> [--role <role>] [--labels <a,b>] [--lang <a,b>] [--job <c,d>]
                       [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>]
                       [--record <effort-id>] [--json]
   nen direct answer   --record <effort-id> --answer <continue|stop> --repo <path> [--json]
@@ -114,6 +114,9 @@ resolves against --repo's root.
 
   --registry <path>    The model-direction registry file. Required.
   --taxonomy <path>    The classification taxonomy file. Required by resolve.
+  A flag that belongs to another verb of the family (--record on registry, --taxonomy
+  on answer...) is a usage error, exit 2, naming the flag.
+
   --repo <path>        The checkout whose nen/workflow.json spells the aliases.
                        Required by resolve; optional on registry, where it only
                        anchors a relative --registry (default: the current directory).
@@ -131,6 +134,34 @@ resolves against --repo's root.
   --json               Every verb prints one document with a
                        "contract": "nen.direct.<verb>/v0.1" key.`;
 
+// WHICH FLAGS EACH VERB TAKES. The parser knows the family's flags as one set, so
+// `registry --record x` parses -- and would be silently ignored, which is how a
+// verb could look like it did something it did not. A flag that belongs to ANOTHER
+// verb of the family is a typo of the same class, and exits 2 naming the flag, the
+// verb it was given to and the verbs that own it (the same rule `nen classify`
+// states). The global flags (--repo, --json, --help) are every verb's and are not
+// listed.
+const VERB_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  registry: ["registry"],
+  resolve: ["registry", "taxonomy", "lang", "job", "kind", "role", "labels", "surface", "model", "effort", "record"],
+  answer: ["record", "answer"],
+};
+
+function refuseForeignFlags(subcommand: string, context: CommandContext): void {
+  const family = [...(directCommand.flags.values ?? []), ...(directCommand.flags.booleans ?? [])];
+  const given = [...Object.keys(context.args.values), ...context.args.booleans];
+  const own = VERB_FLAGS[subcommand] ?? [];
+  for (const flag of given) {
+    if (!family.includes(flag) || own.includes(flag)) continue;
+    const owners = Object.entries(VERB_FLAGS)
+      .filter(([, flags]): boolean => flags.includes(flag))
+      .map(([verb]): string => `'direct ${verb}'`);
+    throw new VerbUsageError(
+      `--${flag} is not a flag of 'direct ${subcommand}'; it belongs to ${owners.join(", ")}. A flag another verb takes would be silently ignored here.`,
+    );
+  }
+}
+
 export const directCommand: Command = {
   name: "direct",
   subcommands: ["registry", "resolve", "answer"],
@@ -142,6 +173,7 @@ export const directCommand: Command = {
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("direct", context.args, ["registry", "resolve", "answer"]);
+    refuseForeignFlags(subcommand, context);
     if (subcommand === "registry") return runRegistry(context);
     return subcommand === "resolve" ? runResolve(context) : runAnswer(context);
   },
