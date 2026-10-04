@@ -42,7 +42,7 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
-import { GIT, must } from "../seam/exec.js";
+import { GIT, must, ToolError } from "../seam/exec.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { advisoryFor, type CoverageAdvisory } from "./coverage/advisory.js";
 import { digestArtifacts, fileStats, nulPaths, readCaptureSidecar, recordCapture, takeFingerprint } from "./capture-provenance.js";
@@ -160,12 +160,13 @@ export function validateTouched(options: Pick<CoverageOptions, "touched" | "base
  * only after a whole coverage run, from the diff that ran after it.
  */
 function verifyBase(context: CommandContext, repoRoot: string, base: string): void {
-  const result = context.seams.run(
-    GIT,
-    ["rev-parse", "--verify", "--quiet", "--end-of-options", `${base}^{commit}`],
-    { cwd: repoRoot },
-  );
-  if (result.spawnFailed || result.code !== 0) {
+  const args = ["rev-parse", "--verify", "--quiet", "--end-of-options", `${base}^{commit}`];
+  const result = context.seams.run(GIT, args, { cwd: repoRoot });
+  // GIT THAT COULD NOT BE STARTED IS NOT A BAD BASE (Copilot round 2 on
+  // zheref/nen#369): it is an operational failure, exit 1 through ToolError,
+  // and only a rev-parse that RAN and rejected the ref is the usage error.
+  if (result.spawnFailed) throw new ToolError(GIT, args, result);
+  if (result.code !== 0) {
     throw new VerbUsageError(
       `--base '${base}' does not name a commit in this repository ('git rev-parse --verify ${base}^{commit}' found none). Name a branch, tag or commit that exists here -- fetch it first if it is a remote's.`,
     );
@@ -968,6 +969,10 @@ function fromCapture(
     platform: context.seams.platform,
   });
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
+  // EVERY DECLARED ARTIFACT IS CONTAINED FIRST, reports or not (Copilot round
+  // 2 on zheref/nen#369), exactly as ./run.ts holds them before a run: a
+  // `../outside.bin` is exit 2 naming it, and is never probed.
+  for (const value of plan.artifacts) insideRepo(repoRoot, value, `project.verbs.${plan.lane}.coverage.artifacts`);
   const reports = plan.artifacts.filter((value): boolean => recognisedByName(value));
   const digests = digestArtifacts(repoRoot, plan.lane, reports);
   const problems = proveCapture(context, repoRoot, plan.lane, reports, digests);
@@ -1006,6 +1011,9 @@ function proveCapture(
   if (read.state === "missing") return [{ reason: "no-sidecar", sidecar: path }];
   if (read.state === "unreadable") return [{ reason: "unreadable-sidecar", sidecar: path, why: read.why }];
   const now = takeFingerprint(context.seams, repoRoot, reports);
+  // git that could not be STARTED is an operational failure (exit 1), never a
+  // refused capture: nothing was learned about the tree.
+  if (!now.ok && now.error !== undefined) throw now.error;
   if (!now.ok) {
     return [{ reason: "unreadable-sidecar", sidecar: path, why: `the tree cannot be fingerprinted now: ${now.why}` }];
   }

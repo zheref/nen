@@ -29,11 +29,48 @@ function seams(others: string, tagged = "", extra: readonly ScriptedCall[] = [])
 }
 
 describe("takeFingerprint", () => {
-  it("refuses a path whose bytes were not UTF-8 -- never a marker standing in for it", () => {
+  it("refuses a path whose RAW bytes are not UTF-8 -- never a marker standing in for it", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-fp-"));
     try {
-      const result = takeFingerprint(seams("src/x�.ts\0"), dir, ["coverage/lcov.info"]);
-      expect(result).toEqual({ ok: false, why: expect.stringMatching(/'src\/x�\.ts' is not valid UTF-8/) as unknown as string });
+      const bytes = new Uint8Array([...new TextEncoder().encode("src/x"), 0xff, ...new TextEncoder().encode(".ts"), 0]);
+      const result = takeFingerprint(
+        new ScriptedSeams([
+          HEAD,
+          { match: DIFF, result: { code: 0, stdout: "" } },
+          { match: OTHERS, result: { code: 0, stdoutBytes: bytes } },
+          { match: TAGGED, result: { code: 0, stdout: "" } },
+        ]),
+        dir,
+        ["coverage/lcov.info"],
+      );
+      expect(result.ok).toBe(false);
+      expect(result.ok ? "" : result.why).toMatch(/'src\/x\uFFFD\.ts' is not valid UTF-8/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("RECORDS a real filename that contains U+FFFD -- only undecodable bytes refuse (Copilot round 2)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-fp-"));
+    try {
+      writeFileSync(join(dir, "x\uFFFD.ts"), "1");
+      const result = takeFingerprint(seams("x\uFFFD.ts\0"), dir, ["coverage/lcov.info"]);
+      expect(result.ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("carries git's spawn failure as an operational error, never only a sentence", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-fp-"));
+    try {
+      const result = takeFingerprint(
+        new ScriptedSeams([{ match: HEAD.match, result: { code: -1, spawnFailed: true, stderr: "ENOENT" } }]),
+        dir,
+        [],
+      );
+      expect(result.ok).toBe(false);
+      expect(!result.ok && result.error !== undefined).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

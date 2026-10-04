@@ -8639,8 +8639,15 @@ declaration:
   as they were before the run, so it may be an earlier tree's report; an
   existing sidecar is then left to fail on its own fingerprint. Nor when the
   tree cannot be fingerprinted: not a git work tree or no commit yet, a path
-  that is not valid UTF-8 (nen cannot read its bytes back through git's
-  output), or an untracked file it cannot read. The run's document is
+  whose raw bytes a strict UTF-8 decoder rejects (a real filename that merely
+  contains U+FFFD is fine), or an untracked file it cannot read. Nor when the
+  sidecar's own path resolves outside the repository (a symlinked `.nen` or
+  `coverage-capture`): it is held to the same real-path containment as every
+  declared path, and a sidecar that escapes is never written and, on reuse,
+  is refused as unreadable. Under `--from-capture` every declared artifact —
+  report or not — is contained before anything is read (exit 2 for one that
+  escapes), and a git that cannot be **started** is exit 1, never a refused
+  capture or a bad `--base`. The run's document is
   unchanged either way.
 
 `--from-capture` reads the sidecar, recomputes the fingerprint **now** and

@@ -15,7 +15,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -372,6 +372,28 @@ describe.skipIf(!HAVE_GIT)("--from-capture, against the real git", () => {
     expect(ran.code).toBe(0);
     expect(ran.err.join("\n")).toMatch(/is not valid UTF-8/);
     expect(existsSync(join(dir, ".nen/coverage-capture"))).toBe(false);
+  });
+
+  // ── Copilot round 2 on zheref/nen#369 ────────────────────────────────────
+
+  it("a real filename containing U+FFFD is recorded and reused -- only undecodable bytes refuse", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, "src", "odd\uFFFD.ts"), "export {};\n");
+    const ran = await nen(dir, MEASURE);
+    expect(ran.code, ran.err.join("\n")).toBe(0);
+    expect(existsSync(join(dir, ".nen/coverage-capture/only.json"))).toBe(true);
+    expect((await nen(dir, REUSE)).code).toBe(0);
+  });
+
+  it("a symlinked .nen OUT of the tree is never written through", async () => {
+    const dir = repo();
+    const outside = mkdtempSync(join(tmpdir(), "nen-outside-"));
+    made.push(outside);
+    symlinkSync(outside, join(dir, ".nen"), "junction");
+    const ran = await nen(dir, MEASURE);
+    expect(ran.code).toBe(0);
+    expect(ran.err.join("\n")).toMatch(/recorded no coverage-capture provenance for lane 'only': the capture sidecar names .*outside the repository/);
+    expect(existsSync(join(outside, "coverage-capture"))).toBe(false);
   });
 });
 

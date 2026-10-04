@@ -2018,3 +2018,83 @@ describe("--touched --from-capture: the flags and the refusals", () => {
     expect(classifyCommand("nen shu coverage --repo /x --touched --base main").classification).toBe("mutating");
   });
 });
+
+// ── Copilot round 2 on zheref/nen#369 ───────────────────────────────────────
+
+describe("--from-capture: containment and operational failures", () => {
+  const SIDECAR = JSON.stringify({
+    contract: "nen.shu.coverage-capture/v0.1",
+    lane: "only",
+    verb: "coverage",
+    head: "a".repeat(40),
+    startedAt: "2026-10-04T00:00:00.000Z",
+    fingerprint: "f",
+    artifacts: [{ path: "coverage-summary.json", sha256: "0".repeat(64) }],
+  });
+
+  function laneRepo(artifacts: readonly string[]): string {
+    return withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts } } },
+    });
+  }
+
+  it("a git that cannot be STARTED for the base check is exit 1, not a bad --base", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main"], {
+      script: [{ match: baseCheck("main"), result: { code: -1, spawnFailed: true, stderr: "spawn git ENOENT" } }],
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).not.toMatch(/does not name a commit/);
+  });
+
+  it("a git that cannot be STARTED for the fingerprint is exit 1, not a refused capture (8)", async () => {
+    const repo = laneRepo(["coverage-summary.json"]);
+    try {
+      mkdirSync(join(repo, ".nen", "coverage-capture"), { recursive: true });
+      writeFileSync(join(repo, ".nen", "coverage-capture", "only.json"), SIDECAR);
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], {
+        repo,
+        script: [{ match: HEAD_READ, result: { code: -1, spawnFailed: true, stderr: "spawn git ENOENT" } }],
+      });
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).not.toMatch(/--from-capture refused/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a sidecar reached through a symlinked .nen OUT of the tree is unreadable, never read", async () => {
+    const repo = laneRepo(["coverage-summary.json"]);
+    const outside = mkdtempSync(join(tmpdir(), "nen-outside-"));
+    try {
+      mkdirSync(join(outside, "coverage-capture"));
+      writeFileSync(join(outside, "coverage-capture", "only.json"), SIDECAR);
+      symlinkSync(outside, join(repo, ".nen"), "junction");
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], { repo });
+      expect(result.code).toBe(8);
+      expect(result.err.join("\n")).toMatch(/provenance sidecar '\.nen\/coverage-capture\/only\.json' cannot be read: .*outside the repository/);
+      // Refused before any fingerprint was taken: the external file decided nothing.
+      expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([baseCheck("main")]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("every declared artifact is contained first -- one escaping through a symlink is exit 2, never probed", async () => {
+    const repo = laneRepo(["out/outside.bin", "coverage-summary.json"]);
+    const outside = mkdtempSync(join(tmpdir(), "nen-outside-"));
+    try {
+      writeFileSync(join(outside, "outside.bin"), "x");
+      symlinkSync(outside, join(repo, "out"), "junction");
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], { repo });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/project\.verbs\.only\.coverage\.artifacts names 'out\/outside\.bin'.*outside the repository/);
+      expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([baseCheck("main")]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});

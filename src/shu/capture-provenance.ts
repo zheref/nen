@@ -27,8 +27,8 @@
 
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync, type Stats } from "node:fs";
 import { dirname, join } from "node:path";
-import type { CommandContext } from "../cli/command.js";
-import { GIT, type Seams } from "../seam/exec.js";
+import { VerbUsageError, type CommandContext } from "../cli/command.js";
+import { GIT, ToolError, type CommandResult, type Seams } from "../seam/exec.js";
 import {
   CAPTURE_CONTRACT,
   CAPTURE_DIRECTORY,
@@ -57,7 +57,57 @@ export function nulPaths(stdout: string): string[] {
 /** A fingerprint of the tree as it is now, or why one could not be taken. */
 export type Fingerprint =
   | { readonly ok: true; readonly head: string; readonly fingerprint: string }
-  | { readonly ok: false; readonly why: string };
+  | {
+      readonly ok: false;
+      readonly why: string;
+      /**
+       * Set when git itself could not be STARTED -- an operational failure,
+       * never a fact about the tree. `--from-capture` throws it (exit 1)
+       * rather than reporting the capture refused (Copilot round 2 on
+       * zheref/nen#369).
+       */
+      readonly error?: ToolError;
+    };
+
+/** A failed git read, as a `Fingerprint` failure: spawn failures carry the error. */
+function failed(args: readonly string[], result: CommandResult, why: string): Extract<Fingerprint, { ok: false }> {
+  return result.spawnFailed ? { ok: false, why, error: new ToolError(GIT, args, result) } : { ok: false, why };
+}
+
+/**
+ * A `-z` path list from git's RAW stdout bytes, each record decoded by a FATAL
+ * UTF-8 decoder (as ../stage/triage.ts reads `git status -z`). A record that
+ * is not UTF-8 comes back as `{ undecodable }` -- the only thing that refuses;
+ * a filename that really contains U+FFFD decodes cleanly and is kept.
+ */
+export function nulRecords(bytes: Uint8Array): (string | { readonly undecodable: string })[] {
+  const fatal = new TextDecoder("utf-8", { fatal: true });
+  const lenient = new TextDecoder("utf-8");
+  const records: (string | { readonly undecodable: string })[] = [];
+  let start = 0;
+  for (let index = 0; index <= bytes.length; index++) {
+    if (index < bytes.length && bytes[index] !== 0) continue;
+    if (index > start) {
+      const slice = bytes.subarray(start, index);
+      try {
+        records.push(fatal.decode(slice));
+      } catch {
+        records.push({ undecodable: lenient.decode(slice) });
+      }
+    }
+    start = index + 1;
+  }
+  return records;
+}
+
+/** `git <args>` with stdout kept as raw bytes, for a `-z` path list. */
+function gitBytes(seams: Seams, repoRoot: string, args: readonly string[]): CommandResult {
+  return seams.run(GIT, args, { cwd: repoRoot, bytes: true });
+}
+
+function recordsOf(result: CommandResult): (string | { readonly undecodable: string })[] {
+  return nulRecords(result.stdoutBytes ?? new TextEncoder().encode(result.stdout));
+}
 
 /**
  * sha256 over HEAD, `git diff HEAD --binary`, every untracked non-ignored
@@ -71,53 +121,51 @@ export type Fingerprint =
  * different bytes, or let a changed tree print the same ones.
  *
  * NOTHING IS COLLAPSED TO A MARKER THAT COULD HIDE A DIFFERENCE. A path whose
- * bytes are not UTF-8 cannot be read back through the subprocess seam (it
- * decodes text), and an untracked file nen cannot read has no content to
- * hash: either one makes the fingerprint `ok: false`, naming the path -- the
- * caller records nothing rather than a fingerprint that would match a
- * different tree.
+ * bytes are not UTF-8 (told apart from a real U+FFFD by a fatal decoder over
+ * git's raw output) and an untracked file nen cannot read both make the
+ * fingerprint `ok: false`, naming the path -- the caller records nothing
+ * rather than a fingerprint that would match a different tree.
  */
 export function takeFingerprint(seams: Seams, repoRoot: string, artifacts: readonly string[]): Fingerprint {
-  const head = seams.run(GIT, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], { cwd: repoRoot });
+  const headArgs = ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"];
+  const head = seams.run(GIT, headArgs, { cwd: repoRoot });
   if (head.spawnFailed || head.code !== 0) {
-    return { ok: false, why: "HEAD does not name a commit here (not a git work tree, or no commit yet)" };
+    return failed(headArgs, head, "HEAD does not name a commit here (not a git work tree, or no commit yet)");
   }
   const exclude = [...artifacts, CAPTURE_DIRECTORY].map((path): string => `:(exclude,literal)${path}`);
-  const diff = seams.run(
-    GIT,
-    [
-      ...RAW_PATHS,
-      "diff",
-      "HEAD",
-      "--binary",
-      "--no-color",
-      "--no-ext-diff",
-      "--no-textconv",
-      "--submodule=diff",
-      "--ignore-submodules=none",
-      "--",
-      ".",
-      ...exclude,
-    ],
-    { cwd: repoRoot },
-  );
+  const diffArgs = [
+    ...RAW_PATHS,
+    "diff",
+    "HEAD",
+    "--binary",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--submodule=diff",
+    "--ignore-submodules=none",
+    "--",
+    ".",
+    ...exclude,
+  ];
+  const diff = seams.run(GIT, diffArgs, { cwd: repoRoot });
   if (diff.spawnFailed || diff.code !== 0) {
-    return { ok: false, why: `'git diff HEAD --binary' exited ${diff.code}: ${diff.stderr.trim()}` };
+    return failed(diffArgs, diff, `'git diff HEAD --binary' exited ${diff.code}: ${diff.stderr.trim()}`);
   }
-  const listed = seams.run(GIT, [...RAW_PATHS, "ls-files", "-z", "--others", "--exclude-standard"], {
-    cwd: repoRoot,
-  });
+  const othersArgs = [...RAW_PATHS, "ls-files", "-z", "--others", "--exclude-standard"];
+  const listed = gitBytes(seams, repoRoot, othersArgs);
   if (listed.spawnFailed || listed.code !== 0) {
-    return { ok: false, why: `'git ls-files --others' exited ${listed.code}: ${listed.stderr.trim()}` };
+    return failed(othersArgs, listed, `'git ls-files --others' exited ${listed.code}: ${listed.stderr.trim()}`);
   }
   const untracked: UntrackedDigest[] = [];
-  for (const path of nulPaths(listed.stdout).filter((entry): boolean => !excludedFromFingerprint(entry, artifacts))) {
-    const digest = untrackedDigest(repoRoot, path);
+  for (const record of recordsOf(listed)) {
+    if (typeof record !== "string") return notUtf8(record.undecodable);
+    if (excludedFromFingerprint(record, artifacts)) continue;
+    const digest = untrackedDigest(repoRoot, record);
     if (typeof digest !== "string") return { ok: false, why: digest.why };
-    untracked.push({ path, sha256: digest });
+    untracked.push({ path: record, sha256: digest });
   }
   const hidden = hiddenDigests(seams, repoRoot, artifacts);
-  if (!Array.isArray(hidden)) return { ok: false, why: (hidden as { why: string }).why };
+  if (!Array.isArray(hidden)) return hidden as Extract<Fingerprint, { ok: false }>;
   const headSha = head.stdout.trim();
   return {
     ok: true,
@@ -126,25 +174,21 @@ export function takeFingerprint(seams: Seams, repoRoot: string, artifacts: reado
   };
 }
 
-/** U+FFFD: what the seam's UTF-8 decoding leaves where a path's bytes were not UTF-8. */
-const UNDECODABLE = "\uFFFD";
-
-function notUtf8(path: string): { readonly why: string } {
+function notUtf8(path: string): Extract<Fingerprint, { ok: false }> {
   return {
-    why: `the path '${path}' is not valid UTF-8, so nen cannot read its bytes back through git's output and cannot fingerprint it -- rename it, or ignore it`,
+    ok: false,
+    why: `the path '${path}' is not valid UTF-8 (git printed bytes a strict UTF-8 decoder rejects), so nen cannot name it exactly and cannot fingerprint it -- rename it, or ignore it`,
   };
 }
 
 /**
- * One untracked entry's content hash, from the path's exact bytes. A symlink
- * is its TARGET string (git stores a link that way, and following it could
- * leave the tree); a directory -- a NESTED repository, which git lists as
- * `dir/` -- counts only as present (a stated limit). Anything else nen cannot
- * read is a refusal, never a marker: a marker would make two different files
- * fingerprint alike.
+ * One untracked entry's content hash. A symlink is its TARGET string (git
+ * stores a link that way, and following it could leave the tree); a directory
+ * -- a NESTED repository, which git lists as `dir/` -- counts only as present
+ * (a stated limit). Anything else nen cannot read is a refusal, never a
+ * marker: a marker would make two different files fingerprint alike.
  */
 function untrackedDigest(repoRoot: string, path: string): string | { readonly why: string } {
-  if (path.includes(UNDECODABLE)) return notUtf8(path);
   const absolute = join(repoRoot, path);
   try {
     const stats = lstatSync(absolute);
@@ -171,18 +215,20 @@ function hiddenDigests(
   seams: Seams,
   repoRoot: string,
   artifacts: readonly string[],
-): UntrackedDigest[] | { readonly why: string } {
-  const listed = seams.run(GIT, [...RAW_PATHS, "ls-files", "-v", "-z"], { cwd: repoRoot });
+): UntrackedDigest[] | Extract<Fingerprint, { ok: false }> {
+  const taggedArgs = [...RAW_PATHS, "ls-files", "-v", "-z"];
+  const listed = gitBytes(seams, repoRoot, taggedArgs);
   if (listed.spawnFailed || listed.code !== 0) {
-    return { why: `'git ls-files -v' exited ${listed.code}: ${listed.stderr.trim()}` };
+    return failed(taggedArgs, listed, `'git ls-files -v' exited ${listed.code}: ${listed.stderr.trim()}`);
   }
   const paths: string[] = [];
-  for (const entry of nulPaths(listed.stdout)) {
-    const tag = entry.slice(0, 1);
-    const path = entry.slice(2);
+  for (const record of recordsOf(listed)) {
+    const text = typeof record === "string" ? record : record.undecodable;
+    const tag = text.slice(0, 1);
+    const path = text.slice(2);
     const hidden = tag === "S" || (tag !== tag.toUpperCase() && tag === tag.toLowerCase());
     if (!hidden || excludedFromFingerprint(path, artifacts)) continue;
-    if (path.includes(UNDECODABLE)) return notUtf8(path);
+    if (typeof record !== "string") return notUtf8(path);
     paths.push(path);
   }
   if (paths.length === 0) return [];
@@ -197,9 +243,10 @@ function hiddenDigests(
     .filter((path): boolean => !present.includes(path))
     .map((path): UntrackedDigest => ({ path, sha256: "absent" }));
   if (present.length > 0) {
-    const hashed = seams.run(GIT, [...RAW_PATHS, "hash-object", "--no-filters", "--", ...present], { cwd: repoRoot });
+    const hashArgs = [...RAW_PATHS, "hash-object", "--no-filters", "--", ...present];
+    const hashed = seams.run(GIT, hashArgs, { cwd: repoRoot });
     if (hashed.spawnFailed || hashed.code !== 0) {
-      return { why: `'git hash-object --no-filters' exited ${hashed.code}: ${hashed.stderr.trim()}` };
+      return failed(hashArgs, hashed, `'git hash-object --no-filters' exited ${hashed.code}: ${hashed.stderr.trim()}`);
     }
     const objects = hashed.stdout.split("\n").filter((line): boolean => line !== "");
     present.forEach((path, index): void => {
@@ -261,6 +308,16 @@ export function fileStats(absolute: string): Stats | null {
   }
 }
 
+/** The sidecar's absolute path, or why it resolves outside the repository. */
+function containedSidecar(repoRoot: string, lane: string): string | { readonly why: string } {
+  try {
+    return insideRepo(repoRoot, sidecarPath(lane), "the capture sidecar");
+  } catch (error) {
+    if (error instanceof VerbUsageError) return { why: error.message };
+    throw error;
+  }
+}
+
 /** The lane's sidecar: read, absent, or unreadable with a reason. */
 export type SidecarRead =
   | { readonly state: "present"; readonly sidecar: CaptureSidecar }
@@ -268,9 +325,16 @@ export type SidecarRead =
   | { readonly state: "unreadable"; readonly why: string };
 
 export function readCaptureSidecar(repoRoot: string, lane: string): SidecarRead {
+  // THE SIDECAR'S PATH IS FIXED, AND STILL CONTAINED (Copilot round 2 on
+  // zheref/nen#369): a `.nen` or `coverage-capture` directory that is a
+  // symlink out of the tree would otherwise have nen read -- and trust -- a
+  // file outside it. The same real-path rule every declared path meets
+  // (./run.ts's insideRepo); an escaping sidecar is UNREADABLE, never read.
+  const absolute = containedSidecar(repoRoot, lane);
+  if (typeof absolute !== "string") return { state: "unreadable", why: absolute.why };
   let text: string;
   try {
-    text = readFileSync(join(repoRoot, sidecarPath(lane)), "utf8");
+    text = readFileSync(absolute, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { state: "missing" };
     return { state: "unreadable", why: (error as NodeJS.ErrnoException).code ?? "unknown error" };
@@ -373,7 +437,11 @@ export async function recordCapture(
       sha256: entry.sha256 as string,
     })),
   };
-  const absolute = join(repoRoot, path);
+  const absolute = containedSidecar(repoRoot, produced.lane);
+  if (typeof absolute !== "string") {
+    context.io.err(`nen recorded no coverage-capture provenance for lane '${produced.lane}': ${absolute.why}`);
+    return code;
+  }
   mkdirSync(dirname(absolute), { recursive: true });
   writeFileSync(absolute, `${JSON.stringify(sidecar, null, 2)}\n`);
   return code;
