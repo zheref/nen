@@ -2,6 +2,57 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.19.0 — 2026-10-04
+
+Release unit for `v0.18.3..v0.19.0`. It brings interactive desktop runners, the runner trust fixes, and stricter readiness:
+- the deliveries: [#334](https://github.com/zheref/nen/pull/334), [#335](https://github.com/zheref/nen/pull/335), [#336](https://github.com/zheref/nen/pull/336), [#342](https://github.com/zheref/nen/pull/342) and [#343](https://github.com/zheref/nen/pull/343);
+- [#358](https://github.com/zheref/nen/pull/358), the release proposal.
+
+The compatibility floor moves to `0.19`.
+
+### Added
+
+- **runner** ([#335](https://github.com/zheref/nen/pull/335), closes [#333](https://github.com/zheref/nen/issues/333)) — interactive Windows runners, which run inside a signed-in desktop session for jobs that drive a real UI. A service runs in session 0, where such a job times out.
+  - **Declaration:** `nen/workflow.json` → `runners.pools[].mode` is `service` or `interactive`.
+    - Absent means `service` on Windows and Linux, and `interactive` on macOS, whose runner is a LaunchAgent.
+    - `macOS` + `service` and `Linux` + `interactive` are refused.
+    - An interactive Windows pool's labels are exactly `["self-hosted", "Windows", <arch>, "desktop"]`.
+  - **`runner plan`:** its contract is now `nen.runner.plan/v0.2`, which adds `mode` and `dailyAccount`; a v0.1 plan still reads, as a service plan.
+    - An interactive identity must be a local account; the built-in service identities are refused.
+    - Every rendering says the runner is online only while that account is signed in, with an active, unlocked session.
+    - It also says such a runner takes every job aimed at the plain `[self-hosted, Windows, <arch>]` set, not only `desktop` jobs.
+    - When the identity is the Windows account computing the plan, the plan warns and records `dailyAccount: true`.
+  - **`runner script`:** a `dailyAccount` plan renders only with the new `--accept-daily-account`, and the verb repeats that check itself on Windows.
+    - For an interactive pool the script installs no service and asks no password.
+    - It resets each `Runner<N>` folder to the locked root's baseline, then grants the identity Modify there.
+    - It registers a Scheduled Task at that account's logon that runs `run.cmd` in its desktop session: interactive token, priority 4, no time limit, restarted on failure.
+    - A folder still installed as a service is refused.
+    - The service-form script is unchanged.
+  - **`runner workflow`:** it fills an eighth value, `@@MODE@@`. A template that predates it still renders. nen's fixture template gains a desktop-session probe, which fails in session 0, and mode-aware remediation.
+- **runner** ([#336](https://github.com/zheref/nen/pull/336), closes [#330](https://github.com/zheref/nen/issues/330)) — on the pool's own host, `runner plan` reads the existing `actions.runner.*` services read-only (`Get-CimInstance Win32_Service` / `systemctl`).
+  - It warns on stderr, at exit 0, when the planned account already serves a repository of different or unknown visibility, and recommends a per-repository account (`runner-<repo>`).
+  - It also names the target's own runners left on such an account.
+  - Nothing is refused, and nen never creates an account.
+
+### Fixed
+
+- **runner** ([#334](https://github.com/zheref/nen/pull/334), closes [#319](https://github.com/zheref/nen/issues/319)) — `runner enable` certifies only a `workflow_dispatch` run on the default branch that ran the default branch's own preflight blob.
+  - `runner script` treats a configured `Runner<N>` as stale when its service is absent or GitHub no longer lists it. It re-registers that runner with `--replace` instead of counting it as skipped.
+  - For an interactive runner, which has no service, only GitHub's listing makes it stale (#335).
+- **gates** ([#342](https://github.com/zheref/nen/pull/342), closes [#317](https://github.com/zheref/nen/issues/317) and [#331](https://github.com/zheref/nen/issues/331)) — `pr ready` no longer counts a head as green when all of its checks were skipped; it needs at least one success.
+  - A draft PR is not-ready at row 1.
+  - A queued re-run is the latest run of its check, and holds row 2 until it concludes.
+  - `pr next-blocker --json`'s `kind` gains `draft`.
+- **surface** ([#343](https://github.com/zheref/nen/pull/343), closes [#328](https://github.com/zheref/nen/issues/328)) — a mirror's `summary:` line now parses as YAML for every `description`, block scalars included.
+
+### Breaking / consumer notes
+
+- **Repin: `"0.18"` → `"0.19"`, and `v0.18.3` → `v0.19.0`.** The maintainer moved the floor for this release because three changes alter meaning on unchanged inputs. A repository whose `dependency.minimum` is below `0.19` is refused by this build at exit 5, and must raise its minimum and repin. zheref/hatsu declares `0.18` (bootstrap ref `v0.18.2`); its repin rides with zheref/hatsu#206, which adopts `mode` and `@@MODE@@`.
+- **gates** — `pr ready` answers not-ready where it answered ready ([#342](https://github.com/zheref/nen/pull/342)): for a head whose checks are all skipped, for a draft, and for a check whose latest run is a queued re-run. A repository whose only checks are conditional must make one job run and succeed on every head.
+- **runner** — `runner enable` exits 1 for a run it accepted before ([#334](https://github.com/zheref/nen/pull/334)): a `push` run, or a run on a branch other than the default. Dispatch with `nen runner preflight` on the default branch and pass that run id.
+- **runner** — `runner plan --json` / `--out` names the contract `nen.runner.plan/v0.2`, where it named `v0.1`, and carries `mode` and `dailyAccount` ([#335](https://github.com/zheref/nen/pull/335)). A reader that matches the contract string must accept `v0.2`. `runner script` still reads a v0.1 plan.
+- **surface** — on repin, Hatsu's `surfaces/codex/ten/SKILL.md` reads stale until one `nen surface mirror generate` for codex: its `summary:` gains double quotes ([#343](https://github.com/zheref/nen/pull/343)).
+
 ## v0.18.3 — 2026-10-01
 
 Release unit for `v0.18.2..v0.18.3`, the Windows pool's first live runs after `hatsu:jusshin` brought it back:
