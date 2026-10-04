@@ -55,8 +55,24 @@ import { rawLines } from "../seam/lines.js";
 import { trailerAdmitted, trailerRefusal, type LoadedWorkflow } from "../schema/workflow.js";
 import type { Trailer } from "./format.js";
 
-/** git's own trailer parser, over stdin: trailers only, from the input only, folded lines unfolded. */
-export const PARSE_TRAILERS_ARGS: readonly string[] = ["interpret-trailers", "--parse", "--unfold"];
+/**
+ * git's own trailer parser, over stdin: trailers only, from the input only,
+ * folded lines unfolded -- and `--no-divider` (Copilot, NN-PR-#357). Without
+ * it git treats a standalone `---` line as the start of a patch and reads
+ * nothing below it, so a hook appending a refused trailer under a Markdown
+ * rule in the body would read back as `[]`: fail-open. A commit message is
+ * never a patch email, so the divider is never meaningful here.
+ */
+export const PARSE_TRAILERS_ARGS: readonly string[] = ["interpret-trailers", "--parse", "--unfold", "--no-divider"];
+
+/**
+ * The repository's `trailer.separators`. `--parse` PRINTS every trailer with
+ * the FIRST character of that value (Copilot, NN-PR-#357): under `=:`,
+ * `Co-authored-by: Cursor` comes out as `Co-authored-by= Cursor`, and a
+ * decoder that split on ':' alone dropped it. Read, never overridden with
+ * `-c`, because that would also change which lines git ACCEPTS as trailers.
+ */
+export const SEPARATORS_ARGS: readonly string[] = ["config", "--get", "trailer.separators"];
 
 /** The written commit, raw: plumbing, so no `log.*` configuration reaches it. */
 export function catFileArgs(sha: string): readonly string[] {
@@ -87,15 +103,33 @@ export interface Readback {
   readonly findings: readonly InjectedFinding[];
 }
 
-/** `Key: value` lines into trailers; a line with no colon (never produced by `--parse`) is skipped rather than guessed at. */
-export function parseTrailerLines(output: string): Trailer[] {
+/** A read-back of a real commit: the comparison, plus whether that commit is a ROOT commit (no parent, so no `HEAD~1` to return to). */
+export interface WrittenReadback extends Readback {
+  readonly root: boolean;
+}
+
+/**
+ * `--parse` output into trailers: `Key<separator> value` per line, the
+ * separator being the one git printed with (`outputSeparator`, ':' by
+ * default). A line without it (never produced by `--parse`) is skipped rather
+ * than guessed at.
+ */
+export function parseTrailerLines(output: string, separator = ":"): Trailer[] {
   const trailers: Trailer[] = [];
   for (const line of rawLines(output)) {
-    const index = line.indexOf(":");
+    const index = line.indexOf(separator);
     if (index <= 0) continue;
     trailers.push({ key: line.slice(0, index).trim(), value: line.slice(index + 1).trim() });
   }
   return trailers;
+}
+
+/** Whether a raw commit object names no parent -- a ROOT commit. Headers end at the first blank line. */
+export function isRootCommit(raw: string): boolean {
+  const normalized = raw.replace(/\r\n/g, "\n");
+  const end = normalized.indexOf("\n\n");
+  const headers = end === -1 ? normalized : normalized.slice(0, end);
+  return !headers.split("\n").some((line): boolean => line.startsWith("parent "));
 }
 
 /** A raw commit object's MESSAGE: everything after the first blank line, which ends the headers (a signature's continuation lines start with a space, never blank). */
@@ -158,11 +192,25 @@ function gitFailure(result: { readonly stderr: string; readonly code: number }):
   return outputLines(result.stderr).join(" ") || `exit ${result.code}`;
 }
 
+/**
+ * The character `--parse` prints between key and value: the first of
+ * `trailer.separators`, ':' when it is unset (`git config --get` exit 1).
+ * Any other failure throws -- a separator guessed is a trailer dropped.
+ */
+function outputSeparator(seams: Seams, root: string, failure: (what: string, why: string) => string): string {
+  const result = seams.run(GIT, [...SEPARATORS_ARGS], { cwd: root });
+  if (result.spawnFailed || result.code > 1) throw new Error(failure(SEPARATORS_ARGS.join(" "), gitFailure(result)));
+  if (result.code === 1) return ":";
+  const first = result.stdout.replace(/\r?\n$/, "").charAt(0);
+  return first === "" ? ":" : first;
+}
+
 /** `text`'s trailers, as git's own parser reads them. Throws when git cannot answer. */
-function parseWithGit(seams: Seams, root: string, text: string, failure: (why: string) => string): Trailer[] {
+function parseWithGit(seams: Seams, root: string, text: string, failure: (what: string, why: string) => string): Trailer[] {
+  const separator = outputSeparator(seams, root, failure);
   const result = seams.run(GIT, [...PARSE_TRAILERS_ARGS], { cwd: root, stdin: text });
-  if (result.spawnFailed || result.code !== 0) throw new Error(failure(gitFailure(result)));
-  return parseTrailerLines(result.stdout);
+  if (result.spawnFailed || result.code !== 0) throw new Error(failure(PARSE_TRAILERS_ARGS.join(" "), gitFailure(result)));
+  return parseTrailerLines(result.stdout, separator);
 }
 
 /**
@@ -175,8 +223,8 @@ export function sentTrailers(seams: Seams, root: string, message: string): Trail
     seams,
     root,
     message,
-    (why): string =>
-      `could not read the message's trailers with git's own parser ('git ${PARSE_TRAILERS_ARGS.join(" ")}' failed: ${why}). Nothing was committed: without them the written commit could not be checked.`,
+    (what, why): string =>
+      `could not read the message's trailers with git's own parser ('git ${what}' failed: ${why}). Nothing was committed: without them the written commit could not be checked.`,
   );
 }
 
@@ -185,14 +233,14 @@ export function sentTrailers(seams: Seams, root: string, message: string): Trail
  * that cannot answer THROWS: the commit exists, the check did not happen, and
  * "not checked" must never render as a clean `injected: []`.
  */
-export function readBack(seams: Seams, root: string, sha: string, sent: readonly Trailer[], policy: LoadedWorkflow): Readback {
+export function readBack(seams: Seams, root: string, sha: string, sent: readonly Trailer[], policy: LoadedWorkflow): WrittenReadback {
   const notChecked = (what: string, why: string): string =>
     `committed ${sha}, but could not read its trailers back ('git ${what}' failed: ${why}). The commit is in place; whether it carries a refused trailer was NOT checked.`;
   const cat = catFileArgs(sha);
   const raw = seams.run(GIT, [...cat], { cwd: root });
   if (raw.spawnFailed || raw.code !== 0) throw new Error(notChecked(cat.join(" "), gitFailure(raw)));
-  const written = parseWithGit(seams, root, commitMessageOf(raw.stdout), (why): string => notChecked(PARSE_TRAILERS_ARGS.join(" "), why));
-  return compareTrailers(written, sent, policy);
+  const written = parseWithGit(seams, root, commitMessageOf(raw.stdout), notChecked);
+  return { ...compareTrailers(written, sent, policy), root: isRootCommit(raw.stdout) };
 }
 
 /** The reason one finding is refused, as a clause. */

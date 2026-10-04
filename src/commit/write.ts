@@ -136,6 +136,8 @@ export type WriteOutcome =
        */
       readonly findings: readonly InjectedFinding[];
       readonly policy: LoadedWorkflow | null;
+      /** How to drop the written commit with the change still staged -- parent-aware; null when nothing is refused. */
+      readonly undo: string | null;
     };
 
 export interface WriteOptions {
@@ -276,6 +278,7 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
       lines: [`would run: git commit -F ${COMMIT_MESSAGE_PATH}`, "message:", ...messageLines],
       findings: [],
       policy: loaded,
+      undo: null,
     };
   }
 
@@ -324,5 +327,28 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
     lines: [`committed ${sha}: ${subject}`],
     findings: back.findings,
     policy,
+    undo: back.findings.length === 0 ? null : undoLine(seams, root, back.root),
   };
+}
+
+/**
+ * The way back from a refused commit, keeping the change staged -- PARENT-
+ * AWARE (Copilot, NN-PR-#357). A ROOT commit has no `HEAD~1`, so the reset
+ * every other commit is undone with fails there. On a branch, `git update-ref
+ * -d HEAD` deletes the branch's only ref: the branch is unborn again and the
+ * index -- the staged tree -- is untouched. On a detached HEAD there is no
+ * branch to delete, and `git checkout --orphan <branch>` starts an unborn
+ * branch over the same index. Which of the two is asked of `git symbolic-ref
+ * -q HEAD` (exit 0 on a branch, 1 detached); anything else names both rather
+ * than guessing.
+ */
+function undoLine(seams: Seams, root: string, isRoot: boolean): string {
+  if (!isRoot) return "'git reset --soft HEAD~1' keeps the change staged";
+  const head = seams.run(GIT, ["symbolic-ref", "-q", "HEAD"], { cwd: root });
+  const onBranch = "'git update-ref -d HEAD' makes the branch unborn again with the change still staged";
+  const detached = "on this detached HEAD, 'git checkout --orphan <branch>' starts an unborn branch over the same staged change";
+  const prefix = "it is the ROOT commit, so there is no HEAD~1 to reset to: ";
+  if (!head.spawnFailed && head.code === 0) return `${prefix}${onBranch} (${head.stdout.trim()})`;
+  if (!head.spawnFailed && head.code === 1) return `${prefix}${detached}`;
+  return `${prefix}on a branch, ${onBranch}; ${detached}`;
 }

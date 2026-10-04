@@ -99,6 +99,32 @@ function repository(hookTrailer: string | null): string {
   return repo;
 }
 
+/** A prepare-commit-msg hook with a body of its own, for the shapes `git interpret-trailers` would not write. */
+function installRawHook(repo: string, body: string): void {
+  const hook = join(repo, ".git", "nen-test-hooks", "prepare-commit-msg");
+  writeFileSync(hook, `#!/bin/sh\n${body}\n`);
+  chmodSync(hook, 0o755);
+}
+
+/** A repository with NO commit yet, the policy staged with the hooks pinned -- the next commit is the ROOT. */
+function emptyRepository(): string {
+  counter += 1;
+  const repo = join(root, `repo-${counter}`);
+  mkdirSync(repo);
+  mustGit(repo, ["init", "--quiet", "--initial-branch=main"]);
+  mustGit(repo, ["config", "core.autocrlf", "false"]);
+  mustGit(repo, ["config", "user.name", "nen test"]);
+  mustGit(repo, ["config", "user.email", "nen@example.invalid"]);
+  mustGit(repo, ["config", "commit.gpgsign", "false"]);
+  const hooks = join(repo, ".git", "nen-test-hooks");
+  mkdirSync(hooks);
+  mustGit(repo, ["config", "core.hooksPath", hooks]);
+  mkdirSync(join(repo, "nen"));
+  writeFileSync(join(repo, "nen", "workflow.json"), `${JSON.stringify(POLICY)}\n`);
+  mustGit(repo, ["add", "-A"]);
+  return repo;
+}
+
 /** The prepare-commit-msg hook: append `trailer` to every message, through git's own trailer writer. */
 function installHook(repo: string, trailer: string): void {
   const hook = join(repo, ".git", "nen-test-hooks", "prepare-commit-msg");
@@ -192,6 +218,44 @@ describe.skipIf(!HAVE_GIT)("nen commit write -- the written commit's trailers, r
       { key: "Hatsu-Agent", value: "kurapika" },
       { key: "Co-authored-by", value: "Cursor <cursoragent@cursor.com>" },
     ]);
+  });
+
+  it("a hook appending the refused trailer BELOW a Markdown '---' line is still read: exit 3 (Copilot, NN-PR-#357)", async () => {
+    const repo = repository(null);
+    installRawHook(repo, `printf '\\n---\\n\\n${CURSOR}\\n' >> "$1"`);
+    const message = stage(repo, "d.txt", "feat: add d\n");
+    const result = await run(commitCommand, ["commit", "write", "--message-file", message, "--trailer", "Hatsu-Agent: kurapika"], repo);
+    expect(mustGit(repo, ["cat-file", "commit", "HEAD"])).toContain(`---\n\n${CURSOR}`);
+    expect(result.code).toBe(3);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["injected"]).toEqual(["Co-authored-by"]);
+  });
+
+  it("trailer.separators '=:' -- git prints '=' -- is decoded, not silently emptied: exit 3 (Copilot, NN-PR-#357)", async () => {
+    const repo = repository(CURSOR);
+    mustGit(repo, ["config", "trailer.separators", "=:"]);
+    const message = stage(repo, "e.txt", "feat: add e\n");
+    const result = await run(commitCommand, ["commit", "write", "--message-file", message, "--trailer", "Hatsu-Agent: kurapika"], repo);
+    expect(result.code).toBe(3);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["injected"]).toEqual(["Co-authored-by"]);
+    expect((doc["trailers"] as { key: string }[]).map((trailer): string => trailer.key)).toEqual(["Hatsu-Agent", "Co-authored-by"]);
+  });
+
+  it("an injected ROOT commit names 'git update-ref -d HEAD', and that way back keeps the change staged (Copilot, NN-PR-#357)", async () => {
+    const repo = emptyRepository();
+    installHook(repo, CURSOR);
+    const message = join(repo, ".git", "msg-root.txt");
+    writeFileSync(message, "chore: the first commit\n");
+    const result = await run(commitCommand, ["commit", "write", "--message-file", message, "--trailer", "Hatsu-Agent: kurapika"], repo);
+    expect(result.code).toBe(3);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/ROOT commit, so there is no HEAD~1.*'git update-ref -d HEAD'.*refs\/heads\/main/);
+    expect(err).not.toMatch(/reset --soft HEAD~1/);
+    // The named way back works, and the staged tree survives it.
+    mustGit(repo, ["update-ref", "-d", "HEAD"]);
+    expect(git(repo, ["rev-parse", "-q", "--verify", "HEAD"]).code).not.toBe(0);
+    expect(mustGit(repo, ["diff", "--cached", "--name-only"])).toBe("nen/workflow.json");
   });
 
   it("a hook appending a key the policy ADMITS is not injected: exit 0, a note names it", async () => {

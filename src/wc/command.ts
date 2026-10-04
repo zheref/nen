@@ -118,7 +118,7 @@ the upstream check above makes, never pushes, never force-anything.
 
 THEN THE FOLDED COMMIT IS READ BACK (zheref/nen#273), exactly as 'nen
 commit write' reads its own: the message file through 'git interpret-trailers
---parse --unfold' before the reset, the folded commit through 'git cat-file
+--parse --unfold --no-divider' before the reset, the folded commit through 'git cat-file
 commit <sha>' and the same parser after. An added key the policy refuses, or
 one ending in -by or -with that commits.allowedAttributionTrailers does not
 admit (with no ${WORKFLOW_FILE} too), and a refused key the message itself

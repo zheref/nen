@@ -223,7 +223,8 @@ composed message is written there and removed afterwards.
 
 THEN THE COMMIT IS READ BACK (zheref/nen#273), by git's own trailer parser
 on both sides: the composed message through 'git interpret-trailers --parse
---unfold' BEFORE the write, and the written commit through 'git cat-file
+--unfold --no-divider' (decoded with the first character of
+trailer.separators) BEFORE the write, and the written commit through 'git cat-file
 commit <sha>' (plumbing -- no log.* config reaches it) and the same parser
 after. A trailer on the commit the message did not carry was added by a hook
 inside 'git commit' (prepare-commit-msg, commit-msg, a harness's own). It is
@@ -233,7 +234,10 @@ rule binds with no ${WORKFLOW_FILE} too ('Made-with: Cursor'). A refused key
 the MESSAGE itself carried (a 'Key:value' line git reads as a trailer) is
 named as the message's, never a hook's. Any of these: exit 3, every key
 named with its source and rule, the commit LEFT IN PLACE -- never amended;
-drop it yourself ('git reset --soft HEAD~1'). An added key nothing refuses
+drop it yourself, the change kept staged: 'git reset --soft HEAD~1', or for
+a ROOT commit (no HEAD~1) 'git update-ref -d HEAD' on a branch and 'git
+checkout --orphan <branch>' on a detached HEAD -- the line names the one that
+applies. An added key nothing refuses
 is a 'note:' line, exit unchanged. A read-back git could not answer is exit
 1: the commit exists, the check did not happen.
 
@@ -340,8 +344,8 @@ function runWrite(context: CommandContext): number {
   // this repository refuses -- ./readback.ts's three rules. Not 1 -- nothing failed to run,
   // and the commit exists -- and not 2 -- the invocation was right. The report
   // above still names the sha; the commit is left for the caller to drop.
-  if (outcome.findings.length > 0 && outcome.report.sha !== null && outcome.policy !== null) {
-    context.io.err(`nen commit write: ${injectedMessage(outcome.report.sha, outcome.findings, outcome.policy, "'git reset --soft HEAD~1' keeps the change staged")}`);
+  if (outcome.findings.length > 0 && outcome.report.sha !== null && outcome.policy !== null && outcome.undo !== null) {
+    context.io.err(`nen commit write: ${injectedMessage(outcome.report.sha, outcome.findings, outcome.policy, outcome.undo)}`);
     return 3;
   }
   return 0;

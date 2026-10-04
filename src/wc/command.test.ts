@@ -160,9 +160,10 @@ const NAME_OK = { match: "git check-ref-format --branch main", result: { stdout:
 /** The squash's read-back (zheref/nen#273): git's parse of the message file before the reset, the folded commit, git's parse of its message. */
 function readBackScript(sent: string, written: string): ScriptedCall[] {
   return [
-    { match: "git interpret-trailers --parse --unfold", result: { stdout: sent } },
+    { match: "git config --get trailer.separators", result: { code: 1 } },
+    { match: "git interpret-trailers --parse --unfold --no-divider", result: { stdout: sent } },
     { match: "git cat-file commit newsha00", result: { stdout: "tree t\nauthor a\n\nfeat: add a thing\n" } },
-    { match: "git interpret-trailers --parse --unfold", result: { stdout: written } },
+    { match: "git interpret-trailers --parse --unfold --no-divider", result: { stdout: written } },
   ];
 }
 
@@ -373,7 +374,8 @@ describe("nen wc squash -- CLI wiring", () => {
     const path = messageFile("feat: add a thing\n");
     const result = await squashJsonRun(["--onto", "main", "--message-file", path], [
       NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR,
-      { match: "git interpret-trailers --parse --unfold", result: { stdout: "" } },
+      { match: "git config --get trailer.separators", result: { code: 1 } },
+      { match: "git interpret-trailers --parse --unfold --no-divider", result: { stdout: "" } },
       { match: "git reset --soft base0000", result: { code: 0 } },
       { match: `git commit -F ${path}`, result: { code: 0 } },
       { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } },
@@ -382,13 +384,14 @@ describe("nen wc squash -- CLI wiring", () => {
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/committed newsha00.*fatal: bad object.*NOT checked/);
     const calls = result.seams.calls.map((call): string => [call.command, ...call.args].join(" "));
-    expect(calls.indexOf("git interpret-trailers --parse --unfold")).toBeLessThan(calls.indexOf("git reset --soft base0000"));
+    expect(calls.indexOf("git interpret-trailers --parse --unfold --no-divider")).toBeLessThan(calls.indexOf("git reset --soft base0000"));
   });
 
   it("git failing to parse the message file stops the squash BEFORE the reset -- nothing moved (hanten N2)", async () => {
     const result = await squashJsonRun(["--onto", "main", "--message-file", messageFile("feat: x\n")], [
       NAME_OK, CLEAN, MERGE_BASE, ANCESTOR_OK, TWO_COMMITS, NO_UPSTREAM, ...BASE_CLEAR,
-      { match: "git interpret-trailers --parse --unfold", result: { code: 129, stderr: "usage" } },
+      { match: "git config --get trailer.separators", result: { code: 1 } },
+      { match: "git interpret-trailers --parse --unfold --no-divider", result: { code: 129, stderr: "usage" } },
     ]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/Nothing was committed/);

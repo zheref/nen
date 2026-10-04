@@ -20,10 +20,15 @@ const NOTHING_STAGED = { match: "git diff --cached --quiet", result: { code: 0 }
 const COMMITTED = { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 0 } };
 const HEAD = { match: "git rev-parse HEAD", result: { stdout: "newsha00\n" } };
 /** The read-back of the written commit's trailers (zheref/nen#273); empty unless a test says otherwise. */
-const PARSE_CALL = "git interpret-trailers --parse --unfold";
+const PARSE_CALL = "git interpret-trailers --parse --unfold --no-divider";
 const CAT_CALL = "git cat-file commit newsha00";
+const CONFIG_CALL = "git config --get trailer.separators";
+/** `trailer.separators` unset -- exit 1, ':' -- answered for every read the verb makes. */
+const CONFIG_UNSET: ScriptedCall = { match: CONFIG_CALL, result: { code: 1 } };
 /** The written commit as `git cat-file` prints it: headers, a blank line, the message. */
-const RAW_COMMIT = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor a <a@b> 0 +0000\ncommitter a <a@b> 0 +0000\n\nfeat: x\n";
+const RAW_COMMIT = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nparent 1111111111111111111111111111111111111111\nauthor a <a@b> 0 +0000\ncommitter a <a@b> 0 +0000\n\nfeat: x\n";
+/** The same commit with no parent: the repository's ROOT commit. */
+const RAW_ROOT_COMMIT = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor a <a@b> 0 +0000\ncommitter a <a@b> 0 +0000\n\nfeat: x\n";
 /**
  * The three read-back calls in the order they happen: git's parse of the SENT
  * message (before the write), the commit object, git's parse of its message.
@@ -31,6 +36,7 @@ const RAW_COMMIT = "tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor a <a@b
  */
 function readBackScript(sent: string, written: string): ScriptedCall[] {
   return [
+    CONFIG_UNSET,
     { match: PARSE_CALL, result: { stdout: sent } },
     { match: CAT_CALL, result: { stdout: RAW_COMMIT } },
     { match: PARSE_CALL, result: { stdout: written } },
@@ -183,7 +189,7 @@ describe("nen commit write -- the write", () => {
       injected: [],
       dryRun: false,
     });
-    expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet", PARSE_CALL, `git commit -F ${COMMIT_MESSAGE_PATH}`, "git rev-parse HEAD", CAT_CALL, PARSE_CALL]);
+    expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet", CONFIG_CALL, PARSE_CALL, `git commit -F ${COMMIT_MESSAGE_PATH}`, "git rev-parse HEAD", CAT_CALL, CONFIG_CALL, PARSE_CALL]);
     expect(existsSync(join(root, ".nen", "commit", "message.txt"))).toBe(false);
     expect(existsSync(join(root, ".nen", "commit"))).toBe(false);
     const text = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, ...READ_BACK]);
@@ -203,19 +209,38 @@ describe("nen commit write -- the write", () => {
     expect(gitCalls(result.seams).filter((call): boolean => call.includes("amend") || call.includes("reset"))).toEqual([]);
   });
 
+  it("a refused ROOT commit names a parent-aware way back: update-ref -d HEAD on a branch, checkout --orphan detached (Copilot, NN-PR-#357)", async () => {
+    const root = repo({ message: "feat: x\n", policy: { commits: { allowedAttributionTrailers: ["Hatsu-Agent"] } } });
+    const rootScript = (head: ScriptedCall): ScriptedCall[] => [
+      STAGED, COMMITTED, HEAD, CONFIG_UNSET,
+      { match: PARSE_CALL, result: { stdout: "" } },
+      { match: CAT_CALL, result: { stdout: RAW_ROOT_COMMIT } },
+      { match: PARSE_CALL, result: { stdout: "Co-authored-by: Cursor <c@x>\n" } },
+      head,
+    ];
+    const onBranch = await capture(root, ["--message-file", "message.txt"], rootScript({ match: "git symbolic-ref -q HEAD", result: { stdout: "refs/heads/main\n" } }));
+    expect(onBranch.code).toBe(3);
+    expect(onBranch.err.join("\n")).toMatch(/ROOT commit, so there is no HEAD~1.*'git update-ref -d HEAD'.*\(refs\/heads\/main\)/);
+    expect(onBranch.err.join("\n")).not.toMatch(/reset --soft HEAD~1/);
+    const detached = await capture(root, ["--message-file", "message.txt"], rootScript({ match: "git symbolic-ref -q HEAD", result: { code: 1 } }));
+    expect(detached.err.join("\n")).toMatch(/detached HEAD, 'git checkout --orphan <branch>'/);
+    const unknown = await capture(root, ["--message-file", "message.txt"], rootScript({ match: "git symbolic-ref -q HEAD", result: { code: 128 } }));
+    expect(unknown.err.join("\n")).toMatch(/on a branch, 'git update-ref -d HEAD'.*checkout --orphan/);
+  });
+
   it("a read-back git cannot answer is exit 1, saying the commit exists and the check was not performed", async () => {
     const root = repo({ message: "feat: x\n" });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, { match: PARSE_CALL, result: { stdout: "" } }, { match: CAT_CALL, result: { code: 128, stderr: "fatal: nope" } }]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, COMMITTED, HEAD, CONFIG_UNSET, { match: PARSE_CALL, result: { stdout: "" } }, { match: CAT_CALL, result: { code: 128, stderr: "fatal: nope" } }]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/committed newsha00.*cat-file commit newsha00.*fatal: nope.*NOT checked/);
   });
 
   it("git failing to parse the SENT message stops the verb BEFORE the write -- nothing committed (hanten N2)", async () => {
     const root = repo({ message: "feat: x\n" });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, { match: PARSE_CALL, result: { code: 129, stderr: "usage" } }]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, CONFIG_UNSET, { match: PARSE_CALL, result: { code: 129, stderr: "usage" } }]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/Nothing was committed/);
-    expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet", PARSE_CALL]);
+    expect(gitCalls(result.seams)).toEqual(["git diff --cached --quiet", CONFIG_CALL, PARSE_CALL]);
   });
 
   it("a 'Key:value' line git reads as a trailer is never blamed on a hook: the sent side is git's parse too (hanten N2)", async () => {
@@ -263,7 +288,7 @@ describe("nen commit write -- the write", () => {
 
   it("a failed git commit is exit 1 with git's reason, and the message file is still removed", async () => {
     const root = repo({ message: "feat: x\n" });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, READ_BACK[0] as ScriptedCall, { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "hook refused" } }]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, CONFIG_UNSET, READ_BACK[1] as ScriptedCall, { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "hook refused" } }]);
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/hook refused/);
     expect(existsSync(join(root, ".nen", "commit", "message.txt"))).toBe(false);
@@ -341,7 +366,7 @@ describe("nen commit write -- the repository's commitlint subject-case rule, thr
 
   it("prints the 'NOT checked' warning for a JavaScript config even when the repository's own hook then refuses the commit", async () => {
     const root = commitlintRepo("fix: Start the timer\n", { "commitlint.config.js": "module.exports = { extends: ['@commitlint/config-conventional'] }\n" });
-    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, READ_BACK[0] as ScriptedCall, { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "subject must not be sentence-case [subject-case]" } }]);
+    const result = await capture(root, ["--message-file", "message.txt"], [STAGED, CONFIG_UNSET, READ_BACK[1] as ScriptedCall, { match: `git commit -F ${COMMIT_MESSAGE_PATH}`, result: { code: 1, stderr: "subject must not be sentence-case [subject-case]" } }]);
     expect(result.code).toBe(1);
     const err = result.err.join("\n");
     expect(err).toMatch(/nen: warning: subject-case NOT checked: .*commitlint\.config\.js/);

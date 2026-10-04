@@ -699,7 +699,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
-| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
+| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
@@ -775,7 +775,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) the repository's `subject-case` rule (commitlint's own when readable as data, else `commits.subjectCase`), and its body/footer line lengths, wrapping `--body` to them (commitlint's own when readable as data, else `commits.bodyMaxLineLength`, else 100) -- never its content | on every run: nen/workflow.json under --repo (the attribution-trailer policy, commits.subjectCase and commits.bodyMaxLineLength), and the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
-| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse, interpret-trailers --parse and cat-file commit for the written commit's trailer read-back -- exit 3 on an injected one, #273) | yes |
+| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the written commit's trailer read-back -- exit 3 on an injected one, #273) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -2512,7 +2512,7 @@ and a hook injected a trailer the policy refuses**.
 **The folded commit is read back** ([#273](https://github.com/zheref/nen/issues/273)),
 exactly as [`commit write`](#nen-commit-write) reads its own and under the
 same three rules: the message file through `git interpret-trailers --parse
---unfold` before the reset, the folded commit through `git cat-file commit
+--unfold --no-divider` before the reset, the folded commit through `git cat-file commit
 <newSha>` and the same parser after. An injected key is named in `injected[]`
 and on stderr with its source and rule, and the verb exits **3** — the squash
 is **left in place, never amended**; `git reset --soft ORIG_HEAD` restores the
@@ -6454,14 +6454,18 @@ A hook that runs *inside* the verb's own `git commit` — `prepare-commit-msg`,
 `commit-msg`, or a harness's own (Cursor appends `Co-authored-by: Cursor
 <cursoragent@cursor.com>`, [zheref/hatsu#66](https://github.com/zheref/hatsu/issues/66))
 — can add a trailer to a message nen already validated. So after the write the
-verb asks git's own trailer parser what the commit carries (`git log -1
---format=%(trailers:only,unfold) <sha>`) and compares it with the message it
-wrote, case-insensitively on the key. **Both sides are read by git's own
+verb asks git's own trailer parser what the commit carries and compares it
+with the message it wrote, case-insensitively on the key. **Both sides are read by git's own
 trailer parser**: the composed message through `git interpret-trailers --parse
---unfold` *before* the write (a git that cannot parse it stops the verb with
-nothing committed), and the written commit through `git cat-file commit <sha>`
-— plumbing, which no `log.*` setting such as `log.showSignature` can add a
-line to — and the same parser after. A refused key on the commit is
+--unfold --no-divider` *before* the write (a git that cannot parse it stops the
+verb with nothing committed), and the written commit through `git cat-file
+commit <sha>` — plumbing, which no `log.*` setting such as `log.showSignature`
+can add a line to — and the same parser after. `--no-divider` keeps a
+standalone `---` line in the body from ending the read (without it git takes
+it for the start of a patch and sees no trailer below it), and the output is
+decoded with the **first character of `trailer.separators`** (`git config
+--get trailer.separators`, `:` when unset) — the character `--parse` prints
+with — so a repository declaring `=:` is read, not silently emptied. A refused key on the commit is
 **injected** when:
 
 - a hook **added** it (the message did not carry it) and this repository's
@@ -6481,8 +6485,12 @@ line to — and the same parser after. A refused key on the commit is
 
 Every such key is named in `injected[]` and on stderr with its source and
 rule, and the verb exits **3**. The commit is **left in place — never
-amended**; the line names the way back (`git reset --soft HEAD~1` keeps the
-change staged). A key a hook added that nothing refuses (the repository's own
+amended**; the line names the way back, **parent-aware**, with the change kept
+staged: `git reset --soft HEAD~1` — or, when the written commit is the
+repository's **root** commit and there is no `HEAD~1`, `git update-ref -d
+HEAD` on a branch (the branch is unborn again, the index untouched) and `git
+checkout --orphan <branch>` on a detached HEAD, asked of `git symbolic-ref -q
+HEAD`. A key a hook added that nothing refuses (the repository's own
 `Hatsu-Agent`, Gerrit's `Change-Id`) is a `nen: note:` line and the exit is
 unchanged.
 

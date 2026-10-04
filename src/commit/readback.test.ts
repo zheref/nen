@@ -15,9 +15,11 @@ import {
   commitMessageOf,
   compareTrailers,
   injectedMessage,
+  isRootCommit,
   PARSE_TRAILERS_ARGS,
   parseTrailerLines,
   readBack,
+  SEPARATORS_ARGS,
   sentTrailers,
 } from "./readback.js";
 
@@ -35,6 +37,8 @@ const NO_POLICY = policy(null);
 const t = (key: string, value = "v"): { key: string; value: string } => ({ key, value });
 const PARSE = `git ${PARSE_TRAILERS_ARGS.join(" ")}`;
 const CAT = `git ${catFileArgs("abc123").join(" ")}`;
+const CONFIG = `git ${SEPARATORS_ARGS.join(" ")}`;
+const CONFIG_UNSET = { match: CONFIG, result: { code: 1 } };
 
 describe("parseTrailerLines and commitMessageOf", () => {
   it("splits each 'Key: value' line at its first colon and skips blanks and colon-less lines", () => {
@@ -42,6 +46,20 @@ describe("parseTrailerLines and commitMessageOf", () => {
       { key: "Closes", value: "#4" },
       { key: "Co-authored-by", value: "A <a@b.c>" },
     ]);
+  });
+
+  it("decodes with the separator git printed with -- '=' under trailer.separators '=:' (Copilot, NN-PR-#357)", () => {
+    expect(parseTrailerLines("Co-authored-by= Cursor <c@x>\nCloses= #4\n", "=")).toEqual([
+      { key: "Co-authored-by", value: "Cursor <c@x>" },
+      { key: "Closes", value: "#4" },
+    ]);
+    // ...which the ':' default would have dropped whole: the fail-open.
+    expect(parseTrailerLines("Co-authored-by= Cursor <c@x>\n")).toEqual([]);
+  });
+
+  it("isRootCommit: a commit with no 'parent' header is the root; a message line starting 'parent ' is not a header", () => {
+    expect(isRootCommit("tree t\nauthor a\n\nfeat: x\n\nparent of nothing\n")).toBe(true);
+    expect(isRootCommit("tree t\nparent p\nauthor a\n\nfeat: x\n")).toBe(false);
   });
 
   it("drops a raw commit's headers -- a signature's continuation lines included -- and keeps the message", () => {
@@ -112,23 +130,35 @@ describe("compareTrailers", () => {
 
 describe("sentTrailers and readBack -- git's own parser, no git log", () => {
   it("parses the sent message on stdin, in --repo, before any write", () => {
-    const seams = new ScriptedSeams([{ match: PARSE, result: { stdout: "Closes: #4\n" } }]);
+    const seams = new ScriptedSeams([CONFIG_UNSET, { match: PARSE, result: { stdout: "Closes: #4\n" } }]);
     expect(sentTrailers(seams, "/repo", "feat: x\n\nCloses:#4\n")).toEqual([{ key: "Closes", value: "#4" }]);
     expect(seams.calls[0]?.cwd).toBe("/repo");
   });
 
+  it("reads trailer.separators and decodes with its FIRST character; a config read that fails is a failure, never ':' guessed", () => {
+    const seams = new ScriptedSeams([{ match: CONFIG, result: { stdout: "=:\n" } }, { match: PARSE, result: { stdout: "Co-authored-by= Cursor\n" } }]);
+    expect(sentTrailers(seams, "/repo", "feat: x\n\nCo-authored-by: Cursor\n")).toEqual([{ key: "Co-authored-by", value: "Cursor" }]);
+    const broken = new ScriptedSeams([{ match: CONFIG, result: { code: 3, stderr: "bad config" } }]);
+    expect((): unknown => sentTrailers(broken, "/repo", "feat: x\n")).toThrow(/config --get trailer.separators.*bad config/);
+  });
+
+  it("asks the parser with --no-divider, so a '---' line in the body never hides the trailers below it", () => {
+    expect(PARSE_TRAILERS_ARGS).toContain("--no-divider");
+  });
+
   it("refuses when git cannot parse the sent message, saying nothing was committed", () => {
-    const seams = new ScriptedSeams([{ match: PARSE, result: { code: 129, stderr: "usage" } }]);
+    const seams = new ScriptedSeams([CONFIG_UNSET, { match: PARSE, result: { code: 129, stderr: "usage" } }]);
     expect((): unknown => sentTrailers(seams, "/repo", "feat: x\n")).toThrow(/Nothing was committed/);
   });
 
   it("reads the commit with cat-file and hands only its MESSAGE to interpret-trailers", () => {
     const seams = new ScriptedSeams([
+      CONFIG_UNSET,
       { match: CAT, result: { stdout: "tree t\nauthor a\n\nfeat: x\n\nCo-authored-by: Cursor <c@x>\n" } },
       { match: PARSE, result: { stdout: "Co-authored-by: Cursor <c@x>\n" } },
     ]);
     expect(readBack(seams, "/repo", "abc123", [], ADMITS_HATSU).injected).toEqual(["Co-authored-by"]);
-    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([CAT, PARSE]);
+    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([CAT, CONFIG, PARSE]);
     expect(seams.calls.some((call): boolean => call.args.includes("log"))).toBe(false);
   });
 
@@ -136,6 +166,7 @@ describe("sentTrailers and readBack -- git's own parser, no git log", () => {
     const failCat = new ScriptedSeams([{ match: CAT, result: { code: 128, stderr: "fatal: bad object" } }]);
     expect((): unknown => readBack(failCat, "/repo", "abc123", [], ADMITS_HATSU)).toThrow(/committed abc123.*fatal: bad object.*NOT checked/);
     const failParse = new ScriptedSeams([
+      CONFIG_UNSET,
       { match: CAT, result: { stdout: "tree t\n\nfeat: x\n" } },
       { match: PARSE, result: { code: 1, stderr: "boom" } },
     ]);
