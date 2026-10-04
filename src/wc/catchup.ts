@@ -67,17 +67,19 @@ import { rawLines } from "../seam/lines.js";
 import { REBASE_IN_PROGRESS_ARGV, rebaseState, REPO_ANSWERS_ARGV } from "../seam/rebase.js";
 import {
   classifyConflicts,
+  displayPath,
   NOT_READ,
   type Classification,
   type ConflictClass,
   type DeclarationState,
   type MechanicalDeclaration,
   type ResolveGroup,
+  type Sides,
 } from "./mechanical.js";
 import { endOfOptionsRefusal, fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
 import { findPublishedCommit, parseFolded, SquashStateError } from "./squash.js";
 
-/** v0.2 (zheref/nen#326): `conflicted[].class`, and `declaration`, `declarationError`, `classes`, `mechanical`, `resolve` at the end. */
+/** v0.2 (zheref/nen#326): `conflicted[].class`, and `declaration`, `declarationError`, `classes`, `mechanical`, `resolve`, `cwd` at the end. */
 export const CATCH_UP_CONTRACT = "nen.wc.catch-up/v0.2";
 
 export type Strategy = "rebase" | "merge";
@@ -90,12 +92,8 @@ export interface RawConflict {
   readonly ours: string | null;
   /** THE BASE's side (stage 3 on a merge, stage 2 on a rebase), capped; `(binary, N bytes)` for a blob carrying a NUL; null when that side deleted the path. */
   readonly theirs: string | null;
-  /**
-   * False only when the path is unmerged and the BASE's stage is absent -- the
-   * base deleted it. A path flagged solely for a leftover marker is already
-   * staged, so a checkout of either side reads the index and this is true.
-   */
-  readonly baseSide: boolean;
+  /** Which sides the index holds (./mechanical.ts's `Sides`): a delete/modify conflict is never a manifest's or changelog's. */
+  readonly sides: Sides;
 }
 
 /** A conflicted path as the report carries it: its class right after its name. */
@@ -135,6 +133,8 @@ export interface CatchUpReport {
   readonly mechanical: boolean;
   /** Per class (per declared mirror), the paths and the commands a caller runs. Never run here. */
   readonly resolve: readonly ResolveGroup[];
+  /** The working tree's root (`--repo`): where every `resolve[].steps` command runs. */
+  readonly cwd: string;
 }
 
 export type CatchUpOutcome =
@@ -296,7 +296,13 @@ export function collectConflicts(seams: Seams, cwd: string, strategy: Strategy):
       path,
       ours: readStage(seams, cwd, path, oursStage, present.has(oursStage)),
       theirs: readStage(seams, cwd, path, theirsStage, present.has(theirsStage)),
-      baseSide: present.size === 0 || present.has(theirsStage),
+      sides: present.size === 0
+        ? "staged"
+        : !present.has(theirsStage)
+          ? "base-deleted"
+          : !present.has(oursStage)
+            ? "branch-deleted"
+            : "both",
     };
   });
 }
@@ -328,12 +334,13 @@ export interface Classified {
 const ABSENT: MechanicalDeclaration = { state: "absent", block: null, error: null };
 
 /** Classify `raw` against the declaration -- read only when `raw` is non-empty. */
-export function classify(raw: readonly RawConflict[], options: CatchUpOptions, strategy: Strategy): Classified {
+export function classify(raw: readonly RawConflict[], options: CatchUpOptions, strategy: Strategy, cwd: string): Classified {
   const read = raw.length === 0 ? NOT_READ : (options.declaration?.() ?? ABSENT);
   const classification = classifyConflicts(
-    raw.map((conflict) => ({ path: conflict.path, baseSide: conflict.baseSide })),
+    raw.map((conflict) => ({ path: conflict.path, sides: conflict.sides })),
     read,
     strategy,
+    cwd,
   );
   return {
     conflicted: raw.map((conflict): CatchUpConflict => ({
@@ -423,6 +430,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
         aborted: !dryRun,
         dryRun,
         ...UNCLASSIFIED,
+        cwd,
       },
     };
   }
@@ -440,7 +448,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     const aheadBefore = mustCount(seams, cwd, `${remoteBase}..HEAD`);
     const stillConflicted = collectConflicts(seams, cwd, pending);
     const done = (after: string | null, raw: readonly RawConflict[]): CatchUpOutcome => {
-      const classified = raw.length === 0 ? null : classify(raw, options, pending);
+      const classified = raw.length === 0 ? null : classify(raw, options, pending, cwd);
       const report: CatchUpReport = {
         contract: CATCH_UP_CONTRACT,
         base,
@@ -455,6 +463,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
         aborted: false,
         dryRun,
         ...(classified === null ? UNCLASSIFIED : tailOf(classified)),
+        cwd,
       };
       return { kind: "done", lines, report, classified };
     };
@@ -528,7 +537,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
   }
 
   const done = (after: string | null, noOp: boolean, raw: readonly RawConflict[]): CatchUpOutcome => {
-    const classified = raw.length === 0 ? null : classify(raw, options, strategy);
+    const classified = raw.length === 0 ? null : classify(raw, options, strategy, cwd);
     const report: CatchUpReport = {
       contract: CATCH_UP_CONTRACT,
       base,
@@ -543,6 +552,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
       aborted: false,
       dryRun,
       ...(classified === null ? UNCLASSIFIED : tailOf(classified)),
+      cwd,
     };
     return { kind: "done", lines, report, classified };
   };
@@ -592,7 +602,7 @@ export function renderConflicts(conflicted: readonly CatchUpConflict[]): readonl
     for (const line of plainBlock(text).replace(/\n$/, "").split("\n")) lines.push(`      ${line}`);
   };
   for (const conflict of conflicted) {
-    lines.push(`  ${plainLine(conflict.path)}`);
+    lines.push(`  ${plainLine(displayPath(conflict.path))}`);
     side("ours  ", conflict.ours);
     side("theirs", conflict.theirs);
   }

@@ -279,7 +279,7 @@ verb it invoked. The complete list:
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
-| [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1` ([#326](https://github.com/zheref/nen/issues/326)) |
+| [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
@@ -2765,13 +2765,27 @@ conflicted path carries a `class`: `manifest`, `changelog`, `mirror` or
 Each list holds repo-relative globs (`*`, `**`, `?`; absolute or backslashed
 ones are refused at load, since git never reports a path that way). A path two
 globs match is the first class's: manifest, then changelog, then each mirror in
-declared order. The block alone satisfies the file's "declares neither block"
+declared order. A mirror glob covering the whole tree (`*`, `**`, `**/*`) is
+refused, since every conflict would then read as a mirror's. So is any glob that
+reaches `nen/contract.json` itself, because a conflict on the declaration is
+never mechanical. **A delete/modify conflict** on a manifest or changelog (one
+side's index stage missing) is classed `other`: whether the file should exist
+is a judgement, not the recurring release shape. A mirror's deletion stays a
+mirror's, since the generator decides what exists. The block alone satisfies the file's "declares neither block"
 guard; a block declaring nothing, a near-miss key (`manifest`, `mirror`,
 `path`), a mirror with no `paths` or no `regenerate`, and a `regenerate` given
 as a string are all refused by pointer.
 
 The text output counts each class and then lists, per class, the paths and the
-commands a caller runs, **none of which the verb runs**:
+commands a caller runs, **none of which the verb runs**. Every command runs
+**from the working tree's root**: the text says `run from <root>`, the
+report carries `cwd` (top-level and on every `resolve[]` group), every git step
+is spelled `git -C <root> …`, and the declared `regenerate` argv is meant to run
+from that root too. Every path is a **literal**, root-anchored pathspec
+(`:(top,literal)<path>`), so a conflicted `x*.md` never reaches `xa.md`. A token
+carrying a tab or newline is printed in `$'…'` form, escaped rather than dropped,
+and a first token containing `=` is quoted so a shell cannot read it as an
+assignment.
 
 - **manifest** — `git add -- <paths>`, after writing the version this branch
   ships. The version is a release decision nen does not make
@@ -2779,7 +2793,9 @@ commands a caller runs, **none of which the verb runs**:
 - **changelog** — `git add -- <paths>`, after keeping both sides' entries.
 - **mirror**, one group per declared mirror — the base's side checked out
   (`git checkout --theirs` on a merge, `--ours` on a rebase, the same reversal as
-  the report's labels) or `git rm` where the base deleted the path, so that a
+  the report's labels; for a path already staged and flagged only for a leftover
+  marker, which has no stage to name, `git checkout MERGE_HEAD` on a merge and
+  `git checkout HEAD` on a rebase) or `git rm` where the base deleted the path, so that a
   generator that will not overwrite a file it did not write can run; then the
   declared `regenerate` argv, exactly as declared; then `git add -A --
   ':(glob)<each glob>'`. Run it after every non-mirror conflict, since a mirror
@@ -2787,7 +2803,9 @@ commands a caller runs, **none of which the verb runs**:
 - **other** — listed by name: a judgement nen does not make.
 
 **When every conflicted path is in the declared set, the stop exits `3`**
-instead of `1`. One `other` path, no `mechanical` block (`declaration:
+instead of `1`. **Exit `1` no longer covers every conflict: a caller that
+treats `1` as "conflict" must also treat `3` as one.** Exit 3 is still a stop,
+with nothing continued and nothing resolved. One `other` path, no `mechanical` block (`declaration:
 "absent"`), or a contract nen cannot read (`"unreadable"`, the reason in
 `declarationError`, every path reported as `other`) is the ordinary stop at exit
 `1`, with every path and both its sides reported as before. Either way nen picks
@@ -2800,11 +2818,12 @@ pushes.
 after, behindBefore, aheadBefore, noOp, conflicted: [{ path, class, ours,
 theirs }], resumed, aborted, dryRun, declaration, declarationError, classes:
 { manifest, changelog, mirror, other }, mechanical, resolve: [{ class, globs,
-paths, note, steps: [argv, …] }] }`. `strategy` is the one that ran (`auto`
+paths, cwd, note, steps: [argv, …] }], cwd }`. `cwd` is the working tree's root,
+where every step runs. `strategy` is the one that ran (`auto`
 resolved); `after` is `null` on a dry run and on a conflict. `declaration` is
 `not-read` whenever nothing conflicted (the file was not opened), and `classes`
 is then all zero. `mechanical` is `true` only when the block was read and every
-one of at least one conflicted path is in it. v0.2 adds `class` and the five
+one of at least one conflicted path is in it. v0.2 adds `class` and the six
 trailing keys; every v0.1 key keeps its place and meaning. Exit 0 on a clean
 catch-up, a resume, an abort, a dry run or `noOp`; exit 1 on a conflict with
 any `other` path (the document is still printed) or a git failure this verb

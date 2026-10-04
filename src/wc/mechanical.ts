@@ -81,6 +81,8 @@ export interface ResolveGroup {
   /** For a mirror, the declared entry's own globs; empty for the other two. */
   readonly globs: readonly string[];
   readonly paths: readonly string[];
+  /** Where every step runs: the working tree's root (`--repo`). The git steps also say so with `-C`. */
+  readonly cwd: string;
   /** What is the caller's to do, in a sentence. */
   readonly note: string;
   /** Each command, as an argv, in order. PRINTED, never run. */
@@ -95,31 +97,64 @@ export interface Classification {
   readonly resolve: readonly ResolveGroup[];
 }
 
-/** One conflicted path, as far as classification needs it: its name and whether the BASE's side still has it. */
+/**
+ * Which of the two sides the index holds for a conflicted path:
+ *
+ *   * `both`           -- stages 2 and 3 are there: a content (or add/add) conflict;
+ *   * `base-deleted`   -- the base's stage is absent: the base deleted it;
+ *   * `branch-deleted` -- this branch's stage is absent: this branch deleted it;
+ *   * `staged`         -- no unmerged stage at all: the path is staged and
+ *                         flagged only for a leftover conflict marker.
+ */
+export type Sides = "both" | "base-deleted" | "branch-deleted" | "staged";
+
+/** One conflicted path, as far as classification needs it. */
 export interface ClassifiedInput {
   readonly path: string;
-  /** False when the base deleted the path (its stage is absent). */
-  readonly baseSide: boolean;
+  readonly sides: Sides;
 }
 
-function classOf(path: string, block: MechanicalBlock | null): { readonly kind: ConflictClass; readonly mirror: number | null } {
+/**
+ * A DELETE/MODIFY CONFLICT ON A MANIFEST OR CHANGELOG IS NEVER MECHANICAL
+ * (hanten N1). Whether the file should exist at all is a judgement; only a
+ * conflict where both sides still hold it is the recurring release shape.
+ * A mirror's deletion stays mechanical: the generator decides what exists.
+ */
+function classOf(conflict: ClassifiedInput, block: MechanicalBlock | null): { readonly kind: ConflictClass; readonly mirror: number | null } {
   if (block === null) return { kind: "other", mirror: null };
-  if (matchesAnyGlob(path, block.manifests)) return { kind: "manifest", mirror: null };
-  if (matchesAnyGlob(path, block.changelog)) return { kind: "changelog", mirror: null };
+  const { path, sides } = conflict;
+  const oneSided = sides === "base-deleted" || sides === "branch-deleted";
+  if (matchesAnyGlob(path, block.manifests)) return { kind: oneSided ? "other" : "manifest", mirror: null };
+  if (matchesAnyGlob(path, block.changelog)) return { kind: oneSided ? "other" : "changelog", mirror: null };
   const mirror = block.mirrors.findIndex((entry): boolean => matchesAnyGlob(path, entry.paths));
   return mirror === -1 ? { kind: "other", mirror: null } : { kind: "mirror", mirror };
+}
+
+/** A path as a LITERAL, root-anchored pathspec (hanten N2): `x*.md` names that file, never `xa.md`. */
+export function literalPathspec(path: string): string {
+  return `:(top,literal)${path}`;
+}
+
+/** A declared glob as a root-anchored glob pathspec. */
+function globPathspec(glob: string): string {
+  return `:(top,glob)${glob}`;
 }
 
 /**
  * Every path's class, the counts, and the resolve groups. `strategy` decides
  * which `git checkout` flag names the BASE's side for a mirror: stage 3
  * (`--theirs`) on a merge, stage 2 (`--ours`) on a rebase -- the same
- * reversal ./catchup.ts's header states for the report's own labels.
+ * reversal ./catchup.ts's header states for the report's own labels. A
+ * `staged` mirror path has no stage to name, so the base's side is named by
+ * commit instead: `MERGE_HEAD` on a merge (the base being merged in), `HEAD`
+ * on a rebase (the base plus the commits already replayed). `cwd` is the
+ * working tree's root; every git step carries `-C <cwd>`.
  */
 export function classifyConflicts(
   conflicted: readonly ClassifiedInput[],
   declaration: MechanicalDeclaration,
   strategy: "rebase" | "merge",
+  cwd: string,
 ): Classification {
   const block = declaration.state === "declared" ? declaration.block : null;
   const classes = new Map<string, ConflictClass>();
@@ -128,21 +163,23 @@ export function classifyConflicts(
   const changelogs: string[] = [];
   const mirrors = new Map<number, ClassifiedInput[]>();
   for (const conflict of conflicted) {
-    const { kind, mirror } = classOf(conflict.path, block);
+    const { kind, mirror } = classOf(conflict, block);
     classes.set(conflict.path, kind);
     counts[kind] += 1;
     if (kind === "manifest") manifests.push(conflict.path);
     if (kind === "changelog") changelogs.push(conflict.path);
     if (kind === "mirror" && mirror !== null) mirrors.set(mirror, [...(mirrors.get(mirror) ?? []), conflict]);
   }
+  const git = (...args: readonly string[]): readonly string[] => ["git", "-C", cwd, ...args];
   const resolve: ResolveGroup[] = [];
   if (manifests.length > 0) {
     resolve.push({
       class: "manifest",
       globs: [],
       paths: manifests,
+      cwd,
       note: "both sides moved the version. Which version this branch ships is a release decision nen does not make: write it into each manifest, then stage them",
-      steps: [["git", "add", "--", ...manifests]],
+      steps: [git("add", "--", ...manifests.map(literalPathspec))],
     });
   }
   if (changelogs.length > 0) {
@@ -150,26 +187,33 @@ export function classifyConflicts(
       class: "changelog",
       globs: [],
       paths: changelogs,
+      cwd,
       note: "both sides added entries. Keep both sides' entries and remove the markers -- nen drops neither and orders neither -- then stage it",
-      steps: [["git", "add", "--", ...changelogs]],
+      steps: [git("add", "--", ...changelogs.map(literalPathspec))],
     });
   }
   const baseFlag = strategy === "merge" ? "--theirs" : "--ours";
+  const baseRef = strategy === "merge" ? "MERGE_HEAD" : "HEAD";
   for (const [index, entries] of [...mirrors.entries()].sort(([a], [b]): number => a - b)) {
     const entry = block?.mirrors[index];
     if (entry === undefined) continue;
-    const kept = entries.filter((conflict): boolean => conflict.baseSide).map((conflict): string => conflict.path);
-    const gone = entries.filter((conflict): boolean => !conflict.baseSide).map((conflict): string => conflict.path);
+    const of = (...wanted: readonly Sides[]): readonly string[] =>
+      entries.filter((conflict): boolean => wanted.includes(conflict.sides)).map((conflict): string => literalPathspec(conflict.path));
+    const kept = of("both", "branch-deleted");
+    const staged = of("staged");
+    const gone = of("base-deleted");
     const steps: (readonly string[])[] = [];
-    if (kept.length > 0) steps.push(["git", "checkout", baseFlag, "--", ...kept]);
-    if (gone.length > 0) steps.push(["git", "rm", "--quiet", "--", ...gone]);
+    if (kept.length > 0) steps.push(git("checkout", baseFlag, "--", ...kept));
+    if (staged.length > 0) steps.push(git("checkout", baseRef, "--", ...staged));
+    if (gone.length > 0) steps.push(git("rm", "--quiet", "--", ...gone));
     steps.push(entry.regenerate);
-    steps.push(["git", "add", "-A", "--", ...entry.paths.map((glob): string => `:(glob)${glob}`)]);
+    steps.push(git("add", "-A", "--", ...entry.paths.map(globPathspec)));
     resolve.push({
       class: "mirror",
       globs: entry.paths,
       paths: entries.map((conflict): string => conflict.path),
-      note: `generated, so neither side is kept: regenerate it AFTER every non-mirror conflict is resolved, because it is generated from those sources. The base's side (${baseFlag} on a ${strategy}) is checked out first only so a generator that refuses to overwrite a file it did not write can run; the regenerate rewrites it either way`,
+      cwd,
+      note: `generated, so neither side is kept: regenerate it AFTER every non-mirror conflict is resolved, because it is generated from those sources. The base's side (${baseFlag} on a ${strategy}; ${baseRef} for a path already staged) is checked out first only so a generator that refuses to overwrite a file it did not write can run; the regenerate rewrites it either way. The declared regenerate command runs from ${cwd}`,
       steps,
     });
   }
@@ -182,9 +226,44 @@ export function classifyConflicts(
   };
 }
 
-/** An argv as ONE line a POSIX shell reads back as the same argv. */
+const CONTROL = /[\u0000-\u001f\u007f]/;
+
+/**
+ * One token as ONE shell word (hanten N8, N9). Plain tokens pass bare; a
+ * token carrying a control byte (a tab or newline in a path) is written in
+ * ANSI-C `$'...'` form so the byte is SHOWN, escaped, rather than dropped
+ * or sent raw to a terminal; anything else unusual is single-quoted. A FIRST
+ * token containing `=` is quoted too, since a shell reads `a=b cmd` as an
+ * assignment rather than a command.
+ */
+export function shellWord(token: string, first = false): string {
+  if (CONTROL.test(token)) {
+    const body = [...token]
+      .map((char): string => {
+        if (char === "\\") return "\\\\";
+        if (char === "'") return "\\'";
+        if (char === "\t") return "\\t";
+        if (char === "\n") return "\\n";
+        if (char === "\r") return "\\r";
+        const code = char.charCodeAt(0);
+        return code < 0x20 || code === 0x7f ? `\\x${code.toString(16).padStart(2, "0")}` : char;
+      })
+      .join("");
+    return `$'${body}'`;
+  }
+  if (/^[A-Za-z0-9_./@%+,:-]+$/.test(token)) return token;
+  if (!first && /^[A-Za-z0-9_./=@%+,:-]+$/.test(token)) return token;
+  return shellSingleQuote(token);
+}
+
+/** A path for a text line: shown as-is, unless it carries a control byte, which is then escaped in a `$'...'` word rather than dropped. */
+export function displayPath(path: string): string {
+  return CONTROL.test(path) ? shellWord(path) : path;
+}
+
+/** An argv as ONE line a POSIX shell (bash, zsh) reads back as the same argv. */
 export function renderCommand(argv: readonly string[]): string {
-  return argv.map((token): string => (/^[A-Za-z0-9_./=@%+,-]+$/.test(token) ? token : shellSingleQuote(token))).join(" ");
+  return argv.map((token, index): string => shellWord(token, index === 0)).join(" ");
 }
 
 /** The text rendering's classification block -- every path under its class, every step as a command line. */
@@ -209,13 +288,15 @@ export function renderClassification(
       ? `all ${total} conflicted path(s) are mechanical -- exit ${EXIT_ALL_MECHANICAL}; nen resolved none. Resolve them in this order, then re-run the same command:`
       : `${counts.other} path(s) are not mechanical -- exit 1; resolve them by hand, then re-run the same command`,
   );
+  const cwd = classification.resolve[0]?.cwd;
+  if (cwd !== undefined) lines.push(`  run from ${shellWord(cwd)} (every git step also says so with -C; the regenerate commands run from there too):`);
   for (const group of classification.resolve) {
-    const label = group.class === "mirror" ? `mirror ${group.globs.join(", ")}` : group.class;
-    lines.push(`  ${plainLine(label)} (${group.paths.length}): ${group.note}`);
-    for (const step of group.steps) lines.push(`    $ ${plainLine(renderCommand(step))}`);
+    const label = group.class === "mirror" ? `mirror ${group.globs.map((glob): string => shellWord(glob)).join(", ")}` : group.class;
+    lines.push(`  ${plainLine(label)} (${group.paths.length}): ${plainLine(group.note)}`);
+    for (const step of group.steps) lines.push(`    $ ${renderCommand(step)}`);
   }
   if (others.length > 0) {
-    lines.push(`  other (${others.length}): a judgement nen does not make -- ${others.map((path): string => plainLine(path)).join(", ")}`);
+    lines.push(`  other (${others.length}): a judgement nen does not make -- ${others.map((path): string => shellWord(path)).join(", ")}`);
   }
   return lines;
 }

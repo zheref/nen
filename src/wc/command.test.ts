@@ -619,7 +619,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git rebase origin/main", result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(Object.keys(result.doc)).toEqual(["contract", "base", "strategy", "before", "after", "behindBefore", "aheadBefore", "noOp", "conflicted", "resumed", "aborted", "dryRun", "declaration", "declarationError", "classes", "mechanical", "resolve"]);
+    expect(Object.keys(result.doc)).toEqual(["contract", "base", "strategy", "before", "after", "behindBefore", "aheadBefore", "noOp", "conflicted", "resumed", "aborted", "dryRun", "declaration", "declarationError", "classes", "mechanical", "resolve", "cwd"]);
     // Nothing conflicted, so the declaration was never opened -- and says so.
     expect(result.doc).toMatchObject({ declaration: "not-read", declarationError: null, classes: { manifest: 0, changelog: 0, mirror: 0, other: 0 }, mechanical: false, resolve: [] });
     expect(result.doc).toMatchObject({ contract: "nen.wc.catch-up/v0.2", base: "main", strategy: "rebase", before: "before00", after: "after000", behindBefore: 3, aheadBefore: 2, noOp: false, conflicted: [], resumed: false, aborted: false, dryRun: false });

@@ -242,8 +242,26 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
 // case follows the printed steps, it runs the git ones and writes what the
 // generator would have written.
 
-type Group = { class: string; globs: string[]; paths: string[]; note: string; steps: string[][] };
+type Group = { class: string; globs: string[]; paths: string[]; cwd: string; note: string; steps: string[][] };
 const groups = (run: Run): Group[] => run.doc["resolve"] as Group[];
+const lit = (path: string): string => `:(top,literal)${path}`;
+/** Generous: each case makes a dozen real git calls, and a loaded runner is slow (the #326 flake candidate). */
+const GIT_CASE_MS = 20_000;
+
+/** Follow the printed git steps exactly as printed; the regenerate step is the caller's generator, so write what it would. */
+function followSteps(work: string, run: Run, regenerate: () => void): void {
+  for (const group of groups(run)) {
+    for (const step of group.steps) {
+      if (step[0] === "git") {
+        const result = spawnSync("git", step.slice(1), { encoding: "utf8" });
+        if (result.status !== 0) throw new Error(`printed step failed: ${step.join(" ")}: ${result.stderr}`);
+      } else {
+        regenerate();
+      }
+    }
+  }
+  void work;
+}
 
 /** `nen/contract.json` with only a `mechanical` block, for the case under `dir`. */
 function mechanicalContract(dir: string): string {
@@ -321,8 +339,11 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(out).toContain("to back out: git merge --abort");
     // It resolved nothing: every path is still unmerged.
     expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"]).split("\n").sort()).toEqual(Object.keys(byPath).sort());
+    expect(stopped.doc["cwd"]).toBe(work);
+    expect(groups(stopped).every((g): boolean => g.cwd === work)).toBe(true);
+    expect(out).toContain(`  run from ${work} (every git step also says so with -C; the regenerate commands run from there too):`);
     mustGit(work, ["merge", "--abort"]);
-  });
+  }, GIT_CASE_MS);
 
   it("an ALL-MECHANICAL merge stop exits 3 with the declared regenerate argv; following the steps and re-running continues and pushes nothing", async () => {
     seedCase("allmech");
@@ -337,31 +358,27 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     const mirror = groups(stopped).find((g): boolean => g.class === "mirror");
     expect(mirror).toMatchObject({ globs: ["allmech/surfaces/codex/**"], paths: ["allmech/surfaces/codex/a.md"] });
     expect(mirror?.steps).toEqual([
-      ["git", "checkout", "--theirs", "--", "allmech/surfaces/codex/a.md"],
+      ["git", "-C", work, "checkout", "--theirs", "--", lit("allmech/surfaces/codex/a.md")],
       ["nen", "surface", "mirror", "generate", "--surface", "codex", "--out", "allmech/surfaces/codex"],
-      ["git", "add", "-A", "--", ":(glob)allmech/surfaces/codex/**"],
+      ["git", "-C", work, "add", "-A", "--", ":(top,glob)allmech/surfaces/codex/**"],
     ]);
     // git lists unmerged paths in index order, so the dot-directory comes first.
     expect(groups(stopped).find((g): boolean => g.class === "manifest")?.steps).toEqual([
-      ["git", "add", "--", "allmech/.claude-plugin/plugin.json", "allmech/package.json"],
+      ["git", "-C", work, "add", "--", lit("allmech/.claude-plugin/plugin.json"), lit("allmech/package.json")],
     ]);
     const text = await wc(["catch-up", "--repo", work, "--base", "main"], false);
     expect(text.code).toBe(3);
     expect(text.out.join("\n")).toContain("all 4 conflicted path(s) are mechanical -- exit 3; nen resolved none.");
     expect(text.out.join("\n")).toContain("    $ nen surface mirror generate --surface codex --out allmech/surfaces/codex");
-    expect(text.out.join("\n")).toContain("    $ git add -A -- ':(glob)allmech/surfaces/codex/**'");
+    expect(text.out.join("\n")).toContain(`    $ git -C ${work} add -A -- ':(top,glob)allmech/surfaces/codex/**'`);
     // Nothing was resolved by the verb.
     expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"]).split("\n")).toHaveLength(4);
 
     // The caller's part: a version, both changelog sections, then the mirror steps.
     for (const manifest of ["allmech/package.json", "allmech/.claude-plugin/plugin.json"]) writeFileSync(join(work, manifest), '{ "version": "0.4.0" }\n');
     writeFileSync(join(work, "allmech/CHANGELOG.md"), "# Changelog\n\n## 0.4.0\n\n## 0.3.0\n\n## 0.1.0\n");
-    for (const group of groups(stopped)) {
-      for (const step of group.steps) {
-        if (step[0] === "git") mustGit(work, step.slice(1));
-        else writeFileSync(join(work, "allmech/surfaces/codex/a.md"), "generated a 0.4.0\n");
-      }
-    }
+    // Run from somewhere else entirely: the printed -C is what makes the steps land (N3).
+    followSteps(work, stopped, (): void => writeFileSync(join(work, "allmech/surfaces/codex/a.md"), "generated a 0.4.0\n"));
     const resumed = await wc(["catch-up", "--repo", work, "--base", "main"]);
     expect(resumed.code).toBe(0);
     expect(resumed.doc).toMatchObject({ resumed: true, conflicted: [], declaration: "not-read", mechanical: false });
@@ -369,7 +386,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(mustGit(work, ["merge-base", "--is-ancestor", "origin/main", "HEAD"])).toBe("");
     // Re-running proved the tree and pushed nothing: the remote branch is where it was.
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/allmech-merge"]).split(/\s+/)[0]).toBe(published);
-  });
+  }, GIT_CASE_MS);
 
   it("an ALL-MECHANICAL rebase stop names the base's side as --ours, and 'git rm' where the base deleted a mirror file", async () => {
     seedCase("rebmech");
@@ -384,13 +401,13 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(stopped.code).toBe(3);
     expect(stopped.doc).toMatchObject({ strategy: "rebase", classes: { manifest: 2, changelog: 1, mirror: 2, other: 0 }, mechanical: true });
     expect(groups(stopped).find((g): boolean => g.class === "mirror")?.steps).toEqual([
-      ["git", "checkout", "--ours", "--", "rebmech/surfaces/codex/a.md"],
-      ["git", "rm", "--quiet", "--", "rebmech/surfaces/codex/b.md"],
+      ["git", "-C", work, "checkout", "--ours", "--", lit("rebmech/surfaces/codex/a.md")],
+      ["git", "-C", work, "rm", "--quiet", "--", lit("rebmech/surfaces/codex/b.md")],
       ["nen", "surface", "mirror", "generate", "--surface", "codex", "--out", "rebmech/surfaces/codex"],
-      ["git", "add", "-A", "--", ":(glob)rebmech/surfaces/codex/**"],
+      ["git", "-C", work, "add", "-A", "--", ":(top,glob)rebmech/surfaces/codex/**"],
     ]);
     mustGit(work, ["rebase", "--abort"]);
-  });
+  }, GIT_CASE_MS);
 
   it("no declaration read is the ordinary stop: a contract nen cannot read is 'unreadable', every path 'other', exit 1", async () => {
     seedCase("broken");
@@ -401,7 +418,55 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(stopped.doc).toMatchObject({ declaration: "unreadable", classes: { manifest: 0, changelog: 0, mirror: 0, other: 1 }, mechanical: false, resolve: [] });
     expect(typeof stopped.doc["declarationError"]).toBe("string");
     mustGit(work, ["merge", "--abort"]);
-  });
+  }, GIT_CASE_MS);
+
+  for (const strategy of ["merge", "rebase"] as const) {
+    it(`a DELETE/MODIFY conflict on a manifest or changelog is 'other' -- exit 1, never 3 -- on a ${strategy} (hanten N1)`, async () => {
+      const dir = `delmod${strategy}`;
+      seedCase(dir);
+      // The branch deletes the manifest and the changelog; main moves both.
+      // On a rebase the sides swap stages, so the case covers both readings.
+      const work = branchWith(`${dir}-branch`, { [`${dir}/src.ts`]: "export const x = 9;\n" });
+      mustGit(work, ["rm", "--quiet", `${dir}/package.json`, `${dir}/CHANGELOG.md`]);
+      mustGit(work, [...WHO, "commit", "--quiet", "-m", "chore: drop the manifest and changelog"]);
+      advanceMain({ [`${dir}/package.json`]: '{ "version": "0.3.0" }\n', [`${dir}/CHANGELOG.md`]: "# Changelog\n\n## 0.3.0\n" }, "chore: release 0.3.0");
+      const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", strategy]);
+      expect(stopped.code).toBe(1);
+      expect(stopped.doc).toMatchObject({ strategy, declaration: "declared", mechanical: false, classes: { manifest: 0, changelog: 0, mirror: 0, other: 2 } });
+      expect(conflicts(stopped).map((c) => [c.path, (c as unknown as { class: string }).class]).sort()).toEqual([
+        [`${dir}/CHANGELOG.md`, "other"],
+        [`${dir}/package.json`, "other"],
+      ]);
+      // No step restores the deleted file: there is no manifest or changelog group at all.
+      expect(groups(stopped)).toEqual([]);
+      mustGit(work, [strategy, "--abort"]);
+    }, GIT_CASE_MS);
+  }
+
+  // A `*` cannot be in a Windows file name, so this case is POSIX-only.
+  it.skipIf(process.platform === "win32")("prints LITERAL pathspecs: a conflicted 'x*.md' never reaches 'xa.md' (hanten N2)", async () => {
+    advanceMain(
+      {
+        "nen/contract.json": `${JSON.stringify({ mechanical: { changelog: ["star/x?.md"] } }, null, 2)}\n`,
+        "star/x*.md": "base\n",
+        "star/xa.md": "untouched\n",
+      },
+      "chore: seed star",
+    );
+    const work = branchWith("star-branch", { "star/x*.md": "branch\n" });
+    advanceMain({ "star/x*.md": "main\n" }, "chore: main star");
+    const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    expect(stopped.code).toBe(3);
+    expect(groups(stopped)[0]?.steps).toEqual([["git", "-C", work, "add", "--", lit("star/x*.md")]]);
+    // An unrelated edit to the file a glob would also have matched.
+    writeFileSync(join(work, "star/x*.md"), "branch\nmain\n");
+    writeFileSync(join(work, "star/xa.md"), "edited, never staged\n");
+    followSteps(work, stopped, (): void => undefined);
+    expect(mustGit(work, ["diff", "--cached", "--name-only"])).not.toContain("star/xa.md");
+    expect(mustGit(work, ["diff", "--name-only"])).toBe("star/xa.md");
+    mustGit(work, ["checkout", "--", "star/xa.md"]);
+    mustGit(work, ["merge", "--abort"]);
+  }, GIT_CASE_MS);
 });
 
 describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {

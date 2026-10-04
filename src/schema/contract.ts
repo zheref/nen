@@ -1,7 +1,7 @@
 // src/schema/contract.ts -- `nen/contract.json`: what a repository needs FROM
 // nen, and what nen needs to know ABOUT the repository.
 //
-// ONE FILE, TWO INDEPENDENT BLOCKS, and the reason they share a file is that
+// ONE FILE, THREE INDEPENDENT BLOCKS, and the reason they share a file is that
 // "everything nen-related lives under `nen/`" is only a rule if it is true:
 //
 //   * `dependency` -- the pin. Which nen version this repository requires, the
@@ -19,25 +19,26 @@
 //     -- and write the probe as ["nen", "--version"].
 //   * `project` -- the stack declaration. Lanes, per-lane verbs, the host
 //     toolchain, preconditions nen ASSERTS and never performs.
-//   * `mechanical` -- a THIRD, smaller block (zheref/nen#326): which paths
-//     are version manifests, which is the changelog, which trees are
-//     generated mirrors and the command that regenerates each. `nen wc
-//     catch-up` reads it to classify a conflict and spawns none of it. It
-//     alone also satisfies the empty-file guard below.
+//   * `mechanical` -- the conflict set (zheref/nen#326): which paths are
+//     version manifests, which is the changelog, which trees are generated
+//     mirrors and the argv that regenerates each. Read by `nen wc catch-up`,
+//     only on a conflict, to classify each conflicted path; it spawns none of
+//     it, printing the regenerate argv for the caller to run.
 //
-// BOTH BLOCKS ARE OPTIONAL AND INDEPENDENT. A plugin repository carries
+// ALL THREE BLOCKS ARE OPTIONAL AND INDEPENDENT. A plugin repository carries
 // `dependency` alone; a product repository that pins no nen version carries
-// `project` alone. A verb that needs a block it does not find refuses by name --
-// that refusal belongs to the verb, not to this loader.
+// `project` alone; any of the three alone is a readable file. A verb that needs
+// a block it does not find refuses by name -- that refusal belongs to the verb,
+// not to this loader.
 //
-// NOTHING IN NEN ACTS ON EITHER BLOCK YET (zheref/nen#108). This file parses and
-// validates; no verb reads `project`, and nen never re-pins itself from
-// `dependency` -- it never fetches a bootstrap, never compares its own version
-// against the block, never exits on it. That stays the consumer's warm-up job,
-// reading the file's literal values directly.
+// WHO READS WHICH. `project` is read by the `shu` verbs, `repo classify` and
+// `scaffold`; `mechanical` by `wc catch-up`. nen never re-pins itself from
+// `dependency` (zheref/nen#108) -- it never fetches a bootstrap, never compares
+// its own version against the block, never exits on it. That stays the
+// consumer's warm-up job, reading the file's literal values directly.
 //
-// A FILE WITH NEITHER BLOCK IS REFUSED, and that is a decision rather than an
-// oversight. "Both blocks are optional" makes an EMPTY object formally legal and
+// A FILE WITH NONE OF THE THREE IS REFUSED, and that is a decision rather than an
+// oversight. "Every block is optional" makes an EMPTY object formally legal and
 // operationally useless -- no verb can ever read it -- while the shape that
 // produces one in practice is a migration typo: a consumer moving a root
 // contract here and forgetting to wrap the object in `dependency`, whose every
@@ -72,6 +73,7 @@ import {
   requireString,
   SchemaError,
 } from "./errors.js";
+import { matchesGlob } from "../shu/evidence/glob.js";
 import { CONTRACT_FILE, readSchemaJson, type SchemaLocation } from "./source.js";
 
 // ── the closed sets ─────────────────────────────────────────────────────────
@@ -2139,10 +2141,30 @@ function requireRepoGlob(path: string, pointer: string, value: unknown): string 
   return glob;
 }
 
+/**
+ * A mechanical glob that matches `nen/contract.json` itself is refused
+ * (hanten N7): the declaration would class its own conflict as mechanical,
+ * and a caller following the printed steps would stage a file nen then
+ * cannot read.
+ */
 function repoGlobs(path: string, pointer: string, value: unknown): readonly string[] {
   if (value === undefined || value === null) return [];
-  return requireArray(path, pointer, value).map((item, index): string => requireRepoGlob(path, `${pointer}[${index}]`, item));
+  return requireArray(path, pointer, value).map((item, index): string => {
+    const at = `${pointer}[${index}]`;
+    const glob = requireRepoGlob(path, at, item);
+    if (matchesGlob(CONTRACT_FILE, glob)) {
+      throw new SchemaError(
+        path,
+        at,
+        `${JSON.stringify(glob)} matches ${CONTRACT_FILE} -- the file this block lives in. A conflict on the declaration is never mechanical; narrow the glob so it cannot reach it`,
+      );
+    }
+    return glob;
+  });
 }
+
+/** A mirror glob that names EVERY path (`*` at the root, `**`) is refused: every conflict would be a mirror's. */
+const WHOLE_TREE_GLOBS: readonly string[] = ["*", "**", "**/*", "**/**"];
 
 /**
  * `mechanical` -- what `nen wc catch-up` may call a MECHANICAL conflict
@@ -2183,6 +2205,15 @@ export function parseMechanical(path: string, value: unknown): MechanicalBlock {
       throw new SchemaError(path, `${at}.paths`, "expected the glob list, got nothing (the field is absent). A mirror covering no paths classifies nothing");
     }
     const paths = repoGlobs(path, `${at}.paths`, entry["paths"]);
+    paths.forEach((glob, globIndex): void => {
+      if (WHOLE_TREE_GLOBS.includes(glob)) {
+        throw new SchemaError(
+          path,
+          `${at}.paths[${globIndex}]`,
+          `${JSON.stringify(glob)} covers the whole tree, so every conflicted path would be classed this mirror's and the stop would read as mechanical whatever conflicted. Name the generated directory`,
+        );
+      }
+    });
     if (paths.length === 0) {
       throw new SchemaError(path, `${at}.paths`, "is an empty array. A mirror covering no paths classifies nothing");
     }

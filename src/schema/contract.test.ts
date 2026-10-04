@@ -41,7 +41,7 @@ const PROJECT = {
   verbs: { web: { build: { exe: "pnpm", argv: ["run", "build"] } } },
 } as const;
 
-describe("the two blocks, and the empty file", () => {
+describe("the three blocks, and the empty file", () => {
   it("accepts a dependency-only file", () => {
     const contract = parse({ dependency: DEPENDENCY });
     expect(contract.dependency?.minimum).toBe("0.3");
@@ -139,6 +139,19 @@ describe("the mechanical block -- the conflict set 'nen wc catch-up' classifies 
     expect(refusal({ mechanical: { changelog: ["/CHANGELOG.md"] } }).pointer).toBe("mechanical.changelog[0]");
     expect(refusal({ mechanical: { manifests: ["pkg\\package.json"] } }).pointer).toBe("mechanical.manifests[0]");
     expect(refusal({ mechanical: { manifests: [""] } }).pointer).toBe("mechanical.manifests[0]");
+  });
+
+  it("refuses a mirror glob covering the whole tree, and any glob reaching nen/contract.json itself (hanten N7)", () => {
+    for (const glob of ["*", "**", "**/*"]) {
+      expect(refusal({ mechanical: { mirrors: [{ paths: ["gen/**", glob], regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].paths[1]");
+    }
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["*"], regenerate: ["x"] }] } }).message).toContain("covers the whole tree");
+    const self = refusal({ mechanical: { manifests: ["**/*.json"] } });
+    expect(self.pointer).toBe("mechanical.manifests[0]");
+    expect(self.message).toContain("matches nen/contract.json");
+    expect(refusal({ mechanical: { changelog: ["nen/*"] } }).pointer).toBe("mechanical.changelog[0]");
+    expect(refusal({ mechanical: { mirrors: [{ paths: ["nen/**"], regenerate: ["x"] }] } }).pointer).toBe("mechanical.mirrors[0].paths[0]");
+    expect(parse({ mechanical: { manifests: ["package.json", "**/plugin.json"] } }).mechanical?.manifests).toHaveLength(2);
   });
 });
 
