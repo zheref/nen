@@ -104,8 +104,15 @@ describe("evaluateReady -- the ready path", () => {
       // The fixture declares no `checks.excluded` (zheref/nen#249).
       declaredExclusions: [],
       // What a `watch until --pr` wakes on (zheref/nen#264): every check on
-      // the fixture has a verdict, and both approvers reviewed at head.
-      settlement: { checksSettled: true, pendingChecks: [], reviewersAtHead: ["sasuke", "tenma"] },
+      // the fixture has a verdict, and both approvers' rounds are at head.
+      settlement: {
+        checksSettled: true,
+        pendingChecks: [],
+        roundsAtHead: [
+          { reviewer: "sasuke", via: "review" },
+          { reviewer: "tenma", via: "review" },
+        ],
+      },
     });
   });
 });

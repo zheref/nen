@@ -4148,7 +4148,7 @@ was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 | `--cwd <path>` | no | Working directory for the spawned command. | Defaults to the process's own cwd. |
 | `--error-exit-threshold <n>` | no | In exit-code-as-truth mode (no `--true-pattern`), an exit code at or above this is an OBSERVATION ERROR. | Default 2; ignored when `--true-pattern` is given. |
 | `--pr <ref>` | instead of `--command` | Watch one pull request through the **same in-process read** [`nen pr ready`](#nen-pr-ready) makes ([#264](https://github.com/zheref/nen/issues/264)). | The ref grammar, token, identity resolution, exclusions and gate are all `pr ready`'s, so the watch and a `pr ready` asked of one snapshot never disagree. Every `pr ready` flag is read exactly as `pr ready` reads it, and only beside `--pr`. `--pr` beside `--command`, or `--true-pattern`/`--error-exit-threshold`/`--cwd` beside `--pr`, or `--until`/a `pr ready` flag beside `--command`, refuses at exit 2. |
-| `--until <predicate>` | with `--pr` | What `--pr` waits for. | `checks-settled` — every latest check, after the exclusions CON-32(a) applies, has a verdict, **red included**; an empty rollup is never settled. `review-posted` — a submitted (non-PENDING) review exists at the current head, from any author. `ready` — `pr ready` would answer `ready`. `settled-and-reviewed` — `checks-settled` AND (`review-posted` OR `ready`). |
+| `--until <predicate>` | with `--pr` | What `--pr` waits for. | `checks-settled` — every latest check, after the exclusions CON-32(a) applies, has a verdict, **red included**; an empty rollup is never settled. `review-posted` — a **configured** reviewer's round is posted at the current head: the gate's own reviewer set, resolved through the same identities and the same round rules CON-32(b) uses (a review by the reviewer's login, or its definitive-SUCCESS round-check run), current head only, and not while a review request for that reviewer is pending. A review from anyone outside the set — a stray human comment, say — wakes nothing. `ready` — `pr ready` would answer `ready`. `settled-and-reviewed` — `checks-settled` AND (`review-posted` OR `ready`). |
 
 **Output and exit codes** — human rendering is one `"[<n>] <message>"` line per observation, then a
 final line naming the outcome. `--json` prints `{ outcome, iterations }`, each iteration carrying
@@ -4169,13 +4169,13 @@ verb, with the same pacing (`monitor.pollSeconds`), bound (`monitor.maxCycles`),
 exit codes as the `--command` form, and no subprocess at all. Each observation is one call of the
 function `nen pr ready` prints; the predicates read its verdict and two facts the gate's own
 evaluation computes from the same snapshot — whether the rollup has settled (with the still-running
-checks named) and who has reviewed at the current head. A read that could not see — an `unevaluated`
+checks named) and which configured reviewers' rounds are posted at the current head. A read that could not see — an `unevaluated`
 verdict, a rollup or reviews array the predicate needs that could not be parsed, a `--require-head`
 GitHub's head does not match — is an **observation error**, never a "not yet". A usage refusal from the
 read (a malformed ref, no identity source, a bad `--round-policy`) stops the watch at exit 2 on the
 first poll. Human output is one `[<n>] <predicate> is (not yet) true -- head <sha7>: <checks>; <reviews>;
 verdict <gateLine>` line per poll; `--json` adds `until`, `pr` and `last` — the final read's `{ verdict,
-gateLine, judgedHead, settlement: { checksSettled, pendingChecks, reviewersAtHead } }`, or `null` when
+gateLine, judgedHead, settlement: { checksSettled, pendingChecks, roundsAtHead: [{ reviewer, via }] } }`, or `null` when
 the last read decided no verdict. **It wakes the caller and rings nothing**: by the maintainer's ruling
 of 2026-10-03 notification rungs stay the host's, and `nen stop` does not ring them.
 

@@ -33,6 +33,7 @@
 // was dropped: rungs 2-3 stay the host's, and `nen stop` does not ring them.
 
 import { VerbUsageError } from "../cli/command.js";
+import type { RoundAtHead } from "../gates/predicates.js";
 import type { ReadyRead } from "../verbs/pr_ready.js";
 import type { WatchObservation } from "./until.js";
 
@@ -67,8 +68,8 @@ export function observePr(read: ReadyRead, predicate: PrPredicate): WatchObserva
 
   const ready = report.verdict === "ready";
   const checks = settlement.checksSettled;
-  const reviewers = settlement.reviewersAtHead;
-  const reviewPosted = reviewers !== null && reviewers.length > 0;
+  const rounds = settlement.roundsAtHead;
+  const reviewPosted = rounds !== null && rounds.length > 0;
 
   // Which unreadable fact this predicate actually needs. `ready` reads none of
   // them -- the verdict already turned on both (an unreadable rollup or reviews
@@ -78,13 +79,13 @@ export function observePr(read: ReadyRead, predicate: PrPredicate): WatchObserva
       ? null
       : (predicate === "checks-settled" || predicate === "settled-and-reviewed") && checks === null
         ? "the check rollup could not be read"
-        : predicate === "review-posted" && reviewers === null
-          ? "the reviews at head could not be read"
-          : predicate === "settled-and-reviewed" && reviewers === null && !ready
-            ? "the reviews at head could not be read"
+        : predicate === "review-posted" && rounds === null
+          ? "the reviewer rounds at head could not be read"
+          : predicate === "settled-and-reviewed" && rounds === null && !ready
+            ? "the reviewer rounds at head could not be read"
             : null;
 
-  const facts = describeFacts(report.verdict, report.gateLine, report.judgedHead, checks, settlement.pendingChecks, reviewers);
+  const facts = describeFacts(report.verdict, report.gateLine, report.judgedHead, checks, settlement.pendingChecks, rounds);
   if (blind !== null) {
     return { errored: true, conditionTrue: false, message: `observation failed: ${blind} -- ${facts}` };
   }
@@ -110,7 +111,7 @@ function describeFacts(
   judgedHead: string | null,
   checks: boolean | null,
   pending: readonly string[],
-  reviewers: readonly string[] | null,
+  rounds: readonly RoundAtHead[] | null,
 ): string {
   const head = judgedHead === null ? "(unread)" : judgedHead.slice(0, 7);
   const checkText =
@@ -122,7 +123,11 @@ function describeFacts(
           ? "no checks reported"
           : `${pending.length} check(s) pending (${pending.join(", ")})`;
   const reviewText =
-    reviewers === null ? "reviews unreadable" : reviewers.length === 0 ? "no review at head" : `reviewed at head by ${reviewers.join(", ")}`;
+    rounds === null
+      ? "reviewer rounds unreadable"
+      : rounds.length === 0
+        ? "no configured reviewer's round at head"
+        : `round at head by ${rounds.map((round): string => `${round.reviewer} (${round.via})`).join(", ")}`;
   const verdictText = verdict === "ready" ? "ready" : gateLine;
   return `head ${head}: ${checkText}; ${reviewText}; verdict ${verdictText}`;
 }

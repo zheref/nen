@@ -319,6 +319,7 @@ import {
   normalizeReviewers,
   pendingCheckLabels,
   pendingRounds,
+  roundsAtHead,
   quorumExcusedRounds,
   resolveDeclaredExclusions,
   reviewsAllApprovedAtHead,
@@ -332,6 +333,7 @@ import {
   type OwedRound,
   type QuorumMember,
   type QuorumResult,
+  type RoundAtHead,
   type RoundPolicy,
   type UnapprovedApprover,
 } from "./predicates.js";
@@ -681,8 +683,14 @@ export interface Settlement {
   readonly checksSettled: boolean | null;
   /** The latest checks still deciding, by label. Empty when settled or unreadable. */
   readonly pendingChecks: readonly string[];
-  /** Distinct authors of a submitted (non-PENDING) review cast at the current head, in order. */
-  readonly reviewersAtHead: readonly string[] | null;
+  /**
+   * The CONFIGURED reviewers (the gate's own reviewer set) whose round is
+   * posted at the current head, in set order, each with the branch that found
+   * it -- ./predicates.ts's `roundsAtHead`. A review by anyone outside the set
+   * is not a round. `null` when the head, the reviews, the review requests or
+   * the rollup (a round check is read off it) could not be read.
+   */
+  readonly roundsAtHead: readonly RoundAtHead[] | null;
 }
 
 export interface EvaluateOptions {
@@ -1540,20 +1548,24 @@ export function evaluateReady(
 
   function settlementOf(): Settlement {
     const settledSet = parsedChecks.ok ? excludeCheckNames(checksExcludedByRun, excludedNames) : null;
-    const reviewersAtHead =
-      headKnown && parsedReviews.ok
-        ? [
-            ...new Set(
-              parsedReviews.value
-                .filter((review): boolean => review.commitId === head && review.state !== "PENDING")
-                .map((review): string => review.author),
-            ),
-          ]
+    // The same parses the CON-32(b) rows read: the UN-excluded rollup (a
+    // round check is a reviewer's, not a CON-32(a) carve-out's) and the same
+    // reviews and requests, with the same delivery carve-out.
+    const requests = parseReviewRequests(state["review_requests"]);
+    const rounds =
+      headKnown && parsedReviews.ok && requests.ok && parsedChecks.ok
+        ? roundsAtHead(
+            identities,
+            { reviewRequests: requests.value, checks: parsedChecks.value, reviews: parsedReviews.value },
+            head,
+            reviewers,
+            delivery,
+          )
         : null;
     return {
       checksSettled: settledSet === null ? null : checksSettled(settledSet),
       pendingChecks: settledSet === null ? [] : pendingCheckLabels(settledSet),
-      reviewersAtHead,
+      roundsAtHead: rounds,
     };
   }
 }

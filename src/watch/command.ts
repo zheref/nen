@@ -107,8 +107,13 @@ usage:
                                     exclusions CON-32(a) applies) has a
                                     verdict -- RED INCLUDED; an empty rollup is
                                     never settled
-                    review-posted   a submitted review exists at the current
-                                    head, from any author
+                    review-posted   a CONFIGURED reviewer's round is posted at
+                                    the current head -- the gate's own
+                                    reviewer set and identities: a review by
+                                    its login, or its definitive round-check
+                                    run (as CON-32(b) reads it). A review from
+                                    anyone outside the set wakes nothing; a
+                                    pending re-request means not posted yet
                     ready           'pr ready' would answer ready
                     settled-and-reviewed
                                     checks-settled AND (review-posted OR ready)
@@ -121,7 +126,8 @@ usage:
                   This wakes the caller; it rings nothing -- notification rungs
                   stay the host's.
                   --json adds 'until', 'pr' and 'last' (the final read's
-                  verdict, gateLine, judgedHead and settlement) to the result.
+                  verdict, gateLine, judgedHead and settlement: checksSettled,
+                  pendingChecks, roundsAtHead [{reviewer, via}]) to the result.
 
 Exits 0 when the condition became true, 1 on an error streak or a bound
 reached -- a caller piping this into further automation stops rather than

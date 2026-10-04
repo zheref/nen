@@ -1214,6 +1214,45 @@ export function pendingRounds(
   return owed;
 }
 
+// --- roundsAtHead ---------------------------------------------------------------
+// `nen watch until --pr <ref> --until review-posted` (zheref/nen#264, the
+// coordinator's ruling on it): has a CONFIGURED reviewer's round been posted
+// at the CURRENT head? Only the gate's own reviewer set counts, resolved
+// through the SAME identities and the SAME `reviewerRound` branches
+// `pendingRounds` asks -- a review by the reviewer's login, a definitive
+// round-check run, CON-40's holistic pass -- so a stray human comment-only
+// review wakes nothing, and a reviewer whose CHECK is its round wakes the
+// loop without ever posting a review.
+//
+// CURRENT HEAD ONLY: `reviewerRound` is asked under `strict` with no earlier
+// runs, because a watch is waiting for a round on THIS head; `bounded`'s
+// any-head leniency would read a round from before the last push as fresh.
+// And a pending review request for the reviewer means its round is not
+// posted yet, exactly as `pendingRounds`' first limb reads it.
+export interface RoundAtHead {
+  readonly reviewer: string;
+  readonly via: RoundVia;
+}
+
+export function roundsAtHead(
+  identities: GateIdentities,
+  inputs: RoundInputs,
+  headSha: string,
+  reviewers: readonly string[],
+  deliveryPr = false,
+): RoundAtHead[] {
+  const checks = latestChecks(inputs.checks);
+  const found: RoundAtHead[] = [];
+  for (const name of normalizeReviewerNames(reviewers)) {
+    const identity: ReviewerIdentity | undefined = identities.reviewer(name);
+    const loginPattern = identity?.loginPattern ?? safePattern(name);
+    if (inputs.reviewRequests.some((request): boolean => requestMatches(request, loginPattern))) continue;
+    const outcome = reviewerRound(identity, loginPattern, inputs.reviews, checks, [], headSha, "strict", deliveryPr);
+    if (outcome.had) found.push({ reviewer: name, via: outcome.via });
+  }
+  return found;
+}
+
 /** Which branch of `reviewerRound` found a reviewer's round. */
 export type RoundVia =
   | "review"

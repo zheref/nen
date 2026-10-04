@@ -89,26 +89,72 @@ describe("evaluateReady's settlement -- read off the evaluation's own parse", ()
     expect(evaluation.context.settlement.checksSettled).toBe(true);
   });
 
-  it("names the authors of submitted reviews at head only -- never a stale round, never a PENDING draft", () => {
+  const at = "2026-01-01T00:00:00Z";
+  const state = (overrides: Record<string, unknown>): Record<string, unknown> => ({
+    mergeable: "MERGEABLE",
+    head_sha: HEAD,
+    checks: [],
+    reviews: [],
+    review_requests: [],
+    unresolved_threads: 0,
+    ...overrides,
+  });
+
+  it("counts a CONFIGURED reviewer's round at head and ignores a stray human's comment-only review", () => {
     const evaluation = evaluateReady(
       identities,
-      {
-        mergeable: "MERGEABLE",
-        head_sha: HEAD,
-        checks: [],
+      state({
         reviews: [
-          { author: "old", state: "APPROVED", commit_id: "0ldc0mm1t", submitted_at: "2025-01-01T00:00:00Z" },
-          { author: "drafting", state: "PENDING", commit_id: HEAD, submitted_at: null },
-          { author: "copilot", state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-01-01T00:00:00Z" },
-          { author: "copilot", state: "COMMENTED", commit_id: HEAD, submitted_at: "2026-01-01T00:01:00Z" },
+          { author: "a-passing-human", state: "COMMENTED", commit_id: HEAD, submitted_at: at },
+          { author: "copilot", state: "COMMENTED", commit_id: HEAD, submitted_at: at },
         ],
-        review_requests: [],
-        unresolved_threads: 0,
-      },
+      }),
       options,
     );
-    expect(evaluation.context.settlement.reviewersAtHead).toEqual(["copilot"]);
+    expect(evaluation.context.settlement.roundsAtHead).toEqual([{ reviewer: "copilot", via: "review" }]);
     expect(evaluation.context.settlement.checksSettled).toBe(false);
+  });
+
+  it("a stray human's review ALONE is no round at all", () => {
+    const evaluation = evaluateReady(
+      identities,
+      state({ reviews: [{ author: "a-passing-human", state: "COMMENTED", commit_id: HEAD, submitted_at: at }] }),
+      options,
+    );
+    expect(evaluation.context.settlement.roundsAtHead).toEqual([]);
+  });
+
+  it("current head only: a configured reviewer's round on an earlier commit does not count, even under bounded", () => {
+    const evaluation = evaluateReady(
+      identities,
+      state({ reviews: [{ author: "sasuke", state: "APPROVED", commit_id: "0ldc0mm1t", submitted_at: at }] }),
+      options,
+    );
+    expect(evaluation.context.settlement.roundsAtHead).toEqual([]);
+  });
+
+  it("a reviewer whose CHECK is its round counts by a definitive SUCCESS run at head, with no review", () => {
+    const evaluation = evaluateReady(
+      identities,
+      state({
+        reviewers: "sasuke,tenma,copilot,bugbot",
+        checks: [{ name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      options,
+    );
+    expect(evaluation.context.settlement.roundsAtHead).toEqual([{ reviewer: "bugbot", via: "round-check" }]);
+  });
+
+  it("a pending review request for the reviewer means its round is not posted yet", () => {
+    const evaluation = evaluateReady(
+      identities,
+      state({
+        reviews: [{ author: "copilot", state: "COMMENTED", commit_id: HEAD, submitted_at: at }],
+        review_requests: ["copilot"],
+      }),
+      options,
+    );
+    expect(evaluation.context.settlement.roundsAtHead).toEqual([]);
   });
 
   it("an unreadable rollup or reviews array is null -- never false", () => {
@@ -118,7 +164,7 @@ describe("evaluateReady's settlement -- read off the evaluation's own parse", ()
       options,
     );
     expect(evaluation.context.settlement.checksSettled).toBeNull();
-    expect(evaluation.context.settlement.reviewersAtHead).toBeNull();
+    expect(evaluation.context.settlement.roundsAtHead).toBeNull();
   });
 });
 
@@ -128,7 +174,7 @@ interface Snapshot {
   /** A queued Windows job, or every check concluded. */
   readonly pending: boolean;
   /** Reviews at head: none, a comment only, or both approvers' APPROVE. */
-  readonly reviews: "none" | "comment" | "approved";
+  readonly reviews: "none" | "stray" | "comment" | "approved";
 }
 
 const CHECK_NAMES = ["compile", "linux", "macos"];
@@ -162,6 +208,8 @@ function source(snapshot: Snapshot): PrStateSource {
   const reviews =
     snapshot.reviews === "none"
       ? []
+      : snapshot.reviews === "stray"
+        ? [{ user: { login: "a-passing-human" }, state: "COMMENTED", commit_id: HEAD, submitted_at: at }]
       : snapshot.reviews === "comment"
         ? [{ user: { login: "copilot" }, state: "COMMENTED", commit_id: HEAD, submitted_at: at }]
         : [
@@ -229,9 +277,9 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     const result = await watch([...BASE, "--until", "settled-and-reviewed"], stub);
     expect(result.code).toBe(0);
     expect(stub.reads()).toBe(3);
-    expect(result.out[0]).toMatch(/^\[1\] settled-and-reviewed is not yet true -- head cafebab: 1 check\(s\) pending \(windows\); no review at head/);
-    expect(result.out[1]).toMatch(/^\[2\] settled-and-reviewed is not yet true -- head cafebab: checks settled; no review at head/);
-    expect(result.out[2]).toMatch(/^\[3\] settled-and-reviewed is true -- .*reviewed at head by copilot/);
+    expect(result.out[0]).toMatch(/^\[1\] settled-and-reviewed is not yet true -- head cafebab: 1 check\(s\) pending \(windows\); no configured reviewer's round at head/);
+    expect(result.out[1]).toMatch(/^\[2\] settled-and-reviewed is not yet true -- head cafebab: checks settled; no configured reviewer's round at head/);
+    expect(result.out[2]).toMatch(/^\[3\] settled-and-reviewed is true -- .*round at head by copilot \(review\)/);
     expect(result.out.at(-1)).toBe("condition became true after 3 observation(s)");
     // Paced between observations, never after the last.
     expect(result.sleeps).toEqual([0, 0]);
@@ -250,6 +298,23 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     );
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/--max-iterations bound \(1\)/);
+  });
+
+  it("a stray human's comment-only review does NOT wake review-posted; the configured reviewer's round does", async () => {
+    const stub = deps([{ pending: true, reviews: "stray" }, SETTLED_COMMENTED]);
+    const result = await watch([...BASE, "--until", "review-posted"], stub);
+    expect(result.code).toBe(0);
+    expect(stub.reads()).toBe(2);
+    expect(result.out[0]).toMatch(/review-posted is not yet true -- .*no configured reviewer's round at head/);
+    expect(result.out[1]).toMatch(/review-posted is true -- .*round at head by copilot \(review\)/);
+  });
+
+  it("a stray human's review does not satisfy settled-and-reviewed either", async () => {
+    const result = await watch(
+      [...BASE, "--until", "settled-and-reviewed", "--max-iterations", "1"],
+      deps([{ pending: false, reviews: "stray" }]),
+    );
+    expect(result.code).toBe(1);
   });
 
   it("checks-settled wakes on a settled rollup even before any review", async () => {
@@ -308,7 +373,14 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
       verdict: "ready",
       gateLine: "ready",
       judgedHead: HEAD,
-      settlement: { checksSettled: true, pendingChecks: [], reviewersAtHead: ["sasuke", "tenma"] },
+      settlement: {
+        checksSettled: true,
+        pendingChecks: [],
+        roundsAtHead: [
+          { reviewer: "sasuke", via: "review" },
+          { reviewer: "tenma", via: "review" },
+        ],
+      },
     });
     expect((doc["iterations"] as unknown[]).length).toBe(2);
   });
@@ -366,7 +438,7 @@ describe("observePr / parsePrPredicate -- pure", () => {
     const read: ReadyRead = {
       kind: "verdict",
       report: { verdict: "not-ready", gateLine: "not-ready: x", judgedHead: HEAD } as never,
-      settlement: { checksSettled: null, pendingChecks: [], reviewersAtHead: null },
+      settlement: { checksSettled: null, pendingChecks: [], roundsAtHead: null },
     };
     expect(observePr(read, "ready")).toMatchObject({ errored: false, conditionTrue: false });
     expect(observePr(read, "checks-settled")).toMatchObject({ errored: true });
