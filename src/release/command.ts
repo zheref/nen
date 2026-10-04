@@ -112,7 +112,7 @@ function resolveHoldState(result: CommandResult, holdVar: string): HoldState {
   return { kind: "held", value, recognizedTruthy: HOLD_TRUTHY.has(lowered) };
 }
 
-const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>]
+const USAGE = `nen release preflight --repo-slug <owner/name> --tag <vX.Y.Z> --range <vPrev>..<cut-point> --changelog <path> --owner-repo <owner/name> [--hold-var <name>] [--critical-issues <n,n>] [--live-chores-from <path>] [--fragment-dir <dir>] [--repo <path>] [--json]
 nen release resolve-target --repo <path> --token <main|last-commit|checkout|hash|branch> [--trunk main]
 nen release self-check --repo <path> --pr-merge-sha <sha> --previous-tag <ref> --cut-point <ref>
 nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
@@ -120,14 +120,16 @@ nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 preflight:
   Every precondition of the release preflight table, checked and reported
   whole -- never the first failure (getsuga SKILL.md §2). Every usage
-  problem is reported whole too: each missing or invalid flag, and each
-  caller-named file that cannot be read, is named in ONE refusal at exit 2,
+  problem is reported whole too: each missing or invalid flag, an
+  unresolvable --repo, and each caller-named file that cannot be read (files
+  are checked once --repo resolves) is named in ONE refusal at exit 2,
   before any tool runs (zheref/nen#309).
 
   REQUIRED -- refused at exit 2 when absent or empty:
-  --repo-slug <owner/name>  'gh variable get' and the hold row read this
-                            repository.
-  --tag <vX.Y.Z>            Checked against 'git ls-remote --tags origin'.
+  --repo-slug <owner/name>  The repository whose hold variable 'gh variable
+                            get' reads. The tag is not checked here.
+  --tag <vX.Y.Z>            Checked against 'git ls-remote --tags origin',
+                            run in --repo's checkout.
   --range <vPrev>..<cut-point>
                             Same contract as 'nen changelog completeness'; a
                             revision beginning with '-' is refused.
@@ -166,8 +168,12 @@ preflight:
                             resolve to the repository root), and so is a path
                             that is not a directory. A directory that is not
                             there contributes no fragments.
-  --repo <path>             Resolves the relative --changelog,
-                            --live-chores-from and --fragment-dir. Defaults
+  --repo <path>             The checkout whose origin the tag is checked
+                            against and whose history is reconciled; it
+                            resolves the relative --changelog,
+                            --live-chores-from and --fragment-dir, which are
+                            checked once --repo resolves (an empty
+                            --fragment-dir is refused either way). Defaults
                             to the current directory.
 
 resolve-target:
@@ -272,7 +278,7 @@ export const releaseCommand: Command = {
       }
     };
 
-    const repoSlug = gather(() => requireValue(context.args, "repo-slug", "The owner/name to check RELEASE_HOLD and the tag against."));
+    const repoSlug = gather(() => requireValue(context.args, "repo-slug", "The owner/name whose hold variable 'gh variable get' reads; the tag is checked with 'git ls-remote --tags origin' in --repo's checkout."));
     const tag = gather(() => requireValue(context.args, "tag", "The tag being proposed for this cut."));
     const range = gather(() => requireValue(context.args, "range", "The <vPrev>..<cut-point> range CON-33(c) reconciles."));
     // Refused HERE, with the other usage checks, as well as inside the shared
@@ -308,8 +314,15 @@ export const releaseCommand: Command = {
     // THE SAME SEAM ../changelog/command.ts USES for the same flag, so the two
     // verbs cannot drift again: absent directory -> no fragments, `''` and a
     // non-directory path -> exit 2 naming the flag. See ../cli/inputs.ts.
+    // The EMPTY-value refusal needs no root, so it is reported whether or
+    // not --repo resolved; only the stat of a real path waits for one.
+    const fragmentDirRaw = context.args.values["fragment-dir"];
     const fragmentDirFull =
-      root === undefined ? undefined : gather(() => optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root));
+      root !== undefined
+        ? gather(() => optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, root))
+        : fragmentDirRaw !== undefined && fragmentDirRaw.trim() === ""
+          ? gather(() => optionalDirectoryFlag(context.args, "fragment-dir", DEFAULT_FRAGMENT_DIR, ""))
+          : undefined;
 
     const changelog =
       changelogPath === undefined || root === undefined ? undefined : gather(() => readTextFile(changelogPath, root));

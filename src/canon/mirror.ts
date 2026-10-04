@@ -252,36 +252,45 @@ export function readFileMarker(text: string): FileMarker | null {
   };
 }
 
-/** A line git writes into a file it could not merge: `<<<<<<<`, `|||||||` (diff3), `=======`, `>>>>>>>`. */
-const CONFLICT_MARKER_RE = /^(?:(?:<{7}|\|{7}|>{7})(?: .*)?|={7})$/;
+/**
+ * The two lines git writes around every conflicted hunk: `<<<<<<< <ours>` and
+ * `>>>>>>> <theirs>`. The `=======` and diff3 `|||||||` lines git writes BETWEEN
+ * them are deliberately not matched on their own: seven `=` under a line of
+ * text is a markdown setext heading underline, which a hand-written rule may
+ * well carry, and inside a real hunk they are always fenced by these two.
+ */
+const CONFLICT_FENCE_RE = /^(?:<{7}|>{7})(?: .*)?$/;
 
-/** Where an unresolved merge conflict shows in a file: the first conflict-marker line, 1-based. */
+/** Where an unresolved merge conflict shows in a file: its first `<<<<<<<`/`>>>>>>>` line, 1-based. */
 export interface ConflictMarker {
   readonly line: number;
   readonly text: string;
 }
 
 /**
- * The first merge-conflict marker line in `text`, or null when it carries none
- * (zheref/nen#309).
+ * The first merge-conflict fence line in `text` (`<<<<<<<` or `>>>>>>>`), or
+ * null when it carries none (zheref/nen#309). A lone `=======` or `|||||||`
+ * line is not a conflict -- see CONFLICT_FENCE_RE.
  *
- * WHY THE GUARD ASKS THIS BEFORE IT SAYS "WRITTEN BY HAND". The ownership
- * marker is read from line 1 only (see readFileMarker), and a conflicted merge
- * puts `<<<<<<< HEAD` exactly there -- so a file this mirror generated, caught
- * mid-merge, carried no readable marker and was refused as somebody's own
- * hand-written rule. The refusal was right; the cause it named sent the reader
- * looking for a hand edit that did not exist. Only the stated cause changes
- * here: a conflicted destination is still refused, never regenerated over.
+ * WHY THE GUARD ASKS THIS FIRST. The ownership marker is read from line 1
+ * only (see readFileMarker), and a conflicted merge puts `<<<<<<< HEAD`
+ * exactly there -- so a file this mirror generated, caught mid-merge, carried
+ * no readable marker and was refused as somebody's own hand-written rule. The
+ * refusal was right; the cause it named sent the reader looking for a hand
+ * edit that did not exist. And a conflict BELOW an intact marker must not be
+ * regenerated over either: overwriting it would silently pick a side of a
+ * merge nobody resolved. Either way the destination is refused, nothing is
+ * written, and the refusal names the conflict.
  */
 export function findConflictMarker(text: string): ConflictMarker | null {
   const lines = normalizeEol(text).split("\n");
-  const index = lines.findIndex((line): boolean => CONFLICT_MARKER_RE.test(line));
+  const index = lines.findIndex((line): boolean => CONFLICT_FENCE_RE.test(line));
   if (index === -1) return null;
   return { line: index + 1, text: lines[index] ?? "" };
 }
 
 function conflictRefusal(path: string, conflict: ConflictMarker): string {
-  return `${path} has an unresolved merge conflict (line ${conflict.line}: '${conflict.text}'), so the ownership marker this mirror reads cannot be trusted and nothing is overwritten. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.`;
+  return `${path} has an unresolved merge conflict (line ${conflict.line}: '${conflict.text}'), so it is not regenerated over and nothing is written. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.`;
 }
 
 function samePin(marker: CanonPin, pin: CanonPin): boolean {
@@ -611,12 +620,14 @@ export function guardSurface(root: string, rendering: SurfaceRendering): readonl
       }
       if (!existsSync(path)) continue;
       const text = readFileSync(path, "utf8");
+      // Asked BEFORE the marker: a conflicted destination is refused whether
+      // or not its marker survived on line 1 (zheref/nen#309).
+      const conflict = findConflictMarker(text);
+      if (conflict !== null) {
+        refusals.push(conflictRefusal(file.path, conflict));
+        continue;
+      }
       if (readFileMarker(text) === null) {
-        const conflict = findConflictMarker(text);
-        if (conflict !== null) {
-          refusals.push(conflictRefusal(file.path, conflict));
-          continue;
-        }
         refusals.push(
           `${file.path} exists and carries no '${MARKER_PREFIX}...' line, so it was written by hand and is not this mirror's to overwrite. Move or rename the consumer's own rule (a subdirectory of ${rule.dir}/ is left alone), or delete it in favour of the canon file.`,
         );
@@ -634,16 +645,18 @@ export function guardSurface(root: string, rendering: SurfaceRendering): readonl
     return refusals;
   }
   const existing = existsSync(path) ? readFileSync(path, "utf8") : null;
+  // A conflicted document is refused whole, block intact or not: a conflict
+  // that duplicated or split the BEGIN/END pair would otherwise be named as
+  // a broken marker pair -- true, and still the wrong cause -- and one in the
+  // consumer's prose is not this verb's to carry into a fresh write.
+  const conflict = existing === null ? null : findConflictMarker(existing);
+  if (conflict !== null) {
+    refusals.push(conflictRefusal(rule.file, conflict));
+    return refusals;
+  }
   const spliced = spliceBlock(existing, rendering.block ?? "");
   if ("refused" in spliced) {
-    // A conflicted merge duplicates or splits the BEGIN/END pair, so the
-    // marker-pair reason below would be true and still the wrong cause.
-    const conflict = existing === null ? null : findConflictMarker(existing);
-    refusals.push(
-      conflict !== null
-        ? conflictRefusal(rule.file, conflict)
-        : `${rule.file} ${spliced.refused}. Restore the marker pair, or remove the whole block and regenerate.`,
-    );
+    refusals.push(`${rule.file} ${spliced.refused}. Restore the marker pair, or remove the whole block and regenerate.`);
   }
   return refusals;
 }

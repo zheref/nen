@@ -1004,6 +1004,53 @@ describe("nen release preflight -- every missing or invalid flag in one refusal 
     expect(err).toBe("nen release: --tag is required. The tag being proposed for this cut.\nRun 'nen release --help'.");
   });
 
+  // THE ORDERING CHANGE, PINNED (hanten N4): the caller-named files are now
+  // read BEFORE 'gh variable get', so an unreadable one is refused with no
+  // tool run at all -- and, alone, with the message it always had.
+  function validArgs(dir: string, overrides: Record<string, string>): string[] {
+    writeFileSync(join(dir, "CHANGELOG.md"), "x\n");
+    writeFileSync(join(dir, "live-chores.json"), "[]");
+    const flags: Record<string, string> = {
+      "repo-slug": "o/r",
+      tag: "v1.1.0",
+      range: "v1.0.0..v1.1.0",
+      changelog: "CHANGELOG.md",
+      "owner-repo": "o/r",
+      "critical-issues": "",
+      "live-chores-from": "live-chores.json",
+      ...overrides,
+    };
+    return Object.entries(flags).flatMap(([flag, value]): string[] => [`--${flag}`, value]);
+  }
+
+  it("refuses ONLY an unreadable --changelog with its old message byte for byte, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const { code, err, toolCalls } = await refuse(validArgs(dir, { changelog: "missing-CHANGELOG.md" }), dir);
+    expect(code).toBe(2);
+    expect(err).toBe(
+      `nen release: could not read '${join(dir, "missing-CHANGELOG.md")}' (ENOENT). A verb that fell back to an empty input here would report a clean verdict for a check it never ran.\nRun 'nen release --help'.`,
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("refuses ONLY an unreadable --live-chores-from with its old message byte for byte, and runs no tool", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-"));
+    const { code, err, toolCalls } = await refuse(validArgs(dir, { "live-chores-from": "missing-chores.json" }), dir);
+    expect(code).toBe(2);
+    expect(err).toBe(
+      `nen release: could not read '${join(dir, "missing-chores.json")}' (ENOENT). A verb that fell back to an empty input here would report a clean verdict for a check it never ran.\nRun 'nen release --help'.`,
+    );
+    expect(toolCalls).toEqual([]);
+  });
+
+  it("reports an EMPTY --fragment-dir even when --repo did not resolve", async () => {
+    const { code, err } = await refuse(["--tag", "v1.1.0", "--fragment-dir", ""], "");
+    expect(code).toBe(2);
+    expect(err).toMatch(/refused for 6 reasons/);
+    expect(err).toMatch(/--repo was given an empty value/);
+    expect(err).toMatch(/--fragment-dir was given an empty value/);
+  });
+
   it("gathers an INVALID flag and an unreadable file beside the missing ones", async () => {
     const { code, err, toolCalls } = await refuse([
       "--range=--output=x..HEAD",

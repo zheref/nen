@@ -299,29 +299,54 @@ describe("a directory surface on disk -- guard, write, check", () => {
     const dir = join(root, ".claude", "rules");
     mkdirSync(dir, { recursive: true });
     const marker = fileMarker(PIN, "01-a.md");
-    // Each of git's marker lines is enough on its own once the ownership marker is gone from line 1.
+    const refusal = (line: number, shown: string): string =>
+      `.claude/rules/01-a.md has an unresolved merge conflict (line ${line}: '${shown}'), so it is not regenerated over and nothing is written. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.`;
+    // A '<<<<<<<' or '>>>>>>>' fence is the conflict; CRLF reads the same as LF.
     for (const [text, line, shown] of [
       [`<<<<<<< HEAD\n${marker}\nours\n=======\n${marker}\ntheirs\n>>>>>>> topic\n`, 1, "<<<<<<< HEAD"],
-      ["# A\n=======\ntheirs\n", 2, "======="],
       ["# A\r\ntheirs\r\n>>>>>>> topic\r\n", 3, ">>>>>>> topic"],
-      ["# A\n||||||| merged common ancestors\n", 2, "||||||| merged common ancestors"],
+      ["# A\n<<<<<<< ours\na\n||||||| merged common ancestors\nb\n=======\nc\n>>>>>>> theirs\n", 2, "<<<<<<< ours"],
     ] as const) {
       writeFileSync(join(dir, "01-a.md"), text);
       const refusals = guardSurface(root, renderSurface(row("claude-code"), sources(), PIN));
-      expect(refusals).toHaveLength(1);
-      expect(refusals[0]).toBe(
-        `.claude/rules/01-a.md has an unresolved merge conflict (line ${line}: '${shown}'), so the ownership marker this mirror reads cannot be trusted and nothing is overwritten. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.`,
-      );
+      expect(refusals).toEqual([refusal(line, shown)]);
       expect(refusals[0]).not.toMatch(/hand-written|by hand/);
     }
-    // A genuinely hand-written file -- including lines that merely START like a conflict marker -- keeps its cause.
-    writeFileSync(join(dir, "01-a.md"), "# Mine\n\n<<<<<<<< eight, not seven\n========= nine\n");
-    expect(guardSurface(root, renderSurface(row("claude-code"), sources(), PIN))[0]).toMatch(/exists and carries no .* so it was written by hand/);
   });
 
-  it("findConflictMarker reports the first conflict line, 1-based, or null", () => {
+  it("REFUSES a MARKED destination holding a real conflict hunk below its intact marker -- never regenerated over (zheref/nen#309)", () => {
+    const root = tempDir();
+    const dir = join(root, ".claude", "rules");
+    mkdirSync(dir, { recursive: true });
+    const conflicted = `${fileMarker(PIN, "01-a.md")}\n# A\n\n<<<<<<< HEAD\nHello World.\n=======\nHi World.\n>>>>>>> topic\n`;
+    writeFileSync(join(dir, "01-a.md"), conflicted);
+    const rendering = renderSurface(row("claude-code"), sources(), PIN);
+    expect(guardSurface(root, rendering)).toEqual([
+      ".claude/rules/01-a.md has an unresolved merge conflict (line 4: '<<<<<<< HEAD'), so it is not regenerated over and nothing is written. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.",
+    ]);
+    expect(readFileSync(join(dir, "01-a.md"), "utf8")).toBe(conflicted);
+  });
+
+  it("reads a lone '=======' (a setext heading underline) or '|||||||' as hand-written text, not a conflict (zheref/nen#309)", () => {
+    const root = tempDir();
+    const dir = join(root, ".claude", "rules");
+    mkdirSync(dir, { recursive: true });
+    for (const text of ["Testing\n=======\n\nMy own rule.\n", "# Mine\n|||||||\n", "# Mine\n\n<<<<<<<< eight, not seven\n========= nine\n"]) {
+      writeFileSync(join(dir, "01-a.md"), text);
+      const refusals = guardSurface(root, renderSurface(row("claude-code"), sources(), PIN));
+      expect(refusals).toHaveLength(1);
+      expect(refusals[0]).toMatch(/^\.claude\/rules\/01-a\.md exists and carries no .* so it was written by hand/);
+    }
+    // And a MARKED file whose body carries a setext heading is ours, not refused.
+    writeFileSync(join(dir, "01-a.md"), `${fileMarker(MOVED, "01-a.md")}\nTesting\n=======\n`);
+    expect(guardSurface(root, renderSurface(row("claude-code"), sources(), PIN))).toEqual([]);
+  });
+
+  it("findConflictMarker reports the first '<<<<<<<'/'>>>>>>>' line, 1-based, or null", () => {
     expect(findConflictMarker("a\nb\n")).toBeNull();
-    expect(findConflictMarker("a\n<<<<<<<\n")).toEqual({ line: 2, text: "<<<<<<<" });
+    expect(findConflictMarker("Testing\n=======\n")).toBeNull();
+    expect(findConflictMarker("a\n|||||||\n=======\n")).toBeNull();
+    expect(findConflictMarker("a\n=======\n<<<<<<<\n")).toEqual({ line: 3, text: "<<<<<<<" });
     expect(findConflictMarker("x <<<<<<< HEAD\n")).toBeNull();
   });
 
@@ -427,6 +452,15 @@ describe("a document surface on disk -- the managed block inside AGENTS.md", () 
     // The same duplicated BEGIN pair, produced by a conflicted merge, names the conflict instead (zheref/nen#309).
     writeFileSync(join(root, "AGENTS.md"), `# Mine\n<<<<<<< HEAD\n${blockBegin(PIN)}\n${BLOCK_END}\n=======\n${blockBegin(MOVED)}\n${BLOCK_END}\n>>>>>>> topic\n`);
     expect(guardSurface(root, rendering)[0]).toMatch(/^AGENTS\.md has an unresolved merge conflict \(line 2: '<<<<<<< HEAD'\)/);
+    // An intact block with a conflict in the consumer's prose is refused too -- not carried into a fresh write.
+    const prose = `<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> topic\n${blockBegin(PIN)}\n${BLOCK_END}\n`;
+    writeFileSync(join(root, "AGENTS.md"), prose);
+    expect(guardSurface(root, rendering)).toEqual([
+      "AGENTS.md has an unresolved merge conflict (line 1: '<<<<<<< HEAD'), so it is not regenerated over and nothing is written. Finish the merge -- resolve the conflict, or check out either side -- then regenerate.",
+    ]);
+    // A setext heading in the consumer's prose is not a conflict.
+    writeFileSync(join(root, "AGENTS.md"), "Project\n=======\n\nMine.\n");
+    expect(guardSurface(root, rendering)).toEqual([]);
 
     const linked = tempDir();
     writeFileSync(join(linked, "real.md"), "");
