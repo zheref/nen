@@ -279,6 +279,14 @@ function parseConfidence(path: string, value: unknown): ConfidencePolicy {
   return { levels, applied, listed };
 }
 
+/** Refuse any non-`$` key of `record` that is not one the shape owns: a misspelt key would otherwise be silently ignored. */
+function onlyKeys(path: string, pointer: string, record: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const name of Object.keys(record)) {
+    if (name.startsWith("$") || allowed.includes(name)) continue;
+    throw new SchemaError(path, `${pointer}.${name}`, `is not a key of this predicate shape (expected only: ${allowed.join(", ")})`);
+  }
+}
+
 function parsePredicate(
   path: string,
   pointer: string,
@@ -318,12 +326,15 @@ function parsePredicate(
     }
     case "issueLabels": {
       const labels = requireRecord(path, `${pointer}.issueLabels`, inner);
+      onlyKeys(path, `${pointer}.issueLabels`, labels, ["any"]);
       const any = requireStringList(path, `${pointer}.issueLabels.any`, labels["any"]);
       if (any.length === 0) throw new SchemaError(path, `${pointer}.issueLabels.any`, "is empty. A list with no pattern never matches.");
       return { kind: "issueLabels", any };
     }
     case "jobs": {
       const jobs = requireRecord(path, `${pointer}.jobs`, inner);
+      // Exactly one of two shapes: { anyKey } alone, or { nonEmpty, everyListsOnly } together.
+      onlyKeys(path, `${pointer}.jobs`, jobs, jobs["anyKey"] !== undefined ? ["anyKey"] : ["nonEmpty", "everyListsOnly"]);
       if (jobs["anyKey"] !== undefined) {
         const keys = requireStringList(path, `${pointer}.jobs.anyKey`, jobs["anyKey"]);
         keys.forEach((key, index): void => {
@@ -356,6 +367,10 @@ function parseDomains(path: string, value: unknown, jobKeys: readonly string[]):
   if (value === undefined) return null;
   const pointer = "domains";
   const record = requireRecord(path, pointer, value);
+  // The rows are read first-match-wins; a file that says otherwise states a different contract.
+  if (record["firstMatchWins"] !== undefined && record["firstMatchWins"] !== true) {
+    throw new SchemaError(path, `${pointer}.firstMatchWins`, `expected true (the rows are evaluated in order, the first match winning), got ${describeValue(record["firstMatchWins"])}`);
+  }
   const keys = requireStringList(path, `${pointer}.keys`, record["keys"]);
   if (keys.length === 0) {
     throw new SchemaError(path, `${pointer}.keys`, "is empty. A domain block with no domains routes nothing.");

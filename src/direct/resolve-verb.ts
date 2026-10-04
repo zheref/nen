@@ -61,7 +61,7 @@ function mismatchLine(mismatch: Mismatch): string {
 
 export function renderResolution(resolution: Resolution, recorded: string | null): string[] {
   const { winner, runnerUp, domain, effort } = resolution;
-  if (resolution.undirectable !== null || winner === null || runnerUp === null || domain === null || effort === null) {
+  if (resolution.undirectable !== null || winner === null || domain === null || effort === null) {
     const lines = [`undirectable: ${resolution.undirectable ?? "nothing to direct"}`];
     if (recorded !== null) lines.push(`recorded ${recorded}`);
     return lines;
@@ -69,8 +69,12 @@ export function renderResolution(resolution: Resolution, recorded: string | null
   const lines = renderPipeTable([
     ["", "alias", "surface/tier", "model alias", "restart"],
     sideRow("winner", winner),
-    sideRow("runner-up", runnerUp),
+    ...(runnerUp === null ? [] : [sideRow("runner-up", runnerUp)]),
   ]);
+  if (runnerUp === null) lines.push("runner-up: none distinct");
+  for (const side of [winner, runnerUp]) {
+    if (side !== null && side.substituted !== null) lines.push(`note: ${side.alias} stands in for ${side.substituted}`);
+  }
   // One line per tool: the entries are sentences, and a sentence in a table cell
   // would set the width of the whole column.
   for (const entry of winner.interactive) lines.push(`interactive: ${entry}`);

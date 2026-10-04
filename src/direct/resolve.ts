@@ -56,6 +56,7 @@
 // flag marks that compare unread: reported, never a mismatch.
 
 import { VerbUsageError } from "../cli/command.js";
+import { SchemaError } from "../schema/errors.js";
 import type { ClassifyTaxonomy, DomainPolicy, DomainPredicate } from "../classify/taxonomy.js";
 import {
   MANY_JOBS,
@@ -350,7 +351,8 @@ export interface Skipped {
 
 export interface Aggregate {
   readonly winner: string;
-  readonly runnerUp: string;
+  /** The next distinct alias, or null when every candidate is the winner itself. */
+  readonly runnerUp: string | null;
   /** The sides of the pairs that decided each alias, first pair first. */
   readonly winnerSides: readonly PairSide[];
   readonly runnerUpSides: readonly PairSide[];
@@ -409,18 +411,18 @@ export function aggregate(registry: DirectRegistry, pairs: readonly Pair[]): Agg
       tally,
     };
   }
-  // The winner won every counted pair: the second opinion is the winning pairs' own
+  // The winner won every counted pair: the second opinion is the WINNING pairs' own
   // most frequent runner-up (a reviewer already resolved to its stand-in), ties by
-  // precedence; the first pair's when none differs from the winner.
+  // precedence. A skipped pair is never read, and the winner is never its own
+  // runner-up: when every candidate equals the winner there is none distinct, and
+  // the runner-up is null.
   const seconds = rank(registry, winning.map((pair): string => pair.runnerUp.alias).filter((alias): boolean => alias !== winner));
-  const runnerUp = seconds[0] ?? (pairs[0] as Pair).runnerUp.alias;
+  const runnerUp = seconds[0] ?? null;
   return {
     winner,
     runnerUp,
     winnerSides: winning.map((pair): PairSide => pair.winner),
-    runnerUpSides: (seconds[0] === undefined ? [pairs[0] as Pair] : winning.filter((pair): boolean => pair.runnerUp.alias === runnerUp)).map(
-      (pair): PairSide => pair.runnerUp,
-    ),
+    runnerUpSides: winning.filter((pair): boolean => pair.runnerUp.alias === runnerUp).map((pair): PairSide => pair.runnerUp),
     skipped,
     tally,
   };
@@ -448,6 +450,8 @@ export interface ResolvedSide {
   readonly effortControl: string | null;
   readonly interactive: readonly string[];
   readonly note: string | null;
+  /** The reviewer product this alias stood in for (its cell's `also`), so the skill can name it; else null. */
+  readonly substituted: string | null;
   readonly snapshot: SnapshotQuote | null;
   readonly liveLookup: { readonly cli: string | null; readonly docs: readonly string[] } | null;
 }
@@ -506,6 +510,7 @@ export function resolveSide(
     effortControl: surfaceRow?.effortControl ?? null,
     interactive,
     note: notes.length === 0 ? null : notes.join("; "),
+    substituted: sides.map((side): string | null => side.substituted).find((name): boolean => name !== null) ?? null,
     snapshot: quote === undefined ? null : { asOf: registry.snapshot.asOf, ...quote },
     liveLookup: own(registry.liveLookup, row.provider) ?? null,
   };
@@ -615,7 +620,15 @@ export function compareSession(
     compares.push({ field, session: given, recommended, verdict: given === UNREAD ? "unread" : same ? "match" : "mismatch" });
   };
   if (session.surface !== null) decide("surface", session.surface, winner.surface, session.surface === winner.surface);
-  if (session.model !== null) decide("model", session.model, winner.surfaceAlias, session.model === winner.surfaceAlias);
+  if (session.model !== null) {
+    // An alias the consumer's workflow does not spell is no fact to compare against:
+    // the verdict is unread with nothing recommended, never a mismatch on a non-fact.
+    if (winner.surfaceAlias === UNSPELLED || winner.surfaceAlias === null) {
+      compares.push({ field: "model", session: session.model, recommended: null, verdict: "unread" });
+    } else {
+      decide("model", session.model, winner.surfaceAlias, session.model === winner.surfaceAlias);
+    }
+  }
   if (session.effort !== null) {
     const readSurface = session.surface !== null && session.surface !== UNREAD ? session.surface : winner.surface;
     const recommended = dial(registry, readSurface, level);
@@ -637,6 +650,7 @@ export interface Resolution {
   readonly pairs: readonly Pair[];
   readonly aggregate: Pick<Aggregate, "skipped" | "tally"> | null;
   readonly winner: ResolvedSide | null;
+  /** Null when undirectable, or when no alias distinct from the winner exists. */
   readonly runnerUp: ResolvedSide | null;
   readonly effort: EffortVerdict | null;
   readonly mismatch: Mismatch | null;
@@ -652,8 +666,33 @@ export interface ResolveContext {
 /** The reason an empty job axis answers with. */
 export const UNDIRECTABLE_JOB = "job axis empty";
 
+/**
+ * Once both files are loaded: a routing cell key must be the shared cell or one of
+ * the taxonomy's language keys, and a routing domain one of its `domains.keys`. A
+ * cell under a misspelt language would never be read, and a misspelt domain would
+ * make every job it routes fall through to the fallback, both silently; refused by
+ * pointer instead (exit 1: the files disagree, the caller typed nothing wrong).
+ */
+export function checkRegistryAgainstTaxonomy(registry: DirectRegistry, taxonomy: ClassifyTaxonomy): void {
+  const domainKeys = requireDomains(taxonomy).keys;
+  const langKeys = taxonomy.axes.lang.keys.map((entry): string => entry.key);
+  for (const [job, domains] of Object.entries(registry.routing)) {
+    for (const [domain, entry] of Object.entries(domains)) {
+      if (!domainKeys.includes(domain)) {
+        throw new SchemaError(registry.path, `routing.${job}.${domain}`, `names domain ${JSON.stringify(domain)}, which is not one of the taxonomy's domains.keys [${domainKeys.join(", ")}]`);
+      }
+      for (const cell of Object.keys(entry.cells)) {
+        if (cell !== SHARED_CELL && !langKeys.includes(cell)) {
+          throw new SchemaError(registry.path, `routing.${job}.${domain}.cells.${cell}`, `is neither the shared '${SHARED_CELL}' cell nor one of the taxonomy's language keys [${langKeys.join(", ")}]`);
+        }
+      }
+    }
+  }
+}
+
 export function resolveDirection(context: ResolveContext, inputs: DirectInputs, session: SessionValues): Resolution {
   const { registry, taxonomy, models } = context;
+  checkRegistryAgainstTaxonomy(registry, taxonomy);
   if (inputs.jobs.length === 0) {
     return { inputs, session, undirectable: UNDIRECTABLE_JOB, domain: null, pairs: [], aggregate: null, winner: null, runnerUp: null, effort: null, mismatch: null };
   }
@@ -662,7 +701,8 @@ export function resolveDirection(context: ResolveContext, inputs: DirectInputs, 
   const decided = aggregate(registry, pairs);
   const scored = scoreEffort(registry, taxonomy, inputs, derived.domain);
   const winner = resolveSide(registry, models, decided.winner, decided.winnerSides, inputs.langs, scored.level);
-  const runnerUp = resolveSide(registry, models, decided.runnerUp, decided.runnerUpSides, inputs.langs, scored.level);
+  const runnerUp =
+    decided.runnerUp === null ? null : resolveSide(registry, models, decided.runnerUp, decided.runnerUpSides, inputs.langs, scored.level);
   return {
     inputs,
     session,

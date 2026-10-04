@@ -150,6 +150,22 @@ describe("parseDirectRegistry -- every refusal names its pointer", () => {
     expect(Object.keys(registry.routing["discovery"]?.["feature"]?.cells ?? {})).toEqual(["*"]);
   });
 
+  it("refuses a mismatch block that is not the contract this binary implements", () => {
+    for (const compares of [["surface", "tier", "effort"], ["surface", "model"], ["model", "surface", "effort"], []]) {
+      expect(
+        refusal((v): void => {
+          v["mismatch"]["compares"] = compares;
+        }).pointer,
+        JSON.stringify(compares),
+      ).toBe("mismatch.compares");
+    }
+    expect(
+      refusal((v): void => {
+        v["mismatch"]["ledger"] = ".nen/other/<effort>.json";
+      }).pointer,
+    ).toBe("mismatch.ledger");
+  });
+
   it("refuses a surface whose modelsKey is not a string", () => {
     const error = refusal((v): void => {
       v["surfaces"]["codex"]["modelsKey"] = 7;

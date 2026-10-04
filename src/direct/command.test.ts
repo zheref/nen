@@ -182,6 +182,31 @@ describe("nen direct resolve -- human output over the real fixtures", () => {
   });
 });
 
+describe("nen direct resolve -- a runner-up distinct from the winner, or none", () => {
+  it("says 'runner-up: none distinct' when every candidate is the winner (a reviewer's stand-in is the winner)", async () => {
+    const result = await capture(resolveArgs(consumerRepo(), "--lang", "typescript", "--job", "security", "--kind", "library"));
+    expect(result.code).toBe(0);
+    const text = result.out.join("\n");
+    expect(text).toContain("runner-up: none distinct");
+    expect(text).not.toMatch(/\| runner-up/);
+    expect(text).toContain("pair security x typescript: EXECUTION_FRONTIER, runner-up EXECUTION_FRONTIER (for PR_SECURITY_REVIEW)");
+    const json = JSON.parse((await capture(resolveArgs(consumerRepo(), "--lang", "typescript", "--job", "security", "--kind", "library", "--json"))).out.join("\n")) as Json;
+    expect(json["runnerUp"]).toBeNull();
+    expect(json["winner"]["alias"]).toBe("EXECUTION_FRONTIER");
+  });
+
+  it("names the reviewer product a distinct runner-up stands in for", async () => {
+    const result = await capture(resolveArgs(consumerRepo(), "--lang", "typescript", "--job", "review", "--kind", "product", "--labels", "bug", "--json"));
+    const json = JSON.parse(result.out.join("\n")) as Json;
+    expect(json["runnerUp"]).toMatchObject({ reviewer: false, substituted: "PR_QUALITY_REVIEW" });
+  });
+
+  it("an unspelled model is unread, never a mismatch", async () => {
+    const result = await capture(resolveArgs(consumerRepo(null), ...CLASSIFIED, "--model", "opus"));
+    expect(result.out.join("\n")).toContain("mismatch: no (model unread)");
+  });
+});
+
 describe("nen direct resolve --json", () => {
   it("has the documented top-level keys and the winner's resolved fields", async () => {
     const result = await verdict("--json");
@@ -318,6 +343,21 @@ describe("nen direct resolve -- exit codes", () => {
     expect(shape.err.join("\n")).toMatch(/at domains\.rule\[0\]\.when\.repoSize/);
     const malformed = tmpRepo({ "nen/workflow.json": "{ not json" });
     expect((await capture(resolveArgs(malformed, ...CLASSIFIED))).code).toBe(1);
+  });
+
+  it("exits 1 when the two files disagree: a cell under a language, or a routing domain, the taxonomy lacks", async () => {
+    const cell = mutatedRegistry((v): void => {
+      v["routing"]["implementation"]["feature"]["cells"]["cobol"] = v["routing"]["implementation"]["feature"]["cells"]["*"];
+    });
+    const a = await capture(["direct", "resolve", "--registry", cell, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), ...CLASSIFIED]);
+    expect(a.code).toBe(1);
+    expect(a.err.join("\n")).toMatch(/at routing\.implementation\.feature\.cells\.cobol/);
+    const domain = mutatedRegistry((v): void => {
+      v["routing"]["implementation"]["elsewhere"] = v["routing"]["implementation"]["feature"];
+    });
+    const b = await capture(["direct", "resolve", "--registry", domain, "--taxonomy", REAL_TAXONOMY, "--repo", consumerRepo(), ...CLASSIFIED]);
+    expect(b.code).toBe(1);
+    expect(b.err.join("\n")).toMatch(/at routing\.implementation\.elsewhere/);
   });
 
   it("exits 1 when the registry cannot route what the taxonomy names", async () => {

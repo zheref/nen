@@ -48,8 +48,9 @@ a forgotten flag into a confident wrong answer (zheref/nen#28):
 [`idea file`](#nen-idea-file),
 [`scaffold init`](#nen-scaffold-init),
 [`canon resolve`](#nen-canon-resolve),
-[`parse futon`](#nen-parse-futon) and
-[`report data`](#nen-report-data).
+[`parse futon`](#nen-parse-futon),
+[`report data`](#nen-report-data) and
+[`direct resolve`](#nen-direct-resolve).
 Twenty-nine verbs accept it and never read it at all — they work entirely from
 the paths and slugs they are handed. Every verb of
 [`effort`](#family-effort), [`epic`](#family-epic), [`loop`](#family-loop),
@@ -3998,9 +3999,12 @@ Answers "which model, where, at what effort" for one classification, reporting e
    `aggregation.precedence` (earlier first). A reviewer alias is never the winner: a pair it wins
    counts for its `also` stand-in (or is skipped, reported). The runner-up is the next most frequent
    winning alias (ties by precedence); when the winner won every pair, the most frequent `runnerUp`
-   alias across the winner's pairs, a reviewer resolving to its `also` (the registry parser refuses a
-   reviewer runner-up with none). A frontier alias may be recommended — the verdict is for the
-   maintainer's own session.
+   alias across the **winning** pairs (never a skipped pair's), a reviewer resolving to its `also`.
+   **The winner is never its own runner-up**: when every candidate equals the winner (a reviewer
+   runner-up whose stand-in is the winner), `runnerUp` is `null` and the human output says
+   `runner-up: none distinct`. A resolved runner-up that is a stand-in carries `substituted`, the
+   reviewer product it stood in for, so the skill can name it. A frontier alias may be recommended —
+   the verdict is for the maintainer's own session.
 4. **Resolve each side.** Provider, family and tier from the alias; the surface from the alias (the
    registry parser refuses a cell whose surface is not its alias's); the surface alias from the
    workflow's `models.<modelsKey>.<tier>` (else `unspelled`); the surface's restart line with
@@ -4015,7 +4019,9 @@ Answers "which model, where, at what effort" for one classification, reporting e
    mapped through the winner surface's own control. Reported as `weight 4 + manyJobs + <domain add> =
    6 -> max`.
 6. **Mismatch** — for the session flags given: `--surface` is compared by name, `--model` by **alias**
-   against `models.<modelsKey>.<winner tier>` (aliases, not tiers), and `--effort` in **dial space**:
+   against `models.<modelsKey>.<winner tier>` (aliases, not tiers; **when the workflow does not spell
+   that tier the compare is `unread` with `recommended: null`, never a mismatch on a non-fact**), and
+   `--effort` in **dial space**:
    the recommended level and the session's level are both mapped through `effort.surfaceMap` for the
    session's surface (the winner's when none was given), so a collapsed top (`max` -> `high` on
    cursor and antigravity) matches a session at `high`. The literal **`unread`** on any flag marks
@@ -4024,11 +4030,23 @@ Answers "which model, where, at what effort" for one classification, reporting e
 7. **Record** — with `--record <effort-id>`, the whole result plus `effortId` and `recordedAt` is
    written to `.nen/direct/<encoded id>.json` under `--repo` (directories created; `.nen/` is
    gitignored output, never `nen/`). The id is the caller's string (`<CODE>-IS-#<N>` for an issue,
-   `inline-<ISO-8601 UTC>` for a textual effort) **percent-encoded with `encodeURIComponent`, exactly as
-   [`usage record`](#nen-usage) encodes `--effort`** for `.nen/usage/<effort>.json` (that helper is bound
-   to the usage directory, so the expression is mirrored), which makes a `/` or a `:` in an id a
-   file-name character. An id that is empty, absolute, carries a backslash or has a `..` segment is
-   refused at exit 2 before anything is read.
+   `inline-<ISO-8601 UTC>` for a textual effort), **percent-encoded by the same exported encoder
+   [`usage record`](#nen-usage) uses for `--effort`** (`encodeEffortId`, `encodeURIComponent`), which
+   makes a `/` or a `:` in an id a file-name character. **The encoder is shared; the id vocabulary
+   is not**: the usage ledger's own id alphabet refuses `#` and `:`, so it cannot hold the two ids above,
+   while this ledger accepts any id that is not a traversal (that alphabet disagreement belongs to
+   the usage verb's owner and is not changed here). An id that is empty, absolute, carries a backslash
+   or has a `..` segment is refused at exit 2 before anything is read.
+
+**The two files must agree.** After both load, a routing cell key that is neither the shared `*`
+cell nor one of the taxonomy's language keys, and a routing domain that is not one of its
+`domains.keys`, are refused at exit 1 naming the pointer (`routing.<job>.<domain>.cells.<key>`): a
+key the *taxonomy* lacks on the command line is exit 2, but a job the registry cannot route, or a file
+that contradicts the other, is exit 1. The registry's `mismatch` block must state exactly the set the
+binary compares (`compares: [surface, model, effort]`, `ledger: .nen/direct/<effort>.json`); any other
+is refused when the registry loads. Likewise a predicate carrying a key that is not its own
+(`issueLabels` takes only `any`; `jobs` takes `anyKey` alone, or `nonEmpty` with `everyListsOnly`) and a
+`domains.firstMatchWins` other than `true` are refused when the taxonomy loads.
 
 **Empty axes are answers, not errors.** No job (`--job ""`, or the flag omitted) is
 `undirectable: job axis empty` — one line, `winner`, `runnerUp`, `effort` and `mismatch` null, exit 0
@@ -4070,11 +4088,11 @@ job axis. `--json` prints one document; top-level keys, in this order: `contract
 matched row's `order` — `because`, `fallbacks`), `pairs` (an array of `{ job, lang, domain,
 fallbackFrom, phase, phaseName, cell, winner, runnerUp }`), `aggregate` (`skipped`, `tally`),
 `winner` and `runnerUp` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
-restart, effortControl, interactive, note, snapshot, liveLookup }`), `effort` (`score`, `weight`,
+restart, effortControl, interactive, note, substituted, snapshot, liveLookup }`), `effort` (`score`, `weight`,
 `level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, compares: [{ field, session,
 recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread`), `effortId` and
 `record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp` and `effort` are
-`null` when undirectable. Exit 0 for every resolution, **including a mismatch and an
+`null` when undirectable, and `runnerUp` is also `null` when no alias distinct from the winner exists. Exit 0 for every resolution, **including a mismatch and an
 undirectable one**; exit 1 for an invalid registry or taxonomy (an unknown predicate shape, a cell
 whose surface is not its alias's), an unreadable workflow, a taxonomy with no weight on a carried job,
 or a registry that cannot route a job the taxonomy names; exit 2 for a missing flag, an unknown

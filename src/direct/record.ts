@@ -9,12 +9,13 @@
 //
 // THE NAME IS THE EFFORT'S IDENTITY, a string the CALLER types: `<CODE>-IS-#<N>` for
 // an issue, `inline-<ISO-8601 UTC>` for a textual effort. It is percent-encoded
-// into the file name exactly as `nen usage record` encodes `--effort` for
-// `.nen/usage/<effort>.json` (../usage/ledger.ts `usageLedgerPath`:
-// `encodeURIComponent`, which is injective, so no two efforts share a file and a `/`
-// can never open a subdirectory). That helper is bound to the usage directory, so
-// the one expression is mirrored here rather than imported; if the encoding there
-// ever changes, this must move with it so one effort names both ledgers the same way.
+// into the file name by `encodeEffortId`, the ONE encoder `nen usage record` also
+// uses for `.nen/usage/<effort>.json` (../usage/ledger.ts: `encodeURIComponent`,
+// injective, so no two efforts share a file and a `/` can never open a
+// subdirectory). The ENCODER is shared; the id VOCABULARY is not: the usage
+// ledger's EFFORT_ID alphabet refuses `#` and `:`, so it cannot hold either of the
+// ids above, while this ledger accepts any id that is not a traversal. That
+// disagreement is routed to the usage ledger's owner and is not fixed here.
 //
 // A typed name that reached the filesystem unchecked would be a way to write anywhere,
 // so a name that is empty, absolute, carries a backslash or a NUL, or has a `..`
@@ -26,6 +27,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
+import { encodeEffortId } from "../usage/ledger.js";
 
 /** The one directory a record may be written under, relative to `--repo`'s root. */
 export const RECORD_DIR = ".nen/direct";
@@ -41,7 +43,7 @@ export function recordPath(root: string, id: string): string {
   if (id.startsWith("/") || /^[A-Za-z]:/.test(id)) return refuse("it is an absolute path");
   if (id.split("/").some((segment): boolean => segment === "..")) return refuse("a segment is '..'");
   const directory = resolve(root, RECORD_DIR);
-  const full = resolve(directory, `${encodeURIComponent(id)}.json`);
+  const full = resolve(directory, `${encodeEffortId(id)}.json`);
   if (!full.startsWith(directory + sep)) return refuse("it resolves outside the record directory");
   return full;
 }

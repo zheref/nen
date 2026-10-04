@@ -55,7 +55,18 @@ export const EFFORT_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
  * incident that rule comes from.
  */
 export function usageLedgerPath(root: string, effort: string): string {
-  return join(root, ...USAGE_LEDGER_DIR.split("/"), `${encodeURIComponent(effort)}.json`);
+  return join(root, ...USAGE_LEDGER_DIR.split("/"), `${encodeEffortId(effort)}.json`);
+}
+
+/**
+ * The ONE encoder of an effort's id into a ledger file name, exported so every
+ * per-effort ledger (this one, and `.nen/direct/<id>.json`, ../direct/record.ts) names
+ * its file the same way. It is the encoder only: the id VOCABULARY is each verb's own
+ * (this ledger's EFFORT_ID alphabet refuses `#` and `:`, which an id such as
+ * `<CODE>-IS-#<N>` or `inline-<ISO>` carries; the direct ledger accepts them).
+ */
+export function encodeEffortId(effort: string): string {
+  return encodeURIComponent(effort);
 }
 
 /** The ledger on disk, or an empty one; a file that is not this contract's is refused, never rewritten. */

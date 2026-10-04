@@ -156,6 +156,14 @@ export interface RoutingEntry {
   readonly cells: Readonly<Record<string, RoutingCell>>;
 }
 
+/**
+ * The compares this binary implements, in order, and the ledger it writes: the
+ * registry's `mismatch` block must STATE these, because the binary implements one
+ * contract and a file that names another would be read by nothing.
+ */
+export const MISMATCH_COMPARES: readonly string[] = ["surface", "model", "effort"];
+export const MISMATCH_LEDGER = ".nen/direct/<effort>.json";
+
 export interface MismatchPolicy {
   readonly compares: readonly string[];
   readonly ledger: string;
@@ -408,10 +416,15 @@ function parsePrecedence(path: string, value: unknown, aliasNames: readonly stri
 
 function parseMismatch(path: string, value: unknown): MismatchPolicy {
   const record = requireRecord(path, "mismatch", value);
-  return {
-    compares: requireStringList(path, "mismatch.compares", record["compares"]),
-    ledger: requireString(path, "mismatch.ledger", record["ledger"]),
-  };
+  const compares = requireStringList(path, "mismatch.compares", record["compares"]);
+  if (compares.length !== MISMATCH_COMPARES.length || compares.some((name, index): boolean => name !== MISMATCH_COMPARES[index])) {
+    throw new SchemaError(path, "mismatch.compares", `must be exactly [${MISMATCH_COMPARES.join(", ")}], the set this binary compares; got ${JSON.stringify(compares)}`);
+  }
+  const ledger = requireString(path, "mismatch.ledger", record["ledger"]);
+  if (ledger !== MISMATCH_LEDGER) {
+    throw new SchemaError(path, "mismatch.ledger", `must be ${describeValue(MISMATCH_LEDGER)}, the one ledger this binary writes; got ${describeValue(ledger)}`);
+  }
+  return { compares, ledger };
 }
 
 function parseSide(

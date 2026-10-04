@@ -4,6 +4,7 @@ import { loadClassifyTaxonomy } from "../classify/taxonomy.js";
 import { loadDirectRegistry } from "./registry.js";
 import {
   aggregate,
+  checkRegistryAgainstTaxonomy,
   collectPairs,
   compareSession,
   DirectError,
@@ -54,14 +55,14 @@ function context(
 /** A resolution known to be directable, so a test reads its winner without a null check at every line. */
 type Directed = Omit<Resolution, "winner" | "runnerUp" | "effort" | "domain"> & {
   readonly winner: ResolvedSide;
-  readonly runnerUp: ResolvedSide;
+  readonly runnerUp: ResolvedSide | null;
   readonly effort: EffortVerdict;
   readonly domain: DomainVerdict;
 };
 
 function direct(c: ResolveContext, given: DirectInputs, session: SessionValues): Directed {
   const result = resolveDirection(c, given, session);
-  if (result.winner === null || result.runnerUp === null || result.effort === null || result.domain === null) {
+  if (result.winner === null || result.effort === null || result.domain === null) {
     throw new Error(`expected a directable resolution, got ${result.undirectable ?? "nothing"}`);
   }
   return result as Directed;
@@ -145,6 +146,10 @@ describe("evaluatePredicate -- every shape the taxonomy admits", () => {
       [{ jobs: { anyKey: ["no-such-job"] } }, "domains.rule[0].when.jobs.anyKey[0]"],
       [{ anyOf: [{ bogus: 1 }] }, "domains.rule[0].when.anyOf[0].bogus"],
       [{ repoKind: [] }, "domains.rule[0].when.repoKind"],
+      [{ issueLabels: { any: ["bug"], all: ["x"] } }, "domains.rule[0].when.issueLabels.all"],
+      [{ jobs: { anyKey: ["plain"], nonEmpty: true } }, "domains.rule[0].when.jobs.nonEmpty"],
+      [{ jobs: { nonEmpty: true, everyListsOnly: "ops", extra: 1 } }, "domains.rule[0].when.jobs.extra"],
+      [{ repoKind: ["a"], $note: "ok", repoRole: ["b"] }, "domains.rule[0].when"],
       [["otherwise"], "domains.rule[0].when"],
       ["sometimes", "domains.rule[0].when"],
     ] as [Json | string, string][]) {
@@ -158,6 +163,28 @@ describe("evaluatePredicate -- every shape the taxonomy admits", () => {
       }
       expect((caught as { pointer?: string } | null)?.pointer, JSON.stringify(when)).toBe(pointer);
     }
+  });
+});
+
+describe("domains.firstMatchWins", () => {
+  it("refuses anything but true, by pointer; accepts true or absent", () => {
+    for (const value of [false, "true", 1]) {
+      let caught: unknown = null;
+      try {
+        context((): void => {}, (v): void => {
+          v["domains"]["firstMatchWins"] = value;
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as { pointer?: string } | null)?.pointer, String(value)).toBe("domains.firstMatchWins");
+    }
+    expect(() => context((): void => {}, (v): void => {
+      v["domains"]["firstMatchWins"] = true;
+    })).not.toThrow();
+    expect(() => context((): void => {}, (v): void => {
+      delete v["domains"]["firstMatchWins"];
+    })).not.toThrow();
   });
 });
 
@@ -345,9 +372,24 @@ describe("aggregate -- the winner and the runner-up", () => {
     expect(result.runnerUp).toBe("A_EXEC");
   });
 
-  it("with no distinct runner-up anywhere, the first pair's runner-up stands", () => {
+  it("never returns the winner as the runner-up: with none distinct the runner-up is null", () => {
     const result = run({ plain: [side("A_TOP", "s1"), side("A_TOP", "s1")] }, ["plain"]);
-    expect(result.runnerUp).toBe("A_TOP");
+    expect(result.runnerUp).toBeNull();
+    expect(result.runnerUpSides).toEqual([]);
+    // a reviewer runner-up whose stand-in is the winner resolves to the winner: still none distinct
+    const standIn = run({ plain: [side("A_TOP", "s1"), side("R_BOT", null, { also: "A_TOP" })] }, ["plain"]);
+    expect(standIn.runnerUp).toBeNull();
+  });
+
+  it("reads the winning pairs' runner-ups only, never a skipped pair's", () => {
+    // heavy's winner is a reviewer with no stand-in (skipped) and its runner-up is a distinct alias;
+    // the counted pair's runner-up equals the winner, so there is no distinct runner-up
+    const result = run(
+      { plain: [side("A_TOP", "s1"), side("A_TOP", "s1")], heavy: [side("R_BOT", null), side("A_EXEC", "s2")] },
+      ["plain", "heavy"],
+    );
+    expect(result.skipped).toHaveLength(1);
+    expect(result.runnerUp).toBeNull();
   });
 
   it("a reviewer alias is never the winner: its stand-in is used when the cell gives one", () => {
@@ -387,7 +429,7 @@ describe("resolveDirection -- each side resolved", () => {
     expect(none.winner.restart).toBe("s1 --model <alias>");
     const noTier = direct(context((): void => {}, (): void => {}, { k1: { fast: "quick" } }), inputs(), NO_SESSION);
     expect(noTier.winner.surfaceAlias).toBe(UNSPELLED);
-    expect(noTier.runnerUp.surfaceAlias).toBe("quick");
+    expect(noTier.runnerUp?.surfaceAlias).toBe("quick");
   });
 
   it("reads the surface from the alias, and fills the restart's <alias> and <level> from the workflow and the effort map", () => {
@@ -408,6 +450,15 @@ describe("resolveDirection -- each side resolved", () => {
     expect(runnerUp).toMatchObject({ alias: "A_EXEC", reviewer: false, surface: "s2", surfaceAlias: "exec" });
   });
 
+  it("carries the reviewer product a stand-in stood in for, on the resolved runner-up", () => {
+    const c = context((v): void => {
+      setCell(v, "plain", "dev", "*", side("A_TOP", "s1"), side("R_BOT", null, { also: "A_EXEC" }));
+    });
+    const result = direct(c, inputs(), NO_SESSION);
+    expect(result.runnerUp).toMatchObject({ alias: "A_EXEC", substituted: "R_BOT" });
+    expect(result.winner.substituted).toBeNull();
+  });
+
   it("builds the interactive list: surface, each language's tool, the cell's, deduplicated, nulls dropped", () => {
     const c = context((v): void => {
       setCell(v, "plain", "dev", "*", side("A_TOP", "s1", { interactive: "the alpha IDE" }));
@@ -422,7 +473,7 @@ describe("resolveDirection -- each side resolved", () => {
     const result = direct(context(), inputs(), NO_SESSION);
     expect(result.winner.snapshot).toEqual({ asOf: "2026-01-02", primary: "Top 1", modelId: "top-1", fallback: "Max 1" });
     expect(result.winner.liveLookup).toEqual({ cli: "p1 models", docs: ["https://p1.example/models"] });
-    expect(result.runnerUp.snapshot).toBeNull();
+    expect(result.runnerUp?.snapshot).toBeNull();
   });
 });
 
@@ -560,11 +611,12 @@ describe("compareSession -- a mismatch is an answer, compared in the session's o
     expect(allUnread?.compares.every((entry): boolean => entry.verdict === "unread")).toBe(true);
   });
 
-  it("flows through resolveDirection without refusing, and compares a model against 'unspelled' when the workflow does not spell it", () => {
+  it("flows through resolveDirection without refusing, and never compares a model against an alias the workflow does not spell: that is unread", () => {
     const result = direct(context(), inputs(), { surface: "s2", model: "x", effort: "max" });
     expect(result.mismatch?.compares.map((entry): string => entry.field)).toEqual(["surface", "model", "effort"]);
     const bare = direct(context((): void => {}, (): void => {}, {}), inputs(), { surface: null, model: "opus", effort: null });
-    expect(bare.mismatch?.compares).toEqual([{ field: "model", session: "opus", recommended: UNSPELLED, verdict: "mismatch" }]);
+    expect(bare.mismatch?.compares).toEqual([{ field: "model", session: "opus", recommended: null, verdict: "unread" }]);
+    expect(bare.mismatch?.match).toBe(true);
   });
 });
 
@@ -597,5 +649,36 @@ describe("parseInputs and parseSession -- usage refusals name the valid set", ()
     expect(() => parseSession(registry, { surface: null, model: null, effort: "extreme" })).toThrow(/--effort 'extreme' is not one of: low, medium, high, max, unread/);
     expect(parseSession(registry, { surface: UNREAD, model: UNREAD, effort: UNREAD })).toEqual({ surface: UNREAD, model: UNREAD, effort: UNREAD });
     expect(parseSession(registry, { surface: "s1", model: "anything", effort: "max" })).toEqual({ surface: "s1", model: "anything", effort: "max" });
+  });
+});
+
+describe("checkRegistryAgainstTaxonomy -- the two loaded files must agree", () => {
+  it("refuses a routing cell key that is neither the shared cell nor a taxonomy language", () => {
+    const c = context((v): void => {
+      setCell(v, "plain", "dev", "nolang", side("A_TOP", "s1"));
+    });
+    expect(() => direct(c, inputs(), NO_SESSION)).toThrow(/at routing\.plain\.dev\.cells\.nolang, is neither the shared '\*' cell/);
+    let caught: unknown = null;
+    try {
+      resolveDirection(c, inputs({ jobs: [] }), NO_SESSION);
+    } catch (error) {
+      caught = error;
+    }
+    expect((caught as { pointer?: string } | null)?.pointer).toBe("routing.plain.dev.cells.nolang");
+  });
+
+  it("refuses a routing domain that is not one of the taxonomy's domains", () => {
+    const c = context((v): void => {
+      v["routing"]["plain"]["nowhere"] = v["routing"]["plain"]["dev"];
+    });
+    expect(() => direct(c, inputs(), NO_SESSION)).toThrow(/at routing\.plain\.nowhere, names domain "nowhere"/);
+  });
+
+  it("accepts the real pair, and the mini pair", () => {
+    const registry = loadDirectRegistry("/", REAL_REGISTRY);
+    const taxonomy = loadClassifyTaxonomy("/", REAL_TAXONOMY);
+    expect(() => checkRegistryAgainstTaxonomy(registry, taxonomy)).not.toThrow();
+    const c = context();
+    expect(() => checkRegistryAgainstTaxonomy(c.registry, c.taxonomy)).not.toThrow();
   });
 });
