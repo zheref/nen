@@ -365,3 +365,88 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
     expect((await capture(["stage", "triage", "--nul"])).code).toBe(2);
   });
 });
+
+describe("nen stage triage --range -- every git read that can fail, through the seam (zheref/nen#337)", () => {
+  const BASE = "a".repeat(40);
+  const HEAD = "b".repeat(40);
+  const MB = "c".repeat(40);
+  const LOG = `git -c core.quotePath=false log -z --format= --name-only --no-renames --diff-merges=cc --ignore-submodules=none --no-relative ${MB}..${HEAD} --`;
+  const DIFF = `git -c core.quotePath=false diff -z --name-status --find-renames --ignore-submodules=none --no-relative --no-ext-diff ${MB} ${HEAD} --`;
+  const CAT = "git cat-file --batch-check=%(objecttype) %(objectsize) -z";
+  const fail = { code: 128, stderr: "fatal: boom" };
+
+  function script(overrides: Readonly<Record<string, ScriptedCall["result"]>> = {}): ScriptedCall[] {
+    const calls: Record<string, ScriptedCall["result"]> = {
+      "git rev-parse --git-dir": { stdout: ".git\n" },
+      "git rev-parse --verify --quiet --end-of-options main^{commit}": { stdout: `${BASE}\n` },
+      "git rev-parse --verify --quiet --end-of-options topic^{commit}": { stdout: `${HEAD}\n` },
+      [`git merge-base ${BASE} ${HEAD}`]: { stdout: `${MB}\n` },
+      [`git rev-list --count ${MB}..${HEAD}`]: { stdout: "2\n" },
+      [LOG]: { stdout: "src/a.ts\0" },
+      [DIFF]: { stdout: "M\0src/a.ts\0" },
+      [CAT]: { stdout: "blob 3\n" },
+      ...overrides,
+    };
+    return Object.entries(calls).map(([match, result]): ScriptedCall => ({ match, result }));
+  }
+
+  it("reads clean through every step when nothing fails", async () => {
+    const result = await capture(["stage", "triage", "--range", "main..topic"], script());
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      `read: committed range main..topic (${MB.slice(0, 12)}..${HEAD.slice(0, 12)}, 2 commit(s)), not the working copy`,
+      "clean: 1 file(s)",
+      "  src/a.ts",
+      "ignored: 0 file(s), not listed",
+    ]);
+  });
+
+  it.each([
+    [`git merge-base ${BASE} ${HEAD}`, "the merge base"],
+    [`git rev-list --count ${MB}..${HEAD}`, "the commit count \\(git rev-list\\)"],
+    [LOG, "the paths the commits touched \\(git log\\)"],
+    [DIFF, "the net change \\(git diff\\)"],
+    [CAT, "the sizes at the head \\(git cat-file\\)"],
+  ])("exits 1 when '%s' fails, naming %s", async (match, named) => {
+    const result = await capture(["stage", "triage", "--range", "main..topic"], script({ [match]: fail }));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(new RegExp(`could not read ${named} for --range main\\.\\.topic: fatal: boom`));
+    expect(result.out).toEqual([]);
+  });
+
+  it("names a shallow clone at exit 2 when the merge base is not in the repository (hanten N8)", async () => {
+    const result = await capture(
+      ["stage", "triage", "--range", "main..topic"],
+      [
+        ...script({ [`git merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
+        { match: "git rev-parse --is-shallow-repository", result: { stdout: "true\n" } },
+      ],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/shallow clone -- fetch more history/);
+  });
+
+  it("calls two complete histories unrelated at exit 2 when the clone is not shallow", async () => {
+    const result = await capture(
+      ["stage", "triage", "--range", "main..topic"],
+      [
+        ...script({ [`git merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
+        { match: "git rev-parse --is-shallow-repository", result: { stdout: "false\n" } },
+      ],
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/share no common ancestor/);
+  });
+
+  it("refuses --large-bytes 0 in range mode at exit 2, before any git read", async () => {
+    const result = await capture(["stage", "triage", "--range", "main..topic", "--large-bytes", "0"], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--large-bytes takes a positive whole number/);
+  });
+
+  it("refuses a '-' ref at exit 2 with no git call at all (hanten N7)", async () => {
+    const result = await capture(["stage", "triage", "--range", "--upload-pack=x..main"], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/begins with '-'/);
+  });
+});

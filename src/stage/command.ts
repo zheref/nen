@@ -19,12 +19,15 @@ import {
   addListFrom,
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
+  batchCheckInput,
+  parseBatchCheckSizes,
   parseCommitRange,
-  parseLsTreeSizesBytes,
+  parseHistoryPathsBytes,
   parseNameStatusBytes,
   parseStatusPorcelain,
   parseStatusPorcelainBytes,
   pathspecLine,
+  triageRange,
   triageStage,
   type StatusEntry,
   type TriageResult,
@@ -53,22 +56,34 @@ usage:
   --range        stage triage only. Triage the paths the COMMITS in
                  <base>..<head> changed instead of the working copy -- the
                  review of a branch whose work is already committed. Same
-                 detectors, same output shape, same exit codes.
+                 detectors and --json shape; see below for what is read.
 
 WHICH MODE READ THE PATHS. Without --range, stage triage reads the working
 copy (git status: staged, unstaged, untracked and ignored paths) and never a
-commit. With --range it reads ONLY the commits: git diff --name-status from
-the merge base of <base> and <head> to <head> -- the commits git log
-<base>..<head> lists, renames followed -- and never the working copy or the
-index, so uncommitted changes are not in it. Its text report opens with a
-'read: committed range ...' line naming both resolved commits. Sizes are the
-blob sizes at <head>; a path the range deleted is never measured, so never
-flagged large; --mentions is matched against a deleted path's basename as in
-the working-copy mode. Nothing in a commit is git-ignored, so the ignored
-bucket is always empty. A ref that does not resolve to a commit, a value that
-is not <base>..<head> (an empty side, the three-dot form), or two commits with
-no common ancestor is exit 2 naming what failed -- never a fall back to the
-working copy.
+commit. With --range it reads ONLY commits, never the working copy or the
+index, so uncommitted changes are not in it. <base>..<head> means the commits
+git log <base>..<head> lists: the diff runs from merge-base(<base>, <head>) to
+<head>, as git diff <base>...<head> does, so a base that moved on contributes
+nothing. Two readings, each for what it can answer:
+  - NAMES: secret shape, binary, out-of-scope and local config run over the
+    UNION of every path any commit in the range touched (git log --name-only
+    --no-renames). A path gone at <head> -- added then deleted, or renamed
+    away -- that matches one is FLAGGED with that reason plus 'in-history':
+    it is still in the history being pushed.
+  - NET CHANGE: deletions, --mentions and sizes come from the net diff
+    (git diff --name-status --find-renames, merge base to <head>). A path the
+    range deleted is never measured, so never flagged large; --mentions is
+    matched against a deleted path's basename as in the working-copy mode;
+    sizes are blob sizes at <head> (git cat-file --batch-check), never the
+    disk.
+Submodule ignore settings are overridden (--ignore-submodules=none), so a
+gitlink is never hidden. Nothing in a commit is git-ignored, so the ignored
+bucket is always empty. The text report opens with a 'read: committed range
+...' line naming both resolved commits and the commit count -- or that the
+range names no commits (still exit 0). Same --json shape in both modes:
+{ read, clean[], flagged[], ignored[] }, where read is { mode: "working-copy" }
+or { mode: "range", base, head, mergeBase, headSha, commits }. Needs git 2.38
+or newer (cat-file --batch-check -z).
 
 Detects, never decides: secret shapes (.env, *.pem, *.key, credentials*),
 local-config filenames (the '.local' infix -- settings.local.json, .env.local,
@@ -79,7 +94,12 @@ verb never gives. A git-ignored path is a FACT rather than a question -- it
 cannot be staged without -f, so there is nothing to ask -- and is reported
 separately as a count in text (the paths themselves are never printed in
 text; read them from --json). Exits 1 only when something is flagged; an
-all-ignored tree is exit 0.
+all-ignored tree is exit 0. With --range it also exits 2 for a range that is
+malformed (not <base>..<head>, an empty side, the three-dot form, a side
+beginning with '-'), a side that does not resolve to a commit, two commits
+with no common ancestor or a shallow clone missing the history -- never a fall
+back to the working copy -- and exits 1 when a git read fails (merge-base,
+commit count, log, diff or cat-file), naming the read.
 
 stage list runs the SAME triage, with the same three flags, and prints its
 complement on stdout: every modified, added, renamed, deleted and untracked
@@ -184,12 +204,13 @@ function readAndTriage(
   return { entries, triage };
 }
 
-/** What `--range` resolved to: the commits the diff actually ran between. */
+/** What `--range` resolved to: the commits the readings actually ran between. */
 interface ResolvedRange {
   readonly base: string;
   readonly head: string;
   readonly mergeBase: string;
   readonly headSha: string;
+  readonly commits: number;
 }
 
 function gitFailure(result: { code: number; stderr: string }): string {
@@ -202,12 +223,14 @@ function stdoutBytesOf(result: { stdout: string; stdoutBytes?: Uint8Array }): Ui
 }
 
 /**
- * `stage triage --range` (zheref/nen#337): the paths the commits in
- * `<base>..<head>` changed, triaged by the same detectors as the working
- * copy. NEVER FALLS BACK: a value that is not a range, a ref that does not
- * resolve to a commit and two commits with no common ancestor are each a
- * usage error at exit 2 naming what failed. `null` is a git read failure
- * (not a repository, a diff or tree read that failed), already reported.
+ * `stage triage --range` (zheref/nen#337): the commits in `<base>..<head>`,
+ * triaged by the same detectors as the working copy -- names over every path
+ * any commit touched, deletions and sizes over the net change (see
+ * `triageRange`). NEVER FALLS BACK: a value that is not a range, a side that
+ * begins with '-' or does not resolve to a commit, two commits with no common
+ * ancestor and a shallow clone missing the history are each a usage error at
+ * exit 2 naming what failed. `null` is a git read failure, already reported
+ * with the read named.
  */
 function readRangeAndTriage(
   context: CommandContext,
@@ -220,6 +243,19 @@ function readRangeAndTriage(
       `--range takes <base>..<head> -- got '${rawRange}'. Both sides are required and the three-dot form is refused: an empty side is not read as HEAD, and the range is never guessed.`,
     );
   }
+  for (const [side, ref] of [
+    ["base", range.base],
+    ["head", range.head],
+  ] as const) {
+    // Refused BEFORE git sees it (hanten N7): a ref spelled like an option is
+    // never handed to a git command line, whatever --end-of-options would
+    // make of it.
+    if (ref.startsWith("-")) {
+      throw new VerbUsageError(
+        `--range ${rawRange}: the ${side} ref '${ref}' begins with '-', which no ref this verb reads may. Nothing was triaged.`,
+      );
+    }
+  }
   const largeBytes = readLargeBytes(context);
 
   const gitDir = context.seams.run(GIT, ["rev-parse", "--git-dir"], { cwd: root });
@@ -227,10 +263,13 @@ function readRangeAndTriage(
     context.io.err(`nen: ${root} is not a git repository: ${gitFailure(gitDir)}`);
     return null;
   }
+  const failed = (what: string, result: { code: number; stderr: string }): null => {
+    context.io.err(`nen: could not read ${what} for --range ${rawRange}: ${gitFailure(result)}`);
+    return null;
+  };
 
   const resolve = (side: "base" | "head", ref: string): string => {
-    // `--end-of-options` so a ref spelled like a flag is a ref; `^{commit}` so
-    // a tree or blob id is refused rather than diffed.
+    // `^{commit}` so a tree or blob id is refused rather than diffed.
     const result = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], {
       cwd: root,
     });
@@ -248,14 +287,48 @@ function readRangeAndTriage(
   const mb = context.seams.run(GIT, ["merge-base", baseSha, headSha], { cwd: root });
   const mergeBase = mb.stdout.trim();
   if (mb.code === 1 && mergeBase === "") {
+    // NO COMMON ANCESTOR -- or none VISIBLE (hanten N8): a shallow clone cut
+    // above the fork point answers exactly like two unrelated histories.
+    const shallow = context.seams.run(GIT, ["rev-parse", "--is-shallow-repository"], { cwd: root });
+    if (shallow.code === 0 && shallow.stdout.trim() === "true") {
+      throw new VerbUsageError(
+        `--range ${rawRange}: no common ancestor of '${range.base}' and '${range.head}' is in this repository, and it is a shallow clone -- fetch more history (git fetch --unshallow, or --deepen) and run again. Nothing was triaged.`,
+      );
+    }
     throw new VerbUsageError(
       `--range ${rawRange}: '${range.base}' and '${range.head}' share no common ancestor, so the range names no commits. Nothing was triaged.`,
     );
   }
-  if (mb.code !== 0 || mergeBase === "") {
-    context.io.err(`nen: could not read the merge base of ${rawRange}: ${gitFailure(mb)}`);
-    return null;
-  }
+  if (mb.code !== 0 || mergeBase === "") return failed("the merge base", mb);
+
+  const count = context.seams.run(GIT, ["rev-list", "--count", `${mergeBase}..${headSha}`], { cwd: root });
+  const counted = count.stdout.trim();
+  const commits = Number(counted);
+  if (count.code !== 0 || counted === "" || !Number.isInteger(commits)) return failed("the commit count (git rev-list)", count);
+
+  // EVERY PATH ANY COMMIT TOUCHED (hanten N1): renames off so both names of a
+  // rename are here, merges read as combined diffs, submodule ignore settings
+  // overridden (hanten N2).
+  const log = context.seams.run(
+    GIT,
+    [
+      "-c",
+      "core.quotePath=false",
+      "log",
+      "-z",
+      "--format=",
+      "--name-only",
+      "--no-renames",
+      "--diff-merges=cc",
+      "--ignore-submodules=none",
+      "--no-relative",
+      `${mergeBase}..${headSha}`,
+      "--",
+    ],
+    { cwd: root, bytes: true },
+  );
+  if (log.code !== 0) return failed("the paths the commits touched (git log)", log);
+  const history = parseHistoryPathsBytes(stdoutBytesOf(log));
 
   const diff = context.seams.run(
     GIT,
@@ -266,6 +339,7 @@ function readRangeAndTriage(
       "-z",
       "--name-status",
       "--find-renames",
+      "--ignore-submodules=none",
       "--no-relative",
       "--no-ext-diff",
       mergeBase,
@@ -274,47 +348,49 @@ function readRangeAndTriage(
     ],
     { cwd: root, bytes: true },
   );
-  if (diff.code !== 0) {
-    context.io.err(`nen: could not read the paths changed in ${rawRange}: ${gitFailure(diff)}`);
-    return null;
-  }
+  if (diff.code !== 0) return failed("the net change (git diff)", diff);
   const entries = parseNameStatusBytes(stdoutBytesOf(diff));
 
-  // MEASURED AT <head>, from the tree, never from the disk: the working copy is
-  // not what the range would land. A deleted path is absent from <head>'s tree
-  // and so is never measured -- and never flagged large.
-  const tree = context.seams.run(GIT, ["ls-tree", "-r", "-l", "-z", "--full-tree", headSha], { cwd: root, bytes: true });
-  if (tree.code !== 0) {
-    context.io.err(`nen: could not read the tree at ${range.head}: ${gitFailure(tree)}`);
-    return null;
-  }
-  const treeSizes = parseLsTreeSizesBytes(stdoutBytesOf(tree));
-  const sizes = new Map<string, number>();
-  for (const entry of entries) {
-    if (entry.indexStatus === "D") continue;
-    const size = treeSizes.get(entry.path);
-    if (size !== undefined) sizes.set(entry.path, size);
+  // MEASURED AT <head>, never on disk, and only the changed paths that still
+  // exist there (hanten N9): a deletion is never measured, and an undecodable
+  // name cannot be spelled as an object name, so it is not measured either.
+  const toMeasure = entries
+    .filter((entry): boolean => entry.indexStatus !== "D" && entry.undecodable !== true)
+    .map((entry): string => entry.path);
+  let sizes: ReadonlyMap<string, number> = new Map();
+  if (toMeasure.length > 0) {
+    const check = context.seams.run(GIT, ["cat-file", "--batch-check=%(objecttype) %(objectsize)", "-z"], {
+      cwd: root,
+      stdin: batchCheckInput(headSha, toMeasure),
+    });
+    if (check.code !== 0) return failed("the sizes at the head (git cat-file)", check);
+    sizes = parseBatchCheckSizes(headSha, toMeasure, check.stdout);
   }
 
-  const triage = triageStage(entries, {
+  const triage = triageRange(entries, history, {
     scopePrefixes: commaList(context.args.values["scope"]),
     mentionedText: context.args.values["mentions"] ?? "",
     sizes,
     largeBytes,
   });
-  return { range: { base: range.base, head: range.head, mergeBase, headSha }, triage };
+  return { range: { base: range.base, head: range.head, mergeBase, headSha, commits }, triage };
 }
 
 function runTriage(context: CommandContext, triage: TriageResult, range?: ResolvedRange): number {
   if (context.json) {
-    context.io.out(JSON.stringify(triage, null, 2));
+    // THE DOCUMENT NAMES ITS READING (hanten N4), in both modes: one shape,
+    // `read` first, so a consumer never has to infer which tree it describes.
+    const read = range === undefined ? { mode: "working-copy" } : { mode: "range", ...range };
+    context.io.out(JSON.stringify({ read, ...triage }, null, 2));
     return triage.flagged.length === 0 ? 0 : 1;
   }
   if (range !== undefined) {
-    // Text only, and only in range mode: the working-copy report is unchanged,
-    // and --json keeps the one shape both modes share.
+    // Text only in range mode: the working-copy text report is unchanged.
+    const span = `${range.mergeBase.slice(0, 12)}..${range.headSha.slice(0, 12)}`;
     context.io.out(
-      `read: committed range ${range.base}..${range.head} (${range.mergeBase.slice(0, 12)}..${range.headSha.slice(0, 12)}), not the working copy`,
+      range.commits === 0
+        ? `read: committed range ${range.base}..${range.head} (${span}) -- the range names no commits, not the working copy`
+        : `read: committed range ${range.base}..${range.head} (${span}, ${range.commits} commit(s)), not the working copy`,
     );
   }
   context.io.out(`clean: ${triage.clean.length} file(s)`);

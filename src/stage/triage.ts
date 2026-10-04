@@ -227,22 +227,59 @@ export function parseNameStatusBytes(bytes: Uint8Array): readonly StatusEntry[] 
 }
 
 /**
- * `git ls-tree -r -l -z --full-tree <head>`, raw bytes, as a size per blob
- * path: `<mode> SP <type> SP <object> SP+ <size> TAB <path>`. Only a blob with
- * a numeric size is measured -- a submodule's gitlink prints `-` and is left
- * out, so it is "not measured", never "measured and small". This is the
- * committed counterpart of the working-copy stat: the size a path has AT THE
- * HEAD OF THE RANGE, which is what the range would put in the trunk.
+ * `git log -z --format= --name-only --no-renames <mb>..<head>`, raw bytes: every
+ * path ANY commit in the range touched, once each, first-seen order kept. With
+ * renames off a rename contributes both names, so a secret-shaped name that was
+ * renamed away inside the range is still on this list (zheref/nen#337, hanten
+ * N1). A name that is not UTF-8 is carried with `undecodable` set.
  */
-export function parseLsTreeSizesBytes(bytes: Uint8Array): ReadonlyMap<string, number> {
-  const sizes = new Map<string, number>();
+export function parseHistoryPathsBytes(bytes: Uint8Array): readonly { path: string; undecodable: boolean }[] {
+  const seen = new Set<string>();
+  const paths: { path: string; undecodable: boolean }[] = [];
   for (const record of splitNulRecords(bytes)) {
-    const tab = record.text.indexOf("\t");
-    if (tab === -1) continue;
-    const fields = record.text.slice(0, tab).split(/ +/);
-    if (fields[1] !== "blob") continue;
-    const size = Number(fields[3]);
-    if (Number.isInteger(size) && size >= 0) sizes.set(record.text.slice(tab + 1), size);
+    if (seen.has(record.text)) continue;
+    seen.add(record.text);
+    paths.push({ path: record.text, undecodable: record.undecodable });
+  }
+  return paths;
+}
+
+/**
+ * The stdin `git cat-file --batch-check='%(objecttype) %(objectsize)' -z`
+ * reads: one `<headSha>:<path>` per path, NUL-terminated, so a path with a
+ * newline is one object name. The answer comes back newline-terminated, one
+ * line per object in the same order -- `<type> <size>` when it resolves, or the
+ * object name ECHOED, then ` missing` (a submodule's gitlink, whose commit is
+ * not in this repository) or ` ambiguous`.
+ */
+export function batchCheckInput(headSha: string, paths: readonly string[]): string {
+  return paths.map((path): string => `${headSha}:${path}\0`).join("");
+}
+
+/**
+ * Reads the batch-check answer back against the object names it was asked
+ * for, IN ORDER. An echoed name may itself carry a newline, so each answer is
+ * matched against the name it answers rather than split on `\n` blindly: a
+ * line that begins with `<name> ` is that name's refusal and is consumed to
+ * the end of the line AFTER the name. Only a `blob` with a numeric size is
+ * measured; anything else is "not measured", never "measured and small".
+ */
+export function parseBatchCheckSizes(headSha: string, paths: readonly string[], text: string): ReadonlyMap<string, number> {
+  const sizes = new Map<string, number>();
+  let cursor = 0;
+  for (const path of paths) {
+    if (cursor >= text.length) break;
+    const name = `${headSha}:${path}`;
+    if (text.startsWith(`${name} `, cursor)) {
+      const end = text.indexOf("\n", cursor + name.length);
+      cursor = end === -1 ? text.length : end + 1;
+      continue;
+    }
+    const end = text.indexOf("\n", cursor);
+    const line = text.slice(cursor, end === -1 ? text.length : end);
+    cursor = end === -1 ? text.length : end + 1;
+    const match = /^blob (\d+)$/.exec(line);
+    if (match !== null) sizes.set(path, Number(match[1]));
   }
   return sizes;
 }
@@ -254,7 +291,14 @@ export type FlagReason =
   | "out-of-scope"
   | "unmentioned-deletion"
   | "local-config"
-  | "large";
+  | "large"
+  /**
+   * The path is in a commit inside a `--range` but NOT in the range's net
+   * change -- added and then deleted, or renamed away -- and one of the name
+   * detectors matched it. It is gone at `<head>` and still in the pushed
+   * history (zheref/nen#337, hanten N1). Never produced in working-copy mode.
+   */
+  | "in-history";
 
 export interface FlaggedFile {
   readonly path: string;
@@ -573,4 +617,42 @@ export function pathspecLine(path: string): string {
     else quoted += char;
   }
   return `${quoted}"`;
+}
+
+/**
+ * THE COMMITTED-RANGE TRIAGE (zheref/nen#337). The NET change -- what `<head>`
+ * holds against the merge base -- goes through `triageStage` exactly as a
+ * working-copy reading does: deletions, `--mentions` and sizes are about what
+ * the range lands, so they are read off the net diff.
+ *
+ * The NAME detectors -- secret shape, binary, out-of-scope, local config --
+ * then also run over every path any commit in the range touched that the net
+ * change does not carry (a rename's original included). A secret added and
+ * removed inside the range is still in the history being pushed, so a range
+ * that reads only its endpoints fails open (hanten N1). Such a path is FLAGGED
+ * with each name reason it matched plus `in-history`. A history-only path that
+ * matches no name detector is not reported: it is not in the change the range
+ * lands, and nothing about its name needs a human.
+ */
+export function triageRange(
+  net: readonly StatusEntry[],
+  history: readonly { path: string }[],
+  options: TriageOptions = {},
+): TriageResult {
+  const result = triageStage(net, options);
+  const scopePrefixes = options.scopePrefixes ?? [];
+  const binaryPaths = options.binaryPaths ?? new Set<string>();
+  const inNet = new Set(net.map((entry): string => entry.path));
+  const flagged: FlaggedFile[] = [...result.flagged];
+  for (const { path } of history) {
+    if (inNet.has(path)) continue;
+    inNet.add(path);
+    const reasons: FlagReason[] = [];
+    if (SECRET_SHAPE.test(path)) reasons.push("secret-shape");
+    if (binaryPaths.has(path) || BINARY_EXTENSION.test(path)) reasons.push("binary");
+    if (scopePrefixes.length > 0 && !scopePrefixes.some((prefix): boolean => path.startsWith(prefix))) reasons.push("out-of-scope");
+    if (LOCAL_CONFIG_SHAPE.test(path)) reasons.push("local-config");
+    if (reasons.length > 0) flagged.push({ path, reasons: [...reasons, "in-history"] });
+  }
+  return { clean: result.clean, flagged, ignored: result.ignored };
 }

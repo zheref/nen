@@ -10,8 +10,10 @@
 // working tree, because the defect that filed #337 was a review of a clean,
 // committed branch reading the secret-shape row as unread.
 //
-// It SKIPS where `git` is missing or older than 2.28 (the fixture's
-// `--initial-branch` floor), as ./list.integration.test.ts does.
+// It SKIPS where `git` is missing or older than 2.38 -- the verb's own floor
+// in range mode: `cat-file --batch-check -z` (2.38) is the newest of what it
+// runs, above `log --diff-merges` (2.31), `rev-parse --end-of-options` (2.30)
+// and the fixture's `--initial-branch` (2.28).
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -41,7 +43,7 @@ function usableGit(): boolean {
   if (version === null) return false;
   const major = Number(version[1]);
   const minor = Number(version[2]);
-  return major > 2 || (major === 2 && minor >= 28);
+  return major > 2 || (major === 2 && minor >= 38);
 }
 
 const HAVE_GIT = usableGit();
@@ -80,6 +82,7 @@ async function triage(repo: string, argv: readonly string[], json = false): Prom
 }
 
 interface Doc {
+  readonly read: { mode: string; base?: string; head?: string; mergeBase?: string; headSha?: string; commits?: number };
   readonly clean: string[];
   readonly flagged: { path: string; reasons: string[] }[];
   readonly ignored: { path: string; reasons: string[] }[];
@@ -87,6 +90,12 @@ interface Doc {
 
 function doc(run: Run): Doc {
   return JSON.parse(run.out.join("\n")) as Doc;
+}
+
+/** The three buckets alone, for a row that compares them whole. */
+function buckets(run: Run): Omit<Doc, "read"> {
+  const { clean, flagged, ignored } = doc(run);
+  return { clean, flagged, ignored };
 }
 
 describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zheref/nen#337)", () => {
@@ -135,6 +144,29 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     write(repo, "assets/blob.ts", "z".repeat(4096));
     commit(repo, "delete, rename, grow");
 
+    // hanten N1: a secret that exists only INSIDE the range.
+    mustGit(repo, ["checkout", "--quiet", "-b", "ghost-env", init]);
+    write(repo, ".env", "SECRET=1\n");
+    commit(repo, "add a .env");
+    rmSync(join(repo, ".env"));
+    write(repo, "src/a.ts", "changed\n");
+    commit(repo, "remove it again");
+
+    mustGit(repo, ["checkout", "--quiet", "-b", "ghost-pem", init]);
+    write(repo, "key.pem", "-----BEGIN PRIVATE KEY-----\n");
+    commit(repo, "add a key");
+    mustGit(repo, ["mv", "key.pem", "notes.txt"]);
+    commit(repo, "rename it away");
+
+    // hanten N2: an added gitlink, with a committed .gitmodules that says
+    // `ignore = all`. Its commit is this repository's own root -- the object
+    // need not be a real submodule checkout for git to record the gitlink.
+    mustGit(repo, ["checkout", "--quiet", "-b", "gitlink", init]);
+    write(repo, ".gitmodules", '[submodule "vendor/credentials"]\n\tpath = vendor/credentials\n\turl = ./vendor\n\tignore = all\n');
+    mustGit(repo, ["add", ".gitmodules"]);
+    mustGit(repo, ["update-index", "--add", "--cacheinfo", `160000,${init},vendor/credentials`]);
+    mustGit(repo, [...WHO, "commit", "--quiet", "-m", "add a gitlink"]);
+
     mustGit(repo, ["checkout", "--quiet", "main"]);
   });
 
@@ -146,7 +178,7 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     expect(status(repo)).toBe("");
     const run = await triage(repo, ["--range", "main..env-branch"]);
     expect(run.code).toBe(1);
-    expect(run.out[0]).toMatch(/^read: committed range main\.\.env-branch \([0-9a-f]{12}\.\.[0-9a-f]{12}\), not the working copy$/);
+    expect(run.out[0]).toMatch(/^read: committed range main\.\.env-branch \([0-9a-f]{12}\.\.[0-9a-f]{12}, 1 commit\(s\)\), not the working copy$/);
     expect(run.out).toContain("  .env  [secret-shape]");
     expect(run.out).toContain("ignored: 0 file(s), not listed");
   });
@@ -155,7 +187,7 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     expect(status(repo)).toBe("");
     const run = await triage(repo, ["--range", "main..pem-branch"], true);
     expect(run.code).toBe(1);
-    expect(doc(run)).toEqual({ clean: [], flagged: [{ path: "certs/server.pem", reasons: ["secret-shape"] }], ignored: [] });
+    expect(buckets(run)).toEqual({ clean: [], flagged: [{ path: "certs/server.pem", reasons: ["secret-shape"] }], ignored: [] });
   });
 
   it("a clean range exits 0 with every changed path clean, in a clean working tree", async () => {
@@ -165,9 +197,72 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     expect(run.out.slice(1)).toEqual(["clean: 2 file(s)", "  src/a.ts", "  src/b.ts", "ignored: 0 file(s), not listed"]);
   });
 
-  it("--json keeps the working-copy shape exactly: clean, flagged, ignored and nothing else", async () => {
+  it("--json has one shape in both modes, and its 'read' names the reading", async () => {
     const run = await triage(repo, ["--range", "main..clean-branch"], true);
-    expect(Object.keys(doc(run))).toEqual(["clean", "flagged", "ignored"]);
+    expect(Object.keys(doc(run))).toEqual(["read", "clean", "flagged", "ignored"]);
+    expect(doc(run).read).toEqual({
+      mode: "range",
+      base: "main",
+      head: "clean-branch",
+      mergeBase: init,
+      headSha: mustGit(repo, ["rev-parse", "clean-branch"]).trim(),
+      commits: 1,
+    });
+    const working = await triage(repo, [], true);
+    expect(Object.keys(doc(working))).toEqual(["read", "clean", "flagged", "ignored"]);
+    expect(doc(working).read).toEqual({ mode: "working-copy" });
+  });
+
+  it("an empty range exits 0, says it names no commits, and --json carries commits: 0", async () => {
+    const text = await triage(repo, ["--range", "env-branch..main"]);
+    expect(text.code).toBe(0);
+    expect(text.out[0]).toMatch(/-- the range names no commits, not the working copy$/);
+    const json = await triage(repo, ["--range", "env-branch..main"], true);
+    expect(json.code).toBe(0);
+    expect(doc(json).read.commits).toBe(0);
+    expect(buckets(json)).toEqual({ clean: [], flagged: [], ignored: [] });
+  });
+
+  it("flags a .env added and then deleted inside the range: gone at head, still in history (hanten N1)", async () => {
+    expect(status(repo)).toBe("");
+    const run = await triage(repo, ["--range", "main..ghost-env"], true);
+    expect(run.code).toBe(1);
+    expect(buckets(run)).toEqual({
+      clean: ["src/a.ts"],
+      flagged: [{ path: ".env", reasons: ["secret-shape", "in-history"] }],
+      ignored: [],
+    });
+  });
+
+  it("flags a key.pem added and then renamed to notes.txt inside the range (hanten N1)", async () => {
+    expect(status(repo)).toBe("");
+    const run = await triage(repo, ["--range", "main..ghost-pem"]);
+    expect(run.code).toBe(1);
+    expect(run.out).toContain("  key.pem  [secret-shape, in-history]");
+    expect(run.out).toContain("  notes.txt");
+  });
+
+  it("sees an added gitlink when diff.ignoreSubmodules=all is configured (hanten N2)", async () => {
+    mustGit(repo, ["config", "diff.ignoreSubmodules", "all"]);
+    try {
+      const run = await triage(repo, ["--range", "main..gitlink"], true);
+      expect(run.code).toBe(1);
+      expect(doc(run).flagged).toContainEqual({ path: "vendor/credentials", reasons: ["secret-shape"] });
+    } finally {
+      mustGit(repo, ["config", "--unset", "diff.ignoreSubmodules"]);
+    }
+  });
+
+  it("sees an added gitlink when a committed .gitmodules says ignore = all (hanten N2)", async () => {
+    mustGit(repo, ["checkout", "--quiet", "gitlink"]);
+    try {
+      expect(mustGit(repo, ["config", "-f", ".gitmodules", "submodule.vendor/credentials.ignore"]).trim()).toBe("all");
+      const run = await triage(repo, ["--range", "main..gitlink"], true);
+      expect(run.code).toBe(1);
+      expect(doc(run).flagged).toContainEqual({ path: "vendor/credentials", reasons: ["secret-shape"] });
+    } finally {
+      mustGit(repo, ["checkout", "--quiet", "main"]);
+    }
   });
 
   it("never reads the working copy: an untracked .env on disk is not in a clean range's report", async () => {
@@ -176,7 +271,7 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     try {
       const run = await triage(repo, ["--range", "main..clean-branch"], true);
       expect(run.code).toBe(0);
-      expect(doc(run)).toEqual({ clean: ["src/a.ts", "src/b.ts"], flagged: [], ignored: [] });
+      expect(buckets(run)).toEqual({ clean: ["src/a.ts", "src/b.ts"], flagged: [], ignored: [] });
       // And without --range the same tree is the working-copy reading, unchanged.
       const working = await triage(repo, [], true);
       expect(working.code).toBe(1);
@@ -228,7 +323,7 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     mustGit(repo, ["checkout", "--quiet", "main"]);
     const run = await triage(repo, ["--range", "moved-main..clean-branch"], true);
     expect(run.code).toBe(0);
-    expect(doc(run)).toEqual({ clean: ["src/a.ts", "src/b.ts"], flagged: [], ignored: [] });
+    expect(buckets(run)).toEqual({ clean: ["src/a.ts", "src/b.ts"], flagged: [], ignored: [] });
   });
 
   it("refuses an unresolved head ref at exit 2, naming it, and never falls back to the working copy", async () => {
@@ -264,6 +359,12 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     const run = await triage(repo, ["--range", "main..island"]);
     expect(run.code).toBe(2);
     expect(run.err.join("\n")).toMatch(/share no common ancestor/);
+  });
+
+  it.each(["-x..main", "main..--output=/tmp/x"])("refuses a side beginning with '-' (%s) at exit 2, before git sees it", async (value) => {
+    const run = await triage(repo, ["--range", value]);
+    expect(run.code).toBe(2);
+    expect(run.err.join("\n")).toMatch(/begins with '-'/);
   });
 
   it.each(["main", "main...env-branch", "..env-branch", "main..", "a..b..c"])(

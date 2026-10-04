@@ -4,11 +4,14 @@ import {
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
   parseCommitRange,
-  parseLsTreeSizesBytes,
+  batchCheckInput,
+  parseBatchCheckSizes,
+  parseHistoryPathsBytes,
   parseNameStatusBytes,
   parseStatusPorcelain,
   parseStatusPorcelainBytes,
   pathspecLine,
+  triageRange,
   triageStage,
 } from "./triage.js";
 
@@ -385,13 +388,45 @@ describe("the committed-range readers (zheref/nen#337)", () => {
     expect(parseNameStatusBytes(raw)[0]?.undecodable).toBe(true);
   });
 
-  it("parseLsTreeSizesBytes measures blobs only, never a gitlink", () => {
-    const sizes = parseLsTreeSizesBytes(
-      bytes("100644 blob abc     120\tsrc/a.ts\u0000160000 commit def       -\tvendor/sub\u0000100644 blob 012 3\tpath with space.ts\u0000"),
-    );
-    expect([...sizes]).toEqual([
-      ["src/a.ts", 120],
-      ["path with space.ts", 3],
+  it("batchCheckInput writes one NUL-terminated <sha>:<path> per path, newlines kept whole", () => {
+    expect(batchCheckInput("abc", ["src/a.ts", "new\nline.ts"])).toBe("abc:src/a.ts\u0000abc:new\nline.ts\u0000");
+  });
+
+  it("parseBatchCheckSizes measures blobs only, and reads an echoed refusal whose name carries a newline", () => {
+    const paths = ["src/a.ts", "vendor/sub", "new\nline.ts", "dir"];
+    const text = "blob 120\nabc:vendor/sub missing\nabc:new\nline.ts ambiguous\ntree 40\n";
+    expect([...parseBatchCheckSizes("abc", paths, text)]).toEqual([["src/a.ts", 120]]);
+    expect([...parseBatchCheckSizes("abc", ["a", "b"], "abc:a missing\nblob 7\n")]).toEqual([["b", 7]]);
+  });
+
+  it("parseHistoryPathsBytes keeps each path once, first-seen order, and marks a non-UTF-8 name", () => {
+    const paths = parseHistoryPathsBytes(bytes("key.pem\u0000notes.txt\u0000key.pem\u0000.env\u0000"));
+    expect(paths).toEqual([
+      { path: "key.pem", undecodable: false },
+      { path: "notes.txt", undecodable: false },
+      { path: ".env", undecodable: false },
+    ]);
+    expect(parseHistoryPathsBytes(new Uint8Array([0x66, 0xff, 0]))[0]?.undecodable).toBe(true);
+  });
+
+  it("triageRange flags a history-only name match with 'in-history' and leaves a harmless one unreported", () => {
+    const net = parseNameStatusBytes(bytes("R100\u0000key.pem\u0000notes.txt\u0000"));
+    const history = parseHistoryPathsBytes(bytes("key.pem\u0000notes.txt\u0000.env\u0000scratch.ts\u0000settings.local.json\u0000"));
+    expect(triageRange(net, history)).toEqual({
+      clean: ["notes.txt"],
+      flagged: [
+        { path: "key.pem", reasons: ["secret-shape", "in-history"] },
+        { path: ".env", reasons: ["secret-shape", "in-history"] },
+        { path: "settings.local.json", reasons: ["local-config", "in-history"] },
+      ],
+      ignored: [],
+    });
+  });
+
+  it("triageRange applies --scope to history-only paths too", () => {
+    const history = parseHistoryPathsBytes(bytes("elsewhere/tmp.ts\u0000"));
+    expect(triageRange([], history, { scopePrefixes: ["src/"] }).flagged).toEqual([
+      { path: "elsewhere/tmp.ts", reasons: ["out-of-scope", "in-history"] },
     ]);
   });
 
