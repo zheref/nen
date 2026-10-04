@@ -46,6 +46,7 @@ import { PROGRAM } from "../version.js";
 import { openDeclaration } from "./declaration.js";
 import { EXIT_UNSUPPORTED_HOST, ShuRefusal } from "./exit.js";
 import { coverageAdvisories } from "./coverage-defaults.js";
+import { recordCapture } from "./capture-provenance.js";
 import { runCoverage } from "./coverage.js";
 import { detect, renderDetect, writeProposal } from "./detect.js";
 import { readChangedFiles } from "./evidence/diff.js";
@@ -176,7 +177,9 @@ verbs:
   detect      Read the markers on disk and PROPOSE a project block. Writes
               nothing without --write, and never overwrites a declaration.
   build       Compile or assemble the lane.
-  test        Run the lane's test suite.
+  test        Run the lane's test suite. Where the lane's test row declares
+              every coverage report its coverage row names, the run also
+              records their capture sidecar (see --from-capture).
   ui-test     Run the lane's UI/E2E suite.
   lint        Run the lane's linter and format check.
   archive     Produce the lane's distributable artifact.
@@ -201,7 +204,8 @@ verbs:
               touched, reading EVERY such artifact and resolving each one's
               paths against its own root, per --touched below. With
               --from-capture it runs NOTHING and reads the capture already on
-              disk, once nen has judged it current, per --from-capture below.
+              disk, once its provenance sidecar proves it this tree's, per
+              --from-capture below. A run records that sidecar.
   test-report Run the lane's declared 'test', then PARSE the results file
               that run produced: a row per test, and the four counts. The
               report is the first path under the TEST verb's 'artifacts' nen
@@ -529,31 +533,46 @@ flags:
   --base <ref>     'coverage' only, and only WITH --touched -- given without
                    it, exit 2: it names the ref --touched diffs against and
                    has nothing to do on its own. No default: nen never
-                   invents a base to compare against.
+                   invents a base to compare against. Checked BEFORE anything
+                   runs: a base beginning with '-' is exit 2 (git would read
+                   it as an option), and so is one 'git rev-parse --verify
+                   --quiet --end-of-options <base>^{commit}' cannot resolve.
+                   Every path git hands back is read with core.quotePath=false
+                   and -z, so a non-ASCII touched path is matched as itself.
   --from-capture   'coverage' only, and only WITH --touched (zheref/nen#250).
                    Do not run the lane's coverage command: build the touched
                    table from the reports its 'artifacts' name, ALREADY ON
                    DISK. The lane, verb and host are resolved exactly as a
                    run resolves them (a seated 'coverage' is still exit 4);
                    the declared argv and its preconditions are never spawned
-                   -- only 'git diff --name-only <base>...HEAD' and 'git diff
-                   --name-only HEAD'. NEN DECIDES WHETHER THE CAPTURE IS
-                   CURRENT, never the caller: every declared report nen reads
-                   must be on disk and modified no earlier than every touched
-                   file and every tracked file with an uncommitted change
-                   (files no longer on disk, and the reports themselves, are
-                   not compared). The capture's commit is not the test -- a
-                   report records none, and the ordinary loop commits AFTER
-                   it measures. A report that is missing or older than any
-                   of those files is REFUSED, every one named with its
-                   reason, at exit 8 with no document: nothing is ever
-                   reused silently, and never a subset. A current capture
-                   gets exactly the parse, join, ladder, 'touched' shape and
-                   exit 6 a run's report gets, with 'exitCode' about the
-                   read. Not compared, and so not caught: untracked files,
-                   and a capture copied in from another checkout. Given
-                   without --touched, with --dry-run, or with --effort: exit
-                   2.
+                   -- it starts only nen's own fixed-argv git reads. NEN
+                   DECIDES WHETHER THE CAPTURE IS THIS TREE'S, never the
+                   caller, and by PROVENANCE, never a clock: every nen run
+                   that produces the lane's declared coverage reports writes
+                   .nen/coverage-capture/<lane>.json -- 'coverage' always;
+                   'test' and 'test-report' only when the lane's TEST row
+                   declares every one of those reports among its own
+                   'artifacts' -- recording the lane, each report's sha256,
+                   HEAD, the start time, and a TREE FINGERPRINT taken at the
+                   START of the run: sha256 over HEAD, 'git diff HEAD
+                   --binary', and every untracked non-ignored file's path and
+                   content sha256 (the declared reports and .nen/coverage-
+                   capture/ left out). --from-capture recomputes it now and
+                   REFUSES, at exit 8 with no document, naming every reason:
+                   no sidecar (a capture produced outside nen is refused by
+                   design), a different fingerprint, a different lane or
+                   report list, or a report whose sha256 changed. So an edit
+                   during or after the run, a merge, a rename, a deletion and
+                   a new untracked file are all caught; nothing is reused
+                   silently, and never a subset. Not caught: a change to an
+                   IGNORED file, and an edit made during the run and undone
+                   before the reuse. A run that leaves an undeclared,
+                   unignored output beside its report makes its own capture
+                   unreusable -- ignore that output, or declare it. A proven
+                   capture gets exactly the parse, join, ladder, 'touched'
+                   shape and exit 6 a run's report gets, with 'exitCode'
+                   about the read. Given without --touched, with --dry-run,
+                   or with --effort: exit 2.
   --from-artifacts 'test-report' only. Do not run anything: read the results
                    file the lane's 'test' verb declares under 'artifacts' and
                    parse whatever is on disk. The lane, the verb and the host
@@ -887,7 +906,8 @@ exit codes:
      PRECONDITION that is not satisfied.
      On 'coverage' also: --touched given without --base, or --base given
      without --touched -- each names the flag with nothing to do; and
-     --from-capture given without --touched, with --dry-run, or with --effort.
+     --from-capture given without --touched, with --dry-run, or with --effort;
+     a --base that begins with '-' or names no commit.
      On 'tools' also: an --only naming a tool the declaration does not carry, a
      'version' in a form nen cannot evaluate, and -- under --install -- a pin
      this release will not act on (a range where the installer activates one
@@ -963,12 +983,14 @@ exit codes:
      (NEN_REF older than dependency.pinned_ref) and goes on.
 
   8  'coverage --touched --from-capture' only (zheref/nen#250): the capture
-     on disk cannot be reused -- a declared report is missing, or was
-     modified before a touched or uncommitted file it must postdate. Nothing
-     was run or measured, and no document is printed: stderr names every
-     report and its reason. Not 1, which is a failed tool or an unreadable
-     report; not 6, which is a CURRENT capture that joined nothing. Route it
-     to one action: measure again (the same line without --from-capture).
+     on disk is not proven a capture of this tree -- no provenance sidecar,
+     a different tree fingerprint, a different lane or report list, or a
+     report whose sha256 changed. Nothing was run or measured, and no
+     document is printed: stderr names every reason. Not 1, which is a failed
+     tool or an unreadable report; not 6, which is a PROVEN capture that
+     joined nothing. Route it to one action: measure again (the same line
+     without --from-capture). Codes above 2 are per verb: 'pr ready' and
+     'pr mark-ready' use 8 for a different fact (a head mismatch).
 
   Codes 3, 4 and 5 extend this CLI's published 0/1/2 (zheref/nen#91); 6 is
   'coverage' --touched's own (zheref/nen#236); 7 is the 'tools' check's own
@@ -1361,17 +1383,32 @@ export const shuCommand: Command = {
       // made a written `deploy` seat unreachable, because a lane that will
       // never deploy answered "--target is required" instead of its own reason.
       // ./run.ts's `runVerb` header carries the order and the argument.
-      return refusalCode(context, subcommand, runVerb(context, repoRoot, {
-        verb: subcommand,
-        lane: context.args.values["lane"] ?? null,
-        dryRun: context.args.booleans.has("dry-run"),
-        target: context.args.values["target"] ?? null,
-        // AND NEVER AN IMPLIED --run. `refuseForeignFlags` above has already
-        // refused this flag on every verb but 'deploy', so reading it
-        // unconditionally here cannot turn another verb's line into an action.
-        run: context.args.booleans.has("run"),
-        effort: context.args.values["effort"] ?? null,
-      }));
+      const execute = (): Promise<number> =>
+        runVerb(context, repoRoot, {
+          verb: subcommand,
+          lane: context.args.values["lane"] ?? null,
+          dryRun: context.args.booleans.has("dry-run"),
+          target: context.args.values["target"] ?? null,
+          // AND NEVER AN IMPLIED --run. `refuseForeignFlags` above has already
+          // refused this flag on every verb but 'deploy', so reading it
+          // unconditionally here cannot turn another verb's line into an action.
+          run: context.args.booleans.has("run"),
+          effort: context.args.values["effort"] ?? null,
+        });
+      // A `test` WHOSE ROW DECLARES THE LANE'S COVERAGE REPORTS PRODUCES A
+      // CAPTURE, and records its provenance exactly as `coverage` does
+      // (zheref/nen#250; ./capture-provenance.ts's header says which runs and
+      // why). Every other verb, and a `test` row that declares no such
+      // report, runs exactly as before.
+      if (subcommand === "test") {
+        return refusalCode(context, subcommand, recordCapture(context, repoRoot, {
+          lane: context.args.values["lane"] ?? null,
+          verb: "test",
+          recordAs: "test",
+          dryRun: context.args.booleans.has("dry-run"),
+        }, execute));
+      }
+      return refusalCode(context, subcommand, execute());
     } catch (error) {
       return shuRefusalCode(context, subcommand, error);
     }

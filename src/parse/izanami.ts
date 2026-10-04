@@ -881,15 +881,19 @@ export type NenVerbPolicy =
    * WRITES BY DEFAULT; a named read gate is what certifies a form of it.
    *
    * `--dry-run` IS ALWAYS ONE OF THE GATES and `alsoRead` names any others. It
-   * is empty on eleven of the thirteen rows that carry this kind, and it is not
-   * a way to widen the certified set cheaply: a flag belongs there only when
-   * the form it selects starts NO PROCESS AT ALL -- a property of nen, pinned
-   * from both sides by that verb's own suite -- rather than one that merely
-   * looks harmless. `nen shu test-report --from-artifacts` is one: it reads
-   * a file the declaration names and never reaches ../shu/run.ts. `nen shu
-   * coverage --from-capture` is the other (zheref/nen#250): it reads the
-   * reports the declaration names and spawns only nen's own `git diff` reads. A flag whose
-   * safety depended on somebody else's argv would belong in `writeFlags` on a
+   * is empty on twenty-nine of the thirty-one rows that carry this kind, and it
+   * is not a way to widen the certified set cheaply: a flag belongs there only
+   * when the form it selects starts only nen's own fixed-argv reads -- no
+   * argv a declaration supplied, and no caller value that could reach a
+   * child as an option -- a property of nen, pinned from both sides by that
+   * verb's own suite, rather than one that merely looks harmless. `nen shu
+   * test-report --from-artifacts` is one: it reads a file the declaration
+   * names and starts nothing. `nen shu coverage --from-capture` is the other
+   * (zheref/nen#250): it reads the reports the declaration names and starts
+   * only git reads whose argv nen fixed -- the one caller value among them,
+   * `--base`, is refused when it begins with '-' and verified as a commit
+   * behind `--end-of-options` before any of them runs. A flag whose safety
+   * depended on somebody else's argv would belong in `writeFlags` on a
    * different kind, or nowhere.
    */
   | { readonly kind: "dry-run-gated"; readonly alsoRead?: readonly string[]; readonly why: string }
@@ -1348,13 +1352,15 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       run: DRY("starts a long-running production process on this terminal unless --dry-run is given -- and with --target <name> also spawns the declared device probe before it and the target's after-steps once it exits"),
       // A SECOND READ GATE, for the same reason `test-report` has one below:
       // `--from-capture` (zheref/nen#250) resolves the lane's `coverage`
-      // invocation, reads the reports it NAMES, and never reaches
-      // ../shu/run.ts -- its only subprocesses are two `git diff --name-only`
-      // reads nen itself chose, which ../shu/coverage.test.ts pins against a
-      // scripted seam. Every other form spawns the declared argv.
+      // invocation, reads the reports it NAMES and the capture sidecar, and
+      // never reaches ../shu/run.ts -- it starts only nen's own fixed-argv
+      // git reads (the base check, the tree fingerprint, the touched diff),
+      // which ../shu/coverage.test.ts pins against a scripted seam. A
+      // `--base` beginning with '-' is refused before any of them. Every other
+      // form spawns the declared argv.
       coverage: DRY_OR(
         ["--from-capture"],
-        "spawns the lane's declared coverage command unless --dry-run or --from-capture is given -- a coverage run writes its report tree by definition",
+        "spawns the lane's declared coverage command and records its capture sidecar unless --dry-run or --from-capture is given -- --from-capture starts only nen's own fixed-argv reads; a coverage run writes its report tree by definition",
       ),
       // THE OTHER ROW IN THIS TABLE WITH A SECOND READ GATE, and it is a
       // property of nen rather than of anybody's declaration: `--from-artifacts`
@@ -1834,7 +1840,7 @@ function evaluateNenPolicy(
       // support"` and `--title x\ --dry-run` each donate a `--dry-run` token
       // to the scan that no shell ever produces). An unprovable gate on a
       // writes-by-default verb is no gate: mutating.
-      // THE GATES ARE `--dry-run` AND, ON ONE ROW, A SECOND FLAG BESIDE IT --
+      // THE GATES ARE `--dry-run` AND, ON TWO ROWS, A SECOND FLAG BESIDE IT --
       // see `alsoRead` above for what earns a place there. The exact-token
       // rule is unchanged for both: a spelling this scan misses falls back to
       // `mutating`, which is this policy's own safe direction.

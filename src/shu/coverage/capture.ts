@@ -1,110 +1,217 @@
 // src/shu/coverage/capture.ts -- `nen shu coverage --touched --from-capture`:
-// is a coverage capture already on disk CURRENT for this tree? (zheref/nen#250)
+// is a coverage capture already on disk ABOUT THIS TREE? (zheref/nen#250)
 //
 // THE QUESTION IS NEN'S, NOT THE CALLER'S. A flag that said "trust the file"
 // would hand the one judgement this verb exists to make -- are these numbers
-// about THIS tree? -- to whoever typed it, and a caller in a hurry answers yes.
-// So `--from-capture` never reuses a capture nen has not judged current, and a
-// capture it cannot judge current is REFUSED, by name, with the reason
-// (../exit.ts's EXIT_COVERAGE_STALE_CAPTURE). Silently reusing it is the
-// failure the issue names.
+// about THIS tree? -- to whoever typed it. So `--from-capture` never reuses a
+// capture nen cannot PROVE current, and one it cannot is REFUSED, by name,
+// with the reason (../exit.ts's EXIT_COVERAGE_STALE_CAPTURE).
 //
-// WHAT "CURRENT" MEANS, AND WHY IT IS MODIFICATION TIMES. A coverage report
-// records no commit: nothing in an LCOV tracefile, an Istanbul summary or an
-// xccov document says which tree it measured. What nen CAN see is when the
-// report was written and when every file that could make it wrong was last
-// written -- and a capture is current exactly when it was written AFTER every
-// one of them. The files that could make it wrong are:
+// PROVENANCE, NOT CLOCKS. A coverage report records no commit and no tree, and
+// a modification time says when bytes were written, not what they measured --
+// an edit made while the suite was running, a merge that rewrote files nobody
+// touched, a rename, a deletion and a skewed clock all slipped past an mtime
+// rule (hanten round 1 on zheref/nen#250). So every nen run that can produce
+// the lane's declared coverage reports records a SIDECAR beside them,
+// `.nen/coverage-capture/<lane>.json`, carrying:
 //
-//   * every file the touched set names (`git diff --name-only <base>...HEAD`),
-//     because those are the rows the table reports; and
-//   * every tracked file with an uncommitted change (`git diff --name-only
-//     HEAD`), because an edit nobody committed yet still changes what the
-//     tests measure, and it is not in the touched set.
+//   * a TREE FINGERPRINT taken at the START of the run -- sha256 over HEAD, the
+//     bytes of `git diff HEAD --binary` (every staged and unstaged change to a
+//     tracked file, deletions and renames included), and every untracked,
+//     non-ignored file's path and content sha256;
+//   * each declared report's path and content sha256, taken when the run
+//     succeeded.
 //
-// A file modified after the capture was written means the capture measured a
-// different version of it. A checkout that moved a touched file rewrites that
-// file, so its time moves too. A COMMIT DOES NOT, and that is why the HEAD the
-// capture was taken at is not the test: the ordinary loop verifies the tree
-// and THEN commits it, so a capture older than HEAD's commit is the normal
-// case and refusing it would refuse every honest reuse.
+// `--from-capture` recomputes the fingerprint NOW and hashes the reports NOW,
+// and reuses the capture only when every one of them is what the sidecar
+// recorded. Nothing in the decision reads a clock.
 //
-// WHAT THIS CANNOT SEE, said rather than hidden: a capture copied in from
-// another checkout, an untracked file (never compared -- a coverage run's own
-// untracked output sits beside the report and is written after it), and a
-// file changed and changed back to an older timestamp. Each is a capture
-// someone went out of their way to make look current.
+// WHAT THE FINGERPRINT LEAVES OUT, ON PURPOSE: the declared reports themselves
+// and the sidecar directory -- the run writes both, so a fingerprint that
+// covered them could never match its own capture -- and ignored files, which
+// is what ignoring means. Everything else a run could have measured is in it.
 //
-// TEXT IN, SHAPE OUT. The modification times are read by ../coverage.ts and
-// handed in; this module never touches the filesystem, so the rule is tested
-// without one.
+// TEXT IN, SHAPE OUT. The git reads, the file hashes and the sidecar's bytes
+// are gathered by ../capture-provenance.ts and handed in; this module hashes
+// and compares, and touches neither a filesystem nor a subprocess.
 
-/** One declared report, as nen found it on disk. `mtimeMs` null: not there. */
-export interface CaptureStat {
-  readonly path: string;
-  readonly mtimeMs: number | null;
+import { createHash } from "node:crypto";
+
+/** The sidecar's own contract name. */
+export const CAPTURE_CONTRACT = "nen.shu.coverage-capture/v0.1";
+
+/** Where the sidecars live, repo-relative, `/`-separated. */
+export const CAPTURE_DIRECTORY = ".nen/coverage-capture";
+
+/** The repo-relative sidecar path for one lane. */
+export function sidecarPath(lane: string): string {
+  return `${CAPTURE_DIRECTORY}/${encodeURIComponent(lane)}.json`;
 }
 
-/** One file the capture must be newer than. Absent files are never listed. */
-export interface WatchedFile {
+/** One declared report and its content hash; null hash: not a file on disk. */
+export interface ArtifactDigest {
   readonly path: string;
-  readonly mtimeMs: number;
+  readonly sha256: string | null;
 }
 
-/** Why one declared report cannot be reused. */
-export type CaptureProblem =
-  | { readonly path: string; readonly reason: "missing" }
-  | { readonly path: string; readonly reason: "stale"; readonly newer: readonly string[] };
+/** One untracked, non-ignored file: its path and its content's hash. */
+export interface UntrackedDigest {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+/** The raw facts a fingerprint is computed from. */
+export interface TreeFacts {
+  readonly head: string;
+  readonly diff: string;
+  readonly untracked: readonly UntrackedDigest[];
+}
+
+/** The sidecar, as written and as read back. */
+export interface CaptureSidecar {
+  readonly contract: string;
+  readonly lane: string;
+  /** The verb whose run produced the capture: `coverage`, `test` or `test-report`. */
+  readonly verb: string;
+  readonly head: string;
+  /** ISO time the run started. RECORDED FOR A READER, never compared. */
+  readonly startedAt: string;
+  readonly fingerprint: string;
+  readonly artifacts: readonly { readonly path: string; readonly sha256: string }[];
+}
+
+export function sha256(bytes: string | Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
 
 /**
- * Every declared report that cannot be reused, in declaration order; empty
- * when all of them are current.
- *
- * ALL OF THEM OR NONE. A workspace's `--touched` table is assembled from every
- * declared report, and reusing the current ones while one is stale would
- * report a table half of which is about another tree -- with nothing in it to
- * say which half.
- *
- * EQUAL TIMES ARE CURRENT. A filesystem with coarse timestamps (one or two
- * seconds) gives an edit and the run that followed it the same time often
- * enough; the run read the file as it was, so the capture is about it.
+ * The tree fingerprint. Each field is length-prefixed so that no choice of
+ * bytes in one can impersonate a boundary into the next.
  */
-export function judgeCapture(
-  captures: readonly CaptureStat[],
-  watched: readonly WatchedFile[],
-): readonly CaptureProblem[] {
+export function fingerprintOf(facts: TreeFacts): string {
+  const hash = createHash("sha256");
+  const field = (label: string, value: string): void => {
+    hash.update(`${label}:${Buffer.byteLength(value, "utf8")}:`);
+    hash.update(value);
+  };
+  field("head", facts.head);
+  field("diff", facts.diff);
+  const sorted = [...facts.untracked].sort((a, b): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  field("untracked", String(sorted.length));
+  for (const entry of sorted) {
+    field("path", entry.path);
+    field("sha256", entry.sha256);
+  }
+  return hash.digest("hex");
+}
+
+/** Whether a path is one the fingerprint leaves out (the reports, the sidecars). */
+export function excludedFromFingerprint(path: string, artifacts: readonly string[]): boolean {
+  return artifacts.includes(path) || path === CAPTURE_DIRECTORY || path.startsWith(`${CAPTURE_DIRECTORY}/`);
+}
+
+/**
+ * A sidecar's bytes, read back -- or a sentence saying why they are not one.
+ * Every field is checked: a sidecar is evidence, and evidence nen cannot read
+ * is not evidence.
+ */
+export function parseSidecar(text: string): CaptureSidecar | string {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return "it is not JSON";
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return "it is not an object";
+  const value = raw as Record<string, unknown>;
+  if (value["contract"] !== CAPTURE_CONTRACT) return `its contract is not '${CAPTURE_CONTRACT}'`;
+  for (const key of ["lane", "verb", "head", "startedAt", "fingerprint"]) {
+    if (typeof value[key] !== "string") return `its '${key}' is not a string`;
+  }
+  const artifacts = value["artifacts"];
+  const wellFormed = (entry: unknown): boolean => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const fields = entry as Record<string, unknown>;
+    return typeof fields["path"] === "string" && typeof fields["sha256"] === "string";
+  };
+  if (!Array.isArray(artifacts) || !artifacts.every(wellFormed)) {
+    return "its 'artifacts' is not a list of { path, sha256 }";
+  }
+  return value as unknown as CaptureSidecar;
+}
+
+/** Why a capture cannot be reused. Every applicable reason is collected. */
+export type CaptureProblem =
+  | { readonly reason: "no-sidecar"; readonly sidecar: string }
+  | { readonly reason: "unreadable-sidecar"; readonly sidecar: string; readonly why: string }
+  | { readonly reason: "lane"; readonly recorded: string; readonly lane: string }
+  | { readonly reason: "artifacts"; readonly recorded: readonly string[]; readonly declared: readonly string[] }
+  | { readonly reason: "tree"; readonly recordedHead: string; readonly head: string }
+  | { readonly reason: "artifact-missing"; readonly path: string }
+  | { readonly reason: "artifact-changed"; readonly path: string };
+
+/** What nen sees NOW, to judge a sidecar against. */
+export interface CaptureNow {
+  readonly lane: string;
+  readonly artifacts: readonly ArtifactDigest[];
+  readonly fingerprint: string;
+  readonly head: string;
+}
+
+/**
+ * Every reason the capture cannot be reused, empty when it can.
+ *
+ * ALL OF THE REPORTS OR NONE. A workspace's touched table is assembled from
+ * every declared report, and reusing the sound ones while one changed would
+ * report a table part of which is about another run -- with nothing in it to
+ * say which part.
+ */
+export function judgeCapture(sidecar: CaptureSidecar, now: CaptureNow): readonly CaptureProblem[] {
   const problems: CaptureProblem[] = [];
-  for (const capture of captures) {
-    if (capture.mtimeMs === null) {
-      problems.push({ path: capture.path, reason: "missing" });
+  if (sidecar.lane !== now.lane) problems.push({ reason: "lane", recorded: sidecar.lane, lane: now.lane });
+  const recorded = sidecar.artifacts.map((entry): string => entry.path);
+  const declared = now.artifacts.map((entry): string => entry.path);
+  if (recorded.length !== declared.length || recorded.some((path, index): boolean => path !== declared[index])) {
+    problems.push({ reason: "artifacts", recorded, declared });
+  }
+  if (sidecar.fingerprint !== now.fingerprint) {
+    problems.push({ reason: "tree", recordedHead: sidecar.head, head: now.head });
+  }
+  for (const artifact of now.artifacts) {
+    if (artifact.sha256 === null) {
+      problems.push({ reason: "artifact-missing", path: artifact.path });
       continue;
     }
-    const written = capture.mtimeMs;
-    const newer = watched
-      .filter((file): boolean => file.mtimeMs > written)
-      .map((file): string => file.path);
-    if (newer.length > 0) problems.push({ path: capture.path, reason: "stale", newer });
+    const was = sidecar.artifacts.find((entry): boolean => entry.path === artifact.path);
+    if (was !== undefined && was.sha256 !== artifact.sha256) {
+      problems.push({ reason: "artifact-changed", path: artifact.path });
+    }
   }
   return problems;
 }
 
-/** How many newer files the refusal names per report before it summarises. */
-const NAMED = 3;
+function describe(problem: CaptureProblem): string {
+  switch (problem.reason) {
+    case "no-sidecar":
+      return `there is no provenance sidecar at '${problem.sidecar}': this capture was not recorded by a nen run that produced it ('nen shu coverage', or 'nen shu test'/'test-report' on a lane whose test row declares the coverage reports), and a capture produced outside nen is refused by design`;
+    case "unreadable-sidecar":
+      return `the provenance sidecar '${problem.sidecar}' cannot be read: ${problem.why}`;
+    case "lane":
+      return `the sidecar records lane '${problem.recorded}', not '${problem.lane}'`;
+    case "artifacts":
+      return `the sidecar records the reports [${problem.recorded.join(", ")}] and the lane now declares [${problem.declared.join(", ")}]`;
+    case "tree":
+      return problem.recordedHead === problem.head
+        ? `the working tree is not the one the capture's run started on: HEAD is the same (${problem.head.slice(0, 12)}), and a tracked file's content, a rename, a deletion or an untracked file differs`
+        : `the working tree is not the one the capture's run started on: HEAD was ${problem.recordedHead.slice(0, 12)} and is now ${problem.head.slice(0, 12)}`;
+    case "artifact-missing":
+      return `the report '${problem.path}' is not on disk`;
+    case "artifact-changed":
+      return `the report '${problem.path}' is not the file the run recorded (its sha256 differs)`;
+  }
+}
 
-/**
- * The refusal sentence: every report that cannot be reused, and why, and the
- * one way out.
- */
-export function captureRefusal(problems: readonly CaptureProblem[], checked: number): string {
-  const each = problems
-    .map((problem): string => {
-      if (problem.reason === "missing") {
-        return `'${problem.path}' is not on disk -- there is no capture to reuse`;
-      }
-      const named = problem.newer.slice(0, NAMED).map((path): string => `'${path}'`).join(", ");
-      const more = problem.newer.length > NAMED ? ` and ${problem.newer.length - NAMED} more` : "";
-      return `'${problem.path}' is STALE -- written before ${problem.newer.length} of the ${checked} file${checked === 1 ? "" : "s"} it must postdate changed: ${named}${more}`;
-    })
-    .join("; ");
-  return `--from-capture refused: ${each}. A capture is reused only when it was written after every touched file and every uncommitted change in this tree, and nen will not report another tree's numbers as this one's. Run the same line without --from-capture (it runs the lane's coverage command and measures what that run writes), or re-run whatever produced the capture, then try again.`;
+/** The refusal sentence: every reason, and the one way out. */
+export function captureRefusal(problems: readonly CaptureProblem[]): string {
+  return `--from-capture refused: ${problems.map(describe).join("; ")}. nen reuses a capture only when its provenance proves it measured this exact tree, and it will not report another tree's numbers as this one's. Run the same line without --from-capture (it runs the lane's coverage command, measures what that run writes, and records a fresh sidecar), then try again.`;
 }

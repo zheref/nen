@@ -43,10 +43,10 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { GIT, must } from "../seam/exec.js";
-import { rawLines } from "../seam/lines.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { advisoryFor, type CoverageAdvisory } from "./coverage/advisory.js";
-import { captureRefusal, judgeCapture, type CaptureStat, type WatchedFile } from "./coverage/capture.js";
+import { digestArtifacts, nulPaths, readCaptureSidecar, recordCapture, takeFingerprint } from "./capture-provenance.js";
+import { captureRefusal, judgeCapture, sidecarPath, type CaptureProblem } from "./coverage/capture.js";
 import { openDeclaration } from "./declaration.js";
 import { EXIT_COVERAGE_STALE_CAPTURE, EXIT_COVERAGE_UNJOINED, ShuRefusal } from "./exit.js";
 import { renderInvocation } from "./render.js";
@@ -140,6 +140,34 @@ export function validateTouched(options: Pick<CoverageOptions, "touched" | "base
   if (!options.touched && options.base !== null) {
     throw new VerbUsageError(
       `--base is read only with --touched -- it names the ref '--touched' diffs against, and does nothing on its own. Add --touched, or drop --base.`,
+    );
+  }
+  // A BASE THAT BEGINS WITH '-' WOULD REACH GIT AS AN OPTION, not a ref:
+  // '--base=--output=<path>' made 'git diff' WRITE a file from a line izanami
+  // certifies read-only (hanten round 1 on zheref/nen#250, N5). No ref git
+  // accepts begins with '-', so refusing the shape costs no real base.
+  if (options.base !== null && options.base.startsWith("-")) {
+    throw new VerbUsageError(
+      `--base '${options.base}' begins with '-', so git would read it as an option rather than a ref. No branch, tag or commit name begins with '-'; name the ref itself (e.g. '--base origin/main').`,
+    );
+  }
+}
+
+/**
+ * The base must name a commit, asked of git BEFORE anything is spawned:
+ * `git rev-parse --verify --quiet --end-of-options <base>^{commit}`. A base
+ * that names nothing is a mistyped flag, exit 2 -- and it was once learned
+ * only after a whole coverage run, from the diff that ran after it.
+ */
+function verifyBase(context: CommandContext, repoRoot: string, base: string): void {
+  const result = context.seams.run(
+    GIT,
+    ["rev-parse", "--verify", "--quiet", "--end-of-options", `${base}^{commit}`],
+    { cwd: repoRoot },
+  );
+  if (result.spawnFailed || result.code !== 0) {
+    throw new VerbUsageError(
+      `--base '${base}' does not name a commit in this repository ('git rev-parse --verify ${base}^{commit}' found none). Name a branch, tag or commit that exists here -- fetch it first if it is a remote's.`,
     );
   }
 }
@@ -847,6 +875,7 @@ export async function runCoverage(
   validateTouched(options);
   validateFromCapture(options);
   const ladder = readLadder(repoRoot, options, threshold);
+  if (options.touched) verifyBase(context, repoRoot, options.base as string);
   if (options.fromCapture === true) return fromCapture(context, repoRoot, options, threshold, ladder);
   // A HOLDER RATHER THAN A `let`: the assignment happens inside a callback, and
   // a `let` narrowed to `null` at its declaration is a type error at every read
@@ -858,18 +887,28 @@ export async function runCoverage(
 
   let exitCode: number;
   try {
-    exitCode = await runVerb(context, repoRoot, {
-      verb: "coverage",
-      lane: options.lane,
-      dryRun: options.dryRun,
-      // NEITHER FLAG BELONGS TO THIS VERB. `coverage` takes no destination and
-      // has no `--run` gate -- ./command.ts's per-subcommand flag table refuses
-      // both on it -- and the executor reads them only for the verbs that do.
-      target: null,
-      run: false,
-      sink,
-      effort: options.effort ?? null,
-    });
+    // THE RUN RECORDS ITS CAPTURE'S PROVENANCE (zheref/nen#250): the tree's
+    // fingerprint before it starts, the reports' hashes once it has exited 0
+    // -- the sidecar `--from-capture` later proves a capture against.
+    exitCode = await recordCapture(
+      context,
+      repoRoot,
+      { lane: options.lane, verb: "coverage", recordAs: "coverage", dryRun: options.dryRun },
+      () =>
+        runVerb(context, repoRoot, {
+          verb: "coverage",
+          lane: options.lane,
+          dryRun: options.dryRun,
+          // NEITHER FLAG BELONGS TO THIS VERB. `coverage` takes no destination
+          // and has no `--run` gate -- ./command.ts's per-subcommand flag table
+          // refuses both on it -- and the executor reads them only for the
+          // verbs that do.
+          target: null,
+          run: false,
+          sink,
+          effort: options.effort ?? null,
+        }),
+    );
   } catch (error) {
     // A REFUSAL THAT ALREADY HANDED OVER A REPORT STILL PRINTS IT. ./run.ts's
     // spawn-failure path (exit 5) emits the report and then throws, which is
@@ -894,7 +933,7 @@ export async function runCoverage(
 
 /**
  * `--touched --from-capture`: the table from the reports already on disk, with
- * NO run (zheref/nen#250) -- once nen has judged them current.
+ * NO run (zheref/nen#250) -- once nen has PROVED them a capture of this tree.
  *
  * THE INVOCATION IS RESOLVED, NOT RUN, and that is deliberate: the reports are
  * a property of `project.verbs.<lane>.coverage.artifacts`, so reading them
@@ -903,15 +942,17 @@ export async function runCoverage(
  * declaration excludes still 3, an unknown lane still 2. `test-report
  * --from-artifacts` reads its results the same way. ./run.ts is never called,
  * so neither the declared argv nor a precondition probe is spawned: the only
- * subprocesses are the two `git diff` reads below, both nen's own.
+ * subprocesses are nen's own fixed-argv git reads.
  *
- * THE JUDGEMENT COMES BEFORE THE PARSE. A capture nen cannot judge current is
- * refused at EXIT_COVERAGE_STALE_CAPTURE naming each report and why, with no
- * document -- nothing was measured, and a document would be a table of another
- * tree's numbers with a refusal code beside it. A current one is handed to the
- * SAME parse, join, banding and document a run's report gets, at exit 0 for
- * the read, so the `touched` shape and the 6 for "joined nothing" are exactly
- * what the run form produces.
+ * THE PROOF COMES BEFORE THE PARSE. The sidecar the producing run wrote is
+ * read; the tree is fingerprinted NOW and the reports hashed NOW
+ * (./coverage/capture.ts says what, and why no clock is involved); and any
+ * difference -- or no sidecar at all -- is refused at
+ * EXIT_COVERAGE_STALE_CAPTURE naming every reason, with no document: nothing
+ * was measured, and a document would be another tree's numbers beside a
+ * refusal code. A proven capture is handed to the SAME parse, join, banding
+ * and document a run's report gets, at exit 0 for the read, so the `touched`
+ * shape and the 6 for "joined nothing" are exactly what the run form produces.
  */
 function fromCapture(
   context: CommandContext,
@@ -927,72 +968,56 @@ function fromCapture(
     platform: context.seams.platform,
   });
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
-  const pointer = `project.verbs.${plan.lane}.coverage.artifacts`;
-  const captures: CaptureStat[] = plan.artifacts
-    .filter((value): boolean => recognisedByName(value))
-    .map((value): CaptureStat => ({ path: value, mtimeMs: fileMtime(insideRepo(repoRoot, value, pointer)) }));
+  const reports = plan.artifacts.filter((value): boolean => recognisedByName(value));
+  const digests = digestArtifacts(repoRoot, plan.lane, reports);
+  const problems = proveCapture(context, repoRoot, plan.lane, reports, digests);
+  if (problems.length > 0) throw new ShuRefusal(EXIT_COVERAGE_STALE_CAPTURE, captureRefusal(problems));
   const files = touchedFiles(context, repoRoot, options.base as string);
-  const uncommitted = rawLines(
-    must(context.seams, GIT, ["diff", "--name-only", "HEAD"], { cwd: repoRoot }).stdout,
-  );
-  const watched = watchedFiles(repoRoot, [...files, ...uncommitted], plan.artifacts);
-  const problems = judgeCapture(captures, watched);
-  if (problems.length > 0) {
-    throw new ShuRefusal(EXIT_COVERAGE_STALE_CAPTURE, captureRefusal(problems, watched.length));
-  }
+  const present = new Set(digests.filter((entry): boolean => entry.sha256 !== null).map((entry): string => entry.path));
   const run: CoverageRun = {
     lane: plan.lane,
     stack: plan.stack,
     cwd,
     artifacts: plan.artifacts.map(
-      (value): ShuArtifactReport => ({
-        kind: "path",
-        value,
-        exists: fileMtime(insideRepo(repoRoot, value, pointer)) !== null,
-      }),
+      (value): ShuArtifactReport => ({ kind: "path", value, exists: present.has(value) || existsOnDisk(repoRoot, value) }),
     ),
   };
-  const header = renderFromCapture(
-    plan.lane,
-    plan.stack,
-    captures.map((capture): string => capture.path),
-    watched.length,
-  );
+  const header = renderFromCapture(plan.lane, plan.stack, reports, sidecarPath(plan.lane));
   return report(context, run, header, repoRoot, { ...options, dryRun: false }, threshold, ladder, 0, files);
 }
 
-/** A file's modification time, or null when there is no FILE at the path. */
-function fileMtime(absolute: string): number | null {
-  try {
-    const stats = statSync(absolute);
-    return stats.isFile() ? stats.mtimeMs : null;
-  } catch {
-    return null;
+/**
+ * Every reason the capture on disk is not proven a capture of this tree.
+ *
+ * NO SIDECAR AND NO REPORT ARE REFUSALS TOO. A lane that declares no report nen
+ * reads has nothing to reuse; the run form answers that at exit 1 with the
+ * field to declare, and this form refuses it rather than reporting a table of
+ * nothing as if it had been proven.
+ */
+function proveCapture(
+  context: CommandContext,
+  repoRoot: string,
+  lane: string,
+  reports: readonly string[],
+  digests: ReturnType<typeof digestArtifacts>,
+): readonly CaptureProblem[] {
+  const path = sidecarPath(lane);
+  const read = readCaptureSidecar(repoRoot, lane);
+  if (read.state === "missing") return [{ reason: "no-sidecar", sidecar: path }];
+  if (read.state === "unreadable") return [{ reason: "unreadable-sidecar", sidecar: path, why: read.why }];
+  const now = takeFingerprint(context.seams, repoRoot, reports);
+  if (!now.ok) {
+    return [{ reason: "unreadable-sidecar", sidecar: path, why: `the tree cannot be fingerprinted now: ${now.why}` }];
   }
+  return judgeCapture(read.sidecar, { lane, artifacts: digests, fingerprint: now.fingerprint, head: now.head });
 }
 
-/**
- * The files a capture must postdate: each path named once, the declared
- * reports themselves left out (a tracked report is "uncommitted" the moment a
- * run rewrites it, and it cannot postdate itself), and a path with no file on
- * disk -- deleted by the change -- left out too, since it has no time to
- * compare and no row to report.
- */
-function watchedFiles(
-  repoRoot: string,
-  paths: readonly string[],
-  artifacts: readonly string[],
-): readonly WatchedFile[] {
-  const skip = new Set(artifacts);
-  const seen = new Set<string>();
-  const watched: WatchedFile[] = [];
-  for (const path of paths) {
-    if (path === "" || seen.has(path) || skip.has(path)) continue;
-    seen.add(path);
-    const mtimeMs = fileMtime(join(repoRoot, path));
-    if (mtimeMs !== null) watched.push({ path, mtimeMs });
+function existsOnDisk(repoRoot: string, value: string): boolean {
+  try {
+    return statSync(join(repoRoot, value)).isFile();
+  } catch {
+    return false;
   }
-  return watched;
 }
 
 /**
@@ -1183,9 +1208,24 @@ function computeTouched(
   return { files, filter: filterTouchedGroups(parsed.groups, files, threshold), grain: touchedGrain(parsed) };
 }
 
-/** `git diff --name-only <base>...HEAD`, in the repository root, one path per line. */
+/**
+ * `git -c core.quotePath=false diff --name-only -z <base>...HEAD`, in the
+ * repository root, split on NUL.
+ *
+ * `-z` AND `core.quotePath=false`, BOTH (hanten round 1 on zheref/nen#250,
+ * N1). Without them git C-quotes any path with a byte outside printable ASCII
+ * -- `src/café.ts` arrives as `"src/caf\303\251.ts"` -- and that string
+ * matches no report row, so the one non-ASCII file a change touched was
+ * reported `unmatched` with nothing to say why. NUL is the one byte a path
+ * cannot hold, so the split is exact.
+ */
 function touchedFiles(context: CommandContext, repoRoot: string, base: string): readonly string[] {
-  const result = must(context.seams, GIT, ["diff", "--name-only", `${base}...HEAD`], { cwd: repoRoot });
+  const result = must(
+    context.seams,
+    GIT,
+    ["-c", "core.quotePath=false", "diff", "--name-only", "-z", `${base}...HEAD`],
+    { cwd: repoRoot },
+  );
   // `rawLines`, NEVER `outputLines`: THESE ARE PATHS, AND A PATH'S SPACES ARE
   // PART OF IT. ../seam/lines.ts exists for exactly this distinction --
   // `outputLines` trims, which is right for turning a subprocess's stderr into
@@ -1193,8 +1233,8 @@ function touchedFiles(context: CommandContext, repoRoot: string, base: string): 
   // committed as `src/ odd .ts` is a file git names with its spaces intact, and
   // a trimmed copy of that name matches no coverage row, so the one file the
   // caller most needs banded would be reported `unmatched` with nothing to say
-  // why. (Raised by Copilot on zheref/nen#147.)
-  return rawLines(result.stdout);
+  // why. (Raised by Copilot on zheref/nen#147.) A NUL split keeps them too.
+  return nulPaths(result.stdout);
 }
 
 /**
