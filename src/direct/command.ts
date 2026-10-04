@@ -13,10 +13,11 @@
 // and every vocabulary word it uses is read from the files --registry and
 // --taxonomy name, never written into this binary.
 //
-// Two verbs, one family, so a skill's whole mechanical loop is one noun:
+// Three verbs, one family, so a skill's whole mechanical loop is one noun:
 //   registry  validate the registry file, print what it says;
 //   resolve   resolve a classification to a recommendation, report any mismatch
-//             with the session, optionally record it.
+//             with the session, optionally record it;
+//   answer    write the maintainer's picker answer into that record afterwards.
 // Each lives in its own module beside this one (./registry-verb.ts and
 // ./resolve-verb.ts, over ./registry.ts and ./resolve.ts); this file is the
 // family's registration, its usage text and its dispatch.
@@ -25,6 +26,7 @@
 // answer), 1 a failure (an invalid file, an unreadable workflow), 2 a usage error.
 
 import { requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
+import { runAnswer } from "./answer-verb.js";
 import { runRegistry } from "./registry-verb.js";
 import { runResolve } from "./resolve-verb.js";
 
@@ -36,6 +38,7 @@ usage:
                       --kind <kind> [--role <role>] [--labels <a,b>] --lang <a,b> --job <c,d>
                       [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>]
                       [--record <effort-id>] [--json]
+  nen direct answer   --record <effort-id> --answer <continue|stop> --repo <path> [--json]
 
 The registry file (--registry) names ALIASES (roles such as the frontier author or
 the execution model), the surfaces they run on, a routing table per (job, domain,
@@ -101,6 +104,14 @@ resolves against --repo's root.
       unknown language or job key, a surface or level the registry lacks (each names the
       valid set), or a refused --record.
 
+  nen direct answer
+      Writes the maintainer's picker answer into the record 'resolve --record' filed, which
+      exists before the picker runs: reads .nen/direct/<encoded id>.json under --repo (the
+      same id, encoding and traversal refusals as --record), sets decision: { answer,
+      answeredAt } (replacing an earlier one), and rewrites the file, every other field
+      unchanged. A missing or unreadable record is exit 1, naming the path; an answer that
+      is not continue or stop, a missing flag or a refused --record is exit 2.
+
   --registry <path>    The model-direction registry file. Required.
   --taxonomy <path>    The classification taxonomy file. Required by resolve.
   --repo <path>        The checkout whose nen/workflow.json spells the aliases.
@@ -114,21 +125,24 @@ resolves against --repo's root.
   --surface <s>        The surface the running session is on, or unread.
   --model <alias>      The model alias the running session is on, or unread.
   --effort <level>     The effort level the running session is at, or unread.
-  --record <id>        File the result under .nen/direct/<encoded id>.json.
+  --record <id>        File the result under .nen/direct/<encoded id>.json (resolve),
+                       or name the record to answer (answer).
+  --answer <a>         The picker's answer: continue or stop. Required by answer.
   --json               Every verb prints one document with a
                        "contract": "nen.direct.<verb>/v0.1" key.`;
 
 export const directCommand: Command = {
   name: "direct",
-  subcommands: ["registry", "resolve"],
+  subcommands: ["registry", "resolve", "answer"],
   summary: "Choose the model, surface and effort for an issue's classification: validate the registry, resolve a recommendation.",
   usage: USAGE,
   flags: {
-    values: ["registry", "taxonomy", "lang", "job", "kind", "role", "labels", "surface", "model", "effort", "record"],
+    values: ["registry", "taxonomy", "lang", "job", "kind", "role", "labels", "surface", "model", "effort", "record", "answer"],
     booleans: [],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("direct", context.args, ["registry", "resolve"]);
-    return subcommand === "registry" ? runRegistry(context) : runResolve(context);
+    const subcommand = requireSubcommand("direct", context.args, ["registry", "resolve", "answer"]);
+    if (subcommand === "registry") return runRegistry(context);
+    return subcommand === "resolve" ? runResolve(context) : runAnswer(context);
   },
 };

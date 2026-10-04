@@ -22,11 +22,11 @@ const verdict = (...rest: string[]): ReturnType<typeof capture> =>
 const CLASSIFIED = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
 
 describe("nen direct -- registration and dispatch", () => {
-  it("is registered between dev and effort, with its two subcommands", () => {
+  it("is registered between dev and effort, with its three subcommands", () => {
     const names = COMMANDS.map((command): string => command.name);
     expect(names.indexOf("direct")).toBe(names.indexOf("dev") + 1);
     expect(names.indexOf("direct")).toBe(names.indexOf("effort") - 1);
-    expect(directCommand.subcommands).toEqual(["registry", "resolve"]);
+    expect(directCommand.subcommands).toEqual(["registry", "resolve", "answer"]);
   });
 
   it("refuses a bare family, an unknown subcommand and a help request on one it lacks, at exit 2", async () => {
@@ -466,5 +466,111 @@ describe("nen direct resolve --record", () => {
     const result = await capture(resolveArgs(repo, "--lang", "cobol", "--job", "implementation", "--kind", "product", "--record", "an-effort"));
     expect(result.code).toBe(2);
     expect(existsSync(join(repo, ".nen"))).toBe(false);
+  });
+});
+
+describe("nen direct answer", () => {
+  const CLASSIFIED_ARGS = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
+  const answer = (repo: string, ...rest: string[]): ReturnType<typeof capture> => capture(["direct", "answer", "--repo", repo, ...rest]);
+  const recorded = async (repo: string, id: string): Promise<string> => {
+    const result = await capture(resolveArgs(repo, ...CLASSIFIED_ARGS, "--record", id, "--json"));
+    expect(result.code).toBe(0);
+    return join(repo, ".nen", "direct", `${encodeURIComponent(id)}.json`);
+  };
+
+  it("writes decision { answer, answeredAt } into the record resolve filed, and echoes it with --json", async () => {
+    const repo = consumerRepo();
+    const file = await recorded(repo, "NN-IS-#12");
+    const result = await answer(repo, "--record", "NN-IS-#12", "--answer", "stop", "--json");
+    expect(result.code).toBe(0);
+    const decision = { answer: "stop", answeredAt: "2026-10-04T12:00:00.000Z" };
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ contract: "nen.direct.answer/v0.1", record: file, decision });
+    const written = JSON.parse(readFileSync(file, "utf8")) as Json;
+    expect(written["decision"]).toEqual(decision);
+    expect(readFileSync(file, "utf8").endsWith("}\n")).toBe(true);
+  });
+
+  it("leaves every other field byte-equal: the file differs from the original only by the decision", async () => {
+    const repo = consumerRepo();
+    const file = await recorded(repo, "an-effort");
+    const before = readFileSync(file, "utf8");
+    await answer(repo, "--record", "an-effort", "--answer", "continue");
+    const after = readFileSync(file, "utf8");
+    const original = JSON.parse(before) as Json;
+    const changed = JSON.parse(after) as Json;
+    const { decision, ...rest } = changed;
+    expect(decision).toEqual({ answer: "continue", answeredAt: "2026-10-04T12:00:00.000Z" });
+    expect(rest).toEqual(original);
+    // and exactly the bytes resolve would have written for that document plus the decision
+    expect(after).toBe(`${JSON.stringify({ ...original, decision }, null, 2)}\n`);
+    expect(after.startsWith(before.slice(0, before.lastIndexOf("\n}")))).toBe(true);
+  });
+
+  it("replaces an earlier answer; the last word stands", async () => {
+    const repo = consumerRepo();
+    const file = await recorded(repo, "an-effort");
+    await answer(repo, "--record", "an-effort", "--answer", "continue");
+    await answer(repo, "--record", "an-effort", "--answer", "stop");
+    expect((JSON.parse(readFileSync(file, "utf8")) as Json)["decision"]["answer"]).toBe("stop");
+  });
+
+  it("prints a short human confirmation", async () => {
+    const repo = consumerRepo();
+    const file = await recorded(repo, "an-effort");
+    const result = await answer(repo, "--record", "an-effort", "--answer", "continue");
+    expect(result.out).toEqual(["answered continue at 2026-10-04T12:00:00.000Z", `recorded ${file}`]);
+  });
+
+  it("exits 1 naming the path when no record exists, and creates nothing", async () => {
+    const repo = consumerRepo();
+    const result = await answer(repo, "--record", "never-resolved", "--answer", "continue");
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain(join(repo, ".nen", "direct", "never-resolved.json"));
+    expect(existsSync(join(repo, ".nen"))).toBe(false);
+  });
+
+  it("exits 1 for a record that is not a JSON object, and does not rewrite it", async () => {
+    const repo = tmpRepo({ ".nen/direct/broken.json": "{ not json", ".nen/direct/list.json": "[1]" });
+    for (const id of ["broken", "list"]) {
+      const before = readFileSync(join(repo, ".nen", "direct", `${id}.json`), "utf8");
+      const result = await answer(repo, "--record", id, "--answer", "stop");
+      expect(result.code, id).toBe(1);
+      expect(readFileSync(join(repo, ".nen", "direct", `${id}.json`), "utf8")).toBe(before);
+    }
+  });
+
+  it("exits 2 for an answer that is not continue or stop, naming the valid ones", async () => {
+    const repo = consumerRepo();
+    await recorded(repo, "an-effort");
+    for (const bad of ["maybe", "Continue", ""]) {
+      const result = await answer(repo, "--record", "an-effort", "--answer", bad);
+      expect(result.code, `--answer '${bad}'`).toBe(2);
+    }
+    expect((await answer(repo, "--record", "an-effort", "--answer", "maybe")).err.join("\n")).toMatch(/--answer 'maybe' is not one of: continue, stop/);
+  });
+
+  it("exits 2 for a missing --record, --answer or --repo", async () => {
+    const repo = consumerRepo();
+    expect((await capture(["direct", "answer", "--repo", repo, "--answer", "stop"])).code).toBe(2);
+    expect((await capture(["direct", "answer", "--repo", repo, "--record", "x"])).code).toBe(2);
+    expect((await capture(["direct", "answer", "--record", "x", "--answer", "stop"])).code).toBe(2);
+  });
+
+  it("refuses a traversal at exit 2, the same refusals as resolve --record, and reads nothing outside .nen/direct/", async () => {
+    for (const id of ["..", "../escape", "a/../../escape", "/abs/path", "C:/abs", "a\\b", ""]) {
+      const repo = consumerRepo();
+      const result = await answer(repo, "--record", id, "--answer", "stop");
+      expect(result.code, `--record '${id}'`).toBe(2);
+      // an empty value is the flag missing; every other id is refused by name
+      expect(result.err.join("\n")).toMatch(id === "" ? /--record is required/ : /--record .* is refused/);
+      expect(existsSync(join(repo, ".nen")), `--record '${id}' wrote`).toBe(false);
+    }
+  });
+
+  it("encodes the id like resolve: a slash id finds its flat file", async () => {
+    const repo = consumerRepo();
+    const file = await recorded(repo, "sonnet/kurapika/x");
+    expect((await answer(repo, "--record", "sonnet/kurapika/x", "--answer", "continue")).code).toBe(0);
+    expect((JSON.parse(readFileSync(file, "utf8")) as Json)["decision"]["answer"]).toBe("continue");
   });
 });

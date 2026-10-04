@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 125 verbs, every flag checked against the binary this repository
+families, 126 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -680,7 +680,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 125 verbs, grouped as the README groups them. **Reads** is what a
+All 126 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -732,6 +732,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
 | [`direct`](#family-direct) | [`nen direct registry`](#nen-direct-registry) | validates a model-direction registry file and prints it: the snapshot date, each alias (provider, family, surface/tier, snapshot quote), the surfaces and the live-lookup sources | local file (--registry) | yes |
 | [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
+| [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
@@ -4029,7 +4030,8 @@ Answers "which model, where, at what effort" for one classification, reporting e
    an answer; the skill asks once.
 7. **Record** — with `--record <effort-id>`, the whole result plus `effortId` and `recordedAt` is
    written to `.nen/direct/<encoded id>.json` under `--repo` (directories created; `.nen/` is
-   gitignored output, never `nen/`). The id is the caller's string (`<CODE>-IS-#<N>` for an issue,
+   gitignored output, never `nen/`). The record is filed before the picker runs, so the
+   maintainer's answer is written into it afterwards by [`direct answer`](#nen-direct-answer). The id is the caller's string (`<CODE>-IS-#<N>` for an issue,
    `inline-<ISO-8601 UTC>` for a textual effort), **percent-encoded by the same exported encoder
    [`usage record`](#nen-usage) uses for `--effort`** (`encodeEffortId`, `encodeURIComponent`), which
    makes a `/` or a `:` in an id a file-name character. **The encoder is shared; the id vocabulary
@@ -4125,6 +4127,39 @@ mismatch: yes (surface match; model fable != opus; effort unread)
 (row 1 matched on the canon role, so the domain is the first row's and its domain add fires; the two
 pairs split between the frontier author and the execution model and the tie goes to the registry's
 precedence; the surface matches, the model differs, the effort is unread — exit 0)
+
+### `nen direct answer`
+
+Answers "what did the maintainer say, and where is it recorded": the skill's picker (continue on this
+session, or stop and restart elsewhere) runs *after* [`direct resolve --record`](#nen-direct-resolve)
+has filed `.nen/direct/<encoded id>.json`, so the answer is written into that same record afterwards.
+It reads the record `--record <id>` names under `--repo`'s root — the same id, the same
+percent-encoding and the same traversal refusals as `resolve --record` — sets
+`decision: { answer, answeredAt }` (`answeredAt` the verb's clock, ISO 8601 UTC), and rewrites the file
+in the form `resolve` wrote it (two-space indent, trailing newline), **every other field unchanged**. A
+second answer replaces the first: the record holds the last word. The answer belongs to a resolution
+that exists — a missing record is a failure naming the path, never a created file.
+
+**Usage**
+
+```text
+nen direct answer --record <effort-id> --answer <continue|stop> --repo <path> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--record <effort-id>` | yes | The effort's id, as `direct resolve --record` was given it. | Encoded and refused exactly like `resolve`'s; a traversal -> exit 2. |
+| `--answer <continue\|stop>` | yes | The maintainer's picker answer. | Any other value -> exit 2, naming the two. |
+| `--repo <path>` | yes | The checkout whose `.nen/direct/` holds the record. | Unbracketed in usage; omitted is refused at exit 2. |
+
+**Output and exit codes** — human rendering is `answered <answer> at <time>` then `recorded <path>`.
+`--json` prints one document; top-level keys, in this order: `contract` (`nen.direct.answer/v0.1`),
+`record` (the rewritten file's path) and `decision` (`{ answer, answeredAt }`). Exit 0 when the
+decision was written; exit 1 when the record does not exist, is not JSON, or is not a JSON object (it
+is not rewritten); exit 2 for a missing flag, an answer that is not `continue` or `stop`, or a refused
+`--record`.
 
 <a id="family-label"></a>
 

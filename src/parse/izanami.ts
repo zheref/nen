@@ -1063,6 +1063,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // and printed. --record writes the result under .nen/direct/<name>.json,
       // a local write, so its presence alone moves the line out of read-only.
       resolve: GATED(["--record"], "--record writes the result to .nen/direct/<name>.json under --repo"),
+      answer: MUT("rewrites the .nen/direct/<id>.json record with the picker's decision -- a local write, every time"),
     },
   },
   effort: { subcommands: { classify: RO("classifies an effort -- pure computation") } },
