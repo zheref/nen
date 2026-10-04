@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { classifyCommand } from "./command.js";
 import { COMMANDS } from "../cli/registry.js";
-import { capture, MINI } from "./fixtures/harness.js";
+import { capture, landedRepo, MINI, SLUG } from "./fixtures/harness.js";
 
 describe("nen classify -- registration and dispatch", () => {
   it("is registered, between changelog and color, with its four subcommands", () => {
@@ -48,5 +48,28 @@ describe("nen classify --help -- the usage text names what the verbs take", () =
     expect(text).toMatch(/Refuses at exit 1/);
     expect(text).toMatch(/refuses the plan whole \(exit 2/);
     expect(text).toContain("nen.classify.<verb>/v0.1");
+  });
+});
+
+describe("nen classify -- a flag that belongs to another verb is a usage error", () => {
+  // [verb, the verb's own valid argv, the foreign flag (and value) added, the flag, the verb that owns it]
+  const cases: readonly (readonly [string, readonly string[], readonly string[], string, string])[] = [
+    ["labels", [], ["--run"], "--run", "classify apply"],
+    ["install", [], ["--plan", "p.json"], "--plan", "classify apply"],
+    ["status", ["--target", SLUG, "--open"], ["--write"], "--write", "classify install"],
+    ["apply", ["--target", SLUG, "--plan", "p.json"], ["--write"], "--write", "classify install"],
+  ];
+  for (const [verb, own, foreign, flag, owner] of cases) {
+    it(`'${verb}' refuses ${flag} at exit 2, naming the flag, the verb and its owner`, async () => {
+      const result = await capture(["classify", verb, "--taxonomy", MINI, "--repo", landedRepo(), ...own, ...foreign]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain(`${flag} is not a flag of 'classify ${verb}'`);
+      expect(result.err.join("\n")).toContain(owner);
+      expect(result.seams.calls).toEqual([]);
+    });
+  }
+
+  it("still accepts a verb's own flags (the allow-list is not over-eager)", async () => {
+    expect((await capture(["classify", "labels", "--taxonomy", MINI, "--json"])).code).toBe(0);
   });
 });

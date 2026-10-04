@@ -39,6 +39,24 @@ describe("validatePlan -- every refusal named, nothing partial", () => {
     ]);
   });
 
+  it("accepts an empty axis beside a populated one: the job label only, the empty axis stays empty", () => {
+    const result = validatePlan(taxonomy, declared, "plan.json", [{ issue: 5, lang: [], job: ["build"] }]);
+    expect(result.refusals).toEqual([]);
+    expect(result.rows).toEqual([{ issue: 5, labels: ["job/build"], confidence: "high", reason: null }]);
+  });
+
+  it("accepts a row with both axes empty -- an undecidable row -- and renders 'nothing to apply' without refusing", async () => {
+    const result = validatePlan(taxonomy, declared, "plan.json", [{ issue: 6, lang: [], job: [] }]);
+    expect(result.refusals).toEqual([]);
+    expect(result.rows).toEqual([{ issue: 6, labels: [], confidence: "high", reason: null }]);
+
+    const repo = landedRepo();
+    const run = await capture(apply(repo, plan(repo, [{ issue: 6, lang: [], job: [] }]), "--run"), [issueCall(6, [])]);
+    expect(run.code).toBe(0);
+    expect(run.out[0]).toBe("#6  nothing to apply");
+    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+  });
+
   it("refuses a plan that is not an array, and a row that is not an object", () => {
     expect(refusals({ issue: 1 })[0]).toMatch(/at \$, expected a JSON array/);
     expect(refusals([7])[0]).toMatch(/at \[0\], expected an object/);

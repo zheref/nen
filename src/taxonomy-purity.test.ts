@@ -577,6 +577,25 @@ const FORBIDDEN: readonly Forbidden[] = [
     allows: ['const merged = "\u2713";', 'const closed = "\u2717";', 'const draft = "\u270E";'],
   },
   {
+    what: "a classification-taxonomy value",
+    // `nen classify` reads its axis prefixes, keys and colours from the taxonomy
+    // file (src/classify/taxonomy.ts), so none of them may be written into a
+    // binary. Two shapes: a string literal that BEGINS with an axis prefix
+    // (`"lang/swift"`, `` `job/${key}` ``), and the two axis colours as bare
+    // six-hex literals -- the `#`-prefixed colour rule above cannot see
+    // GitHub's own spelling, which has no `#`. Narrow on purpose: a literal that
+    // merely mentions a prefix mid-sentence is prose, not a name the code
+    // decides with.
+    pattern: /["'`](?:lang|job)\/|["'`](?:1d76db|5319e7)["'`]/i,
+    catches: ['const a = "lang/swift";', "const b = `job/${key}`;", 'const c = "1d76db";', "const d = '5319e7';"],
+    allows: [
+      'const a = "no language/job split";',
+      "const b = axis.prefix + key;",
+      'const c = "1d76dbf";',
+      'throw new Error("a label of this axis is prefix + key");',
+    ],
+  },
+  {
     what: "a delivery branch-naming convention",
     pattern: /["'`](integration|train|epic)\//i,
     catches: ['const a = "integration/v1";'],

@@ -17,7 +17,7 @@ const FIXTURES = join(process.cwd(), "src", "classify", "fixtures");
 
 /** A two-and-two taxonomy, small enough to script every gh call by hand. */
 export const MINI = join(FIXTURES, "mini.taxonomy.json");
-/** The real taxonomy file, copied verbatim. */
+/** A snapshot of the governance taxonomy (see its $comment for source and date), copied verbatim. */
 export const REAL = join(FIXTURES, "classify.taxonomy.json");
 export const PARTIAL_REPO = join(FIXTURES, "repo-partial");
 export const EXPECTED_AFTER_WRITE = join(FIXTURES, "repo-partial", "expected-after-write.json");

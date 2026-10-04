@@ -22,7 +22,7 @@
 // the plan, and "you typed it wrong" must stay distinguishable from "gh
 // refused".
 
-import { requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
+import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { runApply } from "./apply.js";
 import { runInstall } from "./install.js";
 import { runLabels } from "./labels.js";
@@ -69,9 +69,10 @@ it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
       (missing). Then the summary, whether nen/labels.json declares every
       taxonomy label, and whether every one exists on the repository. Exactly
       one of --issue (a comma list of positive numbers) or --open (every open
-      issue; pull requests are skipped). --with-body adds each issue's body
-      ("" when it has none) and comment count to the output, from the same
-      read -- no extra call per issue. Exit 0 whatever the state; 1 when gh
+      issue; pull requests are skipped). --with-body adds body (""
+      when it has none) and commentCount to each issue in the --json
+      document, from the same read -- no extra call per issue; the human
+      rows are unchanged. Exit 0 whatever the state; 1 when gh
       failed or a number names a pull request.
 
   nen classify apply
@@ -93,6 +94,9 @@ it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
       overrides; --reason is recorded after the row's own reason).
       Exit 0 when nothing failed, 1 when any application failed.
 
+  A flag that belongs to another verb of the family (--run on labels, --write
+  on apply, --plan on install...) is a usage error, exit 2, naming the flag.
+
   --taxonomy <path>   The classification taxonomy file. Required.
   --repo <path>       The checkout whose nen/labels.json is the consumer's
                       declaration. Required by install, status and apply;
@@ -101,6 +105,34 @@ it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
   --target <o/n>      The GitHub repository (never a checkout path).
   --json              Every verb prints one document with a
                       "contract": "nen.classify.<verb>/v0.1" key.`;
+
+// WHICH FLAGS EACH VERB TAKES. The parser knows the family's flags as one set, so
+// `labels --run` parses -- and would be silently ignored, which is how `apply
+// --write` or `install --plan` could look like they did something. A flag that
+// belongs to ANOTHER verb of the family is a typo of the same class as
+// `install --target` without `--sync`, and exits 2 naming both. The global
+// flags (--repo, --json, --help) are every verb's and are not listed.
+const VERB_FLAGS: Readonly<Record<string, readonly string[]>> = {
+  labels: ["taxonomy"],
+  install: ["taxonomy", "write", "sync", "target", "dry-run"],
+  status: ["taxonomy", "target", "issue", "open", "with-body"],
+  apply: ["taxonomy", "target", "plan", "run", "include-low", "reason", "ledger"],
+};
+
+function refuseForeignFlags(subcommand: string, context: CommandContext): void {
+  const family = [...(classifyCommand.flags.values ?? []), ...(classifyCommand.flags.booleans ?? [])];
+  const given = [...Object.keys(context.args.values), ...context.args.booleans];
+  const own = VERB_FLAGS[subcommand] ?? [];
+  for (const flag of given) {
+    if (!family.includes(flag) || own.includes(flag)) continue;
+    const owners = Object.entries(VERB_FLAGS)
+      .filter(([, flags]): boolean => flags.includes(flag))
+      .map(([verb]): string => `'classify ${verb}'`);
+    throw new VerbUsageError(
+      `--${flag} is not a flag of 'classify ${subcommand}'; it belongs to ${owners.join(", ")}. A flag another verb takes would be silently ignored here.`,
+    );
+  }
+}
 
 export const classifyCommand: Command = {
   name: "classify",
@@ -113,6 +145,7 @@ export const classifyCommand: Command = {
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("classify", context.args, ["labels", "install", "status", "apply"]);
+    refuseForeignFlags(subcommand, context);
     switch (subcommand) {
       case "labels":
         return runLabels(context);

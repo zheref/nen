@@ -208,17 +208,17 @@ describe("nen classify status --with-body", () => {
   const payloadFor = (number: number, extra: Record<string, unknown>): Record<string, unknown> =>
     rawIssue(number, ["lang/alpha"], extra);
 
-  it("--issue: each issue carries body and comments from the issues/{n} read already made -- no extra call", async () => {
+  it("--issue: each issue carries body and commentCount from the issues/{n} read already made -- no extra call", async () => {
     const result = await capture(
       status(landedRepo(), "--issue", "12,13", "--with-body", "--json"),
       [issueCall(12, ["lang/alpha"], { body: "Fix the thing.", comments: 3 }), issueCall(13, [], { body: null }), ALL_ON_GITHUB],
     );
     expect(result.code).toBe(0);
     const json = JSON.parse(result.out.join("\n")) as { issues: Record<string, unknown>[] };
-    expect(json.issues[0]).toMatchObject({ number: 12, body: "Fix the thing.", comments: 3 });
-    expect(json.issues[1]).toMatchObject({ number: 13, body: "", comments: 0 });
+    expect(json.issues[0]).toMatchObject({ number: 12, body: "Fix the thing.", commentCount: 3 });
+    expect(json.issues[1]).toMatchObject({ number: 13, body: "", commentCount: 0 });
     expect(Object.keys(json.issues[0] as object)).toEqual([
-      "number", "title", "labels", "lang", "job", "unknown", "missing", "classified", "body", "comments",
+      "number", "title", "labels", "lang", "job", "unknown", "missing", "classified", "body", "commentCount",
     ]);
     // One read per issue plus the label list: nothing more.
     expect(result.seams.calls.map((call): string => call.args.join(" "))).toEqual([
@@ -228,28 +228,28 @@ describe("nen classify status --with-body", () => {
     ]);
   });
 
-  it("--open: body and comments come from the list payload", async () => {
+  it("--open: body and commentCount come from the list payload", async () => {
     const result = await capture(status(landedRepo(), "--open", "--with-body", "--json"), [
       openPage(1, [payloadFor(7, { body: "Seven", comments: 2 }), payloadFor(8, { body: null }), payloadFor(9, {})]),
       ALL_ON_GITHUB,
     ]);
     const json = JSON.parse(result.out.join("\n")) as { issues: Record<string, unknown>[] };
-    expect(json.issues.map((issue): unknown => [issue["body"], issue["comments"]])).toEqual([
+    expect(json.issues.map((issue): unknown => [issue["body"], issue["commentCount"]])).toEqual([
       ["Seven", 2],
       ["", 0],
       ["", 0],
     ]);
   });
 
-  it("without the flag the output is unchanged: no body or comments key, though the payload carries them", async () => {
+  it("without the flag the output is unchanged: no body or commentCount key, though the payload carries them", async () => {
     const withPayload = [issueCall(12, ["lang/alpha"], { body: "Fix the thing.", comments: 3 }), ALL_ON_GITHUB];
     const plain = await capture(status(landedRepo(), "--issue", "12", "--json"), withPayload);
     const issue = (JSON.parse(plain.out.join("\n")) as { issues: Record<string, unknown>[] }).issues[0] as Record<string, unknown>;
     expect("body" in issue).toBe(false);
-    expect("comments" in issue).toBe(false);
+    expect("commentCount" in issue).toBe(false);
 
     const open = await capture(status(landedRepo(), "--open", "--json"), [openPage(1, [payloadFor(7, { body: "x", comments: 1 })]), ALL_ON_GITHUB]);
-    expect(open.out.join("\n")).not.toMatch(/"body"|"comments"/);
+    expect(open.out.join("\n")).not.toMatch(/"body"|"commentCount"/);
   });
 
   it("leaves the human rows exactly as they were", async () => {

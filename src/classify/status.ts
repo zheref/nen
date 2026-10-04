@@ -14,7 +14,7 @@
 //   github    whether every taxonomy label exists on the repository (the sync
 //             ran). Existence only -- drift is `install`'s question.
 //
-// `--with-body` ADDS `body` and `comments` TO EACH ISSUE so a classifying skill
+// `--with-body` ADDS `body` and `commentCount` TO EACH ISSUE (in the --json document; human rows are unchanged) so a classifying skill
 // needs no second read per issue (an N+1 a reviewer flagged): both ride the
 // payload this verb already fetches -- the `issues/{n}` read for --issue, the
 // list page for --open -- so the flag costs no extra call. Without it the
@@ -55,14 +55,14 @@ export type IssueStatus = Record<AxisName, string[]> & {
   classified: boolean;
   /** Only with --with-body: the issue body as GitHub returns it, "" when null. */
   body?: string;
-  /** Only with --with-body: the issue's `comments` count from the same read. */
-  comments?: number;
+  /** Only with --with-body: the issue's comment COUNT (REST `comments`, not their text), from the same read. */
+  commentCount?: number;
 };
 
 /** What `--with-body` reads off the payload. */
 export interface BodyFields {
   readonly body: string;
-  readonly comments: number;
+  readonly commentCount: number;
 }
 
 export type Summary = Record<string, number> & { total: number; classified: number; missingBoth: number };
@@ -94,7 +94,7 @@ export function classifyLabels(
   }
   const missing = AXES.filter((name): boolean => keys[name].length === 0);
   const base: IssueStatus = { number, title, labels: [...labels], ...keys, unknown, missing, classified: missing.length === 0 };
-  return extra === null ? base : { ...base, body: extra.body, comments: extra.comments };
+  return extra === null ? base : { ...base, body: extra.body, commentCount: extra.commentCount };
 }
 
 /** `missing` + the axis name with its first letter raised: `missingLang`. */
@@ -136,7 +136,7 @@ interface RawOpenIssue {
 function bodyFields(item: { readonly body?: unknown; readonly comments?: unknown }): BodyFields {
   return {
     body: typeof item.body === "string" ? item.body : "",
-    comments: typeof item.comments === "number" ? item.comments : 0,
+    commentCount: typeof item.comments === "number" ? item.comments : 0,
   };
 }
 
