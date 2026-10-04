@@ -150,7 +150,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     // What git actually holds: stage 2 is origin/main, stage 3 the replayed commit.
     expect(mustGit(work, ["show", ":2:README.md"])).toBe("main side");
     expect(mustGit(work, ["show", ":3:README.md"])).toBe("branch side");
-    expect(conflicts(stopped)).toEqual([{ path: "README.md", ours: "branch side\n", theirs: "main side\n" }]);
+    expect(conflicts(stopped)).toEqual([{ path: "README.md", class: "other", ours: "branch side\n", theirs: "main side\n" }]);
     expect(git(work, ["rebase", "--show-current-patch"]).code).toBe(0);
 
     // The same command, unresolved: conflicted again, nothing continued.
@@ -191,7 +191,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     expect(stopped.doc["strategy"]).toBe("merge");
     expect(mustGit(work, ["show", ":2:README.md"])).toBe("published side");
     expect(mustGit(work, ["show", ":3:README.md"])).toBe("main again");
-    expect(conflicts(stopped)).toEqual([{ path: "README.md", ours: "published side\n", theirs: "main again\n" }]);
+    expect(conflicts(stopped)).toEqual([{ path: "README.md", class: "other", ours: "published side\n", theirs: "main again\n" }]);
     expect(git(work, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]).code).toBe(0);
 
     const aborted = await wc(["catch-up", "--repo", work, "--base", "main", "--abort"]);
@@ -212,8 +212,8 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"])).toContain('"docs/\\303\\274n\\303\\257.md"');
     const byPath = new Map(conflicts(stopped).map((c): [string, Conflict] => [c.path, c]));
     expect([...byPath.keys()].sort()).toEqual(["docs/ünï.md", "sp ace.txt"]);
-    expect(byPath.get("docs/ünï.md")).toEqual({ path: "docs/ünï.md", ours: "branch ü\n", theirs: "main ü\n" });
-    expect(byPath.get("sp ace.txt")).toEqual({ path: "sp ace.txt", ours: "branch space\n", theirs: "main space\n" });
+    expect(byPath.get("docs/ünï.md")).toEqual({ path: "docs/ünï.md", class: "other", ours: "branch ü\n", theirs: "main ü\n" });
+    expect(byPath.get("sp ace.txt")).toEqual({ path: "sp ace.txt", class: "other", ours: "branch space\n", theirs: "main space\n" });
     const text = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"], false);
     expect(text.out.join("\n")).toContain("  docs/ünï.md\n    ours  :\n      branch ü\n    theirs:\n      main ü");
     mustGit(work, ["merge", "--abort"]);
@@ -230,6 +230,177 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     const noOp = await wc(["catch-up", "--repo", work, "--base", "main"]);
     expect(noOp.code).toBe(0);
     expect(noOp.doc["noOp"]).toBe(true);
+  });
+});
+
+// ── conflict classes (zheref/nen#326) ───────────────────────────────────────
+//
+// Each case declares its own `mechanical` block on main, under its own
+// directory, so a case never classifies another's paths. The regenerate argv
+// is DECLARED and asserted verbatim, never run: the verb prints it, and a
+// test that spawned it would be testing the generator, not the verb. Where a
+// case follows the printed steps, it runs the git ones and writes what the
+// generator would have written.
+
+type Group = { class: string; globs: string[]; paths: string[]; note: string; steps: string[][] };
+const groups = (run: Run): Group[] => run.doc["resolve"] as Group[];
+
+/** `nen/contract.json` with only a `mechanical` block, for the case under `dir`. */
+function mechanicalContract(dir: string): string {
+  return `${JSON.stringify(
+    {
+      mechanical: {
+        manifests: [`${dir}/package.json`, `${dir}/.claude-plugin/plugin.json`],
+        changelog: [`${dir}/CHANGELOG.md`],
+        mirrors: [{ paths: [`${dir}/surfaces/codex/**`], regenerate: ["nen", "surface", "mirror", "generate", "--surface", "codex", "--out", `${dir}/surfaces/codex`] }],
+      },
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+/** The base every case starts from: one manifest pair, a changelog, two mirror files and a source file. */
+function seedCase(dir: string): void {
+  advanceMain(
+    {
+      "nen/contract.json": mechanicalContract(dir),
+      [`${dir}/package.json`]: '{ "version": "0.1.0" }\n',
+      [`${dir}/.claude-plugin/plugin.json`]: '{ "version": "0.1.0" }\n',
+      [`${dir}/CHANGELOG.md`]: "# Changelog\n\n## 0.1.0\n",
+      [`${dir}/surfaces/codex/a.md`]: "generated a v1\n",
+      [`${dir}/surfaces/codex/b.md`]: "generated b v1\n",
+      [`${dir}/src.ts`]: "export const x = 1;\n",
+    },
+    `chore: seed ${dir}`,
+  );
+}
+
+/** Both sides' release-shaped edits: the version, the changelog's top section, the mirror. */
+const releaseEdits = (dir: string, version: string, extra: Readonly<Record<string, string>> = {}): Record<string, string> => ({
+  [`${dir}/package.json`]: `{ "version": "${version}" }\n`,
+  [`${dir}/.claude-plugin/plugin.json`]: `{ "version": "${version}" }\n`,
+  [`${dir}/CHANGELOG.md`]: `# Changelog\n\n## ${version}\n\n## 0.1.0\n`,
+  [`${dir}/surfaces/codex/a.md`]: `generated a ${version}\n`,
+  ...extra,
+});
+
+describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the real git (#326)", () => {
+  it("a MIXED stop: every path classed and counted, the mechanical commands printed, and still exit 1 because one path is 'other'", async () => {
+    seedCase("mixed");
+    const work = branchWith("mixed-classes", releaseEdits("mixed", "0.2.0", { "mixed/src.ts": "export const x = 2;\n" }));
+    advanceMain(releaseEdits("mixed", "0.3.0", { "mixed/src.ts": "export const x = 3;\n" }), "chore: release 0.3.0");
+
+    const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    expect(stopped.code).toBe(1);
+    expect(stopped.doc).toMatchObject({
+      contract: "nen.wc.catch-up/v0.2",
+      declaration: "declared",
+      declarationError: null,
+      classes: { manifest: 2, changelog: 1, mirror: 1, other: 1 },
+      mechanical: false,
+    });
+    const byPath = Object.fromEntries(conflicts(stopped).map((c): [string, string] => [c.path, (c as unknown as { class: string }).class]));
+    expect(byPath).toEqual({
+      "mixed/.claude-plugin/plugin.json": "manifest",
+      "mixed/package.json": "manifest",
+      "mixed/CHANGELOG.md": "changelog",
+      "mixed/surfaces/codex/a.md": "mirror",
+      "mixed/src.ts": "other",
+    });
+    // The other path's sides are still reported exactly as before.
+    expect(conflicts(stopped).find((c): boolean => c.path === "mixed/src.ts")).toMatchObject({ ours: "export const x = 2;\n", theirs: "export const x = 3;\n" });
+    expect(groups(stopped).map((g): string => g.class)).toEqual(["manifest", "changelog", "mirror"]);
+
+    const text = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"], false);
+    expect(text.code).toBe(1);
+    const out = text.out.join("\n");
+    expect(out).toContain("classes: 2 manifest, 1 changelog, 1 mirror, 1 other (by nen/contract.json's 'mechanical' block)");
+    expect(out).toContain("1 path(s) are not mechanical -- exit 1");
+    expect(out).toContain("  other (1): a judgement nen does not make -- mixed/src.ts");
+    expect(out).toContain("to back out: git merge --abort");
+    // It resolved nothing: every path is still unmerged.
+    expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"]).split("\n").sort()).toEqual(Object.keys(byPath).sort());
+    mustGit(work, ["merge", "--abort"]);
+  });
+
+  it("an ALL-MECHANICAL merge stop exits 3 with the declared regenerate argv; following the steps and re-running continues and pushes nothing", async () => {
+    seedCase("allmech");
+    const work = branchWith("allmech-merge", releaseEdits("allmech", "0.2.0"));
+    mustGit(work, [...PINNED, "push", "--quiet", "-u", "origin", "allmech-merge"]);
+    const published = mustGit(work, ["rev-parse", "HEAD"]);
+    advanceMain(releaseEdits("allmech", "0.3.0"), "chore: release 0.3.0");
+
+    const stopped = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    expect(stopped.code).toBe(3);
+    expect(stopped.doc).toMatchObject({ strategy: "merge", declaration: "declared", classes: { manifest: 2, changelog: 1, mirror: 1, other: 0 }, mechanical: true, after: null });
+    const mirror = groups(stopped).find((g): boolean => g.class === "mirror");
+    expect(mirror).toMatchObject({ globs: ["allmech/surfaces/codex/**"], paths: ["allmech/surfaces/codex/a.md"] });
+    expect(mirror?.steps).toEqual([
+      ["git", "checkout", "--theirs", "--", "allmech/surfaces/codex/a.md"],
+      ["nen", "surface", "mirror", "generate", "--surface", "codex", "--out", "allmech/surfaces/codex"],
+      ["git", "add", "-A", "--", ":(glob)allmech/surfaces/codex/**"],
+    ]);
+    // git lists unmerged paths in index order, so the dot-directory comes first.
+    expect(groups(stopped).find((g): boolean => g.class === "manifest")?.steps).toEqual([
+      ["git", "add", "--", "allmech/.claude-plugin/plugin.json", "allmech/package.json"],
+    ]);
+    const text = await wc(["catch-up", "--repo", work, "--base", "main"], false);
+    expect(text.code).toBe(3);
+    expect(text.out.join("\n")).toContain("all 4 conflicted path(s) are mechanical -- exit 3; nen resolved none.");
+    expect(text.out.join("\n")).toContain("    $ nen surface mirror generate --surface codex --out allmech/surfaces/codex");
+    expect(text.out.join("\n")).toContain("    $ git add -A -- ':(glob)allmech/surfaces/codex/**'");
+    // Nothing was resolved by the verb.
+    expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"]).split("\n")).toHaveLength(4);
+
+    // The caller's part: a version, both changelog sections, then the mirror steps.
+    for (const manifest of ["allmech/package.json", "allmech/.claude-plugin/plugin.json"]) writeFileSync(join(work, manifest), '{ "version": "0.4.0" }\n');
+    writeFileSync(join(work, "allmech/CHANGELOG.md"), "# Changelog\n\n## 0.4.0\n\n## 0.3.0\n\n## 0.1.0\n");
+    for (const group of groups(stopped)) {
+      for (const step of group.steps) {
+        if (step[0] === "git") mustGit(work, step.slice(1));
+        else writeFileSync(join(work, "allmech/surfaces/codex/a.md"), "generated a 0.4.0\n");
+      }
+    }
+    const resumed = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    expect(resumed.code).toBe(0);
+    expect(resumed.doc).toMatchObject({ resumed: true, conflicted: [], declaration: "not-read", mechanical: false });
+    expect(mustGit(work, ["show", "HEAD:allmech/surfaces/codex/a.md"])).toBe("generated a 0.4.0");
+    expect(mustGit(work, ["merge-base", "--is-ancestor", "origin/main", "HEAD"])).toBe("");
+    // Re-running proved the tree and pushed nothing: the remote branch is where it was.
+    expect(mustGit(work, ["ls-remote", "origin", "refs/heads/allmech-merge"]).split(/\s+/)[0]).toBe(published);
+  });
+
+  it("an ALL-MECHANICAL rebase stop names the base's side as --ours, and 'git rm' where the base deleted a mirror file", async () => {
+    seedCase("rebmech");
+    const work = branchWith("rebmech-rebase", releaseEdits("rebmech", "0.2.0", { "rebmech/surfaces/codex/b.md": "generated b 0.2.0\n" }));
+    advanceMain(releaseEdits("rebmech", "0.3.0"), "chore: release 0.3.0");
+    // The base also stops generating b.md: a modify/delete conflict on a mirror path.
+    mustGit(seed, ["rm", "--quiet", "rebmech/surfaces/codex/b.md"]);
+    mustGit(seed, [...WHO, "commit", "--quiet", "-m", "chore: drop b"]);
+    mustGit(seed, [...PINNED, "push", "--quiet", "origin", "main"]);
+
+    const stopped = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    expect(stopped.code).toBe(3);
+    expect(stopped.doc).toMatchObject({ strategy: "rebase", classes: { manifest: 2, changelog: 1, mirror: 2, other: 0 }, mechanical: true });
+    expect(groups(stopped).find((g): boolean => g.class === "mirror")?.steps).toEqual([
+      ["git", "checkout", "--ours", "--", "rebmech/surfaces/codex/a.md"],
+      ["git", "rm", "--quiet", "--", "rebmech/surfaces/codex/b.md"],
+      ["nen", "surface", "mirror", "generate", "--surface", "codex", "--out", "rebmech/surfaces/codex"],
+      ["git", "add", "-A", "--", ":(glob)rebmech/surfaces/codex/**"],
+    ]);
+    mustGit(work, ["rebase", "--abort"]);
+  });
+
+  it("no declaration read is the ordinary stop: a contract nen cannot read is 'unreadable', every path 'other', exit 1", async () => {
+    seedCase("broken");
+    const work = branchWith("broken-contract", { "broken/src.ts": "export const x = 'branch';\n", "nen/contract.json": "{ not json\n" });
+    advanceMain({ "broken/src.ts": "export const x = 'main';\n" }, "chore: main side");
+    const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    expect(stopped.code).toBe(1);
+    expect(stopped.doc).toMatchObject({ declaration: "unreadable", classes: { manifest: 0, changelog: 0, mirror: 0, other: 1 }, mechanical: false, resolve: [] });
+    expect(typeof stopped.doc["declarationError"]).toBe("string");
+    mustGit(work, ["merge", "--abort"]);
   });
 });
 

@@ -619,8 +619,10 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git rebase origin/main", result: { code: 0 } },
     ]);
     expect(result.code).toBe(0);
-    expect(Object.keys(result.doc)).toEqual(["contract", "base", "strategy", "before", "after", "behindBefore", "aheadBefore", "noOp", "conflicted", "resumed", "aborted", "dryRun"]);
-    expect(result.doc).toMatchObject({ contract: "nen.wc.catch-up/v0.1", base: "main", strategy: "rebase", before: "before00", after: "after000", behindBefore: 3, aheadBefore: 2, noOp: false, conflicted: [], resumed: false, aborted: false, dryRun: false });
+    expect(Object.keys(result.doc)).toEqual(["contract", "base", "strategy", "before", "after", "behindBefore", "aheadBefore", "noOp", "conflicted", "resumed", "aborted", "dryRun", "declaration", "declarationError", "classes", "mechanical", "resolve"]);
+    // Nothing conflicted, so the declaration was never opened -- and says so.
+    expect(result.doc).toMatchObject({ declaration: "not-read", declarationError: null, classes: { manifest: 0, changelog: 0, mirror: 0, other: 0 }, mechanical: false, resolve: [] });
+    expect(result.doc).toMatchObject({ contract: "nen.wc.catch-up/v0.2", base: "main", strategy: "rebase", before: "before00", after: "after000", behindBefore: 3, aheadBefore: 2, noOp: false, conflicted: [], resumed: false, aborted: false, dryRun: false });
     expect(gitCalls(result.seams)).toContain("git rebase origin/main");
   });
 
@@ -678,8 +680,8 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
     expect(result.code).toBe(1);
     expect(result.doc["after"]).toBeNull();
     expect(result.doc["conflicted"]).toEqual([
-      { path: "a.ts", ours: "branch a\n", theirs: "base a\n" },
-      { path: "b.ts", ours: null, theirs: "base b\n" },
+      { path: "a.ts", class: "other", ours: "branch a\n", theirs: "base a\n" },
+      { path: "b.ts", class: "other", ours: null, theirs: "base b\n" },
     ]);
     expect(gitCalls(result.seams)).not.toContain("git show :3:b.ts");
     expect(gitCalls(result.seams)).not.toContain("git rebase --abort");
@@ -708,7 +710,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git show :3:a.ts", result: { stdout: "base a\n" } },
     ]);
     expect(result.code).toBe(1);
-    expect(result.doc["conflicted"]).toEqual([{ path: "a.ts", ours: "branch a\n", theirs: "base a\n" }]);
+    expect(result.doc["conflicted"]).toEqual([{ path: "a.ts", class: "other", ours: "branch a\n", theirs: "base a\n" }]);
   });
 
   it("reads a non-ASCII path raw, treats a stage that is there but unreadable as an ERROR, and reports a binary side by size (N3, N5)", async () => {
@@ -724,7 +726,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: `git show :3:${path}`, result: { stdout: "text\n" } },
     ]);
     expect(result.code).toBe(1);
-    expect(result.doc["conflicted"]).toEqual([{ path, ours: "(binary, 4096 bytes)", theirs: "text\n" }]);
+    expect(result.doc["conflicted"]).toEqual([{ path, class: "other", ours: "(binary, 4096 bytes)", theirs: "text\n" }]);
     // The stage is listed, the show fails: an error at exit 1, never "deleted".
     const failed = await capture(["wc", "catch-up", "--base", "main", "--strategy", "merge"], [
       ...NOTHING_PENDING, CLEAN, FETCHED, HEAD_BEFORE, BEHIND(2), AHEAD(1),
@@ -843,7 +845,7 @@ describe("nen wc catch-up -- rebase or merge onto origin/<base>, never picking a
       { match: "git show :3:c.ts", result: { stdout: "o\n" } },
     ]);
     expect(result.code).toBe(1);
-    expect(result.doc["conflicted"]).toEqual([{ path: "c.ts", ours: "o\n", theirs: "t\n" }]);
+    expect(result.doc["conflicted"]).toEqual([{ path: "c.ts", class: "other", ours: "o\n", theirs: "t\n" }]);
     expect(result.doc["resumed"]).toBe(false);
   });
 

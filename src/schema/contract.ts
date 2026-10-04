@@ -19,6 +19,11 @@
 //     -- and write the probe as ["nen", "--version"].
 //   * `project` -- the stack declaration. Lanes, per-lane verbs, the host
 //     toolchain, preconditions nen ASSERTS and never performs.
+//   * `mechanical` -- a THIRD, smaller block (zheref/nen#326): which paths
+//     are version manifests, which is the changelog, which trees are
+//     generated mirrors and the command that regenerates each. `nen wc
+//     catch-up` reads it to classify a conflict and spawns none of it. It
+//     alone also satisfies the empty-file guard below.
 //
 // BOTH BLOCKS ARE OPTIONAL AND INDEPENDENT. A plugin repository carries
 // `dependency` alone; a product repository that pins no nen version carries
@@ -621,6 +626,35 @@ export interface ProjectBlock {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * One declared generated tree: the paths it covers and the command that
+ * regenerates it, as `nen wc catch-up` prints it (zheref/nen#326).
+ */
+export interface MechanicalMirror {
+  /** Repo-relative globs (`*`, `**`, `?`) -- every path under them is generated. */
+  readonly paths: readonly string[];
+  /** The argv that regenerates them. PRINTED by `wc catch-up`, never spawned by it. */
+  readonly regenerate: readonly string[];
+  /** The entry exactly as the file states it, every key preserved. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * `mechanical` -- the conflict shapes a catch-up meets on every parallel
+ * release and that are never a judgement about the code: the version
+ * manifests, the changelog, the generated mirrors (zheref/nen#326).
+ */
+export interface MechanicalBlock {
+  /** Globs of the files that carry the version (plugin manifests, package.json). */
+  readonly manifests: readonly string[];
+  /** Globs of the changelog file(s). */
+  readonly changelog: readonly string[];
+  /** The generated trees, each with its regenerate command. */
+  readonly mirrors: readonly MechanicalMirror[];
+  /** The block exactly as the file states it, every key preserved. */
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface RepositoryContract {
   /** Absolute path of the file this was read from. */
   readonly path: string;
@@ -632,6 +666,8 @@ export interface RepositoryContract {
   readonly schema: string | null;
   readonly dependency: DependencyBlock | null;
   readonly project: ProjectBlock | null;
+  /** `wc catch-up`'s mechanical conflict set, or null when the file declares none. */
+  readonly mechanical: MechanicalBlock | null;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -2078,6 +2114,97 @@ export function parseProjectBlock(path: string, value: unknown): ProjectBlock {
   };
 }
 
+/** The three keys `mechanical` is made of. Nen's, not the repo's. */
+const MECHANICAL_KEYS: readonly string[] = ["manifests", "changelog", "mirrors"];
+
+/** The two keys one `mechanical.mirrors[]` entry is made of. */
+const MECHANICAL_MIRROR_KEYS: readonly string[] = ["paths", "regenerate"];
+
+/**
+ * One repo-relative glob. Absolute and backslashed paths are refused: git
+ * reports conflicted paths repo-relative with `/`, so either shape would
+ * match nothing on every run -- a declaration that silently classifies
+ * nothing, which is the failure this block exists to end.
+ */
+function requireRepoGlob(path: string, pointer: string, value: unknown): string {
+  const glob = requireString(path, pointer, value);
+  if (glob === "") throw new SchemaError(path, pointer, "is an empty string; a glob that names nothing matches nothing");
+  if (ABSOLUTE_PATH.test(glob) || glob.includes("\\")) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `${JSON.stringify(glob)} is not a repo-relative, '/'-separated glob. git reports every conflicted path relative to the repository root with '/', so this would match nothing`,
+    );
+  }
+  return glob;
+}
+
+function repoGlobs(path: string, pointer: string, value: unknown): readonly string[] {
+  if (value === undefined || value === null) return [];
+  return requireArray(path, pointer, value).map((item, index): string => requireRepoGlob(path, `${pointer}[${index}]`, item));
+}
+
+/**
+ * `mechanical` -- what `nen wc catch-up` may call a MECHANICAL conflict
+ * (zheref/nen#326): a version manifest bumped on both sides, a changelog
+ * whose top section both sides added, a generated mirror both sides
+ * regenerated. Parsed rather than preserved, for the reason every acting
+ * block here is: a mistyped key preserved on `raw` would classify every
+ * conflict as `other`, and the verb would keep handing the same three
+ * shapes back as hand work while the file plainly declares them.
+ *
+ * NOTHING HERE IS EVER SPAWNED BY THE VERB THAT READS IT. `regenerate` is
+ * printed as the command to run, because a catch-up that ran a generator
+ * would be resolving a conflict, and nen picks no side.
+ */
+export function parseMechanical(path: string, value: unknown): MechanicalBlock {
+  const raw = requireRecord(path, "mechanical", value);
+  refuseNearMissKey(
+    path,
+    "mechanical",
+    raw,
+    MECHANICAL_KEYS,
+    "mechanical",
+    (meant): string =>
+      `'nen wc catch-up' would classify every '${meant}' conflict as 'other' and exit 1 as though nothing were declared`,
+  );
+  const manifests = repoGlobs(path, "mechanical.manifests", raw["manifests"]);
+  const changelog = repoGlobs(path, "mechanical.changelog", raw["changelog"]);
+  const mirrorsRaw = raw["mirrors"] === undefined || raw["mirrors"] === null ? [] : requireArray(path, "mechanical.mirrors", raw["mirrors"]);
+  const mirrors = mirrorsRaw.map((item, index): MechanicalMirror => {
+    const at = `mechanical.mirrors[${index}]`;
+    const entry = requireRecord(path, at, item);
+    refuseNearMissKey(path, at, entry, MECHANICAL_MIRROR_KEYS, at, (meant): string =>
+      meant === "paths"
+        ? "no conflicted path would ever be classified as this mirror's"
+        : "'nen wc catch-up' would have no regenerate command to print for this mirror",
+    );
+    if (entry["paths"] === undefined) {
+      throw new SchemaError(path, `${at}.paths`, "expected the glob list, got nothing (the field is absent). A mirror covering no paths classifies nothing");
+    }
+    const paths = repoGlobs(path, `${at}.paths`, entry["paths"]);
+    if (paths.length === 0) {
+      throw new SchemaError(path, `${at}.paths`, "is an empty array. A mirror covering no paths classifies nothing");
+    }
+    if (entry["regenerate"] === undefined) {
+      throw new SchemaError(
+        path,
+        `${at}.regenerate`,
+        "expected the argv that regenerates these paths, got nothing (the field is absent). A generated tree is only mechanical because a command rewrites it; without one the conflict is hand work",
+      );
+    }
+    return { paths, regenerate: requireArgv(path, `${at}.regenerate`, entry["regenerate"]), raw: entry };
+  });
+  if (manifests.length === 0 && changelog.length === 0 && mirrors.length === 0) {
+    throw new SchemaError(
+      path,
+      "mechanical",
+      "declares no manifests, no changelog and no mirrors. A block that classifies nothing is indistinguishable from one that was never declared; state at least one, or delete the block",
+    );
+  }
+  return { manifests, changelog, mirrors, raw };
+}
+
 export function parseContract(
   path: string,
   location: SchemaLocation,
@@ -2086,12 +2213,13 @@ export function parseContract(
   const raw = requireRecord(path, "(root)", value);
   const hasDependency = raw["dependency"] !== undefined && raw["dependency"] !== null;
   const hasProject = raw["project"] !== undefined && raw["project"] !== null;
-  if (!hasDependency && !hasProject) {
+  const hasMechanical = raw["mechanical"] !== undefined && raw["mechanical"] !== null;
+  if (!hasDependency && !hasProject && !hasMechanical) {
     const stray = Object.keys(raw).filter((key): boolean => !key.startsWith("$"));
     throw new SchemaError(
       path,
       "(root)",
-      `declares neither a "dependency" block (what this repository needs FROM nen) nor a "project" block (what nen needs to know ABOUT it), so nothing can ever read it. ${
+      `declares neither a "dependency" block (what this repository needs FROM nen) nor a "project" block (what nen needs to know ABOUT it) -- nor a "mechanical" block (the conflict set 'nen wc catch-up' classifies) -- so nothing can ever read it. ${
         stray.length === 0
           ? "The file is empty of both; delete it, or add the block you meant."
           : `Its top-level keys are [${stray.join(", ")}] -- if this file was moved here from a root 'nen.contract.json', wrap that object in a "dependency" key.`
@@ -2111,6 +2239,7 @@ export function parseContract(
     schema: typeof raw["$schema"] === "string" && raw["$schema"] !== "" ? raw["$schema"] : null,
     dependency: hasDependency ? parseDependencyBlock(path, raw["dependency"]) : null,
     project: hasProject ? parseProjectBlock(path, raw["project"]) : null,
+    mechanical: hasMechanical ? parseMechanical(path, raw["mechanical"]) : null,
     raw,
   };
 }
@@ -2145,6 +2274,12 @@ export function describeContract(contract: RepositoryContract): string {
     const tools = Object.keys(contract.project.toolchain).length;
     blocks.push(
       `project (${lanes.length} ${lanes.length === 1 ? "lane" : "lanes"}: ${lanes.join(", ")}; ${verbs} ${verbs === 1 ? "verb" : "verbs"}; ${tools} toolchain ${tools === 1 ? "entry" : "entries"})`,
+    );
+  }
+  if (contract.mechanical !== null) {
+    const { manifests, changelog, mirrors } = contract.mechanical;
+    blocks.push(
+      `mechanical (${manifests.length} manifest ${manifests.length === 1 ? "glob" : "globs"}, ${changelog.length} changelog ${changelog.length === 1 ? "glob" : "globs"}, ${mirrors.length} ${mirrors.length === 1 ? "mirror" : "mirrors"})`,
     );
   }
   return blocks.join(", ");

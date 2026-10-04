@@ -49,6 +49,14 @@
 // ./publish.ts's refspec check first, and the fetch spells its refspec in
 // full behind `--end-of-options`, where nothing in the name is an option.
 //
+// A STOP IS CLASSIFIED, NEVER RESOLVED (zheref/nen#326). Every conflicted
+// path carries a `class` -- manifest, changelog, mirror or other -- read off
+// `nen/contract.json`'s `mechanical` block (./mechanical.ts), opened only
+// when something conflicted. When every path is in the declared set the
+// command exits 3 rather than 1 and the report's `resolve[]` carries the
+// commands a caller runs, in order -- the mirror's regenerate exactly as
+// declared. Nothing in it is run here.
+//
 // `git fetch` IS A READ, on ./squash.ts's argument: it moves a
 // remote-tracking ref this repository already keeps and never a branch, and
 // this module never pushes.
@@ -57,20 +65,44 @@ import { plainBlock, plainLine } from "../cli/plain.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 import { REBASE_IN_PROGRESS_ARGV, rebaseState, REPO_ANSWERS_ARGV } from "../seam/rebase.js";
+import {
+  classifyConflicts,
+  NOT_READ,
+  type Classification,
+  type ConflictClass,
+  type DeclarationState,
+  type MechanicalDeclaration,
+  type ResolveGroup,
+} from "./mechanical.js";
 import { endOfOptionsRefusal, fetchArgv, refuseBranchName, REMOTE } from "./publish.js";
 import { findPublishedCommit, parseFolded, SquashStateError } from "./squash.js";
 
-export const CATCH_UP_CONTRACT = "nen.wc.catch-up/v0.1";
+/** v0.2 (zheref/nen#326): `conflicted[].class`, and `declaration`, `declarationError`, `classes`, `mechanical`, `resolve` at the end. */
+export const CATCH_UP_CONTRACT = "nen.wc.catch-up/v0.2";
 
 export type Strategy = "rebase" | "merge";
 export type RequestedStrategy = Strategy | "auto";
 
 /** One conflicted path, with both sides' content as the index holds them. */
-export interface CatchUpConflict {
+export interface RawConflict {
   readonly path: string;
   /** THIS BRANCH's side (stage 2 on a merge, stage 3 on a rebase), capped; `(binary, N bytes)` for a blob carrying a NUL; null when this side deleted the path. */
   readonly ours: string | null;
   /** THE BASE's side (stage 3 on a merge, stage 2 on a rebase), capped; `(binary, N bytes)` for a blob carrying a NUL; null when that side deleted the path. */
+  readonly theirs: string | null;
+  /**
+   * False only when the path is unmerged and the BASE's stage is absent -- the
+   * base deleted it. A path flagged solely for a leftover marker is already
+   * staged, so a checkout of either side reads the index and this is true.
+   */
+  readonly baseSide: boolean;
+}
+
+/** A conflicted path as the report carries it: its class right after its name. */
+export interface CatchUpConflict {
+  readonly path: string;
+  readonly class: ConflictClass;
+  readonly ours: string | null;
   readonly theirs: string | null;
 }
 
@@ -93,11 +125,27 @@ export interface CatchUpReport {
   /** True when `--abort` backed an in-progress rebase or merge out. */
   readonly aborted: boolean;
   readonly dryRun: boolean;
+  /** Whether `nen/contract.json`'s `mechanical` block was read: `not-read` when nothing conflicted. */
+  readonly declaration: DeclarationState;
+  /** Why the file could not be read, when `declaration` is `unreadable`; null otherwise. */
+  readonly declarationError: string | null;
+  /** How many conflicted paths fell in each class. All zero when nothing conflicted. */
+  readonly classes: Readonly<Record<ConflictClass, number>>;
+  /** True only when the block was read and EVERY conflicted path is in it -- the exit-3 stop. */
+  readonly mechanical: boolean;
+  /** Per class (per declared mirror), the paths and the commands a caller runs. Never run here. */
+  readonly resolve: readonly ResolveGroup[];
 }
 
 export type CatchUpOutcome =
   | { readonly kind: "refused"; readonly reason: string }
-  | { readonly kind: "done"; readonly report: CatchUpReport; readonly lines: readonly string[] };
+  | {
+      readonly kind: "done";
+      readonly report: CatchUpReport;
+      readonly lines: readonly string[];
+      /** The classification behind the report's tail; null when nothing conflicted. */
+      readonly classified: Classified | null;
+    };
 
 /** How much of each side of a conflict travels in the report. */
 export const HUNK_CAP = 4_000;
@@ -227,7 +275,7 @@ function readStage(seams: Seams, cwd: string, path: string, stage: number, prese
  * there but cannot be shown is an error. `ours` is this branch's side and
  * `theirs` the base's, by `strategy` (see the header).
  */
-export function collectConflicts(seams: Seams, cwd: string, strategy: Strategy): readonly CatchUpConflict[] {
+export function collectConflicts(seams: Seams, cwd: string, strategy: Strategy): readonly RawConflict[] {
   const unmerged = runGit(seams, cwd, [...RAW_PATHS, "diff", "--name-only", "-z", "--diff-filter=U"]).stdout
     .split("\0")
     .filter((path): boolean => path !== "");
@@ -242,12 +290,13 @@ export function collectConflicts(seams: Seams, cwd: string, strategy: Strategy):
   const stages = unmergedStages(seams, cwd);
   // On a rebase the replayed commit -- this branch's side -- sits in stage 3.
   const [oursStage, theirsStage] = strategy === "rebase" ? [3, 2] : [2, 3];
-  return paths.map((path): CatchUpConflict => {
+  return paths.map((path): RawConflict => {
     const present = stages.get(path) ?? new Set<number>();
     return {
       path,
       ours: readStage(seams, cwd, path, oursStage, present.has(oursStage)),
       theirs: readStage(seams, cwd, path, theirsStage, present.has(theirsStage)),
+      baseSide: present.size === 0 || present.has(theirsStage),
     };
   });
 }
@@ -257,7 +306,71 @@ export interface CatchUpOptions {
   readonly strategy: RequestedStrategy;
   readonly dryRun: boolean;
   readonly abort: boolean;
+  /**
+   * Reads the mechanical declaration. Called only once something conflicted,
+   * so a clean catch-up never opens the file. Absent means "nothing declared".
+   */
+  readonly declaration?: () => MechanicalDeclaration;
 }
+
+/** The report's classification fields, and each conflict with its class. */
+export interface Classified {
+  readonly conflicted: readonly CatchUpConflict[];
+  readonly declaration: DeclarationState;
+  readonly declarationError: string | null;
+  readonly classes: Readonly<Record<ConflictClass, number>>;
+  readonly mechanical: boolean;
+  readonly resolve: readonly ResolveGroup[];
+  readonly classification: Classification;
+  readonly read: MechanicalDeclaration;
+}
+
+const ABSENT: MechanicalDeclaration = { state: "absent", block: null, error: null };
+
+/** Classify `raw` against the declaration -- read only when `raw` is non-empty. */
+export function classify(raw: readonly RawConflict[], options: CatchUpOptions, strategy: Strategy): Classified {
+  const read = raw.length === 0 ? NOT_READ : (options.declaration?.() ?? ABSENT);
+  const classification = classifyConflicts(
+    raw.map((conflict) => ({ path: conflict.path, baseSide: conflict.baseSide })),
+    read,
+    strategy,
+  );
+  return {
+    conflicted: raw.map((conflict): CatchUpConflict => ({
+      path: conflict.path,
+      class: classification.classes.get(conflict.path) ?? "other",
+      ours: conflict.ours,
+      theirs: conflict.theirs,
+    })),
+    declaration: read.state,
+    declarationError: read.error,
+    classes: classification.counts,
+    mechanical: classification.mechanical,
+    resolve: classification.resolve,
+    classification,
+    read,
+  };
+}
+
+/** The report's tail fields, in contract order. */
+function tailOf(classified: Classified): Pick<CatchUpReport, "declaration" | "declarationError" | "classes" | "mechanical" | "resolve"> {
+  return {
+    declaration: classified.declaration,
+    declarationError: classified.declarationError,
+    classes: classified.classes,
+    mechanical: classified.mechanical,
+    resolve: classified.resolve,
+  };
+}
+
+/** The report's tail for a run with nothing conflicted. */
+const UNCLASSIFIED = {
+  declaration: "not-read" as DeclarationState,
+  declarationError: null,
+  classes: { manifest: 0, changelog: 0, mirror: 0, other: 0 },
+  mechanical: false,
+  resolve: [] as readonly ResolveGroup[],
+};
 
 /**
  * The verb, from the first read to the report. `refused` is a usage error
@@ -295,6 +408,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     return {
       kind: "done",
       lines,
+      classified: null,
       report: {
         contract: CATCH_UP_CONTRACT,
         base,
@@ -308,6 +422,7 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
         resumed: false,
         aborted: !dryRun,
         dryRun,
+        ...UNCLASSIFIED,
       },
     };
   }
@@ -324,28 +439,33 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     const behindBefore = mustCount(seams, cwd, `HEAD..${remoteBase}`);
     const aheadBefore = mustCount(seams, cwd, `${remoteBase}..HEAD`);
     const stillConflicted = collectConflicts(seams, cwd, pending);
-    const report = (after: string | null, conflicted: readonly CatchUpConflict[]): CatchUpReport => ({
-      contract: CATCH_UP_CONTRACT,
-      base,
-      strategy: pending,
-      before,
-      after,
-      behindBefore,
-      aheadBefore,
-      noOp: false,
-      conflicted,
-      resumed: !dryRun && conflicted.length === 0,
-      aborted: false,
-      dryRun,
-    });
+    const done = (after: string | null, raw: readonly RawConflict[]): CatchUpOutcome => {
+      const classified = raw.length === 0 ? null : classify(raw, options, pending);
+      const report: CatchUpReport = {
+        contract: CATCH_UP_CONTRACT,
+        base,
+        strategy: pending,
+        before,
+        after,
+        behindBefore,
+        aheadBefore,
+        noOp: false,
+        conflicted: classified?.conflicted ?? [],
+        resumed: !dryRun && raw.length === 0,
+        aborted: false,
+        dryRun,
+        ...(classified === null ? UNCLASSIFIED : tailOf(classified)),
+      };
+      return { kind: "done", lines, report, classified };
+    };
     if (stillConflicted.length > 0) {
       lines.push(`${pending} in progress, and ${stillConflicted.length} path(s) still conflicted -- nothing continued:`);
       lines.push(abortLine(pending));
-      return { kind: "done", lines, report: report(null, stillConflicted) };
+      return done(null, stillConflicted);
     }
     if (dryRun) {
       lines.push(pending === "rebase" ? "would run: git rebase --continue  (GIT_EDITOR=true)" : "would run: git commit --no-edit");
-      return { kind: "done", lines, report: report(null, []) };
+      return done(null, []);
     }
     const resumed = pending === "rebase"
       ? runGit(seams, cwd, ["rebase", "--continue"], { GIT_EDITOR: "true" })
@@ -357,11 +477,11 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
       }
       lines.push(`continued the ${pending}; a later commit conflicted on ${conflicted.length} path(s) -- nen picked no side:`);
       lines.push(abortLine(pending));
-      return { kind: "done", lines, report: report(null, conflicted) };
+      return done(null, conflicted);
     }
     const after = mustHead(seams, cwd, `continued the ${pending}`);
     lines.push(`continued the ${pending}; HEAD is ${after}`);
-    return { kind: "done", lines, report: report(after, []) };
+    return done(after, []);
   }
 
   // ── the ordinary path: clean tree, fetch, choose, run ─────────────────────
@@ -407,29 +527,34 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     lines.push(`strategy: ${strategy}`);
   }
 
-  const report = (after: string | null, noOp: boolean, conflicted: readonly CatchUpConflict[]): CatchUpReport => ({
-    contract: CATCH_UP_CONTRACT,
-    base,
-    strategy,
-    before,
-    after,
-    behindBefore,
-    aheadBefore,
-    noOp,
-    conflicted,
-    resumed: false,
-    aborted: false,
-    dryRun,
-  });
+  const done = (after: string | null, noOp: boolean, raw: readonly RawConflict[]): CatchUpOutcome => {
+    const classified = raw.length === 0 ? null : classify(raw, options, strategy);
+    const report: CatchUpReport = {
+      contract: CATCH_UP_CONTRACT,
+      base,
+      strategy,
+      before,
+      after,
+      behindBefore,
+      aheadBefore,
+      noOp,
+      conflicted: classified?.conflicted ?? [],
+      resumed: false,
+      aborted: false,
+      dryRun,
+      ...(classified === null ? UNCLASSIFIED : tailOf(classified)),
+    };
+    return { kind: "done", lines, report, classified };
+  };
 
   if (behindBefore === 0) {
     lines.push(`already up to date with ${remoteBase} (${aheadBefore} ahead, 0 behind) -- nothing to do`);
-    return { kind: "done", lines, report: report(before, true, []) };
+    return done(before, true, []);
   }
   const argv = strategy === "rebase" ? ["rebase", remoteBase] : ["merge", "--no-edit", remoteBase];
   if (dryRun) {
     lines.push(`would run: git ${argv.join(" ")}  (${aheadBefore} ahead, ${behindBefore} behind)`);
-    return { kind: "done", lines, report: report(null, false, []) };
+    return done(null, false, []);
   }
   const ran = runGit(seams, cwd, argv);
   if (ran.code !== 0) {
@@ -439,11 +564,11 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     }
     lines.push(`${strategy} stopped on ${conflicted.length} conflicted path(s) -- nen picked no side; the tree is left as git left it:`);
     lines.push(abortLine(strategy));
-    return { kind: "done", lines, report: report(null, false, conflicted) };
+    return done(null, false, conflicted);
   }
   const after = mustHead(seams, cwd, `${strategy}d ${remoteBase}`);
   lines.push(`${strategy === "rebase" ? "rebased onto" : "merged"} ${remoteBase}; HEAD is ${after}`);
-  return { kind: "done", lines, report: report(after, false, []) };
+  return done(after, false, []);
 }
 
 /**
