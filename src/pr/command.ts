@@ -46,7 +46,6 @@ import {
 } from "../gates/base_exclusions.js";
 import { resolveDeclaredExclusions } from "../gates/predicates.js";
 import { declarationWarnings } from "../gates/ready.js";
-import { plainLine } from "../cli/plain.js";
 import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";

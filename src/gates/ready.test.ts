@@ -1241,7 +1241,10 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       const evaluation = evaluateReady(OWN, stateFor(combo), OPTIONS);
       expect(evaluation.context.reviewers).toEqual(enrolled ? ["copilot", "bugbot"] : ["copilot"]);
       const owedRow = rowOf(evaluation, "rounds-owed");
-      expect(owedRow.status).toBe(!copilotOwed && !bugbotOwed && quorumMet ? "ready" : "failed");
+      // The 2026-10-04 ruling (zheref/nen#361): a MET quorum fulfils the owed
+      // rounds of its own members, and both reviewers here are members -- so
+      // the row is exactly the quorum's verdict.
+      expect(owedRow.status).toBe(quorumMet ? "ready" : "failed");
 
       // The quorum is carried on the row whatever its outcome.
       expect(owedRow.roundQuorum).toMatchObject({
@@ -1253,8 +1256,8 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
 
       // Each failure is named, and nothing that did not fail is.
       const reason = owedRow.reason ?? "";
-      expect(reason.includes("copilot (review requested, not yet posted)")).toBe(copilotOwed);
-      expect(reason.includes("bugbot (no round at head)")).toBe(bugbotOwed);
+      expect(reason.includes("copilot (review requested, not yet posted)")).toBe(copilotOwed && !quorumMet);
+      expect(reason.includes("bugbot (no round at head)")).toBe(bugbotOwed && !quorumMet);
       expect(reason.includes("round quorum not met")).toBe(!quorumMet);
       if (!quorumMet) {
         const lack = {
@@ -1269,18 +1272,150 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
           combo.copilotRequested ? "copilot (no round, review requested, not yet posted)" : "copilot (no round)",
         );
       }
-      if (owedRow.status === "ready") expect(owedRow.note).toMatch(/^round quorum met \(/);
+      if (owedRow.status === "ready") {
+        expect(owedRow.note).toMatch(/^round quorum met \(/);
+        // Each excused member is named, and why; nothing else is.
+        const note = owedRow.note ?? "";
+        expect(note.includes("copilot (review requested, not yet posted; covered by round quorum)")).toBe(copilotOwed);
+        expect(note.includes("bugbot (no round at head; covered by round quorum)")).toBe(bugbotOwed);
+        expect(note.includes("excused by the met round quorum")).toBe(copilotOwed || bugbotOwed);
+      }
 
       // THE PRE-QUORUM READING -- the declaration alone -- is the per-reviewer
-      // verdict, and the quorum only ever ADDS to it: whatever the declaration
-      // refuses, the quorum-carrying file refuses too.
+      // verdict. Under the 2026-10-04 ruling the quorum both ADDS (an unmet
+      // quorum fails what the declaration passes) and FULFILS (a met quorum
+      // passes a member the declaration owes): the row is the quorum's verdict.
       const alone = rowOf(evaluateReady(DECLARATION_ALONE, stateFor(combo), OPTIONS), "rounds-owed");
       expect(alone.status).toBe(!copilotOwed && !bugbotOwed ? "ready" : "failed");
       expect(alone).not.toHaveProperty("roundQuorum");
-      if (alone.status === "failed") expect(owedRow.status).toBe("failed");
-      if (owedRow.status === "ready") expect(alone.status).toBe("ready");
+      // The rows other than CON-32(b)'s owed limb do not move with the quorum.
+      const aloneAll = evaluateReady(DECLARATION_ALONE, stateFor(combo), OPTIONS);
+      for (const id of ["round-stalled", "unresolved-threads"] as const) {
+        expect(rowOf(evaluation, id).status).toBe(rowOf(aloneAll, id).status);
+      }
     },
   );
+
+  // zheref/nen#361's acceptance criteria, by name (ruling 2026-10-04).
+  it("#361: Bugbot EXHAUSTED (its check errors NEUTRAL, which enrols it) plus a Copilot round is READY", () => {
+    const errored = { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "NEUTRAL", title: "Error" };
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), errored],
+        reviews: [{ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(row.status).toBe("ready");
+    expect(row.note).toContain("round quorum met (1 of 2 with a round, 1 required, CON-32b)");
+    expect(row.note).toContain("excused by the met round quorum (ruling 2026-10-04): bugbot (no round at head; covered by round quorum)");
+  });
+
+  it("#361: Copilot OWED (requested, silent) plus a Bugbot SUCCESS is READY", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(rowOf(evaluation, "rounds-owed").note).toContain(
+      "copilot (review requested, not yet posted; covered by round quorum)",
+    );
+  });
+
+  it("#361: a reviewer NOT in any_of is still owed, met quorum or not", () => {
+    const withOutsider = parseGateIdentities("/fixture/nen/gates.json", {
+      ...OWN_RAW,
+      reviewers: [
+        ...(OWN_RAW["reviewers"] as unknown[]),
+        { name: "sasuke", login_pattern: { pattern: "^sasuke$", ignoreCase: true } },
+      ],
+      base_reviewers: ["copilot", "sasuke"],
+    });
+    const evaluation = evaluateReady(
+      withOutsider,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot,sasuke",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(row.reason).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head)",
+    );
+    expect(row.roundQuorum?.met).toBe(true);
+  });
+
+  it("#361: an UNMET quorum still fails, naming every owed member", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.neutral],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(rowOf(evaluation, "rounds-owed").reason).toMatch(
+      /^not-ready: a configured reviewer's round is still owed at the current head \(CON-32b\): copilot \(review requested, not yet posted\);bugbot \(no round at head\) — and round quorum not met/,
+    );
+  });
+
+  it("#361: a file with NO quorum gets the per-reviewer verdict, byte for byte", () => {
+    // DECLARATION_ALONE is this repository's file minus `round_quorum`. Copilot
+    // requested and silent, Bugbot clean: the owed round still fails exactly as
+    // before the 2026-10-04 ruling, with no quorum on the row and no note.
+    const evaluation = evaluateReady(
+      DECLARATION_ALONE,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(evaluation.line).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted)",
+    );
+    expect(row).not.toHaveProperty("roundQuorum");
+    expect(row.note).toBeNull();
+  });
+
+  it("#361: a met quorum leaves row 3 (a stalled request) and row 6 (threads) failing", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+        stall_requested_at: "2025-06-01T10:00:00Z",
+        unresolved_threads: 2,
+      }),
+      OPTIONS,
+    );
+    expect(rowOf(evaluation, "rounds-owed").status).toBe("ready");
+    expect(rowOf(evaluation, "round-stalled").status).toBe("failed");
+    expect(rowOf(evaluation, "unresolved-threads").status).toBe("failed");
+    expect(evaluation.ready).toBe(false);
+  });
 
   it("NOBODY reviewed: the line is the quorum's, word for word, and it is the only failing row", () => {
     // No review, no run at head, and no run on any earlier head either -- a
@@ -1380,20 +1515,22 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
     );
   });
 
-  it("a met quorum never excuses an owed round: Copilot requested, Bugbot's round had, still not-ready", () => {
+  // SUPERSEDED by the 2026-10-04 ruling (zheref/nen#361): under 2026-09-29 a
+  // met quorum never excused an owed round; now it fulfils its members'.
+  it("a met quorum EXCUSES an owed member: Copilot requested, Bugbot's round had, ready (ruling 2026-10-04)", () => {
     const evaluation = evaluateReady(
       OWN,
       stateFor({ copilotReview: false, bugbotReview: true, copilotRequested: true, bugbotCheck: "absent" }),
       OPTIONS,
     );
     expect(rowOf(evaluation, "rounds-owed").roundQuorum?.met).toBe(true);
-    expect(evaluation.line).toBe(
-      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
-        "copilot (review requested, not yet posted)",
-    );
+    expect(evaluation.line).toBe("ready");
   });
 
-  it("a Cursor Bugbot check still RUNNING keeps bugbot owed even though Copilot's round meets the quorum", () => {
+  // SUPERSEDED by the 2026-10-04 ruling: a still-running member is excused
+  // by a met quorum like any other owed member. Its findings, if it posts any,
+  // still hold row 6 until resolved -- but a PR may read ready before it posts.
+  it("a Cursor Bugbot check still RUNNING is excused once Copilot's round meets the quorum (ruling 2026-10-04)", () => {
     const evaluation = evaluateReady(
       OWN,
       stateFor({ copilotReview: true, bugbotReview: false, copilotRequested: false, bugbotCheck: "in-progress" }),
@@ -1401,9 +1538,8 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
     );
     const row = rowOf(evaluation, "rounds-owed");
     expect(row.roundQuorum?.met).toBe(true);
-    expect(row.reason).toBe(
-      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
-    );
+    expect(row.status).toBe("ready");
+    expect(row.note).toContain("bugbot (no round at head; covered by round quorum)");
   });
 
   it("the stall bound is unchanged: a stalled Copilot request is row 3's line; row 4 carries owed AND quorum", () => {
@@ -1441,7 +1577,7 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       expect(evaluation.ready).toBe(true);
     });
 
-    it("--reviewers bugbot with only Copilot's round: bugbot is owed; the met quorum does not excuse it", () => {
+    it("--reviewers bugbot with only Copilot's round: the met quorum fulfils bugbot's round (ruling 2026-10-04)", () => {
       const evaluation = evaluateReady(
         OWN,
         readyState({
@@ -1452,9 +1588,8 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       );
       const row = rowOf(evaluation, "rounds-owed");
       expect(row.roundQuorum?.met).toBe(true);
-      expect(row.reason).toBe(
-        "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
-      );
+      expect(row.status).toBe("ready");
+      expect(row.note).toContain("bugbot (no round at head; covered by round quorum)");
     });
   });
 

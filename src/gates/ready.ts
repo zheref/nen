@@ -156,11 +156,21 @@
 //     contract -- a seventh row changes what the table MEANS, which bumps the
 //     contract and every consumer with it -- and because in substance it IS
 //     CON-32(b)'s owed limb: "a round is owed at the current head", asked of a
-//     group. The QUORUM BRANCH only ever ADDS a failure: it excuses no
-//     per-reviewer owed round, and a file that declares no quorum gets from
-//     THIS branch byte-for-byte the table, the line and the JSON it got
-//     before. (Per-reviewer verdicts themselves DID move, for a different
-//     reason -- see (10).)
+//     group. A file that declares no quorum gets from THIS branch
+//     byte-for-byte the table, the line and the JSON it got before.
+//     (Per-reviewer verdicts themselves DID move, for a different reason --
+//     see (10).)
+//     A MET QUORUM FULFILS ITS OWN MEMBERS' ROUNDS (maintainer ruling
+//     2026-10-04, zheref/nen#361, superseding "the quorum only ever ADDS a
+//     failure"): "a declared round_quorum must fulfil the round requirement
+//     for its members. If Bugbot is unavailable because it is exhausted,
+//     Copilot's round satisfies the review gate, and the other way around."
+//     So once the quorum is met, an owed round of a reviewer NAMED IN
+//     `any_of` no longer fails row 4; the row's note names the quorum and
+//     each excused member. A reviewer outside `any_of` is owed exactly as
+//     before, an UNMET quorum fails exactly as before, and rows 3 (a stalled
+//     request) and 6 (unresolved threads) are untouched -- an excused
+//     member's posted findings must still be resolved.
 //     Under `bounded`, a round-check reviewer's SUCCESS run on an EARLIER
 //     commit that GitHub lists against this pull request -- the blob's
 //     `earlier_round_checks`, read by ../github/pr_state.ts -- is also its
@@ -304,6 +314,7 @@ import {
   latestChecks,
   normalizeReviewers,
   pendingRounds,
+  quorumExcusedRounds,
   resolveDeclaredExclusions,
   reviewsAllApprovedAtHead,
   reviewerReviewCheckPattern,
@@ -1374,25 +1385,34 @@ export function evaluateReady(
         earlierChecks: earlierRoundChecks(state),
       };
       const owed = pendingRounds(identities, roundInputs, head, reviewers, policy, delivery);
-      const owedReason =
-        owed.length === 0
-          ? null
-          : "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
-            owed.map((entry): string => describeOwedRound(identities, entry)).join(";");
-      // `round_quorum` (maintainer ruling 2026-09-29) -- ADOPTION DIVERGENCE
-      // (9) in the header. The quorum is judged on the SAME row and only ever
-      // ADDS a failure: an owed round above is never excused by a met quorum,
-      // and an unmet quorum fails the row even when nothing above is owed.
-      // It is read from the FILE, so it applies under `--reviewers` too -- the
-      // configured set decides who is OWED, the quorum is the repository's
-      // declared floor on who HAS reviewed -- and it is `null` on the
-      // `--reviewers`-only identity path, which names no file.
+      // `round_quorum` (maintainer rulings 2026-09-29 and 2026-10-04) --
+      // ADOPTION DIVERGENCE (9) in the header. The quorum is judged on the
+      // SAME row. Unmet, it fails the row even when nothing is owed. MET, it
+      // FULFILS the owed rounds of its own `any_of` members
+      // (`quorumExcusedRounds`); a non-member is still owed. It is read from
+      // the FILE, so it applies under `--reviewers` too -- the configured set
+      // decides who is OWED, the quorum is the repository's declared rule on
+      // who HAS reviewed -- and it is `null` on the `--reviewers`-only
+      // identity path, which names no file.
       const quorum =
         roundQuorum(identities, roundInputs, head, policy, delivery) ?? undefined;
+      const { owed: stillOwed, excused } = quorumExcusedRounds(owed, quorum);
+      const owedReason =
+        stillOwed.length === 0
+          ? null
+          : "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
+            stillOwed.map((entry): string => describeOwedRound(identities, entry)).join(";");
       if (quorum === undefined || quorum.met) {
+        const excusedClause =
+          excused.length === 0
+            ? ""
+            : "; excused by the met round quorum (ruling 2026-10-04): " +
+              excused
+                .map((entry): string => `${describeOwedRound(identities, entry).replace(/\)$/, "")}; covered by round quorum)`)
+                .join(", ");
         owedRow =
           owedReason === null
-            ? passed(quorum === undefined ? null : describeQuorum(quorum), quorum)
+            ? passed(quorum === undefined ? null : `${describeQuorum(quorum)}${excusedClause}`, quorum)
             : failed(owedReason, quorum);
       } else {
         // Both failures on one row, owed first: the line a caller quotes

@@ -94,9 +94,11 @@
 // "subset of a newer file's reviewer rules" the version exists to refuse. It is
 // accepted here because (1) the maintainer required the declaration to stay
 // VALID under the pinned v0.15.1, which a version bump would break outright for
-// every consumer on that pin; (2) the quorum only ever ADDS a requirement, so
-// the subset an older reader applies is the declaration's own per-reviewer
-// verdict -- never a reviewer excused that the file's per-reviewer rules owe;
+// every consumer on that pin; (2) the subset an older reader applies is the
+// declaration's own per-reviewer verdict -- never a reviewer excused that the
+// file's per-reviewer rules owe. (Since the 2026-10-04 ruling, zheref/nen#361,
+// a MET quorum also fulfils its own members' owed rounds; an older reader
+// still owes them, which is STRICTER there, never wider);
 // and (3) the file is written so that declaration is meaningful on its own
 // (see this repository's own `nen/gates.json` `$comment`). What an older reader
 // misses is exactly the quorum's floor -- "somebody reviewed". Making that
@@ -242,8 +244,9 @@ export interface DependabotCarveOut {
 /**
  * `round_quorum` -- at least `minimum` of the reviewers named in `anyOf` must
  * HAVE a round (maintainer ruling 2026-09-29; the header's `round_quorum`
- * section). A requirement ADDED to CON-32(b)'s rounds-owed row, never an
- * exemption: it excuses no reviewer the per-reviewer rules owe.
+ * section). Unmet, it ADDS a failure to CON-32(b)'s rounds-owed row. Met, it
+ * FULFILS the rounds owed by its own `anyOf` members (maintainer ruling
+ * 2026-10-04, zheref/nen#361); a reviewer outside `anyOf` is never excused.
  *
  * "Has a round" is decided by EXACTLY the rules that already satisfy one
  * reviewer (the round policy, a posted review under `login_pattern`, a

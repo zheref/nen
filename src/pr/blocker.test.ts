@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
-import { loadGateIdentities, type GateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { PrSnapshot } from "./fetch.js";
 import type { CheckRun, Review } from "../github/types.js";
 import { nextBlocker } from "./blocker.js";
@@ -178,6 +180,48 @@ describe("nextBlocker -- round_quorum, on this repository's own nen/gates.json (
         "copilot (no round), bugbot (no round, no 'Cursor Bugbot' check)" +
         " (head only — `nen pr ready` also reads earlier commits of this PR)",
     });
+  });
+
+  // zheref/nen#361 (ruling 2026-10-04): a met quorum fulfils its members'
+  // rounds, here as in `pr ready`'s row 4.
+  it("#361: Bugbot errored (NEUTRAL, enrolled) plus Copilot's review: no owed-round for the covered member", () => {
+    const result = nextBlocker(
+      OWN,
+      snapshot({ checks: [green, bugbotRun("NEUTRAL")], reviews: [review("copilot-pull-request-reviewer[bot]")] }),
+    );
+    expect(result.kind).toBe("none");
+  });
+
+  it("#361: Copilot requested and silent plus a Bugbot SUCCESS: no owed-round", () => {
+    const result = nextBlocker(
+      OWN,
+      snapshot({
+        checks: [green, bugbotRun("SUCCESS")],
+        reviewRequests: [{ login: "Copilot", name: null }],
+      }),
+    );
+    expect(result.kind).toBe("none");
+    // The request does make Copilot owed: with no other member's round, it is named.
+    const unmet = nextBlocker(
+      OWN,
+      snapshot({ checks: [green], reviewRequests: [{ login: "Copilot", name: null }] }),
+    );
+    expect(unmet.kind).toBe("owed-round");
+    expect(unmet.detail).toMatch(/^copilot \(review-requested-not-yet-posted\) — and round quorum not met/);
+  });
+
+  it("#361: a non-member owed is still an owed-round, quorum met or not", () => {
+    const raw = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as {
+      reviewers: unknown[];
+    } & Record<string, unknown>;
+    const withOutsider = parseGateIdentities("/fixture/nen/gates.json", {
+      ...raw,
+      reviewers: [...raw.reviewers, { name: "sasuke", login_pattern: { pattern: "^sasuke$", ignoreCase: true } }],
+    });
+    const result = nextBlocker(withOutsider, snapshot({ checks: [green, bugbotRun("SUCCESS")] }), {
+      reviewers: ["copilot", "bugbot", "sasuke"],
+    });
+    expect(result).toEqual({ kind: "owed-round", detail: "sasuke (no-round-at-head)" });
   });
 
   it("Bugbot's review (as cursor[bot]) meets the quorum -- the blocker moves on", () => {

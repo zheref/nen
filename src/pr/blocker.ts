@@ -27,6 +27,7 @@ import {
   excludeCheckNames,
   latestChecks,
   pendingRounds,
+  quorumExcusedRounds,
   resolveDeclaredExclusions,
   roundQuorum,
   type RoundPolicy,
@@ -155,10 +156,13 @@ export function nextBlocker(
   );
   // `round_quorum` (maintainer ruling 2026-09-29; Nobunaga's review of E7,
   // finding H2): the file's floor on how many of a group HAVE a round. Asked
-  // AFTER pendingRounds and of the same inputs, and it only ever ADDS: before
-  // it was asked here, this repository's own gates.json (copilot exempt,
-  // bugbot enrolled only by its check) let an unreviewed pull request answer
-  // `none` while `nen pr ready` refused it on the quorum. `null` when the file
+  // AFTER pendingRounds and of the same inputs. Unmet, it adds a blocker:
+  // before it was asked here, this repository's own gates.json (copilot
+  // exempt, bugbot enrolled only by its check) let an unreviewed pull request
+  // answer `none` while `nen pr ready` refused it on the quorum. MET, it
+  // FULFILS the owed rounds of its own `any_of` members (maintainer ruling
+  // 2026-10-04, zheref/nen#361), exactly as `pr ready`'s row 4 does, so this
+  // verb never names an owed round `pr ready` excuses. `null` when the file
   // declares none, and then nothing below changes.
   const quorum = roundQuorum(identities, roundInputs, snapshot.pr.headSha, policy, deliveryPr);
   // HEAD ONLY, AND SAID SO (Nobunaga's delta review of E7, finding F2). Under
@@ -192,8 +196,9 @@ export function nextBlocker(
       ? describeQuorum(quorum) +
         (headOnly ? " (head only — `nen pr ready` also reads earlier commits of this PR)" : "")
       : null;
-  if (owed.length > 0) {
-    const detail = owed.map((round): string => `${round.reviewer} (${round.reason})`).join(", ");
+  const { owed: stillOwed } = quorumExcusedRounds(owed, quorum);
+  if (stillOwed.length > 0) {
+    const detail = stillOwed.map((round): string => `${round.reviewer} (${round.reason})`).join(", ");
     return {
       kind: "owed-round",
       detail: quorumClause === null ? detail : `${detail} — and ${quorumClause}`,

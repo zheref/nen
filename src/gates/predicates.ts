@@ -1475,6 +1475,27 @@ export interface QuorumMember {
   } | null;
 }
 
+/**
+ * The 2026-10-04 ruling (zheref/nen#361): a MET `round_quorum` FULFILS the
+ * round owed by its own `any_of` members -- "if Bugbot is unavailable because
+ * it is exhausted, Copilot's round satisfies the review gate, and the other way
+ * around". Splits the per-reviewer owed list into what still fails CON-32(b)
+ * and what the met quorum excuses. A member owed under an UNMET quorum, a
+ * non-member, and every owed round when no quorum is declared (`null`) stay
+ * owed exactly as before. Pure: callers decide how to render the excused.
+ */
+export function quorumExcusedRounds(
+  owed: readonly OwedRound[],
+  quorum: QuorumResult | null | undefined,
+): { readonly owed: readonly OwedRound[]; readonly excused: readonly OwedRound[] } {
+  if (quorum === null || quorum === undefined || !quorum.met) return { owed, excused: [] };
+  const members = new Set(quorum.anyOf);
+  return {
+    owed: owed.filter((round): boolean => !members.has(round.reviewer)),
+    excused: owed.filter((round): boolean => members.has(round.reviewer)),
+  };
+}
+
 export interface QuorumResult {
   /** The file's `any_of`, in its order. */
   readonly anyOf: readonly string[];

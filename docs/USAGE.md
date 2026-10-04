@@ -1254,13 +1254,32 @@ Cursor Bugbot". `round_quorum` says it:
   `bounded_policy_exempt`**. Those two facts decide who is *owed* a round, not
   who *has* one. A pending review request is reported beside the member, and it
   is never counted either way.
-- **It only adds a requirement.** Fewer than `minimum` members with a round
-  fails row 4 (`rounds-owed`, CON-32(b)). Every per-reviewer owed round is
-  judged exactly as before and is never excused by a met quorum. A member with
-  a pending request is still owed, and an enrolled `Cursor Bugbot` whose check
-  is still running is still owed. The quorum is on row 4 rather than a row of
-  its own because `conjuncts` stays the six rows of `nen.pr.ready/v0.1`, and a
-  seventh would change what the table means for every consumer.
+- **Unmet, it adds a requirement; met, it fulfils its members' rounds
+  (maintainer ruling of 2026-10-04, zheref/nen#361, superseding "it only adds
+  a requirement").** The ruling: *a declared `round_quorum` must fulfil the
+  round requirement for its members. If Bugbot is unavailable because it is
+  exhausted, Copilot's round satisfies the review gate, and the other way
+  around.* So:
+  - fewer than `minimum` members with a round fails row 4 (`rounds-owed`,
+    CON-32(b)), even when nothing is owed, exactly as before;
+  - once the quorum is **met**, a round owed by a reviewer **named in
+    `any_of`** no longer fails row 4. That covers a member with a pending
+    request, an enrolled `Cursor Bugbot` whose check is still running, and one
+    whose check errored (`NEUTRAL`, for example "usage limit reached"). The row
+    passes, and its note names the quorum and each excused member:
+    `round quorum met (1 of 2 …): …; excused by the met round quorum (ruling
+    2026-10-04): bugbot (no round at head; covered by round quorum)`;
+  - a reviewer **not** in `any_of` is owed exactly as before;
+  - row 3 (a stalled request) and row 6 (unresolved threads) are unchanged,
+    so a member's posted findings must still be resolved, and an excused
+    member that is still running can post findings after the row reads ready;
+  - `nen pr next-blocker` agrees: it reports no `owed-round` for a member the
+    met quorum covers;
+  - a file with no `round_quorum` gets byte-identical output.
+
+  The quorum is on row 4 rather than a row of its own because `conjuncts`
+  stays the six rows of `nen.pr.ready/v0.1`, and a seventh would change what
+  the table means for every consumer.
 - **The reason names every member.** With nothing owed, the row reads
   `not-ready: round quorum not met (0 of 2 with a round, 1 required, CON-32b):
   copilot (no round), bugbot (no round, no 'Cursor Bugbot' check)`. A member
@@ -1339,11 +1358,10 @@ unmet until something changes. There are two remedies:
   re-run needs a new comment ([Cursor Docs: Bugbot](https://cursor.com/help/ai-features/bugbot)).
   A run that concludes `SUCCESS` is Bugbot's round. A run with findings posts a
   review, which is its round too.
-- **When Bugbot cannot succeed and Copilot already has a round**, run
-  `nen pr ready <ref> --reviewers copilot` (the reviewers other than Bugbot).
-  `--reviewers` sets who is *owed* a round, so Bugbot stops being owed. The
-  quorum is the repository's declared floor and still counts Copilot's round,
-  so the pull request is not waved through on nobody's review.
+- **When Bugbot cannot succeed and Copilot already has a round**, nothing is
+  needed since the 2026-10-04 ruling: the met quorum fulfils Bugbot's round.
+  (Before it, the remedy was `--reviewers copilot`.) Without another member's
+  round, an owed Bugbot still holds the quorum unmet.
 
 **Worked example: this repository's own `nen/gates.json`.** Copilot is kept but
 exempt under `bounded`, Cursor Bugbot is added, and the quorum asks for at least
@@ -1374,8 +1392,9 @@ one of the two:
 | Bugbot posted a review (as `cursor[bot]`) at any earlier head | ready |
 | Bugbot's run concluded `SUCCESS` on an earlier commit that GitHub lists against this PR, nothing at head, no review | ready under `bounded`, noted `bugbot (round: 'Cursor Bugbot' check completed at earlier head <sha>)`. FAILED under `strict` |
 | Copilot posted a review at any earlier head | ready |
-| `Cursor Bugbot` still running, Copilot reviewed earlier | FAILED: `bugbot (no round at head)`. It is enrolled and owed until its run concludes `SUCCESS` or it posts a review. See *The way out of an owed Bugbot round* below |
-| Copilot re-requested and not yet posted, Bugbot reviewed | FAILED: `copilot (review requested, not yet posted)` |
+| `Cursor Bugbot` still running, Copilot reviewed earlier | ready (ruling 2026-10-04): the met quorum excuses it, noted `bugbot (no round at head; covered by round quorum)`. Under the 2026-09-29 reading this FAILED |
+| `Cursor Bugbot` errored (`NEUTRAL`, "usage limit reached"), Copilot reviewed earlier | ready (ruling 2026-10-04), noted the same way |
+| Copilot re-requested and not yet posted, Bugbot reviewed | ready (ruling 2026-10-04), noted `copilot (review requested, not yet posted; covered by round quorum)`. Row 3 still fails if the request has stalled |
 
 Under a release that predates `round_quorum` (through v0.16.0), the first three
 rows read `ready`: no reviewer is owed, and those releases ignore the floor.
