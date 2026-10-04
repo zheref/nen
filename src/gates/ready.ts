@@ -687,7 +687,10 @@ export function declarationWarnings(outcome: DeclaredExclusionOutcome, source: s
   const counted =
     outcome.matched.length === 0
       ? "it names no check at this head"
-      : `counted on CON-32(a): ${outcome.matched.join(", ")}`;
+      : // Not "counted": another honoured entry, or --exclude-check, may still
+        // remove the same label (Copilot on zheref/nen#359). This declaration
+        // only says it did not.
+        `labels matched but not removed by this declaration: ${outcome.matched.join(", ")}`;
   switch (outcome.status) {
     case "expired":
       return [

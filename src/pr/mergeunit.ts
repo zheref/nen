@@ -61,6 +61,7 @@ import { SchemaError } from "../schema/errors.js";
 import { GH, must, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import type { DeclaredExclusionReport, Io, PrReadyDeps, PrReadyInput } from "../verbs/pr_ready.js";
 import { declarationNotice } from "../gates/ready.js";
+import { plainLine } from "../cli/plain.js";
 import { prReady, defaultDeps } from "../verbs/pr_ready.js";
 import { targetFromRemote, TargetError, type Target } from "../github/target.js";
 
@@ -208,14 +209,16 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     // (zheref/nen#249, Feitan F2): a merge transcript never records a widened
     // verdict without the ruling that widened it.
     lines: [
-      `pr ready: ${line}`,
-      ...declaredNoticeLines(parsed.meta?.declaredExclusions).map((notice): string => `pr ready: ${notice}`),
+      plainLine(`pr ready: ${line}`),
+      // Plain at the boundary (Copilot on zheref/nen#359): labels, names,
+      // reasons and conditions are text this verb did not write.
+      ...declaredNoticeLines(parsed.meta?.declaredExclusions).map((notice): string => plainLine(`pr ready: ${notice}`)),
       // Every other warning the verdict carried (hanten round 2, N2) -- a
       // refused base read, a local-only exclusion, an expired ruling -- minus
       // the notices just printed.
       ...(Array.isArray(parsed.meta?.warnings) ? parsed.meta.warnings : [])
         .filter((warning): boolean => typeof warning === "string" && !warning.startsWith("excluded by declaration: "))
-        .map((warning): string => `pr ready: warning: ${redact(warning)}`),
+        .map((warning): string => plainLine(`pr ready: warning: ${redact(warning)}`)),
       ...captured.errLines.map(redact),
     ],
   };

@@ -46,6 +46,7 @@ import {
 } from "../gates/base_exclusions.js";
 import { resolveDeclaredExclusions } from "../gates/predicates.js";
 import { declarationWarnings } from "../gates/ready.js";
+import { plainLine } from "../cli/plain.js";
 import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
@@ -740,9 +741,11 @@ function blocker(context: CommandContext): number {
     return result.kind === "none" ? 0 : 1;
   }
   context.io.out(`#${prNumber}: ${result.kind}`);
-  context.io.out(`  ${result.detail}`);
+  // Plain at the boundary (Copilot on zheref/nen#359): the detail and the
+  // declaration lines carry check labels and declared text nen did not write.
+  context.io.out(plainLine(`  ${result.detail}`));
   for (const warning of warnings) {
-    context.io.out(warning.startsWith("excluded by declaration: ") ? `  ${warning}` : `  warning: ${warning}`);
+    context.io.out(plainLine(warning.startsWith("excluded by declaration: ") ? `  ${warning}` : `  warning: ${warning}`));
   }
   return result.kind === "none" ? 0 : 1;
 }

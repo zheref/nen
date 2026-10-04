@@ -749,8 +749,33 @@ describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(after.context.declaredExclusions[0]?.status).toBe("expired");
     expect(after.context.declaredExclusions[0]?.matched).toEqual([WINDOWS]);
     expect(after.context.warnings).toEqual([
-      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) EXPIRED — until 2025-06-01 has passed, so it is no longer honoured; counted on CON-32(a): ${WINDOWS}. Renew the ruling with a new until, or delete the entry.`,
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) EXPIRED — until 2025-06-01 has passed, so it is no longer honoured; labels matched but not removed by this declaration: ${WINDOWS}. Renew the ruling with a new until, or delete the entry.`,
     ]);
+  });
+
+  it("an EXPIRED exact entry overlapping an honoured glob never claims the check was counted (Copilot on #359)", () => {
+    const evaluation = evaluateReady(
+      declaring(
+        { ...RULING, ruled: "2025-01-01", until: "2025-03-01" },
+        { ...RULING, name: "check (Windows*", match: "glob" },
+      ),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    // The glob removed it: ready.
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.context.declaredExclusions.map((o): string => o.status)).toEqual(["expired", "honoured"]);
+    const expired = evaluation.context.warnings.find((w): boolean => w.includes("EXPIRED"));
+    expect(expired).toContain(`labels matched but not removed by this declaration: ${WINDOWS}`);
+    expect(evaluation.context.warnings.join("\n")).not.toMatch(/counted on CON-32/i);
+    // ...and the same holds when --exclude-check is what removed it.
+    const flagged = evaluateReady(
+      declaring({ ...RULING, ruled: "2025-01-01", until: "2025-03-01" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      { ...OPTIONS, excludeCheckNames: [WINDOWS] },
+    );
+    expect(flagged.ready).toBe(true);
+    expect(flagged.context.warnings.join("\n")).toContain("labels matched but not removed by this declaration");
   });
 
   it("an expired exclusion is named even when it matches nothing at this head", () => {
@@ -772,7 +797,7 @@ describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(evaluation.ready).toBe(false);
     expect(evaluation.context.declaredExclusions[0]?.status).toBe("not-yet-ruled");
     expect(evaluation.context.warnings).toEqual([
-      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) NOT honoured — ruled 2025-06-02 is after today (UTC), so the ruling is not in force yet; counted on CON-32(a): ${WINDOWS}.`,
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) NOT honoured — ruled 2025-06-02 is after today (UTC), so the ruling is not in force yet; labels matched but not removed by this declaration: ${WINDOWS}.`,
     ]);
     // ...and from its own day on, it is.
     expect(

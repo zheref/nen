@@ -96,6 +96,7 @@ import {
 import { loadRepoRegistry } from "../schema/repos.js";
 import { GATES_FILE, readSchemaJson, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
+import { plainLine } from "../cli/plain.js";
 import {
   BASE_GATES_PATH,
   exclusionsAtBase,
@@ -1094,7 +1095,7 @@ function renderDeclaredExclusions(report: ReadyReport): string[] {
           ? "names no check at this head"
           : applied
             ? `removed from CON-32(a): ${exclusion.matched.join(", ")}`
-            : `COUNTED on CON-32(a): ${exclusion.matched.join(", ")}`;
+            : `labels matched but not removed by this declaration: ${exclusion.matched.join(", ")}`;
     const state = ((): string => {
       switch (exclusion.status) {
         case "honoured":
@@ -1214,7 +1215,11 @@ export function renderExplain(report: ReadyReport): string[] {
     lines.push("");
     lines.push(`  What would fix this: ${report.remedy}`);
   }
-  return lines;
+  // THE HUMAN-RENDERING BOUNDARY (Copilot on zheref/nen#359): check labels,
+  // declared names, reasons and conditions are strings this verb did not
+  // write, and ESC/CR/LF in one would rewrite the terminal or break the row.
+  // Every line is made plain here; `--json` keeps the original bytes.
+  return lines.map(plainLine);
 }
 
 // ── the verb ────────────────────────────────────────────────────────────────
@@ -1735,17 +1740,18 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
     // head, unconditionally (zheref/nen#245); every OTHER failing row, so a
     // first failure cannot hide the rest (zheref/nen#248); and every warning,
     // the head-mismatch one included.
-    io.out(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`);
+    // Plain at the boundary, as `renderExplain` is (Copilot on zheref/nen#359).
+    io.out(plainLine(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`));
     io.out(judgedHeadLine(report));
     // What a DECLARATION removed from CON-32(a), on the default output itself
     // (zheref/nen#249, Feitan F2): no widened verdict without its ruling.
-    for (const notice of declarationNotices(report)) io.out(`  ${notice}`);
+    for (const notice of declarationNotices(report)) io.out(plainLine(`  ${notice}`));
     for (const id of report.failing.slice(1)) {
       const row = report.conjuncts.find((conjunct): boolean => conjunct.id === id);
-      if (row !== undefined) io.out(`  also FAILED ${row.clause}: ${row.reason ?? row.title}`);
+      if (row !== undefined) io.out(plainLine(`  also FAILED ${row.clause}: ${row.reason ?? row.title}`));
     }
     for (const warning of report.meta.warnings) {
-      if (!isDeclarationNotice(warning)) io.out(`  warning: ${warning}`);
+      if (!isDeclarationNotice(warning)) io.out(plainLine(`  warning: ${warning}`));
     }
   }
   if (report.verdict === "unevaluated" && !json) {

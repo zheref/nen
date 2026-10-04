@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
-import { loadGateIdentities, parseGateIdentities } from "./gates.js";
+import { loadGateIdentities, parseCheckExclusions, parseGateIdentities } from "./gates.js";
 import { SchemaError } from "./errors.js";
 
 describe("loadGateIdentities -- reads the TARGET repository", () => {
@@ -704,6 +704,14 @@ describe("parseGateIdentities -- checks.excluded (zheref/nen#249)", () => {
       expect(() => parseGateIdentities(at, file), String(message)).toThrow(SchemaError);
       expect(() => parseGateIdentities(at, file), String(message)).toThrow(message);
     }
+  });
+
+  it("the base-only parser applies the same version guard before reading checks (Copilot on #359)", () => {
+    const checks = { excluded: [entry()] };
+    expect(() => parseCheckExclusions(at, { checks })).toThrow(/version[\s\S]*is required/);
+    expect(() => parseCheckExclusions(at, { version: 2, checks })).toThrow(/understands version 1 only/);
+    expect(() => parseCheckExclusions(at, { version: "1", checks })).toThrow(/understands version 1 only/);
+    expect(parseCheckExclusions(at, { version: 1, checks })).toHaveLength(1);
   });
 
   it("refuses an entry key it does not define, $comment aside (N10)", () => {

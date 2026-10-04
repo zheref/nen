@@ -1875,6 +1875,48 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     );
   });
 
+  it("a base file with a MISSING or UNSUPPORTED version supplies no exclusion, and says so (Copilot on #359)", async () => {
+    for (const version of [undefined, 2]) {
+      const raw = { ...FIXTURE, version, checks: { excluded: [RULING] } };
+      const source = withRedWindows(async (): Promise<string | null> => JSON.stringify(raw));
+      const { code, report } = await run(source, [RULING]);
+      expect(code, String(version)).toBe(1);
+      expect(report?.meta.declaredExclusions, String(version)).toEqual([]);
+      expect(report?.meta.warnings.join("\n"), String(version)).toMatch(/NOT honoured: [\s\S]*at version, /);
+    }
+  });
+
+  it("control characters in labels and declared text never reach a rendered line; --json keeps them (Copilot on #359)", async () => {
+    const EVIL = "check (Windows\u001b[2J\r\nfake: ready";
+    const evil = { ...RULING, name: "check (Windows*", reason: "no runner\u001b[31m\r\ninjected", until: "2025-06-30" };
+    const source = (): PrStateSource => {
+      const base = withRedWindows(baseDeclares([evil]));
+      return {
+        ...base,
+        pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+          const snapshot = await base.pullRequestSnapshot(repo, n);
+          return {
+            ...snapshot,
+            checkRollup: [
+              { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
+              { name: EVIL, status: "COMPLETED", conclusion: "FAILURE" },
+            ],
+          };
+        },
+      };
+    };
+    for (const mode of ["plain", "explain"] as const) {
+      const { out } = await run(source(), null, mode);
+      const text = out.join("\n");
+      expect(text, mode).toContain("excluded by declaration: check (Windows[2Jfake: ready — no runner[31minjected");
+      for (const line of out) expect(line, mode).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    }
+    const { report } = await run(source(), null);
+    expect(report?.meta.declaredExclusions[0]?.matched).toEqual([EVIL]);
+    expect(report?.meta.declaredExclusions[0]?.reason).toBe(evil.reason);
+    expect(report?.meta.warnings.join("\n")).toContain(EVIL);
+  });
+
   it("a malformed block AT THE BASE honours nothing, and says so", async () => {
     const { code, report } = await run(withRedWindows(baseDeclares([{ ...RULING, until: "2025/06/30" }])), [RULING]);
     expect(code).toBe(1);
@@ -1940,7 +1982,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(json.report?.meta.warnings.some((w): boolean => /EXPIRED — until 2024-12-31 has passed/.test(w))).toBe(true);
     const explain = await run(withRedWindows(baseDeclares([expired])), null, "explain");
     expect(explain.out.join("\n")).toContain(
-      `declared exclusion EXPIRED, not honoured: glob 'check (Windows*' — no Windows runner exists (ruled 2024-12-01, until 2024-12-31) · COUNTED on CON-32(a): ${WINDOWS}`,
+      `declared exclusion EXPIRED, not honoured: glob 'check (Windows*' — no Windows runner exists (ruled 2024-12-01, until 2024-12-31) · labels matched but not removed by this declaration: ${WINDOWS}`,
     );
   });
 

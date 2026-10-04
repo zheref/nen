@@ -555,6 +555,46 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       );
     });
 
+    it("control characters in labels and declared text are stripped from rendered lines, kept in --json (Copilot on #359)", async () => {
+      const EVIL = "check (Windows\u001b[2J\r\nfake: none";
+      const altGates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const ruling = { name: "check (Windows*", match: "glob", reason: "no\u001b[31m\r\nrunner", ruled: "2020-01-01", until: "2099-12-31" };
+      const script = (): ScriptedCall[] => {
+        const [view, ...rest] = greenAltApprovedScript();
+        const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
+        const withRed = {
+          ...viewJson,
+          baseRefOid: "base123",
+          statusCheckRollup: [
+            ...(viewJson["statusCheckRollup"] as unknown[]),
+            { __typename: "CheckRun", name: EVIL, status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        };
+        const content = Buffer.from(JSON.stringify({ ...altGates, checks: { excluded: [ruling] } })).toString("base64");
+        return [
+          { match: view?.match ?? "", result: { stdout: JSON.stringify(withRed) } },
+          ...rest,
+          {
+            match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+            result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content }) },
+          },
+        ];
+      };
+      const checkout = mkdtempSync(join(tmpdir(), "nen-frozen-"));
+      const gatesFlag = ["--gates", join(ALT_REPO, "nen", "gates.json")];
+      const plain = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", ...gatesFlag], checkout, new ScriptedSeams(script()));
+      expect(plain.out[0]).toBe("#9: none");
+      expect(plain.out).toContain("  excluded by declaration: check (Windows[2Jfake: none — no[31mrunner (ruled 2020-01-01, until 2099-12-31)");
+      for (const line of plain.out) expect(line).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+      const json = await capture(
+        ["pr", "next-blocker", "--target", "o/n", "--pr", "9", ...gatesFlag, "--json"],
+        checkout,
+        new ScriptedSeams(script()),
+      );
+      const parsed = JSON.parse(json.out.join("\n")) as { warnings: string[] };
+      expect(parsed.warnings).toContain(`excluded by declaration: ${EVIL} — ${ruling.reason} (ruled 2020-01-01, until 2099-12-31)`);
+    });
+
     it("a base read refused with 403 applies nothing and WARNS -- in the plain output and in --json's warnings", async () => {
       const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
       const altGates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;

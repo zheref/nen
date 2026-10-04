@@ -344,6 +344,28 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       expect(outcome.lines.join("\n")).not.toContain("excluded by declaration");
     });
 
+    it("the transcript strips control characters from labels and declared text (Copilot on #359)", async () => {
+      const EVIL = "check (Windows\u001b[2J\r\nfake";
+      const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const plain = readySource();
+      const source: PrStateSource = {
+        ...plain,
+        pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => {
+          const snapshot = await plain.pullRequestSnapshot(repo, n);
+          return {
+            ...snapshot,
+            checkRollup: [...(snapshot.checkRollup as unknown[]), { name: EVIL, status: "COMPLETED", conclusion: "FAILURE" }],
+          };
+        },
+        fileAtRef: async (): Promise<string | null> =>
+          JSON.stringify({ ...gates, checks: { excluded: [{ ...RULING, reason: "no\u001b[31m\r\nrunner" }] } }),
+      };
+      const outcome = await run(tmpRoot(), passingScript(), { deps: readyDeps(source) });
+      expect(outcome.report.ok).toBe(true);
+      expect(outcome.lines).toContain("pr ready: excluded by declaration: check (Windows[2Jfake — no[31mrunner (ruled 2024-12-01, until 2025-06-30)");
+      for (const line of outcome.lines) expect(line).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    });
+
     it("a base read refused with 403 is in the transcript as a pr ready warning (N2)", async () => {
       const outcome = await run(headDeclaringRoot(), passingScript(), {
         deps: readyDeps(

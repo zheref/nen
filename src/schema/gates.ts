@@ -425,12 +425,13 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
   return raw;
 }
 
-export function parseGateIdentities(path: string, value: unknown): GateIdentities {
-  const root = requireRecord(path, "$", value);
-
-  // The version is read FIRST, before any field is interpreted. Validating a
-  // file against the wrong schema and then complaining about its fields is how a
-  // version mismatch gets diagnosed as five unrelated defects.
+/**
+ * The `version` guard every reader of this file applies before interpreting
+ * any field -- `parseGateIdentities` and the base-only `parseCheckExclusions`
+ * alike (Copilot on zheref/nen#359): an exclusion read out of a file this build
+ * cannot version-check is a ruling read under rules nobody stated.
+ */
+function requireGatesVersion(path: string, root: Record<string, unknown>): void {
   const rawVersion = root["version"];
   if (rawVersion === undefined || rawVersion === null) {
     throw new SchemaError(
@@ -446,6 +447,15 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
       `is ${describeValue(rawVersion)}, and this build of nen understands version ${GATES_SCHEMA_VERSION} only. Refusing rather than reading the fields it happens to recognise: a gate that applied part of a repository's reviewer rules would report a readiness verdict nobody configured.`,
     );
   }
+}
+
+export function parseGateIdentities(path: string, value: unknown): GateIdentities {
+  const root = requireRecord(path, "$", value);
+
+  // The version is read FIRST, before any field is interpreted. Validating a
+  // file against the wrong schema and then complaining about its fields is how a
+  // version mismatch gets diagnosed as five unrelated defects.
+  requireGatesVersion(path, root);
 
   const rawReviewers = requireArray(path, "reviewers", root["reviewers"]);
   const reviewers: ReviewerIdentity[] = [];
@@ -849,6 +859,7 @@ export const GLOB_MIN_LITERAL_PREFIX = 3;
  */
 export function parseCheckExclusions(path: string, rootValue: unknown): DeclaredCheckExclusion[] {
   const root = requireRecord(path, "$", rootValue);
+  requireGatesVersion(path, root);
   return readCheckExclusions(path, root["checks"]);
 }
 
