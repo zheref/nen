@@ -256,3 +256,17 @@ describe("this repository's own review.scopes (zheref/nen#311)", () => {
     expect(security?.paths).not.toContain("README.md");
   });
 });
+
+describe("this repository's own review.scopes -- the bounded-merge deciders (zheref/nen#311, ruling of 2026-10-04)", () => {
+  it("raises the security scope on the files that decide 'nen pr merge --release-unit'", () => {
+    const deciders = ["src/release/unitcheck.ts", "src/release/command.ts", "src/report/patterns.ts", "src/schema/workflow.ts", "src/verbs/pr_ready.ts"];
+    const classified = classifyScopes(deciders, loadWorkflow(process.cwd()).workflow.review.scopes);
+    const security = classified.scopes.find((scope): boolean => scope.scope === "security");
+    expect(security?.paths).toEqual(deciders);
+  });
+
+  it("does not widen security to a neighbour of those exact files", () => {
+    const classified = classifyScopes(["src/report/data.ts", "src/schema/repos.ts"], loadWorkflow(process.cwd()).workflow.review.scopes);
+    expect(classified.scopes.map((scope): string => scope.scope)).toEqual(["code"]);
+  });
+});
