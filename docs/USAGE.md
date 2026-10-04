@@ -13,8 +13,8 @@ with the `nen` spelling. This document covers the **v0.13.0 line** (one new fami
 new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 41 command
-families, 119 verbs, every flag checked against the binary this repository
+arrive with them): 42 command
+families, 123 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -679,7 +679,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 119 verbs, grouped as the README groups them. **Reads** is what a
+All 123 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -722,6 +722,10 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
+| [`classify`](#family-classify) | [`nen classify labels`](#nen-classify-labels) | validates a classification taxonomy file and prints the label set it defines (axis prefix + key, colour, description) | local file (--taxonomy) | yes |
+| [`classify`](#family-classify) | [`nen classify install`](#nen-classify-install) | compares the taxonomy's labels with nen/labels.json (present, drift, absent, foreign), rewrites the declaration with --write, or syncs only those labels to GitHub with --sync once the declaration is landed | local file (--taxonomy), nen/labels.json; gh only with --sync | yes |
+| [`classify`](#family-classify) | [`nen classify status`](#nen-classify-status) | which issues carry a label on every axis, which are missing one, which carry an unknown key, and whether the declaration and GitHub both hold the taxonomy's labels | local file (--taxonomy), nen/labels.json, gh (issue reads, label list) | yes |
+| [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
@@ -3909,6 +3913,269 @@ labels, validating the schema set itself, resolving a colour by the
 repository's own precedence, resolving a repository token against the
 registry, and formatting the object notation the rest of the surface cross-
 references objects with.
+
+<a id="family-classify"></a>
+
+**`nen classify`**
+
+The mechanical half of classifying issues on two axes — the languages and the jobs a piece of work is
+about — and applying the result as GitHub labels. Reading an issue and *deciding* its keys is a
+skill's judgement; everything deterministic around it is here. Every word of the vocabulary — each
+axis's label prefix, colour and keys, and the confidence levels — is read from the **taxonomy file**
+`--taxonomy` names (`$schema` of the form `<owner>.classify-taxonomy/v1`); this binary carries none
+of it. A label an axis defines is `prefix + key`, coloured with the axis colour and described by the
+key's description (≤ 100 characters, GitHub's own limit).
+
+Two rulings shape the family. **The declaration lands first, GitHub follows**: the labels are added
+to the consumer's `nen/labels.json` through its own pull request (`install --write`), and only then
+created on GitHub (`install --sync`), which refuses until the declaration is landed. **An axis with no
+confident answer stays empty**, and **low-confidence rows are listed, not applied**, unless
+`--include-low`. Every path flag (`--taxonomy`, `--plan`, `--ledger`) resolves against `--repo`'s
+root; an absolute path is used as-is.
+
+### `nen classify labels`
+
+Answers "is this taxonomy file valid, and what label set does it define": it validates the file and
+prints one line per label (`name  #colour  description`). A bad file is refused at exit 1 naming the
+pointer into it — a missing axis, a duplicate key, a description over 100 characters, a prefix not
+ending in `/`, a colour that is not six hex digits, a key that is not kebab-case.
+
+**Usage**
+
+```text
+nen classify labels --taxonomy <path> [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. Missing -> exit 2. |
+| `--repo <path>` | no | Anchors a relative `--taxonomy`. | Defaults to cwd. The only `classify` verb where it is optional: this one reads one file and nothing else. |
+
+**Output and exit codes** — human rendering is one line per label, then `<n> label(s): <a> lang, <b>
+job`. `--json` prints one document; top-level keys: `contract` (`nen.classify.labels/v0.1`),
+`taxonomy` (the resolved path), `axes` (per axis: `prefix`, `count`) and `labels` (an array of
+`{ name, color, description, axis, key }`). Exit 0 when the file is valid; exit 1 when it is not (the
+refusal names the pointer) or cannot be read; exit 2 when `--taxonomy` is missing.
+
+**Example**
+
+```bash
+nen classify labels --taxonomy src/classify/fixtures/mini.taxonomy.json
+```
+```text
+lang/alpha  #1d76db  Needs alpha
+lang/beta   #1d76db  Needs beta
+job/build   #5319e7  Building the thing
+job/test    #5319e7  Testing the thing
+4 label(s): 2 lang, 2 job
+```
+(from a real run against the small fixture taxonomy; the real one defines 5 + 39 labels — reads one
+file, no `gh` call)
+
+### `nen classify install`
+
+Answers "has the classification label set been installed here": it compares the taxonomy's labels with
+the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
+colours compare case-insensitively), `drift` (the name is declared but the colour or description
+differs) or `absent`. Labels in `nen/labels.json` that wear an axis prefix but whose key the taxonomy
+does not carry are listed as `foreign` and are **never** removed or changed — a retired key may still
+sit on issues.
+
+Three forms, and the third is the second step of a deliberate two:
+
+- **report** (no flag, or `--dry-run`) — read only. Exit 0 when every label is `present`, 1 otherwise,
+  so a skill reads "installed?" from the exit code.
+- **`--write`** — rewrites `nen/labels.json` so every taxonomy label is present: absent labels are
+  appended after the existing entries in taxonomy order, drifted ones are updated in place, and every
+  other entry and top-level key (`$comment` included) keeps its content and key order. The file is
+  re-serialised with two-space indent and a trailing newline, then re-read through the schema loader.
+  A declaration that already has everything is not rewritten at all. With `--dry-run` it prints what
+  would change and writes nothing.
+- **`--sync --target <owner/name>`** — creates or updates the taxonomy's labels on GitHub through the
+  same create-or-update as [`labels sync`](#nen-labels-sync), but only the taxonomy's labels, never the
+  rest of the declaration. It **refuses at exit 1 while the on-disk declaration lacks a taxonomy label
+  or carries a drifted one** — "the declaration is not landed: run `nen classify install --write`, land
+  it through its PR, then sync". `--dry-run` reports `would-sync` and makes no `gh` call.
+
+**Usage**
+
+```text
+nen classify install --taxonomy <path> --repo <path> [--write | --sync --target <owner/name>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` is the consumer's declaration. | Omitting it is refused by name at exit 2. |
+| `--write` | no (boolean) | Rewrite `nen/labels.json` so every taxonomy label is present. | With `--sync`: usage error, exit 2 — two steps, two landings. |
+| `--sync` | no (boolean) | Sync the taxonomy's labels to GitHub. | Needs `--target`; refuses while the declaration is not landed. |
+| `--target <owner/name>` | with `--sync` | The GitHub repository. | Only valid with `--sync` (otherwise exit 2); malformed or missing -> exit 2. |
+| `--dry-run` | no (boolean) | Report only; with `--write` or `--sync`, say what would happen and do nothing. | |
+
+**Output and exit codes** — human rendering is one line per label (`present`/`drift`/`absent`, a
+drifted label naming what differs), the `foreign` lines, and a closing line (`installed: …`, or on
+stderr `<n> of <m> label(s) not installed (<a> absent, <d> drift)`). `--write` prints `add`/`update`
+lines and `written: <n> added, <m> updated`; `--sync` prints what `labels sync` prints. `--json`
+prints one document; top-level keys, in this order: `contract` (`nen.classify.install/v0.1`), `mode`
+(`report`, `write` or `sync`), `labelsFile` (the resolved path), `dryRun`, `entries` (an array of
+`{ name, status }` — in `write` mode, what was found *before* the write), `foreign`, `written`
+(`{ added, updated }`, or `null`) and `sync` (the full `labels sync` report, or `null`). Exit 0: report
+with every label present; `--write` done; `--sync` done. Exit 1: report with any label absent or
+drifted; `--sync` refused or any label failed to sync; an unreadable taxonomy or declaration. Exit 2:
+`--write` with `--sync`, `--target` without `--sync`, a missing `--sync` target, or a missing
+`--taxonomy`/`--repo`.
+
+**Example**
+
+```bash
+nen classify install --taxonomy ../mini.taxonomy.json --repo src/classify/fixtures/repo-partial
+```
+```text
+present  lang/alpha
+absent   lang/beta
+drift    job/build  (colour #ffffff -> #5319e7)
+absent   job/test
+foreign  lang/zeta  (declared, not in the taxonomy; left alone)
+nen: 3 of 4 label(s) not installed (2 absent, 1 drift) -- run 'nen classify install --write'.
+```
+(from a real run, exit 1; `--taxonomy` resolved against `--repo`. The same command with `--write
+--dry-run` prints `would add  lang/beta`, `would update  job/build`, `would add  job/test`, the foreign
+line and `would write: 2 added, 1 updated (nothing was written)` — and with `--sync --target
+zheref/nen` it refuses with the "declaration is not landed" sentence above, calling `gh` not at all)
+
+### `nen classify status`
+
+Answers "which issues still need classifying, and is the machinery in place": for each issue it sorts
+the labels already on it into the keys the taxonomy knows on each axis, `unknown` (a label wearing an
+axis prefix whose key the taxonomy lacks) and `missing` (the axes with no label at all). An issue is
+`classified` only when every axis has a label. It also reports `declared` — whether `nen/labels.json`
+carries every taxonomy label — and `github` — whether every taxonomy label exists on the repository
+(existence only; colour drift is `install`'s question).
+
+Exactly one of `--issue <n>[,<n>...]` and `--open`. `--open` reads every open issue, paginated to the
+end (pull requests, which GitHub serves from the same endpoint, are filtered out) and says so when it
+stopped at the defensive page ceiling instead of finishing; a `gh label list` that came back at its
+500 limit is flagged the same way. A number that names a **pull request** is refused at exit 1,
+naming it, rather than reported as an unlabelled issue.
+
+**Usage**
+
+```text
+nen classify status --taxonomy <path> --repo <path> --target <owner/name> (--issue <n>[,<n>...] | --open) [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` the `declared` verdict reads. | |
+| `--target <owner/name>` | yes | The GitHub repository whose issues and labels are read. | Missing or malformed -> exit 2. |
+| `--issue <n>[,<n>...]` | one of | Comma list of positive whole numbers. | Duplicates collapse; a non-number -> exit 2. Exclusive with `--open`. |
+| `--open` | one of (boolean) | Every open issue, paginated. | |
+
+**Output and exit codes** — human rendering is one row per issue (`#N  lang: swift,kotlin  job:
+implementation  missing: -`, with an `unknown:` column only when there is one), then the summary line
+(`<n> issue(s): <c> classified, missing lang: …, missing job: …, missing both: …`), then `declared:`
+and `github:` lines (`ok`, or `missing <n>` naming the labels). `--json` prints one document;
+top-level keys: `contract` (`nen.classify.status/v0.1`), `target`, `truncated` (whether `--open` hit
+its page ceiling), `issues` (an array of `{ number, title, labels, lang, job, unknown, missing,
+classified }`, where `lang` and `job` are the keys found on each axis), `summary` (`total`,
+`classified`, `missingLang`, `missingJob`, `missingBoth`), `declared` (`{ status, missing }`) and
+`github` (`{ status, missing, truncated }`). Exit 0 whatever the state — a status is an answer; exit 1
+when `gh` failed or a number names a pull request; exit 2 for a missing flag, neither or both of
+`--issue`/`--open`, or a malformed list.
+
+**Example** (quoted from `src/classify/status.test.ts` — this verb always reads GitHub, so it was not
+run live)
+
+```bash
+nen classify status --taxonomy tax.json --repo . --target zheref/nen --issue 12,13,14
+```
+```text
+#12  lang: alpha,beta  job: build  missing: -
+#13  lang: alpha  job: -  missing: job  unknown: job/retired
+#14  lang: -  job: -  missing: lang,job
+3 issue(s): 1 classified, missing lang: 1, missing job: 2, missing both: 1
+declared: ok
+github: ok
+```
+
+### `nen classify apply`
+
+Answers "apply this classification plan as labels, and keep a record": `--plan` is a JSON array of
+rows, `{ "issue": <n>, "lang": ["<key>", …], "job": ["<key>", …], "confidence": "<level>" (optional;
+the taxonomy's first level), "reason": "<text>" (optional) }`, whose axis fields are the taxonomy's
+axes.
+
+**The whole plan is validated before anything is read from GitHub or written**: positive whole issue
+numbers, no duplicate issue, every key in its axis, every resulting label declared in
+`nen/labels.json` (the check [`label apply`](#nen-label-apply) makes), a confidence the taxonomy
+names, no unknown field (a misspelt axis would otherwise apply nothing silently). **One invalid row
+refuses the plan whole at exit 2, every refusal named — nothing partial.** Then every issue is read
+(`gh api repos/<o>/<n>/issues/<N>`): a number that names a **pull request** is refused at exit 1,
+naming it, before the first write, and a label an issue already carries is reported `already` and not
+re-applied.
+
+Rows whose confidence the taxonomy lists as *not applied* (low) are reported `listed` and skipped
+unless `--include-low` — a sweep applies high and medium after one confirmation and lists the rest.
+Without `--run` nothing is written to GitHub (a dry run); with it each label is added through `gh
+issue edit <n> --repo <o/n> --add-label <label>`, one label per call, a failure isolated to its label.
+
+**Every application writes a ledger line — dry run or not — AFTER the mutation resolves**, through the
+same ledger [`label apply`](#nen-label-apply) writes (`outcome` `dry-run`, `applied` or `failed`; the
+object spelled `<owner/name>#<N>`; the reason is the row's, then `--reason`'s, joined by `; `).
+`listed` and `already` are not applications and write none.
+
+**Usage**
+
+```text
+nen classify apply --taxonomy <path> --repo <path> --target <owner/name> --plan <path.json> [--run] [--include-low] [--reason <text>] [--ledger <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` the plan is checked against, and the ledger's default base. | |
+| `--target <owner/name>` | yes | The GitHub repository the labels are applied on. | |
+| `--plan <path.json>` | yes | The classification plan. | Resolved against `--repo`'s root. Unreadable or not JSON -> exit 2. |
+| `--run` | no (boolean) | Apply for real. | Without it: a dry run; the ledger still records each decision. |
+| `--include-low` | no (boolean) | Apply rows at a confidence level the taxonomy lists rather than applies. | |
+| `--reason <text>` | no | Recorded in each ledger line after the row's own reason. | Never sent to GitHub. |
+| `--ledger <path>` | no | Ledger file. | Defaults to `label-ledger.jsonl` under `--repo`'s root. Its directory must exist (checked before the first write, exit 2). |
+
+**Output and exit codes** — human rendering is a `(dry run)` banner when there is no `--run`, one line
+per issue (`#12  applied: …  already: …  listed: …`; `would apply:` on a dry run; `failed:` on a
+failure), a totals line and `ledger: <path>`; failures are named on stderr. `--json` prints one
+document; top-level keys: `contract` (`nen.classify.apply/v0.1`), `target`, `run`, `ledger` (the
+resolved path), `issues` (an array of `{ number, applied, wouldApply, already, failed, listed }`, each
+a list of label names) and `totals` (`issues`, `applied`, `wouldApply`, `already`, `failed`,
+`listed`). Exit 0 when nothing failed; exit 1 when any application failed (its labels named), when a
+number names a pull request, or when `gh` could not read an issue; exit 2 for a plan that does not
+validate (every refusal named, nothing read or written), an unreadable plan, an unwritable ledger
+directory, or a missing flag.
+
+**Example** (quoted from `src/classify/apply.test.ts` — this verb reads GitHub even as a dry run, so
+it was not run live)
+
+```bash
+nen classify apply --taxonomy tax.json --repo . --target zheref/nen --plan plan.json --run
+```
+```text
+#1  applied: lang/alpha
+#2  applied: lang/beta, job/test
+#3  listed: lang/alpha, job/build
+3 issue(s): 3 applied, 0 would apply, 0 already, 0 failed, 2 listed
+ledger: ./label-ledger.jsonl
+```
+(the plan's third row carries `"confidence": "low"`, so it is listed and no ledger line is written
+for it)
 
 <a id="family-label"></a>
 

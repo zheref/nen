@@ -1,0 +1,26 @@
+{
+  "$schema": "example.classify-taxonomy/v1",
+  "contract": "example-classify-taxonomy",
+  "axes": {
+    "lang": {
+      "prefix": "lang/",
+      "color": "1d76db",
+      "keys": [
+        { "key": "alpha", "title": "Alpha", "description": "Needs alpha" },
+        { "key": "beta", "title": "Beta", "description": "Needs beta" }
+      ]
+    },
+    "job": {
+      "prefix": "job/",
+      "color": "5319e7",
+      "keys": [
+        { "key": "build", "title": "Build", "description": "Building the thing" },
+        { "key": "test", "title": "Test", "description": "Testing the thing" }
+      ]
+    }
+  },
+  "domains": { "keys": ["one"], "rule": [], "fallback": "one" },
+  "classification": {
+    "confidence": { "levels": ["high", "medium", "low"], "applied": ["high", "medium"], "listed": ["low"] }
+  }
+}

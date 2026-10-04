@@ -66,7 +66,7 @@ Apply a label to one object, logged.
                    refusal you would otherwise meet is this flag's
                    absence, not a missing file.`;
 
-const DEFAULT_LEDGER = "label-ledger.jsonl";
+export const DEFAULT_LEDGER = "label-ledger.jsonl";
 
 export const labelCommand: Command = {
   name: "label",
