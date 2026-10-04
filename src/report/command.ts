@@ -36,6 +36,7 @@ import { assembleData, parseTiers, renderData, type TierTable } from "./data.js"
 import { assembleObjects, renderObjects } from "./objects.js";
 import { assembleRegister, parseDesk, renderRegister, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
+import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
 import { graphInjection, graphToMermaid, parseGraph, type GraphDocument } from "./graph.js";
 import { renderReport } from "./render.js";
 
@@ -425,19 +426,24 @@ async function runData(context: CommandContext): Promise<number> {
 function notationSource(root: string, warn: (line: string) => void): NotationSource {
   try {
     const registry = openTaxonomy({ repoFlag: root }).repos();
-    const codes = new Map<string, string>();
+    // A PRODUCT-CODE VALUE IS CANONICALISED TO THE REPOSITORY THE FILE
+    // RECORDS (Copilot, NN-PR-#365), through src/repo/resolve.ts's own rule
+    // rather than a second reading of it: `KP: "KroApple"` beside a consumer
+    // `zheref/KroApple` means `zheref/KroApple`, so the code a row is written
+    // in resolves back to the row it came from. A bare value nothing claims is
+    // carried as recorded; `codeFor` and the register's own name-half match
+    // still pair it with a slug, because inventing an owner is a guess.
     const slugs = new Map<string, string>();
     for (const [code, name] of Object.entries(registry.productCodes)) {
-      codes.set(name.toLowerCase(), code);
-      slugs.set(code, name);
+      slugs.set(code, recordedRepoFor(registry, name) ?? name);
     }
     for (const entry of registry.consumers) {
-      if (entry.code === null) continue;
-      if (!codes.has(entry.repo.toLowerCase())) codes.set(entry.repo.toLowerCase(), entry.code);
-      if (!slugs.has(entry.code)) slugs.set(entry.code, entry.repo);
+      if (entry.code !== null && !slugs.has(entry.code)) slugs.set(entry.code, entry.repo);
     }
+    const consumerCode = (slug: string): string | null =>
+      registry.consumers.find((entry): boolean => entry.code !== null && entry.repo.toLowerCase() === slug.toLowerCase())?.code ?? null;
     return {
-      codeFor: (slug): string | null => codes.get(slug.toLowerCase()) ?? null,
+      codeFor: (slug): string | null => productCodeFor(registry, slug) ?? consumerCode(slug),
       slugFor: (code): string | null => slugs.get(code) ?? null,
       unavailable: null,
     };

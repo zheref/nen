@@ -438,8 +438,21 @@ interface Scoped {
   readonly notation: string;
 }
 
+/**
+ * Two repository names for the same repository.
+ *
+ * A BARE NAME MATCHES A SLUG'S NAME HALF, on src/repo/resolve.ts's own rule: a
+ * registry may record a product code's value as `KroApple` with no owner, and
+ * a bare value cannot disagree about an owner it never states.
+ */
 function sameSlug(a: string | null, b: string | null): boolean {
-  return a !== null && b !== null && a.toLowerCase() === b.toLowerCase();
+  if (a === null || b === null) return false;
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  if (x === y) return true;
+  if (!x.includes("/") && y.includes("/")) return y.split("/")[1] === x;
+  if (!y.includes("/") && x.includes("/")) return x.split("/")[1] === y;
+  return false;
 }
 
 /**
@@ -791,6 +804,20 @@ export function assembleRegister(desk: Desk, input: RegisterInput): RegisterKeys
     if (!own.resolved) unresolved.add(slug ?? `#${object.number}`);
     return { object, slug, notation: own.text };
   });
+  // ONE IDENTITY, ONE ROW (Copilot, NN-PR-#365). The live path cannot read an
+  // object twice, but an --objects-from file can carry it twice -- and a
+  // register that rendered and COUNTED both would publish tallies about
+  // objects that do not exist. Refused, naming the identity.
+  const identities = new Map<string, Scoped>();
+  for (const entry of scope) {
+    const identity = `${(entry.slug ?? "").toLowerCase()}#${entry.object.number}`;
+    if (identities.has(identity)) {
+      throw new VerbUsageError(
+        `the register carries ${entry.notation} twice. GitHub numbers issues and pull requests from one sequence per repository, so two rows with the same repository and number are one object read twice -- drop the duplicate from the objects file rather than publishing a register that counts it twice.`,
+      );
+    }
+    identities.set(identity, entry);
+  }
   const deskRows = new Map<Scoped, DeskRow>();
   for (const [key, row] of desk.rows) {
     const found = resolveReference(key, scope, input.codes, `row '${key}'`, null);
@@ -832,6 +859,15 @@ export function assembleRegister(desk: Desk, input: RegisterInput): RegisterKeys
   const counts = tallies(input.objects, desk.gates);
   const efforts =
     desk.efforts ?? [...new Set([...input.phases.map((p): string => p.effort), ...input.usage.map((u): string => u.effort)])];
+  // A SPEND NOTE NOBODY WILL SHOW IS REFUSED, not dropped (Copilot,
+  // NN-PR-#365): a misspelled effort name, or one `efforts` leaves out, would
+  // otherwise lose a line somebody wrote for the page, at exit 0.
+  const strays = [...desk.spendNotes.keys()].filter((name): boolean => !efforts.includes(name));
+  if (strays.length > 0) {
+    throw new VerbUsageError(
+      `the register desk's spendNotes name ${strays.map((name): string => `'${name}'`).join(", ")}, which ${strays.length === 1 ? "is" : "are"} not among the efforts this page shows (${efforts.map((name): string => `'${name}'`).join(", ") || "none"}). Fix the name, or add it to 'efforts'.`,
+    );
+  }
 
   // THE NOTATION FALLBACK IS SAID ON THE PAGE (PROCESS.md § Publishing a
   // report): a row reading `owner/name#7` instead of `XX-PR-#7` is a failed

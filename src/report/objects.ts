@@ -834,7 +834,7 @@ async function prRow(
     // THE CHECKOUT'S ABSOLUTE PATH STAYS ON THE TERMINAL. The gate names the
     // file it looked for, and a row's notes travel into published reports --
     // ./data.ts's rule for `repo`, applied to a field that can now carry it.
-    if (readiness === null) notes.push(line.replace(/^objects: /, "").split(repoRoot).join("<repo>"));
+    if (readiness === null) notes.push(redactRoot(line.replace(/^objects: /, ""), repoRoot));
   }
 
   return {
@@ -860,6 +860,26 @@ async function prRow(
     readiness,
     notes,
   };
+}
+
+/**
+ * `root` replaced by `<repo>` in a line, in EITHER separator spelling, with the
+ * rest of each redacted path written with `/`.
+ *
+ * SEPARATOR-AGNOSTIC BECAUSE WINDOWS IS (NN-PR-#365's Windows leg). The gate
+ * builds the path it names with the platform's own separator, so on win32 the
+ * checkout arrives as `C:\...\repo` and its remainder as `\nen\gates.json`;
+ * a redaction that only knew one spelling left the root in, or left a path
+ * whose shape depended on the machine that ran it. One form on every platform
+ * is what a published note can promise.
+ */
+export function redactRoot(line: string, root: string): string {
+  const spellings = [...new Set([root, root.replace(/\\/g, "/"), root.replace(/\//g, "\\")])].filter(
+    (spelling): boolean => spelling !== "",
+  );
+  let out = line;
+  for (const spelling of spellings) out = out.split(spelling).join("<repo>");
+  return out.replace(/<repo>([\\/][^\s'"`)]*)/g, (_match, rest: string): string => `<repo>${rest.replace(/\\/g, "/")}`);
 }
 
 /** A string field, or the empty string WITH the degradation named. */

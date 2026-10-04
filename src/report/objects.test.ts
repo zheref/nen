@@ -21,6 +21,7 @@ import {
   issueArgv,
   parseObjects,
   parseVerdictLine,
+  redactRoot,
   renderObjects,
   type ReportObject,
 } from "./objects.js";
@@ -759,7 +760,10 @@ describe("every field degrades on its own", () => {
     expect(notes[0]).toMatch(/^the readiness gate produced no report for zheref\/nen#217/);
     expect(notes.join("\n")).not.toMatch(/check run/);
     expect(notes.join("\n")).not.toContain(COVERAGE_REPO);
-    expect(notes[0]).toContain("<repo>/nen/gates.json");
+    // The SAME form on every platform: the remainder of a redacted path is
+    // written with '/' whatever separator the gate's host used.
+    expect(notes[0]).toContain("'<repo>/nen/gates.json'");
+    expect(notes[0]).not.toMatch(/<repo>\\/);
   });
 });
 
@@ -1007,5 +1011,18 @@ describe("every degraded field is named (threads …ctk and …ctq)", () => {
     // one field there is no degrading around.
     expect(objects.map((row): number => row.number)).toEqual([215]);
     expect(captured.err.join("\n")).toMatch(/carried no numeric 'number' and could not be identified/);
+  });
+});
+
+describe("redactRoot is separator-agnostic (NN-PR-#365, Windows)", () => {
+  it("redacts a win32 root in either spelling and writes the remainder with '/'", () => {
+    const root = "C:\\runner\\work\\repo";
+    expect(redactRoot("looked for at 'C:\\runner\\work\\repo\\nen\\gates.json'", root)).toBe("looked for at '<repo>/nen/gates.json'");
+    expect(redactRoot("looked for at 'C:/runner/work/repo/nen/gates.json'", root)).toBe("looked for at '<repo>/nen/gates.json'");
+  });
+
+  it("leaves a POSIX path the same shape, and a line without the root untouched", () => {
+    expect(redactRoot("at '/home/u/repo/nen/gates.json'", "/home/u/repo")).toBe("at '<repo>/nen/gates.json'");
+    expect(redactRoot("no path here", "/home/u/repo")).toBe("no path here");
   });
 });

@@ -779,3 +779,55 @@ describe("the live path, scripted (N8)", () => {
     expect(captured.err.join("\n")).toMatch(/objects: the readiness gate/);
   });
 });
+
+// ── Copilot round 1 on NN-PR-#365 ────────────────────────────────────────────
+
+describe("product codes canonicalised to the recorded repository (Copilot #365)", () => {
+  const BANKAI_REPO = join(process.cwd(), "src", "schema", "fixtures", "bankai-repo");
+
+  it("writes and resolves KP-/BC- notation for bare product-code values", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-register-bankai-"));
+    const kroPr = { ...PR_READY, number: 5, url: "https://github.com/zheref/KroApple/pull/5", linked: [3] };
+    const coreIssue = { ...ISSUE, number: 3, url: "https://github.com/zheref/bankai-core/issues/3", linked: [] };
+    writeFileSync(join(dir, "objects.json"), JSON.stringify([coreIssue, kroPr]));
+    writeFileSync(
+      join(dir, "desk.json"),
+      JSON.stringify({
+        ...DESK,
+        rows: { "KP-PR-#5": { needs: "kro's merge" }, "BC-IS-#3": { needs: "core triage" } },
+        gates: [{ gate: "G2", label: "m", asks: [{ ...DESK.gates[0]?.asks[1], pr: "KP-PR-#5" }] }],
+      }),
+    );
+    const captured = await capture([
+      "report", "data", "--repo", BANKAI_REPO, "--base", "main",
+      "--objects-from", join(dir, "objects.json"), "--register", join(dir, "desk.json"), "--json",
+    ]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    const document = JSON.parse(captured.out.join("\n")) as Record<string, unknown>;
+    const rows = document["objects"] as Record<string, unknown>[];
+    expect(rows.map((row): unknown => [row["notation"], row["needs"]])).toEqual([
+      ["BC-IS-#3", "core triage"],
+      ["KP-PR-#5", "kro's merge"],
+    ]);
+    // A linked number in ANOTHER repository is not this one's #3.
+    expect(rows[1]?.["linkedLine"]).toBe("KP#3");
+    expect((document["gates"] as { asks: { verdict: string }[] }[])[0]?.asks[0]?.verdict).toBe(PR_READY.readiness.reason);
+    expect(document["footerNote"]).not.toMatch(/unresolved/);
+  });
+});
+
+describe("one identity, one row (Copilot #365)", () => {
+  it("refuses an objects file carrying the same repository and number twice", async () => {
+    const { captured } = await registerDocument(repo({ objects: [PR_READY, { ...PR_READY, title: "again" }], desk: { ...DESK, rows: {}, gates: [DESK.gates[1]] } }));
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/the register carries HA-PR-#87 twice/);
+  });
+});
+
+describe("a spend note nobody will show is refused (Copilot #365)", () => {
+  it("names a spendNotes key outside the computed effort list", async () => {
+    const { captured } = await registerDocument(repo({ desk: { ...DESK, efforts: ["e1"], spendNotes: { e1: "kept", el: "typo" } } }));
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/spendNotes name 'el', which is not among the efforts this page shows \('e1'\)/);
+  });
+});
