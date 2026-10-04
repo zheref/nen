@@ -6,6 +6,7 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { GIT, outputLines } from "../seam/exec.js";
 import { commaList } from "../cli/comma.js";
+import { plainLine } from "../cli/plain.js";
 import {
   requireRepoFlag,
   requireSubcommand,
@@ -19,11 +20,11 @@ import {
   addListFrom,
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
-  batchCheckInput,
-  parseBatchCheckSizes,
+  BATCH_CHECK_FORMAT,
+  measurableBlob,
+  parseBatchCheckIds,
   parseCommitRange,
-  parseHistoryPathsBytes,
-  parseNameStatusBytes,
+  parseRawChangesBytes,
   parseStatusPorcelain,
   parseStatusPorcelainBytes,
   pathspecLine,
@@ -65,25 +66,30 @@ index, so uncommitted changes are not in it. <base>..<head> means the commits
 git log <base>..<head> lists: the diff runs from merge-base(<base>, <head>) to
 <head>, as git diff <base>...<head> does, so a base that moved on contributes
 nothing. Two readings, each for what it can answer:
-  - NAMES: secret shape, binary, out-of-scope and local config run over the
-    UNION of every path any commit in the range touched (git log --name-only
-    --no-renames). A path gone at <head> -- added then deleted, or renamed
-    away -- that matches one is FLAGGED with that reason plus 'in-history':
-    it is still in the history being pushed.
-  - NET CHANGE: deletions, --mentions and sizes come from the net diff
-    (git diff --name-status --find-renames, merge base to <head>). A path the
-    range deleted is never measured, so never flagged large; --mentions is
-    matched against a deleted path's basename as in the working-copy mode;
-    sizes are blob sizes at <head> (git cat-file --batch-check), never the
-    disk.
-Submodule ignore settings are overridden (--ignore-submodules=none), so a
-gitlink is never hidden. Nothing in a commit is git-ignored, so the ignored
-bucket is always empty. The text report opens with a 'read: committed range
-...' line naming both resolved commits and the commit count -- or that the
-range names no commits (still exit 0). Same --json shape in both modes:
-{ read, clean[], flagged[], ignored[] }, where read is { mode: "working-copy" }
-or { mode: "range", base, head, mergeBase, headSha, commits }. Needs git 2.38
-or newer (cat-file --batch-check -z).
+  - HISTORY: every change any commit in the range made (git log --raw
+    --no-renames --diff-merges=cc), merges read as combined diffs. Secret
+    shape, binary, out-of-scope and local config run over every path it
+    names, and every blob it introduced is measured. A finding on something
+    NOT in the range's net change -- a path added then deleted, renamed away,
+    or changed and reverted, or a blob a later commit replaced (a dump
+    committed and dropped, a file grown then shrunk) -- is FLAGGED with its
+    reason plus 'in-history': it is still in the history being pushed.
+  - NET CHANGE: deletions, --mentions and each path's size at <head> come
+    from the net diff (git diff --raw --find-renames, merge base to <head>).
+    A path the range deleted is never measured at <head>; --mentions is
+    matched against a deleted path's basename as in the working-copy mode.
+Sizes are blob sizes from git cat-file --batch-check, by object id, never the
+disk. Submodule ignore settings are overridden (--ignore-submodules=none), so
+a gitlink is never hidden, and replace refs are bypassed
+(--no-replace-objects), so git reads the objects being pushed. A name git
+printed in bytes that are not UTF-8 is flagged 'undecodable'. Nothing in a
+commit is git-ignored, so the ignored bucket is always empty. The text report
+opens with a 'read: committed range ...' line naming both resolved commits
+and the commit count -- or that the range names no commits (still exit 0) --
+and prints every path with control characters removed. Same --json shape in
+both modes: { read, clean[], flagged[], ignored[] }, where read is
+{ mode: "working-copy" } or { mode: "range", base, head, mergeBase, headSha,
+commits }. Needs git 2.31 or newer (log --diff-merges).
 
 Detects, never decides: secret shapes (.env, *.pem, *.key, credentials*),
 local-config filenames (the '.local' infix -- settings.local.json, .env.local,
@@ -258,7 +264,13 @@ function readRangeAndTriage(
   }
   const largeBytes = readLargeBytes(context);
 
-  const gitDir = context.seams.run(GIT, ["rev-parse", "--git-dir"], { cwd: root });
+  // EVERY RANGE READ BYPASSES REPLACE REFS (hanten round 2 N6): a
+  // `refs/replace/` entry would otherwise let git answer with a different
+  // commit or tree than the one being pushed.
+  const git = (args: readonly string[], options: { bytes?: boolean; stdin?: string } = {}): ReturnType<typeof context.seams.run> =>
+    context.seams.run(GIT, ["--no-replace-objects", ...args], { cwd: root, ...options });
+
+  const gitDir = git(["rev-parse", "--git-dir"]);
   if (gitDir.code !== 0) {
     context.io.err(`nen: ${root} is not a git repository: ${gitFailure(gitDir)}`);
     return null;
@@ -270,9 +282,7 @@ function readRangeAndTriage(
 
   const resolve = (side: "base" | "head", ref: string): string => {
     // `^{commit}` so a tree or blob id is refused rather than diffed.
-    const result = context.seams.run(GIT, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`], {
-      cwd: root,
-    });
+    const result = git(["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
     const sha = result.stdout.trim();
     if (result.code !== 0 || sha === "") {
       throw new VerbUsageError(
@@ -284,12 +294,12 @@ function readRangeAndTriage(
   const baseSha = resolve("base", range.base);
   const headSha = resolve("head", range.head);
 
-  const mb = context.seams.run(GIT, ["merge-base", baseSha, headSha], { cwd: root });
+  const mb = git(["merge-base", baseSha, headSha]);
   const mergeBase = mb.stdout.trim();
   if (mb.code === 1 && mergeBase === "") {
     // NO COMMON ANCESTOR -- or none VISIBLE (hanten N8): a shallow clone cut
     // above the fork point answers exactly like two unrelated histories.
-    const shallow = context.seams.run(GIT, ["rev-parse", "--is-shallow-repository"], { cwd: root });
+    const shallow = git(["rev-parse", "--is-shallow-repository"]);
     if (shallow.code === 0 && shallow.stdout.trim() === "true") {
       throw new VerbUsageError(
         `--range ${rawRange}: no common ancestor of '${range.base}' and '${range.head}' is in this repository, and it is a shallow clone -- fetch more history (git fetch --unshallow, or --deepen) and run again. Nothing was triaged.`,
@@ -301,23 +311,24 @@ function readRangeAndTriage(
   }
   if (mb.code !== 0 || mergeBase === "") return failed("the merge base", mb);
 
-  const count = context.seams.run(GIT, ["rev-list", "--count", `${mergeBase}..${headSha}`], { cwd: root });
+  const count = git(["rev-list", "--count", `${mergeBase}..${headSha}`]);
   const counted = count.stdout.trim();
   const commits = Number(counted);
   if (count.code !== 0 || counted === "" || !Number.isInteger(commits)) return failed("the commit count (git rev-list)", count);
 
-  // EVERY PATH ANY COMMIT TOUCHED (hanten N1): renames off so both names of a
-  // rename are here, merges read as combined diffs, submodule ignore settings
-  // overridden (hanten N2).
-  const log = context.seams.run(
-    GIT,
+  // EVERY CHANGE ANY COMMIT MADE (hanten N1, round 2 N1): renames off so both
+  // names of a rename are here, merges read as combined diffs, the
+  // destination blob of each change kept so a blob committed and later
+  // replaced is still measured, submodule ignore settings overridden (N2).
+  const log = git(
     [
       "-c",
       "core.quotePath=false",
       "log",
       "-z",
+      "--raw",
+      "--no-abbrev",
       "--format=",
-      "--name-only",
       "--no-renames",
       "--diff-merges=cc",
       "--ignore-submodules=none",
@@ -325,19 +336,19 @@ function readRangeAndTriage(
       `${mergeBase}..${headSha}`,
       "--",
     ],
-    { cwd: root, bytes: true },
+    { bytes: true },
   );
-  if (log.code !== 0) return failed("the paths the commits touched (git log)", log);
-  const history = parseHistoryPathsBytes(stdoutBytesOf(log));
+  if (log.code !== 0) return failed("the changes the commits made (git log)", log);
+  const history = parseRawChangesBytes(stdoutBytesOf(log));
 
-  const diff = context.seams.run(
-    GIT,
+  const diff = git(
     [
       "-c",
       "core.quotePath=false",
       "diff",
       "-z",
-      "--name-status",
+      "--raw",
+      "--no-abbrev",
       "--find-renames",
       "--ignore-submodules=none",
       "--no-relative",
@@ -346,31 +357,25 @@ function readRangeAndTriage(
       headSha,
       "--",
     ],
-    { cwd: root, bytes: true },
+    { bytes: true },
   );
   if (diff.code !== 0) return failed("the net change (git diff)", diff);
-  const entries = parseNameStatusBytes(stdoutBytesOf(diff));
+  const net = parseRawChangesBytes(stdoutBytesOf(diff));
 
-  // MEASURED AT <head>, never on disk, and only the changed paths that still
-  // exist there (hanten N9): a deletion is never measured, and an undecodable
-  // name cannot be spelled as an object name, so it is not measured either.
-  const toMeasure = entries
-    .filter((entry): boolean => entry.indexStatus !== "D" && entry.undecodable !== true)
-    .map((entry): string => entry.path);
-  let sizes: ReadonlyMap<string, number> = new Map();
-  if (toMeasure.length > 0) {
-    const check = context.seams.run(GIT, ["cat-file", "--batch-check=%(objecttype) %(objectsize)", "-z"], {
-      cwd: root,
-      stdin: batchCheckInput(headSha, toMeasure),
-    });
-    if (check.code !== 0) return failed("the sizes at the head (git cat-file)", check);
-    sizes = parseBatchCheckSizes(headSha, toMeasure, check.stdout);
+  // MEASURED BY OBJECT ID, never on disk and never by path (hanten round 2
+  // N4): bare ids carry no newline, so cat-file needs no -z. A deletion, a
+  // gitlink and the null id are never measured.
+  const oids = [...new Set([...net, ...history].filter(measurableBlob).map((change): string => change.oid))];
+  let blobSizes: ReadonlyMap<string, number> = new Map();
+  if (oids.length > 0) {
+    const check = git(["cat-file", `--batch-check=${BATCH_CHECK_FORMAT}`], { stdin: oids.map((oid): string => `${oid}\n`).join("") });
+    if (check.code !== 0) return failed("the blob sizes (git cat-file)", check);
+    blobSizes = parseBatchCheckIds(check.stdout);
   }
 
-  const triage = triageRange(entries, history, {
+  const triage = triageRange(net, history, blobSizes, {
     scopePrefixes: commaList(context.args.values["scope"]),
     mentionedText: context.args.values["mentions"] ?? "",
-    sizes,
     largeBytes,
   });
   return { range: { base: range.base, head: range.head, mergeBase, headSha, commits }, triage };
@@ -387,14 +392,17 @@ function runTriage(context: CommandContext, triage: TriageResult, range?: Resolv
   if (range !== undefined) {
     // Text only in range mode: the working-copy text report is unchanged.
     const span = `${range.mergeBase.slice(0, 12)}..${range.headSha.slice(0, 12)}`;
+    const typed = plainLine(`${range.base}..${range.head}`);
     context.io.out(
       range.commits === 0
-        ? `read: committed range ${range.base}..${range.head} (${span}) -- the range names no commits, not the working copy`
-        : `read: committed range ${range.base}..${range.head} (${span}, ${range.commits} commit(s)), not the working copy`,
+        ? `read: committed range ${typed} (${span}) -- the range names no commits, not the working copy`
+        : `read: committed range ${typed} (${span}, ${range.commits} commit(s)), not the working copy`,
     );
   }
   context.io.out(`clean: ${triage.clean.length} file(s)`);
-  for (const path of triage.clean) context.io.out(`  ${path}`);
+  // plainLine on every rendered path (hanten round 2 N2): a `\r` in a name
+  // would otherwise rewrite the row in place and hide it. --json keeps bytes.
+  for (const path of triage.clean) context.io.out(`  ${plainLine(path)}`);
   // A count only -- this verb carries no --verbose flag, so the paths
   // themselves are never listed in text (zheref/nen#169). Printed
   // unconditionally, even at zero, matching the 'clean' line above: both
@@ -402,7 +410,7 @@ function runTriage(context: CommandContext, triage: TriageResult, range?: Resolv
   context.io.out(`ignored: ${triage.ignored.length} file(s), not listed`);
   if (triage.flagged.length > 0) {
     context.io.out(`flagged: ${triage.flagged.length} file(s) -- never staged without an explicit yes`);
-    for (const file of triage.flagged) context.io.out(`  ${file.path}  [${file.reasons.join(", ")}]`);
+    for (const file of triage.flagged) context.io.out(`  ${plainLine(file.path)}  [${file.reasons.join(", ")}]`);
     return 1;
   }
   return 0;

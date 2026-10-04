@@ -10,10 +10,11 @@
 // working tree, because the defect that filed #337 was a review of a clean,
 // committed branch reading the secret-shape row as unread.
 //
-// It SKIPS where `git` is missing or older than 2.38 -- the verb's own floor
-// in range mode: `cat-file --batch-check -z` (2.38) is the newest of what it
-// runs, above `log --diff-merges` (2.31), `rev-parse --end-of-options` (2.30)
-// and the fixture's `--initial-branch` (2.28).
+// It SKIPS where `git` is missing or older than 2.31 -- the verb's own floor
+// in range mode: `log --diff-merges` (2.31) is the newest flag it passes,
+// above `rev-parse --end-of-options` (2.30) and the fixture's
+// `--initial-branch` (2.28). Sizes go to `cat-file --batch-check` as bare
+// object ids, with no `-z`, so nothing needs 2.38 (hanten round 2 N4).
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -43,7 +44,7 @@ function usableGit(): boolean {
   if (version === null) return false;
   const major = Number(version[1]);
   const minor = Number(version[2]);
-  return major > 2 || (major === 2 && minor >= 38);
+  return major > 2 || (major === 2 && minor >= 31);
 }
 
 const HAVE_GIT = usableGit();
@@ -167,6 +168,61 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     mustGit(repo, ["update-index", "--add", "--cacheinfo", `160000,${init},vendor/credentials`]);
     mustGit(repo, [...WHO, "commit", "--quiet", "-m", "add a gitlink"]);
 
+    // hanten round 2 N1: a large blob that exists only inside the range.
+    mustGit(repo, ["checkout", "--quiet", "-b", "ghost-dump", init]);
+    write(repo, "dump.sql", "d".repeat(3000));
+    commit(repo, "add a dump");
+    rmSync(join(repo, "dump.sql"));
+    commit(repo, "drop it");
+
+    mustGit(repo, ["checkout", "--quiet", "-b", "grow-shrink", init]);
+    write(repo, "src/a.ts", "g".repeat(3000));
+    commit(repo, "grow");
+    write(repo, "src/a.ts", "small\n");
+    commit(repo, "shrink");
+
+    // hanten round 2 N3 (a): an EVIL merge adds a secret no parent had, and a
+    // later merge drops it the same way.
+    for (const side of ["side-one", "side-two"]) {
+      mustGit(repo, ["checkout", "--quiet", "-b", side, init]);
+      write(repo, `${side}.ts`);
+      commit(repo, side);
+    }
+    mustGit(repo, ["checkout", "--quiet", "-b", "evil", init]);
+    write(repo, "src/topic.ts");
+    commit(repo, "topic work");
+    mustGit(repo, [...WHO, "merge", "--quiet", "--no-ff", "--no-commit", "side-one"]);
+    write(repo, "evil.pem", "-----BEGIN PRIVATE KEY-----\n");
+    mustGit(repo, ["add", "evil.pem"]);
+    mustGit(repo, [...WHO, "commit", "--quiet", "-m", "evil merge adds a key"]);
+    mustGit(repo, [...WHO, "merge", "--quiet", "--no-ff", "--no-commit", "side-two"]);
+    mustGit(repo, ["rm", "--quiet", "evil.pem"]);
+    mustGit(repo, [...WHO, "commit", "--quiet", "-m", "evil merge drops it"]);
+
+    // (b): a catch-up merge from the base. The base's own files -- a secret
+    // among them -- are not this range's.
+    mustGit(repo, ["checkout", "--quiet", "-b", "trunk", init]);
+    write(repo, "trunk-only.pem", "-----BEGIN CERTIFICATE-----\n");
+    write(repo, "src/trunk.ts");
+    commit(repo, "the trunk moves on");
+    mustGit(repo, ["checkout", "--quiet", "-b", "catch-up", init]);
+    write(repo, "src/feature.ts");
+    commit(repo, "feature");
+    mustGit(repo, [...WHO, "merge", "--quiet", "--no-ff", "-m", "catch up with the trunk", "trunk"]);
+
+    // (c): a secret added and removed only on a side branch that is merged in.
+    mustGit(repo, ["checkout", "--quiet", "-b", "with-side", init]);
+    write(repo, "src/main-line.ts");
+    commit(repo, "main line");
+    mustGit(repo, ["checkout", "--quiet", "-b", "leaky-side"]);
+    write(repo, ".env.production", "SECRET=3\n");
+    commit(repo, "side adds a secret");
+    rmSync(join(repo, ".env.production"));
+    write(repo, "src/side.ts");
+    commit(repo, "side drops it");
+    mustGit(repo, ["checkout", "--quiet", "with-side"]);
+    mustGit(repo, [...WHO, "merge", "--quiet", "--no-ff", "-m", "merge the side", "leaky-side"]);
+
     mustGit(repo, ["checkout", "--quiet", "main"]);
   });
 
@@ -240,6 +296,57 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     expect(run.code).toBe(1);
     expect(run.out).toContain("  key.pem  [secret-shape, in-history]");
     expect(run.out).toContain("  notes.txt");
+  });
+
+  it("flags a 3000-byte dump.sql added then deleted as [large, in-history] (hanten round 2 N1)", async () => {
+    const run = await triage(repo, ["--range", "main..ghost-dump", "--large-bytes", "2000"], true);
+    expect(run.code).toBe(1);
+    expect(buckets(run)).toEqual({ clean: [], flagged: [{ path: "dump.sql", reasons: ["large", "in-history"] }], ignored: [] });
+    // Under the default threshold the same range has nothing to say.
+    const quiet = await triage(repo, ["--range", "main..ghost-dump"], true);
+    expect(quiet.code).toBe(0);
+  });
+
+  it("flags a file grown then shrunk inside the range as [large, in-history] (hanten round 2 N1)", async () => {
+    const run = await triage(repo, ["--range", "main..grow-shrink", "--large-bytes", "2000"], true);
+    expect(run.code).toBe(1);
+    expect(buckets(run)).toEqual({ clean: [], flagged: [{ path: "src/a.ts", reasons: ["large", "in-history"] }], ignored: [] });
+  });
+
+  it("flags a key an evil merge added and a later merge removed (hanten round 2 N3a)", async () => {
+    const run = await triage(repo, ["--range", "main..evil"], true);
+    expect(run.code).toBe(1);
+    expect(doc(run).flagged).toEqual([{ path: "evil.pem", reasons: ["secret-shape", "in-history"] }]);
+    expect(doc(run).clean.sort()).toEqual(["side-one.ts", "side-two.ts", "src/topic.ts"]);
+  });
+
+  it("does not list the base's files after a catch-up merge from the base (hanten round 2 N3b)", async () => {
+    const run = await triage(repo, ["--range", "trunk..catch-up"], true);
+    expect(run.code).toBe(0);
+    expect(buckets(run)).toEqual({ clean: ["src/feature.ts"], flagged: [], ignored: [] });
+  });
+
+  it("flags a secret added and removed only on a merged side branch (hanten round 2 N3c)", async () => {
+    const run = await triage(repo, ["--range", "main..with-side"], true);
+    expect(run.code).toBe(1);
+    expect(doc(run).flagged).toEqual([{ path: ".env.production", reasons: ["secret-shape", "in-history"] }]);
+    expect(doc(run).clean.sort()).toEqual(["src/main-line.ts", "src/side.ts"]);
+  });
+
+  it("reads the pushed objects, not a replace ref's stand-in (hanten round 2 N6)", async () => {
+    const envCommit = mustGit(repo, ["rev-parse", "env-branch"]).trim();
+    const cleanCommit = mustGit(repo, ["rev-parse", "clean-branch"]).trim();
+    mustGit(repo, ["replace", envCommit, cleanCommit]);
+    try {
+      // git itself now shows the stand-in's changes for env-branch ...
+      expect(mustGit(repo, ["diff", "--name-only", "main", "env-branch"])).not.toContain(".env");
+      // ... and the verb still reads the commit being pushed.
+      const run = await triage(repo, ["--range", "main..env-branch"], true);
+      expect(run.code).toBe(1);
+      expect(doc(run).flagged).toEqual([{ path: ".env", reasons: ["secret-shape"] }]);
+    } finally {
+      mustGit(repo, ["replace", "-d", envCommit]);
+    }
   });
 
   it("sees an added gitlink when diff.ignoreSubmodules=all is configured (hanten N2)", async () => {

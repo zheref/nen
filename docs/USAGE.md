@@ -722,7 +722,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
-| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names over every path any commit touched (`in-history` for one gone at head), deletions and sizes over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --name-only, diff --name-status, cat-file --batch-check | yes |
+| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names and blob sizes over every change any commit made (`in-history` for a finding not in the net change), deletions and mentions over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --raw, diff --raw, cat-file --batch-check | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -3374,26 +3374,38 @@ working copy or the index. Both sides are resolved to commits (`git rev-parse
 `<head>`, as `git diff <base>...<head>` does** — a base that moved on after the
 branch was cut contributes nothing. Two readings, each for what it can answer:
 
-- **Names, over the per-commit union.** The name detectors — secret shape,
-  binary, out-of-scope, local config — run over every path ANY commit in the
-  range touched (`git log -z --name-only --no-renames --diff-merges=cc`). A
-  path that is gone at `<head>` — a `.env` added and then deleted, a `key.pem`
-  renamed to `notes.txt` — is still in the history being pushed, so if it
-  matches one it is FLAGGED with that reason plus **`in-history`**. A
-  history-only path that matches no name detector is not reported.
-- **Deletions, mentions and sizes, over the net diff** (`git diff -z
-  --name-status --find-renames`, merge base to `<head>`). A rename is reported
-  by its new path. Sizes are blob sizes at `<head>`, asked of `git cat-file
-  --batch-check -z` for the changed paths only, never the disk; a path the range
-  deleted is never measured and never flagged `large`; `--mentions` is matched
-  against a deleted path's basename exactly as in the working-copy mode.
+- **History: every change any commit made** (`git log -z --raw --no-renames
+  --diff-merges=cc`), a merge read as its combined diff — so an evil merge's own
+  additions are seen, and a catch-up merge from the base contributes none of
+  the base's files. The name detectors — secret shape, binary, out-of-scope,
+  local config — run over every path it names, and **every blob it introduced
+  is measured**. A finding on something **not in the range's net change** — a
+  path added then deleted, renamed away, or changed and reverted, or a blob a
+  later commit replaced (a dump committed then dropped, a file grown then
+  shrunk) — is FLAGGED with its reason plus **`in-history`**: it is not at
+  `<head>`, and it is still in the history being pushed. A history-only path
+  with no finding is not reported.
+- **Net change: deletions, mentions and each path's size at `<head>`** (`git
+  diff -z --raw --find-renames`, merge base to `<head>`). A rename is reported
+  by its new path. A path the range deleted is never measured at `<head>`;
+  `--mentions` is matched against a deleted path's basename exactly as in the
+  working-copy mode.
 
-Both git reads pass `--ignore-submodules=none`, so neither
+Sizes are blob sizes asked of `git cat-file --batch-check` by bare object id,
+never the disk. Every range read passes `--no-replace-objects`, so a
+`refs/replace/` entry cannot stand a different commit in for the one being
+pushed, and both change reads pass `--ignore-submodules=none`, so neither
 `diff.ignoreSubmodules` nor a committed `.gitmodules` `ignore = all` can hide an
-added gitlink. Nothing in a commit is git-ignored, so `ignored` is always empty.
-Same detectors, same exit codes on the classification, and the **same `--json`
-shape** as the working-copy mode (see *Output and exit codes*). Range mode needs
-git **2.38** or newer (`cat-file --batch-check -z`). **It never falls back** to
+added gitlink. A name git printed in bytes that are not UTF-8 is flagged
+**`undecodable`** — the path shown is a lenient decode that cannot name the
+file — and two such names are told apart on their raw bytes. The name detectors
+match a whole path segment (`[^/]*`), so a name carrying a newline, a carriage
+return, U+2028 or U+2029 is still matched, and the text report prints every
+path with its control characters removed. Nothing in a commit is git-ignored,
+so `ignored` is always empty. Same detectors, same exit codes on the
+classification, and the **same `--json` shape** as the working-copy mode (see
+*Output and exit codes*). Range mode needs git **2.31** or newer (`log
+--diff-merges`; `--end-of-options` is 2.30). **It never falls back** to
 the working copy. It is a filename check, not a substitute for a content
 scanner.
 
@@ -3452,7 +3464,10 @@ refused before git sees it), a side that does not resolve to a commit, or two
 commits with no common ancestor — named as a **shallow clone** to fetch more
 history into when `git rev-parse --is-shallow-repository` says so — and exit
 **1** when a git read fails (merge-base, the commit count, `git log`, `git
-diff`, `git cat-file`), naming the read.
+diff`, `git cat-file`), naming the read. Two reasons exist only in range mode:
+`in-history` (the finding is not in the range's net change: added then deleted,
+renamed away, or changed and reverted) and `undecodable` (a name that is not
+UTF-8).
 
 **Example**
 

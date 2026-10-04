@@ -370,43 +370,55 @@ describe("nen stage triage --range -- every git read that can fail, through the 
   const BASE = "a".repeat(40);
   const HEAD = "b".repeat(40);
   const MB = "c".repeat(40);
-  const LOG = `git -c core.quotePath=false log -z --format= --name-only --no-renames --diff-merges=cc --ignore-submodules=none --no-relative ${MB}..${HEAD} --`;
-  const DIFF = `git -c core.quotePath=false diff -z --name-status --find-renames --ignore-submodules=none --no-relative --no-ext-diff ${MB} ${HEAD} --`;
-  const CAT = "git cat-file --batch-check=%(objecttype) %(objectsize) -z";
+  const BLOB = "d".repeat(40);
+  const Z = "0".repeat(40);
+  // Every range read carries --no-replace-objects (hanten round 2 N6); a
+  // script that matched without it would fail as an unscripted call.
+  const G = "git --no-replace-objects";
+  const LOG = `${G} -c core.quotePath=false log -z --raw --no-abbrev --format= --no-renames --diff-merges=cc --ignore-submodules=none --no-relative ${MB}..${HEAD} --`;
+  const DIFF = `${G} -c core.quotePath=false diff -z --raw --no-abbrev --find-renames --ignore-submodules=none --no-relative --no-ext-diff ${MB} ${HEAD} --`;
+  const CAT = `${G} cat-file --batch-check=%(objectname) %(objecttype) %(objectsize)`;
+  const RAW = `:100644 100644 ${Z} ${BLOB} M\0src/a.ts\0`;
   const fail = { code: 128, stderr: "fatal: boom" };
 
   function script(overrides: Readonly<Record<string, ScriptedCall["result"]>> = {}): ScriptedCall[] {
     const calls: Record<string, ScriptedCall["result"]> = {
-      "git rev-parse --git-dir": { stdout: ".git\n" },
-      "git rev-parse --verify --quiet --end-of-options main^{commit}": { stdout: `${BASE}\n` },
-      "git rev-parse --verify --quiet --end-of-options topic^{commit}": { stdout: `${HEAD}\n` },
-      [`git merge-base ${BASE} ${HEAD}`]: { stdout: `${MB}\n` },
-      [`git rev-list --count ${MB}..${HEAD}`]: { stdout: "2\n" },
-      [LOG]: { stdout: "src/a.ts\0" },
-      [DIFF]: { stdout: "M\0src/a.ts\0" },
-      [CAT]: { stdout: "blob 3\n" },
+      [`${G} rev-parse --git-dir`]: { stdout: ".git\n" },
+      [`${G} rev-parse --verify --quiet --end-of-options main^{commit}`]: { stdout: `${BASE}\n` },
+      [`${G} rev-parse --verify --quiet --end-of-options topic^{commit}`]: { stdout: `${HEAD}\n` },
+      [`${G} merge-base ${BASE} ${HEAD}`]: { stdout: `${MB}\n` },
+      [`${G} rev-list --count ${MB}..${HEAD}`]: { stdout: "2\n" },
+      [LOG]: { stdout: RAW },
+      [DIFF]: { stdout: RAW },
+      [CAT]: { stdout: `${BLOB} blob 3\n` },
       ...overrides,
     };
     return Object.entries(calls).map(([match, result]): ScriptedCall => ({ match, result }));
   }
 
-  it("reads clean through every step when nothing fails", async () => {
-    const result = await capture(["stage", "triage", "--range", "main..topic"], script());
-    expect(result.code).toBe(0);
-    expect(result.out).toEqual([
+  it("reads clean through every step when nothing fails, sizing by bare object id", async () => {
+    const seams = new ScriptedSeams(script());
+    const out: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (): void => undefined };
+    const code = await runFamily(stageCommand, ["stage", "triage", "--range", "main..topic"], BANKAI_REPO, false, io, seams);
+    expect(code).toBe(0);
+    expect(out).toEqual([
       `read: committed range main..topic (${MB.slice(0, 12)}..${HEAD.slice(0, 12)}, 2 commit(s)), not the working copy`,
       "clean: 1 file(s)",
       "  src/a.ts",
       "ignored: 0 file(s), not listed",
     ]);
+    const cat = seams.calls.find((call) => call.args.includes("cat-file"));
+    expect(cat?.stdin).toBe(`${BLOB}\n`);
+    expect(seams.calls.every((call) => call.args[0] === "--no-replace-objects")).toBe(true);
   });
 
   it.each([
-    [`git merge-base ${BASE} ${HEAD}`, "the merge base"],
-    [`git rev-list --count ${MB}..${HEAD}`, "the commit count \\(git rev-list\\)"],
-    [LOG, "the paths the commits touched \\(git log\\)"],
+    [`${G} merge-base ${BASE} ${HEAD}`, "the merge base"],
+    [`${G} rev-list --count ${MB}..${HEAD}`, "the commit count \\(git rev-list\\)"],
+    [LOG, "the changes the commits made \\(git log\\)"],
     [DIFF, "the net change \\(git diff\\)"],
-    [CAT, "the sizes at the head \\(git cat-file\\)"],
+    [CAT, "the blob sizes \\(git cat-file\\)"],
   ])("exits 1 when '%s' fails, naming %s", async (match, named) => {
     const result = await capture(["stage", "triage", "--range", "main..topic"], script({ [match]: fail }));
     expect(result.code).toBe(1);
@@ -414,12 +426,33 @@ describe("nen stage triage --range -- every git read that can fail, through the 
     expect(result.out).toEqual([]);
   });
 
+  it("flags a non-UTF-8 name in the net change 'undecodable', read from the raw bytes (hanten round 2 N7)", async () => {
+    const head = new TextEncoder().encode(`:100644 100644 ${Z} ${BLOB} A\0`);
+    const bytes = new Uint8Array([...head, 0x66, 0xff, 0x2e, 0x74, 0x73, 0]);
+    const result = await captureJson(
+      ["stage", "triage", "--range", "main..topic"],
+      script({ [LOG]: { stdoutBytes: bytes, stdout: "" }, [DIFF]: { stdoutBytes: bytes, stdout: "" } }),
+      BANKAI_REPO,
+    );
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n")) as { flagged: { path: string; reasons: string[] }[] };
+    expect(doc.flagged).toEqual([{ path: "f�.ts", reasons: ["undecodable"] }]);
+  });
+
+  it("renders a flagged name through plainLine, so a carriage return cannot hide it (hanten round 2 N2)", async () => {
+    const raw = `:100644 100644 ${Z} ${BLOB} A\0cr\r.pem\0`;
+    const result = await capture(["stage", "triage", "--range", "main..topic"], script({ [LOG]: { stdout: raw }, [DIFF]: { stdout: raw } }));
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("  cr.pem  [secret-shape]");
+    expect(result.out.join("\n")).not.toContain("\r");
+  });
+
   it("names a shallow clone at exit 2 when the merge base is not in the repository (hanten N8)", async () => {
     const result = await capture(
       ["stage", "triage", "--range", "main..topic"],
       [
-        ...script({ [`git merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
-        { match: "git rev-parse --is-shallow-repository", result: { stdout: "true\n" } },
+        ...script({ [`${G} merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
+        { match: `${G} rev-parse --is-shallow-repository`, result: { stdout: "true\n" } },
       ],
     );
     expect(result.code).toBe(2);
@@ -430,8 +463,8 @@ describe("nen stage triage --range -- every git read that can fail, through the 
     const result = await capture(
       ["stage", "triage", "--range", "main..topic"],
       [
-        ...script({ [`git merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
-        { match: "git rev-parse --is-shallow-repository", result: { stdout: "false\n" } },
+        ...script({ [`${G} merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
+        { match: `${G} rev-parse --is-shallow-repository`, result: { stdout: "false\n" } },
       ],
     );
     expect(result.code).toBe(2);

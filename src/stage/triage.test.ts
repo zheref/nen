@@ -4,10 +4,8 @@ import {
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
   parseCommitRange,
-  batchCheckInput,
-  parseBatchCheckSizes,
-  parseHistoryPathsBytes,
-  parseNameStatusBytes,
+  parseBatchCheckIds,
+  parseRawChangesBytes,
   parseStatusPorcelain,
   parseStatusPorcelainBytes,
   pathspecLine,
@@ -366,53 +364,67 @@ describe("addListFrom -- what a list may never carry, and the rename it must", (
 });
 
 describe("the committed-range readers (zheref/nen#337)", () => {
-  const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
+  const enc = (text: string): Uint8Array => new TextEncoder().encode(text);
+  const Z = "0".repeat(40);
+  const oid = (c: string): string => c.repeat(40);
+  /** One non-merge `--raw -z` record. */
+  const raw = (status: string, dst: string, ...paths: string[]): string =>
+    `:100644 100644 ${Z} ${dst} ${status}\u0000${paths.join("\u0000")}\u0000`;
 
   it("parseCommitRange splits one '..' and refuses everything else", () => {
     expect(parseCommitRange("origin/main..HEAD")).toEqual({ base: "origin/main", head: "HEAD" });
     for (const bad of ["HEAD", "a...b", "..b", "a..", "a..b..c", ""]) expect(parseCommitRange(bad)).toBeNull();
   });
 
-  it("parseNameStatusBytes keeps the NEW path of a rename, carries the original, and reads a deletion as 'D'", () => {
-    const entries = parseNameStatusBytes(bytes("M\u0000src/a.ts\u0000R087\u0000old.ts\u0000new.ts\u0000D\u0000gone.ts\u0000A\u0000.env\u0000"));
-    expect(entries).toEqual([
-      { path: "src/a.ts", indexStatus: "M", worktreeStatus: " ", ignored: false },
-      { path: "new.ts", indexStatus: "R", worktreeStatus: " ", ignored: false, origPath: "old.ts" },
-      { path: "gone.ts", indexStatus: "D", worktreeStatus: " ", ignored: false },
-      { path: ".env", indexStatus: "A", worktreeStatus: " ", ignored: false },
+  it("parseRawChangesBytes keeps a rename's NEW path, carries the original, and keeps each destination blob", () => {
+    const changes = parseRawChangesBytes(
+      enc(raw("M", oid("a"), "src/a.ts") + raw("R087", oid("b"), "old.ts", "new.ts") + raw("D", Z, "gone.ts")),
+    );
+    expect(changes.map((change) => [change.entry.path, change.entry.indexStatus, change.entry.origPath, change.oid])).toEqual([
+      ["src/a.ts", "M", undefined, oid("a")],
+      ["new.ts", "R", "old.ts", oid("b")],
+      ["gone.ts", "D", undefined, Z],
     ]);
   });
 
-  it("parseNameStatusBytes marks a non-UTF-8 name undecodable", () => {
-    const raw = new Uint8Array([0x41, 0, 0x66, 0xff, 0x2e, 0x74, 0x73, 0]);
-    expect(parseNameStatusBytes(raw)[0]?.undecodable).toBe(true);
+  it("parseRawChangesBytes reads a merge's combined record by its RESULT side", () => {
+    const record = `::000000 000000 100644 ${Z} ${Z} ${oid("e")} AA\u0000evil.pem\u0000`;
+    const [change] = parseRawChangesBytes(enc(record));
+    expect(change?.entry.path).toBe("evil.pem");
+    expect(change?.oid).toBe(oid("e"));
+    expect(change?.mode).toBe("100644");
   });
 
-  it("batchCheckInput writes one NUL-terminated <sha>:<path> per path, newlines kept whole", () => {
-    expect(batchCheckInput("abc", ["src/a.ts", "new\nline.ts"])).toBe("abc:src/a.ts\u0000abc:new\nline.ts\u0000");
+  it("parseRawChangesBytes keys two different non-UTF-8 names apart, though they decode alike (round 2 N7)", () => {
+    const head = enc(`:100644 100644 ${Z} ${oid("a")} A\u0000`);
+    const bytes = new Uint8Array([...head, 0x66, 0xff, 0, ...head, 0x66, 0xfe, 0]);
+    const changes = parseRawChangesBytes(bytes);
+    expect(changes.map((change) => change.entry.path)).toEqual(["f�", "f�"]);
+    expect(changes[0]?.key).not.toBe(changes[1]?.key);
+    expect(changes.every((change) => change.entry.undecodable === true)).toBe(true);
   });
 
-  it("parseBatchCheckSizes measures blobs only, and reads an echoed refusal whose name carries a newline", () => {
-    const paths = ["src/a.ts", "vendor/sub", "new\nline.ts", "dir"];
-    const text = "blob 120\nabc:vendor/sub missing\nabc:new\nline.ts ambiguous\ntree 40\n";
-    expect([...parseBatchCheckSizes("abc", paths, text)]).toEqual([["src/a.ts", 120]]);
-    expect([...parseBatchCheckSizes("abc", ["a", "b"], "abc:a missing\nblob 7\n")]).toEqual([["b", 7]]);
-  });
-
-  it("parseHistoryPathsBytes keeps each path once, first-seen order, and marks a non-UTF-8 name", () => {
-    const paths = parseHistoryPathsBytes(bytes("key.pem\u0000notes.txt\u0000key.pem\u0000.env\u0000"));
-    expect(paths).toEqual([
-      { path: "key.pem", undecodable: false },
-      { path: "notes.txt", undecodable: false },
-      { path: ".env", undecodable: false },
+  it("parseBatchCheckIds measures blobs only, keyed by id", () => {
+    const text = `${oid("a")} blob 120\n${oid("b")} missing\n${oid("c")} tree 40\n${oid("d")} blob 0\n`;
+    expect([...parseBatchCheckIds(text)]).toEqual([
+      [oid("a"), 120],
+      [oid("d"), 0],
     ]);
-    expect(parseHistoryPathsBytes(new Uint8Array([0x66, 0xff, 0]))[0]?.undecodable).toBe(true);
   });
 
-  it("triageRange flags a history-only name match with 'in-history' and leaves a harmless one unreported", () => {
-    const net = parseNameStatusBytes(bytes("R100\u0000key.pem\u0000notes.txt\u0000"));
-    const history = parseHistoryPathsBytes(bytes("key.pem\u0000notes.txt\u0000.env\u0000scratch.ts\u0000settings.local.json\u0000"));
-    expect(triageRange(net, history)).toEqual({
+  it("triageRange flags a history-only name match with 'in-history', and leaves a harmless one unreported", () => {
+    const net = parseRawChangesBytes(enc(raw("R100", oid("n"), "key.pem", "notes.txt")));
+    const history = parseRawChangesBytes(
+      enc(
+        raw("A", oid("k"), "key.pem") +
+          raw("D", Z, "key.pem") +
+          raw("A", oid("n"), "notes.txt") +
+          raw("A", oid("e"), ".env") +
+          raw("A", oid("s"), "scratch.ts") +
+          raw("A", oid("l"), "settings.local.json"),
+      ),
+    );
+    expect(triageRange(net, history, new Map())).toEqual({
       clean: ["notes.txt"],
       flagged: [
         { path: "key.pem", reasons: ["secret-shape", "in-history"] },
@@ -424,19 +436,63 @@ describe("the committed-range readers (zheref/nen#337)", () => {
   });
 
   it("triageRange applies --scope to history-only paths too", () => {
-    const history = parseHistoryPathsBytes(bytes("elsewhere/tmp.ts\u0000"));
-    expect(triageRange([], history, { scopePrefixes: ["src/"] }).flagged).toEqual([
+    const history = parseRawChangesBytes(enc(raw("A", oid("t"), "elsewhere/tmp.ts")));
+    expect(triageRange([], history, new Map(), { scopePrefixes: ["src/"] }).flagged).toEqual([
       { path: "elsewhere/tmp.ts", reasons: ["out-of-scope", "in-history"] },
     ]);
   });
 
-  it("a range's entries triage exactly as working-copy entries do: a deletion is never large, mentions still match", () => {
-    const entries = parseNameStatusBytes(bytes("D\u0000src/gone.ts\u0000A\u0000certs/server.pem\u0000"));
-    const result = triageStage(entries, { mentionedText: "remove gone.ts", sizes: new Map([["certs/server.pem", 1]]), largeBytes: 1 });
-    expect(result).toEqual({
-      clean: ["src/gone.ts"],
-      flagged: [{ path: "certs/server.pem", reasons: ["secret-shape", "large"] }],
+  it("triageRange measures history blobs: a dump added then deleted, and a file grown then shrunk (round 2 N1)", () => {
+    const net = parseRawChangesBytes(enc(raw("M", oid("2"), "src/a.ts")));
+    const history = parseRawChangesBytes(
+      enc(raw("A", oid("d"), "dump.sql") + raw("D", Z, "dump.sql") + raw("M", oid("1"), "src/a.ts") + raw("M", oid("2"), "src/a.ts")),
+    );
+    const sizes = new Map([
+      [oid("d"), 3000],
+      [oid("1"), 3000],
+      [oid("2"), 6],
+    ]);
+    expect(triageRange(net, history, sizes, { largeBytes: 2000 })).toEqual({
+      clean: [],
+      flagged: [
+        { path: "src/a.ts", reasons: ["large", "in-history"] },
+        { path: "dump.sql", reasons: ["large", "in-history"] },
+      ],
       ignored: [],
     });
+    // Under the threshold, nothing in history is large, and the row is clean.
+    expect(triageRange(net, history, sizes).flagged).toEqual([]);
+  });
+
+  it("triageRange measures each net path by its blob at <head>, and never a deletion", () => {
+    const net = parseRawChangesBytes(enc(raw("A", oid("b"), "big.bin.txt") + raw("D", Z, "gone.ts")));
+    const result = triageRange(net, [], new Map([[oid("b"), 10]]), { largeBytes: 10, mentionedText: "gone.ts" });
+    expect(result).toEqual({ clean: ["gone.ts"], flagged: [{ path: "big.bin.txt", reasons: ["large"] }], ignored: [] });
+  });
+
+  it("triageRange flags a non-UTF-8 net name and a non-UTF-8 history-only name 'undecodable' (round 2 N7)", () => {
+    const head = enc(`:100644 100644 ${Z} ${oid("a")} A\u0000`);
+    const changes = parseRawChangesBytes(new Uint8Array([...head, 0x66, 0xff, 0, ...head, 0x66, 0xfe, 0]));
+    const [first, second] = changes;
+    if (first === undefined || second === undefined) throw new Error("two changes expected");
+    const result = triageRange([first], [first, second], new Map());
+    expect(result.flagged).toEqual([
+      { path: "f�", reasons: ["undecodable"] },
+      { path: "f�", reasons: ["undecodable", "in-history"] },
+    ]);
+  });
+
+  // round 2 N2: `.` does not match a line terminator, so `.*` let these pass.
+  const terminated = ["n\nl.key", "cr\r.pem", "ls .pem", "ps .key", ".env.\nx", "credentials\r"];
+
+  it.each(terminated)("triageStage (working copy) flags %j as secret-shape", (path) => {
+    const result = triageStage([{ path, indexStatus: "?", worktreeStatus: "?", ignored: false }]);
+    expect(result.flagged).toEqual([{ path, reasons: ["secret-shape"] }]);
+  });
+
+  it.each(terminated)("triageRange (committed) flags %j as secret-shape, net and history-only", (path) => {
+    const change = parseRawChangesBytes(enc(raw("A", oid("a"), path)));
+    expect(triageRange(change, change, new Map()).flagged).toEqual([{ path, reasons: ["secret-shape"] }]);
+    expect(triageRange([], change, new Map()).flagged).toEqual([{ path, reasons: ["secret-shape", "in-history"] }]);
   });
 });
