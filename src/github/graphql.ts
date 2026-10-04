@@ -137,6 +137,7 @@ export const PULL_REQUEST_QUERY = `
         headRefOid
         headRefName
         baseRefName
+        baseRefOid
         author { login }
         labels(first:100) { nodes { name } }
         reviewRequests(first:100) {
@@ -304,6 +305,12 @@ export interface GhPullRequestNode {
   readonly headRefOid: unknown;
   readonly headRefName: unknown;
   readonly baseRefName: unknown;
+  /**
+   * The base branch's tip commit (zheref/nen#249, Feitan F1): the commit
+   * `nen pr ready` reads `checks.excluded` at, so a pull request cannot exempt
+   * its own failing check by editing the declaration on its own head.
+   */
+  readonly baseRefOid?: unknown;
   readonly author: unknown;
   // Unwrapped from `labels(first:100) { nodes { name } }`.
   readonly labels: unknown;
@@ -465,6 +472,7 @@ function toGhPullRequestNode(raw: unknown): GhPullRequestNode | undefined {
     headRefOid: raw["headRefOid"],
     headRefName: raw["headRefName"],
     baseRefName: raw["baseRefName"],
+    baseRefOid: raw["baseRefOid"],
     // `author { login }` is ALREADY the shape parsePullRequest() reads
     // (`{login}` object or bare string), so it is carried across untouched.
     author: raw["author"],

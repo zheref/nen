@@ -148,8 +148,11 @@ export function checkExpectedBody(summary: IssueSummary, expectedSha256: string 
  * caller approves in a dry run must be the argv that runs, not a rendering of
  * it a later edit can drift away from.
  */
-export function editBodyArgv(target: Target, issue: number, bodyFile: string): readonly string[] {
-  return ["issue", "edit", String(issue), "--repo", target.slug, "--body-file", bodyFile];
+export function editBodyArgv(target: Target, issue: number): readonly string[] {
+  // `--body-file -`: the body travels on stdin, the very bytes this verb read,
+  // hashed and checked -- never re-read from the path by `gh` after the checks
+  // (zheref/nen#329).
+  return ["issue", "edit", String(issue), "--repo", target.slug, "--body-file", "-"];
 }
 
 /**
@@ -194,9 +197,9 @@ export class BodyNotSentError extends Error {
 }
 
 /** Replace the issue's body. Throws on anything `gh` did not exit 0 on. */
-export function writeIssueBody(seams: Seams, target: Target, issue: number, bodyFile: string): void {
-  const argv = editBodyArgv(target, issue, bodyFile);
-  const result = seams.run(GH, argv);
+export function writeIssueBody(seams: Seams, target: Target, issue: number, body: string): void {
+  const argv = editBodyArgv(target, issue);
+  const result = seams.run(GH, argv, { stdin: body });
   if (result.spawnFailed) {
     throw new BodyNotSentError(
       `could not replace ${target.slug}#${issue}'s body: gh could not be started (${

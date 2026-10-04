@@ -186,3 +186,182 @@ describe("nen stage triage -- an ignored path is never measured", () => {
     expect(triage.clean).toEqual(["src.txt"]);
   });
 });
+
+// zheref/nen#237: `nen stage list` -- the exact add list, triage's complement.
+describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
+  const STATUS = "git -c core.quotePath=false status --porcelain=v1 -z --ignored -uall";
+  const TOPLEVEL = "git rev-parse --show-toplevel";
+
+  async function list(
+    argv: readonly string[],
+    stdout: string,
+    json = false,
+    withWrite = false,
+    toplevel: string = BANKAI_REPO,
+    stdoutBytes?: Uint8Array,
+    repo: string = BANKAI_REPO,
+  ): Promise<{ code: number; out: string[]; err: string[]; written: string[] }> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const written: string[] = [];
+    const io: Io = {
+      out: (line): void => void out.push(line),
+      err: (line): void => void err.push(line),
+      ...(withWrite ? { write: (chunk: string): void => void written.push(chunk) } : {}),
+    };
+    const code = await runFamily(
+      stageCommand,
+      ["stage", "list", ...argv],
+      repo,
+      json,
+      io,
+      new ScriptedSeams([
+        { match: TOPLEVEL, result: { stdout: `${toplevel}\n` } },
+        { match: STATUS, result: { stdout, ...(stdoutBytes === undefined ? {} : { stdoutBytes }) } },
+      ]),
+    );
+    return { code, out, err, written };
+  }
+
+  it("refuses an OMITTED --repo at exit 2", async () => {
+    const result = await capture(["stage", "list"], [], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--repo <path> is required/);
+  });
+
+  it("prints only the paths on stdout, untracked ones included, at exit 0", async () => {
+    const result = await list([], " M src/a.ts\0?? src/new.ts\0!! node_modules/x\0");
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["src/a.ts", "src/new.ts"]);
+    expect(result.err).toEqual(["ignored: 1 file(s), not listed"]);
+  });
+
+  it("withholds the list on a flag (exit 1) and names each exclusion with its reasons on stderr", async () => {
+    const result = await list([], " M src/a.ts\0?? .env\0");
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/^excluded: \.env {2}\[secret-shape\]$/m);
+    expect(err).toMatch(/1 path\(s\) need a human -- the add list \(1 path\(s\)\) is withheld/);
+  });
+
+  it("--json carries the whole classification at the flagged exit", async () => {
+    const result = await list([], " M src/a.ts\0?? .env\0!! node_modules/x\0", true);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({
+      verdict: "flagged",
+      add: ["src/a.ts"],
+      excluded: [{ path: ".env", reasons: ["secret-shape"] }],
+      alreadyStaged: [],
+      ignored: [{ path: "node_modules/x", reasons: ["ignored"] }],
+      unmerged: [],
+      embeddedRepos: [],
+      undecodable: [],
+    });
+  });
+
+  it("exits 3 on an empty tree, with nothing on stdout", async () => {
+    const result = await list([], "");
+    expect(result.code).toBe(3);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/nothing to add/);
+  });
+
+  it("exits 3 on an all-ignored tree, and --json says 'empty'", async () => {
+    const result = await list([], "!! node_modules/x\0", true);
+    expect(result.code).toBe(3);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ verdict: "empty", add: [] });
+  });
+
+  it("--nul writes every path NUL-terminated through the raw sink, with no trailing newline", async () => {
+    const result = await list(["--nul"], " M with space.ts\0?? new\nline.ts\0", false, true);
+    expect(result.code).toBe(0);
+    expect(result.written).toEqual(["with space.ts\0new\nline.ts\0"]);
+    expect(result.out).toEqual([]);
+  });
+
+  it("the newline form C-quotes a path with a newline so git reads it back whole", async () => {
+    const result = await list([], "?? new\nline.ts\0");
+    expect(result.out).toEqual(['"new\\nline.ts"']);
+  });
+
+  it("names an already-staged deletion on stderr and keeps it off the list", async () => {
+    const result = await list(["--mentions", "gone.ts"], "D  src/gone.ts\0 M src/a.ts\0");
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["src/a.ts"]);
+    expect(result.err.join("\n")).toMatch(/^already staged: src\/gone\.ts {2}\[deletion in the index/m);
+  });
+
+  it("refuses a --repo that is not the top of its working tree (exit 2), naming the top to pass", async () => {
+    const result = await list([], " M src/a.ts\0", false, false, join(BANKAI_REPO, ".."));
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/not its top[\s\S]*Pass --repo /);
+  });
+
+  it("names each unmerged path on stderr and withholds the list at exit 1", async () => {
+    const result = await list([], "UU src/both.ts\0AA src/added.ts\0 M src/a.ts\0", true);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({
+      verdict: "flagged",
+      add: ["src/a.ts"],
+      unmerged: ["src/both.ts", "src/added.ts"],
+    });
+    const text = await list([], "UU src/both.ts\0 M src/a.ts\0");
+    expect(text.code).toBe(1);
+    expect(text.out).toEqual([]);
+    expect(text.err).toContain("unmerged: src/both.ts");
+  });
+
+  it("never lists an embedded repository, and names it on stderr at exit 1", async () => {
+    const result = await list([], "?? vendor/lib/\0?? src/new.ts\0");
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/^embedded repository: vendor\/lib\/ {2}\[/m);
+  });
+
+  it("names a path whose raw bytes are not UTF-8 as undecodable and withholds the list", async () => {
+    const enc = new TextEncoder();
+    const bytes = new Uint8Array([...enc.encode("?? bad"), 0xff, ...enc.encode("name.ts\0 M src/a.ts\0")]);
+    const result = await list([], "", true, false, BANKAI_REPO, bytes);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ verdict: "flagged", undecodable: ["bad\uFFFDname.ts"] });
+  });
+
+  it("lists a literal U+FFFD filename as an ordinary path at exit 0", async () => {
+    const result = await list([], "?? bad\uFFFDname.ts\0 M src/a.ts\0");
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["bad\uFFFDname.ts", "src/a.ts"]);
+  });
+
+  it("counts a path in two buckets once: a DD is unmerged AND an unmentioned deletion", async () => {
+    const result = await list([], "DD src/gone.ts\0 M src/a.ts\0");
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/nen: 1 path\(s\) need a human/);
+  });
+
+  it.skipIf(process.platform === "win32")("accepts a --repo whose toplevel ends in a space -- the path is read exactly", async () => {
+    const top = join(mkdtempSync(join(tmpdir(), "nen-stage-top-")), "repo ");
+    mkdirSync(top);
+    const result = await list([], " M src/a.ts\0", false, false, top, undefined, top);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual(["src/a.ts"]);
+  });
+
+  it("lists a worktree rename's original as a deletion, flagged unless mentioned", async () => {
+    const unmentioned = await list([], " R src/new.ts\0src/old.ts\0", true);
+    expect(unmentioned.code).toBe(1);
+    expect(JSON.parse(unmentioned.out.join("\n"))).toMatchObject({
+      add: ["src/new.ts"],
+      excluded: [{ path: "src/old.ts", reasons: ["unmentioned-deletion"] }],
+    });
+    const mentioned = await list(["--mentions", "moves old.ts"], " R src/new.ts\0src/old.ts\0");
+    expect(mentioned.code).toBe(0);
+    expect(mentioned.out).toEqual(["src/new.ts", "src/old.ts"]);
+  });
+
+  it("refuses --nul with --json, and --nul on triage, at exit 2", async () => {
+    expect((await list(["--nul"], "", true)).code).toBe(2);
+    expect((await capture(["stage", "triage", "--nul"])).code).toBe(2);
+  });
+});

@@ -123,8 +123,9 @@ describe("createArgv -- labels and assignee IN the create call", () => {
       "zheref/nen",
       "--title",
       "t",
+      // The checked body travels on stdin (zheref/nen#329), never as a path.
       "--body-file",
-      "b.md",
+      "-",
       "--assignee",
       "me",
       "--label",
@@ -148,10 +149,11 @@ describe("fileIssue", () => {
     const seams = new ScriptedSeams([
       { match: `gh ${argv.join(" ")}`, result: { stdout: "https://github.com/zheref/nen/issues/42\n" } },
     ]);
-    expect(fileIssue(seams, TARGET, request)).toEqual({
+    expect(fileIssue(seams, TARGET, request, "the checked body")).toEqual({
       url: "https://github.com/zheref/nen/issues/42",
       number: 42,
     });
+    expect(seams.calls[0]?.stdin).toBe("the checked body");
   });
 
   it("throws when gh reports no URL, rather than reporting a fake success", () => {
@@ -164,6 +166,6 @@ describe("fileIssue", () => {
     };
     const argv = createArgv(TARGET, request);
     const seams = new ScriptedSeams([{ match: `gh ${argv.join(" ")}`, result: { stdout: "" } }]);
-    expect(() => fileIssue(seams, TARGET, request)).toThrow(/no issue URL/);
+    expect(() => fileIssue(seams, TARGET, request, "b")).toThrow(/no issue URL/);
   });
 });

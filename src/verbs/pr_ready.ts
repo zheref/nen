@@ -69,6 +69,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
+  declarationNotice,
   evaluateReady,
   unknownTable,
   CAVEATS,
@@ -76,7 +77,11 @@ import {
   type ConjunctId,
   type ReadyEvaluation,
 } from "../gates/ready.js";
-import type { RoundPolicy } from "../gates/predicates.js";
+import {
+  resolveDeclaredExclusions,
+  type DeclaredExclusionOutcome,
+  type RoundPolicy,
+} from "../gates/predicates.js";
 import { createClient, tokenFromEnv } from "../github/client.js";
 import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state.js";
 import { assertRepoRoot } from "../repo/root.js";
@@ -91,6 +96,14 @@ import {
 import { loadRepoRegistry } from "../schema/repos.js";
 import { GATES_FILE, readSchemaJson, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
+import { plainLine } from "../cli/plain.js";
+import {
+  BASE_GATES_PATH,
+  exclusionsAtBase,
+  type BaseExclusions,
+  type BaseGatesRead,
+} from "../gates/base_exclusions.js";
+import { untilText, type DeclaredCheckExclusion } from "../schema/gates.js";
 import { ExcludeCheckError, parseExcludeCheckNames } from "../pr/excludecheck.js";
 
 /**
@@ -430,6 +443,11 @@ export interface ReadyReport {
   readonly meta: ReadyMeta;
 }
 
+/** One `checks.excluded` entry in `meta.declaredExclusions`. */
+export type DeclaredExclusionReport = Omit<DeclaredExclusionOutcome, "matched"> & {
+  readonly matched: readonly string[] | null;
+};
+
 export interface ReadyMeta {
   /** The ref exactly as the caller typed it. */
   readonly ref: string;
@@ -456,6 +474,40 @@ export interface ReadyMeta {
    * second state worth a second sentinel for.
    */
   readonly excludedChecks: readonly string[];
+  /**
+   * `nen/gates.json`'s `checks.excluded` (zheref/nen#249), every declared
+   * exclusion with its reason, ruling date, `until`, its `status` and the
+   * rollup labels it named. `status` is one of five:
+   *   `honoured`      applied: every label in `matched` was dropped;
+   *   `expired`       its date `until` has passed: not applied;
+   *   `not-yet-ruled` its `ruled` date is after today (UTC): not applied;
+   *   `unknown-date`  the evaluation time could not be read: not applied;
+   *   `in-force`      ONLY on an unevaluated report: in force by its dates,
+   *                   but nothing was applied (see `declaredExclusionsSource`).
+   * `matched` is `null` on an unevaluated report -- the rollup was never read,
+   * so nothing was matched and "matched nothing" would be a claim about it.
+   * Always the array, empty when the file declares none or identities came
+   * from `--reviewers`. Additive to v0.1. `excludedChecks` above stays the
+   * FLAG's names only; the two sources are reported apart because one is a
+   * per-invocation choice and the other a standing ruling.
+   */
+  readonly declaredExclusions: readonly DeclaredExclusionReport[];
+  /**
+   * WHERE `declaredExclusions` came from (hanten round 2, N5):
+   * `<owner>/<repo>@<sha>` -- the pull request's base, the only source a
+   * decided verdict honours (`@(unknown base)` when GitHub answered none) --
+   * or `local-unverified` on an unevaluated report, whose entries are the
+   * checkout's own file, never checked against the base. `null` when
+   * identities came from `--reviewers`, which declares no exclusion. Additive.
+   */
+  readonly declaredExclusionsSource: string | null;
+  /**
+   * Quiet facts that changed nothing a reader could see (hanten round 2, N3):
+   * today, only "could not confirm the base declares no exclusion" when the
+   * base read failed and the local file declares none. Rendered by `--explain`,
+   * never by the default output. Always the array. Additive.
+   */
+  readonly notes: readonly string[];
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -1027,6 +1079,58 @@ export function localHeadWarning(report: ReadyReport): string | null {
   );
 }
 
+/**
+ * `checks.excluded` as `--explain` names it (zheref/nen#249): one line per
+ * declared exclusion, its reason verbatim, whether it was honoured, and which
+ * checks it removed -- so a verdict a declaration widened says so on the page.
+ */
+function renderDeclaredExclusions(report: ReadyReport): string[] {
+  return report.meta.declaredExclusions.map((exclusion): string => {
+    const named = exclusion.match === "glob" ? `glob '${exclusion.name}'` : `'${exclusion.name}'`;
+    const applied = exclusion.status === "honoured";
+    const matched =
+      exclusion.matched === null
+        ? "local, not verified at base; rollup not read, nothing applied"
+        : exclusion.matched.length === 0
+          ? "names no check at this head"
+          : applied
+            ? `removed from CON-32(a): ${exclusion.matched.join(", ")}`
+            : `labels matched but not removed by this declaration: ${exclusion.matched.join(", ")}`;
+    const state = ((): string => {
+      switch (exclusion.status) {
+        case "honoured":
+          return "declared exclusion";
+        case "in-force":
+          return "declared exclusion (in force by its dates; not applied)";
+        case "expired":
+          return "declared exclusion EXPIRED, not honoured";
+        case "not-yet-ruled":
+          return "declared exclusion NOT YET RULED (ruled is after today), not honoured";
+        case "unknown-date":
+          return "declared exclusion NOT honoured (evaluation date unreadable)";
+      }
+    })();
+    return `  ${state}: ${named} — ${exclusion.reason} (ruled ${exclusion.ruled}, until ${untilText(exclusion.until)}) · ${matched}`;
+  });
+}
+
+/**
+ * The `excluded by declaration: …` lines (Feitan F2): one per HONOURED entry
+ * that removed at least one check. Printed by the DEFAULT output after the
+ * judged-head line, because a verdict a declaration widened must say so on the
+ * one line a caller reads, not only under `--explain`.
+ */
+export function declarationNotices(report: ReadyReport): string[] {
+  return report.meta.declaredExclusions
+    .filter((exclusion): boolean => exclusion.status === "honoured" && exclusion.matched !== null && exclusion.matched.length > 0)
+    .map((exclusion): string => declarationNotice({ ...exclusion, matched: exclusion.matched ?? [] }));
+}
+
+/** A `meta.warnings` entry that is one of `declarationNotices`, already printed above it. */
+function isDeclarationNotice(warning: string): boolean {
+  return warning.startsWith("excluded by declaration: ");
+}
+
 export function renderExplain(report: ReadyReport): string[] {
   const lines: string[] = [];
   lines.push(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`);
@@ -1061,7 +1165,14 @@ export function renderExplain(report: ReadyReport): string[] {
   if (report.meta.excludedChecks.length > 0) {
     lines.push(`  excluding checks named: ${report.meta.excludedChecks.join(", ")} (name-based exclusion, zheref/nen#216)`);
   }
-  for (const warning of report.meta.warnings) lines.push(`  warning: ${warning}`);
+  for (const line of renderDeclaredExclusions(report)) lines.push(line);
+  // The `excluded by declaration` notices also ride in `meta.warnings` (so
+  // `--json` and every consumer of it carry them); the lines just above say the
+  // same thing with the status beside it, so they are not printed twice.
+  for (const warning of report.meta.warnings) {
+    if (!isDeclarationNotice(warning)) lines.push(`  warning: ${warning}`);
+  }
+  for (const note of report.meta.notes) lines.push(`  note: ${note}`);
   lines.push("");
   lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
   lines.push("  when every row is ready, and the line above is the first failing row's reason.");
@@ -1104,7 +1215,11 @@ export function renderExplain(report: ReadyReport): string[] {
     lines.push("");
     lines.push(`  What would fix this: ${report.remedy}`);
   }
-  return lines;
+  // THE HUMAN-RENDERING BOUNDARY (Copilot on zheref/nen#359): check labels,
+  // declared names, reasons and conditions are strings this verb did not
+  // write, and ESC/CR/LF in one would rewrite the terminal or break the row.
+  // Every line is made plain here; `--json` keeps the original bytes.
+  return lines.map(plainLine);
 }
 
 // ── the verb ────────────────────────────────────────────────────────────────
@@ -1389,12 +1504,27 @@ export async function prReady(
         }
       : null;
 
-  const evaluation: ReadyEvaluation = evaluateReady(identities.identities, fetched.state, {
-    roundPolicyDefault: policy,
-    stallMinutes,
-    now: deps.now(),
-    excludeCheckNames,
-  });
+  // ── checks.excluded, AT THE BASE (zheref/nen#249, Feitan F1) ─────────────
+  //
+  // Never the local file's: under `--repo` a worktree holds the pull request's
+  // own head, which could exempt its own red check. Read only when identities
+  // came from a gates file -- the `--reviewers` path declares no exclusion, as
+  // it declares no carve-out. See ../gates/base_exclusions.ts.
+  const base =
+    identities.source === "schema"
+      ? await readBaseExclusions(opened.source, ref, fetched.state, identities.identities.excludedChecks ?? [])
+      : { exclusions: [], warnings: [], notes: [], source: undefined, origin: null };
+  const evaluation: ReadyEvaluation = evaluateReady(
+    { ...identities.identities, excludedChecks: base.exclusions },
+    fetched.state,
+    {
+      roundPolicyDefault: policy,
+      stallMinutes,
+      now: deps.now(),
+      excludeCheckNames,
+      ...(base.source === undefined ? {} : { declaredExclusionsSource: base.source }),
+    },
+  );
 
   const report: ReadyReport = {
     contract: CONTRACT,
@@ -1419,10 +1549,13 @@ export async function prReady(
       excludeRun: excludeRun === "" ? null : excludeRun,
       requiredHead: requiredHead ?? null,
       excludedChecks: excludeCheckNames,
+      declaredExclusions: evaluation.context.declaredExclusions,
+      declaredExclusionsSource: base.origin,
+      notes: base.notes,
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,
-      warnings: [...flagWarnings, ...fetched.warnings, ...evaluation.context.warnings],
+      warnings: [...flagWarnings, ...fetched.warnings, ...base.warnings, ...evaluation.context.warnings],
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
     },
@@ -1436,6 +1569,37 @@ export async function prReady(
     explain,
     mismatch === null ? report : { ...report, meta: { ...report.meta, warnings: [...report.meta.warnings, mismatch] } },
   );
+}
+
+/**
+ * Read `nen/gates.json` at the pull request's base commit and resolve its
+ * `checks.excluded` (zheref/nen#249, Feitan F1). Every failure -- no base
+ * commit, a source that cannot read files, a read that threw -- honours no
+ * exclusion and says so; see ../gates/base_exclusions.ts.
+ */
+async function readBaseExclusions(
+  source: PrStateSource,
+  ref: ResolvedRef,
+  state: Record<string, unknown>,
+  local: readonly DeclaredCheckExclusion[],
+): Promise<BaseExclusions & { readonly source: string; readonly origin: string }> {
+  const baseSha = typeof state["base_sha"] === "string" ? state["base_sha"] : "";
+  const origin = `${ref.owner}/${ref.repo}@${baseSha === "" ? "(unknown base)" : baseSha}`;
+  const where = `${origin}:${BASE_GATES_PATH}`;
+  let read: BaseGatesRead;
+  if (baseSha === "") {
+    read = { kind: "failed", message: "GitHub answered no base commit for the pull request" };
+  } else if (source.fileAtRef === undefined) {
+    read = { kind: "failed", message: "this transport cannot read files at a commit" };
+  } else {
+    try {
+      const text = await source.fileAtRef({ owner: ref.owner, repo: ref.repo }, BASE_GATES_PATH, baseSha);
+      read = text === null ? { kind: "absent" } : { kind: "read", text };
+    } catch (error) {
+      read = { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  return { ...exclusionsAtBase(read, where, local), source: `${where} checks.excluded`, origin };
 }
 
 /** The document `--require-head` prints on a mismatch, in place of a verdict. */
@@ -1531,6 +1695,23 @@ function unevaluatedReport(
       // requested. `requiredHead` means "given AND matched", on every report.
       requiredHead: null,
       excludedChecks: excludeCheckNames,
+      // The LOCAL file's declarations, dated against `now` so an expired one
+      // is still named -- GitHub was never read, so neither was the base the
+      // decided path takes them from. Never matched, never `honoured`: the
+      // rollup was not read and nothing was applied, so an entry in force by
+      // its dates is `in-force` (zheref/nen#249, N7).
+      declaredExclusions:
+        identities.source === "schema"
+          ? resolveDeclaredExclusions(identities.identities.excludedChecks ?? [], [], now).outcomes.map(
+              (outcome): DeclaredExclusionReport => ({
+                ...outcome,
+                status: outcome.status === "honoured" ? "in-force" : outcome.status,
+                matched: null,
+              }),
+            )
+          : [],
+      declaredExclusionsSource: identities.source === "schema" ? "local-unverified" : null,
+      notes: [],
       deliveryPr: null,
       identities: { source: identities.source, path: identities.path },
       // The gate never ran, so it never asked -- `false` here would read as
@@ -1559,13 +1740,19 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
     // head, unconditionally (zheref/nen#245); every OTHER failing row, so a
     // first failure cannot hide the rest (zheref/nen#248); and every warning,
     // the head-mismatch one included.
-    io.out(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`);
+    // Plain at the boundary, as `renderExplain` is (Copilot on zheref/nen#359).
+    io.out(plainLine(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`));
     io.out(judgedHeadLine(report));
+    // What a DECLARATION removed from CON-32(a), on the default output itself
+    // (zheref/nen#249, Feitan F2): no widened verdict without its ruling.
+    for (const notice of declarationNotices(report)) io.out(plainLine(`  ${notice}`));
     for (const id of report.failing.slice(1)) {
       const row = report.conjuncts.find((conjunct): boolean => conjunct.id === id);
-      if (row !== undefined) io.out(`  also FAILED ${row.clause}: ${row.reason ?? row.title}`);
+      if (row !== undefined) io.out(plainLine(`  also FAILED ${row.clause}: ${row.reason ?? row.title}`));
     }
-    for (const warning of report.meta.warnings) io.out(`  warning: ${warning}`);
+    for (const warning of report.meta.warnings) {
+      if (!isDeclarationNotice(warning)) io.out(plainLine(`  warning: ${warning}`));
+    }
   }
   if (report.verdict === "unevaluated" && !json) {
     io.err(

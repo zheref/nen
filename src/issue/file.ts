@@ -211,8 +211,11 @@ export function createArgv(target: Target, request: FileRequest): readonly strin
     target.slug,
     "--title",
     request.title,
+    // `-`: the body travels on stdin -- the bytes read and checked, never a
+    // path `gh` re-reads after the checks (zheref/nen#329). `bodyFile` is
+    // where they were read from, and is reported, not handed on.
     "--body-file",
-    request.bodyFile,
+    "-",
     "--assignee",
     request.assignee,
   ];
@@ -230,8 +233,8 @@ export interface FileResult {
 
 const ISSUE_URL = /https:\/\/[^\s]+\/issues\/(\d+)/;
 
-export function fileIssue(seams: Seams, target: Target, request: FileRequest): FileResult {
-  const result = seams.run(GH, createArgv(target, request));
+export function fileIssue(seams: Seams, target: Target, request: FileRequest, body: string): FileResult {
+  const result = seams.run(GH, createArgv(target, request), { stdin: body });
   if (result.code !== 0) {
     throw new Error(
       `issue creation failed: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,

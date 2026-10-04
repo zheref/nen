@@ -133,7 +133,7 @@ function listedRepos(registry: RepoRegistry): readonly string[] {
 // bare value cannot disagree about an owner it never states. Null when the file
 // records only the bare name; the value is then carried through as recorded,
 // since inventing an owner is a guess.
-function recordedRepoFor(registry: RepoRegistry, name: string): string | null {
+export function recordedRepoFor(registry: RepoRegistry, name: string): string | null {
   const entry = entryFor(registry, name);
   if (entry !== null) return entry.repo;
   const wanted = lower(name);
@@ -149,7 +149,7 @@ function recordedRepoFor(registry: RepoRegistry, name: string): string | null {
 // The product code whose value names `slug`, when the registry assigns one.
 // The same comparison discipline as recordedRepoFor, from the other side: a
 // slug value must match as recorded, a bare value matches the name half.
-function codeFor(registry: RepoRegistry, slug: string): string | null {
+export function codeFor(registry: RepoRegistry, slug: string): string | null {
   const wanted = lower(slug);
   const shortName = lower(nameHalf(slug));
   for (const [code, name] of Object.entries(registry.productCodes)) {

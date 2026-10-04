@@ -3,7 +3,7 @@
 // unit-check (policy read from the pull request's BASE), and whose-pr.
 
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -44,6 +44,7 @@ function readySource(head: string = HEAD): PrStateSource {
       headRefOid: head,
       headRefName: "feature/x",
       baseRefName: "main",
+      baseRefOid: "basebase",
       author: { login: "someone" },
       labels: [],
       reviewRequests: [],
@@ -68,6 +69,7 @@ function readySource(head: string = HEAD): PrStateSource {
     reviewRequestsPage: async (): Promise<never> => {
       throw new Error("should not paginate");
     },
+    fileAtRef: async (): Promise<string | null> => null,
   };
 }
 
@@ -269,6 +271,116 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     expect(outcome.lines.join("\n")).toMatch(/pr ready: ready/);
     expect(outcome.lines.join("\n")).toMatch(/head pin: pinned to cafebabe/);
     expect(outcome.lines.join("\n")).toMatch(/plan only \(pass --run to execute\)/);
+  });
+
+  it("the transcript names what a declared checks.excluded entry removed (zheref/nen#249, Feitan F2)", async () => {
+    const root = tmpRoot();
+    const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+    const plain = readySource();
+    const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+    const source: PrStateSource = {
+      ...plain,
+      pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => {
+        const snapshot = await plain.pullRequestSnapshot(repo, n);
+        return {
+          ...snapshot,
+          checkRollup: [
+            ...(snapshot.checkRollup as unknown[]),
+            { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
+          ],
+        };
+      },
+      fileAtRef: async (): Promise<string | null> =>
+        JSON.stringify({
+          ...gates,
+          checks: {
+            excluded: [
+              { name: "check (Windows*", match: "glob", reason: "no Windows runner", ruled: "2024-12-01", until: "2025-06-30" },
+            ],
+          },
+        }),
+    };
+    const outcome = await run(root, passingScript(), { deps: readyDeps(source) });
+    expect(outcome.report.ok).toBe(true);
+    expect(outcome.lines).toContain(
+      `pr ready: excluded by declaration: ${WINDOWS} — no Windows runner (ruled 2024-12-01, until 2025-06-30)`,
+    );
+  });
+
+  describe("checks.excluded the head declares but the base does not (zheref/nen#249, hanten round 2)", () => {
+    const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+    const RULING = { name: "check (Windows*", match: "glob", reason: "no Windows runner", ruled: "2024-12-01", until: "2025-06-30" };
+    /** A checkout whose OWN nen/gates.json -- the PR's head, in a worktree -- declares the exclusion. */
+    function headDeclaringRoot(): string {
+      const root = tmpRoot();
+      const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      writeFileSync(join(root, "nen", "gates.json"), JSON.stringify({ ...gates, checks: { excluded: [RULING] } }));
+      return root;
+    }
+    function redWindows(fileAtRef: () => Promise<string | null>): PrStateSource {
+      const plain = readySource();
+      return {
+        ...plain,
+        pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => {
+          const snapshot = await plain.pullRequestSnapshot(repo, n);
+          return {
+            ...snapshot,
+            checkRollup: [...(snapshot.checkRollup as unknown[]), { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" }],
+          };
+        },
+        fileAtRef,
+      };
+    }
+
+    it("a head-only exclusion is NOT honoured: the merge is refused and the transcript says why (N8)", async () => {
+      const outcome = await run(headDeclaringRoot(), passingScript(), {
+        deps: readyDeps(redWindows(async (): Promise<string | null> => null)),
+      });
+      expect(outcome.report.ok).toBe(false);
+      expect(outcome.lines.join("\n")).toMatch(/pr ready: not-ready: required checks reported but are not all green/);
+      expect(outcome.lines).toContain(
+        "pr ready: warning: declared exclusion 'check (Windows*' is in the local nen/gates.json but not at the pull request's base (zheref/example@basebase:nen/gates.json) — NOT honoured until it is merged there.",
+      );
+      expect(outcome.lines.join("\n")).not.toContain("excluded by declaration");
+    });
+
+    it("the transcript strips control characters from labels and declared text (Copilot on #359)", async () => {
+      const EVIL = "check (Windows\u001b[2J\r\nfake";
+      const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const plain = readySource();
+      const source: PrStateSource = {
+        ...plain,
+        pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => {
+          const snapshot = await plain.pullRequestSnapshot(repo, n);
+          return {
+            ...snapshot,
+            checkRollup: [...(snapshot.checkRollup as unknown[]), { name: EVIL, status: "COMPLETED", conclusion: "FAILURE" }],
+          };
+        },
+        fileAtRef: async (): Promise<string | null> =>
+          JSON.stringify({ ...gates, checks: { excluded: [{ ...RULING, reason: "no\u001b[31m\r\nrunner" }] } }),
+      };
+      const outcome = await run(tmpRoot(), passingScript(), { deps: readyDeps(source) });
+      expect(outcome.report.ok).toBe(true);
+      expect(outcome.lines).toContain("pr ready: excluded by declaration: check (Windows[2Jfake — no[31mrunner (ruled 2024-12-01, until 2025-06-30)");
+      for (const line of outcome.lines) expect(line).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    });
+
+    it("a base read refused with 403 is in the transcript as a pr ready warning (N2)", async () => {
+      const outcome = await run(headDeclaringRoot(), passingScript(), {
+        deps: readyDeps(
+          redWindows(async (): Promise<string | null> => {
+            throw new Error("HTTP 403: Resource not accessible by integration");
+          }),
+        ),
+      });
+      expect(outcome.report.ok).toBe(false);
+      expect(
+        outcome.lines.some((line): boolean =>
+          line.startsWith("pr ready: warning: declared check exclusions NOT honoured: the base could not be read (HTTP 403"),
+        ),
+      ).toBe(true);
+    });
   });
 
   it("merges with --run when every gate passes, carrying the judged SHA in argv (item 3)", async () => {

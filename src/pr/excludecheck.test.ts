@@ -104,6 +104,7 @@ function matrixSource(windowsConclusion: "FAILURE" | "SUCCESS" | null): PrStateS
       headRefOid: "cafebabe",
       headRefName: "feature/x",
       baseRefName: "main",
+      baseRefOid: "basebase",
       author: { login: "someone" },
       labels: [],
       reviewRequests: [],
@@ -137,6 +138,7 @@ function matrixSource(windowsConclusion: "FAILURE" | "SUCCESS" | null): PrStateS
     reviewRequestsPage: async (): Promise<ReviewRequestsPage> => {
       throw new Error("reviewRequestsPage should not be called when hasNextPage is false");
     },
+    fileAtRef: async (): Promise<string | null> => null,
   };
 }
 
