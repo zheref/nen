@@ -20,10 +20,12 @@
 // `git rev-parse` reads, the zoneinfo file the zone names (four bytes of it),
 // and `nen/repos.json` when the stage needs a gate.
 
-import { closeSync, constants, fstatSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { roleOf } from "../repo/classify.js";
+import { isContained } from "../repo/contain.js";
+import { rawLines } from "../seam/lines.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import type { ReportPhase } from "./data.js";
@@ -90,11 +92,12 @@ const STAGES: Readonly<Record<EffortStage, { readonly gate: string; readonly sta
   landed: { gate: "none — landed", stageClass: "ok" },
 };
 
-function gitRead(seams: Seams, root: string, args: readonly string[]): { ok: boolean; stdout: string; why: string } {
+function gitRead(seams: Seams, root: string, args: readonly string[]): { ok: boolean; code: number | null; stdout: string; why: string } {
   const result = seams.run(GIT, [...args], { cwd: root });
-  if (result.spawnFailed) return { ok: false, stdout: "", why: `git could not be started: ${result.stderr}` };
+  if (result.spawnFailed) return { ok: false, code: null, stdout: "", why: `git could not be started: ${result.stderr}` };
   return {
     ok: result.code === 0,
+    code: result.code,
     stdout: result.stdout,
     why: outputLines(result.stderr).join(" ") || `exit ${result.code}`,
   };
@@ -113,7 +116,9 @@ function gitRead(seams: Seams, root: string, args: readonly string[]): { ok: boo
  */
 export function readWorktree(seams: Seams, root: string, warn: (line: string) => void): string | null {
   const read = gitRead(seams, root, ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir", "--show-toplevel"]);
-  const lines = outputLines(read.stdout);
+  // RAW LINES, NOT outputLines (Copilot, NN-PR-#375): a path is data, and a
+  // directory whose name ends in a space is still that directory.
+  const lines = rawLines(read.stdout);
   const [gitDir, commonDir, top] = lines;
   if (!read.ok || gitDir === undefined || commonDir === undefined || top === undefined) {
     warn(`worktree: could not read this checkout's git directories ('git rev-parse --git-dir --git-common-dir' ${read.ok ? "printed too little" : `failed: ${read.why}`}); reported as null.`);
@@ -126,10 +131,20 @@ function trimSlash(path: string): string {
   return path.replace(/[\\/]+$/, "");
 }
 
-/** `refs/remotes/origin/<branch>`'s commit, or null when the branch is not on origin. */
-function originTip(seams: Seams, root: string, branch: string): string | null {
+/**
+ * `refs/remotes/origin/<branch>`'s commit; null when the branch is not on
+ * origin; or the reason the probe itself FAILED (Copilot, NN-PR-#375).
+ *
+ * ONLY EXIT 1 MEANS ABSENT. `rev-parse --verify --quiet` answers 1, silently,
+ * for a ref that does not exist; git that cannot start, or a repository it
+ * cannot read (exit 128), has said nothing about the ref -- and reading that
+ * as "not on origin" would derive `authoring` from a failure.
+ */
+function originTip(seams: Seams, root: string, branch: string): { readonly sha: string | null } | { readonly why: string } {
   const read = gitRead(seams, root, ["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}`]);
-  return read.ok ? (outputLines(read.stdout)[0] ?? null) : null;
+  if (read.ok) return { sha: outputLines(read.stdout)[0] ?? null };
+  if (read.code === 1) return { sha: null };
+  return { why: `whether origin/${branch} exists could not be read ('git rev-parse --verify refs/remotes/origin/${branch}' failed: ${read.why})` };
 }
 
 /**
@@ -203,7 +218,9 @@ export function deriveStage(
   };
   if (input.openStop) return stageRow("blocked", null);
   if (input.branch === null) return fail("HEAD is detached, so there is no branch whose stage to read");
-  const pushed = originTip(seams, input.root, input.branch);
+  const tip = originTip(seams, input.root, input.branch);
+  if ("why" in tip) return fail(tip.why);
+  const pushed = tip.sha;
   const prs = input.objects.filter((object): object is PrObject => object.kind === "pr");
 
   if (prs.length === 0) {
@@ -312,7 +329,13 @@ export function isCompiledZone(zone: string, dirs: readonly string[]): boolean {
   for (const dir of dirs) {
     let fd: number | null = null;
     try {
-      fd = openSync(join(dir, ...zone.split("/")), constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+      // THE REAL PATH MUST STAY IN THE REAL DATABASE (Copilot, NN-PR-#375): a
+      // symlink under $TZDIR pointing anywhere else is not a zone this
+      // database holds, however its first four bytes read.
+      // ../repo/contain.ts's rule, asked of a file that must already exist.
+      const real = realpathSync(join(dir, ...zone.split("/")));
+      if (!isContained(realpathSync(dir), real)) continue;
+      fd = openSync(real, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
       if (!fstatSync(fd).isFile()) continue;
       const magic = Buffer.alloc(4);
       if (readSync(fd, magic, 0, 4, 0) === 4 && magic.toString("latin1") === "TZif") return true;

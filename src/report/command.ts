@@ -35,7 +35,7 @@ import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
 import { assembleContext, deriveClock, type PrLookup, type ReportContext } from "./context.js";
 import { assembleObjects, renderObjects } from "./objects.js";
-import { assembleRegister, parseDesk, renderRegister, type NotationSource } from "./register.js";
+import { assembleRegister, parseDesk, renderRegister, type Desk, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
 import { graphInjection, graphToMermaid, parseGraph, type GraphDocument } from "./graph.js";
@@ -72,7 +72,8 @@ data      One document describing this branch against --base: the commits, the
                    canonical name. It must be a COMPILED zone in this host's
                    zoneinfo database ($TZDIR, else /usr/share/zoneinfo,
                    /var/db/timezone/zoneinfo, /usr/lib/zoneinfo): a regular
-                   file whose first four bytes are 'TZif'. Where no such
+                   file, real path inside the database, whose first four
+                   bytes are 'TZif'. Where no such
                    directory exists (win32), the runtime's ICU zone list
                    answers instead, and stderr says so. A misspelling, a case
                    mismatch, 'zone.tab' or a path is refused at exit 2 before
@@ -97,7 +98,8 @@ data      One document describing this branch against --base: the commits, the
   closed PR or a detached HEAD is null -- so 'published' ("on origin, no PR")
   is not derived by any lookup this verb makes, none of which is exhaustive.
   'repo' is owner/name from a hosted origin (user@host: or scheme://host/),
-  spelled as the registry records it when listed; a local-path or file://
+  its path only -- never userinfo, query or fragment -- spelled as the
+  registry records it when listed; a local-path or file://
   origin is null. EACH IS null, WITH THE REASON ON STDERR, WHEN IT CANNOT BE
   DERIVED; none is guessed. Under --register the register's own 'gate' and
   'generatedAtLocal' (the desk's, else generatedAt) keep their places and the
@@ -401,11 +403,16 @@ function readTz(context: CommandContext): string | null {
 }
 
 /** How the `objects` flags looked for pull requests -- the stage's evidence. */
-function prLookupOf(options: { readonly prs: readonly number[]; readonly backlog: boolean; readonly from: unknown } | null): PrLookup {
+function prLookupOf(
+  options: { readonly prs: readonly number[]; readonly issues: readonly number[]; readonly backlog: boolean; readonly from: unknown } | null,
+): PrLookup {
   if (options === null) return "none";
   if (options.from !== null) return "file";
   if (options.prs.length > 0) return "prs";
-  return options.backlog ? "backlog" : "issues-only";
+  if (options.backlog) return "backlog";
+  // `--target` ALONE SELECTS NOTHING (Copilot, NN-PR-#375): it names where,
+  // not what, so it is no lookup at all -- not an issues-only one.
+  return options.issues.length > 0 ? "issues-only" : "none";
 }
 
 /**
@@ -424,6 +431,23 @@ function registerTail(derived: ReportContext): Omit<ReportContext, "gate" | "gen
     generatedDateLocal: derived.generatedDateLocal,
     timeZone: derived.timeZone,
   };
+}
+
+/** `--register <desk>`, read and validated, or null when the flag was not given. */
+function readDesk(context: CommandContext, root: string): Desk | null {
+  const deskFlag = context.args.values["register"];
+  if (deskFlag === undefined) return null;
+  if (deskFlag.trim() === "") {
+    throw new VerbUsageError("--register was given an empty value. Omit it entirely to emit the report data without the register keys.");
+  }
+  return parseDesk(
+    readJsonFile<unknown>(
+      deskFlag,
+      root,
+      "The desk is the judgement half of the register -- the title, the asks, what each row needs; there is no empty default for a file the caller named.",
+    ),
+    deskFlag,
+  );
 }
 
 async function runData(context: CommandContext): Promise<number> {
@@ -446,9 +470,20 @@ async function runData(context: CommandContext): Promise<number> {
     },
     warn,
   );
+  // THE DESK BEFORE THE CLOCK (Copilot, NN-PR-#375): whether the desk sets
+  // the page's clock decides which clock fields the document carries, and
+  // stderr must describe the document returned -- so a desk that owns the
+  // clock silences the derived clock's diagnostics instead of following them
+  // with a retraction. It is also refused, if it must be, before any network.
+  const desk = readDesk(context, root);
+  const deskOwnsClock = desk !== null && desk.generatedAtLocal !== null;
   // THE CLOCK BEFORE THE NETWORK: a refused --tz costs no GitHub read. Read off
   // `generatedAt` itself, so the two stamps are one instant by construction.
-  const clock = deriveClock(context.seams, tz, new Date(document.generatedAt), warn);
+  // A --tz is still VALIDATED when the desk owns the clock: a typo is a typo.
+  const clock = deriveClock(context.seams, tz, new Date(document.generatedAt), deskOwnsClock ? (): void => undefined : warn);
+  if (deskOwnsClock) {
+    warn("timeZone: the register desk set generatedAtLocal, so the desk owns the page's clock; generatedDateLocal and timeZone reported as null.");
+  }
   const objectOptions = readObjectOptions(context, root);
   // `objects` IS APPENDED AT THE END OF THE KEY ORDER, deliberately and once:
   // every consumer reading the twelve v0.11 keys reads the same twelve here,
@@ -474,23 +509,11 @@ async function runData(context: CommandContext): Promise<number> {
     clock,
     warn,
   );
-  const deskFlag = context.args.values["register"];
-  if (deskFlag === undefined) {
+  if (desk === null) {
     const full = { ...document, objects, ...derived };
     emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects)]);
     return 0;
   }
-  if (deskFlag.trim() === "") {
-    throw new VerbUsageError("--register was given an empty value. Omit it entirely to emit the report data without the register keys.");
-  }
-  const desk = parseDesk(
-    readJsonFile<unknown>(
-      deskFlag,
-      root,
-      "The desk is the judgement half of the register -- the title, the asks, what each row needs; there is no empty default for a file the caller named.",
-    ),
-    deskFlag,
-  );
   const register = assembleRegister(desk, {
     generatedAt: document.generatedAt,
     objects,
@@ -509,13 +532,10 @@ async function runData(context: CommandContext): Promise<number> {
   // page's, so a derived zone and date beside it would describe a clock the
   // page does not show.
   const tail = registerTail(derived);
-  if (desk.generatedAtLocal !== null && (tail.timeZone !== null || tail.generatedDateLocal !== null)) {
-    warn("timeZone: the register desk set generatedAtLocal, so the desk owns the page's clock; generatedDateLocal and timeZone reported as null.");
-  }
   const full = {
     ...document,
     ...register,
-    ...(desk.generatedAtLocal === null ? tail : { ...tail, generatedDateLocal: null, timeZone: null }),
+    ...(deskOwnsClock ? { ...tail, generatedDateLocal: null, timeZone: null } : tail),
   };
   emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects), ...renderRegister(register)]);
   return 0;

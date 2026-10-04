@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { ownerNameFromRemote } from "../repo/resolve.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -48,7 +49,8 @@ interface Shape {
   readonly origin?: string | null;
   readonly worktree?: "core" | "linked" | "fails";
   readonly branch?: string | null;
-  readonly pushed?: boolean;
+  readonly pushed?: boolean | "fails";
+  readonly worktreeLines?: string;
 }
 
 function script(shape: Shape = {}): ScriptedCall[] {
@@ -72,13 +74,20 @@ function script(shape: Shape = {}): ScriptedCall[] {
       result:
         worktree === "fails"
           ? { code: 128, stderr: "fatal: not a git repository\n" }
-          : worktree === "linked"
+          : shape.worktreeLines !== undefined
+            ? { code: 0, stdout: shape.worktreeLines }
+            : worktree === "linked"
             ? { code: 0, stdout: "/w/nen/.git/worktrees/quirky-chatterjee-88d5f6\n/w/nen/.git\n/w/wt/quirky-chatterjee-88d5f6\n" }
             : { code: 0, stdout: "/w/nen/.git\n/w/nen/.git\n/w/nen\n" },
     },
     {
       match: `git rev-parse --verify --quiet refs/remotes/origin/${branch ?? ""}`,
-      result: shape.pushed === true ? { code: 0, stdout: `${PUSHED}\n` } : { code: 1, stdout: "" },
+      result:
+        shape.pushed === "fails"
+          ? { code: 128, stderr: "fatal: unable to read refs\n" }
+          : shape.pushed === true
+            ? { code: 0, stdout: `${PUSHED}\n` }
+            : { code: 1, stdout: "" },
     },
     { match: "git rev-parse --verify --quiet HEAD", result: { code: 0, stdout: `${HEAD}\n` } },
   ];
@@ -518,5 +527,78 @@ describe("the host's own zone (N14)", () => {
     expect(readHostZone(paths, () => "Asia/Tokyo")).toBe("Europe/Madrid");
     expect(readHostZone({ ...paths, timezone: join(dir, "none") }, () => "Asia/Tokyo")).toBe("Asia/Tokyo");
     expect(readHostZone({ ...paths, timezone: join(dir, "none") }, () => "Etc/Unknown")).toBeNull();
+  });
+});
+
+describe("Copilot round 1 on NN-PR-#375", () => {
+  it("context.ts:132 -- a FAILED origin probe nulls the stage with the failure; only exit 1 is absent", async () => {
+    const captured = await capture(data(repo()), script({ pushed: "fails" }));
+    expect(captured.doc).toMatchObject({ effortStage: null, gate: null, stageClass: null });
+    expect(captured.err.join("\n")).toContain(`whether origin/${BRANCH} exists could not be read`);
+    expect(captured.err.join("\n")).toContain("fatal: unable to read refs");
+    expect((await capture(data(repo()), script({ pushed: false }))).doc["effortStage"]).toBe("authoring");
+  });
+
+  it.skipIf(process.platform === "win32")("context.ts:318 -- a TZif symlink under $TZDIR that leaves it is not a zone", () => {
+    const outside = mkdtempSync(join(tmpdir(), "nen-zone-outside-"));
+    writeFileSync(join(outside, "Evil"), "TZif2-outside-the-database");
+    const db = mkdtempSync(join(tmpdir(), "nen-zone-db-"));
+    mkdirSync(join(db, "America"));
+    writeFileSync(join(db, "America", "Bogota"), "TZif2-inside");
+    symlinkSync(join(outside, "Evil"), join(db, "America", "Lima"));
+    symlinkSync("Bogota", join(db, "America", "Inside"));
+    expect(isCompiledZone("America/Lima", [db])).toBe(false);
+    expect(isCompiledZone("America/Inside", [db])).toBe(true);
+    expect(isCompiledZone("America/Bogota", [db])).toBe(true);
+  });
+
+  it("data.ts:252 -- never publishes userinfo, a query or a fragment from origin (SECURITY)", async () => {
+    const url = "https://x-access-token:ghp_userinfo@github.com/zheref/nen.git?access_token=s3cr3t#frag";
+    expect(ownerNameFromRemote(url)).toBe("zheref/nen");
+    expect(ownerNameFromRemote("https://github.com/zheref/nen.git?access_token=s3cr3t")).toBe("zheref/nen");
+    expect(ownerNameFromRemote("https://github.com/zheref/nen/#frag")).toBe("zheref/nen");
+    expect(ownerNameFromRemote("git@github.com:zheref/nen.git?x=1")).toBe("zheref/nen");
+    for (const json of [true, false]) {
+      const argv = data(repo());
+      const captured = await capture(json ? argv : argv.filter((arg): boolean => arg !== "--json"), script({ origin: url }));
+      const all = [...captured.out, ...captured.err].join("\n");
+      expect(all).not.toContain("s3cr3t");
+      expect(all).not.toContain("ghp_userinfo");
+      expect(all).not.toContain("frag");
+      if (json) expect(captured.doc["repo"]).toBe("zheref/nen");
+    }
+  });
+
+  it("command.ts:409 -- --target alone is no lookup, so a branch on origin is 'not looked for'", async () => {
+    const captured = await capture(data(repo(), "--target", "zheref/nen"), script({ pushed: true }));
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    expect(captured.doc["effortStage"]).toBeNull();
+    expect(captured.err.join("\n")).toMatch(/no pull request was looked for — pass --target <owner\/name> --prs <n>/);
+    expect(captured.err.join("\n")).not.toMatch(/--issues reads no pull request/);
+  });
+
+  it("command.ts:451 -- a desk that owns the clock silences the derived clock's diagnostics", async () => {
+    const root = repo();
+    writeFileSync(join(root, "desk.json"), JSON.stringify({ variant: "register", title: "t", scope: "s", gate: "G2", generatedAtLocal: "the desk's own", gates: [{ gate: "G2", label: "Merge", cleared: "Nothing.", asks: [] }] }));
+    const captured = await capture(data(root, "--register", "desk.json"), script(), { hostTimeZone: () => "Mars/Olympus" });
+    expect(captured.code).toBe(0);
+    const err = captured.err.join("\n");
+    expect(err).toMatch(/the register desk set generatedAtLocal, so the desk owns the page's clock/);
+    expect(err).not.toMatch(/Mars\/Olympus/);
+    // A typo in --tz is still refused when the desk owns the clock.
+    expect((await capture(data(root, "--register", "desk.json", "--tz", "Mars/Olympus"), script())).code).toBe(2);
+  });
+
+  it("context.ts:116 -- git paths are raw lines: a worktree name ending in a space keeps it", async () => {
+    const captured = await capture(data(repo()), script({ worktreeLines: "/w/nen/.git/worktrees/x\n/w/nen/.git\n/w/wt/odd name \n" }));
+    expect(captured.doc["worktree"]).toBe("odd name ");
+  });
+
+  it("data.ts:669 -- the human repo line is plain; the JSON keeps the bytes", async () => {
+    const origin = "git@github.com:zheref/n\u0007e\u001b[31mn.git";
+    const text = await capture(data(repo()).filter((arg): boolean => arg !== "--json"), script({ origin }));
+    expect(text.out[0]).toBe(`repo: zheref/ne[31mn on '${BRANCH}', base 'main'`);
+    const json = await capture(data(repo()), script({ origin }));
+    expect(json.doc["repo"]).toBe("zheref/n\u0007e\u001b[31mn");
   });
 });

@@ -53,6 +53,7 @@ import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
 import { GIT, normalizeEol, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 import { matchesPattern } from "./patterns.js";
+import { plainLine } from "../cli/plain.js";
 import { ownerNameFromRemote, resolveToken } from "../repo/resolve.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 
@@ -666,7 +667,7 @@ export function readPhaseLedgers(root: string, warn: (line: string) => void): re
 /** The compact human summary. `--json` carries the document itself. */
 export function renderData(data: ReportData): readonly string[] {
   const lines: string[] = [
-    `repo: ${data.repo ?? "(no owner/name)"}${data.branch === null ? " (detached HEAD)" : ` on '${data.branch}'`}, base '${data.base}'`,
+    `repo: ${data.repo === null ? "(no owner/name)" : plainLine(data.repo)}${data.branch === null ? " (detached HEAD)" : ` on '${data.branch}'`}, base '${data.base}'`,
     `generated: ${data.generatedAt}`,
     `commits: ${data.commits.length}`,
   ];
