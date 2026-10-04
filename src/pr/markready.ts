@@ -35,6 +35,7 @@
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import { VerbUsageError } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
 
 export const MARK_READY_CONTRACT = "nen.pr.mark-ready/v0.1";
@@ -113,6 +114,18 @@ export interface DraftState {
 const NOT_A_PULL_REQUEST = /Could not resolve to a PullRequest/i;
 const NOT_A_REPOSITORY = /Could not resolve to a Repository/i;
 
+/**
+ * gh's or GitHub's own words, made safe to embed in a message (Copilot, PR
+ * #355). A THROWN error is printed by ../index.ts's runFamily directly -- it
+ * never passes through the command's plainLine rendering -- and outputLines
+ * trims and redacts but keeps terminal controls. So every string this module
+ * did not write is filtered HERE, where it enters a message, rather than at
+ * one of the several places a message can leave.
+ */
+function foreign(text: string): string {
+  return plainLine(outputLines(text).join(" "));
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -121,7 +134,7 @@ function graphqlErrors(parsed: unknown): string | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const errors = (parsed as { errors?: unknown }).errors;
   if (!Array.isArray(errors) || errors.length === 0) return null;
-  return errors.map((entry): string => String((entry as { message?: unknown }).message ?? JSON.stringify(entry))).join("; ");
+  return foreign(errors.map((entry): string => String((entry as { message?: unknown }).message ?? JSON.stringify(entry))).join("; "));
 }
 
 function refuseUnresolved(target: Target, prNumber: number, message: string): never {
@@ -144,9 +157,9 @@ function refuseUnresolved(target: Target, prNumber: number, message: string): ne
 export function readDraftState(seams: Seams, target: Target, prNumber: number): DraftState {
   const result = seams.run(GH, [...readDraftStateArgv(target, prNumber)]);
   if (result.spawnFailed) {
-    throw new Error(`could not run gh to read ${target.slug}#${prNumber}: ${result.stderr}`);
+    throw new Error(`could not run gh to read ${target.slug}#${prNumber}: ${foreign(result.stderr)}`);
   }
-  const stderr = outputLines(result.stderr).join(" ");
+  const stderr = foreign(result.stderr);
   if (result.code !== 0) {
     if (NOT_A_PULL_REQUEST.test(stderr) || NOT_A_REPOSITORY.test(stderr)) refuseUnresolved(target, prNumber, stderr);
     throw new Error(`could not read ${target.slug}#${prNumber}: ${stderr || `exit ${result.code}`}`);
@@ -155,7 +168,7 @@ export function readDraftState(seams: Seams, target: Target, prNumber: number): 
   try {
     parsed = JSON.parse(result.stdout);
   } catch (error) {
-    throw new Error(`reading ${target.slug}#${prNumber}: gh api graphql did not return JSON (${String(error)})`);
+    throw new Error(`reading ${target.slug}#${prNumber}: gh api graphql did not return JSON (${foreign(String(error))})`);
   }
   const errors = graphqlErrors(parsed);
   if (errors !== null) {
@@ -219,9 +232,9 @@ export interface MarkReadyCall {
 export function sendMarkReady(seams: Seams, target: Target, prNumber: number, pullRequestId: string): MarkReadyCall {
   const result = seams.run(GH, [...markReadyArgv(pullRequestId)]);
   if (result.spawnFailed) {
-    return { kind: "uncertain", message: `could not run gh to mark ${target.slug}#${prNumber} ready: ${result.stderr}` };
+    return { kind: "uncertain", message: `could not run gh to mark ${target.slug}#${prNumber} ready: ${foreign(result.stderr)}` };
   }
-  const stderr = outputLines(result.stderr).join(" ");
+  const stderr = foreign(result.stderr);
   if (result.code !== 0) {
     return { kind: "uncertain", message: `gh exited ${result.code} marking ${target.slug}#${prNumber} ready: ${stderr || "(no stderr)"}` };
   }
@@ -229,7 +242,7 @@ export function sendMarkReady(seams: Seams, target: Target, prNumber: number, pu
   try {
     parsed = JSON.parse(result.stdout);
   } catch (error) {
-    return { kind: "uncertain", message: `marking ${target.slug}#${prNumber} ready: gh api graphql did not return JSON (${String(error)})` };
+    return { kind: "uncertain", message: `marking ${target.slug}#${prNumber} ready: gh api graphql did not return JSON (${foreign(String(error))})` };
   }
   // A 200 CARRYING `errors` IS A REFUSAL -- ./threads.ts's runGraphql says why.
   const errors = graphqlErrors(parsed);

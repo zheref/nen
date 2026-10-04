@@ -1517,6 +1517,70 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     expect((JSON.parse(json.out.join("\n")) as { url: string }).url).toBe(hostile);
   });
 
+  // Copilot, PR #355: a THROWN error is printed by runFamily directly, never
+  // through the command's plainLine rendering, so gh's and GitHub's words must
+  // be filtered where they enter the message. Every path that carries foreign
+  // text is driven end to end here with an ESC sequence in it.
+  describe("hostile gh/GitHub text never reaches the terminal raw", () => {
+    const ESC = "\u001b]0;pwned\u0007\u001b[2J";
+    const noControls = (result: { out: string[]; err: string[] }): void => {
+      const lines = [...result.out, ...result.err];
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line).not.toContain("\u001b");
+        expect(line).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/);
+      }
+    };
+
+    it("first read fails (exit 1, thrown error): stderr is filtered, its words kept", async () => {
+      const seams = new ScriptedSeams([{ match: readKey, result: { code: 1, stderr: `HTTP 502 ${ESC} Bad Gateway` } }]);
+      const result = await capture(base, null, seams);
+      expect(result.code).toBe(1);
+      noControls(result);
+      expect(result.err.join("\n")).toMatch(/502/);
+    });
+
+    it("first read cannot spawn gh (exit 1): the raw spawn stderr is filtered too", async () => {
+      const seams = new ScriptedSeams([{ match: readKey, result: { code: -1, stderr: `spawn gh ENOENT ${ESC}`, spawnFailed: true } }]);
+      const result = await capture(base, null, seams);
+      expect(result.code).toBe(1);
+      noControls(result);
+      expect(result.err.join("\n")).toMatch(/ENOENT/);
+    });
+
+    it("not a pull request (exit 2, usage error): GitHub's words are filtered", async () => {
+      const seams = new ScriptedSeams([
+        { match: readKey, result: { code: 1, stderr: `GraphQL: Could not resolve to a PullRequest ${ESC} with the number of 42.` } },
+      ]);
+      const result = await capture(base, null, seams);
+      expect(result.code).toBe(2);
+      noControls(result);
+    });
+
+    it("a 200 carrying errors on the read (exit 1): the errors' messages are filtered", async () => {
+      const seams = new ScriptedSeams([
+        { match: readKey, result: { code: 0, stdout: JSON.stringify({ data: null, errors: [{ message: `rate limited ${ESC}` }] }) } },
+      ]);
+      const result = await capture(base, null, seams);
+      expect(result.code).toBe(1);
+      noControls(result);
+    });
+
+    it("an uncertain mutation and a failing read back (exit 1, report): both gh texts are filtered, in --json too", async () => {
+      const script: ScriptedCall[] = [
+        readCall(),
+        { match: writeKey, result: { code: 1, stderr: `connection reset ${ESC}` } },
+        { match: readKey, result: { code: 1, stderr: `HTTP 500 ${ESC}` } },
+      ];
+      const human = await capture(base, null, new ScriptedSeams(script));
+      expect(human.code).toBe(1);
+      expect(human.out[0]).toBe("unconfirmed");
+      noControls(human);
+      const json = await capture([...base, "--json"], null, new ScriptedSeams(script));
+      expect((JSON.parse(json.out.join("\n")) as { message: string }).message).not.toContain("\u001b");
+    });
+  });
+
   it("is the only new reader of --dry-run: 'pr retarget --dry-run' is still refused", async () => {
     const result = await capture(["pr", "retarget", "--target", "acme/widgets", "--pr", "1", "--base", "main", "--dry-run"], null);
     expect(result.code).toBe(2);
