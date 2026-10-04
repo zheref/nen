@@ -33,13 +33,15 @@ import { loadWorkflow, type ReportSection } from "../schema/workflow.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
 import { assembleObjects, renderObjects } from "./objects.js";
+import { assembleRegister, parseDesk, renderRegister, type NotationSource } from "./register.js";
+import { openTaxonomy } from "../schema/taxonomy.js";
 import { graphInjection, graphToMermaid, parseGraph, type GraphDocument } from "./graph.js";
 import { renderReport } from "./render.js";
 
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
 usage:
-  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--json]
+  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--register <desk>] [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
 
@@ -83,6 +85,28 @@ data      One document describing this branch against --base: the commits, the
                    shape -- the offline path. VALIDATED at the read seam and
                    refused BY ROW INDEX at exit 2; it is never mixed with the
                    live flags.
+
+  --register <desk>
+                   Emit the REGISTER document -- the backlog register shape
+                   that 'report render --variant register|final' fills a
+                   register page from. <desk> is the judgement half only --
+                   { variant, title, scope, gate, gates[{ gate, label, cleared,
+                   asks[{ kind, rank, title, why, pr?, options[], objects[] }] }],
+                   rows?{ "pr#<n>"|"issue#<n>": { marks, gate, gateClass,
+                   needs, session, lane, thought } }, legendRows?, efforts?,
+                   spendNotes?, generatedAtLocal?, footerNote?,
+                   architectureCaption? }. Every FACT is nen's: each row gains
+                   notation (nen ref's <CODE>-<IS|PR>-#<N> from nen/repos.json,
+                   else <owner>/<name>#<n> named in footerNote), verdict,
+                   labelsLine, checksLine, threadsLine, linkedLine and head;
+                   the five tallies, footerCount, spendEfforts (from phases[]
+                   and usage[]) and empty graph keys are added after
+                   'objects'. A VERDICT IS QUOTED, NEVER WRITTEN: every row's
+                   and every ask's 'verdict' is the row's readiness.reason
+                   verbatim ("" when no authority answered), and a desk that
+                   carries a 'verdict' anywhere is refused at exit 2. An ask
+                   naming 'pr' quotes that pull request's verdict. Validated
+                   at the read seam; refused at exit 2 naming the field.
 
   A pull request's 'readiness' says which authority answered it: 'check' when
   the head carries a check run named 'readiness' (its output's verdict line is
@@ -132,7 +156,7 @@ has not got.`;
 /** Per-subcommand flags, so a flag meant for the other verb is refused, not ignored. */
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
   data: {
-    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from"],
+    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register"],
     booleans: ["backlog"],
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
@@ -344,9 +368,62 @@ async function runData(context: CommandContext): Promise<number> {
     objectOptions === null
       ? []
       : await assembleObjects(context.seams, objectOptions, (line): void => context.io.err(line));
-  const full = { ...document, objects };
-  emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects)]);
+  const deskFlag = context.args.values["register"];
+  if (deskFlag === undefined) {
+    const full = { ...document, objects };
+    emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects)]);
+    return 0;
+  }
+  if (deskFlag.trim() === "") {
+    throw new VerbUsageError("--register was given an empty value. Omit it entirely to emit the report data without the register keys.");
+  }
+  const desk = parseDesk(
+    readJsonFile<unknown>(
+      deskFlag,
+      root,
+      "The desk is the judgement half of the register -- the title, the asks, what each row needs; there is no empty default for a file the caller named.",
+    ),
+    deskFlag,
+  );
+  const register = assembleRegister(desk, {
+    generatedAt: document.generatedAt,
+    objects,
+    phases: document.phases,
+    usage: document.usage,
+    target: objectOptions?.target?.slug ?? null,
+    codes: notationSource(root),
+  });
+  // `objects` STAYS WHERE IT WAS -- after `usage` -- and the register keys
+  // follow it, so a consumer of the v0.13 document reads the same keys in the
+  // same order and the register is new information after them.
+  const full = { ...document, ...register };
+  emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects), ...renderRegister(register)]);
   return 0;
+}
+
+/**
+ * `owner/name` -> product code, from --repo's nen/repos.json.
+ *
+ * NO REGISTRY IS NOT A REFUSAL HERE. The page still renders, every row reads
+ * `<owner>/<name>#<n>`, and footerNote names the failed resolution
+ * (Hatsu PROCESS.md § Publishing a report) -- which is the rule for a display
+ * field, where `nen ref format` refusing is the rule for a token typed by hand.
+ */
+function notationSource(root: string): NotationSource {
+  try {
+    const registry = openTaxonomy({ repoFlag: root }).repos();
+    const codes = new Map<string, string>();
+    for (const [code, name] of Object.entries(registry.productCodes)) codes.set(name.toLowerCase(), code);
+    for (const entry of registry.consumers) {
+      if (entry.code !== null && !codes.has(entry.repo.toLowerCase())) codes.set(entry.repo.toLowerCase(), entry.code);
+    }
+    return { codeFor: (slug): string | null => codes.get(slug.toLowerCase()) ?? null, unavailable: null };
+  } catch {
+    // THE REASON IS NOT COPIED INTO THE PAGE: a registry error names the
+    // absolute path it looked at, and footerNote is pasted into pull requests
+    // (./data.ts's own rule for `repo`). The fact that matters is said whole.
+    return { codeFor: (): null => null, unavailable: "no readable nen/repos.json in --repo" };
+  }
 }
 
 /**
