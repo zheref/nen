@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
-import { loadGateIdentities, parseGateIdentities } from "./gates.js";
+import { loadGateIdentities, parseCheckExclusions, parseGateIdentities } from "./gates.js";
 import { SchemaError } from "./errors.js";
 
 describe("loadGateIdentities -- reads the TARGET repository", () => {
@@ -592,5 +592,150 @@ describe("loadGateIdentities -- THIS repository's own nen/gates.json (ruling 202
       expect(pattern?.test("Cursor Bugbot / probe")).toBe(false);
       expect(pattern?.test("Bugbot")).toBe(false);
     }
+  });
+});
+
+describe("parseGateIdentities -- checks.excluded (zheref/nen#249)", () => {
+  const at = "/fake/nen/gates.json";
+  const base = {
+    version: 1,
+    reviewers: [{ name: "a", login_pattern: { pattern: "^a$", ignoreCase: true } }],
+    default_approvers: ["a"],
+    base_reviewers: ["a"],
+    delivery: {
+      author_pattern: { pattern: "^bot$", ignoreCase: true },
+      head_ref_prefixes: ["x/"],
+    },
+  };
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+  const entry = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    name: WINDOWS,
+    reason: "no Windows runner exists",
+    ruled: "2026-09-22",
+    until: { condition: "a Windows runner exists" },
+    ...overrides,
+  });
+  const withExcluded = (...entries: unknown[]): unknown => ({ ...base, checks: { excluded: entries } });
+
+  it("absent, an absent checks.excluded, and an empty list all read as no exclusion", () => {
+    expect(parseGateIdentities(at, base).excludedChecks).toEqual([]);
+    expect(parseGateIdentities(at, { ...base, checks: {} }).excludedChecks).toEqual([]);
+    expect(parseGateIdentities(at, withExcluded()).excludedChecks).toEqual([]);
+  });
+
+  it("reads a matrix name WHOLE -- commas, brackets and quotes are part of it -- as exact by default", () => {
+    const [only] = parseGateIdentities(at, withExcluded(entry())).excludedChecks ?? [];
+    expect(only).toEqual({
+      name: WINDOWS,
+      match: "exact",
+      reason: "no Windows runner exists",
+      ruled: "2026-09-22",
+      until: { condition: "a Windows runner exists" },
+      untilDate: null,
+    });
+  });
+
+  it("a strict date until is the lapse date; a stated glob with a 3+ character prefix is kept", () => {
+    const [only] =
+      parseGateIdentities(at, withExcluded(entry({ name: "check (Windows*", match: "glob", until: "2026-12-31" })))
+        .excludedChecks ?? [];
+    expect(only?.match).toBe("glob");
+    expect(only?.until).toBe("2026-12-31");
+    expect(only?.untilDate).toBe("2026-12-31");
+    expect(() => parseGateIdentities(at, withExcluded(entry({ name: "che*", match: "glob" })))).not.toThrow();
+  });
+
+  it("refuses every near-date until spelling, so none can be read as a never-lapsing condition", () => {
+    const nearDates = [
+      "2026/10/01",
+      "2026-10-1",
+      "2026-1-01",
+      "26-10-01",
+      "2026-10-01T00:00:00Z",
+      "2026-10-01 ",
+      "\uFF12\uFF10\uFF12\uFF16-\uFF11\uFF10-\uFF10\uFF11", // fullwidth digits
+      "2026\u201010\u201001", // U+2010 HYPHEN
+      "2026\u221210\u221201", // U+2212 MINUS SIGN
+      "2026-02-30",
+      "a Windows runner exists", // a bare condition string: conditions are { condition }
+      "October 1st",
+    ];
+    for (const until of nearDates) {
+      expect(() => parseGateIdentities(at, withExcluded(entry({ until }))), JSON.stringify(until)).toThrow(
+        /checks\.excluded\[0\]\.until/,
+      );
+    }
+  });
+
+  it("refuses surrounding whitespace with its own message, on every field", () => {
+    for (const field of ["name", "reason", "ruled", "until"]) {
+      const padded = field === "ruled" || field === "until" ? " 2026-09-23" : ` x${field}`;
+      expect(() => parseGateIdentities(at, withExcluded(entry({ [field]: padded }))), field).toThrow(
+        /leading or trailing whitespace/,
+      );
+    }
+    expect(() => parseGateIdentities(at, withExcluded(entry({ until: { condition: "x " } })))).toThrow(
+      /until\.condition[\s\S]*leading or trailing whitespace/,
+    );
+  });
+
+  it("refuses every malformed entry by pointer", () => {
+    const refusals: [unknown, RegExp][] = [
+      [{ ...base, checks: [] }, /checks/],
+      [{ ...base, checks: { excluded: {} } }, /checks\.excluded/],
+      [withExcluded("x"), /checks\.excluded\[0\]/],
+      [withExcluded(entry({ name: undefined })), /checks\.excluded\[0\]\.name/],
+      [withExcluded(entry({ reason: undefined })), /checks\.excluded\[0\]\.reason/],
+      [withExcluded(entry({ reason: "  " })), /reason[\s\S]*is blank/],
+      [withExcluded(entry({ ruled: undefined })), /\.ruled/],
+      [withExcluded(entry({ until: undefined })), /\.until[\s\S]*is required/],
+      [withExcluded(entry({ until: 20261001 })), /\.until[\s\S]*is required/],
+      [withExcluded(entry({ until: {} })), /\.until\.condition/],
+      [withExcluded(entry({ until: { condition: "" } })), /\.until\.condition[\s\S]*non-empty/],
+      [withExcluded(entry({ until: { condition: "x", date: "2026-10-01" } })), /\.until[\s\S]*'date'/],
+      [withExcluded(entry({ ruled: "22/09/2026" })), /\.ruled[\s\S]*YYYY-MM-DD/],
+      [withExcluded(entry({ ruled: "2026-02-30" })), /\.ruled/],
+      [withExcluded(entry({ until: "2026-09-21" })), /before ruled/],
+      [withExcluded(entry({ name: "check *" })), /\.match[\s\S]*is required because/],
+      [withExcluded(entry({ match: "regex" })), /expected 'exact' or 'glob'/],
+      [withExcluded(entry(), entry({ reason: "again" })), /checks\.excluded\[1\]\.name[\s\S]*duplicates checks\.excluded\[0\]/],
+    ];
+    for (const [file, message] of refusals) {
+      expect(() => parseGateIdentities(at, file), String(message)).toThrow(SchemaError);
+      expect(() => parseGateIdentities(at, file), String(message)).toThrow(message);
+    }
+  });
+
+  it("the base-only parser applies the same version guard before reading checks (Copilot on #359)", () => {
+    const checks = { excluded: [entry()] };
+    expect(() => parseCheckExclusions(at, { checks })).toThrow(/version[\s\S]*is required/);
+    expect(() => parseCheckExclusions(at, { version: 2, checks })).toThrow(/understands version 1 only/);
+    expect(() => parseCheckExclusions(at, { version: "1", checks })).toThrow(/understands version 1 only/);
+    expect(parseCheckExclusions(at, { version: 1, checks })).toHaveLength(1);
+  });
+
+  it("refuses an entry key it does not define, $comment aside (N10)", () => {
+    expect(() => parseGateIdentities(at, withExcluded(entry({ untill: "2026-12-31" })))).toThrow(
+      /checks\.excluded\[0\][\s\S]*carries 'untill', which this build does not read/,
+    );
+    expect(() => parseGateIdentities(at, withExcluded(entry({ reasons: "x", owner: "y" })))).toThrow(/'reasons', 'owner'/);
+    expect(() => parseGateIdentities(at, withExcluded(entry({ $comment: "the ruling of 2026-09-22" })))).not.toThrow();
+  });
+
+  it("refuses a glob whose literal prefix before the first '*' is under 3 characters (Feitan F4)", () => {
+    for (const name of ["*", "**", "*)", "*e*", "* *", "?*", "ab*", "a*bcdef"]) {
+      expect(() => parseGateIdentities(at, withExcluded(entry({ name, match: "glob" }))), name).toThrow(
+        /literal prefix before the first '\*'/,
+      );
+    }
+    expect(() => parseGateIdentities(at, withExcluded(entry({ name: "check (*", match: "glob" })))).not.toThrow();
+  });
+
+  it("a literal '*' is admitted when the file says exact, and the same name may be declared once per match", () => {
+    const identities = parseGateIdentities(
+      at,
+      withExcluded(entry({ name: "abc*d", match: "exact" }), entry({ name: "abc*d", match: "glob" })),
+    );
+    expect(identities.excludedChecks?.map((e): string => e.match)).toEqual(["exact", "glob"]);
   });
 });

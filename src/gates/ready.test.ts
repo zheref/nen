@@ -101,6 +101,8 @@ describe("evaluateReady -- the ready path", () => {
       // No `--exclude-check <name>` was given, so there is nothing to warn
       // about matching or not matching.
       warnings: [],
+      // The fixture declares no `checks.excluded` (zheref/nen#249).
+      declaredExclusions: [],
     });
   });
 });
@@ -643,6 +645,223 @@ describe("evaluateReady -- --exclude-check (zheref/hatsu#81)", () => {
   });
 });
 
+describe("evaluateReady -- declared checks.excluded (zheref/nen#249)", () => {
+  // The fixture identities, plus a `checks.excluded` block: the same file a
+  // repository would carry, read through the same loader.
+  const FIXTURE_RAW = JSON.parse(
+    readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
+  ) as Record<string, unknown>;
+  const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
+  const RULING = {
+    name: WINDOWS,
+    reason: "the maintainer ruled Windows out of scope until a runner exists",
+    ruled: "2025-05-01",
+    until: { condition: "a Windows runner exists" },
+  };
+  function declaring(...excluded: Record<string, unknown>[]): ReturnType<typeof parseGateIdentities> {
+    return parseGateIdentities("/fixture/nen/gates.json", { ...FIXTURE_RAW, checks: { excluded } });
+  }
+  const redWindows = { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" };
+
+  it("an excluded RED matrix check still yields ready when every other row passes, and the row names it with its reason", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    const row = evaluation.conjuncts.find((c): boolean => c.id === "checks-green");
+    expect(row?.note).toBe(
+      `excluded by declaration: ${WINDOWS} — ${RULING.reason} (ruled 2025-05-01, until a Windows runner exists)`,
+    );
+    expect(evaluation.context.declaredExclusions).toEqual([
+      { ...RULING, match: "exact", status: "honoured", matched: [WINDOWS] },
+    ]);
+    // Never silent (Feitan F2): the notice rides in the warnings too, and a
+    // condition nen cannot evaluate says so on every run (Feitan F3).
+    expect(evaluation.context.warnings).toEqual([
+      `excluded by declaration: ${WINDOWS} — ${RULING.reason} (ruled 2025-05-01, until a Windows runner exists)`,
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) is in force on a CONDITION nen cannot evaluate: "a Windows runner exists". It lapses only when the file is edited; re-check the condition.`,
+    ]);
+  });
+
+  it("the SAME check undeclared yields not-ready", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.firstFailing).toBe("checks-green");
+  });
+
+  it("a check that never starts (queued forever, no runner) is excluded just the same", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({ checks: [greenCheck(), { name: WINDOWS, status: "QUEUED", conclusion: null }] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+  });
+
+  it("a glob drops every matrix leg it names and nothing else", () => {
+    const glob = { ...RULING, name: "check (Windows*", match: "glob" };
+    const legs = [
+      redWindows,
+      { name: "check (Windows, arm64)", status: "COMPLETED", conclusion: "FAILURE" },
+    ];
+    const ready = evaluateReady(declaring(glob), readyState({ checks: [greenCheck(), ...legs] }), OPTIONS);
+    expect(ready.ready).toBe(true);
+    expect(ready.context.declaredExclusions[0]?.matched).toEqual([WINDOWS, "check (Windows, arm64)"]);
+    const linux = evaluateReady(
+      declaring(glob),
+      readyState({
+        checks: [greenCheck(), ...legs, { name: "check (Linux)", status: "COMPLETED", conclusion: "FAILURE" }],
+      }),
+      OPTIONS,
+    );
+    expect(linux.ready).toBe(false);
+  });
+
+  it("an exact name does not match a neighbour that merely contains it", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, name: "check" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.declaredExclusions[0]?.matched).toEqual([]);
+  });
+
+  it("is honoured THROUGH its until date and ignored -- and named EXPIRED -- the day after", () => {
+    const dated = { ...RULING, until: "2025-06-01" };
+    const onTheDay = evaluateReady(declaring(dated), readyState({ checks: [greenCheck(), redWindows] }), {
+      ...OPTIONS,
+      now: "2025-06-01T23:59:59Z",
+    });
+    expect(onTheDay.ready).toBe(true);
+    const after = evaluateReady(declaring(dated), readyState({ checks: [greenCheck(), redWindows] }), {
+      ...OPTIONS,
+      now: "2025-06-02T00:00:00Z",
+    });
+    expect(after.ready).toBe(false);
+    expect(after.firstFailing).toBe("checks-green");
+    expect(after.context.declaredExclusions[0]?.status).toBe("expired");
+    expect(after.context.declaredExclusions[0]?.matched).toEqual([WINDOWS]);
+    expect(after.context.warnings).toEqual([
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) EXPIRED — until 2025-06-01 has passed, so it is no longer honoured; labels matched but not removed by this declaration: ${WINDOWS}. Renew the ruling with a new until, or delete the entry.`,
+    ]);
+  });
+
+  it("an EXPIRED exact entry overlapping an honoured glob never claims the check was counted (Copilot on #359)", () => {
+    const evaluation = evaluateReady(
+      declaring(
+        { ...RULING, ruled: "2025-01-01", until: "2025-03-01" },
+        { ...RULING, name: "check (Windows*", match: "glob" },
+      ),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    // The glob removed it: ready.
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.context.declaredExclusions.map((o): string => o.status)).toEqual(["expired", "honoured"]);
+    const expired = evaluation.context.warnings.find((w): boolean => w.includes("EXPIRED"));
+    expect(expired).toContain(`labels matched but not removed by this declaration: ${WINDOWS}`);
+    expect(evaluation.context.warnings.join("\n")).not.toMatch(/counted on CON-32/i);
+    // ...and the same holds when --exclude-check is what removed it.
+    const flagged = evaluateReady(
+      declaring({ ...RULING, ruled: "2025-01-01", until: "2025-03-01" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      { ...OPTIONS, excludeCheckNames: [WINDOWS] },
+    );
+    expect(flagged.ready).toBe(true);
+    expect(flagged.context.warnings.join("\n")).toContain("labels matched but not removed by this declaration");
+  });
+
+  it("an expired exclusion is named even when it matches nothing at this head", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, ruled: "2025-04-01", until: "2025-05-15" }),
+      readyState(),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(evaluation.context.warnings[0]).toMatch(/EXPIRED[\s\S]*it names no check at this head/);
+  });
+
+  it("a ruling dated after today is NOT YET in force: not honoured, and named", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, ruled: "2025-06-02", until: "2025-12-31" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.declaredExclusions[0]?.status).toBe("not-yet-ruled");
+    expect(evaluation.context.warnings).toEqual([
+      `declared exclusion '${WINDOWS}' (/fixture/nen/gates.json checks.excluded) NOT honoured — ruled 2025-06-02 is after today (UTC), so the ruling is not in force yet; labels matched but not removed by this declaration: ${WINDOWS}.`,
+    ]);
+    // ...and from its own day on, it is.
+    expect(
+      evaluateReady(declaring({ ...RULING, ruled: "2025-06-01" }), readyState({ checks: [greenCheck(), redWindows] }), OPTIONS)
+        .ready,
+    ).toBe(true);
+  });
+
+  it("names the source the caller says the exclusions came from (the base, in pr ready)", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, until: "2025-01-02", ruled: "2025-01-01" }),
+      readyState(),
+      { ...OPTIONS, declaredExclusionsSource: "o/r@base:nen/gates.json checks.excluded" },
+    );
+    expect(evaluation.context.warnings[0]).toContain("(o/r@base:nen/gates.json checks.excluded) EXPIRED");
+  });
+
+  it("an unreadable clock honours NO dated exclusion, and says so", () => {
+    const evaluation = evaluateReady(
+      declaring({ ...RULING, until: "2099-01-01" }),
+      readyState({ checks: [greenCheck(), redWindows] }),
+      { ...OPTIONS, now: "not a time" },
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.context.declaredExclusions[0]?.status).toBe("unknown-date");
+    expect(evaluation.context.warnings[0]).toMatch(/NOT honoured — the evaluation time 'not a time'/);
+    // An unreadable clock honours NO exclusion, a condition one included.
+    expect(
+      evaluateReady(declaring(RULING), readyState({ checks: [greenCheck(), redWindows] }), { ...OPTIONS, now: "x" })
+        .context.declaredExclusions[0]?.status,
+    ).toBe("unknown-date");
+  });
+
+  it("a rollup holding only declared-excluded checks keeps the ABSENT finding, naming them", () => {
+    const evaluation = evaluateReady(declaring(RULING), readyState({ checks: [redWindows] }), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.line).toMatch(
+      /^not-ready: no checks reported \(after excluding: check \(Windows, \["self-hosted","Windows","X64"\]\)\) \(CON-32a\)/,
+    );
+  });
+
+  it("combines with --exclude-check: both sources drop, and the absent finding names both once", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({ checks: [redWindows, greenCheck("readiness")] }),
+      { ...OPTIONS, excludeCheckNames: ["readiness", WINDOWS] },
+    );
+    expect(evaluation.line).toMatch(/after excluding: readiness, check \(Windows/);
+    expect(evaluation.line.split(WINDOWS).length - 1).toBe(1);
+  });
+
+  it("does not excuse an all-skipped head: a skip beside an excluded check is still nothing verified", () => {
+    const evaluation = evaluateReady(
+      declaring(RULING),
+      readyState({
+        checks: [redWindows, { name: "ci / build", status: "COMPLETED", conclusion: "SKIPPED" }],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.line).toMatch(/no check SUCCEEDED at head/);
+  });
+});
+
 describe("evaluateReady -- CON-32(b), the round-stalled / rounds-owed split", () => {
   // copilot is `bounded_policy_exempt` in the fixture -- the PORT CHANGE that
   // replaces the original's `entry.reviewer === "copilot"` literal. A pending
@@ -1022,7 +1241,14 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       const evaluation = evaluateReady(OWN, stateFor(combo), OPTIONS);
       expect(evaluation.context.reviewers).toEqual(enrolled ? ["copilot", "bugbot"] : ["copilot"]);
       const owedRow = rowOf(evaluation, "rounds-owed");
-      expect(owedRow.status).toBe(!copilotOwed && !bugbotOwed && quorumMet ? "ready" : "failed");
+      // The 2026-10-04 ruling (zheref/nen#361): a MET quorum fulfils the owed
+      // rounds of its own UNAVAILABLE members, and both reviewers here are
+      // members. A Bugbot whose run at head is still IN FLIGHT is mid-review,
+      // not unavailable, and stays owed (the maintainer's clarification).
+      const bugbotInFlight = combo.bugbotCheck === "in-progress";
+      const bugbotStillOwed = bugbotOwed && (!quorumMet || bugbotInFlight);
+      const copilotStillOwed = copilotOwed && !quorumMet;
+      expect(owedRow.status).toBe(quorumMet && !bugbotStillOwed ? "ready" : "failed");
 
       // The quorum is carried on the row whatever its outcome.
       expect(owedRow.roundQuorum).toMatchObject({
@@ -1034,8 +1260,8 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
 
       // Each failure is named, and nothing that did not fail is.
       const reason = owedRow.reason ?? "";
-      expect(reason.includes("copilot (review requested, not yet posted)")).toBe(copilotOwed);
-      expect(reason.includes("bugbot (no round at head)")).toBe(bugbotOwed);
+      expect(reason.includes("copilot (review requested, not yet posted)")).toBe(copilotStillOwed);
+      expect(reason.includes("bugbot (no round at head)")).toBe(bugbotStillOwed);
       expect(reason.includes("round quorum not met")).toBe(!quorumMet);
       if (!quorumMet) {
         const lack = {
@@ -1050,18 +1276,150 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
           combo.copilotRequested ? "copilot (no round, review requested, not yet posted)" : "copilot (no round)",
         );
       }
-      if (owedRow.status === "ready") expect(owedRow.note).toMatch(/^round quorum met \(/);
+      if (owedRow.status === "ready") {
+        expect(owedRow.note).toMatch(/^round quorum met \(/);
+        // Each excused member is named, and why; nothing else is.
+        const note = owedRow.note ?? "";
+        expect(note.includes("copilot (review requested, not yet posted; covered by round quorum)")).toBe(copilotOwed);
+        expect(note.includes("bugbot (no round at head; covered by round quorum)")).toBe(bugbotOwed);
+        expect(note.includes("excused by the met round quorum")).toBe(copilotOwed || bugbotOwed);
+      }
 
       // THE PRE-QUORUM READING -- the declaration alone -- is the per-reviewer
-      // verdict, and the quorum only ever ADDS to it: whatever the declaration
-      // refuses, the quorum-carrying file refuses too.
+      // verdict. Under the 2026-10-04 ruling the quorum both ADDS (an unmet
+      // quorum fails what the declaration passes) and FULFILS (a met quorum
+      // passes a member the declaration owes): the row is the quorum's verdict.
       const alone = rowOf(evaluateReady(DECLARATION_ALONE, stateFor(combo), OPTIONS), "rounds-owed");
       expect(alone.status).toBe(!copilotOwed && !bugbotOwed ? "ready" : "failed");
       expect(alone).not.toHaveProperty("roundQuorum");
-      if (alone.status === "failed") expect(owedRow.status).toBe("failed");
-      if (owedRow.status === "ready") expect(alone.status).toBe("ready");
+      // The rows other than CON-32(b)'s owed limb do not move with the quorum.
+      const aloneAll = evaluateReady(DECLARATION_ALONE, stateFor(combo), OPTIONS);
+      for (const id of ["round-stalled", "unresolved-threads"] as const) {
+        expect(rowOf(evaluation, id).status).toBe(rowOf(aloneAll, id).status);
+      }
     },
   );
+
+  // zheref/nen#361's acceptance criteria, by name (ruling 2026-10-04).
+  it("#361: Bugbot EXHAUSTED (its check errors NEUTRAL, which enrols it) plus a Copilot round is READY", () => {
+    const errored = { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "NEUTRAL", title: "Error" };
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), errored],
+        reviews: [{ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(row.status).toBe("ready");
+    expect(row.note).toContain("round quorum met (1 of 2 with a round, 1 required, CON-32b)");
+    expect(row.note).toContain("excused by the met round quorum (ruling 2026-10-04): bugbot (no round at head; covered by round quorum)");
+  });
+
+  it("#361: Copilot OWED (requested, silent) plus a Bugbot SUCCESS is READY", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(true);
+    expect(rowOf(evaluation, "rounds-owed").note).toContain(
+      "copilot (review requested, not yet posted; covered by round quorum)",
+    );
+  });
+
+  it("#361: a reviewer NOT in any_of is still owed, met quorum or not", () => {
+    const withOutsider = parseGateIdentities("/fixture/nen/gates.json", {
+      ...OWN_RAW,
+      reviewers: [
+        ...(OWN_RAW["reviewers"] as unknown[]),
+        { name: "sasuke", login_pattern: { pattern: "^sasuke$", ignoreCase: true } },
+      ],
+      base_reviewers: ["copilot", "sasuke"],
+    });
+    const evaluation = evaluateReady(
+      withOutsider,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot,sasuke",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(row.reason).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (no round at head)",
+    );
+    expect(row.roundQuorum?.met).toBe(true);
+  });
+
+  it("#361: an UNMET quorum still fails, naming every owed member", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.neutral],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    expect(rowOf(evaluation, "rounds-owed").reason).toMatch(
+      /^not-ready: a configured reviewer's round is still owed at the current head \(CON-32b\): copilot \(review requested, not yet posted\);bugbot \(no round at head\) — and round quorum not met/,
+    );
+  });
+
+  it("#361: a file with NO quorum gets the per-reviewer verdict, byte for byte", () => {
+    // DECLARATION_ALONE is this repository's file minus `round_quorum`. Copilot
+    // requested and silent, Bugbot clean: the owed round still fails exactly as
+    // before the 2026-10-04 ruling, with no quorum on the row and no note.
+    const evaluation = evaluateReady(
+      DECLARATION_ALONE,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    const row = rowOf(evaluation, "rounds-owed");
+    expect(evaluation.line).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted)",
+    );
+    expect(row).not.toHaveProperty("roundQuorum");
+    expect(row.note).toBeNull();
+  });
+
+  it("#361: a met quorum leaves row 3 (a stalled request) and row 6 (threads) failing", () => {
+    const evaluation = evaluateReady(
+      OWN,
+      readyState({
+        checks: [greenCheck(), CHECK_SHAPES.completed],
+        reviews: [],
+        review_requests: [{ login: "Copilot" }],
+        reviewers: "copilot,bugbot",
+        stall_requested_at: "2025-06-01T10:00:00Z",
+        unresolved_threads: 2,
+      }),
+      OPTIONS,
+    );
+    expect(rowOf(evaluation, "rounds-owed").status).toBe("ready");
+    expect(rowOf(evaluation, "round-stalled").status).toBe("failed");
+    expect(rowOf(evaluation, "unresolved-threads").status).toBe("failed");
+    expect(evaluation.ready).toBe(false);
+  });
 
   it("NOBODY reviewed: the line is the quorum's, word for word, and it is the only failing row", () => {
     // No review, no run at head, and no run on any earlier head either -- a
@@ -1161,19 +1519,20 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
     );
   });
 
-  it("a met quorum never excuses an owed round: Copilot requested, Bugbot's round had, still not-ready", () => {
+  // SUPERSEDED by the 2026-10-04 ruling (zheref/nen#361): under 2026-09-29 a
+  // met quorum never excused an owed round; now it fulfils its members'.
+  it("a met quorum EXCUSES an owed member: Copilot requested, Bugbot's round had, ready (ruling 2026-10-04)", () => {
     const evaluation = evaluateReady(
       OWN,
       stateFor({ copilotReview: false, bugbotReview: true, copilotRequested: true, bugbotCheck: "absent" }),
       OPTIONS,
     );
     expect(rowOf(evaluation, "rounds-owed").roundQuorum?.met).toBe(true);
-    expect(evaluation.line).toBe(
-      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
-        "copilot (review requested, not yet posted)",
-    );
+    expect(evaluation.line).toBe("ready");
   });
 
+  // The 2026-10-04 ruling covers an UNAVAILABLE member, not one mid-review:
+  // a run still in flight at head keeps it owed even though the quorum is met.
   it("a Cursor Bugbot check still RUNNING keeps bugbot owed even though Copilot's round meets the quorum", () => {
     const evaluation = evaluateReady(
       OWN,
@@ -1181,10 +1540,47 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       OPTIONS,
     );
     const row = rowOf(evaluation, "rounds-owed");
+    expect(evaluation.ready).toBe(false);
+    expect(row.status).toBe("failed");
+    // The met quorum rides on the row; it does not excuse a member mid-review.
     expect(row.roundQuorum?.met).toBe(true);
     expect(row.reason).toBe(
       "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
     );
+  });
+
+  it("...while a Cursor Bugbot run that COMPLETED without a round (errored, cancelled, failed, skipped) is excused", () => {
+    for (const conclusion of ["NEUTRAL", "CANCELLED", "FAILURE", "TIMED_OUT"]) {
+      const evaluation = evaluateReady(
+        OWN,
+        readyState({
+          checks: [greenCheck(), { name: "Cursor Bugbot", status: "COMPLETED", conclusion }],
+          reviews: [{ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+          reviewers: "copilot,bugbot",
+        }),
+        OPTIONS,
+      );
+      const row = rowOf(evaluation, "rounds-owed");
+      expect(row.status, conclusion).toBe("ready");
+      expect(row.note, conclusion).toContain("bugbot (no round at head; covered by round quorum)");
+    }
+  });
+
+  it("every in-flight status keeps the member owed: QUEUED, IN_PROGRESS, PENDING, WAITING", () => {
+    for (const status of ["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"]) {
+      const evaluation = evaluateReady(
+        OWN,
+        readyState({
+          checks: [greenCheck(), { name: "Cursor Bugbot", status, conclusion: null }],
+          reviews: [{ author: "copilot-pull-request-reviewer", state: "COMMENTED", commit_id: "r1sha", submitted_at: NOW }],
+          reviewers: "copilot,bugbot",
+        }),
+        OPTIONS,
+      );
+      expect(rowOf(evaluation, "rounds-owed").reason, status).toBe(
+        "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
+      );
+    }
   });
 
   it("the stall bound is unchanged: a stalled Copilot request is row 3's line; row 4 carries owed AND quorum", () => {
@@ -1222,7 +1618,7 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       expect(evaluation.ready).toBe(true);
     });
 
-    it("--reviewers bugbot with only Copilot's round: bugbot is owed; the met quorum does not excuse it", () => {
+    it("--reviewers bugbot with only Copilot's round: the met quorum fulfils bugbot's round (ruling 2026-10-04)", () => {
       const evaluation = evaluateReady(
         OWN,
         readyState({
@@ -1233,9 +1629,8 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       );
       const row = rowOf(evaluation, "rounds-owed");
       expect(row.roundQuorum?.met).toBe(true);
-      expect(row.reason).toBe(
-        "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bugbot (no round at head)",
-      );
+      expect(row.status).toBe("ready");
+      expect(row.note).toContain("bugbot (no round at head; covered by round quorum)");
     });
   });
 

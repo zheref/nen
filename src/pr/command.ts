@@ -38,7 +38,15 @@ import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE }
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
-import type { Seams } from "../seam/exec.js";
+import {
+  BASE_GATES_PATH,
+  decodeContentsPayload,
+  exclusionsAtBase,
+  type BaseGatesRead,
+} from "../gates/base_exclusions.js";
+import { resolveDeclaredExclusions } from "../gates/predicates.js";
+import { declarationWarnings } from "../gates/ready.js";
+import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
@@ -146,7 +154,12 @@ ready:
                               An opener never closed with a comma after it is
                               refused (exit 2) -- repeat the flag instead. A
                               name with a comma outside every bracket cannot
-                              be named.
+                              be named. Combines with nen/gates.json's
+                              declared checks.excluded (zheref/nen#249), which
+                              is read AT THE PR's BASE commit (never the local
+                              file) and needs contents:read: a standing ruling
+                              belongs there, with its reason, ruling date and
+                              until, not in a flag.
   --gates <path>              Read reviewer identities from this gates file
                               instead of the target repo's nen/gates.json.
                               A RELATIVE path is resolved against the --repo
@@ -743,18 +756,68 @@ function blocker(context: CommandContext): number {
       ? loadGateIdentities(root)
       : resolveIdentities(root, gatesFlag, [], []).identities;
   const snapshot = fetchPullRequest(context.seams, target, prNumber);
+  // `checks.excluded` AT THE BASE (zheref/nen#249, Feitan F1), the same source
+  // `pr ready` reads -- never the local file, which in a worktree is the pull
+  // request's own head. Any failure (no base commit, an unreadable or absent
+  // file, a malformed block) applies none: the stricter answer.
+  const now = new Date().toISOString();
+  const baseSha = snapshot.baseRefOid ?? "";
+  const where = `${target.slug}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
+  const base = exclusionsAtBase(readBaseGatesWithGh(context.seams, target, baseSha), where, identities.excludedChecks ?? []);
+  // Every declared entry as `pr ready` reports it (hanten round 2, N1): the
+  // notice for each honoured one that removed a check, and a warning for each
+  // that did not apply -- expired, not yet ruled, an unevaluable condition.
+  const declaredLines = resolveDeclaredExclusions(base.exclusions, snapshot.checks, now).outcomes.flatMap(
+    (outcome): string[] => declarationWarnings(outcome, `${where} checks.excluded`, now),
+  );
+  const warnings = [...base.warnings, ...declaredLines];
   const result = nextBlocker(identities, snapshot, {
+    declaredExclusions: base.exclusions,
+    now,
     reviewers,
     policy: context.args.values["policy"] === "strict" ? "strict" : context.args.values["policy"] === "bounded" ? "bounded" : undefined,
     deliveryPr: context.args.booleans.has("delivery-pr"),
   });
   if (context.json) {
-    context.io.out(JSON.stringify(result, null, 2));
+    // `warnings` and `notes` are additive (hanten round 2, N1/N3).
+    context.io.out(JSON.stringify({ ...result, warnings, notes: base.notes }, null, 2));
     return result.kind === "none" ? 0 : 1;
   }
   context.io.out(`#${prNumber}: ${result.kind}`);
-  context.io.out(`  ${result.detail}`);
+  // Plain at the boundary (Copilot on zheref/nen#359): the detail and the
+  // declaration lines carry check labels and declared text nen did not write.
+  context.io.out(plainLine(`  ${result.detail}`));
+  for (const warning of warnings) {
+    context.io.out(plainLine(warning.startsWith("excluded by declaration: ") ? `  ${warning}` : `  warning: ${warning}`));
+  }
   return result.kind === "none" ? 0 : 1;
+}
+
+/**
+ * `nen/gates.json` at `baseSha` through `gh`, for `next-blocker` (zheref/nen#249):
+ * the same REST contents route `pr ready` takes on its token, told apart the
+ * same way -- a 404 is "the base declares nothing", every other failure is
+ * "the base could not be read", and both are resolved by
+ * ../gates/base_exclusions.ts's `exclusionsAtBase`.
+ */
+function readBaseGatesWithGh(seams: Seams, target: Target, baseSha: string): BaseGatesRead {
+  if (baseSha === "") return { kind: "failed", message: "GitHub answered no base commit for the pull request" };
+  const encodedPath = BASE_GATES_PATH.split("/").map((segment): string => encodeURIComponent(segment)).join("/");
+  let stdout: string;
+  try {
+    stdout = must(seams, GH, ["api", `repos/${target.slug}/contents/${encodedPath}?ref=${baseSha}`]).stdout;
+  } catch (error) {
+    if (error instanceof ToolError) {
+      if (!error.result.spawnFailed && /HTTP 404|Not Found/i.test(error.result.stderr)) return { kind: "absent" };
+      return { kind: "failed", message: redactRemoteCredentials(error.message) };
+    }
+    throw error;
+  }
+  try {
+    return { kind: "read", text: decodeContentsPayload(JSON.parse(stdout) as unknown, BASE_GATES_PATH, baseSha) };
+  } catch (error) {
+    return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function cascade(context: CommandContext): number {

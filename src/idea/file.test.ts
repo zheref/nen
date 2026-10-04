@@ -94,7 +94,7 @@ describe("fileIdea -- file, then read back, then compare", () => {
   it("files, reads back, and finds no mismatch on a clean round trip", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
+        match: "gh issue create --repo zheref/nen --title an idea --body-file - --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       {
@@ -109,7 +109,7 @@ describe("fileIdea -- file, then read back, then compare", () => {
   it("surfaces a mismatch rather than reporting success", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
+        match: "gh issue create --repo zheref/nen --title an idea --body-file - --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       {
@@ -136,7 +136,7 @@ describe("fileIdea -- file, then read back, then compare", () => {
   it("fails loudly when the read-back answers with a PULL REQUEST, rather than comparing against it", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
+        match: "gh issue create --repo zheref/nen --title an idea --body-file - --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       {
@@ -161,7 +161,7 @@ describe("fileIdea -- file, then read back, then compare", () => {
   it("fails even when the pull request's title, body and labels all match what was submitted", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
+        match: "gh issue create --repo zheref/nen --title an idea --body-file - --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       {
@@ -193,7 +193,7 @@ describe("fileIdea -- file, then read back, then compare", () => {
   it("throws a named error when the read-back call itself fails -- the issue still exists", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh issue create --repo zheref/nen --title an idea --body-file body.md --assignee me --label stage:idea",
+        match: "gh issue create --repo zheref/nen --title an idea --body-file - --assignee me --label stage:idea",
         result: { stdout: "https://github.com/zheref/nen/issues/9\n" },
       },
       { match: "gh api repos/zheref/nen/issues/9", result: { code: 1, stderr: "down" } },

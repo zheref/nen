@@ -21,6 +21,7 @@ import {
   issueArgv,
   parseObjects,
   parseVerdictLine,
+  redactRoot,
   renderObjects,
   type ReportObject,
 } from "./objects.js";
@@ -751,8 +752,18 @@ describe("every field degrades on its own", () => {
     const row = (JSON.parse(captured.out.join("\n")) as { objects: ReportObject[] }).objects[0] as unknown as Record<string, unknown>;
     expect(row["readiness"]).toBeNull();
     // No complaint about a check run that simply is not there: a repository
-    // that publishes none is the ordinary case, not a degradation.
-    expect(row["notes"]).toEqual([]);
+    // that publishes none is the ordinary case, not a degradation. The one
+    // note is the GATE's reason for the null readiness (Nobunaga N7), with the
+    // checkout's absolute path kept off the row.
+    const notes = row["notes"] as string[];
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/^the readiness gate produced no report for zheref\/nen#217/);
+    expect(notes.join("\n")).not.toMatch(/check run/);
+    expect(notes.join("\n")).not.toContain(COVERAGE_REPO);
+    // The SAME form on every platform: the remainder of a redacted path is
+    // written with '/' whatever separator the gate's host used.
+    expect(notes[0]).toContain("'<repo>/nen/gates.json'");
+    expect(notes[0]).not.toMatch(/<repo>\\/);
   });
 });
 
@@ -1000,5 +1011,18 @@ describe("every degraded field is named (threads …ctk and …ctq)", () => {
     // one field there is no degrading around.
     expect(objects.map((row): number => row.number)).toEqual([215]);
     expect(captured.err.join("\n")).toMatch(/carried no numeric 'number' and could not be identified/);
+  });
+});
+
+describe("redactRoot is separator-agnostic (NN-PR-#365, Windows)", () => {
+  it("redacts a win32 root in either spelling and writes the remainder with '/'", () => {
+    const root = "C:\\runner\\work\\repo";
+    expect(redactRoot("looked for at 'C:\\runner\\work\\repo\\nen\\gates.json'", root)).toBe("looked for at '<repo>/nen/gates.json'");
+    expect(redactRoot("looked for at 'C:/runner/work/repo/nen/gates.json'", root)).toBe("looked for at '<repo>/nen/gates.json'");
+  });
+
+  it("leaves a POSIX path the same shape, and a line without the root untouched", () => {
+    expect(redactRoot("at '/home/u/repo/nen/gates.json'", "/home/u/repo")).toBe("at '<repo>/nen/gates.json'");
+    expect(redactRoot("no path here", "/home/u/repo")).toBe("no path here");
   });
 });

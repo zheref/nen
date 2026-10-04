@@ -1,0 +1,148 @@
+<!-- TEST FIXTURE -- the body of Hatsu's templates/rikugan.html (zheref/hatsu,
+     the register and final variants), copied markup for markup with its
+     styles and scripts left out, so 'report data --register' is proved to
+     emit every token that page names. RE-SYNC FROM zheref/hatsu at canon
+     commit 0975a314 (templates/rikugan.html, from the masthead block to the
+     footer paragraph) whenever that page changes. Not shipped. This comment spells no tag
+     of its own: a template's comments are template text. -->
+{{#if sections.masthead}}
+<header class="mast">
+  <div>
+    <div class="eyebrow">Hatsu &middot; rikugan &middot; {{variant}}</div>
+    <h1>{{title}}</h1>
+    <div class="meta">{{scope}} &middot; {{gate}} &middot; <time datetime="{{generatedAt}}" title="{{generatedAt}}">{{generatedAtLocal}}</time></div>
+  </div>
+  <div class="toggle" role="group" aria-label="Theme">
+    <button type="button" id="t-light" aria-pressed="false">light</button>
+    <button type="button" id="t-system" aria-pressed="true">system</button>
+    <button type="button" id="t-dark" aria-pressed="false">dark</button>
+  </div>
+</header>
+{{/if}}
+{{#if sections.tally}}
+<section class="tally" aria-label="At a glance">
+  <div><b>{{tallyScope}}</b><span>in scope</span></div>
+  <div><b class="hot">{{tallyNeedsYou}}</b><span>need you</span></div>
+  <div><b class="hot">{{tallyBlockers}}</b><span>blockers</span></div>
+  <div><b class="good">{{tallyReady}}</b><span>ready</span></div>
+  <div><b class="cool">{{tallyInFlight}}</b><span>in flight</span></div>
+</section>
+{{/if}}
+{{#if sections.desk}}
+<section id="desk">
+<h2>Your desk</h2>
+{{#each gates}}
+<div class="gate-group">
+  <span class="eyebrow">{{gate}} &middot; {{label}}</span>
+  {{#each asks}}
+  <div class="ask">
+    <div class="k">{{kind}} &middot; rank {{rank}}</div>
+    <h3>{{title}}</h3>
+    <p class="why">{{why}}</p>
+    <ol class="opts">
+      {{#each options}}
+      <li class="{{starredClass}}"><span class="letter">{{letter}}</span><span><span class="lab">{{label}}</span>{{#if star}}<svg class="star" viewBox="0 0 20 19" width="14" height="14" role="img" aria-label="{{star}}"><path d="M10 0l2.9 6.2 6.6.9-4.8 4.7 1.2 6.8L10 15.4 4.1 18.6l1.2-6.8L.5 7.1l6.6-.9z" fill="currentColor"/></svg>{{/if}}
+        <span class="cons">{{consequence}}</span>
+        <code>{{command}}</code></span></li>
+      {{/each}}
+    </ol>
+    {{#if objects}}<p class="objs">{{#each objects}}<a href="{{url}}">{{label}}</a>{{/each}}</p>{{/if}}
+    {{#if verdict}}<p class="verdict"><b>Readiness, verbatim:</b> &ldquo;{{verdict}}&rdquo;</p>{{/if}}
+  </div>
+  {{/each}}
+  {{#if cleared}}<p class="cleared"><b>cleared</b><br>{{cleared}}</p>{{/if}}
+</div>
+{{/each}}
+</section>
+{{/if}}
+{{#if sections.register}}
+<section id="register">
+<h2>The register</h2>
+<p class="muted">One row per issue and pull request in scope. Open a row for its gate, its verdict and what it is waiting on.</p>
+<div class="reg">
+  {{#each objects}}
+  <details>
+    <summary>
+      <span class="no">{{notation}}</span>
+      <span class="ti">{{title}}</span>
+      <span class="mono muted">{{marks}}</span>
+      <span class="pill {{gateClass}}">{{gate}}</span>
+    </summary>
+    <div class="body">
+      <dl>
+        <dt>State</dt><dd>{{state}} &middot; {{labelsLine}}</dd>
+        <dt>Verdict</dt><dd>{{verdict}}</dd>
+        <dt>Checks</dt><dd>{{checksLine}}</dd>
+        <dt>Threads</dt><dd>{{threadsLine}}</dd>
+        <dt>Linked</dt><dd>{{linkedLine}}</dd>
+        <dt>Needs</dt><dd>{{needs}}</dd>
+        <dt>Driving</dt><dd>{{session}} &middot; lane {{lane}}</dd>
+        <dt>Head</dt><dd class="mono">{{head}}</dd>
+        <dt>Thought</dt><dd>{{thought}}</dd>
+        <dt>Link</dt><dd><a href="{{url}}">{{url}}</a></dd>
+      </dl>
+    </div>
+  </details>
+  {{/each}}
+</div>
+{{#if graphNodes}}
+<h3>{{architectureCaption}}</h3>
+  <div class="canvas" id="graph-canvas" data-state="pending">
+    <p class="fallback">Laying the graph out&hellip;</p>
+  </div>
+  <p class="glegend"><i class="a"></i>added &nbsp; <i class="c"></i>changed &nbsp; <i class="r"></i>removed &nbsp; <i class="u"></i>unchanged &nbsp; &middot; dashed edge = removed</p>
+  <script type="application/json" id="graph">{{{graphJson}}}</script>
+  <details>
+    <summary>The same delta as text &mdash; nodes and edges</summary>
+    <div class="wrap"><table>
+      <caption class="eyebrow" style="text-align:left;padding:6px 0">Nodes</caption>
+      <tr><th>Node</th><th>Kind</th><th>Change</th></tr>
+      {{#each graphNodes}}<tr><td>{{label}}</td><td class="mono">{{kind}}</td><td><span class="pill">{{change}}</span></td></tr>
+      {{/each}}
+    </table></div>
+    <div class="wrap"><table>
+      <caption class="eyebrow" style="text-align:left;padding:6px 0">Edges</caption>
+      <tr><th>From</th><th>Relation</th><th>To</th><th>Change</th></tr>
+      {{#each graphEdges}}<tr><td class="mono">{{from}}</td><td class="mono">{{rel}}</td><td class="mono">{{to}}</td><td><span class="pill">{{change}}</span></td></tr>
+      {{/each}}
+    </table></div>
+  </details>
+{{/if}}
+</section>
+{{/if}}
+{{#if sections.spend}}
+<section id="spend">
+<h2>Spend</h2>
+{{#each spendEfforts}}
+<h3>{{name}}</h3>
+<h4>Where the time went</h4>
+{{#if hasSpendPhases}}<ul class="bars">
+  {{#each spendPhases}}
+  <li><span class="lane">{{lane}}</span><span class="track"><i style="--pct:{{percent}}"></i></span><span class="amt">{{amount}}</span>{{#if steps}}<span class="steps">{{steps}}</span>{{/if}}</li>
+  {{/each}}
+</ul>{{/if}}
+{{#if noSpendPhases}}<p class="muted">no phase ledger was recorded for this effort</p>{{/if}}
+<h4>Tokens by model</h4>
+<div class="wrap"><table>
+  <tr><th>Surface</th><th>Model</th><th>Input</th><th>Output</th><th>Cache read</th><th>Cache write</th><th>Minutes</th><th>Source</th></tr>
+  {{#each spendUsage}}<tr><td class="mono">{{surface}}</td><td class="mono">{{model}}</td>{{#if notReported}}<td class="muted" colspan="6">not reported</td>{{/if}}{{#if reported}}<td class="n">{{input}}</td><td class="n">{{output}}</td><td class="n">{{cacheRead}}</td><td class="n">{{cacheWrite}}</td><td class="n">{{minutes}}</td><td>{{source}}</td>{{/if}}</tr>
+  {{/each}}
+</table></div>
+<p class="muted mono">Actions minutes: {{actionsMinutes}}</p>
+{{#if spendNote}}<p class="muted">{{spendNote}}</p>{{/if}}
+{{/each}}
+</section>
+{{/if}}
+{{#if sections.legend}}
+<section id="legend">
+<h2>Legend</h2>
+<div class="wrap"><table>
+  <tr><th>Mark</th><th>Means</th></tr>
+  <tr><td class="mono"><svg class="star" viewBox="0 0 20 19" width="14" height="14" role="img" aria-label="recommended"><path d="M10 0l2.9 6.2 6.6.9-4.8 4.7 1.2 6.8L10 15.4 4.1 18.6l1.2-6.8L.5 7.1l6.6-.9z" fill="currentColor"/></svg></td><td>the recommended option on an ask &mdash; exactly one per ask, and the same one the surface's own picker stars</td></tr>
+  <tr><td class="mono">Grouped by gate</td><td>the desk is ordered by gate, then by how much each answer unblocks. A gate with nothing owed is shown cleared, never hidden</td></tr>
+  {{#each legendRows}}<tr><td class="mono">{{mark}}</td><td>{{meaning}}</td></tr>
+  {{/each}}
+</table></div>
+</section>
+{{/if}}
+<p class="foot">{{footerCount}}<br>{{scope}} &middot; {{variant}} &middot; <time datetime="{{generatedAt}}" title="{{generatedAt}}">{{generatedAtLocal}}</time><br>{{footerNote}}</p>

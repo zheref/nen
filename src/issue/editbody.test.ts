@@ -30,15 +30,15 @@ function prPayload(number: number, id: number): string {
 }
 
 describe("editBodyArgv -- the argv a dry run prints IS the argv that runs", () => {
-  it("spells the write as 'issue edit <n> --repo <slug> --body-file <path>'", () => {
-    expect(editBodyArgv(TARGET, 12, "notes/body.md")).toEqual([
+  it("spells the write as 'issue edit <n> --repo <slug> --body-file -' (the checked body on stdin, zheref/nen#329)", () => {
+    expect(editBodyArgv(TARGET, 12)).toEqual([
       "issue",
       "edit",
       "12",
       "--repo",
       "zheref/nen",
       "--body-file",
-      "notes/body.md",
+      "-",
     ]);
   });
 });
@@ -70,30 +70,31 @@ describe("certifyIssue -- refuses (as a usage error) before any write when the n
 });
 
 describe("writeIssueBody -- posts through the Runner seam", () => {
-  it("runs exactly one gh call with the caller's own path", () => {
+  it("runs exactly one gh call, handing gh the checked body on stdin (zheref/nen#329)", () => {
     const seams = new ScriptedSeams([
-      { match: "gh issue edit 12 --repo zheref/nen --body-file notes/body.md", result: {} },
+      { match: "gh issue edit 12 --repo zheref/nen --body-file -", result: {} },
     ]);
-    expect(() => writeIssueBody(seams, TARGET, 12, "notes/body.md")).not.toThrow();
+    expect(() => writeIssueBody(seams, TARGET, 12, "the checked body")).not.toThrow();
     expect(seams.calls.length).toBe(1);
+    expect(seams.calls[0]?.stdin).toBe("the checked body");
   });
 
   it("throws naming the object when gh refuses", () => {
     const seams = new ScriptedSeams([
-      { match: "gh issue edit 12 --repo zheref/nen --body-file notes/body.md", result: { code: 1, stderr: "HTTP 404: Not Found" } },
+      { match: "gh issue edit 12 --repo zheref/nen --body-file -", result: { code: 1, stderr: "HTTP 404: Not Found" } },
     ]);
-    expect(() => writeIssueBody(seams, TARGET, 12, "notes/body.md")).toThrow(/zheref\/nen#12/);
+    expect(() => writeIssueBody(seams, TARGET, 12, "the checked body")).toThrow(/zheref\/nen#12/);
   });
 
   it("throws when gh could not be started at all, rather than reading code -1 as a refusal", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh issue edit 12 --repo zheref/nen --body-file notes/body.md",
+        match: "gh issue edit 12 --repo zheref/nen --body-file -",
         result: { code: -1, stderr: "spawn gh ENOENT", spawnFailed: true },
       },
     ]);
-    expect(() => writeIssueBody(seams, TARGET, 12, "notes/body.md")).toThrow(BodyNotSentError);
-    expect(() => writeIssueBody(seams, TARGET, 12, "notes/body.md")).toThrow(/gh could not be started \(spawn gh ENOENT\), so nothing was sent/);
+    expect(() => writeIssueBody(seams, TARGET, 12, "the checked body")).toThrow(BodyNotSentError);
+    expect(() => writeIssueBody(seams, TARGET, 12, "the checked body")).toThrow(/gh could not be started \(spawn gh ENOENT\), so nothing was sent/);
   });
 });
 
