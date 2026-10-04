@@ -264,14 +264,21 @@ the wrong thing:
 | `4` | **unsupported verb for this lane** — the declaration says so, in its own words | not `2`: the invocation was correct and the answer is a fact about the repository. It is the *majority* case across the stacks the family covers |
 | `5` | **the declared program could not be started** — not installed, not on `PATH` | not `1`: "the tool is not installed" and "the tool ran and said no" want different reactions, and `src/seam/exec.ts` keeps them apart precisely so a caller need not guess |
 
-`shu` is the only *family* that returns `3` or `4`. The [`runner`](#family-runner)
+`shu` is not the only family above `2`, and the codes do **not** mean the same
+thing everywhere. [`issue edit-body`](#nen-issue-edit-body) returns **`3` =
+conflict, nothing written**: under `--expect-body-sha256` the current body is
+not the version the replacement was prepared from
+([#205](https://github.com/zheref/nen/issues/205)). `pr threads`
+([`pr`](#family-pr)) returns `3` for a thread already resolved and `4` for no
+such thread, and
+[`wc swap`](#nen-wc-swap) returns `3` for a dirty tree. Branch on a code only
+together with the verb that produced it. The [`runner`](#family-runner)
 family returns `5` in exactly `shu`'s sense -- `gh` could not be started -- and
 nothing else above `2`: a GitHub refusal there is `1`, because this table
-reserves no code for a network failure. The one other place in this CLI where a
-code above `2` appears is [`bootstrap`](#nen-bootstrap), which
-is not on the three-code scheme at all — it relays the bootstrap script's own
+reserves no code for a network failure. [`bootstrap`](#nen-bootstrap) is not
+on the three-code scheme at all — it relays the bootstrap script's own
 published `3`–`7` unchanged, and those numbers mean the script's things, not
-these. A caller branching on `3`/`4`/`5` must know which of the two it invoked.
+these. A caller branching on `3`/`4`/`5` must know which verb it invoked.
 
 One inconsistency is worth knowing before it surprises you: a missing
 `--target` exits `1` rather than `2` on eighteen verbs — every verb routed
@@ -296,7 +303,7 @@ verb does by default:
 |---|---|---|---|
 | [`issue file`](#nen-issue-file) | no | `--dry-run` | fully offline — no network call at all |
 | [`issue comment`](#nen-issue-comment) | no | `--dry-run` | fully offline; also prints the exact bytes of the body |
-| [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count, first/last line and the current body's sha256; with `--expect-body-sha256` it also compares, and a mismatch exits 3 exactly as a real run would |
+| [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count, first/last line, `current body sha256:` and a `body check:` line saying what was and was not checked; with `--expect-body-sha256` it also compares, and a mismatch exits **3** (conflict, nothing written) exactly as a real run would; `--current-body-out <path>` writes the read's exact bytes |
 | [`issue attach-sub`](#nen-issue-attach-sub) | no | `--dry-run` | **still reads GitHub** to certify every number is an issue, not a PR |
 | [`issue consolidate-close`](#nen-issue-consolidate-close) | no | `--dry-run` | **still reads GitHub** for the object-class check and the open-PR guard |
 | [`labels sync`](#nen-labels-sync) | no | `--dry-run` | fully offline |
@@ -5387,7 +5394,8 @@ write.
 
 ```text
 nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
-                    [--expect-body-sha256 <hex>] [--dry-run]
+                    [--expect-body-sha256 <hex>] [--current-body-out <path>]
+                    [--dry-run]
 ```
 
 **Arguments**
@@ -5397,7 +5405,8 @@ nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
 | `--target <owner/name>` | yes | The GitHub repository. | Missing exits 1. |
 | `--issue <n>` | yes | The issue to replace the body of. | Read with the same strict `/^\d+$/` guard `comment`'s `--issue` uses — `1e3` or `0x0c` are refused rather than silently accepted as 1000/12, because this is a MUTATING read. |
 | `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) so `gh` reads the same bytes this verb previewed. | There is no inline `--body` — that flag belongs to [`issue comment`](#nen-issue-comment). An unreadable path, or one holding only whitespace, is refused (exit 2). |
-| `--expect-body-sha256 <hex>` | no | The sha256 (64 hex digits, either case) of the body your replacement was **prepared from**: the UTF-8 bytes of the REST payload's `body` field exactly — untrimmed, no newline normalisation, a `null` body hashing as `""`. The certifying read compares it with the current body; a mismatch writes nothing and exits **3**. | A malformed value is a usage error (exit 2), never a conflict. **Not atomic** — see *Lost updates* below. Without it nothing is compared. |
+| `--expect-body-sha256 <hex>` | no | The sha256 (64 hex digits, either case) of the body your replacement was **prepared from**: the UTF-8 bytes of the REST payload's `body` field exactly — untrimmed, no newline normalisation, a `null` body hashing as `""`. The certifying read compares it with the current body; a mismatch writes nothing and exits **3**. | A malformed value is a usage error (exit 2), never a conflict. A read carrying no `body` field at all (not `null` — absent) is refused at exit 1, never hashed as `""`. **Not atomic** — see *Lost updates* below. Without it nothing is compared. |
+| `--current-body-out <path>` | no | Write the **exact bytes of the certifying read** to `<path>`, on a dry run and on a conflict — the safe source for the next expectation: fold from that file, and its sha256 is the one the report printed. | Never written on a real write that proceeds. Refused (exit 2) when it names the `--body-file` — a conflict would overwrite your fold. A dry run that cannot write it exits 1; a conflict that cannot write it stays exit 3 and says so (`currentBodyOut.written: false`). |
 | `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has. |
 
 **Output and exit codes** — human line on a real write: `replaced
@@ -5406,18 +5415,40 @@ issue edit ...` followed by `target:`/`number:`/`bytes:`/`first line:`/`last
 line:`/`current body sha256:`/`body check:`. `--json`: `{ contract:
 "nen.issue.edit-body/v0.2", target, number, bytes, bodySha256, written,
 dryRun, outcome, bodyCheck: { expectedSha256, currentSha256, currentBytes,
-result, atomic } }` — `bodySha256` is the hash of the bytes sent, `outcome`
-is `written` | `dry-run` | `conflict` | `uncertain`, `bodyCheck.result` is
-`none` | `matched` | `conflict`, and `atomic` is always `false`. An uncertain
-outcome sets `written: null` and adds `error` and `readBack: {
-currentSha256, matchesSubmitted, readError }`. (v0.1 carried only the first
-six fields.) Exit 0 on success (dry or real); exit 2 on a malformed/absent
+result, atomic }, currentBodyOut }` — `bodySha256` is the hash of the bytes
+sent, `outcome` is `written` | `dry-run` | `conflict` | `uncertain` |
+`not-sent`, `bodyCheck.result` is `none` | `matched` | `conflict`, `atomic`
+is always `false`, and `currentBodyOut` is `null` or `{ path, written, error
+}`. An uncertain outcome sets `written: null` and adds `error` and `readBack:
+{ currentSha256, matchesSubmitted, matchesPrevious, readError }` —
+`matchesPrevious` compares with `bodyCheck.currentSha256`, the version the
+certifying read saw. A not-sent outcome sets `written: false` and adds
+`error`. (v0.1 carried only the first six fields.) Exit 0 on success (dry or real); exit 2 on a malformed/absent
 `--issue`, an empty/unreadable `--body-file`, a malformed
-`--expect-body-sha256`, or a number that certifies as a pull request (that
-refusal comes before the hash comparison); exit 3 on a **conflict** — the
-current body is not the expected version, nothing was written; exit 1 if `gh
-issue edit` itself fails after certification passed, reported as
-**uncertain**, never as written.
+`--expect-body-sha256`, a `--current-body-out` naming the `--body-file`, or a
+number that certifies as a pull request (that refusal comes before the hash
+comparison); exit 3 on a **conflict** — the current body is not the expected
+version, nothing was written; exit 1 if `gh issue edit` fails after
+certification passed (reported as **uncertain**, or as **not sent** when `gh`
+could not be started, never as written), on a read with no `body` field under
+`--expect-body-sha256`/`--current-body-out`, or on a dry run whose
+`--current-body-out` could not be written.
+
+**Where the expected hash comes from.** The safe source is the verb itself:
+`nen issue edit-body … --dry-run --current-body-out base.md` writes the exact
+bytes of its read to `base.md` and prints their sha256 — fold into that file,
+then pass the printed hash. A conflict does the same, so the retry loop is
+"take the bytes the conflict wrote, re-fold, retry with the hash it printed".
+To compute one outside nen:
+
+```bash
+gh api repos/<owner>/<name>/issues/<n> | jq -j '.body // ""' | shasum -a 256
+```
+
+Two traps produce a **different** hash and a false conflict: `gh … -q .body`
+/ `--jq .body` adds a trailing newline, and bare `jq -j .body` prints the
+four characters `null` for a null body (the `// ""` above is what maps it to
+the empty body nen hashes).
 
 **Lost updates, and why this is not a compare-and-swap**
 ([#205](https://github.com/zheref/nen/issues/205)). Writers A and B both
@@ -5433,11 +5464,15 @@ this backend allows; it does not close it, and every report says so
 (`atomic: false`; the human `body check:` line). Where exclusion matters,
 serialise your own writers or post an additive comment instead.
 
-A failed write is **uncertain**, not "not written": a dropped or timed-out
-response cannot tell a refused request from an applied one whose answer was
-lost. The verb reads the body back once and says whether it now equals the
-submitted bytes — evidence, not proof — prints no `replaced` line, and exits
-1. Re-read before retrying.
+A write `gh` started and that then failed is **uncertain**, not "not
+written": a dropped or timed-out response cannot tell a refused request from
+an applied one whose answer was lost. The verb reads the body back once and
+says whether it now equals the submitted bytes (`matchesSubmitted`) or the
+version its certifying read saw (`matchesPrevious`) — evidence, not proof —
+prints no `replaced` line, and exits 1. Re-read before retrying, and retry
+with `--expect-body-sha256` set to what you read. A `gh` that could not be
+**started** is the one certain failure: nothing was sent, so it is reported
+as **not sent** (`written: false`), with no read-back.
 
 **Example**
 

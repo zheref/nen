@@ -49,11 +49,19 @@
 // the flag says so (`atomic: false` under --json), and a caller that needs
 // exclusion must still serialise its own writers or use an additive comment.
 //
-// AN UNCERTAIN WRITE IS NEVER REPORTED AS WRITTEN. A failed `gh issue edit`
-// -- a non-zero exit, a spawn failure, a dropped connection after GitHub
-// applied the change -- cannot tell "refused" from "applied, answer lost".
-// So the verb reads the body back once, reports what it saw (`written: null`,
-// `outcome: "uncertain"`), and exits 1; it never prints "replaced".
+// AN UNCERTAIN WRITE IS NEVER REPORTED AS WRITTEN. A `gh issue edit` that
+// started and then failed -- a non-zero exit, a dropped connection after
+// GitHub applied the change -- cannot tell "refused" from "applied, answer
+// lost". So the verb reads the body back once, reports what it saw
+// (`written: null`, `outcome: "uncertain"`), and exits 1; it never prints
+// "replaced". A `gh` that could not be STARTED is the one failure that is
+// certain: nothing was sent, so it is `outcome: "not-sent"`, `written: false`,
+// with no read-back (the read would need the same missing `gh`).
+//
+// WHERE A CALLER'S EXPECTED HASH COMES FROM. `--current-body-out <path>` writes
+// the exact bytes of the certifying read -- on a dry run and on a conflict --
+// so a fold is prepared from the very bytes whose sha256 the report prints,
+// rather than from a second read taken at some other moment.
 
 import { createHash } from "node:crypto";
 import { GH, outputLines, type Seams } from "../seam/exec.js";
@@ -82,7 +90,7 @@ export function bodySha256(body: string): string {
 export function parseExpectedSha256(raw: string): string {
   if (!/^[0-9a-fA-F]{64}$/.test(raw)) {
     throw new VerbUsageError(
-      `--expect-body-sha256 takes a sha256 as 64 hex digits -- got '${raw}'. It is the hash of the body your replacement was prepared from (UTF-8 bytes of the API's 'body' field, untrimmed); 'nen issue edit-body --dry-run' prints the current one.`,
+      `--expect-body-sha256 takes a sha256 as 64 hex digits -- got '${raw}'. It is the hash of the body your replacement was prepared from (UTF-8 bytes of the API's 'body' field, untrimmed); 'nen issue edit-body --dry-run --current-body-out <path>' writes the current body's bytes and prints their hash, so prepare your fold from that file.`,
     );
   }
   return raw.toLowerCase();
@@ -90,17 +98,41 @@ export function parseExpectedSha256(raw: string): string {
 
 /** What the certifying read found about the current body, for the expectation check. */
 export interface BodyCheck {
-  /** sha256 of the body as read just before the write. */
-  readonly currentSha256: string;
-  readonly currentBytes: number;
+  /**
+   * sha256 of the body as read just before the write; null only when the
+   * payload carried no `body` key (and then no expectation can be checked).
+   */
+  readonly currentSha256: string | null;
+  readonly currentBytes: number | null;
   /** The caller's expectation, or null when none was given. */
   readonly expectedSha256: string | null;
   /** "none" without an expectation; otherwise whether the read matched it. */
   readonly result: "none" | "matched" | "conflict";
 }
 
-export function checkExpectedBody(summary: IssueSummary, expectedSha256: string | null): BodyCheck {
-  const current = summary.body ?? "";
+/**
+ * Refused, rather than compared, when the read carried no `body` key: hashing
+ * an absent body as "" would let an expectation of the empty body "match" a
+ * body nobody saw. Thrown as a plain error (exit 1) -- the invocation was
+ * fine; the answer was not one this check can stand on.
+ */
+export class BodyUnreadError extends Error {
+  constructor(slug: string, issue: number, why: string) {
+    super(
+      `${slug}#${issue}'s read carried no 'body' field, so ${why} -- nothing was written. A null body is "", but an absent field is a payload this check cannot stand on; re-run, and report it if it persists.`,
+    );
+    this.name = "BodyUnreadError";
+  }
+}
+
+export function checkExpectedBody(summary: IssueSummary, expectedSha256: string | null, slug: string): BodyCheck {
+  const current = summary.body;
+  if (current === undefined) {
+    if (expectedSha256 !== null) {
+      throw new BodyUnreadError(slug, summary.number, "--expect-body-sha256 cannot be compared with it");
+    }
+    return { currentSha256: null, currentBytes: null, expectedSha256: null, result: "none" };
+  }
   const currentSha256 = bodySha256(current);
   return {
     currentSha256,
@@ -150,11 +182,29 @@ export function certifyIssue(seams: Seams, target: Target, issue: number): Issue
   );
 }
 
+/**
+ * `gh` could not be STARTED, so nothing was sent -- the one write failure whose
+ * outcome is certain, and therefore never reported as "uncertain".
+ */
+export class BodyNotSentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BodyNotSentError";
+  }
+}
+
 /** Replace the issue's body. Throws on anything `gh` did not exit 0 on. */
 export function writeIssueBody(seams: Seams, target: Target, issue: number, bodyFile: string): void {
   const argv = editBodyArgv(target, issue, bodyFile);
   const result = seams.run(GH, argv);
-  if (result.spawnFailed || result.code !== 0) {
+  if (result.spawnFailed) {
+    throw new BodyNotSentError(
+      `could not replace ${target.slug}#${issue}'s body: gh could not be started (${
+        outputLines(result.stderr).join(" ") || `exit ${result.code}`
+      }), so nothing was sent`,
+    );
+  }
+  if (result.code !== 0) {
     throw new Error(
       `could not replace ${target.slug}#${issue}'s body: ${
         outputLines(result.stderr).join(" ") || `exit ${result.code}`
@@ -170,20 +220,44 @@ export function writeIssueBody(seams: Seams, target: Target, issue: number, body
  * still be overwritten by a request GitHub has not finished applying. The
  * read-back narrows what the caller has to reconcile; it certifies nothing.
  */
+export interface ReadBack {
+  readonly currentSha256: string | null;
+  /** The body now equals the bytes this run submitted. */
+  readonly matchesSubmitted: boolean | null;
+  /** The body now equals what the certifying read saw (bodyCheck.currentSha256). */
+  readonly matchesPrevious: boolean | null;
+  readonly readError: string | null;
+}
+
 export function readBackAfterFailedWrite(
   seams: Seams,
   target: Target,
   issue: number,
   submittedSha256: string,
-): { readonly currentSha256: string | null; readonly matchesSubmitted: boolean | null; readonly readError: string | null } {
+  previousSha256: string | null,
+): ReadBack {
   try {
     const summary = readIssue(seams, target, issue);
-    const currentSha256 = bodySha256(summary.body ?? "");
-    return { currentSha256, matchesSubmitted: currentSha256 === submittedSha256, readError: null };
+    if (summary.body === undefined) {
+      return {
+        currentSha256: null,
+        matchesSubmitted: null,
+        matchesPrevious: null,
+        readError: `${target.slug}#${issue}'s read-back carried no 'body' field`,
+      };
+    }
+    const currentSha256 = bodySha256(summary.body);
+    return {
+      currentSha256,
+      matchesSubmitted: currentSha256 === submittedSha256,
+      matchesPrevious: previousSha256 === null ? null : currentSha256 === previousSha256,
+      readError: null,
+    };
   } catch (error) {
     return {
       currentSha256: null,
       matchesSubmitted: null,
+      matchesPrevious: null,
       readError: error instanceof Error ? error.message : String(error),
     };
   }

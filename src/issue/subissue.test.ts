@@ -98,8 +98,7 @@ describe("readIssue -- REST, because 'id' is not in gh issue view --json", () =>
       state: "open",
       labels: ["area:cli"],
       isPullRequest: false,
-      // No `body` in the fixture payload: GitHub's absent/null body reads as "".
-      body: "",
+      // No `body` key in the fixture payload: left absent, never invented as "".
     });
   });
 

@@ -106,9 +106,10 @@ export interface IssueSummary {
   readonly isPullRequest: boolean;
   /**
    * The object's body EXACTLY as the REST payload carried it, with GitHub's
-   * `null` (an issue that was never given one) read as "". Optional only so
-   * hand-built fixtures elsewhere need not invent one; `readIssue` always sets
-   * it. `nen issue edit-body --expect-body-sha256` hashes this (zheref/nen#205).
+   * `null` (an issue that was never given one) read as "". ABSENT when the
+   * payload carried no `body` key at all -- a different fact from `null`, and
+   * one `nen issue edit-body --expect-body-sha256` refuses to hash rather than
+   * guess at (zheref/nen#205): a body nobody saw has no version to compare.
    */
   readonly body?: string;
 }
@@ -116,6 +117,18 @@ export interface IssueSummary {
 // One `gh api` read per issue. REST rather than `gh issue view`, because `id`
 // -- the field the sub-issues API actually takes -- is not one of the fields
 // `gh issue view --json` exposes.
+/**
+ * `body` as the payload carried it: a string kept, `null` as "", and an absent
+ * key -- or any other type, which no GitHub sends -- left absent rather than
+ * invented.
+ */
+function bodyOf(parsed: Record<string, unknown>): { readonly body?: string } {
+  const raw = parsed["body"];
+  if (typeof raw === "string") return { body: raw };
+  if (raw === null) return { body: "" };
+  return {};
+}
+
 export function readIssue(seams: Seams, target: Target, number: number): IssueSummary {
   const result = seams.run(GH, ["api", `repos/${target.slug}/issues/${number}`]);
   if (result.code !== 0) {
@@ -155,7 +168,7 @@ export function readIssue(seams: Seams, target: Target, number: number): IssueSu
     // hand-written fixture rather than a real object, and would silently
     // diverge from the predicate zheref/nen#25 shipped in ./chain.ts.
     isPullRequest: rawPullRequest !== undefined && rawPullRequest !== null,
-    body: typeof parsed["body"] === "string" ? parsed["body"] : "",
+    ...bodyOf(parsed),
   };
 }
 

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
-import type { Seams } from "../seam/exec.js";
+import type { CommandResult, Seams } from "../seam/exec.js";
 import type { FlagSpec } from "../cli/args.js";
 import { issueCommand, ISSUE_FLAGS, ISSUE_SUBCOMMANDS, ISSUE_SUBCOMMAND_FLAGS } from "./command.js";
 
@@ -1064,7 +1064,10 @@ describe("nen issue comment -- the general comment primitive", () => {
 describe("nen issue edit-body -- replaces an issue's body outright, byte for byte", () => {
   const CERTIFY_12: ScriptedCall = {
     match: "gh api repos/o/n/issues/12",
-    result: { stdout: JSON.stringify({ number: 12, id: 100, title: "an issue", state: "open", labels: [] }) },
+    // `body: null` is what GitHub sends for an issue never given a body -- the
+    // key is always present on a real payload (a missing one is refused under
+    // --expect-body-sha256; see the #205 block below).
+    result: { stdout: JSON.stringify({ number: 12, id: 100, title: "an issue", state: "open", labels: [], body: null }) },
   };
 
   it("certifies the number first, then writes through the Runner seam", async () => {
@@ -1101,6 +1104,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       dryRun: false,
       outcome: "written",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
+      currentBodyOut: null,
     });
   });
 
@@ -1169,6 +1173,7 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
       dryRun: true,
       outcome: "dry-run",
       bodyCheck: { expectedSha256: null, currentSha256: EMPTY_SHA256, currentBytes: 0, result: "none", atomic: false },
+      currentBodyOut: null,
     });
   });
 
@@ -1300,6 +1305,11 @@ describe("nen issue edit-body -- replaces an issue's body outright, byte for byt
     const out = result.out.join("\n");
     expect(out).toMatch(/\[--expect-body-sha256 <hex>\]/);
     expect(out).toMatch(/THIS IS NOT\s+ATOMIC/);
+    expect(out).toMatch(/\[--current-body-out <path>\]/);
+    expect(out).toContain(`gh api repos/<o>/<n>/issues/<i> | jq -j '.body // ""' | shasum -a 256`);
+    expect(out).toMatch(/--jq \.body', which adds a trailing newline/);
+    expect(out).toMatch(/prints 'null' for a null body/);
+    expect(out).toMatch(/NOT-SENT/);
     expect(out).toMatch(/exits 3 \(conflict\)/);
     expect(out).toMatch(/nen\.issue\.edit-body\/v0\.2/);
   });
@@ -1382,6 +1392,7 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
         result: "conflict",
         atomic: false,
       },
+      currentBodyOut: null,
     });
     expect(result.calls).toEqual(["gh api repos/o/n/issues/12"]);
   });
@@ -1432,43 +1443,82 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
   // THE ISSUE'S OWN INTERLEAVING, end to end on one shared backend: A and B
   // both read v1; B writes v2 (its expectation holds); A then submits its fold
   // of v1 with v1's hash -- and is refused, with B's v2 left standing.
-  it("the #205 interleaving: B's write lands first, A's stale fold is refused and B's addition survives", async () => {
+  // N7: A STATEFUL BACKEND -- a write changes what every later read returns,
+  // so the interleavings below are played out against one issue whose body
+  // actually moves, not against a script of canned answers. `afterRead` lets
+  // a test land another writer's edit at a chosen moment.
+  class IssueBackend implements Seams {
+    readonly calls: string[] = [];
+    private readonly delegate = new ScriptedSeams([]);
+    readonly runInteractive = this.delegate.runInteractive.bind(this.delegate);
+    readonly runStreamed = this.delegate.runStreamed.bind(this.delegate);
+    readonly probePort = this.delegate.probePort;
+    readonly now = this.delegate.now;
+    readonly env = this.delegate.env;
+    readonly platform = this.delegate.platform;
+    afterRead: (() => void) | null = null;
+    constructor(public body: string) {}
+    readonly run = (command: string, args: readonly string[]): CommandResult => {
+      const line = [command, ...args].join(" ");
+      this.calls.push(line);
+      const ok = (stdout = ""): CommandResult => ({ code: 0, stdout, stderr: "", spawnFailed: false });
+      if (line === "gh api repos/o/n/issues/12") {
+        const stdout = JSON.stringify({ number: 12, id: 100, title: "t", state: "open", labels: [], body: this.body });
+        const hook = this.afterRead;
+        this.afterRead = null;
+        hook?.();
+        return ok(stdout);
+      }
+      const write = /^gh issue edit 12 --repo o\/n --body-file (.+)$/.exec(line);
+      if (write?.[1] !== undefined) {
+        this.body = readFileSync(write[1], "utf8");
+        return ok();
+      }
+      throw new Error(`unscripted: '${line}'`);
+    };
+  }
+  const silent: Io = { out: (): void => undefined, err: (): void => undefined };
+
+  it("the #205 interleaving: A and B both read v1, B writes v2, A's stale fold is refused and B's addition survives", async () => {
+    const backend = new IssueBackend(V1);
+    const baseOf = sha(V1); // what BOTH writers read
     const pathB = tempFile("b.md", V2);
     const pathA = tempFile("a.md", "## plan\n\nA's fold, prepared from v1 only.\n");
-    const backend = new ScriptedSeams([
-      // Reads of issues/12 are answered in order: B's certifying read sees v1,
-      // A's sees the v2 that B's write produced.
-      readReturning(V1),
-      readReturning(V2),
-      // B's write is the only write scripted: A's, if it were ever attempted,
-      // would throw as unscripted -- the finding, not the fixture's gap.
-      writeOf(pathB),
-    ]);
-    const io: Io = { out: (): void => undefined, err: (): void => undefined };
-    const baseOf = sha(V1);
-    const codeB = await runFamily(issueCommand, argv(pathB, baseOf), null, false, io, backend);
-    const codeA = await runFamily(issueCommand, argv(pathA, baseOf), null, false, io, backend);
-    expect(codeB).toBe(0);
-    expect(codeA).toBe(3);
-    const lines = backend.calls.map((call): string => [call.command, ...call.args].join(" "));
-    expect(lines).toEqual([
+    expect(await runFamily(issueCommand, argv(pathB, baseOf), null, false, silent, backend)).toBe(0);
+    expect(backend.body).toBe(V2);
+    expect(await runFamily(issueCommand, argv(pathA, baseOf), null, false, silent, backend)).toBe(3);
+    expect(backend.body).toBe(V2);
+    expect(backend.calls).toEqual([
       "gh api repos/o/n/issues/12",
       `gh issue edit 12 --repo o/n --body-file ${pathB}`,
       "gh api repos/o/n/issues/12",
     ]);
-    expect(lines).not.toContain(`gh issue edit 12 --repo o/n --body-file ${pathA}`);
+
+    // A reconciles from the bytes the conflict handed it, and lands on top of B.
+    const out = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "current.md");
+    expect(await runFamily(issueCommand, argv(pathA, baseOf, "--current-body-out", out), null, false, silent, backend)).toBe(3);
+    const current = readFileSync(out, "utf8");
+    const refold = tempFile("a2.md", `${current}- A's addition\n`);
+    expect(await runFamily(issueCommand, argv(refold, sha(current)), null, false, silent, backend)).toBe(0);
+    expect(backend.body).toBe(`${V2}- A's addition\n`);
   });
 
-  // THE WINDOW THIS FLAG CANNOT CLOSE, pinned so nobody later reads "matched"
-  // as a guarantee: if B's write lands AFTER A's certifying read but BEFORE
-  // A's write, A's read still sees v1, the check matches, and A overwrites B.
-  // The verb cannot see that from its side; what it MUST do is never claim
+  // THE WINDOW THIS FLAG CANNOT CLOSE, played out rather than asserted: B's
+  // write lands AFTER A's certifying read but BEFORE A's write. A's read saw
+  // v1, the check matched, and A's write overwrites B -- the lost update the
+  // flag narrows but cannot prevent. What the verb MUST do is never claim
   // otherwise.
-  it("the undetectable window: a write between the read and the write is not caught, and the report never claims it would be", async () => {
+  it("the undetectable window: a write between A's read and A's write is lost, and the report never claims it would be caught", async () => {
+    const backend = new IssueBackend(V1);
+    backend.afterRead = (): void => {
+      backend.body = V2; // B lands in the window
+    };
     const path = tempFile("body.md", "A's fold of v1\n");
-    const result = await capture(argv(path, sha(V1)), [readReturning(V1), writeOf(path)], { json: true });
-    expect(result.code).toBe(0);
-    const report = JSON.parse(result.out.join("\n")) as { outcome: string; bodyCheck: { result: string; atomic: boolean } };
+    const out: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (): void => undefined };
+    expect(await runFamily(issueCommand, argv(path, sha(V1)), null, true, io, backend)).toBe(0);
+    expect(backend.body).toBe("A's fold of v1\n"); // B's addition is gone
+    const report = JSON.parse(out.join("\n")) as { outcome: string; bodyCheck: { result: string; atomic: boolean } };
     expect(report.outcome).toBe("written");
     expect(report.bodyCheck.result).toBe("matched");
     expect(report.bodyCheck.atomic).toBe(false);
@@ -1487,7 +1537,14 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     expect(report["written"]).toBeNull();
     expect(report["outcome"]).toBe("uncertain");
     expect(report["error"]).toMatch(/could not replace o\/n#12's body: HTTP 502/);
-    expect(report["readBack"]).toEqual({ currentSha256: sha("A's fold of v1\n"), matchesSubmitted: true, readError: null });
+    expect(report["readBack"]).toEqual({
+      currentSha256: sha("A's fold of v1\n"),
+      matchesSubmitted: true,
+      // N8: compared with bodyCheck.currentSha256 -- the version the certifying read saw.
+      matchesPrevious: false,
+      readError: null,
+    });
+    expect((report["bodyCheck"] as { currentSha256: string }).currentSha256).toBe(sha(V1));
     expect(result.calls).toEqual([
       "gh api repos/o/n/issues/12",
       `gh issue edit 12 --repo o/n --body-file ${path}`,
@@ -1495,16 +1552,32 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     ]);
   });
 
-  it("an uncertain write whose read-back differs, or fails, is still uncertain -- never 'replaced', never 'not written'", async () => {
+  it("an uncertain write whose read-back still shows the previous body, or fails, is still uncertain -- never 'replaced', never 'not written'", async () => {
     const path = tempFile("body.md", "A's fold of v1\n");
-    const differs = await capture(
+    const unchanged = await capture(
       argv(path, sha(V1)),
-      [readReturning(V1), readReturning(V1), writeOf(path, { code: -1, stderr: "spawn gh ENOENT", spawnFailed: true })],
+      [readReturning(V1), readReturning(V1), writeOf(path, { code: 1, stderr: "HTTP 504: Gateway Timeout" })],
+      { json: true },
     );
-    expect(differs.code).toBe(1);
-    expect(differs.out).toEqual([]);
-    expect(differs.err.join("\n")).toMatch(/outcome UNCERTAIN/);
-    expect(differs.err.join("\n")).toMatch(/does NOT equal the submitted bytes .* as of this read/);
+    expect(unchanged.code).toBe(1);
+    const report = JSON.parse(unchanged.out.join("\n")) as { outcome: string; written: unknown; readBack: Record<string, unknown> };
+    expect(report.outcome).toBe("uncertain");
+    expect(report.written).toBeNull();
+    expect(report.readBack).toEqual({ currentSha256: sha(V1), matchesSubmitted: false, matchesPrevious: true, readError: null });
+
+    const plain = await capture(
+      argv(path, sha(V1)),
+      [readReturning(V1), readReturning(V1), writeOf(path, { code: 1, stderr: "HTTP 504" })],
+    );
+    expect(plain.out).toEqual([]);
+    expect(plain.err.join("\n")).toMatch(/outcome UNCERTAIN/);
+    expect(plain.err.join("\n")).toMatch(/still equals what the certifying read saw .* a delayed apply cannot be ruled out/);
+
+    const elsewhere = await capture(
+      argv(path, sha(V1)),
+      [readReturning(V1), readReturning(V2), writeOf(path, { code: 1, stderr: "HTTP 504" })],
+    );
+    expect(elsewhere.err.join("\n")).toMatch(/equals NEITHER the submitted bytes NOR what the certifying read saw/);
 
     const unreadable = await capture(
       argv(path, sha(V1)),
@@ -1517,6 +1590,113 @@ describe("nen issue edit-body --expect-body-sha256 -- lost-update guard, honestl
     expect(unreadable.code).toBe(1);
     expect(unreadable.out).toEqual([]);
     expect(unreadable.err.join("\n")).toMatch(/read-back failed too: could not read o\/n#12: HTTP 503/);
+  });
+
+  // N5: a gh that never STARTED sent nothing -- that outcome is certain, so it
+  // is "not-sent", never "uncertain". The fixture's read-back fails too (the
+  // same gh is missing), and the verb does not even attempt it.
+  it("a gh that could not be started is 'not-sent' (written: false), never uncertain, and attempts no read-back", async () => {
+    const path = tempFile("body.md", "A's fold of v1\n");
+    const spawnFail = { code: -1, stderr: "spawn gh ENOENT", spawnFailed: true };
+    const script = [readReturning(V1), { match: "gh api repos/o/n/issues/12", result: spawnFail }, writeOf(path, spawnFail)];
+    const json = await capture(argv(path, sha(V1)), script, { json: true });
+    expect(json.code).toBe(1);
+    const report = JSON.parse(json.out.join("\n")) as Record<string, unknown>;
+    expect(report["outcome"]).toBe("not-sent");
+    expect(report["written"]).toBe(false);
+    expect(report["error"]).toMatch(/gh could not be started \(spawn gh ENOENT\), so nothing was sent/);
+    expect(report).not.toHaveProperty("readBack");
+    expect(json.calls).toEqual(["gh api repos/o/n/issues/12", `gh issue edit 12 --repo o/n --body-file ${path}`]);
+
+    const plain = await capture(argv(path, sha(V1)), script);
+    expect(plain.code).toBe(1);
+    expect(plain.out).toEqual([]);
+    expect(plain.err.join("\n")).toMatch(/Nothing reached GitHub/);
+    expect(plain.err.join("\n")).not.toMatch(/UNCERTAIN/);
+  });
+
+  // N9: a payload with no `body` key is not GitHub's null body.
+  it("refuses an expectation against a read that carried no body field (exit 1, nothing written)", async () => {
+    const path = tempFile("body.md", "x\n");
+    const result = await capture(argv(path, EMPTY_SHA256), [
+      { match: "gh api repos/o/n/issues/12", result: { stdout: JSON.stringify({ number: 12, id: 100, title: "t", state: "open", labels: [] }) } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.calls).toEqual(["gh api repos/o/n/issues/12"]);
+    expect(result.err.join("\n")).toMatch(/carried no 'body' field, so --expect-body-sha256 cannot be compared with it -- nothing was written/);
+  });
+
+  // N1: --current-body-out writes the certifying read's exact bytes, so a fold
+  // is prepared from the very bytes whose hash the report prints.
+  it("--current-body-out on a dry run writes the read's exact bytes, whose sha256 is the one printed", async () => {
+    const path = tempFile("body.md", "draft\n");
+    const out = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "current.md");
+    const crlf = "line one\r\nline two with no trailing newline";
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path, "--dry-run", "--current-body-out", out],
+      [readReturning(crlf)],
+    );
+    expect(result.code).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe(crlf);
+    expect(result.out).toContain(`current body sha256: ${sha(crlf)}`);
+    expect(result.out).toContain(`current body written to: ${out} (the exact bytes of this read)`);
+    expect(result.calls).toEqual(["gh api repos/o/n/issues/12"]);
+  });
+
+  it("--current-body-out on a conflict writes the current bytes and keeps exit 3; the fold then succeeds against them", async () => {
+    const path = tempFile("body.md", "A's fold of v1\n");
+    const out = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "current.md");
+    const conflict = await capture(argv(path, sha(V1), "--current-body-out", out), [readReturning(V2)], { json: true });
+    expect(conflict.code).toBe(3);
+    expect(readFileSync(out, "utf8")).toBe(V2);
+    const report = JSON.parse(conflict.out.join("\n")) as { currentBodyOut: unknown; bodyCheck: { currentSha256: string } };
+    expect(report.currentBodyOut).toEqual({ path: out, written: true, error: null });
+    expect(sha(readFileSync(out, "utf8"))).toBe(report.bodyCheck.currentSha256);
+
+    // Re-fold from the written bytes and retry with their hash: it matches.
+    const refold = tempFile("refold.md", `${readFileSync(out, "utf8")}\n- A's addition\n`);
+    const retry = await capture(argv(refold, sha(readFileSync(out, "utf8"))), [readReturning(V2), writeOf(refold)]);
+    expect(retry.code).toBe(0);
+  });
+
+  it("--current-body-out is NOT written on a real write that proceeds", async () => {
+    const path = tempFile("body.md", "replacement\n");
+    const out = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "current.md");
+    const result = await capture(argv(path, sha(V1), "--current-body-out", out), [readReturning(V1), writeOf(path)], { json: true });
+    expect(result.code).toBe(0);
+    expect(() => readFileSync(out, "utf8")).toThrow();
+    expect((JSON.parse(result.out.join("\n")) as { currentBodyOut: unknown }).currentBodyOut).toEqual({ path: out, written: false, error: null });
+  });
+
+  it("refuses --current-body-out naming the --body-file (exit 2) -- a conflict would overwrite the caller's fold", async () => {
+    const path = tempFile("body.md", "my fold\n");
+    const result = await capture(argv(path, sha(V1), "--current-body-out", path), []);
+    expect(result.code).toBe(2);
+    expect(result.calls).toEqual([]);
+    expect(readFileSync(path, "utf8")).toBe("my fold\n");
+  });
+
+  it("a dry run whose --current-body-out cannot be written fails (exit 1) rather than succeeding without the file", async () => {
+    const path = tempFile("body.md", "x\n");
+    const out = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "no-such-dir", "current.md");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path, "--dry-run", "--current-body-out", out],
+      [readReturning(V1)],
+    );
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/current body NOT written to/);
+  });
+
+  it("--current-body-out refuses a read that carried no body field rather than writing an invented empty file", async () => {
+    const path = tempFile("body.md", "x\n");
+    const out = join(mkdtempSync(join(tmpdir(), "nen-issue-")), "current.md");
+    const result = await capture(
+      ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path, "--dry-run", "--current-body-out", out],
+      [{ match: "gh api repos/o/n/issues/12", result: { stdout: JSON.stringify({ number: 12, id: 100, title: "t", state: "open", labels: [] }) } }],
+    );
+    expect(result.code).toBe(1);
+    expect(() => readFileSync(out, "utf8")).toThrow();
+    expect(result.err.join("\n")).toMatch(/--current-body-out has no bytes to write/);
   });
 });
 
