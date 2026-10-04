@@ -86,7 +86,7 @@ export class MergeUnitUsageError extends Error {
   }
 }
 
-interface GateOutcome {
+export interface GateOutcome {
   readonly name: string;
   readonly ok: boolean;
   readonly lines: readonly string[];
@@ -141,6 +141,11 @@ export interface RunReadyGate {
   readonly ghRepoFlag: string;
   readonly seams: Seams;
   readonly deps?: PrReadyDeps;
+  /**
+   * `pr ready --require-head <sha>` (zheref/nen#245), passed through verbatim
+   * (zheref/nen#286): absent, `pr ready` judges whatever GitHub's head is.
+   */
+  readonly requireHead?: string;
 }
 
 export interface ReadyGateOutcome extends GateOutcome {
@@ -174,7 +179,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     // target itself -- a second, independent code-registry resolution here
     // would risk disagreeing with the first about which pull request this is.
     positionals: ["pr", "ready", String(options.prNumber)],
-    values: { "gh-repo": options.ghRepoFlag },
+    values: options.requireHead === undefined ? { "gh-repo": options.ghRepoFlag } : { "gh-repo": options.ghRepoFlag, "require-head": options.requireHead },
     booleans: new Set(["json"]),
     repoFlag: options.repoFlag,
   };
@@ -262,7 +267,7 @@ export function fetchPrOnce(seams: Seams, target: Target, prNumber: number): PrO
  * fetch this module made of the pull request is refused BY NAME -- both SHAs
  * printed, never just "the head moved".
  */
-function computePinGate(judgedHead: string | null, prOnce: PrOnce | null, fetchFailure: string | null): GateOutcome {
+export function computePinGate(judgedHead: string | null, prOnce: PrOnce | null, fetchFailure: string | null): GateOutcome {
   if (judgedHead === null) {
     return { name: "head pin", ok: false, lines: ["head pin: 'pr ready' reported no judged head -- refused rather than merging a commit nobody's verdict is about."] };
   }
@@ -615,7 +620,7 @@ export function resolveMergeRef(typedRef: string): ResolvedPrRef {
  * and the origin, so this verb never merges a repository the checkout it was
  * pointed at does not name.
  */
-function resolveTargetForMerge(seams: Seams, root: string, ref: ResolvedPrRef): Target {
+export function resolveTargetForMerge(seams: Seams, root: string, ref: ResolvedPrRef): Target {
   const target = ((): Target => {
     try {
       return resolveUnitCheckTarget(seams, root, ref);
@@ -726,23 +731,42 @@ export async function mergeUnit(options: MergeUnitOptions): Promise<MergeUnitOut
     };
   }
 
-  const result = options.seams.run(GH, mergeArgv);
+  const executed = executeMerge(options.seams, target, ref.number, mergeArgv);
+  lines.push(...executed.lines);
+  return {
+    report: { ...baseReport, ok: executed.ok, ran: executed.ran, spawnFailed: executed.spawnFailed, mergeArgv, state: executed.state, gates },
+    lines,
+  };
+}
+
+/** What `executeMerge` observed: the four report fields it decides, and the lines it printed. */
+export interface MergeExecution {
+  readonly ok: boolean;
+  readonly ran: boolean;
+  readonly spawnFailed: boolean;
+  readonly state: string | null;
+  readonly lines: readonly string[];
+}
+
+/**
+ * Runs `gh <mergeArgv>` and reads the outcome back -- the ONE place either
+ * bounded merge form (`--release-unit`, `--delivery`) touches GitHub's merge
+ * endpoint, so the refused/not-runnable/queued/merged distinctions cannot
+ * drift between the two.
+ */
+export function executeMerge(seams: Seams, target: Target, prNumber: number, mergeArgv: readonly string[]): MergeExecution {
+  const lines: string[] = [];
+  const result = seams.run(GH, mergeArgv);
   if (result.spawnFailed) {
     // F8(b): 'gh' could not be RUN at all -- distinct from gh running and
     // refusing (EXIT_GH_REFUSED below).
     lines.push(`nen pr merge: gh could not be run -- ${redact(result.stderr)}`);
-    return {
-      report: { ...baseReport, ok: false, ran: false, spawnFailed: true, mergeArgv, state: null, gates },
-      lines,
-    };
+    return { ok: false, ran: false, spawnFailed: true, state: null, lines };
   }
   if (result.code !== 0) {
     lines.push(`nen pr merge: gh refused -- ${result.stderr.trim() === "" ? `exit ${result.code}` : redact(result.stderr.trim())}`);
     lines.push(`the exact command for a human to run once the refusal is resolved: gh ${mergeArgv.join(" ")}`);
-    return {
-      report: { ...baseReport, ok: false, ran: false, spawnFailed: false, mergeArgv, state: null, gates },
-      lines,
-    };
+    return { ok: false, ran: false, spawnFailed: false, state: null, lines };
   }
 
   // Feitan FEI-5: `gh pr merge` exiting 0 is not itself proof the pull
@@ -752,18 +776,15 @@ export async function mergeUnit(options: MergeUnitOptions): Promise<MergeUnitOut
   let state: string | null = null;
   try {
     const reread = mustJson<{ readonly state?: string; readonly mergedAt?: string | null }>(
-      options.seams,
+      seams,
       GH,
-      ["pr", "view", String(ref.number), "--repo", target.slug, "--json", "state,mergedAt"],
+      ["pr", "view", String(prNumber), "--repo", target.slug, "--json", "state,mergedAt"],
     );
     state = reread.state ?? null;
   } catch (error) {
     if (error instanceof ToolError) {
       lines.push(`nen pr merge: gh accepted the merge, but its outcome could not be confirmed (${redact(error.message)}).`);
-      return {
-        report: { ...baseReport, ok: true, ran: true, spawnFailed: false, mergeArgv, state: null, gates },
-        lines,
-      };
+      return { ok: true, ran: true, spawnFailed: false, state: null, lines };
     }
     throw error;
   }
@@ -773,9 +794,5 @@ export async function mergeUnit(options: MergeUnitOptions): Promise<MergeUnitOut
   } else {
     lines.push(`queued (auto-merge or merge queue): gh accepted 'gh ${mergeArgv.join(" ")}', but the pull request's state is '${state ?? "(unknown)"}', not MERGED yet.`);
   }
-
-  return {
-    report: { ...baseReport, ok: true, ran: true, spawnFailed: false, mergeArgv, state, gates },
-    lines,
-  };
+  return { ok: true, ran: true, spawnFailed: false, state, lines };
 }

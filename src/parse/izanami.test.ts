@@ -442,7 +442,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen frobnicate everything").classification).toBe("unknown");
     // A subcommand the table has not classified -- the fail-closed drift
     // path for a future subcommand landing without a table row.
-    expect(classifyCommand("nen pr merge --target o/r --pr 1").classification).toBe("unknown");
+    expect(classifyCommand("nen pr frobnicate --target o/r --pr 1").classification).toBe("unknown");
     // A passthrough hands vitest its own flags -- `-- -u` would rewrite
     // snapshot files under a verb this table calls a checker.
     expect(classifyCommand("nen dev test -- -u").classification).toBe("unknown");

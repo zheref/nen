@@ -1383,6 +1383,62 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/--release-unit is only read by 'pr merge'/);
   });
 
+  // zheref/nen#286, narrowed by the maintainer's ruling of 2026-10-03.
+  it("--release-unit and --delivery are mutually exclusive (exit 2)", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--release-unit", "--delivery", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--release-unit and --delivery are mutually exclusive/);
+  });
+
+  it("names both forms when neither is given", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9"], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/a run's own delivery pull request into a non-main base \(--delivery\)/);
+  });
+
+  it("--delivery's missing-ref refusal names the --delivery forms", async () => {
+    const result = await capture(["pr", "merge", "--delivery"], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/'pr merge <CODE>#<n> --delivery \.\.\.'/);
+  });
+
+  it("--delivery refuses a pull request into the default branch at exit 2, naming the ruling", async () => {
+    const root = unitRepo();
+    const result = await capture(
+      ["pr", "merge", "zheref/example#9", "--delivery", "--run"],
+      root,
+      new ScriptedSeams([
+        { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } },
+        {
+          match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,body,isCrossRepository,author,state",
+          result: { code: 0, stdout: JSON.stringify({ headRefOid: "cafebabe", baseRefOid: "b", baseRefName: "main", body: "", isCrossRepository: false, author: { login: "someone" }, state: "OPEN" }) },
+        },
+        { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: "main" } }) } },
+      ]),
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/merge-authority ruling of 2026-09-30/);
+  });
+
+  it("--require-head is refused with --release-unit", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--release-unit", "--require-head", "cafebabe", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--require-head is read by 'pr merge --delivery'/);
+  });
+
+  it("--delivery is refused on every other subcommand", async () => {
+    const result = await capture(["pr", "staleness", "--delivery", "--wakes-from", "x", "--last-activity", "2025-01-01T00:00:00Z", "--now", "2025-01-01T00:00:00Z"], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--delivery is only read by 'pr merge'/);
+  });
+
+  it("'nen pr --help' carries the --delivery usage line and its section", async () => {
+    const help = (await capture(["pr", "--help"], null)).out.join("\n");
+    expect(help).toMatch(/nen pr merge <n\|owner\/name#n\|CODE#n> --delivery --repo <path> \[--require-head <sha>\]/);
+    expect(help).toMatch(/merge --delivery \(zheref\/nen#286\):/);
+    expect(help).toMatch(/nen\.pr\.merge-delivery\/v0\.1/);
+  });
+
   it("--run is refused on every other subcommand", async () => {
     const result = await capture(["pr", "staleness", "--run", "--wakes-from", "x", "--last-activity", "2025-01-01T00:00:00Z", "--now", "2025-01-01T00:00:00Z"], null);
     expect(result.code).toBe(2);
