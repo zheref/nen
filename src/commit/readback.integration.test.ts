@@ -156,8 +156,42 @@ describe.skipIf(!HAVE_GIT)("nen commit write -- the written commit's trailers, r
     expect(doc["sha"]).toBe(head);
     expect(mustGit(repo, ["rev-parse", "HEAD~1"])).toBe(before);
     expect(mustGit(repo, ["log", "-1", "--format=%(trailers:only,unfold)"])).toContain(CURSOR);
-    expect(result.err.join("\n")).toMatch(/refuses: 'Co-authored-by'/);
+    expect(result.err.join("\n")).toMatch(/refuses: 'Co-authored-by' \(added by a hook/);
     expect(result.err.join("\n")).toMatch(/nen never amends it/);
+  });
+
+  it("a hook appending 'Made-with: Cursor' -- on no attribution list -- is injected by the -by/-with rule: exit 3 (hanten N1)", async () => {
+    const repo = repository("Made-with: Cursor");
+    const message = stage(repo, "m.txt", "feat: add m\n");
+    const result = await run(commitCommand, ["commit", "write", "--message-file", message, "--trailer", "Hatsu-Agent: kurapika"], repo);
+    expect(result.code).toBe(3);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["injected"]).toEqual(["Made-with"]);
+    expect(result.err.join("\n")).toMatch(/'Made-with' \(added by a hook.*'-by'\/'-with' key/);
+  });
+
+  it("a 'Key:value' line git reads as a trailer is the MESSAGE's, never blamed on a hook (hanten N2)", async () => {
+    const repo = repository(null);
+    const message = stage(repo, "k.txt", "feat: add k\n\nCo-authored-by:Somebody <s@example.invalid>\n");
+    const result = await run(commitCommand, ["commit", "write", "--message-file", message], repo);
+    expect(result.code).toBe(3);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/'Co-authored-by' \(carried by the message nen wrote/);
+    expect(err).not.toMatch(/added by a hook/);
+  });
+
+  it("log.showSignature=true touches nothing: the read-back is plumbing, never 'git log' (hanten N3)", async () => {
+    const repo = repository(CURSOR);
+    mustGit(repo, ["config", "log.showSignature", "true"]);
+    const message = stage(repo, "s.txt", "feat: add s\n");
+    const result = await run(commitCommand, ["commit", "write", "--message-file", message, "--trailer", "Hatsu-Agent: kurapika"], repo);
+    expect(result.code).toBe(3);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["injected"]).toEqual(["Co-authored-by"]);
+    expect(doc["trailers"]).toEqual([
+      { key: "Hatsu-Agent", value: "kurapika" },
+      { key: "Co-authored-by", value: "Cursor <cursoragent@cursor.com>" },
+    ]);
   });
 
   it("a hook appending a key the policy ADMITS is not injected: exit 0, a note names it", async () => {

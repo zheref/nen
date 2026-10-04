@@ -264,14 +264,24 @@ the wrong thing:
 | `4` | **unsupported verb for this lane** — the declaration says so, in its own words | not `2`: the invocation was correct and the answer is a fact about the repository. It is the *majority* case across the stacks the family covers |
 | `5` | **the declared program could not be started** — not installed, not on `PATH` | not `1`: "the tool is not installed" and "the tool ran and said no" want different reactions, and `src/seam/exec.ts` keeps them apart precisely so a caller need not guess |
 
-`shu` is the only *family* that returns `3` or `4`. The [`runner`](#family-runner)
-family returns `5` in exactly `shu`'s sense -- `gh` could not be started -- and
-nothing else above `2`: a GitHub refusal there is `1`, because this table
-reserves no code for a network failure. The one other place in this CLI where a
-code above `2` appears is [`bootstrap`](#nen-bootstrap), which
-is not on the three-code scheme at all — it relays the bootstrap script's own
-published `3`–`7` unchanged, and those numbers mean the script's things, not
-these. A caller branching on `3`/`4`/`5` must know which of the two it invoked.
+`shu` is the only *family* that returns `3` **and** `4` in that table's sense.
+Every code above `2` is per verb, and **the same number means different things
+in different verbs** — a caller branching on anything above `2` must know which
+verb it invoked. The complete list:
+
+| Verb | Code | Meaning |
+|---|---|---|
+| every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
+| [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
+| every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
+| [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
+| [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
+| [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
+| [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
+| [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
+| [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
+| [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded |
+| [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 
 One inconsistency is worth knowing before it surprises you: a missing
 `--target` exits `1` rather than `2` on eighteen verbs — every verb routed
@@ -689,7 +699,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
-| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, the folded commit's trailers read back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
+| [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path and the abort line, never picking one; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
@@ -765,7 +775,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) the repository's `subject-case` rule (commitlint's own when readable as data, else `commits.subjectCase`), and its body/footer line lengths, wrapping `--body` to them (commitlint's own when readable as data, else `commits.bodyMaxLineLength`, else 100) -- never its content | on every run: nen/workflow.json under --repo (the attribution-trailer policy, commits.subjectCase and commits.bodyMaxLineLength), and the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
-| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse, the written commit's trailers read back -- exit 3 on an injected one, #273) | yes |
+| [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse, interpret-trailers --parse and cat-file commit for the written commit's trailer read-back -- exit 3 on an injected one, #273) | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -970,8 +980,10 @@ commit. Three things make that visible:
   `head-mismatch`, prints both SHAs, and prints **no verdict**. A `8` is never
   `ready` or `not-ready`, because the question was about a commit GitHub does not
   hold as the head. The code collides with nothing else this CLI or its
-  bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s and
-  `pr threads`', and `3`–`7` are the bootstrap script's). Under `--json` the mismatch
+  bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s,
+  `commit write`'s and `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and
+  `shu coverage`'s, `9` is `pr request-reviews`', and `3`–`7` are the
+  bootstrap script's). Under `--json` the mismatch
   prints its own document with its own contract,
   `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
   `requiredHead`, `githubHead`, `message`, `evaluatedAt` and `generator`. It deliberately does
@@ -2498,16 +2510,16 @@ read-back) — never folded into one of the exit-2 refusals, exactly as
 and a hook injected a trailer the policy refuses**.
 
 **The folded commit is read back** ([#273](https://github.com/zheref/nen/issues/273)),
-exactly as [`commit write`](#nen-commit-write) reads its own: `git log -1
---format=%(trailers:only,unfold) <newSha>`, compared case-insensitively with
-the message file's trailers. A key a hook added inside the verb's `git commit`
-that this repository's policy refuses is named in `injected[]` and on stderr,
-and the verb exits **3** — the squash is **left in place, never amended**;
-`git reset --soft ORIG_HEAD` restores the unsquashed commits (the fold changed
-no file). A key the policy admits or never restricts is a `nen: note:` line,
-exit unchanged; with no `nen/workflow.json` nothing is refused. Because the
-read-back needs the policy, `nen/workflow.json` is now loaded **before
-anything moves on every squash**: a malformed one is exit 1 even with
+exactly as [`commit write`](#nen-commit-write) reads its own and under the
+same three rules: the message file through `git interpret-trailers --parse
+--unfold` before the reset, the folded commit through `git cat-file commit
+<newSha>` and the same parser after. An injected key is named in `injected[]`
+and on stderr with its source and rule, and the verb exits **3** — the squash
+is **left in place, never amended**; `git reset --soft ORIG_HEAD` restores the
+unsquashed commits (the fold changed no file). An added key nothing refuses is
+a `nen: note:` line, exit unchanged. Because the read-back needs the policy,
+`nen/workflow.json` is now loaded **once, before the message is judged and
+before anything moves, on every squash**: a malformed one is exit 1 even with
 `--base` and a message carrying no trailer, where it used to be read only for
 a trailer or for `branch.base`.
 
@@ -6444,21 +6456,35 @@ A hook that runs *inside* the verb's own `git commit` — `prepare-commit-msg`,
 — can add a trailer to a message nen already validated. So after the write the
 verb asks git's own trailer parser what the commit carries (`git log -1
 --format=%(trailers:only,unfold) <sha>`) and compares it with the message it
-wrote, case-insensitively on the key:
+wrote, case-insensitively on the key. **Both sides are read by git's own
+trailer parser**: the composed message through `git interpret-trailers --parse
+--unfold` *before* the write (a git that cannot parse it stops the verb with
+nothing committed), and the written commit through `git cat-file commit <sha>`
+— plumbing, which no `log.*` setting such as `log.showSignature` can add a
+line to — and the same parser after. A refused key on the commit is
+**injected** when:
 
-- a key the commit carries that the message did not, and that this
-  repository's [`nen/workflow.json`](#nenworkflowjson) refuses (an
-  attribution trailer not in `commits.allowedAttributionTrailers`, or a key in
-  `commits.forbiddenTrailers` — the same `trailerRefusal` `commit format` and
-  the generated hook ask) is **injected**: every such key is named in
-  `injected[]` and on stderr, and the verb exits **3**. The commit is **left in
-  place — never amended**; the line names the way back (`git reset --soft
-  HEAD~1` keeps the change staged).
-- a key a hook added that the policy **admits** (the repository's own
-  `Hatsu-Agent`) or never restricts (`Change-Id`) is not injected: a `nen:
-  note:` line names it and the exit is unchanged.
-- with **no** `nen/workflow.json`, nothing is refused here, exactly as nothing
-  is refused before the write.
+- a hook **added** it (the message did not carry it) and this repository's
+  [`nen/workflow.json`](#nenworkflowjson) refuses it — an attribution trailer
+  not in `commits.allowedAttributionTrailers`, or a key in
+  `commits.forbiddenTrailers`, the same `trailerRefusal` `commit format` and
+  the generated hook ask;
+- a hook **added** it and its key ends in **`-by` or `-with`** (any case) and
+  `commits.allowedAttributionTrailers` does not admit it — Hatsu's own guard's
+  rule, which catches a harness stamp on no list (`Made-with: Cursor`). This
+  rule binds with **no** `nen/workflow.json` too, where the allow-list is
+  empty; it is the only one that does;
+- the **message itself** carried it and the policy refuses it — possible only
+  where git reads a trailer nen's stricter shape check did not (a
+  `Key:value` line with no space). It is worded as *carried by the message*,
+  never *added by a hook*, and the `-by`/`-with` rule is not applied to it.
+
+Every such key is named in `injected[]` and on stderr with its source and
+rule, and the verb exits **3**. The commit is **left in place — never
+amended**; the line names the way back (`git reset --soft HEAD~1` keeps the
+change staged). A key a hook added that nothing refuses (the repository's own
+`Hatsu-Agent`, Gerrit's `Change-Id`) is a `nen: note:` line and the exit is
+unchanged.
 
 A read-back git cannot answer is exit **1**: the commit exists, and the check
 was **not** performed — never rendered as `injected: []`.

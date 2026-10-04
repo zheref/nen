@@ -67,10 +67,10 @@
 // AND THEN THE COMMIT IS READ BACK (zheref/nen#273). A hook running inside
 // that `git commit` can append a trailer nen never saw, so on a real write
 // `trailers` is what the WRITTEN commit carries, as git reads it -- no longer
-// the message nen handed over -- and every added key the policy refuses is
-// `injected`, the verb's exit 3, with the commit left in place and never
-// amended. ./readback.ts's header has the rule; an added key the policy does
-// not refuse is a `note`, not a failure.
+// the message nen handed over -- and every refused key on it is `injected`,
+// the verb's exit 3, with the commit left in place and never amended.
+// ./readback.ts's header has the three rules and why both sides are read by
+// git's own parser; an added key nothing refuses is a `note`, not a failure.
 
 import { existsSync, mkdirSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -78,7 +78,7 @@ import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { parseCommitMessageFile } from "../wc/messagefile.js";
 import { validateCommitMessage, type Trailer } from "./format.js";
 import { proofVerdict } from "./check.js";
-import { addedNote, readBack } from "./readback.js";
+import { addedNote, admittedAdditions, readBack, sentTrailers, type InjectedFinding } from "./readback.js";
 import { CommitlintConfigError, declaredSubjectCase, readSubjectCaseRule, subjectCaseFindings } from "./commitlint.js";
 import { declaredBodyWidth, lineLengthFindings, readLineLengthRules } from "./bodywidth.js";
 import { SchemaError } from "../schema/errors.js";
@@ -106,8 +106,9 @@ export interface WriteReport {
    */
   readonly trailers: readonly Trailer[];
   /**
-   * Keys on the written commit that the message nen wrote did not carry AND
-   * this repository's policy refuses -- non-empty is exit 3. `null` on a dry
+   * Every refused key the written commit carries -- added by a hook, or
+   * carried by the message where git's parser read a trailer nen's did not;
+   * ./readback.ts's three rules. Non-empty is exit 3. `null` on a dry
    * run: nothing was written, so nothing was read back, and "not checked" is
    * never rendered as `[]`.
    */
@@ -128,8 +129,13 @@ export type WriteOutcome =
       readonly report: WriteReport;
       readonly lines: readonly string[];
       readonly message: string;
-      /** The policy file the read-back judged against -- named by an exit-3 refusal. */
-      readonly policyPath: string;
+      /**
+       * The read-back's refused keys, each with its source and rule, and the
+       * policy they were judged against -- the exit-3 refusal's wording. Empty
+       * and null on a dry run.
+       */
+      readonly findings: readonly InjectedFinding[];
+      readonly policy: LoadedWorkflow | null;
     };
 
 export interface WriteOptions {
@@ -268,9 +274,18 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
       report: report(null),
       message,
       lines: [`would run: git commit -F ${COMMIT_MESSAGE_PATH}`, "message:", ...messageLines],
-      policyPath: loaded?.path ?? "",
+      findings: [],
+      policy: loaded,
     };
   }
+
+  // 3a. THE SENT TRAILERS, BY GIT'S OWN PARSER (zheref/nen#273, hanten N2),
+  // before anything is written: the read-back compares like with like, and a
+  // git that cannot parse stops the verb with nothing committed.
+  /* c8 ignore next -- `loaded` is null only when a failure returned above */
+  if (loaded === null) throw new Error("the commit policy was not loaded before the write");
+  const policy = loaded;
+  const sent = sentTrailers(seams, root, message);
 
   // 4. THE WRITE. The message file lands under .nen/ and is removed after the
   // commit whatever git answered: a stale message file is a message file
@@ -299,10 +314,15 @@ export function write(seams: Seams, root: string, options: WriteOptions): WriteO
 
   // 5. THE READ-BACK (zheref/nen#273): what the commit actually carries,
   // against what nen sent and what the policy refuses. Never an amend.
-  /* c8 ignore next -- `loaded` is null only when a failure returned above */
-  if (loaded === null) throw new Error("the commit policy was not loaded before the write");
-  const back = readBack(seams, root, sha, trailers, loaded);
-  const admitted = back.added.filter((key): boolean => !back.injected.includes(key));
+  const back = readBack(seams, root, sha, sent, policy);
+  const admitted = admittedAdditions(back);
   if (admitted.length > 0) options.note(addedNote(sha, admitted));
-  return { kind: "done", report: report(sha, back.written, back.injected), message, lines: [`committed ${sha}: ${subject}`], policyPath: loaded.path };
+  return {
+    kind: "done",
+    report: report(sha, back.written, back.injected),
+    message,
+    lines: [`committed ${sha}: ${subject}`],
+    findings: back.findings,
+    policy,
+  };
 }
