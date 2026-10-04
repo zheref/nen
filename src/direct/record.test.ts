@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { encodeEffortId, EFFORT_ID, usageLedgerPath } from "../usage/ledger.js";
 import { recordPath } from "./record.js";
@@ -24,6 +24,7 @@ describe("the direct ledger and the usage ledger name an effort's file with one 
 
   it("encodes a slash so the file never leaves the directory", () => {
     expect(encodeEffortId("a/b")).toBe("a%2Fb");
-    expect(recordPath(root, "a/b")).toBe("/some/root/.nen/direct/a%2Fb.json");
+    // The host spells the root (C:\some\root on Windows), so the expectation is built the same way.
+    expect(recordPath(root, "a/b")).toBe(resolve(root, ".nen", "direct", "a%2Fb.json"));
   });
 });
