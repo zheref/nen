@@ -1383,6 +1383,137 @@ describe("nen pr merge -- the bounded merge, CLI wiring", () => {
     expect(result.err.join("\n")).toMatch(/--release-unit is only read by 'pr merge'/);
   });
 
+  // zheref/nen#286, narrowed by the maintainer's ruling of 2026-10-03.
+  it("--release-unit and --delivery are mutually exclusive (exit 2)", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--release-unit", "--delivery", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--release-unit and --delivery are mutually exclusive/);
+  });
+
+  it("names both forms when neither is given", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9"], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/a run's own delivery pull request into a non-main base \(--delivery\)/);
+  });
+
+  it("--delivery's missing-ref refusal names the --delivery forms", async () => {
+    const result = await capture(["pr", "merge", "--delivery"], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/'pr merge <CODE>#<n> --delivery \.\.\.'/);
+  });
+
+  /** The reads a --delivery run makes before it refuses a PR into the default branch. */
+  function trunkRefusalSeams(): ScriptedSeams {
+    const workflow = JSON.stringify({ content: Buffer.from(JSON.stringify({ branch: { base: "main" } })).toString("base64"), encoding: "base64" });
+    const baseOid = "ba5e".repeat(10);
+    return new ScriptedSeams([
+      { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/example.git\n" } },
+      {
+        match: "gh pr view 9 --repo zheref/example --json headRefOid,baseRefOid,baseRefName,headRefName,body,isCrossRepository,author,state",
+        result: {
+          code: 0,
+          stdout: JSON.stringify({ headRefOid: "cafebabe", baseRefOid: baseOid, baseRefName: "main", headRefName: "opus/kurapika/x", body: "", isCrossRepository: false, author: { login: "someone" }, state: "OPEN" }),
+        },
+      },
+      { match: "gh repo view zheref/example --json defaultBranchRef", result: { code: 0, stdout: JSON.stringify({ defaultBranchRef: { name: "main" } }) } },
+      { match: `gh api repos/zheref/example/contents/nen/workflow.json?ref=${baseOid}`, result: { code: 0, stdout: workflow } },
+      { match: "gh api repos/zheref/example/contents/nen/workflow.json?ref=main", result: { code: 0, stdout: workflow } },
+      { match: "gh api repos/zheref/example/branches/main", result: { code: 0, stdout: JSON.stringify({ protected: true }) } },
+      { match: "gh api repos/zheref/example/rules/branches/main", result: { code: 0, stdout: "[]" } },
+    ]);
+  }
+
+  it("--delivery refuses a pull request into the default branch at exit 2 -- refused by ruling, on stdout, not a usage error", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE, "--run"], unitRepo(), trunkRefusalSeams());
+    expect(result.code).toBe(2);
+    expect(result.err).toEqual([]);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/^base: 'main' is the repository's default branch/m);
+    expect(out).toMatch(/nen pr merge: refused by ruling -- not merged \(exit 2\)\. Per the maintainer's merge-authority ruling of 2026-09-30/);
+  });
+
+  it("--delivery --json emits its contract on a refusal too, baseOk false (N6)", async () => {
+    const out: string[] = [];
+    const err: string[] = [];
+    const code = await runFamily(
+      prCommand,
+      ["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE],
+      unitRepo(),
+      true,
+      { out: (line): void => void out.push(line), err: (line): void => void err.push(line) },
+      trunkRefusalSeams(),
+    );
+    expect(code).toBe(2);
+    const doc = JSON.parse(out.join("\n")) as { contract: string; refused: boolean; baseOk: boolean; ok: boolean; mergeArgv: unknown; base: string };
+    expect(doc.contract).toBe("nen.pr.merge-delivery/v0.1");
+    expect(doc.refused).toBe(true);
+    expect(doc.baseOk).toBe(false);
+    expect(doc.ok).toBe(false);
+    expect(doc.mergeArgv).toBeNull();
+    expect(doc.base).toBe("main");
+  });
+
+  // Round 2, N7: other subcommands' flags parse on 'merge' (one family table)
+  // and are refused, not ignored -- on either form, before any gh call.
+  for (const [form, extra] of [
+    ["--delivery", ["--base", "main"]],
+    ["--delivery", ["--target", "zheref/example"]],
+    ["--release-unit", ["--base", "main"]],
+    ["--release-unit", ["--target", "zheref/example"]],
+  ] as const) {
+    it(`${extra[0]} is refused on 'pr merge ${form}' (exit 2, zero gh calls)`, async () => {
+      const result = await capture(["pr", "merge", "zheref/example#9", form, "--requirements-from", REQUIREMENTS_FILE, ...extra], unitRepo(), new ScriptedSeams([]));
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(new RegExp(`${extra[0]} is not read by 'pr merge'`));
+    });
+  }
+
+  it("--delivery requires --requirements-from (AC1, N5)", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--delivery"], unitRepo(), new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/requirements-from/);
+  });
+
+  // N11: 'pr ready''s own flags are refused on merge, before any gh call --
+  // an empty ScriptedSeams throws on the first call, so exit 2 proves zero.
+  for (const extra of [
+    ["--exclude-check", "ci / lint"],
+    ["--gates", "g.json"],
+    ["--reviewers", "a"],
+    ["--approvers", "a"],
+    ["--round-policy", "strict"],
+    ["--token-env", "TOKEN"],
+    ["--exclude-run", "1"],
+    ["--gh-repo", "zheref/example"],
+    ["--explain"],
+  ]) {
+    it(`${extra[0]} is refused on 'pr merge' (exit 2, zero gh calls)`, async () => {
+      const result = await capture(["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS_FILE, ...extra], unitRepo(), new ScriptedSeams([]));
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(new RegExp(`${extra[0]} is only read by 'pr ready'`));
+    });
+  }
+
+  it("--require-head is refused with --release-unit", async () => {
+    const result = await capture(["pr", "merge", "zheref/example#9", "--release-unit", "--require-head", "cafebabe", "--requirements-from", REQUIREMENTS_FILE], unitRepo());
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--require-head is read by 'pr merge --delivery'/);
+  });
+
+  it("--delivery is refused on every other subcommand", async () => {
+    const result = await capture(["pr", "staleness", "--delivery", "--wakes-from", "x", "--last-activity", "2025-01-01T00:00:00Z", "--now", "2025-01-01T00:00:00Z"], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--delivery is only read by 'pr merge'/);
+  });
+
+  it("'nen pr --help' carries the --delivery usage line and its section", async () => {
+    const help = (await capture(["pr", "--help"], null)).out.join("\n");
+    expect(help).toMatch(/nen pr merge <n\|owner\/name#n\|CODE#n> --delivery --requirements-from <path> --repo <path> \[--require-head <sha>\]/);
+    expect(help).toMatch(/7 MERGED WITHOUT AUTHORITY/);
+    expect(help).toMatch(/merge --delivery \(zheref\/nen#286\):/);
+    expect(help).toMatch(/nen\.pr\.merge-delivery\/v0\.1/);
+  });
+
   it("--run is refused on every other subcommand", async () => {
     const result = await capture(["pr", "staleness", "--run", "--wakes-from", "x", "--last-activity", "2025-01-01T00:00:00Z", "--now", "2025-01-01T00:00:00Z"], null);
     expect(result.code).toBe(2);

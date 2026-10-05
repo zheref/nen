@@ -1158,6 +1158,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // pull request's state, head and draft flag -- but sends no mutation.
       "mark-ready": DRY("moves ONE draft pull request out of draft via GitHub's markPullRequestReadyForReview mutation unless --dry-run is given; --dry-run still reads GitHub to certify the number, its state and its head"),
       open: DRY("opens ONE pull request via gh pr create unless --dry-run is given; --dry-run still asks git and GitHub whether the head is pushed and whether one is already open"),
+      // Both bounded forms, --release-unit and --delivery (zheref/nen#286):
+      // --run merges, and the plan form is not certified read-only here
+      // either -- a watchable row for a merge verb is a claim nobody needs.
+      merge: MUT("merges ONE pull request via gh pr merge under --release-unit or --delivery when --run is given; classified mutating in every spelling"),
     },
   },
   quality: {

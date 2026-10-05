@@ -431,6 +431,16 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen epic next-wave --body-file b.md").classification).toBe("read-only");
   });
 
+  // zheref/nen#286 (N10/F6): both merge forms are mutating in every
+  // spelling -- the plan form is not certified watchable either.
+  it("classifies 'pr merge --delivery' as mutating with and without --run, --dry-run or a pre-verb --json", () => {
+    expect(classifyCommand("nen pr merge 9 --delivery --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --delivery --repo . --run").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --delivery --repo . --dry-run").classification).toBe("mutating");
+    expect(classifyCommand("nen --json pr merge 9 --delivery --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --release-unit --repo . --requirements-from r.json").classification).toBe("mutating");
+  });
+
   it("classifies through the pre-verb global flags", () => {
     expect(classifyCommand("nen --repo ../elsewhere wc classify").classification).toBe("read-only");
     expect(classifyCommand("nen --json pr ready 925 --gh-repo owner/repo").classification).toBe("read-only");
@@ -442,7 +452,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen frobnicate everything").classification).toBe("unknown");
     // A subcommand the table has not classified -- the fail-closed drift
     // path for a future subcommand landing without a table row.
-    expect(classifyCommand("nen pr merge --target o/r --pr 1").classification).toBe("unknown");
+    expect(classifyCommand("nen pr frobnicate --target o/r --pr 1").classification).toBe("unknown");
     // A passthrough hands vitest its own flags -- `-- -u` would rewrite
     // snapshot files under a verb this table calls a checker.
     expect(classifyCommand("nen dev test -- -u").classification).toBe("unknown");

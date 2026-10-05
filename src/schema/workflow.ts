@@ -707,6 +707,16 @@ function numberOr(
   return value;
 }
 
+/**
+ * The `branch` block's own parser, exported (zheref/nen#286, Copilot round 1)
+ * so `pr merge --delivery` holds a REMOTE copy of `branch` -- read at a pull
+ * request's base commit -- to exactly the rules this loader holds the local
+ * one to, rather than a second, looser reading.
+ */
+export function parseBranchPolicy(path: string, value: unknown): BranchPolicy {
+  return parseBranch(path, value);
+}
+
 function parseBranch(path: string, value: unknown): BranchPolicy {
   const raw = block(
     path,
