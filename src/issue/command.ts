@@ -624,8 +624,9 @@ usage:
       reachable".
       Proposed actions: close (landed, nothing in flight); hold (carries one of
       --hold-labels -- the repository's own "do not close" names; none are
-      built in; matched case-insensitively, and one that matches no label on
-      any scanned open issue is a finding); review (landed, but the issue was REOPENED, or an open PR
+      built in; matched case-insensitively against the repository's own
+      label list, read only then -- a name that is not a label there, or an
+      unreadable list, is a finding; one on no open issue is fine); review (landed, but the issue was REOPENED, or an open PR
       still closes or mentions it -- the open-pr-check guard); wait (merged
       into a branch not yet on the default branch); verify (the landing or the
       guard could not be read, or a diverged base has a delivery PR). --since scans only PRs merged on or after the

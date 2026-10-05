@@ -15,6 +15,7 @@ import {
   MERGED_PULLS_QUERY,
   deliveryArgv,
   prCommitsArgv,
+  repositoryLabelsArgv,
   type ReconcileOptions,
 } from "./reconcile.js";
 
@@ -81,6 +82,8 @@ interface World {
   readonly extraPages?: readonly ScriptedCall[];
   /** `head -> result` for the delivery-PR lookup a diverged compare triggers. */
   readonly deliveries?: Readonly<Record<string, ScriptedCall["result"]>>;
+  /** The repository's label list, read only when --hold-labels is given. */
+  readonly repoLabels?: ScriptedCall["result"];
 }
 
 function asResult(value: readonly Record<string, unknown>[] | ScriptedCall["result"] | undefined): ScriptedCall["result"] {
@@ -102,6 +105,7 @@ function run(world: World): { report: ReturnType<typeof reconcile>; calls: reado
       result: asResult(world.openPulls),
     },
     ...Object.entries(world.compares ?? {}).map(([sha, result]): ScriptedCall => ({ match: gh(compareArgv(TARGET, "trunk", sha)), result })),
+    { match: gh(repositoryLabelsArgv(TARGET)), result: world.repoLabels ?? { stdout: "keep-open\nbug\n" } },
     ...Object.entries(world.deliveries ?? {}).map(([head, result]): ScriptedCall => ({ match: gh(deliveryArgv(TARGET, head, "trunk")), result })),
   ];
   const seams = new ScriptedSeams(script);
@@ -450,15 +454,42 @@ describe("round 1 (Nobunaga) on the delivery of #332", () => {
     expect(report.complete).toBe(true);
   });
 
-  it("N3: a hold label matching no scanned issue's label is a finding, never a silent 'nothing held'", () => {
-    const { report } = run({
+  it("N3: a hold label that matches no label in the REPOSITORY is a finding, never a silent 'nothing held'", () => {
+    const { report, calls } = run({
       issues: [issue(5, { labels: [{ name: "keep-open" }] })],
       pulls: [pull(40, { body: "Closes #5" })],
       options: { ...OPTIONS, holdLabels: ["kep-open"] },
     });
+    expect(calls).toContain(gh(repositoryLabelsArgv(TARGET)));
     expect(report.complete).toBe(false);
-    expect(report.findings).toEqual([{ source: "hold-labels", detail: expect.stringMatching(/'kep-open' matches no label/) }]);
+    expect(report.findings).toEqual([{ source: "hold-labels", detail: expect.stringMatching(/'kep-open' matches no label in acme\/widgets/) }]);
     expect(report.proposals[0]?.action).toBe("close");
+  });
+
+  it("N3: a hold label that exists in the repository but is on no open issue is fine and silent", () => {
+    const { report } = run({
+      issues: [issue(5)],
+      pulls: [pull(40, { body: "Closes #5" })],
+      options: { ...OPTIONS, holdLabels: ["KEEP-OPEN"] },
+      repoLabels: { stdout: "Keep-Open\n" },
+    });
+    expect(report.complete).toBe(true);
+    expect(report.findings).toEqual([]);
+    expect(report.proposals[0]?.action).toBe("close");
+  });
+
+  it("N3: an unreadable or empty label list is a finding", () => {
+    const options = { ...OPTIONS, holdLabels: ["keep-open"] };
+    const failed = run({ issues: [issue(5)], options, repoLabels: { code: 1, stderr: "HTTP 403" } }).report;
+    expect(failed.complete).toBe(false);
+    expect(failed.findings[0]?.detail).toMatch(/could not read acme\/widgets's labels.*HTTP 403/);
+    const empty = run({ issues: [issue(5)], options, repoLabels: { stdout: "" } }).report;
+    expect(empty.findings[0]?.detail).toMatch(/empty label list/);
+  });
+
+  it("N3: no --hold-labels means the label list is never read", () => {
+    const { calls } = run({ issues: [issue(5)], pulls: [pull(40, { body: "Closes #5" })] });
+    expect(calls).not.toContain(gh(repositoryLabelsArgv(TARGET)));
   });
 
   it("N4: diverged with a merged delivery PR from the base proposes verify, citing it", () => {

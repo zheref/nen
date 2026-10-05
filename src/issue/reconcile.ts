@@ -52,9 +52,10 @@
 // repository's "do not close this" override is whatever it calls it, and the
 // caller hands those names in through --hold-labels; with none given, nothing is
 // held. They match case-insensitively, as GitHub's label names do, and a named
-// hold label that matches no label on any scanned issue is a FINDING -- a typo
-// must never read as "nothing held". The closing keywords are GitHub's own grammar, not any repository's
-// vocabulary, and `REOPENED` is GitHub's `stateReason` enum.
+// hold label that matches no label in the REPOSITORY's own label list is a
+// FINDING -- a typo must never read as "nothing held". A label that exists but
+// sits on no open issue today is fine and silent. The closing keywords are
+// GitHub's own grammar, not any repository's vocabulary, and `REOPENED` is GitHub's `stateReason` enum.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
@@ -283,6 +284,15 @@ export function mergedPullsArgv(target: Target, first: number, since: string | n
     `first=${first}`,
     ...(after === null ? [] : ["-f", `after=${after}`]),
   ];
+}
+
+/**
+ * The repository's whole label list, every page (`--paginate` follows the Link
+ * header, so the list cannot come back cut at a page boundary), one name per
+ * line. Read only when --hold-labels names something to check.
+ */
+export function repositoryLabelsArgv(target: Target): readonly string[] {
+  return ["api", `repos/${target.slug}/labels?per_page=100`, "--paginate", "--jq", ".[].name"];
 }
 
 export function defaultBranchArgv(target: Target): readonly string[] {
@@ -768,6 +778,31 @@ function deliveryOf(
   return delivery;
 }
 
+/** Every --hold-labels name must exist in the repository; an unreadable list is a finding too. */
+function checkHoldLabels(seams: Seams, target: Target, holdLabels: readonly string[], findings: Finding[]): void {
+  const result = seams.run(GH, repositoryLabelsArgv(target));
+  if (result.spawnFailed || result.code !== 0) {
+    findings.push({
+      source: "hold-labels",
+      detail: `could not read ${target.slug}'s labels to check --hold-labels against: ${failure(result.stderr, result.code)}`,
+    });
+    return;
+  }
+  const names = outputLines(result.stdout).map((name): string => name.trim()).filter((name): boolean => name !== "");
+  if (names.length === 0) {
+    findings.push({ source: "hold-labels", detail: `${target.slug} answered an empty label list, so --hold-labels could not be checked` });
+    return;
+  }
+  const known = new Set(names.map((name): string => name.toLowerCase()));
+  for (const label of holdLabels) {
+    if (known.has(label.toLowerCase())) continue;
+    findings.push({
+      source: "hold-labels",
+      detail: `--hold-labels '${label}' matches no label in ${target.slug} (${names.length} read); a misspelt hold label would read as "nothing held", so this is not a clean answer`,
+    });
+  }
+}
+
 function landed(landing: Landing): boolean {
   return landing === "default-branch" || landing === "reached-default-branch";
 }
@@ -861,21 +896,12 @@ export function reconcile(seams: Seams, target: Target, options: ReconcileOption
   }
 
   // Hold labels match case-insensitively, as GitHub's label names do. One that
-  // matches no label on any scanned issue is a finding: a typo would otherwise
-  // read as "nothing held".
+  // matches no label IN THE REPOSITORY is a finding: a typo would otherwise read
+  // as "nothing held". One that exists but is on no open issue is silent -- an
+  // unused hold label is not a mistake.
   const holds = new Set(options.holdLabels.map((label): string => label.toLowerCase()));
   const isHeld = (label: string): boolean => holds.has(label.toLowerCase());
-  if (openIssues !== null) {
-    const present = new Set(openIssues.flatMap((item): readonly string[] => item.labels).map((label): string => label.toLowerCase()));
-    for (const label of options.holdLabels) {
-      if (!present.has(label.toLowerCase())) {
-        findings.push({
-          source: "hold-labels",
-          detail: `--hold-labels '${label}' matches no label on any of the ${openIssues.length} scanned open issue(s); a misspelt hold label would read as "nothing held", so this is not a clean answer`,
-        });
-      }
-    }
-  }
+  if (options.holdLabels.length > 0) checkHoldLabels(seams, target, options.holdLabels, findings);
 
   // The open-PR guard, over every issue some landed PR would close -- the same
   // guard `issue open-pr-check` and `consolidate-close` run, reused.
