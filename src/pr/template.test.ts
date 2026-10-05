@@ -1,12 +1,11 @@
 // src/pr/template.test.ts -- zheref/nen#239: the body-check bootstrap's
-// template discovery and heading derivation.
+// template discovery, heading derivation and derived-body check.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { deriveRequirements, discoverTemplate } from "./template.js";
-import { checkBody } from "./bodycheck.js";
+import { checkDerivedBody, deriveRequirements, discoverTemplate, readLines, stripComments, workingTreeReader } from "./template.js";
 
 /** A throwaway repository root holding exactly `files` (repo-relative path -> contents). */
 function repo(files: Record<string, string>): string {
@@ -18,19 +17,42 @@ function repo(files: Record<string, string>): string {
   return root;
 }
 
+const discover = (root: string): ReturnType<typeof discoverTemplate> => discoverTemplate(workingTreeReader(root));
+const names = (template: string): string[] => deriveRequirements(template).map((requirement) => requirement.name);
+const statuses = (body: string, template: string): string[] =>
+  checkDerivedBody(body, deriveRequirements(template)).results.map((result) => `${result.status} ${result.name}`);
+
 describe("discoverTemplate -- each of GitHub's locations", () => {
   it.each([
     [".github/PULL_REQUEST_TEMPLATE.md"],
     [".github/pull_request_template.md"],
+    [".github/pull_request_template.txt"],
     ["PULL_REQUEST_TEMPLATE.md"],
-    ["pull_request_template.md"],
+    ["pull_request_template.TXT"],
     ["docs/PULL_REQUEST_TEMPLATE.md"],
-    ["docs/pull_request_template.md"],
+    ["docs/pull_request_template.txt"],
     [".github/PULL_REQUEST_TEMPLATE/feature.md"],
+    [".github/PULL_REQUEST_TEMPLATE/feature.txt"],
     ["PULL_REQUEST_TEMPLATE/feature.md"],
-    ["docs/pull_request_template/feature.md"],
+    ["docs/pull_request_template/feature.TXT"],
   ])("finds a lone template at %s", (relative) => {
-    expect(discoverTemplate(repo({ [relative]: "## Summary\n" }))).toEqual({ kind: "found", path: relative });
+    expect(discover(repo({ [relative]: "## Summary\n" }))).toEqual({ kind: "found", path: relative });
+  });
+
+  // N9: a default file with no extension, or another extension, is not one.
+  it.each([["pull_request_template"], [".github/pull_request_template"], ["docs/pull_request_template.rst"]])(
+    "does not accept %s",
+    (relative) => {
+      expect(discover(repo({ [relative]: "## Summary\n" })).kind).toBe("none");
+    },
+  );
+
+  it("a .md and a .txt default in the same place are two candidates -- ambiguous (N9)", () => {
+    const root = repo({ ".github/pull_request_template.md": "## A\n", ".github/pull_request_template.txt": "## B\n" });
+    expect(discover(root)).toEqual({
+      kind: "ambiguous",
+      candidates: [".github/pull_request_template.md", ".github/pull_request_template.txt"],
+    });
   });
 
   it("a default file wins over directory alternatives beside it -- it is what GitHub pre-fills", () => {
@@ -39,67 +61,72 @@ describe("discoverTemplate -- each of GitHub's locations", () => {
       ".github/PULL_REQUEST_TEMPLATE/a.md": "## A\n",
       ".github/PULL_REQUEST_TEMPLATE/b.md": "## B\n",
     });
-    expect(discoverTemplate(root)).toEqual({ kind: "found", path: ".github/pull_request_template.md" });
+    expect(discover(root)).toEqual({ kind: "found", path: ".github/pull_request_template.md" });
   });
 
-  it("ignores non-markdown files and nested directories inside PULL_REQUEST_TEMPLATE/", () => {
+  it("ignores other extensions and nested directories inside PULL_REQUEST_TEMPLATE/", () => {
     const root = repo({
       ".github/PULL_REQUEST_TEMPLATE/only.md": "## Only\n",
-      ".github/PULL_REQUEST_TEMPLATE/notes.txt": "## Not a template\n",
+      ".github/PULL_REQUEST_TEMPLATE/notes.rst": "## Not a template\n",
+      ".github/PULL_REQUEST_TEMPLATE/bare": "## Not one either\n",
       ".github/PULL_REQUEST_TEMPLATE/nested/deeper.md": "## Too deep\n",
     });
-    expect(discoverTemplate(root)).toEqual({ kind: "found", path: ".github/PULL_REQUEST_TEMPLATE/only.md" });
+    expect(discover(root)).toEqual({ kind: "found", path: ".github/PULL_REQUEST_TEMPLATE/only.md" });
   });
 
   it("a directory NAMED like the default file is not a template", () => {
-    const root = repo({ ".github/pull_request_template.md/x.md": "## X\n" });
-    expect(discoverTemplate(root).kind).toBe("none");
+    expect(discover(repo({ ".github/pull_request_template.md/x.md": "## X\n" })).kind).toBe("none");
   });
 });
 
 describe("discoverTemplate -- ambiguity and absence are refusals, never a guess", () => {
   it("two default files in different locations is ambiguous, listing both", () => {
     const root = repo({ ".github/pull_request_template.md": "## A\n", "docs/pull_request_template.md": "## B\n" });
-    expect(discoverTemplate(root)).toEqual({
+    expect(discover(root)).toEqual({
       kind: "ambiguous",
       candidates: [".github/pull_request_template.md", "docs/pull_request_template.md"],
     });
   });
 
   it("several directory templates and no default is ambiguous", () => {
-    const root = repo({ ".github/PULL_REQUEST_TEMPLATE/b.md": "## B\n", ".github/PULL_REQUEST_TEMPLATE/a.md": "## A\n" });
-    expect(discoverTemplate(root)).toEqual({
+    const root = repo({ ".github/PULL_REQUEST_TEMPLATE/b.md": "## B\n", ".github/PULL_REQUEST_TEMPLATE/a.txt": "## A\n" });
+    expect(discover(root)).toEqual({
       kind: "ambiguous",
-      candidates: [".github/PULL_REQUEST_TEMPLATE/a.md", ".github/PULL_REQUEST_TEMPLATE/b.md"],
+      candidates: [".github/PULL_REQUEST_TEMPLATE/a.txt", ".github/PULL_REQUEST_TEMPLATE/b.md"],
     });
   });
 
   it("no template anywhere is 'none', naming every place searched", () => {
-    const discovery = discoverTemplate(repo({ "README.md": "# hi\n" }));
+    const discovery = discover(repo({ "README.md": "# hi\n" }));
     expect(discovery.kind).toBe("none");
     if (discovery.kind !== "none") return;
-    expect(discovery.searched).toContain(".github/pull_request_template.md");
-    expect(discovery.searched).toContain("pull_request_template.md");
-    expect(discovery.searched).toContain("docs/pull_request_template.md");
-    expect(discovery.searched).toContain(".github/PULL_REQUEST_TEMPLATE/*.md");
+    expect(discovery.searched).toContain(".github/pull_request_template.{md,txt}");
+    expect(discovery.searched).toContain("pull_request_template.{md,txt}");
+    expect(discovery.searched).toContain("docs/pull_request_template.{md,txt}");
+    expect(discovery.searched).toContain(".github/PULL_REQUEST_TEMPLATE/*.{md,txt}");
   });
 
   it("a root that does not exist is 'none', not a throw", () => {
-    expect(discoverTemplate(join(tmpdir(), "nen-definitely-absent-root-239")).kind).toBe("none");
+    expect(discover(join(tmpdir(), "nen-definitely-absent-root-239")).kind).toBe("none");
+  });
+});
+
+describe("stripComments", () => {
+  it("removes every pair across the whole line and reports a comment left open (N8)", () => {
+    expect(stripComments("<!-- a --> text <!--", false)).toEqual({ text: " text ", open: true });
+    expect(stripComments("a <!-- b --> c <!-- d --> e", false)).toEqual({ text: "a  c  e", open: false });
+    expect(stripComments("still inside --> after", true)).toEqual({ text: " after", open: false });
+    expect(stripComments("still inside", true)).toEqual({ text: "", open: true });
   });
 });
 
 describe("deriveRequirements", () => {
   it("turns each ATX heading into one requirement at the same level", () => {
-    const requirements = deriveRequirements("## Summary\n\nWhat.\n\n### How to verify ###\n\n# Title\n");
-    expect(requirements.map((requirement) => requirement.name)).toEqual(["## Summary", "### How to verify", "# Title"]);
+    expect(names("## Summary\n\nWhat.\n\n### How to verify ###\n\n# Title\n")).toEqual(["## Summary", "### How to verify", "# Title"]);
   });
 
-  it("skips headings inside fenced code, HTML comments and front matter, and de-duplicates", () => {
+  it("skips headings inside fenced code and HTML comments, and de-duplicates", () => {
     const template = [
-      "---",
-      "name: x",
-      "---",
       "## Summary",
       "```md",
       "## Not a section",
@@ -110,27 +137,146 @@ describe("deriveRequirements", () => {
       "<!--",
       "## Commented out",
       "-->",
-      "<!-- inline --> ## Not a heading either",
+      "<!-- inline --> ## An HTML block line, never a heading",
       "## Summary",
       "## Test plan <!-- keep it short -->",
     ].join("\n");
-    expect(deriveRequirements(template).map((requirement) => requirement.name)).toEqual(["## Summary", "## Test plan"]);
+    expect(names(template)).toEqual(["## Summary", "## Test plan"]);
+  });
+
+  // N1: the heading before an opening comment is kept; the comment it opens
+  // still swallows the lines up to its close.
+  it("keeps a heading on a line that opens a multi-line comment", () => {
+    expect(names("## Summary <!--\n describe\n## Inside\n-->\n## After\n")).toEqual(["## Summary", "## After"]);
+  });
+
+  // N8: a comment that closes and a second that opens on the same line.
+  it("a second comment opened after a closed one on the same line still hides what follows", () => {
+    expect(names("## Top\n<!-- a --> text <!--\n## Hidden\n-->\n")).toEqual(["## Top"]);
+  });
+
+  // N2.
+  it("a UTF-8 BOM does not hide the first heading", () => {
+    expect(names("﻿## Summary\n## Test plan\n")).toEqual(["## Summary", "## Test plan"]);
+  });
+
+  // N11: no front-matter rule -- a leading '---' is a thematic break.
+  it("a leading '---' is a horizontal rule, not front matter", () => {
+    expect(names("---\n## A\n---\n## B\n")).toEqual(["## A", "## B"]);
+  });
+
+  // N12: tabs inside the heading text are whitespace runs too.
+  it("a tab inside a template heading matches a space in the body", () => {
+    expect(statuses("## How to verify\nrun it\n", "## How\tto verify\n")).toEqual(["ok ## How to verify"]);
   });
 
   it("returns nothing for a template with no headings (the caller refuses it)", () => {
     expect(deriveRequirements("Describe your change.\n\n- [ ] tests\n")).toEqual([]);
   });
 
-  it("escapes regex metacharacters, and the patterns match a filled-in body, case-insensitively", () => {
-    const requirements = deriveRequirements("## What (and why?)\n## How to verify\n## C++ [notes]\n");
-    const body = "## what (AND why?)\nbecause\n\n##   How to verify\nrun it\n\n## C++ [notes] ##\n";
-    expect(checkBody(body, requirements).ok).toBe(true);
+  it("escapes regex metacharacters and matches case-insensitively", () => {
+    expect(statuses("## what (AND why?)\nbecause\n\n## C++ [notes] ##\nx\n", "## What (and why?)\n## C++ [notes]\n")).toEqual([
+      "ok ## What (and why?)",
+      "ok ## C++ [notes]",
+    ]);
   });
 
-  it("a heading at the wrong level, or only mentioned in prose, does not satisfy it", () => {
-    const requirements = deriveRequirements("## How to verify\n");
-    expect(checkBody("### How to verify\n", requirements).ok).toBe(false);
-    expect(checkBody("See ## How to verify below\n", requirements).ok).toBe(false);
-    expect(checkBody("## How to verify further\n", requirements).ok).toBe(false);
+  it("a heading at the wrong level, only in prose, or with more text, does not match", () => {
+    const template = "## How to verify\n";
+    expect(statuses("### How to verify\nx\n", template)).toEqual(["missing ## How to verify"]);
+    expect(statuses("See ## How to verify below\n", template)).toEqual(["missing ## How to verify"]);
+    expect(statuses("## How to verify further\nx\n", template)).toEqual(["missing ## How to verify"]);
+  });
+});
+
+describe("checkDerivedBody", () => {
+  const template = "## Summary <!-- one line -->\n<!-- what changed -->\n\n## How to verify\nDescribe the steps.\n";
+
+  // N4 + N3: the untouched template matches every heading (the prefilled
+  // inline comment kept) and fails only on content.
+  it("a verbatim-template body matches every heading, then fails each as EMPTY", () => {
+    expect(statuses(template, template)).toEqual(["empty ## Summary", "empty ## How to verify"]);
+    expect(checkDerivedBody(template, deriveRequirements(template)).ok).toBe(false);
+  });
+
+  // N4: the pattern itself admits the trailing comment, so a pattern copied
+  // into a shipped file still matches a raw body line that kept it.
+  it("the derived pattern admits trailing comment spans on the raw heading line", () => {
+    const [requirement] = deriveRequirements("## Summary\n");
+    expect(new RegExp(requirement?.pattern ?? "", "im").test("## Summary <!-- one line --> <!-- two -->")).toBe(true);
+  });
+
+  it("a filled body passes, even keeping the prefilled inline comment on the heading", () => {
+    const body = "## Summary <!-- one line -->\nA real change.\n\n## How to verify\nRun the suite.\n";
+    expect(statuses(body, template)).toEqual(["ok ## Summary", "ok ## How to verify"]);
+  });
+
+  // N3: what does NOT count as content.
+  it("blank lines, comments and the template's own placeholder lines are not content", () => {
+    const body = "## Summary\n\n<!-- todo -->\n\n## How to verify\nDescribe the steps.\n";
+    expect(statuses(body, template)).toEqual(["empty ## Summary", "empty ## How to verify"]);
+  });
+
+  it("content under a deeper sub-heading counts; the next same-level heading ends the section", () => {
+    const deep = "## Changes\n### Details\n## Notes\n";
+    expect(statuses("## Changes\n### Details\nfilled\n## Notes\nx\n", deep)).toEqual(["ok ## Changes", "ok ### Details", "ok ## Notes"]);
+    expect(statuses("## Changes\n## Notes\nx\n### Details\ny\n", deep)).toEqual(["empty ## Changes", "ok ### Details", "ok ## Notes"]);
+  });
+
+  it("a fenced block is content under its heading", () => {
+    expect(statuses("## How to verify\n```sh\nbun run test\n```\n", "## How to verify\n")).toEqual(["ok ## How to verify"]);
+  });
+
+  // N10: a heading hidden in a comment or a fence in the BODY does not count.
+  it("a heading inside a body comment or fenced block is masked", () => {
+    const one = "## How to verify\n";
+    expect(statuses("<!--\n## How to verify\nsteps\n-->\n", one)).toEqual(["missing ## How to verify"]);
+    expect(statuses("```\n## How to verify\nsteps\n```\n", one)).toEqual(["missing ## How to verify"]);
+  });
+
+  it("a BOM on the body does not hide its first heading (N2)", () => {
+    expect(statuses("﻿## How to verify\nsteps\n", "## How to verify\n")).toEqual(["ok ## How to verify"]);
+  });
+});
+
+describe("readLines", () => {
+  it("classifies an empty ATX heading as blank, not as a heading", () => {
+    expect(readLines("##\n#hashtag\n")).toEqual([{ kind: "blank" }, { kind: "content", text: "#hashtag" }, { kind: "blank" }]);
+  });
+});
+
+describe("workingTreeReader -- reads refuse as usage errors (exit 2), never 1", () => {
+  // N6.
+  it.skipIf(process.platform === "win32")("refuses a template symlinked to a file outside the root", () => {
+    const outside = repo({ "elsewhere.md": "## Secret\n" });
+    const root = repo({});
+    mkdirSync(join(root, ".github"));
+    symlinkSync(join(outside, "elsewhere.md"), join(root, ".github", "pull_request_template.md"));
+    const reader = workingTreeReader(root);
+    expect(discoverTemplate(reader)).toEqual({ kind: "found", path: ".github/pull_request_template.md" });
+    expect(() => reader.read(".github/pull_request_template.md")).toThrow(
+      expect.objectContaining({ name: "VerbUsageError", message: expect.stringMatching(/outside the repository root/) }),
+    );
+  });
+
+  it.skipIf(process.platform === "win32")("reads a template symlinked to a file INSIDE the root", () => {
+    const root = repo({ "templates-src/pr.md": "## Inside\n" });
+    mkdirSync(join(root, ".github"));
+    symlinkSync(join(root, "templates-src", "pr.md"), join(root, ".github", "pull_request_template.md"));
+    expect(workingTreeReader(root).read(".github/pull_request_template.md")).toBe("## Inside\n");
+  });
+
+  // N5.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable template is a usage error naming the file", () => {
+    const root = repo({ ".github/pull_request_template.md": "## Summary\n" });
+    const file = join(root, ".github", "pull_request_template.md");
+    chmodSync(file, 0o000);
+    try {
+      expect(() => workingTreeReader(root).read(".github/pull_request_template.md")).toThrow(
+        expect.objectContaining({ name: "VerbUsageError", message: expect.stringMatching(/pull_request_template\.md.*EACCES/) }),
+      );
+    } finally {
+      chmodSync(file, 0o644);
+    }
   });
 });

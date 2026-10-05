@@ -51,7 +51,16 @@ import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../sea
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
-import { discoverTemplate, requirementsFromTemplate } from "./template.js";
+import {
+  checkDerivedBody,
+  deriveRequirements,
+  describeReader,
+  discoverTemplate,
+  gitReader,
+  workingTreeReader,
+  type DerivedRequirement,
+  type TemplateReader,
+} from "./template.js";
 import { computeStaleness, type VerifiedWake } from "./staleness.js";
 import { nextBlocker } from "./blocker.js";
 import { cascadeMain } from "./cascade.js";
@@ -104,7 +113,7 @@ function requirePr(context: CommandContext): number {
 
 const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
-nen pr body-check --body-from <path> [--requirements-from <path>]
+nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr fetch --target <owner/name> --pr <n>
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
@@ -203,15 +212,22 @@ body-check:
                               repository's own template convention, never a
                               literal shipped here.
   Without --requirements-from the set is DERIVED from the repository's own
-  pull-request template (GitHub's locations: pull_request_template.md, any
-  case, at the root, .github/ or docs/; else one *.md in a
-  PULL_REQUEST_TEMPLATE/ directory there): each of its headings becomes a
-  required heading at the same level. The verdict line names the template it
-  was derived from, and --json carries 'source' { kind: shipped|derived,
-  path }. Two default templates, or several directory templates and no
-  default, is AMBIGUOUS; no template at all, or one with no headings, is a
+  pull-request template (GitHub's locations: pull_request_template.md or
+  .txt, any case, at the root, .github/ or docs/; else one .md/.txt file in
+  a PULL_REQUEST_TEMPLATE/ directory there; a file with no extension is not
+  read): each of its headings becomes a required heading at the same level,
+  and each must have content under it -- a heading with none is EMPTY. The
+  verdict line names the template and where it was read, and --json carries
+  'source' { kind: shipped|derived, path, ref }. Two default templates, or
+  several directory templates and no default, is AMBIGUOUS; no template, an
+  unreadable one, one outside the repository, or one with no headings is a
   refusal (exit 2) -- never a silent skip. Bootstrap: docs/USAGE.md,
   "Bootstrapping a body-check requirements file".
+  --base <ref>                Read the template from git at <ref>, never the
+                              working tree. A PR's head can edit its own
+                              template, so a gate passes the base. An
+                              unresolvable ref, or one starting with '-',
+                              exits 2. Only with a derived set.
 
 fetch:
   One typed snapshot: head SHA, mergeability, the check rollup, reviews
@@ -589,10 +605,12 @@ function staleness(context: CommandContext): number {
 // zheref/nen#239: where the requirement set came from, so a reader of the
 // verdict can tell a shipped file from a set nen derived, without the
 // transcript. `path` is the caller's own `--requirements-from` value when
-// shipped, and the template's repo-relative path when derived.
+// shipped, and the template's repo-relative path when derived; `ref` is the
+// `--base` the template was read at, or null (the working tree, or shipped).
 export interface RequirementSource {
   readonly kind: "shipped" | "derived";
   readonly path: string;
+  readonly ref: string | null;
 }
 
 const BODY_CHECK_BOOTSTRAP =
@@ -601,25 +619,26 @@ const BODY_CHECK_BOOTSTRAP =
 // NO FILE GIVEN: derive from the repository's own pull-request template, or
 // refuse at exit 2 naming what is missing. Every refusal here is a USAGE error
 // -- the invocation lacks an input it needs -- and never a skip.
-function derivedRequirements(root: string): { requirements: readonly BodyRequirement[]; source: RequirementSource } {
-  const discovery = discoverTemplate(root);
+function derivedRequirements(reader: TemplateReader, root: string): { requirements: readonly DerivedRequirement[]; source: RequirementSource } {
+  const where = describeReader(reader);
+  const discovery = discoverTemplate(reader);
   if (discovery.kind === "none") {
     throw new VerbUsageError(
-      `no --requirements-from was given and no pull-request template was found under '${root}' (searched ${discovery.searched.join(", ")}). ${BODY_CHECK_BOOTSTRAP}`,
+      `no --requirements-from was given and no pull-request template was found under '${root}' ${where} (searched ${discovery.searched.join(", ")}). ${BODY_CHECK_BOOTSTRAP}`,
     );
   }
   if (discovery.kind === "ambiguous") {
     throw new VerbUsageError(
-      `no --requirements-from was given and the pull-request template is ambiguous: ${discovery.candidates.join(", ")}. Nen will not pick one. ${BODY_CHECK_BOOTSTRAP}`,
+      `no --requirements-from was given and the pull-request template ${where} is ambiguous: ${discovery.candidates.join(", ")}. Nen will not pick one. ${BODY_CHECK_BOOTSTRAP}`,
     );
   }
-  const requirements = requirementsFromTemplate(root, discovery.path);
+  const requirements = deriveRequirements(reader.read(discovery.path));
   if (requirements.length === 0) {
     throw new VerbUsageError(
-      `no --requirements-from was given and the pull-request template '${discovery.path}' has no headings to derive requirements from. ${BODY_CHECK_BOOTSTRAP}`,
+      `no --requirements-from was given and the pull-request template '${discovery.path}' ${where} has no headings to derive requirements from. ${BODY_CHECK_BOOTSTRAP}`,
     );
   }
-  return { requirements, source: { kind: "derived", path: discovery.path } };
+  return { requirements, source: { kind: "derived", path: discovery.path, ref: reader.ref } };
 }
 
 function bodyCheck(context: CommandContext): number {
@@ -630,28 +649,42 @@ function bodyCheck(context: CommandContext): number {
     context.args.values["requirements-from"] === undefined
       ? undefined
       : requireValue(context.args, "requirements-from", "This repository's own template requirements.");
+  const base = context.args.values["base"];
+  if (base !== undefined && requirementsPath !== undefined) {
+    throw new VerbUsageError(
+      "--base names the ref the pull-request template is read at, and is only read when the set is derived; with --requirements-from there is no template to read.",
+    );
+  }
 
   const cwd = resolveRepoRoot({ repoFlag: context.repoFlag });
   const body = readTextFile(bodyPath, cwd);
-  const { requirements, source } =
-    requirementsPath === undefined
-      ? derivedRequirements(cwd)
-      : {
-          requirements: readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd),
-          source: { kind: "shipped", path: requirementsPath } satisfies RequirementSource,
-        };
 
-  const report = checkBody(body, requirements);
+  // A SHIPPED FILE: exactly the check it always was, plus the source field.
+  if (requirementsPath !== undefined) {
+    const report = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd));
+    const source: RequirementSource = { kind: "shipped", path: requirementsPath, ref: null };
+    const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
+    // A VERDICT LINE ALWAYS PRINTS (review finding): zero output must never be a
+    // passing result a caller's script can mistake for "nothing to report".
+    const lines = [
+      `${satisfiedCount}/${report.results.length} requirement(s) satisfied`,
+      ...report.results.map((result): string => `${result.satisfied ? "ok" : "MISSING"}  ${result.name}`),
+    ];
+    emit(context.io, context.json, { ...report, source }, lines);
+    return report.ok ? 0 : 1;
+  }
+
+  // A DERIVED set says so ON the verdict line (zheref/nen#239), naming the
+  // template and where it was read, so quoting the verdict quotes its
+  // provenance. A heading present with nothing under it is EMPTY, not ok.
+  const reader = base === undefined ? workingTreeReader(cwd) : gitReader(context.seams, cwd, base);
+  const { requirements, source } = derivedRequirements(reader, cwd);
+  const report = checkDerivedBody(body, requirements);
   const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
-  // A VERDICT LINE ALWAYS PRINTS (review finding): zero output must never be a
-  // passing result a caller's script can mistake for "nothing to report".
-  // A DERIVED set says so ON the verdict line (zheref/nen#239), so quoting the
-  // verdict quotes its provenance; a shipped file's line is unchanged.
-  const provenance =
-    source.kind === "derived" ? ` (DERIVED from the pull-request template '${source.path}'; no --requirements-from given)` : "";
+  const label = { ok: "ok", missing: "MISSING", empty: "EMPTY" } as const;
   const lines = [
-    `${satisfiedCount}/${report.results.length} requirement(s) satisfied${provenance}`,
-    ...report.results.map((result): string => `${result.satisfied ? "ok" : "MISSING"}  ${result.name}`),
+    `${satisfiedCount}/${report.results.length} requirement(s) satisfied (DERIVED from the pull-request template '${source.path}' ${describeReader(reader)}; no --requirements-from given)`,
+    ...report.results.map((result): string => `${label[result.status]}  ${result.name}`),
   ];
   emit(context.io, context.json, { ...report, source }, lines);
   return report.ok ? 0 : 1;
