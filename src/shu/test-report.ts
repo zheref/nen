@@ -54,7 +54,7 @@ import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 // test report's suite names have exactly the same problem -- one of the three
 // formats names a suite with the absolute path of the test file -- and a second
 // copy of that decision is a second place for it to drift.
-import { relativiseName } from "./coverage.js";
+import { livenessGiven, relativiseName } from "./coverage.js";
 import { recordCapture } from "./capture-provenance.js";
 import { openDeclaration } from "./declaration.js";
 import { ShuRefusal } from "./exit.js";
@@ -95,6 +95,8 @@ export interface TestReportOptions {
   readonly fromArtifacts: boolean;
   /** `--effort <id>`: the phase ledger the run's steps are appended to (zheref/nen#227). */
   readonly effort?: string | null;
+  /** `--stream` / `--heartbeat`, handed to the executor unchanged (zheref/nen#244). */
+  readonly liveness?: { readonly stream: boolean; readonly heartbeatMs?: number | null };
 }
 
 /**
@@ -275,6 +277,13 @@ export async function runTestReport(
       `'test-report' was given both --dry-run and --from-artifacts. --dry-run prints the '${SOURCE_VERB}' command this lane declares and parses nothing; --from-artifacts runs nothing and parses the results already on disk. Both start no process and they answer different questions, so nen will not pick one for you.`,
     );
   }
+  // --stream AND --heartbeat DESCRIBE A RUNNING STEP (zheref/nen#244), and
+  // --from-artifacts runs none: accepted, they would be ignored.
+  if (options.fromArtifacts && livenessGiven(options.liveness)) {
+    throw new VerbUsageError(
+      `--stream and --heartbeat are not read with --from-artifacts: they relay a running step's output and say it is still running, and --from-artifacts runs nothing. Drop them, or drop --from-artifacts to run the '${SOURCE_VERB}' row.`,
+    );
+  }
   if (options.fromArtifacts) return readOnly(context, repoRoot, options);
 
   const captured: { report: ShuReport | null } = { report: null };
@@ -304,6 +313,7 @@ export async function runTestReport(
           run: false,
           sink,
           effort: options.effort ?? null,
+          ...options.liveness,
         }),
     );
   } catch (error) {

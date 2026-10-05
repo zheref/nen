@@ -175,6 +175,17 @@ describe("a coverage run, parsed", () => {
     expect(parsed.report).toEqual({ format: "istanbul-summary", path: "coverage/coverage-summary.json" });
   });
 
+  it("takes the captured seam under --heartbeat 0 and the streamed one by default, with the same document (zheref/nen#244)", async () => {
+    const captured = await capture(["coverage", "--json", "--heartbeat", "0"], { script: [ok(WEB)] });
+    const watched = await capture(["coverage", "--json"], { script: [ok(WEB)] });
+    const step = (result: Captured): boolean | undefined =>
+      result.seams.calls.find((call): boolean => [call.command, ...call.args].join(" ") === WEB)?.streamed;
+    expect(step(captured)).toBeUndefined();
+    expect(step(watched)).toBe(true);
+    expect(watched.code).toBe(captured.code);
+    expect(document(watched)).toEqual(document(captured));
+  });
+
   it("takes the first artifact whose FORMAT it recognises, not the first artifact", async () => {
     // A coverage verb routinely writes several things -- an HTML tree, notes, a
     // JUnit file, the machine report -- and the machine report is rarely
@@ -2003,6 +2014,9 @@ describe("--touched --from-capture: the flags and the refusals", () => {
     [["coverage", "--from-capture"], /--from-capture is read only with --touched/],
     [["coverage", "--touched", "--base", "main", "--from-capture", "--dry-run"], /both --dry-run and --from-capture/],
     [["coverage", "--touched", "--base", "main", "--from-capture", "--effort", "e1"], /--effort is not read with --from-capture/],
+    [["coverage", "--touched", "--base", "main", "--from-capture", "--stream"], /--stream and --heartbeat are not read with --from-capture/],
+    [["coverage", "--touched", "--base", "main", "--from-capture", "--heartbeat", "5"], /--stream and --heartbeat are not read with --from-capture/],
+    [["coverage", "--touched", "--base", "main", "--from-capture", "--heartbeat", "0"], /--stream and --heartbeat are not read with --from-capture/],
     [["build", "--from-capture"], /--from-capture is not read by 'shu build'/],
   ])("refuses %j at 2 before anything is spawned", async (argv, message) => {
     const result = await capture(argv);

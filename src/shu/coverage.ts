@@ -86,6 +86,8 @@ export interface CoverageOptions {
   readonly dryRun: boolean;
   /** `--effort <id>`: the phase ledger the run's steps are appended to (zheref/nen#227). */
   readonly effort?: string | null;
+  /** `--stream` / `--heartbeat`, handed to the executor unchanged (zheref/nen#244). */
+  readonly liveness?: { readonly stream: boolean; readonly heartbeatMs?: number | null };
   /** `--threshold`, exactly as it was typed. Parsed here, refused here. */
   readonly threshold: string | null;
   /**
@@ -189,9 +191,11 @@ function verifyBase(context: CommandContext, repoRoot: string, base: string): vo
  *     `--from-artifacts`, for the same reason).
  *   * WITH --effort, there is no step to append to the phase ledger: the
  *     ledger records what RAN, and this form runs nothing.
+ *   * WITH --stream or --heartbeat, there is no running step to relay or to
+ *     report alive (zheref/nen#244).
  */
 export function validateFromCapture(
-  options: Pick<CoverageOptions, "touched" | "dryRun" | "effort" | "fromCapture">,
+  options: Pick<CoverageOptions, "touched" | "dryRun" | "effort" | "fromCapture" | "liveness">,
 ): void {
   if (options.fromCapture !== true) return;
   if (!options.touched) {
@@ -209,6 +213,18 @@ export function validateFromCapture(
       `--effort is not read with --from-capture: the phase ledger records the steps a run performed, and --from-capture runs nothing, so there is nothing to append. Drop --effort, or drop --from-capture to measure with a run the ledger records.`,
     );
   }
+  if (livenessGiven(options.liveness)) {
+    throw new VerbUsageError(
+      `--stream and --heartbeat are not read with --from-capture: they relay a running step's output and say it is still running, and --from-capture runs nothing. Drop them, or drop --from-capture to measure with a run.`,
+    );
+  }
+}
+
+/** True when the caller typed --stream or --heartbeat (zheref/nen#244). */
+export function livenessGiven(
+  liveness: { readonly stream: boolean; readonly heartbeatMs?: number | null } | undefined,
+): boolean {
+  return liveness !== undefined && (liveness.stream || liveness.heartbeatMs !== undefined);
 }
 
 /**
@@ -908,6 +924,7 @@ export async function runCoverage(
           run: false,
           sink,
           effort: options.effort ?? null,
+          ...options.liveness,
         }),
     );
   } catch (error) {

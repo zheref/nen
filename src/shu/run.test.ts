@@ -23,11 +23,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
+import { parseArgs } from "../cli/args.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { PORT_PROBE_TIMEOUT_MS, type PortVerdict } from "../seam/exec.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
-import { assertPreconditions, INTERACTIVE_VERBS } from "./run.js";
+import { assertPreconditions, DEFAULT_HEARTBEAT_MS, heartbeatLine, INTERACTIVE_VERBS, pollEvery, runVerb } from "./run.js";
 import {
   LAUNCHING_VERBS,
   renderArgv,
@@ -3920,13 +3921,22 @@ describe("a stall guard: BOTH budgets, the repository's own remedy, and no kill"
     expect(report.steps[1]?.stall).toMatchObject({ elapsedMs: 1_000, quietMs: 500 });
   });
 
-  it("leaves an unguarded step on the captured seam, untouched", async () => {
-    const result = await withDeclaration(oneLane(), ["build", "--json"], {
+  it("leaves an unguarded step on the captured seam, untouched, when nothing asks for liveness (--heartbeat 0)", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json", "--heartbeat", "0"], {
       script: [{ match: "placeholder-tool go", result: { code: 0 } }],
     });
     expect(result.code).toBe(0);
     expect(stallOf(result)).toBeNull();
     expect(result.seams.calls[0]?.streamed).toBeUndefined();
+  });
+
+  it("watches an unguarded step by default, for the heartbeat, and its report says no guard (zheref/nen#244)", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json"], {
+      script: [{ match: "placeholder-tool go", result: { code: 0 } }],
+    });
+    expect(result.code).toBe(0);
+    expect(stallOf(result)).toBeNull();
+    expect(result.seams.calls[0]?.streamed).toBe(true);
   });
 
   it("strikes ONLY when BOTH elapsedMs and quietMs are exceeded -- the two-gate rule, pinned (zheref/nen#227)", async () => {
@@ -4159,5 +4169,275 @@ describe("a run's steps land on the open phase entry", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ── liveness: --stream and the heartbeat (zheref/nen#244) ────────────────────
+//
+// A step that printed nothing until it exited was read as hung by the
+// log-growth watchdog above it, which killed a healthy twelve-minute compile.
+// These pin the two answers on a SCRIPTED clock: the heartbeat, on by default,
+// and `--stream`, which relays the child's own lines as they land. The real
+// clock is ./stream-heartbeat.integration.test.ts's.
+
+/** Every line that is a heartbeat, in order. */
+function beats(lines: readonly string[]): readonly string[] {
+  return lines.filter((line): boolean => line.startsWith("nen shu: "));
+}
+
+/** The child's own lines and the heartbeats, in the order they reached stderr. */
+function liveOrder(lines: readonly string[]): readonly string[] {
+  return lines.filter(
+    (line): boolean => line.startsWith("nen shu: ") || line === "first" || line === "last",
+  );
+}
+
+/** A build that prints, goes quiet past two default intervals, prints again. */
+const PRINT_SLEEP_PRINT = timeline([
+  { atMs: 5, stream: "stdout", text: "first\n" },
+  { atMs: 30_000 },
+  { atMs: 60_000 },
+  { atMs: 61_000, stream: "stderr", text: "last\n" },
+]);
+
+describe("liveness: --stream and the default heartbeat (zheref/nen#244)", () => {
+  it("words the heartbeat with the step, the program and the elapsed time", () => {
+    expect(heartbeatLine("step 1 of 2", "placeholder-tool", 30_400)).toBe(
+      "nen shu: step 1 of 2 (placeholder-tool) still running (30s)",
+    );
+    expect(heartbeatLine("step 2 of 2", "placeholder-tool", 754_999)).toBe(
+      "nen shu: step 2 of 2 (placeholder-tool) still running (12m 34s)",
+    );
+    expect(DEFAULT_HEARTBEAT_MS).toBe(30_000);
+  });
+
+  it("beats on stderr by default, at least twice across two intervals, and HOLDS the child's lines until it exits", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json"], { script: [PRINT_SLEEP_PRINT] });
+    expect(result.code).toBe(0);
+    expect(beats(result.err)).toEqual([
+      "nen shu: step 1 of 1 (placeholder-tool) still running (30s)",
+      "nen shu: step 1 of 1 (placeholder-tool) still running (1m 00s)",
+    ]);
+    // NOT LIVE: both heartbeats land before the line the child printed first.
+    expect(liveOrder(result.err)).toEqual([...beats(result.err), "first", "last"]);
+  });
+
+  it("relays the child's lines AS THEY LAND under --stream, the heartbeats between them", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json", "--stream"], { script: [PRINT_SLEEP_PRINT] });
+    expect(result.code).toBe(0);
+    expect(liveOrder(result.err)).toEqual([
+      "first",
+      "nen shu: step 1 of 1 (placeholder-tool) still running (30s)",
+      "nen shu: step 1 of 1 (placeholder-tool) still running (1m 00s)",
+      "last",
+    ]);
+  });
+
+  it("relays stdout to stdout without --json, live under --stream", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--stream"], { script: [PRINT_SLEEP_PRINT] });
+    expect(result.code).toBe(0);
+    expect(result.out[0]).toBe("first");
+    expect(result.err).toContain("last");
+  });
+
+  it("changes neither the exit code nor one byte of the --json report, in any mode", async () => {
+    const failing = timeline(
+      [
+        { atMs: 5, stream: "stdout", text: "first\n" },
+        { atMs: 30_000 },
+        { atMs: 61_000, stream: "stderr", text: "last\n" },
+      ],
+      3,
+    );
+    const runs = await Promise.all(
+      [["--heartbeat", "0"], [], ["--stream"], ["--stream", "--heartbeat", "0"], ["--heartbeat", "10"]].map(
+        async (flags) => withDeclaration(oneLane(), ["build", "--json", ...flags], { script: [failing] }),
+      ),
+    );
+    for (const run of runs) expect(run.code).toBe(1);
+    // Each run is its own temporary repository, so `cwd` is the one field that
+    // differs by construction -- and differs between two identical runs too.
+    const reports = runs.map((run): unknown =>
+      JSON.parse(run.out.join("\n"), (key, value: unknown): unknown => (key === "cwd" ? "<repo>" : value)),
+    );
+    for (const report of reports.slice(1)) expect(report).toEqual(reports[0]);
+    // The tool's own code is in the report, as it always was.
+    expect((reports[0] as { steps: { exitCode: number }[] }).steps[0]?.exitCode).toBe(3);
+  });
+
+  it("changes neither the exit code nor the text report", async () => {
+    const plain = await withDeclaration(oneLane(), ["build", "--heartbeat", "0"], { script: [PRINT_SLEEP_PRINT] });
+    const streamed = await withDeclaration(oneLane(), ["build", "--stream"], { script: [PRINT_SLEEP_PRINT] });
+    expect(streamed.code).toBe(plain.code);
+    // The report lines are stdout's; the child's own "first" moves no line of it.
+    const report = (lines: readonly string[]): readonly string[] =>
+      lines.filter((line): boolean => line !== "first" && !line.startsWith("cwd:"));
+    expect(report(streamed.out)).toEqual(report(plain.out));
+  });
+
+  it("beats at the interval --heartbeat names, never before it", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json", "--heartbeat", "10"], {
+      script: [timeline([{ atMs: 5_000 }, { atMs: 10_000 }, { atMs: 15_000 }, { atMs: 20_000 }])],
+    });
+    expect(result.code).toBe(0);
+    expect(beats(result.err)).toEqual([
+      "nen shu: step 1 of 1 (placeholder-tool) still running (10s)",
+      "nen shu: step 1 of 1 (placeholder-tool) still running (20s)",
+    ]);
+  });
+
+  it("owes ONE line for a late tick, not a burst", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json"], {
+      script: [timeline([{ atMs: 95_000 }, { atMs: 100_000 }])],
+    });
+    expect(beats(result.err)).toEqual(["nen shu: step 1 of 1 (placeholder-tool) still running (1m 35s)"]);
+  });
+
+  it("is silent under --heartbeat 0, and the step goes through the captured seam", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json", "--heartbeat", "0"], {
+      script: [ok("placeholder-tool go")],
+    });
+    expect(result.code).toBe(0);
+    expect(beats(result.err)).toEqual([]);
+    expect(result.seams.calls[0]?.streamed).toBeUndefined();
+  });
+
+  it("still streams under --stream --heartbeat 0, with no heartbeat", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json", "--stream", "--heartbeat", "0"], {
+      script: [PRINT_SLEEP_PRINT],
+    });
+    expect(beats(result.err)).toEqual([]);
+    expect(liveOrder(result.err)).toEqual(["first", "last"]);
+    expect(result.seams.calls[0]?.streamed).toBe(true);
+  });
+
+  it("keeps a redirected step's stdout for its file under --stream, and relays only stderr", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-stream-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({
+          $schema: "nen.contract/v0.1",
+          project: oneLane({}, { exe: "placeholder-tool", argv: ["go"], stdoutTo: "out/report.txt" }),
+        }),
+      );
+      const result = await capture(["build", "--json", "--stream"], { repo: dir, script: [PRINT_SLEEP_PRINT] });
+      expect(result.code).toBe(0);
+      expect(liveOrder(result.err)).toEqual([...beats(result.err), "last"]);
+      expect(readFileSync(join(dir, "out", "report.txt"), "utf8")).toBe("first\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([["abc"], ["-1"], ["0.05"], ["1e3"], [""]])("refuses --heartbeat '%s' at exit 2, before anything spawns", async (value) => {
+    const result = await withDeclaration(oneLane(), ["build", "--heartbeat", value], { script: [] });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--heartbeat");
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("refuses both flags on a verb that hands the terminal to the child", async () => {
+    for (const flags of [["--stream"], ["--heartbeat", "5"]]) {
+      const result = await capture(["dev", ...flags]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("not read by 'shu dev'");
+    }
+  });
+
+  it("never resets a stall guard's quiet window: the guard still fires on the child's own silence", async () => {
+    const result = await withDeclaration(guarded(), ["build", "--json", "--heartbeat", "10"], {
+      script: [timeline([{ atMs: 0, stream: "stdout", text: "first\n" }, { atMs: 190_000 }], 0, 200_000), ok(KILLER)],
+    });
+    expect(result.code).toBe(0);
+    // Nineteen heartbeats would be nineteen lines of nen's -- none of them the
+    // child's -- and the guard still judged 190s of quiet past its 60s budget.
+    expect(stallOf(result)?.strikes).toBe(1);
+    expect(beats(result.err)).toEqual(["nen shu: step 1 of 1 (placeholder-tool) still running (3m 10s)"]);
+  });
+});
+
+// ── Copilot round 1 on zheref/nen#381 ───────────────────────────────────────
+
+describe("liveness: Copilot round 1 on zheref/nen#381", () => {
+  it("A: past the hold limit, relays everything held and the rest live -- nothing lost, same report", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-hold-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane() }));
+      const script = [
+        timeline([
+          { atMs: 1, stream: "stdout", text: "aaaa\nbb" },
+          { atMs: 2, stream: "stderr", text: "e1\n" },
+          { atMs: 3, stream: "stdout", text: "b\nccc\n" },
+          { atMs: 4, stream: "stderr", text: "e2\n" },
+        ]),
+      ];
+      const run = async (holdLimitBytes?: number): Promise<{ code: number; out: string[]; err: string[] }> => {
+        const out: string[] = [];
+        const err: string[] = [];
+        const context = {
+          args: parseArgs([], {}),
+          repoFlag: dir,
+          json: true,
+          io: { out: (line: string): void => void out.push(line), err: (line: string): void => void err.push(line) },
+          seams: new ScriptedSeams(script, { platform: "linux", env: {} }),
+        };
+        const code = await runVerb(context, dir, {
+          verb: "build",
+          lane: null,
+          dryRun: false,
+          target: null,
+          run: false,
+          ...(holdLimitBytes === undefined ? {} : { holdLimitBytes }),
+        });
+        return { code, out, err };
+      };
+      const bounded = await run(10);
+      const unbounded = await run();
+      const child = (lines: readonly string[]): readonly string[] =>
+        lines.filter((line): boolean => ["aaaa", "bbb", "ccc", "e1", "e2"].includes(line) || line.includes("relaying the rest live"));
+      expect(child(bounded.err)).toEqual([
+        "nen shu: step 1 of 1 output passed 10 bytes; relaying the rest live",
+        "aaaa",
+        "bbb",
+        "ccc",
+        "e1",
+        "e2",
+      ]);
+      // Under the limit nothing changes: held, then stdout before stderr, no notice.
+      expect(child(unbounded.err)).toEqual(["aaaa", "bbb", "ccc", "e1", "e2"]);
+      expect(bounded.code).toBe(unbounded.code);
+      const report = (lines: readonly string[]): unknown =>
+        JSON.parse(lines.join("\n"), (key, value: unknown): unknown => (key === "cwd" ? "<repo>" : value));
+      expect(report(bounded.out)).toEqual(report(unbounded.out));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([["9".repeat(400)], ["3000000"], ["2147484"]])(
+    "B: refuses --heartbeat %s, past the longest interval a timer can hold, at exit 2 naming it",
+    async (value) => {
+      const result = await withDeclaration(oneLane(), ["build", "--heartbeat", value], { script: [] });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("past the longest interval a timer can hold");
+      expect(result.err.join("\n")).toContain(value.slice(0, 32));
+      expect(result.seams.calls).toEqual([]);
+    },
+  );
+
+  it("B: still accepts the longest interval a timer can hold", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json", "--heartbeat", "2147483"], {
+      script: [ok("placeholder-tool go")],
+    });
+    expect(result.code).toBe(0);
+  });
+
+  it("C: no guard and no heartbeat means no watcher interval at all", () => {
+    expect(pollEvery(null, null)).toBeNull();
+    expect(pollEvery(null, 30_000)).toBe(5_000);
+    expect(pollEvery({ ...STALL_GUARD, maxStrikes: 2, raw: {} }, null)).toBe(5_000);
   });
 });
