@@ -2,8 +2,9 @@
 // pull request already claims to close, proposed and never acted on
 // (zheref/nen#332).
 //
-// READ-ONLY AND PROPOSE-ONLY, BY RULING. The maintainer ruled #332 down from
-// "closes or proposes closure" to PROPOSES ONLY: this module finds open issues a
+// READ-ONLY AND PROPOSE-ONLY, BY RULING -- the maintainer's ruling recorded on
+// this verb's PR (zheref/nen#332's delivery), which narrowed the issue's "closes
+// or proposes closure" to PROPOSES ONLY: this module finds open issues a
 // merged pull request already closes, and says which issue, on which evidence,
 // and what it suggests -- in the human rendering and in --json alike. It never
 // closes, comments, labels or otherwise writes to GitHub, and there is no flag
@@ -31,12 +32,18 @@
 // carries no keyword. So "landed" is decided here, not assumed: a PR whose base
 // IS the default branch has landed; any other base is checked with
 // `repos/{o}/{n}/compare/{default}...{mergeCommit}`, whose `behind`/`identical`
-// answer means the merge commit is reachable from the default branch. A merge
-// that has not reached it is proposed as `wait`, never `close`.
+// answer means the merge commit is reachable from the default branch. `ahead`
+// means it is not. `diverged` is weaker than it looks: a base branch that was
+// SQUASHED or REBASED into the default branch reads `diverged` too, because its
+// commits arrived as different ones -- so a diverged merge never asserts "has
+// NOT reached"; the verb looks for a merged delivery PR from that base into the
+// default branch and proposes `verify` citing it when there is one, `wait`
+// (worded as "not reachable") when there is none. Neither is ever `close`.
 //
 // AN UNREADABLE SOURCE IS A FINDING, NEVER "NOTHING TO RECONCILE". Every read
-// that fails is carried as a finding, and so is a list that came back full (it
-// may have stopped before the PR that matters). Any finding makes the run exit
+// that fails is carried as a finding, and so is a partial one -- an open list
+// that came back full, a search that matched more than it returned (it may have
+// stopped before the PR that matters). Any finding makes the run exit
 // 1, and the human rendering says in words that an empty proposal list under a
 // finding is not a clean answer -- the same "found nothing" vs "could not look"
 // rule ./search.ts follows.
@@ -44,19 +51,22 @@
 // NAMES ARE DATA (the Akatsuki migration's § 3). No label is known here. A
 // repository's "do not close this" override is whatever it calls it, and the
 // caller hands those names in through --hold-labels; with none given, nothing is
-// held. The closing keywords are GitHub's own grammar, not any repository's
+// held. They match case-insensitively, as GitHub's label names do, and a named
+// hold label that matches no label on any scanned issue is a FINDING -- a typo
+// must never read as "nothing held". The closing keywords are GitHub's own grammar, not any repository's
 // vocabulary, and `REOPENED` is GitHub's `stateReason` enum.
 
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { openPrCheck } from "./file.js";
+import { plainLine } from "../cli/plain.js";
 
 export const RECONCILE_CONTRACT = "nen.issue.reconcile/v0.1";
 
 /** The page both lists are asked for by default, and the number a truncation is judged against. */
 export const RECONCILE_LIMIT = 100;
 
-/** The largest --limit accepted: `gh`'s own ceiling for a list it paginates itself. */
+/** The largest --limit accepted: GitHub search's ceiling -- it returns no result past the 1000th. */
 export const RECONCILE_MAX_LIMIT = 1000;
 
 // --- closing references ------------------------------------------------------
@@ -93,12 +103,40 @@ const REFERENCE = new RegExp(
  * itself does not act on either.
  */
 export function stripNonReferenceText(text: string): string {
-  return text
+  const unfenced = text
     .replace(/\r\n/g, "\n")
     .replace(/<!--[\s\S]*?-->/g, " ")
     .replace(/```[\s\S]*?(?:```|$)/g, " ")
-    .replace(/~~~[\s\S]*?(?:~~~|$)/g, " ")
-    .replace(/`[^`\n]*`/g, " ");
+    .replace(/~~~[\s\S]*?(?:~~~|$)/g, " ");
+  return stripIndentedCode(unfenced).replace(CODE_SPAN, " ");
+}
+
+// A code span is a run of N backticks closed by a run of EXACTLY N (CommonMark),
+// so ``Closes `#1` `` is one span, and it never crosses a blank line.
+const CODE_SPAN = /(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g;
+
+/**
+ * Drop indented code blocks: a line indented four spaces (or a tab) that
+ * follows a blank line, the start of the text, or another such line. A line
+ * indented the same way straight after a paragraph line is a continuation, not
+ * code, and is kept.
+ */
+function stripIndentedCode(text: string): string {
+  let afterBlank = true;
+  let inCode = false;
+  return text
+    .split("\n")
+    .map((line): string => {
+      if (line.trim() === "") {
+        afterBlank = true;
+        return line;
+      }
+      const indented = /^(?: {4,}|\t)/.test(line);
+      inCode = indented && (afterBlank || inCode);
+      afterBlank = false;
+      return inCode ? "" : line;
+    })
+    .join("\n");
 }
 
 /**
@@ -169,22 +207,65 @@ export const LINKS_PER_PR = 50;
 export const MERGED_PULLS_QUERY = [
   "query($q: String!, $first: Int!, $after: String) {",
   "  search(query: $q, type: ISSUE, first: $first, after: $after) {",
+  "    issueCount",
   "    pageInfo { hasNextPage endCursor }",
   "    nodes { ... on PullRequest {",
   "      number title url baseRefName mergedAt body",
   "      mergeCommit { oid }",
   `      closingIssuesReferences(first: ${LINKS_PER_PR}) { totalCount nodes { number url repository { name owner { login } } } }`,
-  `      commits(first: ${COMMITS_PER_PR}) { totalCount nodes { commit { oid messageHeadline messageBody } } }`,
+  `      commits(first: ${COMMITS_PER_PR}) { totalCount pageInfo { hasNextPage endCursor } nodes { commit { oid messageHeadline messageBody } } }`,
   "    } }",
   "  }",
   "}",
 ].join("\n");
 
+/**
+ * The follow-up for one pull request whose commits did not fit the search page:
+ * the next page of its commits, after the cursor the previous page ended on.
+ */
+export const PR_COMMITS_QUERY = [
+  "query($owner: String!, $name: String!, $number: Int!, $after: String) {",
+  "  repository(owner: $owner, name: $name) {",
+  "    pullRequest(number: $number) {",
+  `      commits(first: ${COMMITS_PER_PR}, after: $after) { pageInfo { hasNextPage endCursor } nodes { commit { oid messageHeadline messageBody } } }`,
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+
+export function prCommitsArgv(target: Target, number: number, after: string): readonly string[] {
+  return [
+    "api",
+    "graphql",
+    "-f",
+    `query=${PR_COMMITS_QUERY}`,
+    "-f",
+    `owner=${target.owner}`,
+    "-f",
+    `name=${target.repo}`,
+    "-F",
+    `number=${number}`,
+    "-f",
+    `after=${after}`,
+  ];
+}
+
+/**
+ * Merged pull requests from BASE into HEAD -- the delivery a diverged compare
+ * may be hiding (a squash or rebase landing of the base branch).
+ */
+export function deliveryArgv(target: Target, head: string, base: string): readonly string[] {
+  return ["pr", "list", "--repo", target.slug, "--state", "merged", "--head", head, "--base", base, "--limit", "1", "--json", "number,url,mergedAt"];
+}
+
 export function openIssuesArgv(target: Target, limit: number): readonly string[] {
   return ["issue", "list", "--repo", target.slug, "--state", "open", "--limit", String(limit), "--json", ISSUE_FIELDS];
 }
 
-/** The search expression: this repository's merged pull requests, newest activity first. */
+/**
+ * The search expression: this repository's merged pull requests, most recently
+ * UPDATED first -- search has no merge-date sort, so this is not merge order.
+ */
 export function mergedPullsSearch(target: Target, since: string | null): string {
   return `repo:${target.slug} is:pr is:merged${since === null ? "" : ` merged:>=${since}`} sort:updated-desc`;
 }
@@ -297,11 +378,20 @@ export function parseMergedPulls(text: string, target: Target): MergedPullReques
  * plus what pagination and the per-PR caps need. A shape it does not recognise
  * THROWS: an unreadable page must be a finding, never an empty one.
  */
+export interface CommitsContinuation {
+  readonly number: number;
+  readonly totalCount: number;
+  /** Where the next page of commits starts; `null` when GitHub gave no cursor. */
+  readonly after: string | null;
+}
+
 export function parseMergedPullsPage(text: string): {
   readonly rows: readonly Record<string, unknown>[];
+  readonly issueCount: number | null;
   readonly hasNextPage: boolean;
   readonly endCursor: string | null;
   readonly overflow: readonly string[];
+  readonly continuations: readonly CommitsContinuation[];
 } {
   const response = record(JSON.parse(text));
   if (Array.isArray(response["errors"]) && response["errors"].length > 0) {
@@ -312,6 +402,7 @@ export function parseMergedPullsPage(text: string): {
   if (!Array.isArray(nodes)) throw new Error("the search answered with no 'nodes' list");
   const pageInfo = record(search["pageInfo"]);
   const overflow: string[] = [];
+  const continuations: CommitsContinuation[] = [];
   const rows = nodes.map((node): Record<string, unknown> => {
     const row = record(node);
     const links = record(row["closingIssuesReferences"]);
@@ -321,8 +412,14 @@ export function parseMergedPullsPage(text: string): {
     if (Number(links["totalCount"] ?? 0) > linkNodes.length) {
       overflow.push(`PR #${String(row["number"])} has ${String(links["totalCount"])} closing references; only ${linkNodes.length} were read`);
     }
-    if (Number(commits["totalCount"] ?? 0) > commitNodes.length) {
-      overflow.push(`PR #${String(row["number"])} has ${String(commits["totalCount"])} commits; only ${commitNodes.length} were read`);
+    const commitsPage = record(commits["pageInfo"]);
+    if (commitsPage["hasNextPage"] === true || Number(commits["totalCount"] ?? 0) > commitNodes.length) {
+      const cursor = commitsPage["endCursor"];
+      continuations.push({
+        number: Number(row["number"] ?? 0),
+        totalCount: Number(commits["totalCount"] ?? 0),
+        after: typeof cursor === "string" && cursor !== "" ? cursor : null,
+      });
     }
     return {
       ...row,
@@ -331,18 +428,63 @@ export function parseMergedPullsPage(text: string): {
     };
   });
   const cursor = pageInfo["endCursor"];
+  const count = search["issueCount"];
   return {
     rows,
+    issueCount: typeof count === "number" && Number.isFinite(count) ? count : null,
     hasNextPage: pageInfo["hasNextPage"] === true,
     endCursor: typeof cursor === "string" && cursor !== "" ? cursor : null,
     overflow,
+    continuations,
   };
 }
 
 /**
- * Every merged pull request the search yields, up to `limit`, page by page.
- * `null` when a page could not be read (the finding is recorded); `truncated`
- * when the limit was reached with more still on GitHub's side.
+ * The commits of one pull request beyond the search page's first 100, page by
+ * page. A failed read returns its reason; the commits read so far are kept.
+ */
+function readRemainingCommits(
+  seams: Seams,
+  target: Target,
+  continuation: CommitsContinuation,
+): { readonly commits: Record<string, unknown>[]; readonly error: string | null } {
+  const commits: Record<string, unknown>[] = [];
+  let after = continuation.after;
+  if (after === null) return { commits, error: "GitHub gave no cursor for the rest of them" };
+  for (;;) {
+    const result = seams.run(GH, prCommitsArgv(target, continuation.number, after));
+    if (result.spawnFailed || result.code !== 0) return { commits, error: failure(result.stderr, result.code) };
+    let connection: Record<string, unknown>;
+    try {
+      const response = record(JSON.parse(result.stdout));
+      if (Array.isArray(response["errors"]) && response["errors"].length > 0) {
+        throw new Error(response["errors"].map((error): string => String(record(error)["message"] ?? "error")).join("; "));
+      }
+      connection = record(record(record(record(response["data"])["repository"])["pullRequest"])["commits"]);
+      if (!Array.isArray(connection["nodes"])) throw new Error("the answer carried no commits list");
+    } catch (error) {
+      return { commits, error: message(error) };
+    }
+    for (const item of connection["nodes"] as unknown[]) commits.push(record(record(item)["commit"]));
+    const page = record(connection["pageInfo"]);
+    if (page["hasNextPage"] !== true) return { commits, error: null };
+    const next = page["endCursor"];
+    if (typeof next !== "string" || next === "") return { commits, error: "GitHub said another page of commits exists and gave no cursor" };
+    after = next;
+  }
+}
+
+/**
+ * Every merged pull request the search yields, up to `limit`, page by page,
+ * each PR once (a row whose number was already read on an earlier page is
+ * dropped -- an update between two page reads can move a PR across the
+ * boundary). `null` when a page could not be read (the finding is recorded).
+ *
+ * TRUNCATED IS DECIDED BY `issueCount`, NOT BY `hasNextPage` ALONE. GitHub
+ * search returns nothing past its 1000th result and answers that last page
+ * with `hasNextPage: false`, so a search that matched 4000 PRs would otherwise
+ * read as complete. `issueCount` is the total the search matched; more matched
+ * than read is a truncation whatever the cursor says.
  */
 function readMergedPulls(
   seams: Seams,
@@ -352,7 +494,9 @@ function readMergedPulls(
   findings: Finding[],
 ): { readonly pulls: MergedPullRequest[]; readonly truncated: boolean } | null {
   const rows: Record<string, unknown>[] = [];
+  const seen = new Set<number>();
   let after: string | null = null;
+  let truncated = false;
   for (;;) {
     const first = Math.min(100, limit - rows.length);
     const result = seams.run(GH, mergedPullsArgv(target, first, since, after));
@@ -367,16 +511,47 @@ function readMergedPulls(
       findings.push({ source: "merged-pull-requests", detail: `could not parse ${target.slug}'s merged pull requests: ${message(error)}` });
       return null;
     }
-    rows.push(...page.rows);
+    const fresh = new Set<number>();
+    for (const row of page.rows) {
+      const number = Number(row["number"] ?? 0);
+      if (seen.has(number)) continue;
+      seen.add(number);
+      fresh.add(number);
+      rows.push(row);
+    }
     for (const detail of page.overflow) findings.push({ source: "merged-pull-requests", detail });
-    if (!page.hasNextPage) return { pulls: parseMergedPulls(JSON.stringify(rows), target), truncated: false };
-    if (rows.length >= limit) return { pulls: parseMergedPulls(JSON.stringify(rows), target), truncated: true };
+    for (const continuation of page.continuations) {
+      if (!fresh.has(continuation.number)) continue;
+      const row = rows.find((candidate): boolean => Number(candidate["number"] ?? 0) === continuation.number);
+      const more = readRemainingCommits(seams, target, continuation);
+      if (row !== undefined) row["commits"] = [...(row["commits"] as Record<string, unknown>[]), ...more.commits];
+      if (more.error !== null) {
+        const read = row === undefined ? 0 : (row["commits"] as unknown[]).length;
+        findings.push({
+          source: "merged-pull-requests",
+          detail: `PR #${continuation.number} has ${continuation.totalCount} commits; only ${read} were read: ${more.error}`,
+        });
+      }
+    }
+    const beyond = page.issueCount !== null && page.issueCount > rows.length;
+    // The limit is checked FIRST: once it is reached nothing more is asked for,
+    // and whether that was the end is the search's count to say.
+    if (rows.length >= limit) {
+      truncated = page.hasNextPage || beyond;
+      break;
+    }
+    if (!page.hasNextPage) {
+      truncated = beyond;
+      break;
+    }
     if (page.endCursor === null) {
       findings.push({ source: "merged-pull-requests", detail: "the search said another page exists and gave no cursor to read it" });
-      return { pulls: parseMergedPulls(JSON.stringify(rows), target), truncated: true };
+      truncated = true;
+      break;
     }
     after = page.endCursor;
   }
+  return { pulls: parseMergedPulls(JSON.stringify(rows), target), truncated };
 }
 
 // --- the report ----------------------------------------------------------------
@@ -386,10 +561,23 @@ function readMergedPulls(
  *   default-branch         -- the PR merged straight into it;
  *   reached-default-branch -- it merged elsewhere, and the merge commit is now
  *                             reachable from the default branch;
- *   not-on-default-branch  -- it merged elsewhere and has not reached it;
+ *   not-on-default-branch  -- it merged elsewhere and the default branch is an
+ *                             ancestor of it (compare `ahead`): not landed;
+ *   diverged               -- it merged elsewhere and is not reachable from the
+ *                             default branch, which has moved on too (compare
+ *                             `diverged`). A squash or rebase landing of the base
+ *                             reads exactly this way, so it asserts nothing --
+ *                             see `delivery`;
  *   unknown                -- that could not be read (a finding names why).
  */
-export type Landing = "default-branch" | "reached-default-branch" | "not-on-default-branch" | "unknown";
+export type Landing = "default-branch" | "reached-default-branch" | "not-on-default-branch" | "diverged" | "unknown";
+
+/** A merged PR from a closing PR's base into the default branch: how a squash/rebase landing is seen. */
+export interface Delivery {
+  readonly pr: number;
+  readonly url: string;
+  readonly mergedAt: string | null;
+}
 
 export interface Evidence {
   readonly pr: number;
@@ -399,6 +587,8 @@ export interface Evidence {
   readonly mergedAt: string | null;
   readonly mergeCommit: string | null;
   readonly landing: Landing;
+  /** For a `diverged` landing only: the merged delivery PR from `base` into the default branch, or `null` when none. */
+  readonly delivery: Delivery | null;
   readonly references: readonly ClosingReference[];
 }
 
@@ -427,7 +617,7 @@ export interface Proposal {
 }
 
 export interface Finding {
-  /** Which source: `default-branch`, `open-issues`, `merged-pull-requests`, `compare #<pr>`, `open-pr-guard`. */
+  /** Which source: `default-branch`, `open-issues`, `merged-pull-requests`, `compare #<pr>`, `delivery <branch>`, `open-pr-guard`, `hold-labels`. */
   readonly source: string;
   readonly detail: string;
 }
@@ -507,7 +697,7 @@ function readList<T>(
 }
 
 const REACHED = new Set(["behind", "identical"]);
-const NOT_REACHED = new Set(["ahead", "diverged"]);
+
 
 function landingOf(
   seams: Seams,
@@ -532,11 +722,50 @@ function landingOf(
   } else {
     const status = result.stdout.trim();
     if (REACHED.has(status)) landing = "reached-default-branch";
-    else if (NOT_REACHED.has(status)) landing = "not-on-default-branch";
+    else if (status === "ahead") landing = "not-on-default-branch";
+    else if (status === "diverged") landing = "diverged";
     else findings.push({ source: `compare #${pull.number}`, detail: `comparing ${pull.mergeCommit} with '${defaultBranch}' answered an unrecognised status '${status}'` });
   }
   cache.set(pull.mergeCommit, landing);
   return landing;
+}
+
+/**
+ * The merged delivery PR from `head` into `base`, read once per base. `null`
+ * for none; `undefined` when the read failed (the finding is recorded).
+ */
+function deliveryOf(
+  seams: Seams,
+  target: Target,
+  head: string,
+  base: string,
+  cache: Map<string, Delivery | null | undefined>,
+  findings: Finding[],
+): Delivery | null | undefined {
+  if (cache.has(head)) return cache.get(head);
+  const result = seams.run(GH, deliveryArgv(target, head, base));
+  let delivery: Delivery | null | undefined;
+  if (result.spawnFailed || result.code !== 0) {
+    findings.push({ source: `delivery ${head}`, detail: `could not look for a merged PR from '${head}' into '${base}': ${failure(result.stderr, result.code)}` });
+    delivery = undefined;
+  } else {
+    try {
+      const first = record(jsonArray(result.stdout, "pull requests")[0]);
+      delivery =
+        first["number"] === undefined
+          ? null
+          : {
+              pr: Number(first["number"]),
+              url: String(first["url"] ?? ""),
+              mergedAt: typeof first["mergedAt"] === "string" && first["mergedAt"] !== "" ? first["mergedAt"] : null,
+            };
+    } catch (error) {
+      findings.push({ source: `delivery ${head}`, detail: `could not parse the merged PRs from '${head}' into '${base}': ${message(error)}` });
+      delivery = undefined;
+    }
+  }
+  cache.set(head, delivery);
+  return delivery;
 }
 
 function landed(landing: Landing): boolean {
@@ -550,8 +779,12 @@ function cite(evidence: Evidence, defaultBranch: string | null): string {
       : evidence.landing === "reached-default-branch"
         ? `merged into '${evidence.base}', and its merge commit has reached '${defaultBranch ?? "?"}'`
         : evidence.landing === "not-on-default-branch"
-          ? `merged into '${evidence.base}', and its merge commit has NOT reached '${defaultBranch ?? "?"}'`
-          : `merged into '${evidence.base}', landing unknown`;
+          ? `merged into '${evidence.base}', and its merge commit has NOT reached '${defaultBranch ?? "?"}' ('${defaultBranch ?? "?"}' is still an ancestor of it)`
+          : evidence.landing === "diverged"
+            ? evidence.delivery === null
+              ? `merged into '${evidence.base}', and its merge commit is not reachable from '${defaultBranch ?? "?"}' (a squash or rebase landing reads the same way)`
+              : `merged into '${evidence.base}', whose merge commit is not reachable from '${defaultBranch ?? "?"}' by ancestry, but PR #${evidence.delivery.pr} merged '${evidence.base}' into '${defaultBranch ?? "?"}' (a squash or rebase landing reads this way)`
+            : `merged into '${evidence.base}', landing unknown`;
   return `PR #${evidence.pr} ${where}`;
 }
 
@@ -576,7 +809,7 @@ export function reconcile(seams: Seams, target: Target, options: ReconcileOption
   if (pullsTruncated) {
     findings.push({
       source: "merged-pull-requests",
-      detail: `the merged pull-request search reached --limit (${options.limit}) with more left; an older merge was not scanned -- narrow --since or raise --limit`,
+      detail: `the merged pull-request search matched more than the ${merged?.pulls.length ?? 0} read (--limit ${options.limit}, and GitHub search stops at 1000); a PR further down its most-recently-updated order was not scanned -- narrow --since or raise --limit`,
     });
   }
 
@@ -593,12 +826,21 @@ export function reconcile(seams: Seams, target: Target, options: ReconcileOption
       ? []
       : options.issues.filter((number): boolean => !open.has(number));
 
-  // Issue -> its evidence, in the order the PRs were listed (newest merge first).
+  // Issue -> its evidence; sorted below by merge date, newest first, because
+  // the search's own order is most-recently-UPDATED, not merge order.
   const evidenceByIssue = new Map<number, Evidence[]>();
   const landingCache = new Map<string, Landing>();
+  const deliveryCache = new Map<string, Delivery | null | undefined>();
   for (const pull of pulls ?? []) {
     for (const [issue, references] of pull.references) {
       if (!open.has(issue)) continue;
+      let landing = landingOf(seams, target, defaultBranch, pull, landingCache, findings);
+      let delivery: Delivery | null = null;
+      if (landing === "diverged" && defaultBranch !== null) {
+        const found = deliveryOf(seams, target, pull.base, defaultBranch, deliveryCache, findings);
+        if (found === undefined) landing = "unknown";
+        else delivery = found;
+      }
       const evidence: Evidence = {
         pr: pull.number,
         url: pull.url,
@@ -606,18 +848,39 @@ export function reconcile(seams: Seams, target: Target, options: ReconcileOption
         base: pull.base,
         mergedAt: pull.mergedAt,
         mergeCommit: pull.mergeCommit,
-        landing: landingOf(seams, target, defaultBranch, pull, landingCache, findings),
+        landing,
+        delivery,
         references,
       };
       evidenceByIssue.set(issue, [...(evidenceByIssue.get(issue) ?? []), evidence]);
     }
   }
 
+  for (const list of evidenceByIssue.values()) {
+    list.sort((a, b): number => (b.mergedAt ?? "").localeCompare(a.mergedAt ?? "") || b.pr - a.pr);
+  }
+
+  // Hold labels match case-insensitively, as GitHub's label names do. One that
+  // matches no label on any scanned issue is a finding: a typo would otherwise
+  // read as "nothing held".
+  const holds = new Set(options.holdLabels.map((label): string => label.toLowerCase()));
+  const isHeld = (label: string): boolean => holds.has(label.toLowerCase());
+  if (openIssues !== null) {
+    const present = new Set(openIssues.flatMap((item): readonly string[] => item.labels).map((label): string => label.toLowerCase()));
+    for (const label of options.holdLabels) {
+      if (!present.has(label.toLowerCase())) {
+        findings.push({
+          source: "hold-labels",
+          detail: `--hold-labels '${label}' matches no label on any of the ${openIssues.length} scanned open issue(s); a misspelt hold label would read as "nothing held", so this is not a clean answer`,
+        });
+      }
+    }
+  }
+
   // The open-PR guard, over every issue some landed PR would close -- the same
   // guard `issue open-pr-check` and `consolidate-close` run, reused.
-  const holds = new Set(options.holdLabels);
   const guardCandidates = [...evidenceByIssue.entries()]
-    .filter(([issue, evidence]): boolean => evidence.some((item): boolean => landed(item.landing)) && !(open.get(issue)?.labels ?? []).some((label): boolean => holds.has(label)))
+    .filter(([issue, evidence]): boolean => evidence.some((item): boolean => landed(item.landing)) && !(open.get(issue)?.labels ?? []).some(isHeld))
     .map(([issue]): number => issue)
     .sort((a, b): number => a - b);
   let guard: Map<number, number[]> | null = new Map();
@@ -643,7 +906,7 @@ export function reconcile(seams: Seams, target: Target, options: ReconcileOption
       const issue = open.get(number) as OpenIssue;
       const inFlight = guard?.get(number) ?? [];
       const base = { issue: number, title: issue.title, url: issue.url, labels: issue.labels, evidence, openPullRequests: inFlight };
-      const held = issue.labels.filter((label): boolean => holds.has(label));
+      const held = issue.labels.filter(isHeld);
       if (held.length > 0) {
         return { ...base, action: "hold", reason: `carries the hold label${held.length === 1 ? "" : "s"} ${held.map((label): string => `'${label}'`).join(", ")}` };
       }
@@ -664,6 +927,10 @@ export function reconcile(seams: Seams, target: Target, options: ReconcileOption
       const unknown = evidence.find((item): boolean => item.landing === "unknown");
       if (unknown !== undefined) {
         return { ...base, action: "verify", reason: `${cite(unknown, defaultBranch)}; check whether it reached the default branch` };
+      }
+      const delivered = evidence.find((item): boolean => item.landing === "diverged" && item.delivery !== null);
+      if (delivered !== undefined) {
+        return { ...base, action: "verify", reason: `${cite(delivered, defaultBranch)}; verify the work arrived through that delivery` };
       }
       return { ...base, action: "wait", reason: `${cite(evidence[0] as Evidence, defaultBranch)}; propose again once that branch lands` };
     });
@@ -693,7 +960,13 @@ function describeReference(reference: ClosingReference): string {
   return `'${reference.text}' in commit ${(reference.commit ?? "?").slice(0, 12)}`;
 }
 
-/** The human rendering: the same report the --json document carries, in lines. */
+/**
+ * The human rendering: the same report the --json document carries, in lines.
+ * EVERY line goes through plainLine: titles, labels, base names, reference text
+ * and finding details (gh's stderr, a compare status) are strings GitHub or
+ * somebody else wrote, and a terminal executes a control sequence in one. The
+ * --json document keeps the original bytes.
+ */
 export function renderReconcile(report: ReconcileReport): readonly string[] {
   const lines: string[] = [];
   lines.push(`repository: ${report.target} (default branch: ${report.defaultBranch ?? "UNREAD"})`);
@@ -716,6 +989,9 @@ export function renderReconcile(report: ReconcileReport): readonly string[] {
     for (const evidence of proposal.evidence) {
       const commit = evidence.mergeCommit === null ? "no merge commit" : `merge commit ${evidence.mergeCommit.slice(0, 12)}`;
       lines.push(`  evidence: PR #${evidence.pr} (${evidence.landing}, base ${evidence.base}, ${commit}${evidence.mergedAt === null ? "" : `, merged ${evidence.mergedAt}`})`);
+      if (evidence.delivery !== null) {
+        lines.push(`    delivery: PR #${evidence.delivery.pr} merged '${evidence.base}' into ${report.defaultBranch ?? "the default branch"}${evidence.delivery.mergedAt === null ? "" : ` on ${evidence.delivery.mergedAt}`}`);
+      }
       for (const reference of evidence.references) lines.push(`    ${describeReference(reference)}`);
     }
   }
@@ -728,5 +1004,5 @@ export function renderReconcile(report: ReconcileReport): readonly string[] {
     lines.push(`findings (${report.findings.length}) -- a source that could not be read in full:`);
     for (const finding of report.findings) lines.push(`  ${finding.source}: ${finding.detail}`);
   }
-  return lines;
+  return lines.map(plainLine);
 }

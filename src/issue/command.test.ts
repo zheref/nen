@@ -3426,7 +3426,7 @@ describe("nen issue reconcile -- read-only, proposes only (zheref/nen#332)", () 
   it("refuses --dry-run at exit 2, naming the propose-only ruling", async () => {
     const result = await capture(["issue", "reconcile", "--target", "o/n", "--dry-run"]);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/proposes only, by the maintainer's ruling on zheref\/nen#332/);
+    expect(result.err.join("\n")).toMatch(/proposes only, by the maintainer's ruling recorded on this verb's PR \(zheref\/nen#332's delivery\)/);
     expect(result.calls).toEqual([]);
   });
 

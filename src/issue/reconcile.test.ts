@@ -13,6 +13,8 @@ import {
   stripNonReferenceText,
   RECONCILE_CONTRACT,
   MERGED_PULLS_QUERY,
+  deliveryArgv,
+  prCommitsArgv,
   type ReconcileOptions,
 } from "./reconcile.js";
 
@@ -59,10 +61,10 @@ function node(row: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-function page(rows: readonly Record<string, unknown>[], next: string | null = null): ScriptedCall["result"] {
+function page(rows: readonly Record<string, unknown>[], next: string | null = null, issueCount?: number): ScriptedCall["result"] {
   return {
     stdout: JSON.stringify({
-      data: { search: { pageInfo: { hasNextPage: next !== null, endCursor: next }, nodes: rows.map(node) } },
+      data: { search: { ...(issueCount === undefined ? {} : { issueCount }), pageInfo: { hasNextPage: next !== null, endCursor: next }, nodes: rows.map(node) } },
     }),
   };
 }
@@ -75,7 +77,10 @@ interface World {
   readonly compares?: Readonly<Record<string, ScriptedCall["result"]>>;
   readonly options?: ReconcileOptions;
   readonly nextCursor?: string;
+  readonly issueCount?: number;
   readonly extraPages?: readonly ScriptedCall[];
+  /** `head -> result` for the delivery-PR lookup a diverged compare triggers. */
+  readonly deliveries?: Readonly<Record<string, ScriptedCall["result"]>>;
 }
 
 function asResult(value: readonly Record<string, unknown>[] | ScriptedCall["result"] | undefined): ScriptedCall["result"] {
@@ -89,7 +94,7 @@ function run(world: World): { report: ReturnType<typeof reconcile>; calls: reado
     { match: gh(defaultBranchArgv(TARGET)), result: world.defaultBranch ?? { stdout: JSON.stringify({ defaultBranchRef: { name: "trunk" } }) } },
     { match: gh(openIssuesArgv(TARGET, options.limit)), result: asResult(world.issues) },
     ...(Array.isArray(world.pulls) || world.pulls === undefined
-      ? [{ match: gh(mergedPullsArgv(TARGET, Math.min(100, options.limit), options.since, null)), result: page((world.pulls as Record<string, unknown>[] | undefined) ?? [], world.nextCursor ?? null) }]
+      ? [{ match: gh(mergedPullsArgv(TARGET, Math.min(100, options.limit), options.since, null)), result: page((world.pulls as Record<string, unknown>[] | undefined) ?? [], world.nextCursor ?? null, world.issueCount) }]
       : [{ match: gh(mergedPullsArgv(TARGET, Math.min(100, options.limit), options.since, null)), result: world.pulls as ScriptedCall["result"] }]),
     ...(world.extraPages ?? []),
     {
@@ -97,6 +102,7 @@ function run(world: World): { report: ReturnType<typeof reconcile>; calls: reado
       result: asResult(world.openPulls),
     },
     ...Object.entries(world.compares ?? {}).map(([sha, result]): ScriptedCall => ({ match: gh(compareArgv(TARGET, "trunk", sha)), result })),
+    ...Object.entries(world.deliveries ?? {}).map(([head, result]): ScriptedCall => ({ match: gh(deliveryArgv(TARGET, head, "trunk")), result })),
   ];
   const seams = new ScriptedSeams(script);
   const report = reconcile(seams, TARGET, options);
@@ -142,10 +148,26 @@ describe("closing references -- GitHub's keyword grammar, nothing looser", () =>
     expect(closingReferencesIn("Closes other/repo#7 and fixes ACME/Widgets#8", TARGET).map(([n]): number => n)).toEqual([8]);
   });
 
-  it("does not read fenced code, inline code or HTML comments", () => {
-    const text = "<!-- Closes #1 -->\n```\nfixes #2\n```\nwrite `Closes #3` like this\nResolves #4";
-    expect(stripNonReferenceText(text)).not.toMatch(/#1|#2|#3/);
+  it("does not read fenced code, inline code, indented code or HTML comments", () => {
+    const text = [
+      "<!-- Closes #1 -->",
+      "```",
+      "fixes #2",
+      "```",
+      "write `Closes #3` like this",
+      "and ``Closes `#5` too`` in a double-backtick span",
+      "",
+      "    Fixes #6",
+      "    closes #7",
+      "",
+      "Resolves #4",
+    ].join("\n");
+    expect(stripNonReferenceText(text)).not.toMatch(/#1|#2|#3|#5|#6|#7/);
     expect(closingReferencesIn(text, TARGET).map(([n]): number => n)).toEqual([4]);
+  });
+
+  it("keeps a four-space continuation line that follows a paragraph line -- it is not code", () => {
+    expect(closingReferencesIn("A paragraph that wraps\n    and Closes #8 here", TARGET).map(([n]): number => n)).toEqual([8]);
   });
 });
 
@@ -204,7 +226,7 @@ describe("reconcile -- proposals bound to landed evidence", () => {
         pull(40, { baseRefName: "epic/one", mergeCommit: { oid: MAIN_SHA }, body: "Closes #5" }),
         pull(41, { baseRefName: "epic/two", mergeCommit: { oid: SIDE_SHA }, body: "Closes #6" }),
       ],
-      compares: { [MAIN_SHA]: { stdout: "behind\n" }, [SIDE_SHA]: { stdout: "diverged\n" } },
+      compares: { [MAIN_SHA]: { stdout: "behind\n" }, [SIDE_SHA]: { stdout: "ahead\n" } },
     });
     expect(calls).toContain(gh(compareArgv(TARGET, "trunk", MAIN_SHA)));
     expect(report.proposals.map((p): [number, string, string] => [p.issue, p.action, p.evidence[0]?.landing ?? ""])).toEqual([
@@ -382,5 +404,164 @@ describe("renderReconcile -- the same report in lines", () => {
     expect(text).toMatch(/#5 issue 5\n {2}propose: close -- PR #40 merged into 'trunk', the default branch/);
     expect(text).toMatch(/evidence: PR #40 \(default-branch, base trunk, merge commit aaaaaaaaaaaa/);
     expect(text).toMatch(/'Closes #5' in the PR body/);
+  });
+});
+
+describe("round 1 (Nobunaga) on the delivery of #332", () => {
+  it("N1: a last page with hasNextPage false but issueCount above the rows read is truncated -- GitHub search stops at 1000", () => {
+    const { report } = run({ issues: [issue(5)], pulls: [pull(40), pull(41)], issueCount: 4000 });
+    expect(report.truncated.mergedPullRequests).toBe(true);
+    expect(report.complete).toBe(false);
+    expect(report.findings.map((f): string => f.source)).toEqual(["merged-pull-requests"]);
+    expect(report.findings[0]?.detail).toMatch(/matched more than the 2 read .*stops at 1000/);
+  });
+
+  it("N1: the limit is checked before hasNextPage -- no page past --limit is asked for", () => {
+    const { report, calls } = run({ issues: [issue(5)], pulls: [pull(40), pull(41)], nextCursor: "MORE", issueCount: 2, options: { ...OPTIONS, limit: 2 } });
+    expect(calls.filter((call): boolean => call.startsWith("gh api graphql"))).toHaveLength(1);
+    expect(report.truncated.mergedPullRequests).toBe(true);
+  });
+
+  it("N1: issueCount equal to the rows read is complete", () => {
+    const { report } = run({ issues: [issue(5)], pulls: [pull(40), pull(41)], issueCount: 2 });
+    expect(report.complete).toBe(true);
+  });
+
+  it("N2: an ESC sequence in a title, base or gh error never reaches the terminal; --json keeps the bytes", () => {
+    const { report } = run({
+      issues: [issue(5, { title: "evil \u001b[2Ktitle" })],
+      pulls: [pull(40, { body: "Closes #5" })],
+      openPulls: { code: 1, stderr: "boom \u001b[1A up" },
+    });
+    expect(report.proposals[0]?.title).toBe("evil \u001b[2Ktitle");
+    const text = renderReconcile(report).join("\n");
+    expect(text).not.toMatch(/\u001b/);
+    expect(text).toMatch(/evil \[2Ktitle/);
+    expect(text).toMatch(/boom \[1A up/);
+  });
+
+  it("N3: hold labels match case-insensitively", () => {
+    const { report } = run({
+      issues: [issue(5, { labels: [{ name: "Keep-Open" }] })],
+      pulls: [pull(40, { body: "Closes #5" })],
+      options: { ...OPTIONS, holdLabels: ["keep-open"] },
+    });
+    expect(report.proposals[0]?.action).toBe("hold");
+    expect(report.complete).toBe(true);
+  });
+
+  it("N3: a hold label matching no scanned issue's label is a finding, never a silent 'nothing held'", () => {
+    const { report } = run({
+      issues: [issue(5, { labels: [{ name: "keep-open" }] })],
+      pulls: [pull(40, { body: "Closes #5" })],
+      options: { ...OPTIONS, holdLabels: ["kep-open"] },
+    });
+    expect(report.complete).toBe(false);
+    expect(report.findings).toEqual([{ source: "hold-labels", detail: expect.stringMatching(/'kep-open' matches no label/) }]);
+    expect(report.proposals[0]?.action).toBe("close");
+  });
+
+  it("N4: diverged with a merged delivery PR from the base proposes verify, citing it", () => {
+    const { report, calls } = run({
+      issues: [issue(5)],
+      pulls: [pull(40, { baseRefName: "epic/x", mergeCommit: { oid: SIDE_SHA }, body: "Closes #5" })],
+      compares: { [SIDE_SHA]: { stdout: "diverged" } },
+      deliveries: { "epic/x": { stdout: JSON.stringify([{ number: 77, url: "u77", mergedAt: "2026-10-02T00:00:00Z" }]) } },
+    });
+    expect(calls).toContain(gh(deliveryArgv(TARGET, "epic/x", "trunk")));
+    const proposal = report.proposals[0];
+    expect(proposal?.action).toBe("verify");
+    expect(proposal?.evidence[0]).toMatchObject({ landing: "diverged", delivery: { pr: 77, url: "u77", mergedAt: "2026-10-02T00:00:00Z" } });
+    expect(proposal?.reason).toMatch(/PR #77 merged 'epic\/x' into 'trunk'/);
+    expect(proposal?.reason).not.toMatch(/has NOT reached/);
+    expect(report.complete).toBe(true);
+  });
+
+  it("N4: diverged with no delivery PR proposes wait, worded 'not reachable', never 'has NOT reached'", () => {
+    const { report } = run({
+      issues: [issue(5)],
+      pulls: [pull(40, { baseRefName: "epic/x", mergeCommit: { oid: SIDE_SHA }, body: "Closes #5" })],
+      compares: { [SIDE_SHA]: { stdout: "diverged" } },
+      deliveries: { "epic/x": { stdout: "[]" } },
+    });
+    const proposal = report.proposals[0];
+    expect(proposal?.action).toBe("wait");
+    expect(proposal?.evidence[0]?.delivery).toBeNull();
+    expect(proposal?.reason).toMatch(/not reachable from 'trunk' \(a squash or rebase landing reads the same way\)/);
+    expect(proposal?.reason).not.toMatch(/has NOT reached/);
+  });
+
+  it("N4: a failed delivery lookup is a finding and the proposal is verify", () => {
+    const { report } = run({
+      issues: [issue(5)],
+      pulls: [pull(40, { baseRefName: "epic/x", mergeCommit: { oid: SIDE_SHA }, body: "Closes #5" })],
+      compares: { [SIDE_SHA]: { stdout: "diverged" } },
+      deliveries: { "epic/x": { code: 1, stderr: "HTTP 500" } },
+    });
+    expect(report.proposals[0]?.action).toBe("verify");
+    expect(report.findings[0]?.source).toBe("delivery epic/x");
+  });
+
+  it("N5: a PR seen on two pages is read once", () => {
+    const { report } = run({
+      issues: [issue(5)],
+      pulls: [pull(40, { body: "Closes #5" })],
+      nextCursor: "P2",
+      extraPages: [{ match: gh(mergedPullsArgv(TARGET, 99, null, "P2")), result: page([pull(40, { body: "Closes #5" }), pull(41)]) }],
+    });
+    expect(report.scanned.mergedPullRequests).toBe(2);
+    expect(report.proposals[0]?.evidence.map((e): number => e.pr)).toEqual([40]);
+  });
+
+  it("N5: evidence is sorted by mergedAt newest first, then PR number, whatever the search order", () => {
+    const { report } = run({
+      issues: [issue(5)],
+      pulls: [
+        pull(40, { mergedAt: "2026-09-01T00:00:00Z", body: "Closes #5" }),
+        pull(42, { mergedAt: "2026-09-20T00:00:00Z", body: "Fixes #5" }),
+        pull(41, { mergedAt: "2026-09-20T00:00:00Z", body: "Resolves #5" }),
+      ],
+    });
+    expect(report.proposals[0]?.evidence.map((e): number => e.pr)).toEqual([42, 41, 40]);
+  });
+
+  function overflowing(): Record<string, unknown> {
+    const row = node(pull(40));
+    row["commits"] = { totalCount: 101, pageInfo: { hasNextPage: true, endCursor: "C1" }, nodes: [] };
+    return row;
+  }
+
+  function searchAnswer(rows: readonly Record<string, unknown>[]): ScriptedCall["result"] {
+    return { stdout: JSON.stringify({ data: { search: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: rows } } }) };
+  }
+
+  it("N8: commits past the first 100 are paged by a per-PR follow-up, and a reference there counts", () => {
+    const { report, calls } = run({
+      issues: [issue(5)],
+      pulls: searchAnswer([overflowing()]),
+      extraPages: [
+        {
+          match: gh(prCommitsArgv(TARGET, 40, "C1")),
+          result: {
+            stdout: JSON.stringify({
+              data: { repository: { pullRequest: { commits: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [{ commit: { oid: "d".repeat(40), messageHeadline: "fix: last", messageBody: "Closes: #5" } }] } } } },
+            }),
+          },
+        },
+      ],
+    });
+    expect(calls).toContain(gh(prCommitsArgv(TARGET, 40, "C1")));
+    expect(report.complete).toBe(true);
+    expect(report.proposals[0]?.evidence[0]?.references).toEqual([{ source: "commit", text: "Closes: #5", commit: "d".repeat(40) }]);
+  });
+
+  it("N8: a failed follow-up keeps the finding", () => {
+    const { report } = run({
+      issues: [issue(5)],
+      pulls: searchAnswer([overflowing()]),
+      extraPages: [{ match: gh(prCommitsArgv(TARGET, 40, "C1")), result: { code: 1, stderr: "HTTP 502" } }],
+    });
+    expect(report.complete).toBe(false);
+    expect(report.findings[0]?.detail).toMatch(/PR #40 has 101 commits; only 0 were read: HTTP 502/);
   });
 });

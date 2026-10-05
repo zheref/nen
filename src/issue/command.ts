@@ -250,7 +250,7 @@ const FOREIGN_FLAG_ADVICE: Readonly<Record<string, Readonly<Record<string, strin
   // a write half (#332 first asked for one), so the refusal says it was RULED
   // away rather than merely absent.
   reconcile: {
-    "dry-run": `${DRY_RUN_OWNERS_SENTENCE} 'issue reconcile' proposes only, by the maintainer's ruling on zheref/nen#332: it never closes, comments or labels, so every run is already what a dry run would be.`,
+    "dry-run": `${DRY_RUN_OWNERS_SENTENCE} 'issue reconcile' proposes only, by the maintainer's ruling recorded on this verb's PR (zheref/nen#332's delivery): it never closes, comments or labels, so every run is already what a dry run would be.`,
   },
   file: {
     body: "'issue file' takes --body-file <path>: a body typed on the command line is a body nobody reviewed. --body belongs to 'issue comment'.",
@@ -604,7 +604,8 @@ usage:
       silently wrong. Ask the 'nen pr' family about a pull request.
   nen issue reconcile --target <owner/name> [--since <YYYY-MM-DD>]
                       [--limit <n>] [--issues 12,34] [--hold-labels a,b]
-      READ-ONLY, PROPOSES ONLY (zheref/nen#332, by ruling): finds OPEN issues a
+      READ-ONLY, PROPOSES ONLY, by the maintainer's ruling recorded on this
+      verb's PR (zheref/nen#332's delivery): finds OPEN issues a
       MERGED pull request already closes, and proposes what to do with each --
       it never closes, comments, labels or writes anything, in text or --json,
       and takes no --dry-run because there is no write to preview. A proposal
@@ -616,20 +617,29 @@ usage:
       mention, 'Part of #n' and title similarity are never evidence. Each
       proposal cites the PR, its merge commit and the reference as written.
       LANDED means on the default branch: a PR merged into it, or merged
-      elsewhere with its merge commit reachable from it (compare API).
+      elsewhere with its merge commit reachable from it (compare API). A
+      'diverged' compare asserts nothing (a squash or rebase landing reads
+      that way): a merged delivery PR from that base into the default branch
+      makes it verify, citing that PR; none makes it wait, worded "not
+      reachable".
       Proposed actions: close (landed, nothing in flight); hold (carries one of
       --hold-labels -- the repository's own "do not close" names; none are
-      built in); review (landed, but the issue was REOPENED, or an open PR
+      built in; matched case-insensitively, and one that matches no label on
+      any scanned open issue is a finding); review (landed, but the issue was REOPENED, or an open PR
       still closes or mentions it -- the open-pr-check guard); wait (merged
       into a branch not yet on the default branch); verify (the landing or the
-      guard could not be read). --since scans only PRs merged on or after the
+      guard could not be read, or a diverged base has a delivery PR). --since scans only PRs merged on or after the
       date; --limit (default ${RECONCILE_LIMIT}, at most ${RECONCILE_MAX_LIMIT}) bounds both lists; --issues
       restricts the proposals and names any entry that is not open.
       Merged PRs are read by a GraphQL search QUERY ('gh api graphql',
-      cursor-paged up to --limit, commit oid and message only).
+      cursor-paged up to --limit, commit oid and message only, each PR once;
+      a PR with over 100 commits has the rest read by a follow-up query).
+      Search stops at 1000 results; more matched (issueCount) than read is a
+      finding whatever the cursor says.
       AN UNREADABLE SOURCE IS A FINDING: a failed read, a GraphQL error, an
       open list that came back full, a search that reached --limit with more
-      left, or a PR with more commits/closing references than were read, is
+      left, a PR with more closing references (50) or commits than were read,
+      or a hold label matching nothing, is
       reported and exits 1, and an empty proposal list under a finding is
       never "nothing to reconcile". Exits: 0 every source read
       (proposals or none), 1 a finding, 2 usage. --json: '{ contract:
