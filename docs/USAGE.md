@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 127 verbs, every flag checked against the binary this repository
+families, 128 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -697,7 +697,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 127 verbs, grouped as the README groups them. **Reads** is what a
+All 128 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -792,6 +792,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`issue`](#family-issue) | [`nen issue consolidate-close`](#nen-issue-consolidate-close) | the file-&gt;attach-&gt;close choreography: union labels, reduce one severity family to its strongest label, guard every child for an open PR, close each with a comment | nen/labels.json; gh (api reads, sub_issues POST, issue close/comment) | yes |
 | [`issue`](#family-issue) | [`nen issue chain-position`](#nen-issue-chain-position) | classify where an OPEN issue sits on its delivery chain, from its labels alone | gh (api read) | yes |
 | [`issue`](#family-issue) | [`nen issue terminus`](#nen-issue-terminus) | classify which object ends an issue's delivery run (its own PR, each child's PR, or one integration-branch delivery PR) | gh (api read) | yes |
+| [`issue`](#family-issue) | [`nen issue reconcile`](#nen-issue-reconcile) | read-only, proposes only: which OPEN issues a MERGED pull request already closes, each proposal citing the PR, its merge commit and the closing reference | gh (repo view, issue list, api graphql search query, api compare, pr list for the open-PR guard) | yes |
 | [`issue`](#family-issue) | [`nen issue edit-body`](#nen-issue-edit-body) | replaces an issue's body outright with a file's bytes, certifying the number is an ISSUE (never a PR) before any write | gh (api read to certify, issue edit unless --dry-run) | yes |
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
@@ -7081,6 +7082,77 @@ terminus: integration-delivery-pr
   carries 'bankai:epic' with the mode label 'bankai:stage/approved-team' -- the terminus is the single 'release/* -> main' delivery PR. A sub-PR merged onto that branch is not the gate.
 ```
 (shape derived from `src/issue/chain.ts`'s `classifyTerminus` and `src/issue/chain.test.ts` -- not run live, this reaches GitHub)
+
+### `nen issue reconcile`
+
+Lifecycle reconciliation ([#332](https://github.com/zheref/nen/issues/332)): which OPEN issues a MERGED pull request already claims to close, and what to do about each. **Read-only and propose-only, by the maintainer's ruling on #332**: it never closes, comments on, labels or otherwise writes to anything, in the human rendering and in `--json` alike, and it has no `--dry-run` because there is no write to preview (`--dry-run` is refused at exit 2, naming the ruling). Acting on a proposal is the caller's, through whichever verb that act belongs to.
+
+**Every proposal is evidence-bound.** It exists only where a merged pull request carries a **closing reference** to the issue, from one of three sources, each cited as written:
+
+- `linked` — GitHub's own `closingIssuesReferences` (which also catches a sidebar link with no text);
+- `body` — a closing keyword in the PR body;
+- `commit` — a closing keyword in one of the PR's commit messages, cited with the commit.
+
+The keywords are GitHub's: `close`/`closes`/`closed`, `fix`/`fixes`/`fixed`, `resolve`/`resolves`/`resolved`, case-insensitive, an optional `:`, then ONE reference — `#n`, `owner/name#n` or the issue's URL. `Closes #1, #2` closes only #1, as on GitHub. Fenced code, inline code and HTML comments are not read (a PR template's `<!-- Closes #123 -->` is not a claim). A reference to another repository is dropped. A bare mention (`see #12`), `Part of #12` and title similarity are never evidence. The closing reference is the PR author's own claim that the issue is done; the verb reports it as that claim, not as criteria it verified.
+
+**Landed means on the default branch** (read from GitHub, never assumed). A PR merged into the default branch has landed. A PR merged anywhere else — an integration or epic branch, where GitHub's keyword close never fires — is checked with `repos/{o}/{n}/compare/{default}...{mergeCommit}`: `behind` or `identical` means its merge commit is reachable from the default branch (`reached-default-branch`); `ahead` or `diverged` means it has not (`not-on-default-branch`).
+
+**The proposed actions**, one per issue, gathering every PR that closes it:
+
+| Action | When |
+|---|---|
+| `close` | a closing PR has landed, no open PR still closes or mentions the issue, and the issue carries no hold label and was not reopened |
+| `hold` | the issue carries one of `--hold-labels` — whatever the evidence |
+| `review` | landed evidence, but the issue's `stateReason` is `REOPENED` (someone judged it unfinished after a close), or an open PR still closes or mentions it (the [`open-pr-check`](#nen-issue-open-pr-check) guard, reused) |
+| `wait` | every closing PR merged into a branch that has not reached the default branch yet |
+| `verify` | the landing, or the open-PR guard, could not be read |
+
+**An unreadable source is a finding, never "nothing to reconcile".** A failed or unparseable read of the default branch, the open issues, the merged pull requests, a compare or the open-PR guard is a finding, and so is a GraphQL `errors` answer. A partial read is a finding too, because it may have stopped before the PR that matters: an open-issue list that came back full, a merged-PR search that reached `--limit` with another page left, or a PR with more commits (100 read) or closing references (50 read) than were read.
+
+**How the merged pull requests are read.** Through `gh api graphql`, as a `search` QUERY (`repo:<o>/<n> is:pr is:merged [merged:>=<since>] sort:updated-desc`), paged by cursor up to `--limit`, selecting each commit's oid and message only. Not `gh pr list --json commits`: that field also selects every commit's authors, and at a page of 100 pull requests GitHub refuses the whole query for exceeding its 500,000-node budget, which was observed live while building this verb. Any finding makes the run exit 1, and an empty proposal list under a finding is rendered as `INCOMPLETE`, never as clean. `--issues` entries absent from a complete open-issue list are named under `notOpen`; a failed or full list names none.
+
+**Names are data.** No label is built in. A repository's own "do not close" override is whatever it calls it, passed through `--hold-labels`; with none given, nothing is held.
+
+**Usage**
+
+```text
+nen issue reconcile --target <owner/name> [--since <YYYY-MM-DD>]
+                    [--limit <n>] [--issues 12,34] [--hold-labels a,b]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | yes | The GitHub repository to reconcile. | Missing or malformed exits 2. |
+| `--since <YYYY-MM-DD>` | no | Scan only PRs merged on or after this date (`merged:>=` in the search). | Not a real calendar date exits 2. |
+| `--limit <n>` | no | The page size of both lists; a list that comes back this full is a finding. | Default 100, 1–1000; anything else exits 2. |
+| `--issues 12,34` | no | Restrict the proposals to these issues. | Every entry must be an issue number (`#` optional); one that is not exits 2 rather than being dropped. |
+| `--hold-labels a,b` | no | The target repository's own "do not close" label names. | Comma list; none by default. |
+
+**Output and exit codes** -- prints the repository and its default branch, what was scanned, the line `proposes only -- nothing was closed, commented on or labelled.`, then per proposal `#<n> <title>`, `propose: <action> -- <reason>` and each `evidence: PR #<pr> (<landing>, base <base>, merge commit <sha>, merged <date>)` with its references beneath; then `not open` and `findings` when there are any. `--json` emits the full report, top-level keys: `contract` (`"nen.issue.reconcile/v0.1"`), `target`, `proposesOnly` (always `true`), `defaultBranch` (`null` when unread), `since`, `limit`, `holdLabels`, `scanned` (`{ openIssues, mergedPullRequests }`), `truncated` (the same two, as booleans), `proposals` (each `{ issue, title, url, labels, action, reason, openPullRequests, evidence: [{ pr, url, title, base, mergedAt, mergeCommit, landing, references: [{ source, text, commit }] }] }`), `notOpen`, `findings` (each `{ source, detail }`), `complete`. Exit 0 when every source was read in full, whether or not anything was proposed; exit 1 on any finding; exit 2 on usage.
+
+**Example**
+
+```bash
+nen issue reconcile --target acme/widgets --since 2026-09-01 --hold-labels keep-open
+```
+```text
+repository: acme/widgets (default branch: main)
+scanned: 41 open issue(s), 63 merged pull request(s) merged on or after 2026-09-01
+proposes only -- nothing was closed, commented on or labelled.
+hold labels: keep-open
+
+#155 Epic: offline sync
+  propose: close -- PR #231 merged into 'epic/offline-sync', and its merge commit has reached 'main'
+  evidence: PR #231 (reached-default-branch, base epic/offline-sync, merge commit 3f2a9c1d0b7e, merged 2026-09-20T14:02:11Z)
+    'Closes #155' in the PR body
+#22 [CHR-4] retry the upload queue
+  propose: wait -- PR #240 merged into 'epic/uploads', and its merge commit has NOT reached 'main'; propose again once that branch lands
+  evidence: PR #240 (not-on-default-branch, base epic/uploads, merge commit 9b81e0c2a4f3, merged 2026-09-28T09:11:40Z)
+    GitHub closing reference https://github.com/acme/widgets/issues/22
+```
+(shape derived from `src/issue/reconcile.ts`'s `renderReconcile` and `src/issue/reconcile.test.ts` -- not run live, this reaches GitHub)
 
 <a id="family-idea"></a>
 

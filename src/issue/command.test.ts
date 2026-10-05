@@ -9,6 +9,7 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import type { FlagSpec } from "../cli/args.js";
 import { issueCommand, ISSUE_FLAGS, ISSUE_SUBCOMMANDS, ISSUE_SUBCOMMAND_FLAGS } from "./command.js";
+import { mergedPullsArgv } from "./reconcile.js";
 
 /** sha256 hex of a string's UTF-8 bytes -- the hash --expect-body-sha256 takes. */
 function sha(text: string): string {
@@ -1798,6 +1799,7 @@ describe("nen issue -- foreign flags derived from each subcommand's own spec (ro
     "consolidate-close": ["--target", "o/n", "--parent", "1", "--children", "2"],
     "chain-position": ["--target", "o/n", "--issue", "1"],
     terminus: ["--target", "o/n", "--issue", "1"],
+    reconcile: ["--target", "o/n"],
   };
 
   const valueFlags = new Set(ISSUE_FLAGS.values ?? []);
@@ -1850,7 +1852,7 @@ describe("nen issue -- foreign flags derived from each subcommand's own spec (ro
     }
     expect(
       foreignPairs.filter((pair): boolean => pair.flag === "body-file").map((pair): string => pair.subcommand),
-    ).toEqual(["search", "open-pr-check", "attach-sub", "consolidate-close", "chain-position", "terminus"]);
+    ).toEqual(["search", "open-pr-check", "attach-sub", "consolidate-close", "chain-position", "terminus", "reconcile"]);
   });
 
   it.each(foreignPairs.map((pair): [string, string] => [pair.subcommand, pair.flag]))(
@@ -3353,5 +3355,101 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(out).toMatch(/REFUSES with exit 4/);
     expect(out).toMatch(/--skip-private-name-check/);
     expect(out).toMatch(/--private-names-ignore-file <path>/);
+  });
+});
+
+describe("nen issue reconcile -- read-only, proposes only (zheref/nen#332)", () => {
+  const DEFAULT_BRANCH: ScriptedCall = {
+    match: "gh repo view o/n --json defaultBranchRef",
+    result: { stdout: JSON.stringify({ defaultBranchRef: { name: "main" } }) },
+  };
+  const OPEN_ISSUES: ScriptedCall = {
+    match: "gh issue list --repo o/n --state open --limit 100 --json number,title,url,labels,stateReason",
+    result: { stdout: JSON.stringify([{ number: 5, title: "five", url: "u5", labels: [], stateReason: "" }]) },
+  };
+  const MERGED = ["gh", ...mergedPullsArgv({ owner: "o", repo: "n", slug: "o/n" }, 100, null, null)].join(" ");
+  const MERGED_PRS: ScriptedCall = {
+    match: MERGED,
+    result: {
+      stdout: JSON.stringify({
+        data: {
+          search: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                number: 40, title: "pr", url: "u40", baseRefName: "main", mergedAt: "2026-10-01T00:00:00Z", mergeCommit: { oid: "f".repeat(40) }, body: "Closes #5",
+                closingIssuesReferences: { totalCount: 0, nodes: [] }, commits: { totalCount: 0, nodes: [] },
+              },
+            ],
+          },
+        },
+      }),
+    },
+  };
+  const OPEN_PRS: ScriptedCall = {
+    match: "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+    result: { stdout: "[]" },
+  };
+
+  it("emits the versioned --json document, exit 0, and writes nothing", async () => {
+    const result = await capture(["issue", "reconcile", "--target", "o/n"], [DEFAULT_BRANCH, OPEN_ISSUES, MERGED_PRS, OPEN_PRS], { json: true });
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["contract"]).toBe("nen.issue.reconcile/v0.1");
+    expect(doc["proposesOnly"]).toBe(true);
+    expect(doc["complete"]).toBe(true);
+    expect((doc["proposals"] as { issue: number; action: string }[]).map((p) => [p.issue, p.action])).toEqual([[5, "close"]]);
+    expect(result.calls.every((call) => / list | view /.test(call) || (call.startsWith("gh api graphql -f query=query(") && !/mutation/.test(call)))).toBe(true);
+  });
+
+  it("renders the same proposals for a human, saying it proposes only", async () => {
+    const result = await capture(["issue", "reconcile", "--target", "o/n"], [DEFAULT_BRANCH, OPEN_ISSUES, MERGED_PRS, OPEN_PRS]);
+    expect(result.code).toBe(0);
+    const out = result.out.join("\n");
+    expect(out).toMatch(/proposes only -- nothing was closed, commented on or labelled/);
+    expect(out).toMatch(/propose: close -- PR #40/);
+  });
+
+  it("exits 1 on an unreadable source, in --json too, and says what was not read", async () => {
+    const result = await capture(
+      ["issue", "reconcile", "--target", "o/n"],
+      [DEFAULT_BRANCH, OPEN_ISSUES, { match: MERGED, result: { code: 1, stderr: "HTTP 502" } }],
+      { json: true },
+    );
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["complete"]).toBe(false);
+    expect(doc["proposals"]).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/could not be read in full; what was not read was not reconciled/);
+  });
+
+  it("refuses --dry-run at exit 2, naming the propose-only ruling", async () => {
+    const result = await capture(["issue", "reconcile", "--target", "o/n", "--dry-run"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/proposes only, by the maintainer's ruling on zheref\/nen#332/);
+    expect(result.calls).toEqual([]);
+  });
+
+  it.each([
+    [["--since", "2026-02-30"], /--since takes a calendar date/],
+    [["--since", "yesterday"], /--since takes a calendar date/],
+    [["--limit", "0"], /--limit takes a whole number from 1 to 1000/],
+    [["--limit", "1001"], /--limit takes a whole number/],
+    [["--issues", "5,x"], /not one: 'x'/],
+  ])("refuses a malformed %j at exit 2 before any read", async (flags, pattern) => {
+    const result = await capture(["issue", "reconcile", "--target", "o/n", ...flags]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(pattern);
+    expect(result.calls).toEqual([]);
+  });
+
+  it("requires --target", async () => {
+    expect((await capture(["issue", "reconcile"])).code).toBe(2);
+  });
+
+  it("issue --help documents reconcile as read-only and propose-only", async () => {
+    const out = (await capture(["issue", "--help"])).out.join("\n");
+    expect(out).toMatch(/nen issue reconcile --target <owner\/name> \[--since <YYYY-MM-DD>\]/);
+    expect(out).toMatch(/READ-ONLY, PROPOSES ONLY/);
   });
 });

@@ -1103,6 +1103,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       "consolidate-close": DRY("attaches and closes issues unless --dry-run is given"),
       "chain-position": RO("computes a chain position -- pure computation"),
       terminus: RO("computes a chain terminus -- pure computation"),
+      // Read-only BY RULING (zheref/nen#332): it proposes closures and never
+      // performs one, so there is no write for a --dry-run to gate.
+      reconcile: RO("proposes closures for issues a landed PR already closes -- gh reads only"),
     },
   },
   label: {
