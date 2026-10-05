@@ -1056,6 +1056,16 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   dev: { subcommands: { test: DEV_FORWARDING_CHECKER, lint: DEV_FORWARDING_CHECKER, replay: DEV_CHECKER } },
+  direct: {
+    subcommands: {
+      registry: RO("validates the model-direction registry file and prints it -- reads one file"),
+      // READS BY DEFAULT: the recommendation is computed from three local files
+      // and printed. --record writes the result under .nen/direct/<name>.json,
+      // a local write, so its presence alone moves the line out of read-only.
+      resolve: GATED(["--record"], "--record writes the result to .nen/direct/<name>.json under --repo"),
+      answer: MUT("rewrites the .nen/direct/<id>.json record with the picker's decision -- a local write, every time"),
+    },
+  },
   effort: { subcommands: { classify: RO("classifies an effort -- pure computation") } },
   epic: { subcommands: { "next-wave": GATED(["--out"], "writes the rewritten body to --out") } },
   fanout: {

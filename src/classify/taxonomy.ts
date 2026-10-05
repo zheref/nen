@@ -17,6 +17,19 @@
 // names -- `AXES` -- the way ../schema/labels.ts knows the word `labels`: a
 // field of the contract, not a value of the vocabulary.
 //
+// THE DIRECTION FAMILY READS MORE OF THE SAME FILE (Hatsu ruling of 2026-10-04:
+// stable aliases, replaceable versions -- `nen direct` picks a model for an
+// issue's classification). Four OPTIONAL facts ride the keys and the root, and
+// this module parses them so the second family never reads the file a second
+// way: a lang key's `code` flag (true marks a programming language, false one
+// that is not code; ABSENT READS TRUE, so a taxonomy written before the flag
+// existed still means what it meant), a job key's `weight` (1..4) and `phases`
+// (domain -> phase ids), and the root's `domains` block (the domain names, the
+// ordered derivation rows and the fallback sentence). None is required here --
+// `nen classify` needs none of them, and a taxonomy without them is still a
+// valid classification vocabulary; `nen direct resolve` is the verb that
+// refuses a file that lacks what it derives from.
+//
 // A BAD FILE IS A LOUD, POINTED REFUSAL (../schema/errors.ts): the path, the
 // pointer into the file and what was found. No fallback and no built-in copy --
 // a binary that guessed the vocabulary would label issues with names the
@@ -27,6 +40,7 @@ import { resolveAgainstRepo } from "../cli/inputs.js";
 import {
   describeValue,
   requireArray,
+  requireBoolean,
   requireRecord,
   requireString,
   SchemaError,
@@ -42,10 +56,56 @@ const KEBAB_KEY = /^[a-z][a-z0-9-]*$/;
 /** The contract line every revision of the file opens with, e.g. `<owner>.classify-taxonomy/v1`. */
 const SCHEMA_LINE = /^[A-Za-z0-9._-]*classify-taxonomy\/v1$/;
 
+/** The weight range a job key may carry; `nen direct` adds the highest one carried to its effort score. */
+export const WEIGHT_MIN = 1;
+export const WEIGHT_MAX = 4;
+
 export interface AxisKey {
   readonly key: string;
   readonly title: string;
   readonly description: string;
+  /** A language key's `code` flag; true when absent. Meaningless (and always true) on a job key. */
+  readonly code: boolean;
+  /** A job key's weight, WEIGHT_MIN..WEIGHT_MAX, or null when the file states none. */
+  readonly weight: number | null;
+  /** A job key's phases per domain (domain -> phase ids, in file order), or null when the file states none. */
+  readonly phases: Readonly<Record<string, readonly string[]>> | null;
+}
+
+/**
+ * A row's condition, as STRUCTURED DATA the direct family evaluates (the maintainer's
+ * review of 2026-10-04 replaced the prose conditions): a bare `"otherwise"`, or an object
+ * with exactly one of `anyOf` (a list of predicates, any matches), `repoKind` /
+ * `repoRole` (a list of values, the input is in it), `issueLabels.any` (patterns; a
+ * `*:name` pattern matches any `<ns>:name`) or `jobs` (`anyKey`, or `nonEmpty` with
+ * `everyListsOnly`). The parser normalises each shape into one member of this union and
+ * refuses any other shape by pointer, so the evaluator never sees an unknown one.
+ */
+export type DomainPredicate =
+  | { readonly kind: "otherwise" }
+  | { readonly kind: "anyOf"; readonly members: readonly DomainPredicate[] }
+  | { readonly kind: "repoKind"; readonly values: readonly string[] }
+  | { readonly kind: "repoRole"; readonly values: readonly string[] }
+  | { readonly kind: "issueLabels"; readonly any: readonly string[] }
+  | { readonly kind: "jobsAnyKey"; readonly keys: readonly string[] }
+  | { readonly kind: "jobsEveryListsOnly"; readonly domain: string };
+
+/** One row of `domains.rule`: the derivation `nen direct` applies, in `order`, first match wins. */
+export interface DomainRule {
+  readonly order: number;
+  readonly domain: string;
+  readonly when: DomainPredicate;
+  /** The row's own `$comment`: the sentence for a reader, reported and never evaluated. */
+  readonly note: string | null;
+}
+
+export interface DomainPolicy {
+  /** The domain names, in the file's order. */
+  readonly keys: readonly string[];
+  /** The derivation rows, ascending by `order`. */
+  readonly rule: readonly DomainRule[];
+  /** The sentence that orders the substitution when a job has no phase in the derived domain. */
+  readonly fallback: string;
 }
 
 export interface Axis {
@@ -75,11 +135,42 @@ export interface ClassifyTaxonomy {
   readonly path: string;
   readonly axes: Readonly<Record<AxisName, Axis>>;
   readonly confidence: ConfidencePolicy;
+  /** The `domains` block, or null when the file carries none. */
+  readonly domains: DomainPolicy | null;
 }
 
 function requireStringList(path: string, pointer: string, value: unknown): string[] {
   return requireArray(path, pointer, value).map((entry, index): string =>
     requireString(path, `${pointer}[${index}]`, entry),
+  );
+}
+
+function optionalBoolean(path: string, pointer: string, value: unknown, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  return requireBoolean(path, pointer, value);
+}
+
+function parseWeight(path: string, pointer: string, value: unknown): number | null {
+  if (value === undefined) return null;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < WEIGHT_MIN || value > WEIGHT_MAX) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `expected a whole number from ${WEIGHT_MIN} to ${WEIGHT_MAX}, got ${describeValue(value)}`,
+    );
+  }
+  return value;
+}
+
+function parsePhases(path: string, pointer: string, value: unknown): Record<string, string[]> | null {
+  if (value === undefined) return null;
+  const record = requireRecord(path, pointer, value);
+  // A `$`-prefixed key (`$comment`, ...) is metadata, never a domain: skipped before
+  // its value is read, the loader policy of ../schema/source.ts.
+  return Object.fromEntries(
+    Object.entries(record)
+      .filter(([domain]): boolean => !domain.startsWith("$"))
+      .map(([domain, ids]): [string, string[]] => [domain, requireStringList(path, `${pointer}.${domain}`, ids)]),
   );
 }
 
@@ -140,7 +231,14 @@ function parseAxis(path: string, name: AxisName, value: unknown): Axis {
       );
     }
     seen.set(key, index);
-    return { key, title, description };
+    return {
+      key,
+      title,
+      description,
+      code: optionalBoolean(path, `${keyPointer}.code`, keyRecord["code"], true),
+      weight: parseWeight(path, `${keyPointer}.weight`, keyRecord["weight"]),
+      phases: parsePhases(path, `${keyPointer}.phases`, keyRecord["phases"]),
+    };
   });
 
   return { name, prefix, color, keys };
@@ -180,6 +278,141 @@ function parseConfidence(path: string, value: unknown): ConfidencePolicy {
     }
   }
   return { levels, applied, listed };
+}
+
+/** Refuse any non-`$` key of `record` that is not one the shape owns: a misspelt key would otherwise be silently ignored. */
+function onlyKeys(path: string, pointer: string, record: Record<string, unknown>, allowed: readonly string[]): void {
+  for (const name of Object.keys(record)) {
+    if (name.startsWith("$") || allowed.includes(name)) continue;
+    throw new SchemaError(path, `${pointer}.${name}`, `is not a key of this predicate shape (expected only: ${allowed.join(", ")})`);
+  }
+}
+
+function parsePredicate(
+  path: string,
+  pointer: string,
+  value: unknown,
+  domainKeys: readonly string[],
+  jobKeys: readonly string[],
+): DomainPredicate {
+  if (value === "otherwise") return { kind: "otherwise" };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `expected "otherwise" or a predicate object (anyOf, repoKind, repoRole, issueLabels, jobs), got ${describeValue(value)}`,
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const shapes = Object.keys(record).filter((name): boolean => !name.startsWith("$"));
+  if (shapes.length !== 1) {
+    throw new SchemaError(path, pointer, `expected exactly one predicate shape, found [${shapes.join(", ")}]`);
+  }
+  const shape = shapes[0] as string;
+  const inner = record[shape];
+  switch (shape) {
+    case "anyOf": {
+      const members = requireArray(path, `${pointer}.anyOf`, inner);
+      if (members.length === 0) throw new SchemaError(path, `${pointer}.anyOf`, "is empty. An any-of with no member never matches.");
+      return {
+        kind: "anyOf",
+        members: members.map((member, index): DomainPredicate => parsePredicate(path, `${pointer}.anyOf[${index}]`, member, domainKeys, jobKeys)),
+      };
+    }
+    case "repoKind":
+    case "repoRole": {
+      const values = requireStringList(path, `${pointer}.${shape}`, inner);
+      if (values.length === 0) throw new SchemaError(path, `${pointer}.${shape}`, "is empty. A list with no value never matches.");
+      return { kind: shape, values };
+    }
+    case "issueLabels": {
+      const labels = requireRecord(path, `${pointer}.issueLabels`, inner);
+      onlyKeys(path, `${pointer}.issueLabels`, labels, ["any"]);
+      const any = requireStringList(path, `${pointer}.issueLabels.any`, labels["any"]);
+      if (any.length === 0) throw new SchemaError(path, `${pointer}.issueLabels.any`, "is empty. A list with no pattern never matches.");
+      return { kind: "issueLabels", any };
+    }
+    case "jobs": {
+      const jobs = requireRecord(path, `${pointer}.jobs`, inner);
+      // Exactly one of two shapes: { anyKey } alone, or { nonEmpty, everyListsOnly } together.
+      onlyKeys(path, `${pointer}.jobs`, jobs, jobs["anyKey"] !== undefined ? ["anyKey"] : ["nonEmpty", "everyListsOnly"]);
+      if (jobs["anyKey"] !== undefined) {
+        const keys = requireStringList(path, `${pointer}.jobs.anyKey`, jobs["anyKey"]);
+        keys.forEach((key, index): void => {
+          if (jobKeys.length > 0 && !jobKeys.includes(key)) {
+            throw new SchemaError(path, `${pointer}.jobs.anyKey[${index}]`, `names ${describeValue(key)}, which is not one of axes.job.keys`);
+          }
+        });
+        if (keys.length === 0) throw new SchemaError(path, `${pointer}.jobs.anyKey`, "is empty. A list with no key never matches.");
+        return { kind: "jobsAnyKey", keys };
+      }
+      if (jobs["nonEmpty"] !== true) {
+        throw new SchemaError(path, `${pointer}.jobs`, "expected 'anyKey', or 'nonEmpty': true with 'everyListsOnly'");
+      }
+      const domain = requireString(path, `${pointer}.jobs.everyListsOnly`, jobs["everyListsOnly"]);
+      if (!domainKeys.includes(domain)) {
+        throw new SchemaError(path, `${pointer}.jobs.everyListsOnly`, `names ${describeValue(domain)}, which is not one of domains.keys [${domainKeys.join(", ")}]`);
+      }
+      return { kind: "jobsEveryListsOnly", domain };
+    }
+    default:
+      throw new SchemaError(
+        path,
+        `${pointer}.${shape}`,
+        `is not a predicate shape this contract carries (expected one of: anyOf, repoKind, repoRole, issueLabels, jobs)`,
+      );
+  }
+}
+
+function parseDomains(path: string, value: unknown, jobKeys: readonly string[]): DomainPolicy | null {
+  if (value === undefined) return null;
+  const pointer = "domains";
+  const record = requireRecord(path, pointer, value);
+  // The rows are read first-match-wins; a file that says otherwise states a different contract.
+  if (record["firstMatchWins"] !== undefined && record["firstMatchWins"] !== true) {
+    throw new SchemaError(path, `${pointer}.firstMatchWins`, `expected true (the rows are evaluated in order, the first match winning), got ${describeValue(record["firstMatchWins"])}`);
+  }
+  const keys = requireStringList(path, `${pointer}.keys`, record["keys"]);
+  if (keys.length === 0) {
+    throw new SchemaError(path, `${pointer}.keys`, "is empty. A domain block with no domains routes nothing.");
+  }
+  keys.forEach((key, index): void => {
+    if (keys.indexOf(key) !== index) {
+      throw new SchemaError(path, `${pointer}.keys[${index}]`, `duplicates ${describeValue(key)}; a domain is named once`);
+    }
+  });
+  const rows = requireArray(path, `${pointer}.rule`, record["rule"]).map((entry, index): DomainRule => {
+    const rowPointer = `${pointer}.rule[${index}]`;
+    const row = requireRecord(path, rowPointer, entry);
+    const order = row["order"];
+    if (typeof order !== "number" || !Number.isInteger(order) || order < 1) {
+      throw new SchemaError(path, `${rowPointer}.order`, `expected a positive whole number, got ${describeValue(order)}`);
+    }
+    const domain = requireString(path, `${rowPointer}.domain`, row["domain"]);
+    if (!keys.includes(domain)) {
+      throw new SchemaError(
+        path,
+        `${rowPointer}.domain`,
+        `names ${describeValue(domain)}, which is not one of ${pointer}.keys [${keys.join(", ")}]`,
+      );
+    }
+    const note = row["$comment"];
+    return {
+      order,
+      domain,
+      when: parsePredicate(path, `${rowPointer}.when`, row["when"], keys, jobKeys),
+      note: typeof note === "string" ? note : null,
+    };
+  });
+  // An empty `rule` is tolerated here: `nen classify` never derives a domain, and
+  // `nen direct resolve` refuses a block whose rows are not the ones it implements.
+  const rule = [...rows].sort((a, b): number => a.order - b.order);
+  rule.forEach((row, index): void => {
+    if (index > 0 && (rule[index - 1] as DomainRule).order === row.order) {
+      throw new SchemaError(path, `${pointer}.rule`, `has two rows with order ${row.order}; the order is the precedence and must be unique`);
+    }
+  });
+  return { keys, rule, fallback: requireString(path, `${pointer}.fallback`, record["fallback"]) };
 }
 
 export function parseClassifyTaxonomy(path: string, value: unknown): ClassifyTaxonomy {
@@ -235,11 +468,30 @@ export function parseClassifyTaxonomy(path: string, value: unknown): ClassifyTax
   const classification = requireRecord(path, "classification", root["classification"]);
   const confidence = parseConfidence(path, classification["confidence"]);
 
+  const domains = parseDomains(path, root["domains"], parsed.flatMap((axis): string[] => (axis.name === "job" ? axis.keys.map((entry): string => entry.key) : [])));
+  // A job's phases name domains; once the file declares the domain set, a phase
+  // under a name outside it is a typo the derivation would silently never reach.
+  if (domains !== null) {
+    parsed.forEach((axis): void => {
+      axis.keys.forEach((entry, index): void => {
+        for (const domain of Object.keys(entry.phases ?? {})) {
+          if (!domains.keys.includes(domain)) {
+            throw new SchemaError(
+              path,
+              `axes.${axis.name}.keys[${index}].phases.${domain}`,
+              `names ${describeValue(domain)}, which is not one of domains.keys [${domains.keys.join(", ")}]`,
+            );
+          }
+        }
+      });
+    });
+  }
+
   const axes = Object.fromEntries(parsed.map((axis): [AxisName, Axis] => [axis.name, axis])) as Record<
     AxisName,
     Axis
   >;
-  return { path, axes, confidence };
+  return { path, axes, confidence, domains };
 }
 
 /**
