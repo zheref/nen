@@ -97,18 +97,15 @@ import type {
   GateIdentities,
   ReviewerIdentity,
 } from "../schema/gates.js";
-// PORT ADDITION (zheref/nen#8 item 3, review MAJOR 1): `safePattern` was a
-// private function in THIS file and a byte-identical private function in
-// ../verbs/pr_ready.ts. When the ReDoS guard landed it was added to that copy
-// only -- and this is the copy on the steady-state path, because once a target
-// repository ships a `nen/gates.json`, `identitiesFromFlags` is never
-// called and every `--reviewers` name the file does not declare is compiled
-// HERE and tested against logins that came off the network. Measured: 305ms per
-// `.test` through this copy for `(a+)+$` at login length, 0ms through the
-// guarded twin. One implementation now, in ../schema/pattern.ts, with the
-// contract and its reasoning in that file's header. PURE still: a source scan
-// and a compile, no file read, no clock, no network.
-import { safePattern } from "../schema/pattern.js";
+// THE NAME-AS-LOGIN FALLBACK (zheref/nen#264, Feitan F1). A reviewer name the
+// identities do not declare is compiled HERE, on the steady-state path, and
+// tested against logins that came off the network. It used to be the shell's
+// unanchored `test($name; "i")` (`safePattern`, zheref/nen#8 item 3), which let
+// a stranger whose login merely CONTAINED the name count as that reviewer; it
+// is now ../schema/pattern.ts's `exactLoginPattern` -- the whole login,
+// case-insensitive, optional `[bot]` -- whose escaping also leaves nothing
+// catastrophic to compile. PURE still: no file read, no clock, no network.
+import { exactLoginPattern } from "../schema/pattern.js";
 
 // --- shared helpers ----------------------------------------------------------
 
@@ -121,16 +118,6 @@ function compareStrings(a: string, b: string): number {
   if (a > b) return 1;
   return 0;
 }
-
-// `safePattern` -- the case-insensitive regex built from a caller-supplied
-// reviewer name, exactly as jq's `test($name; "i")` builds one -- is IMPORTED
-// (see the note at the import above). Its behaviour on a name this file cannot
-// use is unchanged and is the original's: a regex that matches NOTHING, which
-// reproduces the shell's own reading (there, `jq -e` errors, the `if` takes the
-// non-zero exit as "no match", and the reviewer is therefore still owed a
-// round). Conservative in the same direction -- a malformed reviewer name can
-// never SATISFY a round, only fail to match one -- and a CATASTROPHIC name is
-// now treated the same way for the same reason.
 
 // Literal-escape, for the one pattern assembled from an id rather than a name.
 function escapeRegExp(literal: string): string {
@@ -300,6 +287,37 @@ export function checksAllGreen(entries: readonly RollupEntry[]): boolean {
     latest.every(checkAdmissible) &&
     latest.some((entry): boolean => rollupEntryStatus(entry) === "SUCCESS")
   );
+}
+
+// --- checksSettled -----------------------------------------------------------
+// `nen watch until --pr <ref> --until checks-settled` (zheref/nen#264). True iff
+// the rollup is NON-EMPTY and every LATEST entry per name carries a TERMINAL
+// effective status -- any conclusion, green or red, and a StatusContext in
+// SUCCESS/FAILURE/ERROR. It is NOT CON-32(a): a red check is settled (the wait
+// is over and the gate's own row says what is wrong), and only a run still
+// deciding -- `null`, or a StatusContext PENDING/EXPECTED -- holds it open.
+//
+// THE SAME REDUCTION `checksAllGreen` USES, and the same emptiness rule: "no
+// reported check" is no signal, so an empty rollup is never settled -- a watch
+// that woke on it would wake on a startup_failure that produced no check run
+// at all (bankai-core#671), which is exactly the state waiting never improves.
+const UNSETTLED_STATUSES: ReadonlySet<string> = new Set(["PENDING", "EXPECTED"]);
+
+function checkSettled(entry: RollupEntry): boolean {
+  const status = rollupEntryStatus(entry);
+  return status !== null && !UNSETTLED_STATUSES.has(status);
+}
+
+export function checksSettled(entries: readonly RollupEntry[]): boolean {
+  const latest = latestChecks(entries);
+  return latest.length > 0 && latest.every(checkSettled);
+}
+
+/** The latest entries still deciding, by label, in latestChecks() order. */
+export function pendingCheckLabels(entries: readonly RollupEntry[]): string[] {
+  return latestChecks(entries)
+    .filter((entry): boolean => !checkSettled(entry))
+    .map((entry): string => rollupEntryLabel(entry) ?? "(unnamed)");
 }
 
 /**
@@ -713,20 +731,22 @@ function shellApproverNames(approvers: readonly string[]): string[] {
 // The two exceptions are not stylistic: Copilot posts as
 // `copilot-pull-request-reviewer[bot]` and Cursor's Bugbot posts under a login
 // carrying `cursor` OR `bugbot` depending on the installation, so a reviewer
-// configured as `bugbot` must match either. Every other name matches itself,
-// unanchored, which is what lets `sasuke` match `sasuke-bankai[bot]`.
+// configured as `bugbot` must match either. Every other name matched itself,
+// unanchored, which is what let `sasuke` match `sasuke-bankai[bot]`.
 //
 // PORT CHANGE (§3): the switch arms were the two exceptions written into the
 // binary; each is now that reviewer's `login_pattern` in the target repository's
 // `nen/gates.json`. THE FALL-THROUGH IS KEPT, and it is not a fallback of
 // the kind ../schema/errors.ts refuses: it applies to a name the file does NOT
-// declare, and it reproduces the original's `default:` arm exactly -- an
-// undeclared reviewer matches itself, case-insensitively, and an unparseable one
-// matches nothing. Reproducing it matters because a caller may pass
-// `--reviewers` a name the registry has never heard of, and the original's
-// answer to that is "treat it as its own login", not "crash".
+// declare: an undeclared reviewer's name IS its login -- the WHOLE login,
+// case-insensitively, with an optional `[bot]` suffix (../schema/pattern.ts's
+// `exactLoginPattern`, zheref/nen#264). The original's `default:` arm matched
+// the name UNANCHORED, so a stranger whose login merely contained it counted
+// as that reviewer; that half is deliberately NOT reproduced. A caller may
+// still pass `--reviewers` a name the registry has never heard of, and the
+// answer is still "treat it as its own login", not "crash".
 export function reviewerLoginPattern(identities: GateIdentities, name: string): RegExp {
-  return identities.reviewer(name)?.loginPattern ?? safePattern(name);
+  return identities.reviewer(name)?.loginPattern ?? exactLoginPattern(name);
 }
 
 // --- reviewerReviewCheckPattern ----------------------------------------------
@@ -896,7 +916,7 @@ function approverApproved(
   headSha: string,
   reading: ApprovalReading,
 ): boolean {
-  const pattern = identities.reviewer(name)?.loginPattern ?? safePattern(name);
+  const pattern = identities.reviewer(name)?.loginPattern ?? exactLoginPattern(name);
   return latest.some(
     (review): boolean =>
       pattern.test(review.author) &&
@@ -1143,7 +1163,7 @@ export function pendingRounds(
     // can stand in for its round. Every one of those is the conservative
     // reading, so an unknown reviewer OWES a round rather than being excused.
     const identity: ReviewerIdentity | undefined = identities.reviewer(name);
-    const loginPattern = identity?.loginPattern ?? safePattern(name);
+    const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
 
     if (
       inputs.reviewRequests.some((request): boolean =>
@@ -1181,6 +1201,45 @@ export function pendingRounds(
   }
 
   return owed;
+}
+
+// --- roundsAtHead ---------------------------------------------------------------
+// `nen watch until --pr <ref> --until review-posted` (zheref/nen#264, the
+// coordinator's ruling on it): has a CONFIGURED reviewer's round been posted
+// at the CURRENT head? Only the gate's own reviewer set counts, resolved
+// through the SAME identities and the SAME `reviewerRound` branches
+// `pendingRounds` asks -- a review by the reviewer's login, a definitive
+// round-check run, CON-40's holistic pass -- so a stray human comment-only
+// review wakes nothing, and a reviewer whose CHECK is its round wakes the
+// loop without ever posting a review.
+//
+// CURRENT HEAD ONLY: `reviewerRound` is asked under `strict` with no earlier
+// runs, because a watch is waiting for a round on THIS head; `bounded`'s
+// any-head leniency would read a round from before the last push as fresh.
+// And a pending review request for the reviewer means its round is not
+// posted yet, exactly as `pendingRounds`' first limb reads it.
+export interface RoundAtHead {
+  readonly reviewer: string;
+  readonly via: RoundVia;
+}
+
+export function roundsAtHead(
+  identities: GateIdentities,
+  inputs: RoundInputs,
+  headSha: string,
+  reviewers: readonly string[],
+  deliveryPr = false,
+): RoundAtHead[] {
+  const checks = latestChecks(inputs.checks);
+  const found: RoundAtHead[] = [];
+  for (const name of normalizeReviewerNames(reviewers)) {
+    const identity: ReviewerIdentity | undefined = identities.reviewer(name);
+    const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
+    if (inputs.reviewRequests.some((request): boolean => requestMatches(request, loginPattern))) continue;
+    const outcome = reviewerRound(identity, loginPattern, inputs.reviews, checks, [], headSha, "strict", deliveryPr);
+    if (outcome.had) found.push({ reviewer: name, via: outcome.via });
+  }
+  return found;
 }
 
 /** Which branch of `reviewerRound` found a reviewer's round. */
@@ -1580,7 +1639,7 @@ export function roundQuorum(
     // undeclared member gets `pendingRounds`' own default -- the name matches
     // itself -- and no round check, which can only count it as "no round".
     const identity = identities.reviewer(name);
-    const loginPattern = identity?.loginPattern ?? safePattern(name);
+    const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
     const outcome = reviewerRound(
       identity,
       loginPattern,

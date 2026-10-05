@@ -21,6 +21,7 @@ import {
   type JValue,
 } from "./unitcheck.js";
 import { RefError, resolveProductCode, resolveRef } from "../verbs/pr_ready.js";
+import { loadWorkflow } from "../schema/workflow.js";
 
 describe("resolvePrRef -- <n>, <owner/name>#<n> or <CODE>#<n>, never a guess", () => {
   it("reads a bare number with no slug and no code", () => {
@@ -769,5 +770,43 @@ describe("fetchMergeBaseSha -- N6, the merge base rather than baseRefOid directl
       { match: "gh api repos/acme/widgets/compare/BASE...HEAD", result: { code: 0, stdout: JSON.stringify({}) } },
     ]);
     expect(() => fetchMergeBaseSha(seams, TARGET, "BASE", "HEAD")).toThrow(MergeBaseError);
+  });
+});
+
+describe("this repository's own release.unitPaths (zheref/nen#311)", () => {
+  const own = loadWorkflow(process.cwd()).workflow.release.unitPaths;
+  const versionBump = { baseRef: "base", headRef: "head", readJson: (_path: string, ref: string): JValue => jv({ name: "nen", version: ref === "base" ? "0.17.0" : "0.18.0" }) };
+  const check = (paths: readonly string[]): ReturnType<typeof assembleUnitCheck> =>
+    assembleUnitCheck(TARGET, 1, own ?? [], paths.map((path): ReturnType<typeof file> => file(path)), versionBump);
+
+  it("is declared, so unit-check and pr merge --release-unit have a boundary to read", () => {
+    expect(own).not.toBeNull();
+  });
+
+  it("passes a release PR of the NN-PR-#281 shape (changelog, package.json version, version literal)", () => {
+    const report = check(["CHANGELOG.md", "package.json", "src/version.ts"]);
+    expect(report.outsideUnit).toEqual([]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("passes a release PR of the NN-PR-#308 shape (the #281 set plus the pinned-ref docs)", () => {
+    const report = check(["CHANGELOG.md", "README.md", "docs/USAGE.md", "package.json", "src/version.ts"]);
+    expect(report.ok).toBe(true);
+  });
+
+  it("refuses a PR that touches src/parse/**", () => {
+    const report = check(["CHANGELOG.md", "src/parse/izanami.ts"]);
+    expect(report.outsideUnit).toEqual(["src/parse/izanami.ts"]);
+    expect(report.ok).toBe(false);
+  });
+
+  it("refuses a package.json change beyond its version key", () => {
+    const report = assembleUnitCheck(TARGET, 1, own ?? [], [file("package.json")], {
+      baseRef: "base",
+      headRef: "head",
+      readJson: (_path, ref): JValue => jv(ref === "base" ? { version: "0.17.0", private: true } : { version: "0.18.0", private: false }),
+    });
+    expect(report.ok).toBe(false);
+    expect(report.keyScopedViolations[0]?.offendingKeys).toEqual(["private"]);
   });
 });

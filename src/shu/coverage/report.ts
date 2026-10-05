@@ -287,6 +287,31 @@ function labelled(label: string, value: string): string {
   return `${`${label}:`.padEnd(LABEL_WIDTH)}${value}`;
 }
 
+/**
+ * The lines `--from-capture` prints INSTEAD OF an executor report (zheref/
+ * nen#250): nothing ran, so there is no argv, no step and no duration to show
+ * -- only which lane, which reports were reused, and the sidecar that proved
+ * them. Same streams as the executor's report: stdout in text mode, stderr
+ * under `--json`. A lane with no report to reuse says exactly that, and claims
+ * no proof of a capture that does not exist.
+ */
+export function renderFromCapture(
+  lane: string,
+  stack: string,
+  reports: readonly string[],
+  sidecar: string,
+): readonly string[] {
+  return [
+    labelled("lane", `${lane}  (${stack})`),
+    labelled(
+      "read",
+      reports.length === 0
+        ? "--from-capture -- nothing was run, and this lane declares no report to reuse."
+        : `--from-capture -- nothing was run. Reused ${reports.join(", ")}, proven a capture of this exact tree by ${sidecar} (same tree fingerprint, same report hashes).`,
+    ),
+  ];
+}
+
 /** `82.35%` -- or `--%` where there was nothing to divide. */
 export function formatPercent(counts: CoverageCounts): string {
   return counts.percent === null ? "--" : `${counts.percent.toFixed(2)}%`;

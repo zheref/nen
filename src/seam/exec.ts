@@ -77,6 +77,7 @@
 // time" is not "nothing is there": ../shu/run.ts reports a timeout as `satisfied:
 // null` -- cannot assert -- exactly as it reports a kind it does not know.
 
+import { readHostZone } from "./zone.js";
 import { spawn, spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { constants as osConstants } from "node:os";
@@ -316,6 +317,13 @@ export interface Seams {
    * than only on the lane that happens to be the host.
    */
   readonly platform: NodeJS.Platform;
+  /**
+   * The IANA zone this host names for itself, or null when it names none
+   * (zheref/nen#258). OPTIONAL, so a hand-built Seams in a test that never
+   * reads a clock need not say anything about one; a reader treats an absent
+   * seam exactly as a host that names no zone -- `null`, with the reason.
+   */
+  readonly hostTimeZone?: () => string | null;
 }
 
 // CRLF IS NORMALIZED AT THE SEAM, once, for every caller.
@@ -648,6 +656,8 @@ export function defaultSeams(): Seams {
     now: (): Date => new Date(),
     env: process.env,
     platform: process.platform,
+    // The /etc/localtime symlink, then /etc/timezone, then ICU's guess.
+    hostTimeZone: (): string | null => readHostZone(),
   };
 }
 

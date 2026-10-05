@@ -76,6 +76,22 @@ export const EXIT_COVERAGE_UNJOINED = 6;
 export const EXIT_BEHIND_PINNED_REF = 7;
 
 /**
+ * `shu coverage --touched --from-capture` only: the capture on disk cannot be
+ * reused -- a declared report is missing, or was written before a file it
+ * must postdate changed (zheref/nen#250). Nothing was measured and NO
+ * document is printed.
+ *
+ * NOT 1, which is "the tool failed, or a report could not be read": this
+ * report may be perfectly sound -- it is about another tree. NOT 6, which is a
+ * capture that IS current and joined nothing. The remedy is one action, and a
+ * distinct code lets a caller route it there: measure again (the same line
+ * without `--from-capture`). 8 because 3-7 are this family's already;
+ * `pr ready`'s own 8 (a head mismatch) is a different command's contract and
+ * never reaches `nen shu`.
+ */
+export const EXIT_COVERAGE_STALE_CAPTURE = 8;
+
+/**
  * A refusal that exits with one of this family's own codes.
  *
  * It is NOT a VerbUsageError subclass on purpose: ../index.ts's `runFamily`

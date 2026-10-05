@@ -141,6 +141,7 @@ export class ScriptedSeams implements Seams {
   readonly now: () => Date;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly platform: NodeJS.Platform;
+  readonly hostTimeZone: () => string | null;
   private readonly script: readonly ScriptedCall[];
   /** The verdict this fixture gives each port. An unlisted port throws. */
   private readonly ports: Readonly<Record<number, PortVerdict>>;
@@ -167,12 +168,19 @@ export class ScriptedSeams implements Seams {
        * whatever else happens to be listening on the machine running it.
        */
       ports?: Readonly<Record<number, PortVerdict>>;
+      /**
+       * The zone the host names. Defaults to NONE, so no test's output
+       * depends on the zone of the machine running it; a test about the
+       * local clock states the zone it means (zheref/nen#258).
+       */
+      hostTimeZone?: () => string | null;
     } = {},
   ) {
     this.script = [...script];
     this.now = options.now ?? ((): Date => new Date("2026-01-01T00:00:00Z"));
     this.env = options.env ?? {};
     this.platform = options.platform ?? process.platform;
+    this.hostTimeZone = options.hostTimeZone ?? ((): null => null);
     this.ports = options.ports ?? {};
   }
 
