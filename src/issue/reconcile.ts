@@ -117,10 +117,19 @@ export function stripNonReferenceText(text: string): string {
 const CODE_SPAN = /(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g;
 
 /**
- * Drop indented code blocks: a line indented four spaces (or a tab) that
- * follows a blank line, the start of the text, or another such line. A line
- * indented the same way straight after a paragraph line is a continuation, not
- * code, and is kept.
+ * Drop indented code blocks: a line whose content starts at column 4 or more
+ * (a tab advances to the next multiple of 4, so 1-3 spaces then a tab counts)
+ * that follows a blank line, the start of the text, or another such line.
+ * Blockquote markers (`>`) are removed before the column is measured, so code
+ * indented inside a quote is code too. A line indented the same way straight
+ * after a paragraph line is a continuation, not code, and is kept.
+ *
+ * CONSERVATIVE ON LIST CONTINUATIONS, DELIBERATELY. Inside a list item,
+ * CommonMark measures indentation from the item's content column, so a
+ * four-space line after a blank line in a list is a continued paragraph, not
+ * code. This does not track list context and drops it. Dropping text can only
+ * lose a proposal, never invent one, so the error falls on the side the verb's
+ * evidence rule already prefers.
  */
 function stripIndentedCode(text: string): string {
   let afterBlank = true;
@@ -128,16 +137,28 @@ function stripIndentedCode(text: string): string {
   return text
     .split("\n")
     .map((line): string => {
-      if (line.trim() === "") {
+      const unquoted = line.replace(/^(?: {0,3}>[ ]?)+/, "");
+      if (unquoted.trim() === "") {
         afterBlank = true;
         return line;
       }
-      const indented = /^(?: {4,}|\t)/.test(line);
+      const indented = indentColumn(unquoted) >= 4;
       inCode = indented && (afterBlank || inCode);
       afterBlank = false;
       return inCode ? "" : line;
     })
     .join("\n");
+}
+
+/** The column a line's content starts at: a space advances one, a tab to the next multiple of 4. */
+function indentColumn(line: string): number {
+  let column = 0;
+  for (const character of line) {
+    if (character === " ") column += 1;
+    else if (character === "\t") column += 4 - (column % 4);
+    else break;
+  }
+  return column;
 }
 
 /**
@@ -189,6 +210,8 @@ const ISSUE_FIELDS = "number,title,url,labels,stateReason";
 
 /** Commits read per pull request; a PR with more is a finding, never a silent cut. */
 export const COMMITS_PER_PR = 100;
+/** The most commits GitHub serves for one pull request, however it is paged. */
+export const COMMITS_SERVED_PER_PR = 250;
 /** Closing references read per pull request; the same rule. */
 export const LINKS_PER_PR = 50;
 
@@ -256,8 +279,26 @@ export function prCommitsArgv(target: Target, number: number, after: string): re
  * may be hiding (a squash or rebase landing of the base branch).
  */
 export function deliveryArgv(target: Target, head: string, base: string): readonly string[] {
-  return ["pr", "list", "--repo", target.slug, "--state", "merged", "--head", head, "--base", base, "--limit", "1", "--json", "number,url,mergedAt"];
+  return [
+    "pr",
+    "list",
+    "--repo",
+    target.slug,
+    "--state",
+    "merged",
+    "--head",
+    head,
+    "--base",
+    base,
+    "--limit",
+    String(DELIVERY_LIMIT),
+    "--json",
+    "number,url,mergedAt,headRepositoryOwner",
+  ];
 }
+
+/** How many merged deliveries from one base are read: enough to see past a stale or forked one. */
+export const DELIVERY_LIMIT = 10;
 
 export function openIssuesArgv(target: Target, limit: number): readonly string[] {
   return ["issue", "list", "--repo", target.slug, "--state", "open", "--limit", String(limit), "--json", ISSUE_FIELDS];
@@ -289,10 +330,12 @@ export function mergedPullsArgv(target: Target, first: number, since: string | n
 /**
  * The repository's whole label list, every page (`--paginate` follows the Link
  * header, so the list cannot come back cut at a page boundary), one name per
- * line. Read only when --hold-labels names something to check.
+ * line AS A JSON STRING (`@json`), so a name carrying a newline, a quote or
+ * surrounding spaces is read back exactly. Read only when --hold-labels names
+ * something to check.
  */
 export function repositoryLabelsArgv(target: Target): readonly string[] {
-  return ["api", `repos/${target.slug}/labels?per_page=100`, "--paginate", "--jq", ".[].name"];
+  return ["api", `repos/${target.slug}/labels?per_page=100`, "--paginate", "--jq", ".[].name | @json"];
 }
 
 export function defaultBranchArgv(target: Target): readonly string[] {
@@ -461,6 +504,9 @@ function readRemainingCommits(
   const commits: Record<string, unknown>[] = [];
   let after = continuation.after;
   if (after === null) return { commits, error: "GitHub gave no cursor for the rest of them" };
+  // A cursor GitHub has already handed out means the next read would be one
+  // already made: the loop would spin, or silently re-read the same page.
+  const cursors = new Set<string>([after]);
   for (;;) {
     const result = seams.run(GH, prCommitsArgv(target, continuation.number, after));
     if (result.spawnFailed || result.code !== 0) return { commits, error: failure(result.stderr, result.code) };
@@ -480,6 +526,8 @@ function readRemainingCommits(
     if (page["hasNextPage"] !== true) return { commits, error: null };
     const next = page["endCursor"];
     if (typeof next !== "string" || next === "") return { commits, error: "GitHub said another page of commits exists and gave no cursor" };
+    if (cursors.has(next)) return { commits, error: `GitHub repeated the cursor '${next}', so the commit pages made no progress` };
+    cursors.add(next);
     after = next;
   }
 }
@@ -535,23 +583,32 @@ function readMergedPulls(
       const row = rows.find((candidate): boolean => Number(candidate["number"] ?? 0) === continuation.number);
       const more = readRemainingCommits(seams, target, continuation);
       if (row !== undefined) row["commits"] = [...(row["commits"] as Record<string, unknown>[]), ...more.commits];
+      const read = row === undefined ? 0 : (row["commits"] as unknown[]).length;
       if (more.error !== null) {
-        const read = row === undefined ? 0 : (row["commits"] as unknown[]).length;
         findings.push({
           source: "merged-pull-requests",
           detail: `PR #${continuation.number} has ${continuation.totalCount} commits; only ${read} were read: ${more.error}`,
+        });
+      } else if (read < continuation.totalCount) {
+        // GitHub serves at most 250 of a pull request's commits, and answers
+        // the last of them with hasNextPage: false -- so a cursor loop that
+        // ended cleanly can still have read less than the PR holds.
+        findings.push({
+          source: "merged-pull-requests",
+          detail: `PR #${continuation.number} has ${continuation.totalCount} commits; GitHub serves at most ${COMMITS_SERVED_PER_PR} of a pull request's, and ${read} were read, so ${continuation.totalCount - read} were not`,
         });
       }
     }
     const beyond = page.issueCount !== null && page.issueCount > rows.length;
     // The limit is checked FIRST: once it is reached nothing more is asked for,
     // and whether that was the end is the search's count to say.
-    if (rows.length >= limit) {
-      truncated = page.hasNextPage || beyond;
-      break;
-    }
-    if (!page.hasNextPage) {
-      truncated = beyond;
+    if (rows.length >= limit || !page.hasNextPage) {
+      truncated = (rows.length >= limit && page.hasNextPage) || beyond;
+      // Without the total, "no next page" is the cursor's word alone -- and the
+      // cursor is exactly what lies at search's 1000-result ceiling.
+      if (page.issueCount === null && !truncated) {
+        findings.push({ source: "merged-pull-requests", detail: "the search answered without its total (issueCount), so whether it returned every match could not be read" });
+      }
       break;
     }
     if (page.endCursor === null) {
@@ -740,42 +797,66 @@ function landingOf(
   return landing;
 }
 
+interface DeliveryCandidate extends Delivery {
+  /** The head repository's owner login, or `null` when GitHub gave none. */
+  readonly headOwner: string | null;
+}
+
 /**
- * The merged delivery PR from `head` into `base`, read once per base. `null`
- * for none; `undefined` when the read failed (the finding is recorded).
+ * The merged delivery PR from `head` into `base` that could have carried a
+ * child PR merged at `childMergedAt`: from a head in THIS repository (a fork's
+ * branch of the same name is a different branch), and merged at or after the
+ * child (a delivery merged before the child cannot have carried it). The newest
+ * that qualifies; `null` for none; `undefined` when the read failed (the
+ * finding is recorded). The list is read once per base and filtered per child.
  */
 function deliveryOf(
   seams: Seams,
   target: Target,
   head: string,
   base: string,
-  cache: Map<string, Delivery | null | undefined>,
+  childMergedAt: string | null,
+  cache: Map<string, readonly DeliveryCandidate[] | undefined>,
   findings: Finding[],
 ): Delivery | null | undefined {
-  if (cache.has(head)) return cache.get(head);
+  if (!cache.has(head)) cache.set(head, readDeliveries(seams, target, head, base, findings));
+  const candidates = cache.get(head);
+  if (candidates === undefined) return undefined;
+  const qualifying = candidates
+    .filter((candidate): boolean => candidate.headOwner !== null && candidate.headOwner.toLowerCase() === target.owner.toLowerCase())
+    .filter((candidate): boolean => candidate.mergedAt !== null && childMergedAt !== null && candidate.mergedAt >= childMergedAt)
+    .sort((a, b): number => (b.mergedAt ?? "").localeCompare(a.mergedAt ?? "") || b.pr - a.pr);
+  const chosen = qualifying[0];
+  return chosen === undefined ? null : { pr: chosen.pr, url: chosen.url, mergedAt: chosen.mergedAt };
+}
+
+function readDeliveries(
+  seams: Seams,
+  target: Target,
+  head: string,
+  base: string,
+  findings: Finding[],
+): readonly DeliveryCandidate[] | undefined {
   const result = seams.run(GH, deliveryArgv(target, head, base));
-  let delivery: Delivery | null | undefined;
   if (result.spawnFailed || result.code !== 0) {
     findings.push({ source: `delivery ${head}`, detail: `could not look for a merged PR from '${head}' into '${base}': ${failure(result.stderr, result.code)}` });
-    delivery = undefined;
-  } else {
-    try {
-      const first = record(jsonArray(result.stdout, "pull requests")[0]);
-      delivery =
-        first["number"] === undefined
-          ? null
-          : {
-              pr: Number(first["number"]),
-              url: String(first["url"] ?? ""),
-              mergedAt: typeof first["mergedAt"] === "string" && first["mergedAt"] !== "" ? first["mergedAt"] : null,
-            };
-    } catch (error) {
-      findings.push({ source: `delivery ${head}`, detail: `could not parse the merged PRs from '${head}' into '${base}': ${message(error)}` });
-      delivery = undefined;
-    }
+    return undefined;
   }
-  cache.set(head, delivery);
-  return delivery;
+  try {
+    return jsonArray(result.stdout, "pull requests").map((entry): DeliveryCandidate => {
+      const row = record(entry);
+      const owner = record(row["headRepositoryOwner"])["login"];
+      return {
+        pr: Number(row["number"] ?? 0),
+        url: String(row["url"] ?? ""),
+        mergedAt: typeof row["mergedAt"] === "string" && row["mergedAt"] !== "" ? row["mergedAt"] : null,
+        headOwner: typeof owner === "string" && owner !== "" ? owner : null,
+      };
+    });
+  } catch (error) {
+    findings.push({ source: `delivery ${head}`, detail: `could not parse the merged PRs from '${head}' into '${base}': ${message(error)}` });
+    return undefined;
+  }
 }
 
 /** Every --hold-labels name must exist in the repository; an unreadable list is a finding too. */
@@ -788,7 +869,18 @@ function checkHoldLabels(seams: Seams, target: Target, holdLabels: readonly stri
     });
     return;
   }
-  const names = outputLines(result.stdout).map((name): string => name.trim()).filter((name): boolean => name !== "");
+  const names: string[] = [];
+  for (const line of outputLines(result.stdout)) {
+    if (line.trim() === "") continue;
+    try {
+      const name: unknown = JSON.parse(line);
+      if (typeof name !== "string") throw new Error("not a JSON string");
+      names.push(name);
+    } catch (error) {
+      findings.push({ source: "hold-labels", detail: `${target.slug}'s label list carried a line that is not a JSON-encoded name (${message(error)}), so --hold-labels could not be checked` });
+      return;
+    }
+  }
   if (names.length === 0) {
     findings.push({ source: "hold-labels", detail: `${target.slug} answered an empty label list, so --hold-labels could not be checked` });
     return;
@@ -865,14 +957,14 @@ export function reconcile(seams: Seams, target: Target, options: ReconcileOption
   // the search's own order is most-recently-UPDATED, not merge order.
   const evidenceByIssue = new Map<number, Evidence[]>();
   const landingCache = new Map<string, Landing>();
-  const deliveryCache = new Map<string, Delivery | null | undefined>();
+  const deliveryCache = new Map<string, readonly DeliveryCandidate[] | undefined>();
   for (const pull of pulls ?? []) {
     for (const [issue, references] of pull.references) {
       if (!open.has(issue)) continue;
       let landing = landingOf(seams, target, defaultBranch, pull, landingCache, findings);
       let delivery: Delivery | null = null;
       if (landing === "diverged" && defaultBranch !== null) {
-        const found = deliveryOf(seams, target, pull.base, defaultBranch, deliveryCache, findings);
+        const found = deliveryOf(seams, target, pull.base, defaultBranch, pull.mergedAt, deliveryCache, findings);
         if (found === undefined) landing = "unknown";
         else delivery = found;
       }

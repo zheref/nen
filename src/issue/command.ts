@@ -613,15 +613,17 @@ usage:
       GitHub's closingIssuesReferences, or a closing keyword (close/closes/
       closed, fix/fixes/fixed, resolve/resolves/resolved, optional ':') before
       '#n', 'owner/name#n' or the issue's URL, in the PR body or a commit
-      message. Fenced code, inline code and HTML comments are not read; a bare
+      message. Fenced code, inline code, indented code (column 4+, also in a
+      blockquote) and HTML comments are not read; a bare
       mention, 'Part of #n' and title similarity are never evidence. Each
       proposal cites the PR, its merge commit and the reference as written.
       LANDED means on the default branch: a PR merged into it, or merged
       elsewhere with its merge commit reachable from it (compare API). A
       'diverged' compare asserts nothing (a squash or rebase landing reads
       that way): a merged delivery PR from that base into the default branch
-      makes it verify, citing that PR; none makes it wait, worded "not
-      reachable".
+      (same-repository head, merged at or after the closing PR; up to 10
+      listed) makes it verify, citing that PR; none makes it wait, worded
+      "not reachable".
       Proposed actions: close (landed, nothing in flight); hold (carries one of
       --hold-labels -- the repository's own "do not close" names; none are
       built in; matched case-insensitively against the repository's own
@@ -634,9 +636,10 @@ usage:
       restricts the proposals and names any entry that is not open.
       Merged PRs are read by a GraphQL search QUERY ('gh api graphql',
       cursor-paged up to --limit, commit oid and message only, each PR once;
-      a PR with over 100 commits has the rest read by a follow-up query).
-      Search stops at 1000 results; more matched (issueCount) than read is a
-      finding whatever the cursor says.
+      a PR with over 100 commits has the rest read by a follow-up query, and
+      GitHub serves at most 250 of them -- any not read is a finding).
+      Search stops at 1000 results; more matched (issueCount) than read, or a
+      final page with no issueCount, is a finding whatever the cursor says.
       AN UNREADABLE SOURCE IS A FINDING: a failed read, a GraphQL error, an
       open list that came back full, a search that reached --limit with more
       left, a PR with more closing references (50) or commits than were read,

@@ -3374,6 +3374,7 @@ describe("nen issue reconcile -- read-only, proposes only (zheref/nen#332)", () 
       stdout: JSON.stringify({
         data: {
           search: {
+            issueCount: 1,
             pageInfo: { hasNextPage: false, endCursor: null },
             nodes: [
               {
