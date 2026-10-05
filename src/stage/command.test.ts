@@ -365,3 +365,123 @@ describe("nen stage list -- CLI wiring (zheref/nen#237)", () => {
     expect((await capture(["stage", "triage", "--nul"])).code).toBe(2);
   });
 });
+
+describe("nen stage triage --range -- every git read that can fail, through the seam (zheref/nen#337)", () => {
+  const BASE = "a".repeat(40);
+  const HEAD = "b".repeat(40);
+  const MB = "c".repeat(40);
+  const BLOB = "d".repeat(40);
+  const Z = "0".repeat(40);
+  // Every range read carries --no-replace-objects (hanten round 2 N6); a
+  // script that matched without it would fail as an unscripted call.
+  const G = "git --no-replace-objects";
+  const LOG = `${G} -c core.quotePath=false log -z --raw --no-abbrev --format= --no-renames --diff-merges=cc --ignore-submodules=none --no-relative ${MB}..${HEAD} --`;
+  const DIFF = `${G} -c core.quotePath=false diff -z --raw --no-abbrev --find-renames --ignore-submodules=none --no-relative --no-ext-diff ${MB} ${HEAD} --`;
+  const CAT = `${G} cat-file --batch-check=%(objectname) %(objecttype) %(objectsize)`;
+  const RAW = `:100644 100644 ${Z} ${BLOB} M\0src/a.ts\0`;
+  const fail = { code: 128, stderr: "fatal: boom" };
+
+  function script(overrides: Readonly<Record<string, ScriptedCall["result"]>> = {}): ScriptedCall[] {
+    const calls: Record<string, ScriptedCall["result"]> = {
+      [`${G} rev-parse --git-dir`]: { stdout: ".git\n" },
+      [`${G} rev-parse --is-shallow-repository`]: { stdout: "false\n" },
+      [`${G} rev-parse --verify --quiet --end-of-options main^{commit}`]: { stdout: `${BASE}\n` },
+      [`${G} rev-parse --verify --quiet --end-of-options topic^{commit}`]: { stdout: `${HEAD}\n` },
+      [`${G} merge-base ${BASE} ${HEAD}`]: { stdout: `${MB}\n` },
+      [`${G} rev-list --count ${MB}..${HEAD}`]: { stdout: "2\n" },
+      [LOG]: { stdout: RAW },
+      [DIFF]: { stdout: RAW },
+      [CAT]: { stdout: `${BLOB} blob 3\n` },
+      ...overrides,
+    };
+    return Object.entries(calls).map(([match, result]): ScriptedCall => ({ match, result }));
+  }
+
+  it("reads clean through every step when nothing fails, sizing by bare object id", async () => {
+    const seams = new ScriptedSeams(script());
+    const out: string[] = [];
+    const io: Io = { out: (line): void => void out.push(line), err: (): void => undefined };
+    const code = await runFamily(stageCommand, ["stage", "triage", "--range", "main..topic"], BANKAI_REPO, false, io, seams);
+    expect(code).toBe(0);
+    expect(out).toEqual([
+      `read: committed range main..topic (${MB.slice(0, 12)}..${HEAD.slice(0, 12)}, 2 commit(s)), not the working copy`,
+      "clean: 1 file(s)",
+      "  src/a.ts",
+      "ignored: 0 file(s), not listed",
+    ]);
+    const cat = seams.calls.find((call) => call.args.includes("cat-file"));
+    expect(cat?.stdin).toBe(`${BLOB}\n`);
+    expect(seams.calls.every((call) => call.args[0] === "--no-replace-objects")).toBe(true);
+  });
+
+  it.each([
+    [`${G} merge-base ${BASE} ${HEAD}`, "the merge base"],
+    [`${G} rev-list --count ${MB}..${HEAD}`, "the commit count \\(git rev-list\\)"],
+    [LOG, "the changes the commits made \\(git log\\)"],
+    [DIFF, "the net change \\(git diff\\)"],
+    [CAT, "the blob sizes \\(git cat-file\\)"],
+  ])("exits 1 when '%s' fails, naming %s", async (match, named) => {
+    const result = await capture(["stage", "triage", "--range", "main..topic"], script({ [match]: fail }));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(new RegExp(`could not read ${named} for --range main\\.\\.topic: fatal: boom`));
+    expect(result.out).toEqual([]);
+  });
+
+  it("flags a non-UTF-8 name in the net change 'undecodable', read from the raw bytes (hanten round 2 N7)", async () => {
+    const head = new TextEncoder().encode(`:100644 100644 ${Z} ${BLOB} A\0`);
+    const bytes = new Uint8Array([...head, 0x66, 0xff, 0x2e, 0x74, 0x73, 0]);
+    const result = await captureJson(
+      ["stage", "triage", "--range", "main..topic"],
+      script({ [LOG]: { stdoutBytes: bytes, stdout: "" }, [DIFF]: { stdoutBytes: bytes, stdout: "" } }),
+      BANKAI_REPO,
+    );
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n")) as { flagged: { path: string; reasons: string[] }[] };
+    expect(doc.flagged).toEqual([{ path: "f�.ts", reasons: ["undecodable"] }]);
+  });
+
+  it("renders a flagged name through plainLine, so a carriage return cannot hide it (hanten round 2 N2)", async () => {
+    const raw = `:100644 100644 ${Z} ${BLOB} A\0cr\r.pem\0`;
+    const result = await capture(["stage", "triage", "--range", "main..topic"], script({ [LOG]: { stdout: raw }, [DIFF]: { stdout: raw } }));
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("  cr.pem  [secret-shape]");
+    expect(result.out.join("\n")).not.toContain("\r");
+  });
+
+  it("refuses a shallow clone at exit 2 BEFORE reading the range: no ref, merge-base or log call (Copilot on #379)", async () => {
+    const seams = new ScriptedSeams(script({ [`${G} rev-parse --is-shallow-repository`]: { stdout: "true\n" } }));
+    const err: string[] = [];
+    const io: Io = { out: (): void => undefined, err: (line): void => void err.push(line) };
+    const code = await runFamily(stageCommand, ["stage", "triage", "--range", "main..topic"], BANKAI_REPO, false, io, seams);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/is a shallow clone -- fetch full history/);
+    expect(seams.calls.map((call) => call.args.slice(1, 3).join(" "))).toEqual(["rev-parse --git-dir", "rev-parse --is-shallow-repository"]);
+  });
+
+  it("exits 1 naming the probe when the shallow probe itself fails", async () => {
+    const result = await capture(
+      ["stage", "triage", "--range", "main..topic"],
+      script({ [`${G} rev-parse --is-shallow-repository`]: { code: 128, stderr: "fatal: boom" } }),
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not read whether the repository is shallow \(git rev-parse\)/);
+  });
+
+  it("calls two histories with no merge base unrelated at exit 2", async () => {
+    const result = await capture(["stage", "triage", "--range", "main..topic"], script({ [`${G} merge-base ${BASE} ${HEAD}`]: { code: 1 } }));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/share no common ancestor/);
+  });
+
+  it("refuses --large-bytes 0 in range mode at exit 2, before any git read", async () => {
+    const result = await capture(["stage", "triage", "--range", "main..topic", "--large-bytes", "0"], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--large-bytes takes a positive whole number/);
+  });
+
+  it("refuses a '-' ref at exit 2 with no git call at all (hanten N7)", async () => {
+    const result = await capture(["stage", "triage", "--range", "--upload-pack=x..main"], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/begins with '-'/);
+  });
+});

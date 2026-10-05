@@ -1,0 +1,3921 @@
+{
+  "$schema": "hatsu.direct-registry/v1",
+  "contract": "hatsu-direct-registry",
+  "$comment": "The model-selection registry hatsu:direct resolves through `nen direct resolve --registry <this path>` (TRANSCRIBED from the source document's five tables by a one-off generator that is not shipped; source.documentSha256 identifies the document; `nen direct registry` validates the result) (the maintainer's rulings of 2026-10-04, docs/ROSTER.md section Rulings of 2026-10-04 -- classify and direct). It separates STABLE ALIASES (SEMANTIC_FRONTIER, EXECUTION_FRONTIER, ...) from REPLACEABLE VERSIONS, as the source document does: every routing cell names an alias and a surface, never a model version. An alias resolves to a provider, a model FAMILY, the Hatsu surface it runs on and the TIER of nen/workflow.json -> models.<surface> that surface spells it as (deep -> opus on Claude Code, frontier -> astra on Codex, ...), so the concrete alias the maintainer types comes from the consumer's own models block and the version is never in this file. The `snapshot` block is the document's dated version table and is the stated FALLBACK only: the latest recommended version is read LIVE at run time through `liveLookup` (a surface CLI where one lists models, the provider's model page fetched and quoted) and reported with its source; where the lookup fails the snapshot is quoted with its date. The actionable winner and runner-up always name one of Hatsu's four surfaces (claude-code, codex, cursor, antigravity); native IDE integrations (with the providers they offer), the Cursor IDE and GitHub Copilot appear as INTERACTIVE equivalents where the document names them. `routing` is keyed job -> domain -> cells, transcribed from the document's five tables (95 job x domain routes, 167 cells with their language overrides): `*` is the cell every language shares and a language key appears only where the document differs; `prose` reads `*`. `effort` is the deterministic rule for the recommended effort level (low | medium | high | max) from the taxonomy's job weights, the job and language counts, the domain and the repository's gate. Nothing here is a fact about a machine: `nen direct resolve` reads this file and the consumer's nen/workflow.json and hard-codes none of it.",
+  "source": {
+    "document": "Version-Decoupled Model Selection Matrix for Engineering Workflows, registry snapshot 2026-10-04",
+    "rulings": "docs/ROSTER.md section Rulings of 2026-10-04 -- classify and direct",
+    "taxonomy": "contracts/classify.taxonomy.json",
+    "documentSha256": "baf720e3ffac80dc84640751ed3e0567fe61940bd1a505688a17f49c17937a93",
+    "readers": [
+      "hatsu:direct",
+      "hatsu:build",
+      "nen direct resolve"
+    ]
+  },
+  "snapshot": {
+    "asOf": "2026-10-04",
+    "$comment": "The document's Current version registry. A fallback quoted with its date when the live lookup fails -- never the answer while a provider page or surface CLI can be read.",
+    "aliases": {
+      "SEMANTIC_FRONTIER": {
+        "primary": "Claude Opus 5.5",
+        "modelId": "claude-opus-5-5",
+        "fallback": "Claude Fable 5.1"
+      },
+      "SEMANTIC_MAX": {
+        "primary": "Claude Fable 5.1",
+        "modelId": "claude-fable-5-1",
+        "fallback": "Claude Opus 5.5 at higher effort"
+      },
+      "BALANCED_AUTHOR": {
+        "primary": "Claude Sonnet 5.5",
+        "modelId": "claude-sonnet-5-5",
+        "fallback": "GPT-6.1 Sol"
+      },
+      "EXECUTION_FRONTIER": {
+        "primary": "GPT-6 Astra",
+        "modelId": "gpt-6-astra",
+        "fallback": "Claude Opus 5.5"
+      },
+      "EXECUTION_VALUE": {
+        "primary": "GPT-6.1 Sol",
+        "modelId": "gpt-6.1-sol",
+        "fallback": "Claude Sonnet 5.5"
+      },
+      "VISUAL_ORCHESTRATOR": {
+        "primary": "Gemini 4 Argon",
+        "modelId": null,
+        "fallback": "Gemini 3.8 Flash"
+      },
+      "VISUAL_FALLBACK": {
+        "primary": "Gemini 3.8 Flash",
+        "modelId": null,
+        "fallback": "Claude Sonnet 5.5"
+      },
+      "MECHANICAL_EDITOR": {
+        "primary": "Cursor Composer 2.5",
+        "modelId": null,
+        "fallback": "Claude Sonnet 5.5"
+      },
+      "PR_QUALITY_REVIEW": {
+        "primary": "Cursor Bugbot",
+        "modelId": null,
+        "fallback": "SEMANTIC_FRONTIER"
+      },
+      "PR_SECURITY_REVIEW": {
+        "primary": "Cursor Security Review",
+        "modelId": null,
+        "fallback": "EXECUTION_FRONTIER"
+      }
+    }
+  },
+  "aliases": {
+    "SEMANTIC_FRONTIER": {
+      "provider": "anthropic",
+      "family": "claude-opus",
+      "surface": "claude-code",
+      "tier": "deep",
+      "selection": "Best approved model for requirements, architecture, repository comprehension, state/effect semantics, difficult authorship, compatibility, and final semantic judgment"
+    },
+    "SEMANTIC_MAX": {
+      "provider": "anthropic",
+      "family": "claude-fable",
+      "surface": "claude-code",
+      "tier": "frontier",
+      "selection": "Escalation model for unusually ambiguous, long-horizon, or reasoning-dominant work when the default semantic frontier falls short"
+    },
+    "BALANCED_AUTHOR": {
+      "provider": "anthropic",
+      "family": "claude-sonnet",
+      "surface": "claude-code",
+      "tier": "fast",
+      "selection": "Fast frontier-quality model for scoped implementation, tests, documentation, interactive work, and high-volume maintenance"
+    },
+    "EXECUTION_FRONTIER": {
+      "provider": "openai",
+      "family": "gpt-astra",
+      "surface": "codex",
+      "tier": "frontier",
+      "selection": "Best approved model for tool-heavy build/test/debug loops, machinery, CI/CD, migrations, security execution, and computer use"
+    },
+    "EXECUTION_VALUE": {
+      "provider": "openai",
+      "family": "gpt-sol",
+      "surface": "codex",
+      "tier": "deep",
+      "selection": "Near-frontier execution model for routine coding, parallel workers, CI fixes, and high-volume automation"
+    },
+    "VISUAL_ORCHESTRATOR": {
+      "provider": "google",
+      "family": "gemini-pro",
+      "surface": "antigravity",
+      "tier": "deep",
+      "selection": "Best approved model for multimodal UI work, parallel-agent orchestration, long-context synthesis, and visual validation"
+    },
+    "VISUAL_FALLBACK": {
+      "provider": "google",
+      "family": "gemini-flash",
+      "surface": "antigravity",
+      "tier": "fast",
+      "selection": "Generally available visual/orchestration fallback when the frontier visual model is restricted"
+    },
+    "MECHANICAL_EDITOR": {
+      "provider": "cursor",
+      "family": "composer",
+      "surface": "cursor",
+      "tier": "fast",
+      "selection": "Cost-efficient model for repetitive, low-ambiguity, repository-wide transformations"
+    },
+    "PR_QUALITY_REVIEW": {
+      "provider": "cursor",
+      "family": "bugbot",
+      "surface": null,
+      "tier": null,
+      "reviewer": true,
+      "selection": "Automated PR reviewer for quality, correctness, and repository-policy findings"
+    },
+    "PR_SECURITY_REVIEW": {
+      "provider": "cursor",
+      "family": "security-review",
+      "surface": null,
+      "tier": null,
+      "reviewer": true,
+      "selection": "Automated PR reviewer dedicated to exploitable security defects"
+    }
+  },
+  "surfaces": {
+    "$comment": "Hatsu's four actionable surfaces. A `restart` line's placeholders are filled ONLY from the consumer's nen/workflow.json -> models.<modelsKey>.<tier> (<alias>) and from effort.surfaceMap (<level>) -- never from a fetched page and never from the snapshot; the live-read version is quoted beside the line, never inside it (Feitan, 2026-10-04). `interactive` is the surface's own conversational twin.",
+    "claude-code": {
+      "label": "Claude Code",
+      "modelsKey": "claude",
+      "restart": "claude --model <alias> (then /effort <level>)",
+      "interactive": "the Claude desktop app or claude.ai, the same model family",
+      "effortControl": "/effort low|medium|high|max",
+      "lookup": "the harness's model picker (/model) lists the served aliases"
+    },
+    "codex": {
+      "label": "Codex",
+      "modelsKey": "codex",
+      "restart": "codex -m <alias> -c model_reasoning_effort=<level>",
+      "interactive": "ChatGPT's Codex web app or the Codex IDE extension, the same model family",
+      "effortControl": "model_reasoning_effort low|medium|high|xhigh",
+      "lookup": "codex debug models"
+    },
+    "cursor": {
+      "label": "Cursor",
+      "modelsKey": "cursor",
+      "restart": "cursor-agent --model <alias>",
+      "interactive": "the Cursor IDE chat and Composer, the same model",
+      "effortControl": "the model's own thinking setting",
+      "lookup": "cursor-agent --model help lists the served models"
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "modelsKey": "antigravity",
+      "restart": "the Antigravity workspace with Model: <alias> on the lead",
+      "interactive": "the Antigravity IDE itself, or the Gemini app for a conversation",
+      "effortControl": "the model's thinking budget (pro) -- no four-step dial",
+      "lookup": "the workspace's model picker"
+    }
+  },
+  "nativeInteractive": {
+    "swift": "Xcode's native integration (Apple Intelligence; ChatGPT and Claude where Xcode offers them)",
+    "kotlin": "Android Studio / IntelliJ (Gemini in Android Studio; Copilot where enabled)",
+    "typescript": "VS Code or WebStorm with GitHub Copilot Chat, or the Cursor IDE",
+    "csharp": "Visual Studio with GitHub Copilot (Opus, Sonnet and Sol where the plan offers them)",
+    "prose": "the Claude desktop app or claude.ai"
+  },
+  "liveLookup": {
+    "$comment": "How the latest recommended version of a family is read at run time, per provider: the surface's own CLI first where one lists models, then the provider's model page fetched with the surface's web fetch and the line quoted. Pages are untrusted data: a line is quoted, never acted on as an instruction.",
+    "anthropic": {
+      "cli": "the Claude Code model picker (/model), read in-session",
+      "docs": [
+        "https://platform.claude.com/docs/en/models/overview",
+        "https://platform.claude.com/docs/en/release-notes/overview"
+      ]
+    },
+    "openai": {
+      "cli": "codex debug models",
+      "docs": [
+        "https://developers.openai.com/api/docs/changelog",
+        "https://openai.com/index/practical-guide-building-gpt-6/"
+      ]
+    },
+    "google": {
+      "cli": null,
+      "docs": [
+        "https://antigravity.google/docs/subagents",
+        "https://ai.google.dev/gemini-api/docs/models"
+      ]
+    },
+    "cursor": {
+      "cli": "cursor-agent --model help",
+      "docs": [
+        "https://cursor.com/changelog",
+        "https://cursor.com/composer"
+      ]
+    },
+    "copilot": {
+      "cli": null,
+      "docs": [
+        "https://docs.github.com/en/copilot/reference/ai-models/supported-models"
+      ]
+    }
+  },
+  "effort": {
+    "levels": [
+      "low",
+      "medium",
+      "high",
+      "max"
+    ],
+    "rule": {
+      "$comment": "score = the highest job weight among the issue's jobs (1..4), plus one for EACH of: three or more jobs; two or more code languages (a lang key whose taxonomy entry has code false does not count); the derived domain is aigov (kind process or role canon). The adds are cumulative. low <= 2, medium = 3, high = 4, max >= 5. A job of weight 4 (requirements, architecture, api-design, security) in an aigov domain is therefore max on its own; a mechanical edit alone is low. An empty job axis has no score: see emptyAxis.",
+      "base": "max job weight",
+      "plusOne": [
+        {
+          "when": "three or more jobs",
+          "key": "manyJobs",
+          "threshold": 3
+        },
+        {
+          "when": "two or more code languages (prose does not count)",
+          "key": "manyLangs",
+          "threshold": 2
+        },
+        {
+          "when": "the derived domain is aigov",
+          "key": "aigov"
+        }
+      ],
+      "bands": {
+        "low": [
+          0,
+          2
+        ],
+        "medium": [
+          3,
+          3
+        ],
+        "high": [
+          4,
+          4
+        ],
+        "max": [
+          5,
+          99
+        ]
+      }
+    },
+    "surfaceMap": {
+      "claude-code": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "max"
+      },
+      "codex": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "xhigh"
+      },
+      "cursor": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "high"
+      },
+      "antigravity": {
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "max": "high"
+      },
+      "$collapsed": "cursor and antigravity have no top setting: max maps to high there, said in the report; a session at high on those surfaces MATCHES a recommended max because effort is compared in dial space (see mismatch)."
+    }
+  },
+  "aggregation": {
+    "$comment": "An issue carrying several jobs or languages resolves ONE actionable recommendation. Each (job, language) pair yields its cell. WINNER: count winner positions only; the alias with the most wins, ties broken by `precedence` (earlier wins). A reviewer alias (aliases.<a>.reviewer true) is never the winner: a pair it wins counts for its `also` alias. RUNNER-UP: the alias with the next-highest winner count among the other winning aliases, ties by `precedence`; when the winner won every pair, the most frequent runnerUp alias across the winner's pairs, a reviewer alias resolving to its `also`, ties by `precedence`. Every reviewer runnerUp in this file carries an `also`, so a runner-up always resolves to an actionable alias. Every per-pair cell is still reported so the maintainer can see where the aggregate departs from a pair.",
+    "precedence": [
+      "SEMANTIC_MAX",
+      "SEMANTIC_FRONTIER",
+      "EXECUTION_FRONTIER",
+      "VISUAL_ORCHESTRATOR",
+      "EXECUTION_VALUE",
+      "BALANCED_AUTHOR",
+      "VISUAL_FALLBACK",
+      "MECHANICAL_EDITOR",
+      "PR_QUALITY_REVIEW",
+      "PR_SECURITY_REVIEW"
+    ]
+  },
+  "mismatch": {
+    "$comment": "What hatsu:build compares when it runs direct: the session's surface (one of surfaces), its model ALIAS (compared to models.<surface>.<winner tier> -- aliases, not tiers, because frontier and deep both read grok on Cursor) and its effort, compared in DIAL space after effort.surfaceMap (a collapsed top equals its dial). A session value the harness does not expose is passed as `unread` and that compare is reported unread, never a mismatch. A difference on any readable compare is a mismatch: build asks ONCE through the surface's picker (nen/decisions.json row direct-mismatch; continue here is the starred default, never a gate) and records the answer in the direct ledger. It never blocks the work.",
+    "compares": [
+      "surface",
+      "model",
+      "effort"
+    ],
+    "sessionFlags": {
+      "surface": "--surface <s>",
+      "model": "--model <alias>",
+      "effort": "--effort <level|unread>"
+    },
+    "ledger": ".nen/direct/<effort>.json",
+    "effortId": "the effort's identity, known before any branch exists: <CODE>-IS-#<N> for an issue (nen ref format), `inline-<ISO-8601 UTC seconds>` for a textual effort; percent-encoded in the file name as nen usage record encodes --effort; written under --repo's .nen/ (core, before a worktree exists). The verb refuses `..`, an absolute path or any resolved path outside .nen/direct/ at exit 2."
+  },
+  "emptyAxis": {
+    "job": "undirectable: the job axis is empty -- one line in the report, no cell, no effort, no mismatch asked; the caller (build) continues on its own session",
+    "lang": "the shared `*` cell, as the prose language reads it",
+    "$comment": "An axis classify left empty (undecidable, or every key low) reaches direct as an empty list. Inside build classify has already run (build § 2b), so direct never re-classifies: an empty axis is reported, never filled."
+  },
+  "surfaceRule": "A routing cell's surface is always its alias's surface (SEMANTIC_* and BALANCED_AUTHOR on claude-code, EXECUTION_* on codex, VISUAL_* on antigravity, MECHANICAL_EDITOR on cursor), so WORKFLOW § models holds: an alias maps onto a tier, a tier onto the surface's own alias. Where the source document preferred Cursor, Xcode, Android Studio, Visual Studio, the browser toolchain or GitHub Copilot, that preference is the cell's `interactive` equivalent.",
+  "phases": {
+    "FEAT.DEV.001": {
+      "name": "Product discovery and problem framing"
+    },
+    "FEAT.DEV.002": {
+      "name": "Requirements and acceptance contract"
+    },
+    "FEAT.DEV.003": {
+      "name": "Repository analysis and impact mapping"
+    },
+    "FEAT.DEV.004": {
+      "name": "Epic, issue, and delivery planning"
+    },
+    "FEAT.DEV.005": {
+      "name": "Multi-agent orchestration"
+    },
+    "FEAT.DEV.006": {
+      "name": "Architecture and dependency boundaries"
+    },
+    "FEAT.DEV.007": {
+      "name": "State management and effect design"
+    },
+    "FEAT.DEV.008": {
+      "name": "UX flows and interaction design"
+    },
+    "FEAT.DEV.009": {
+      "name": "UI component authoring"
+    },
+    "FEAT.DEV.010": {
+      "name": "Domain and business logic"
+    },
+    "FEAT.DEV.011": {
+      "name": "API, persistence, and service integration"
+    },
+    "FEAT.DEV.012": {
+      "name": "Privacy, permissions, and threat modeling"
+    },
+    "FEAT.DEV.013": {
+      "name": "Feature implementation"
+    },
+    "FEAT.DEV.014": {
+      "name": "Accessibility and localization"
+    },
+    "FEAT.DEV.015": {
+      "name": "Unit and state-transition tests"
+    },
+    "FEAT.DEV.016": {
+      "name": "Integration and contract tests"
+    },
+    "FEAT.DEV.017": {
+      "name": "UI automation and visual validation"
+    },
+    "FEAT.DEV.018": {
+      "name": "Performance and resource validation"
+    },
+    "FEAT.DEV.019": {
+      "name": "Version control, commits, and PR preparation"
+    },
+    "FEAT.DEV.020": {
+      "name": "Adversarial implementation review"
+    },
+    "FEAT.DEV.021": {
+      "name": "Release preparation and rollout"
+    },
+    "FEAT.DEV.022": {
+      "name": "Telemetry and observability design"
+    },
+    "FEAT.DEV.023": {
+      "name": "Post-release monitoring and follow-up"
+    },
+    "MAINT.OPS.001": {
+      "name": "Incident intake and regression triage"
+    },
+    "MAINT.OPS.002": {
+      "name": "Repository archaeology and ownership analysis"
+    },
+    "MAINT.OPS.003": {
+      "name": "Reproduction and root-cause analysis"
+    },
+    "MAINT.OPS.004": {
+      "name": "Interactive debugging"
+    },
+    "MAINT.OPS.005": {
+      "name": "Focused bug fix"
+    },
+    "MAINT.OPS.006": {
+      "name": "Local refactor"
+    },
+    "MAINT.OPS.007": {
+      "name": "Large architectural refactor"
+    },
+    "MAINT.OPS.008": {
+      "name": "Technical-debt discovery and prioritization"
+    },
+    "MAINT.OPS.009": {
+      "name": "Dependency and SDK upgrades"
+    },
+    "MAINT.OPS.010": {
+      "name": "Build configuration and machinery"
+    },
+    "MAINT.OPS.011": {
+      "name": "CI/CD and release-pipeline maintenance"
+    },
+    "MAINT.OPS.012": {
+      "name": "Test-gap analysis"
+    },
+    "MAINT.OPS.013": {
+      "name": "Unit and regression-test authoring"
+    },
+    "MAINT.OPS.014": {
+      "name": "UI automation repair and expansion"
+    },
+    "MAINT.OPS.015": {
+      "name": "Security evaluation and remediation"
+    },
+    "MAINT.OPS.016": {
+      "name": "Focused code and PR review"
+    },
+    "MAINT.OPS.017": {
+      "name": "Documentation and runbook maintenance"
+    },
+    "MAINT.OPS.018": {
+      "name": "Performance and resource optimization"
+    },
+    "MAINT.OPS.019": {
+      "name": "Data, schema, and configuration migrations"
+    },
+    "MAINT.OPS.020": {
+      "name": "Backward compatibility and deprecation"
+    },
+    "MAINT.OPS.021": {
+      "name": "Observability and alert tuning"
+    },
+    "MAINT.OPS.022": {
+      "name": "Release branches, hotfixes, and backports"
+    },
+    "MAINT.OPS.023": {
+      "name": "Mechanical repository-wide edits"
+    },
+    "PARITY.PORT.001": {
+      "name": "Source implementation archaeology"
+    },
+    "PARITY.PORT.002": {
+      "name": "Observable-behavior extraction"
+    },
+    "PARITY.PORT.003": {
+      "name": "Platform-neutral parity contract"
+    },
+    "PARITY.PORT.004": {
+      "name": "Parity matrix and divergence policy"
+    },
+    "PARITY.PORT.005": {
+      "name": "Target capability and gap analysis"
+    },
+    "PARITY.PORT.006": {
+      "name": "Target architecture mapping"
+    },
+    "PARITY.PORT.007": {
+      "name": "State-model and effect mapping"
+    },
+    "PARITY.PORT.008": {
+      "name": "API and platform-service substitution"
+    },
+    "PARITY.PORT.009": {
+      "name": "UX and native-convention adaptation"
+    },
+    "PARITY.PORT.010": {
+      "name": "UI implementation"
+    },
+    "PARITY.PORT.011": {
+      "name": "Data and persistence compatibility"
+    },
+    "PARITY.PORT.012": {
+      "name": "Concurrency, lifecycle, and cancellation mapping"
+    },
+    "PARITY.PORT.013": {
+      "name": "Security, identity, permissions, and secrets"
+    },
+    "PARITY.PORT.014": {
+      "name": "Target implementation backlog"
+    },
+    "PARITY.PORT.015": {
+      "name": "Target feature authoring"
+    },
+    "PARITY.PORT.016": {
+      "name": "Assets, localization, and accessibility parity"
+    },
+    "PARITY.PORT.017": {
+      "name": "Shared fixtures and golden vectors"
+    },
+    "PARITY.PORT.018": {
+      "name": "Integration and contract validation"
+    },
+    "PARITY.PORT.019": {
+      "name": "Cross-platform UI and journey validation"
+    },
+    "PARITY.PORT.020": {
+      "name": "Performance-budget adaptation"
+    },
+    "PARITY.PORT.021": {
+      "name": "Existing-user migration and rollback"
+    },
+    "PARITY.PORT.022": {
+      "name": "Cross-family parity review"
+    },
+    "PARITY.PORT.023": {
+      "name": "Coordinated release and staged rollout"
+    },
+    "PARITY.PORT.024": {
+      "name": "Post-release parity monitoring"
+    },
+    "AIGOV.REPO.001": {
+      "name": "Governance objectives and risk classification"
+    },
+    "AIGOV.REPO.002": {
+      "name": "Repository taxonomy and canonical ontology"
+    },
+    "AIGOV.REPO.003": {
+      "name": "Skill and agent boundary design"
+    },
+    "AIGOV.REPO.004": {
+      "name": "Activation and exclusion contracts"
+    },
+    "AIGOV.REPO.005": {
+      "name": "Instruction and agentic-prose authoring"
+    },
+    "AIGOV.REPO.006": {
+      "name": "Tool, permission, and trust-boundary policy"
+    },
+    "AIGOV.REPO.007": {
+      "name": "Delegation, handoff, and orchestration contracts"
+    },
+    "AIGOV.REPO.008": {
+      "name": "Canonical schema and metadata design"
+    },
+    "AIGOV.REPO.009": {
+      "name": "Surface adapter development"
+    },
+    "AIGOV.REPO.010": {
+      "name": "Deterministic generators and validators"
+    },
+    "AIGOV.REPO.011": {
+      "name": "Evaluation scenario and rubric design"
+    },
+    "AIGOV.REPO.012": {
+      "name": "Evaluation harness implementation"
+    },
+    "AIGOV.REPO.013": {
+      "name": "Cross-model and cross-surface evaluation"
+    },
+    "AIGOV.REPO.014": {
+      "name": "Prompt-injection and abuse evaluation"
+    },
+    "AIGOV.REPO.015": {
+      "name": "Semantic-drift and portability review"
+    },
+    "AIGOV.REPO.016": {
+      "name": "Versioning, compatibility, and migration"
+    },
+    "AIGOV.REPO.017": {
+      "name": "Governance change review and approval"
+    },
+    "AIGOV.REPO.018": {
+      "name": "Release, distribution, and provenance"
+    },
+    "AIGOV.REPO.019": {
+      "name": "Production telemetry and incident capture"
+    },
+    "AIGOV.REPO.020": {
+      "name": "Failure-driven repository maintenance"
+    },
+    "AIGOV.REPO.021": {
+      "name": "Bulk normalization and format migration"
+    },
+    "AIGOV.REPO.022": {
+      "name": "Deprecation and archival"
+    },
+    "LIB.REUSE.001": {
+      "name": "Consumer discovery and use-case framing"
+    },
+    "LIB.REUSE.002": {
+      "name": "Public API and contract design"
+    },
+    "LIB.REUSE.003": {
+      "name": "Platform and runtime support matrix"
+    },
+    "LIB.REUSE.004": {
+      "name": "Module and dependency architecture"
+    },
+    "LIB.REUSE.005": {
+      "name": "Generic types and extension-point design"
+    },
+    "LIB.REUSE.006": {
+      "name": "Error, concurrency, and cancellation contract"
+    },
+    "LIB.REUSE.007": {
+      "name": "Core implementation"
+    },
+    "LIB.REUSE.008": {
+      "name": "Reference integrations and sample applications"
+    },
+    "LIB.REUSE.009": {
+      "name": "Unit, property, and contract tests"
+    },
+    "LIB.REUSE.010": {
+      "name": "Cross-version and compatibility testing"
+    },
+    "LIB.REUSE.011": {
+      "name": "Performance and allocation benchmarking"
+    },
+    "LIB.REUSE.012": {
+      "name": "Security and supply-chain review"
+    },
+    "LIB.REUSE.013": {
+      "name": "Documentation and API examples"
+    },
+    "LIB.REUSE.014": {
+      "name": "Packaging and artifact generation"
+    },
+    "LIB.REUSE.015": {
+      "name": "Semantic versioning and release notes"
+    },
+    "LIB.REUSE.016": {
+      "name": "Publication, signing, and provenance"
+    },
+    "LIB.REUSE.017": {
+      "name": "Consumer migration guides and codemods"
+    },
+    "LIB.REUSE.018": {
+      "name": "Dependency and toolchain upgrades"
+    },
+    "LIB.REUSE.019": {
+      "name": "Defect triage and backward-compatible fixes"
+    },
+    "LIB.REUSE.020": {
+      "name": "Deprecation and breaking-change governance"
+    },
+    "LIB.REUSE.021": {
+      "name": "Adoption, telemetry, and support feedback"
+    },
+    "LIB.REUSE.022": {
+      "name": "End-of-life and archival"
+    }
+  },
+  "routing": {
+    "discovery": {
+      "feature": {
+        "phase": "FEAT.DEV.001",
+        "phaseName": "Product discovery and problem framing",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.001",
+        "phaseName": "Consumer discovery and use-case framing",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.002",
+        "phaseName": "Observable-behavior extraction",
+        "alsoPhases": [
+          "PARITY.PORT.005"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "requirements": {
+      "feature": {
+        "phase": "FEAT.DEV.002",
+        "phaseName": "Requirements and acceptance contract",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.003",
+        "phaseName": "Platform-neutral parity contract",
+        "alsoPhases": [
+          "PARITY.PORT.004"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.001",
+        "phaseName": "Governance objectives and risk classification",
+        "alsoPhases": [
+          "AIGOV.REPO.004"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_MAX",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "analysis": {
+      "feature": {
+        "phase": "FEAT.DEV.003",
+        "phaseName": "Repository analysis and impact mapping",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.002",
+        "phaseName": "Repository archaeology and ownership analysis",
+        "alsoPhases": [
+          "MAINT.OPS.008",
+          "MAINT.OPS.012"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.001",
+        "phaseName": "Source implementation archaeology",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "backlog": {
+      "feature": {
+        "phase": "FEAT.DEV.004",
+        "phaseName": "Epic, issue, and delivery planning",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.014",
+        "phaseName": "Target implementation backlog",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "orchestration": {
+      "feature": {
+        "phase": "FEAT.DEV.005",
+        "phaseName": "Multi-agent orchestration",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Claude Code agent teams"
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.007",
+        "phaseName": "Delegation, handoff, and orchestration contracts",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "architecture": {
+      "feature": {
+        "phase": "FEAT.DEV.006",
+        "phaseName": "Architecture and dependency boundaries",
+        "alsoPhases": [
+          "FEAT.DEV.007"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.007",
+        "phaseName": "Large architectural refactor",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.006",
+        "phaseName": "Target architecture mapping",
+        "alsoPhases": [
+          "PARITY.PORT.007",
+          "PARITY.PORT.012"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.004",
+        "phaseName": "Module and dependency architecture",
+        "alsoPhases": [
+          "LIB.REUSE.005",
+          "LIB.REUSE.006"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.002",
+        "phaseName": "Repository taxonomy and canonical ontology",
+        "alsoPhases": [
+          "AIGOV.REPO.003"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_MAX",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "api-design": {
+      "library": {
+        "phase": "LIB.REUSE.002",
+        "phaseName": "Public API and contract design",
+        "alsoPhases": [
+          "LIB.REUSE.003"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_MAX",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "ux": {
+      "feature": {
+        "phase": "FEAT.DEV.008",
+        "phaseName": "UX flows and interaction design",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.009",
+        "phaseName": "UX and native-convention adaptation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "ui": {
+      "feature": {
+        "phase": "FEAT.DEV.009",
+        "phaseName": "UI component authoring",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.010",
+        "phaseName": "UI implementation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "implementation": {
+      "feature": {
+        "phase": "FEAT.DEV.013",
+        "phaseName": "Feature implementation",
+        "alsoPhases": [
+          "FEAT.DEV.010"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.015",
+        "phaseName": "Target feature authoring",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.007",
+        "phaseName": "Core implementation",
+        "alsoPhases": [
+          "LIB.REUSE.008"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "integration": {
+      "feature": {
+        "phase": "FEAT.DEV.011",
+        "phaseName": "API, persistence, and service integration",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.008",
+        "phaseName": "API and platform-service substitution",
+        "alsoPhases": [
+          "PARITY.PORT.011"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "security": {
+      "feature": {
+        "phase": "FEAT.DEV.012",
+        "phaseName": "Privacy, permissions, and threat modeling",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.015",
+        "phaseName": "Security evaluation and remediation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.013",
+        "phaseName": "Security, identity, permissions, and secrets",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.012",
+        "phaseName": "Security and supply-chain review",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "PR_SECURITY_REVIEW",
+              "surface": null,
+              "interactive": null,
+              "also": "EXECUTION_FRONTIER"
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.006",
+        "phaseName": "Tool, permission, and trust-boundary policy",
+        "alsoPhases": [
+          "AIGOV.REPO.014"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "accessibility": {
+      "feature": {
+        "phase": "FEAT.DEV.014",
+        "phaseName": "Accessibility and localization",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Android Studio / IntelliJ's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.016",
+        "phaseName": "Assets, localization, and accessibility parity",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "unit-tests": {
+      "feature": {
+        "phase": "FEAT.DEV.015",
+        "phaseName": "Unit and state-transition tests",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.013",
+        "phaseName": "Unit and regression-test authoring",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.009",
+        "phaseName": "Unit, property, and contract tests",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "integration-tests": {
+      "feature": {
+        "phase": "FEAT.DEV.016",
+        "phaseName": "Integration and contract tests",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.017",
+        "phaseName": "Shared fixtures and golden vectors",
+        "alsoPhases": [
+          "PARITY.PORT.018"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.010",
+        "phaseName": "Cross-version and compatibility testing",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "ui-automation": {
+      "feature": {
+        "phase": "FEAT.DEV.017",
+        "phaseName": "UI automation and visual validation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": "Android Studio's native tooling"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": "the browser toolchain"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "Visual Studio's native integration"
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.014",
+        "phaseName": "UI automation repair and expansion",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": "Android Studio's native tooling"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": "the browser toolchain"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.019",
+        "phaseName": "Cross-platform UI and journey validation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "performance": {
+      "feature": {
+        "phase": "FEAT.DEV.018",
+        "phaseName": "Performance and resource validation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.018",
+        "phaseName": "Performance and resource optimization",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.020",
+        "phaseName": "Performance-budget adaptation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.011",
+        "phaseName": "Performance and allocation benchmarking",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "review": {
+      "feature": {
+        "phase": "FEAT.DEV.020",
+        "phaseName": "Adversarial implementation review",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.016",
+        "phaseName": "Focused code and PR review",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "PR_QUALITY_REVIEW",
+              "surface": null,
+              "interactive": null,
+              "also": "EXECUTION_FRONTIER"
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.022",
+        "phaseName": "Cross-family parity review",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null,
+              "note": "EXECUTION_FRONTIER reviews semantic author"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null,
+              "note": "SEMANTIC_FRONTIER reviews execution author"
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.017",
+        "phaseName": "Governance change review and approval",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "PR_SECURITY_REVIEW",
+              "surface": null,
+              "interactive": null,
+              "also": "EXECUTION_FRONTIER"
+            }
+          }
+        }
+      }
+    },
+    "release": {
+      "feature": {
+        "phase": "FEAT.DEV.021",
+        "phaseName": "Release preparation and rollout",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the Gradle toolchain"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the CI toolchain"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "MSBuild"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.022",
+        "phaseName": "Release branches, hotfixes, and backports",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.023",
+        "phaseName": "Coordinated release and staged rollout",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "VISUAL_ORCHESTRATOR",
+              "surface": "antigravity",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.014",
+        "phaseName": "Packaging and artifact generation",
+        "alsoPhases": [
+          "LIB.REUSE.015",
+          "LIB.REUSE.016"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "SwiftPM"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the Gradle toolchain"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "npm"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "NuGet"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.018",
+        "phaseName": "Release, distribution, and provenance",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "ci-cd": {
+      "maintenance": {
+        "phase": "MAINT.OPS.011",
+        "phaseName": "CI/CD and release-pipeline maintenance",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "observability": {
+      "feature": {
+        "phase": "FEAT.DEV.022",
+        "phaseName": "Telemetry and observability design",
+        "alsoPhases": [
+          "FEAT.DEV.023"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.021",
+        "phaseName": "Observability and alert tuning",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.024",
+        "phaseName": "Post-release parity monitoring",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.019",
+        "phaseName": "Production telemetry and incident capture",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.021",
+        "phaseName": "Adoption, telemetry, and support feedback",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "triage": {
+      "maintenance": {
+        "phase": "MAINT.OPS.001",
+        "phaseName": "Incident intake and regression triage",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.019",
+        "phaseName": "Defect triage and backward-compatible fixes",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "bug-fix": {
+      "maintenance": {
+        "phase": "MAINT.OPS.005",
+        "phaseName": "Focused bug fix",
+        "alsoPhases": [
+          "MAINT.OPS.003",
+          "MAINT.OPS.004"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.019",
+        "phaseName": "Defect triage and backward-compatible fixes",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "refactor": {
+      "maintenance": {
+        "phase": "MAINT.OPS.006",
+        "phaseName": "Local refactor",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the native IDE integration (Xcode, Android Studio / IntelliJ, the browser toolchain, Visual Studio)"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          }
+        }
+      }
+    },
+    "upgrades": {
+      "maintenance": {
+        "phase": "MAINT.OPS.009",
+        "phaseName": "Dependency and SDK upgrades",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the Gradle toolchain"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "NuGet"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.018",
+        "phaseName": "Dependency and toolchain upgrades",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "machinery": {
+      "maintenance": {
+        "phase": "MAINT.OPS.010",
+        "phaseName": "Build configuration and machinery",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the Gradle toolchain"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the web toolchain"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "MSBuild"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.010",
+        "phaseName": "Deterministic generators and validators",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "documentation": {
+      "maintenance": {
+        "phase": "MAINT.OPS.017",
+        "phaseName": "Documentation and runbook maintenance",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.013",
+        "phaseName": "Documentation and API examples",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "migration": {
+      "maintenance": {
+        "phase": "MAINT.OPS.019",
+        "phaseName": "Data, schema, and configuration migrations",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "parity": {
+        "phase": "PARITY.PORT.021",
+        "phaseName": "Existing-user migration and rollback",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.017",
+        "phaseName": "Consumer migration guides and codemods",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.016",
+        "phaseName": "Versioning, compatibility, and migration",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "deprecation": {
+      "maintenance": {
+        "phase": "MAINT.OPS.020",
+        "phaseName": "Backward compatibility and deprecation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "library": {
+        "phase": "LIB.REUSE.020",
+        "phaseName": "Deprecation and breaking-change governance",
+        "alsoPhases": [
+          "LIB.REUSE.022"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_MAX",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.022",
+        "phaseName": "Deprecation and archival",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "mechanical-edit": {
+      "maintenance": {
+        "phase": "MAINT.OPS.023",
+        "phaseName": "Mechanical repository-wide edits",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.021",
+        "phaseName": "Bulk normalization and format migration",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "MECHANICAL_EDITOR",
+              "surface": "cursor",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "prose-authoring": {
+      "aigov": {
+        "phase": "AIGOV.REPO.005",
+        "phaseName": "Instruction and agentic-prose authoring",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "schema": {
+      "aigov": {
+        "phase": "AIGOV.REPO.008",
+        "phaseName": "Canonical schema and metadata design",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "adapters": {
+      "aigov": {
+        "phase": "AIGOV.REPO.009",
+        "phaseName": "Surface adapter development",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "evals": {
+      "aigov": {
+        "phase": "AIGOV.REPO.011",
+        "phaseName": "Evaluation scenario and rubric design",
+        "alsoPhases": [
+          "AIGOV.REPO.012",
+          "AIGOV.REPO.013",
+          "AIGOV.REPO.020"
+        ],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_MAX",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "drift-review": {
+      "aigov": {
+        "phase": "AIGOV.REPO.015",
+        "phaseName": "Semantic-drift and portability review",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "parity": {
+      "parity": {
+        "phase": "PARITY.PORT.003",
+        "phaseName": "Platform-neutral parity contract",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "onboarding": {
+      "aigov": {
+        "phase": "AIGOV.REPO.009",
+        "phaseName": "Surface adapter development",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.010",
+        "phaseName": "Build configuration and machinery",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the Gradle toolchain"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the web toolchain"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "MSBuild"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "provisioning": {
+      "maintenance": {
+        "phase": "MAINT.OPS.010",
+        "phaseName": "Build configuration and machinery",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "swift": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "Xcode's native integration"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "kotlin": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the Gradle toolchain"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "the web toolchain"
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          },
+          "csharp": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": "MSBuild"
+            },
+            "runnerUp": {
+              "alias": "SEMANTIC_FRONTIER",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "aigov": {
+        "phase": "AIGOV.REPO.010",
+        "phaseName": "Deterministic generators and validators",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      }
+    },
+    "delivery-ops": {
+      "feature": {
+        "phase": "FEAT.DEV.019",
+        "phaseName": "Version control, commits, and PR preparation",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "GitHub Copilot in the IDE (Opus, Sonnet and Sol where the plan offers them)"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            },
+            "runnerUp": {
+              "alias": "EXECUTION_VALUE",
+              "surface": "codex",
+              "interactive": null
+            }
+          }
+        }
+      },
+      "maintenance": {
+        "phase": "MAINT.OPS.022",
+        "phaseName": "Release branches, hotfixes, and backports",
+        "alsoPhases": [],
+        "cells": {
+          "*": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": null
+            }
+          },
+          "typescript": {
+            "winner": {
+              "alias": "EXECUTION_FRONTIER",
+              "surface": "codex",
+              "interactive": null
+            },
+            "runnerUp": {
+              "alias": "BALANCED_AUTHOR",
+              "surface": "claude-code",
+              "interactive": "the Cursor IDE"
+            }
+          }
+        }
+      }
+    }
+  }
+}

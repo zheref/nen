@@ -69,13 +69,20 @@ export function parseStatusPorcelain(text: string): readonly StatusEntry[] {
     text
       .split("\0")
       .filter((record): boolean => record !== "")
-      .map((record): StatusRecord => ({ text: record, undecodable: false })),
+      .map((record): StatusRecord => ({ text: record, undecodable: false, key: record })),
   );
 }
 
 interface StatusRecord {
   readonly text: string;
   readonly undecodable: boolean;
+  /**
+   * The record's identity on its RAW BYTES (zheref/nen#337, hanten round 2
+   * N7): the text itself for a UTF-8 record, and a hex spelling of the bytes
+   * for one that is not -- two different non-UTF-8 names can decode leniently
+   * to the same string, and must never be merged into one.
+   */
+  readonly key: string;
 }
 
 /**
@@ -87,6 +94,17 @@ interface StatusRecord {
  * records around it.
  */
 export function parseStatusPorcelainBytes(bytes: Uint8Array): readonly StatusEntry[] {
+  return parseRecords(splitNulRecords(bytes));
+}
+
+/**
+ * Raw `-z` output split on the byte 0, each record decoded on its own by a
+ * FATAL UTF-8 decoder and, where that fails, leniently with the record marked
+ * `undecodable`. Shared by the status reader above and the committed-range
+ * readers below (zheref/nen#337), so a non-UTF-8 name is detected the same way
+ * whichever git command printed it. Empty records are dropped.
+ */
+function splitNulRecords(bytes: Uint8Array): readonly StatusRecord[] {
   const fatal = new TextDecoder("utf-8", { fatal: true });
   const lenient = new TextDecoder("utf-8");
   const records: StatusRecord[] = [];
@@ -96,14 +114,16 @@ export function parseStatusPorcelainBytes(bytes: Uint8Array): readonly StatusEnt
     if (i > start) {
       const slice = bytes.subarray(start, i);
       try {
-        records.push({ text: fatal.decode(slice), undecodable: false });
+        const text = fatal.decode(slice);
+        records.push({ text, undecodable: false, key: text });
       } catch {
-        records.push({ text: lenient.decode(slice), undecodable: true });
+        const hex = Array.from(slice, (byte): string => byte.toString(16).padStart(2, "0")).join("");
+        records.push({ text: lenient.decode(slice), undecodable: true, key: `\u0000bytes:${hex}` });
       }
     }
     start = i + 1;
   }
-  return parseRecords(records);
+  return records;
 }
 
 function parseRecords(records: readonly StatusRecord[]): readonly StatusEntry[] {
@@ -137,6 +157,132 @@ function parseRecords(records: readonly StatusRecord[]): readonly StatusEntry[] 
   return entries;
 }
 
+// ---------------------------------------------------------------------------
+// THE COMMITTED-RANGE READING (zheref/nen#337).
+//
+// `stage triage --range <base>..<head>` triages the paths a range of COMMITS
+// changed, so a review of a branch whose work is already committed can read
+// the secret-shape row instead of reporting it unread. The detectors do not
+// change and do not learn where their entries came from: the range is read
+// into the same `StatusEntry` shape, one per changed path, with the commit's
+// change letter in `indexStatus` (so a `D` is a deletion to every detector
+// exactly as a staged deletion is) and a blank `worktreeStatus`. Nothing in a
+// commit is git-ignored -- it is already tracked -- so `ignored` is always
+// false here.
+
+/** One `<base>..<head>` range, as typed. Neither side is resolved yet. */
+export interface CommitRange {
+  readonly base: string;
+  readonly head: string;
+}
+
+/**
+ * Splits a `--range` value on its ONE `..`. `null` for anything else: a bare
+ * ref, an empty side (git would read it as HEAD, which this verb never
+ * guesses), or the three-dot form, which is refused rather than read as a
+ * two-dot one with a stray dot.
+ */
+export function parseCommitRange(text: string): CommitRange | null {
+  if (text.includes("...")) return null;
+  const at = text.indexOf("..");
+  if (at === -1 || text.indexOf("..", at + 2) !== -1) return null;
+  const base = text.slice(0, at);
+  const head = text.slice(at + 2);
+  if (base === "" || head === "") return null;
+  return { base, head };
+}
+
+/** The all-zero object id git prints for "no blob on this side" -- a deletion's destination. */
+const NULL_OID = /^0+$/;
+
+/** A gitlink's mode: a submodule commit, never a blob to measure. */
+const GITLINK_MODE = "160000";
+
+/**
+ * One change git reported in `--raw` form: the path (as the `StatusEntry`
+ * every detector reads), the path's raw-byte identity, and the DESTINATION
+ * side's mode and object id -- the blob this change put at the path, or the
+ * null id for a deletion. For a merge's combined record (`::`), the
+ * destination is the merge result's.
+ */
+export interface RawChange {
+  readonly entry: StatusEntry;
+  readonly key: string;
+  readonly mode: string;
+  readonly oid: string;
+}
+
+/**
+ * `git diff -z --raw --no-abbrev` or `git log -z --raw --no-abbrev --format=`,
+ * raw bytes. Each change is a header record -- one `:` per parent, then one
+ * mode per parent plus the result's, one object id per parent plus the
+ * result's, then the status (`M`, `A`, `D`, `T`, `R<score>`, `C<score>`, or one
+ * letter per parent for a merge's combined record) -- followed by its path, or
+ * for a two-parent-free rename or copy, by the ORIGINAL path then the new one.
+ * The new path is the entry and the original is carried as `origPath`, exactly
+ * as an index rename is in the working-copy reading. A record where a header
+ * was expected that is not one is skipped, never read as a path.
+ */
+export function parseRawChangesBytes(bytes: Uint8Array): readonly RawChange[] {
+  const records = splitNulRecords(bytes);
+  const changes: RawChange[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const header = records[i]?.text ?? "";
+    if (!header.startsWith(":")) continue;
+    const parents = /^:+/.exec(header)?.[0].length ?? 1;
+    const fields = header.slice(parents).split(" ");
+    const mode = fields[parents] ?? "";
+    const oid = fields[2 * parents + 1] ?? "";
+    const status = fields[2 * parents + 2] ?? "";
+    const letter = status.charAt(0);
+    const twoPaths = parents === 1 && (letter === "R" || letter === "C");
+    const orig = twoPaths ? records[i + 1] : undefined;
+    const path = records[i + (twoPaths ? 2 : 1)];
+    i += twoPaths ? 2 : 1;
+    if (path === undefined) break;
+    const undecodable = path.undecodable || orig?.undecodable === true;
+    changes.push({
+      entry: {
+        path: path.text,
+        indexStatus: letter === "" ? " " : letter,
+        worktreeStatus: " ",
+        ignored: false,
+        ...(orig === undefined ? {} : { origPath: orig.text }),
+        ...(undecodable ? { undecodable: true as const } : {}),
+      },
+      key: path.key,
+      mode,
+      oid,
+    });
+  }
+  return changes;
+}
+
+/** True when a change's destination is a blob that exists and can be measured. */
+export function measurableBlob(change: RawChange): boolean {
+  return change.oid !== "" && !NULL_OID.test(change.oid) && change.mode !== GITLINK_MODE && change.entry.indexStatus !== "D";
+}
+
+/** The format `cat-file --batch-check` is asked for: every answer names the id it answers. */
+export const BATCH_CHECK_FORMAT = "%(objectname) %(objecttype) %(objectsize)";
+
+/**
+ * `git cat-file --batch-check='%(objectname) %(objecttype) %(objectsize)'`'s
+ * answer to bare object ids, one per line -- ids carry no newline, so no `-z`
+ * is needed (and no git 2.38). A blob's size is keyed by its id; a `missing`
+ * or `ambiguous` answer, or any non-blob, measures nothing: "not measured",
+ * never "measured and small".
+ */
+export function parseBatchCheckIds(text: string): ReadonlyMap<string, number> {
+  const sizes = new Map<string, number>();
+  for (const line of text.split("\n")) {
+    const [oid, type, size] = line.trim().split(" ");
+    if (oid === undefined || type !== "blob" || size === undefined || !/^\d+$/.test(size)) continue;
+    sizes.set(oid, Number(size));
+  }
+  return sizes;
+}
+
 export type FlagReason =
   | "secret-shape"
   | "ignored"
@@ -144,7 +290,21 @@ export type FlagReason =
   | "out-of-scope"
   | "unmentioned-deletion"
   | "local-config"
-  | "large";
+  | "large"
+  /**
+   * `--range` only (zheref/nen#337): a reason on this row was found on
+   * something NOT in the range's net change -- a path added then deleted,
+   * renamed away, or changed and reverted, or a blob a commit introduced that
+   * a later one replaced. It is not at `<head>`, and it is still in the
+   * history the range pushes. Never produced in working-copy mode.
+   */
+  | "in-history"
+  /**
+   * `--range` only: git printed this name in bytes that are not UTF-8, so the
+   * path shown is a lenient decode that cannot name the file and the name
+   * detectors cannot be trusted on it. A human looks (hanten round 2 N7).
+   */
+  | "undecodable";
 
 export interface FlaggedFile {
   readonly path: string;
@@ -206,7 +366,11 @@ export const DEFAULT_LARGE_BYTES = 1024 * 1024;
 // is a FILENAME check only -- it does not read file content, which is
 // deliberate: content scanning is a different, heavier tool, and this check's
 // whole value is that it is cheap enough to run on every file every time.
-const SECRET_SHAPE = /(^|\/)(\.env(\..*)?|.*\.pem|.*\.key|credentials.*)$/i;
+//
+// `[^/]*`, NEVER `.*` (hanten round 2 N2): `.` does not match `\n`, `\r`,
+// U+2028 or U+2029, so a name carrying one -- `n\nl.key` -- would slip past a
+// `.*`. A path segment is everything but `/`, line terminators included.
+const SECRET_SHAPE = /(^|\/)(\.env(\.[^/]*)?|[^/]*\.pem|[^/]*\.key|credentials[^/]*)$/i;
 
 const BINARY_EXTENSION = /\.(png|jpe?g|gif|webp|ico|pdf|zip|tar|gz|7z|exe|dll|so|dylib|bin|woff2?|ttf|otf)$/i;
 
@@ -463,4 +627,110 @@ export function pathspecLine(path: string): string {
     else quoted += char;
   }
   return `${quoted}"`;
+}
+
+/** The name detectors alone -- what a path's NAME says, with nothing to measure. */
+function nameReasons(path: string, scopePrefixes: readonly string[], binaryPaths: ReadonlySet<string>): FlagReason[] {
+  const reasons: FlagReason[] = [];
+  if (SECRET_SHAPE.test(path)) reasons.push("secret-shape");
+  if (binaryPaths.has(path) || BINARY_EXTENSION.test(path)) reasons.push("binary");
+  if (scopePrefixes.length > 0 && !scopePrefixes.some((prefix): boolean => path.startsWith(prefix))) reasons.push("out-of-scope");
+  if (LOCAL_CONFIG_SHAPE.test(path)) reasons.push("local-config");
+  return reasons;
+}
+
+/**
+ * THE COMMITTED-RANGE TRIAGE (zheref/nen#337). The NET change -- what `<head>`
+ * holds against the merge base -- goes through `triageStage` exactly as a
+ * working-copy reading does: deletions and `--mentions` are about what the
+ * range lands, and each net path is measured by the blob it has at `<head>`.
+ *
+ * Then the HISTORY -- every change any commit in the range made, merges read
+ * as combined diffs -- is read for what the endpoints cannot show:
+ *  - a path NOT in the net change (added then deleted, renamed away, changed
+ *    and reverted) is run through the name detectors, keyed on its raw bytes;
+ *  - every blob a commit introduced at a path, other than the one the path
+ *    holds at `<head>`, is measured, so a dump committed and deleted, or a file
+ *    grown and shrunk, still trips `large` (hanten round 2 N1).
+ * Any such finding carries `in-history`. A history-only path with no finding
+ * is not reported: it is not in the change the range lands, and nothing about
+ * it needs a human. A non-UTF-8 name -- net or history-only -- is flagged
+ * `undecodable` (hanten round 2 N7).
+ *
+ * `blobSizes` is keyed by object id; an id it does not carry is not measured.
+ */
+export function triageRange(
+  net: readonly RawChange[],
+  history: readonly RawChange[],
+  blobSizes: ReadonlyMap<string, number>,
+  options: Omit<TriageOptions, "sizes"> = {},
+): TriageResult {
+  const largeBytes = options.largeBytes ?? DEFAULT_LARGE_BYTES;
+  const scopePrefixes = options.scopePrefixes ?? [];
+  const binaryPaths = options.binaryPaths ?? new Set<string>();
+
+  // KEYED ON RAW BYTES, NEVER ON THE DISPLAY PATH (Copilot round 1 on #379):
+  // two non-UTF-8 names can decode to the same lenient string, so a size or
+  // a reason looked up by `entry.path` could land on the wrong file. Each net
+  // change is triaged on its own, with its own size, and every extra reason
+  // is filed under `RawChange.key`; `entry.path` is only ever rendered.
+  const headOid = new Map<string, string>();
+  for (const change of net) headOid.set(change.key, change.oid);
+
+  const extra = new Map<string, FlagReason[]>();
+  const add = (key: string, reason: FlagReason): void => {
+    const list = extra.get(key) ?? [];
+    if (!list.includes(reason)) list.push(reason);
+    extra.set(key, list);
+  };
+  for (const change of net) if (change.entry.undecodable === true) add(change.key, "undecodable");
+
+  // History, per raw-byte key, first-seen order kept.
+  interface Finding {
+    path: string;
+    undecodable: boolean;
+    large: boolean;
+  }
+  const historyOnly = new Map<string, Finding>();
+  for (const change of history) {
+    const inNet = headOid.has(change.key);
+    const size = measurableBlob(change) ? blobSizes.get(change.oid) : undefined;
+    const largeHere = size !== undefined && size >= largeBytes && change.oid !== headOid.get(change.key);
+    if (inNet) {
+      if (largeHere) {
+        add(change.key, "large");
+        add(change.key, "in-history");
+      }
+      continue;
+    }
+    const finding = historyOnly.get(change.key) ?? {
+      path: change.entry.path,
+      undecodable: change.entry.undecodable === true,
+      large: false,
+    };
+    finding.large ||= largeHere;
+    historyOnly.set(change.key, finding);
+  }
+
+  const clean: string[] = [];
+  const flagged: FlaggedFile[] = [];
+  let ignored: readonly FlaggedFile[] = [];
+  for (const change of net) {
+    const size = measurableBlob(change) ? blobSizes.get(change.oid) : undefined;
+    const sizes = new Map<string, number>(size === undefined ? [] : [[change.entry.path, size]]);
+    const one = triageStage([change.entry], { ...options, sizes });
+    ignored = [...ignored, ...one.ignored];
+    const own = one.flagged[0]?.reasons ?? [];
+    const more = (extra.get(change.key) ?? []).filter((reason): boolean => !own.includes(reason));
+    const reasons = [...own, ...more];
+    if (reasons.length === 0) clean.push(change.entry.path);
+    else flagged.push({ path: change.entry.path, reasons });
+  }
+  for (const finding of historyOnly.values()) {
+    const reasons = nameReasons(finding.path, scopePrefixes, binaryPaths);
+    if (finding.undecodable) reasons.push("undecodable");
+    if (finding.large) reasons.push("large");
+    if (reasons.length > 0) flagged.push({ path: finding.path, reasons: [...reasons, "in-history"] });
+  }
+  return { clean, flagged, ignored };
 }

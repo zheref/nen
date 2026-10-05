@@ -219,3 +219,116 @@ describe("loadClassifyTaxonomy -- the file itself", () => {
     expect(() => loadClassifyTaxonomy(dir, "bad.json")).toThrow(/is not valid JSON/);
   });
 });
+
+describe("parseClassifyTaxonomy -- the optional facts nen direct reads", () => {
+  it("reads a language key's code flag, true when absent", () => {
+    const value = readJson(MINI);
+    value["axes"]["lang"]["keys"][1]["code"] = false;
+    const taxonomy = parseClassifyTaxonomy("/x/tax.json", value);
+    expect(taxonomy.axes.lang.keys.map((entry): boolean => entry.code)).toEqual([true, false]);
+  });
+
+  it("refuses a code flag that is not a boolean", () => {
+    const error = refusal((v): void => {
+      v["axes"]["lang"]["keys"][0]["code"] = "yes";
+    });
+    expect(error.pointer).toBe("axes.lang.keys[0].code");
+  });
+
+  it("reads the real taxonomy's code flags: every language is code but one", () => {
+    const keys = loadClassifyTaxonomy("/", REAL).axes.lang.keys;
+    expect(keys.filter((entry): boolean => !entry.code)).toHaveLength(1);
+    expect(keys.filter((entry): boolean => entry.code)).toHaveLength(keys.length - 1);
+  });
+
+  it("reads a job's weight and phases, null when the file states none", () => {
+    const mini = loadClassifyTaxonomy("/", MINI);
+    expect(mini.axes.job.keys[0]?.weight).toBeNull();
+    expect(mini.axes.job.keys[0]?.phases).toBeNull();
+    const real = loadClassifyTaxonomy("/", REAL);
+    for (const entry of real.axes.job.keys) {
+      expect(entry.weight, `${entry.key} has no weight`).toBeGreaterThanOrEqual(1);
+      expect(Object.keys(entry.phases ?? {}).length, `${entry.key} lists no domain`).toBeGreaterThan(0);
+    }
+  });
+
+  it("reads each optional fact on its own axis only: a job's code and a language's weight or phases are ignored, as before", () => {
+    const value = readJson(MINI);
+    value["axes"]["job"]["keys"][0]["code"] = false;
+    value["axes"]["lang"]["keys"][0]["weight"] = 9;
+    value["axes"]["lang"]["keys"][0]["phases"] = "not even a record";
+    const taxonomy = parseClassifyTaxonomy("/x/tax.json", value);
+    expect(taxonomy.axes.job.keys[0]?.code).toBe(true);
+    expect(taxonomy.axes.lang.keys[0]?.weight).toBeNull();
+    expect(taxonomy.axes.lang.keys[0]?.phases).toBeNull();
+  });
+
+  it("refuses a weight outside 1..4 or not whole", () => {
+    for (const weight of [0, 5, 2.5, "3"]) {
+      const error = refusal((v): void => {
+        v["axes"]["job"]["keys"][0]["weight"] = weight;
+      });
+      expect(error.pointer).toBe("axes.job.keys[0].weight");
+    }
+  });
+
+  it("refuses phases that are not lists of ids", () => {
+    const error = refusal((v): void => {
+      v["axes"]["job"]["keys"][0]["phases"] = { one: "P.1" };
+    });
+    expect(error.pointer).toBe("axes.job.keys[0].phases.one");
+  });
+
+  it("reads the real domains block: five rows in order, keys, fallback sentence", () => {
+    const domains = loadClassifyTaxonomy("/", REAL).domains;
+    expect(domains?.rule.map((row): number => row.order)).toEqual([1, 2, 3, 4, 5]);
+    expect(domains?.rule.every((row): boolean => domains.keys.includes(row.domain))).toBe(true);
+    expect(domains?.fallback).toMatch(/derived domain/);
+  });
+
+  it("is null for a taxonomy with no domains block", () => {
+    const value = readJson(MINI);
+    delete value["domains"];
+    expect(parseClassifyTaxonomy("/x/tax.json", value).domains).toBeNull();
+  });
+
+  it("refuses a rule row naming a domain outside domains.keys, and a repeated order", () => {
+    expect(
+      refusal((v): void => {
+        v["domains"] = { keys: ["one"], rule: [{ order: 1, when: "otherwise", domain: "two" }], fallback: "f" };
+      }).pointer,
+    ).toBe("domains.rule[0].domain");
+    expect(
+      refusal((v): void => {
+        v["domains"] = {
+          keys: ["one"],
+          rule: [{ order: 1, when: "otherwise", domain: "one" }, { order: 1, when: "otherwise", domain: "one" }],
+          fallback: "f",
+        };
+      }).pointer,
+    ).toBe("domains.rule");
+  });
+
+  it("refuses a job phase under a domain the file does not declare", () => {
+    const error = refusal((v): void => {
+      v["axes"]["job"]["keys"][0]["phases"] = { elsewhere: ["P.1"] };
+    });
+    expect(error.pointer).toBe("axes.job.keys[0].phases.elsewhere");
+  });
+});
+
+describe("parseClassifyTaxonomy -- metadata keys inside phases", () => {
+  it("skips a $-prefixed key in a job's phases: it is never a domain", () => {
+    const value = readJson(MINI);
+    value["axes"]["job"]["keys"][0]["phases"] = { one: ["P.1"], $comment: "a note, not a domain" };
+    const taxonomy = parseClassifyTaxonomy("/x/tax.json", value);
+    expect(taxonomy.axes.job.keys[0]?.phases).toEqual({ one: ["P.1"] });
+  });
+
+  it("still refuses a non-$ phase key outside domains.keys, with the $ key beside it", () => {
+    const error = refusal((v): void => {
+      v["axes"]["job"]["keys"][0]["phases"] = { elsewhere: ["P.1"], $comment: "x" };
+    });
+    expect(error.pointer).toBe("axes.job.keys[0].phases.elsewhere");
+  });
+});

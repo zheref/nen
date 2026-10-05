@@ -3,9 +3,13 @@ import {
   addListFrom,
   DEFAULT_LARGE_BYTES,
   expandWorktreeRenames,
+  parseCommitRange,
+  parseBatchCheckIds,
+  parseRawChangesBytes,
   parseStatusPorcelain,
   parseStatusPorcelainBytes,
   pathspecLine,
+  triageRange,
   triageStage,
 } from "./triage.js";
 
@@ -356,5 +360,159 @@ describe("addListFrom -- what a list may never carry, and the rename it must", (
     // A worktree rename whose original git ALSO reports as its own deletion row.
     const list = listOf(" R b.ts\0a.ts\0 D a.ts\0 M c.ts\0", "a.ts");
     expect(list.add).toEqual(["b.ts", "a.ts", "c.ts"]);
+  });
+});
+
+describe("the committed-range readers (zheref/nen#337)", () => {
+  const enc = (text: string): Uint8Array => new TextEncoder().encode(text);
+  const Z = "0".repeat(40);
+  const oid = (c: string): string => c.repeat(40);
+  /** One non-merge `--raw -z` record. */
+  const raw = (status: string, dst: string, ...paths: string[]): string =>
+    `:100644 100644 ${Z} ${dst} ${status}\u0000${paths.join("\u0000")}\u0000`;
+
+  it("parseCommitRange splits one '..' and refuses everything else", () => {
+    expect(parseCommitRange("origin/main..HEAD")).toEqual({ base: "origin/main", head: "HEAD" });
+    for (const bad of ["HEAD", "a...b", "..b", "a..", "a..b..c", ""]) expect(parseCommitRange(bad)).toBeNull();
+  });
+
+  it("parseRawChangesBytes keeps a rename's NEW path, carries the original, and keeps each destination blob", () => {
+    const changes = parseRawChangesBytes(
+      enc(raw("M", oid("a"), "src/a.ts") + raw("R087", oid("b"), "old.ts", "new.ts") + raw("D", Z, "gone.ts")),
+    );
+    expect(changes.map((change) => [change.entry.path, change.entry.indexStatus, change.entry.origPath, change.oid])).toEqual([
+      ["src/a.ts", "M", undefined, oid("a")],
+      ["new.ts", "R", "old.ts", oid("b")],
+      ["gone.ts", "D", undefined, Z],
+    ]);
+  });
+
+  it("parseRawChangesBytes reads a merge's combined record by its RESULT side", () => {
+    const record = `::000000 000000 100644 ${Z} ${Z} ${oid("e")} AA\u0000evil.pem\u0000`;
+    const [change] = parseRawChangesBytes(enc(record));
+    expect(change?.entry.path).toBe("evil.pem");
+    expect(change?.oid).toBe(oid("e"));
+    expect(change?.mode).toBe("100644");
+  });
+
+  it("parseRawChangesBytes keys two different non-UTF-8 names apart, though they decode alike (round 2 N7)", () => {
+    const head = enc(`:100644 100644 ${Z} ${oid("a")} A\u0000`);
+    const bytes = new Uint8Array([...head, 0x66, 0xff, 0, ...head, 0x66, 0xfe, 0]);
+    const changes = parseRawChangesBytes(bytes);
+    expect(changes.map((change) => change.entry.path)).toEqual(["f�", "f�"]);
+    expect(changes[0]?.key).not.toBe(changes[1]?.key);
+    expect(changes.every((change) => change.entry.undecodable === true)).toBe(true);
+  });
+
+  it("parseBatchCheckIds measures blobs only, keyed by id", () => {
+    const text = `${oid("a")} blob 120\n${oid("b")} missing\n${oid("c")} tree 40\n${oid("d")} blob 0\n`;
+    expect([...parseBatchCheckIds(text)]).toEqual([
+      [oid("a"), 120],
+      [oid("d"), 0],
+    ]);
+  });
+
+  it("triageRange flags a history-only name match with 'in-history', and leaves a harmless one unreported", () => {
+    const net = parseRawChangesBytes(enc(raw("R100", oid("n"), "key.pem", "notes.txt")));
+    const history = parseRawChangesBytes(
+      enc(
+        raw("A", oid("k"), "key.pem") +
+          raw("D", Z, "key.pem") +
+          raw("A", oid("n"), "notes.txt") +
+          raw("A", oid("e"), ".env") +
+          raw("A", oid("s"), "scratch.ts") +
+          raw("A", oid("l"), "settings.local.json"),
+      ),
+    );
+    expect(triageRange(net, history, new Map())).toEqual({
+      clean: ["notes.txt"],
+      flagged: [
+        { path: "key.pem", reasons: ["secret-shape", "in-history"] },
+        { path: ".env", reasons: ["secret-shape", "in-history"] },
+        { path: "settings.local.json", reasons: ["local-config", "in-history"] },
+      ],
+      ignored: [],
+    });
+  });
+
+  it("triageRange applies --scope to history-only paths too", () => {
+    const history = parseRawChangesBytes(enc(raw("A", oid("t"), "elsewhere/tmp.ts")));
+    expect(triageRange([], history, new Map(), { scopePrefixes: ["src/"] }).flagged).toEqual([
+      { path: "elsewhere/tmp.ts", reasons: ["out-of-scope", "in-history"] },
+    ]);
+  });
+
+  it("triageRange measures history blobs: a dump added then deleted, and a file grown then shrunk (round 2 N1)", () => {
+    const net = parseRawChangesBytes(enc(raw("M", oid("2"), "src/a.ts")));
+    const history = parseRawChangesBytes(
+      enc(raw("A", oid("d"), "dump.sql") + raw("D", Z, "dump.sql") + raw("M", oid("1"), "src/a.ts") + raw("M", oid("2"), "src/a.ts")),
+    );
+    const sizes = new Map([
+      [oid("d"), 3000],
+      [oid("1"), 3000],
+      [oid("2"), 6],
+    ]);
+    expect(triageRange(net, history, sizes, { largeBytes: 2000 })).toEqual({
+      clean: [],
+      flagged: [
+        { path: "src/a.ts", reasons: ["large", "in-history"] },
+        { path: "dump.sql", reasons: ["large", "in-history"] },
+      ],
+      ignored: [],
+    });
+    // Under the threshold, nothing in history is large, and the row is clean.
+    expect(triageRange(net, history, sizes).flagged).toEqual([]);
+  });
+
+  it("triageRange measures each net path by its blob at <head>, and never a deletion", () => {
+    const net = parseRawChangesBytes(enc(raw("A", oid("b"), "big.bin.txt") + raw("D", Z, "gone.ts")));
+    const result = triageRange(net, [], new Map([[oid("b"), 10]]), { largeBytes: 10, mentionedText: "gone.ts" });
+    expect(result).toEqual({ clean: ["gone.ts"], flagged: [{ path: "big.bin.txt", reasons: ["large"] }], ignored: [] });
+  });
+
+  it("triageRange flags a non-UTF-8 net name and a non-UTF-8 history-only name 'undecodable' (round 2 N7)", () => {
+    const head = enc(`:100644 100644 ${Z} ${oid("a")} A\u0000`);
+    const changes = parseRawChangesBytes(new Uint8Array([...head, 0x66, 0xff, 0, ...head, 0x66, 0xfe, 0]));
+    const [first, second] = changes;
+    if (first === undefined || second === undefined) throw new Error("two changes expected");
+    const result = triageRange([first], [first, second], new Map());
+    expect(result.flagged).toEqual([
+      { path: "f�", reasons: ["undecodable"] },
+      { path: "f�", reasons: ["undecodable", "in-history"] },
+    ]);
+  });
+
+  it("triageRange sizes and flags two colliding non-UTF-8 names apart, by raw key (Copilot on #379)", () => {
+    const record = (dst: string): Uint8Array => enc(`:100644 100644 ${Z} ${dst} A\u0000`);
+    const changes = parseRawChangesBytes(new Uint8Array([...record(oid("b")), 0x66, 0xff, 0, ...record(oid("s")), 0x66, 0xfe, 0]));
+    expect(changes.map((change) => change.entry.path)).toEqual(["f\uFFFD", "f\uFFFD"]);
+    const sizes = new Map([
+      [oid("b"), 5000],
+      [oid("s"), 10],
+    ]);
+    expect(triageRange(changes, changes, sizes, { largeBytes: 1000 }).flagged).toEqual([
+      { path: "f\uFFFD", reasons: ["large", "undecodable"] },
+      { path: "f\uFFFD", reasons: ["undecodable"] },
+    ]);
+    // And in the other order: the large one is still the one flagged large.
+    const reversed = [...changes].reverse();
+    expect(triageRange(reversed, reversed, sizes, { largeBytes: 1000 }).flagged).toEqual([
+      { path: "f\uFFFD", reasons: ["undecodable"] },
+      { path: "f\uFFFD", reasons: ["large", "undecodable"] },
+    ]);
+  });
+
+  // round 2 N2: `.` does not match a line terminator, so `.*` let these pass.
+  const terminated = ["n\nl.key", "cr\r.pem", "ls .pem", "ps .key", ".env.\nx", "credentials\r"];
+
+  it.each(terminated)("triageStage (working copy) flags %j as secret-shape", (path) => {
+    const result = triageStage([{ path, indexStatus: "?", worktreeStatus: "?", ignored: false }]);
+    expect(result.flagged).toEqual([{ path, reasons: ["secret-shape"] }]);
+  });
+
+  it.each(terminated)("triageRange (committed) flags %j as secret-shape, net and history-only", (path) => {
+    const change = parseRawChangesBytes(enc(raw("A", oid("a"), path)));
+    expect(triageRange(change, change, new Map()).flagged).toEqual([{ path, reasons: ["secret-shape"] }]);
+    expect(triageRange([], change, new Map()).flagged).toEqual([{ path, reasons: ["secret-shape", "in-history"] }]);
   });
 });

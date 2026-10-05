@@ -469,10 +469,66 @@ interface Forbidden {
   readonly pattern: RegExp;
   /** Where the rule applies. `code` is every shipped source; `ts` is TypeScript only. */
   readonly scope?: "code" | "ts";
+  /** When set, the rule applies only to shipped files whose `src/...` label matches. */
+  readonly paths?: RegExp;
   /** Lines this rule MUST catch, and lines it must not. Exercised below. */
   readonly catches: readonly string[];
   readonly allows: readonly string[];
 }
+
+// THE DIRECTION AND CLASSIFICATION VOCABULARY, READ FROM THE FIXTURES AT TEST TIME
+// (the `nen classify` and `nen direct` families). Every alias, surface, domain, job
+// and language key the two shipped contracts declare is a name a binary must read
+// from the file it was handed, never write. The list is NOT typed here: it is built
+// from the real fixture copies, so a key the maintainer adds to either contract is
+// guarded the day it lands, and this rule cannot drift from the files it protects.
+// A key is refused as a WHOLE quoted string -- `"implementation"`, never a substring
+// of a longer message -- in executable code; comments, fixtures and tests are exempt
+// like every rule below.
+const CONTRACT_FIXTURES: readonly string[] = [
+  join(process.cwd(), "src", "direct", "fixtures", "direct.registry.json"),
+  join(process.cwd(), "src", "classify", "fixtures", "classify.taxonomy.json"),
+];
+
+interface ContractVocabulary {
+  /** Names distinctive enough to refuse in the WHOLE shipped tree: aliases, hyphenated job keys, code-language keys. */
+  readonly distinctive: readonly string[];
+  /** Every name the contracts declare, refused in the two families' own modules, where every word is data. */
+  readonly all: readonly string[];
+}
+
+function contractVocabulary(): ContractVocabulary {
+  const distinctive = new Set<string>();
+  const all = new Set<string>();
+  const metadataFree = (record: object): string[] => Object.keys(record).filter((key): boolean => !key.startsWith("$"));
+  const registry = JSON.parse(readSource(CONTRACT_FIXTURES[0] as string)) as {
+    aliases: object;
+    surfaces: object;
+  };
+  const taxonomy = JSON.parse(readSource(CONTRACT_FIXTURES[1] as string)) as {
+    axes: { lang: { keys: { key: string; code?: boolean }[] }; job: { keys: { key: string }[] } };
+    domains: { keys: string[] };
+  };
+  for (const name of metadataFree(registry.aliases)) {
+    distinctive.add(name);
+    all.add(name);
+  }
+  for (const name of metadataFree(registry.surfaces)) all.add(name);
+  for (const name of taxonomy.domains.keys) all.add(name);
+  for (const entry of taxonomy.axes.job.keys) {
+    all.add(entry.key);
+    if (entry.key.includes("-")) distinctive.add(entry.key);
+  }
+  for (const entry of taxonomy.axes.lang.keys) {
+    all.add(entry.key);
+    if (entry.code !== false) distinctive.add(entry.key);
+  }
+  return { distinctive: [...distinctive], all: [...all] };
+}
+
+const CONTRACT_VOCABULARY = contractVocabulary();
+const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const quotedAnyOf = (names: readonly string[]): RegExp => new RegExp(`(["'\`])(?:${names.map(escapeRegExp).join("|")})\\1`);
 
 // Each entry names a CLASS of value §3 forbids, with the reason a violation
 // matters. The lists are the live system's vocabulary plus the fixture
@@ -594,6 +650,47 @@ const FORBIDDEN: readonly Forbidden[] = [
       'const c = "1d76dbf";',
       'throw new Error("a label of this axis is prefix + key");',
     ],
+  },
+  {
+    // WHOLE TREE, but only the names no other part of nen has a reason to write: the
+    // aliases, the hyphenated job keys and the code languages. Measured against the tree
+    // when this rule landed: none appears quoted in any shipped file.
+    what: "a direction alias, hyphenated job key or code-language key",
+    pattern: quotedAnyOf(CONTRACT_VOCABULARY.distinctive),
+    scope: "ts",
+    catches: [
+      'const a = "SEMANTIC_FRONTIER";',
+      "const b = 'unit-tests';",
+      "const c = `api-design`;",
+      'const d = "swift";',
+    ],
+    allows: [
+      'const a = "implementations";',
+      'const b = "the swift compiler";',
+      "const c = `${job}`;",
+      'const d = "unit-testing";',
+      'const e = "SEMANTIC_FRONTIERS";',
+    ],
+  },
+  {
+    // THE TWO FAMILIES' OWN MODULES (src/direct, src/classify), where EVERY name is
+    // data: also the surfaces, the domains and the single-word jobs. Elsewhere those
+    // words are nen's own vocabulary (the `release` and `review` families, the repo
+    // kind `library`, the `surface` family's four names) and refusing them there would
+    // be a rule about the English language; a name read from the file is what these
+    // two families must never write.
+    what: "a direction or classification vocabulary key in the direct or classify modules",
+    pattern: quotedAnyOf(CONTRACT_VOCABULARY.all),
+    scope: "ts",
+    paths: /^src\/(?:direct|classify)\//,
+    catches: [
+      'const a = "claude-code";',
+      "const b = 'aigov';",
+      "const c = `implementation`;",
+      'const d = "prose";',
+      'const e = "feature";',
+    ],
+    allows: ['const a = "features";', 'const b = "lang";', 'const c = "the prose language";', "const d = `${domain}`;"],
   },
   {
     what: "a delivery branch-naming convention",
@@ -762,11 +859,12 @@ describe("§3: names are data", () => {
     expect(offences).toEqual([]);
   });
 
-  for (const { what, pattern, scope } of FORBIDDEN) {
+  for (const { what, pattern, scope, paths } of FORBIDDEN) {
     it(`finds no hard-coded ${what} in shipped code`, () => {
       const offences: string[] = [];
       for (const file of files) {
         if (scope === "ts" && file.kind !== "ts") continue;
+        if (paths !== undefined && !paths.test(file.label)) continue;
         file.code.split("\n").forEach((line, index): void => {
           // Folded FIRST, so a name split across a `+` is searched as the string
           // the program will actually hold, and the ORIGINAL line is reported so

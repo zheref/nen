@@ -13,8 +13,8 @@ with the `nen` spelling. This document covers the **v0.13.0 line** (one new fami
 new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 42 command
-families, 124 verbs, every flag checked against the binary this repository
+arrive with them): 43 command
+families, 127 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -297,7 +297,7 @@ verb it invoked. The complete list:
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
-| [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
+| [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded |
@@ -697,7 +697,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 124 verbs, grouped as the README groups them. **Reads** is what a
+All 127 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -717,7 +717,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
-| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the ONE bounded merge: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr, every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh api contents/trees/user, gh pr merge unless plan-only), nen/gates.json, nen/repos.json (a `CODE#n` ref) | yes |
+| [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
 | [`wc`](#family-wc) | [`nen wc classify`](#nen-wc-classify) | classify the working copy as must-move / on-branch-dirty / on-branch-clean | git (branch, status, ahead-count) | yes |
@@ -726,7 +726,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
-| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code | git status --porcelain | yes |
+| [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names and blob sizes over every change any commit made (`in-history` for a finding not in the net change), deletions and mentions over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --raw, diff --raw, cat-file --batch-check | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
@@ -748,6 +748,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`classify`](#family-classify) | [`nen classify install`](#nen-classify-install) | compares the taxonomy's labels with nen/labels.json (present, drift, absent, foreign), rewrites the declaration with --write, or syncs only those labels to GitHub with --sync once the declaration is landed | local file (--taxonomy), nen/labels.json; gh only with --sync | yes |
 | [`classify`](#family-classify) | [`nen classify status`](#nen-classify-status) | which issues carry a label on every axis, which are missing one, which carry an unknown key, and whether the declaration and GitHub both hold the taxonomy's labels | local file (--taxonomy), nen/labels.json, gh (issue reads, label list) | yes |
 | [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
+| [`direct`](#family-direct) | [`nen direct registry`](#nen-direct-registry) | validates a model-direction registry file and prints it: the snapshot date, each alias (provider, family, surface/tier, snapshot quote), the surfaces and the live-lookup sources | local file (--registry) | yes |
+| [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
+| [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
@@ -1018,6 +1021,7 @@ commit. Three things make that visible:
   above `2` is read against the verb that returned it. Otherwise (`1`/`2` are
   every verb's, `3`–`5` are `shu`'s, `wc`'s, `commit write`'s and
   `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and `shu coverage`'s,
+  `7` is both [`shu tools`](#nen-shu-tools)' (`BEHIND` the pinned ref) and `pr merge --delivery`'s (merged without authority),
   `9` is `pr request-reviews`', and `3`–`7` are the bootstrap script's). Under `--json` the mismatch
   prints its own document with its own contract,
   `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
@@ -2352,8 +2356,11 @@ would run: gh pr create --repo zheref/nen --base main --head feature/x --title "
 
 ### `nen pr merge`
 
-THE ONE BOUNDED MERGE THIS BINARY PERFORMS — never a general-purpose merge.
-The second of the maintainer's 2026-09-26 "make it deterministic" trio: it
+THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms — a release
+unit (`--release-unit`, this section) and a run's own delivery into a
+non-main base (`--delivery`, [below](#nen-pr-merge-delivery)) — never a
+general-purpose merge: neither flag, or both, is exit 2. `--release-unit`,
+the second of the maintainer's 2026-09-26 "make it deterministic" trio,
 evaluates, IN ORDER, five gates, EVERY ONE regardless of an earlier
 failure, and every verdict line is printed VERBATIM, the same sentence the
 standalone verb would print:
@@ -2401,7 +2408,7 @@ nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> -
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `<n\|owner/name#n\|CODE#n>` | **yes** | the pull request to merge | positional; a bare `<n>` resolves against `--repo`'s own `origin` remote; `owner/name#n` and `CODE#n` must name the SAME repository `--repo`'s `origin` does, or exit 2 — see *The ref* below |
-| `--release-unit` | **yes** | says explicitly that this is a bounded release-unit merge | omitted: exit 2, "nen pr merge only merges a release unit" — there is no general-purpose merge here |
+| `--release-unit` | **yes** (or `--delivery`) | says explicitly that this is a bounded release-unit merge | neither form: exit 2, "nen pr merge only merges a release unit (--release-unit) or a run's own delivery pull request into a non-main base (--delivery)"; both: exit 2 — there is no general-purpose merge here |
 | `--requirements-from <path>` | **yes** | the same `{ name, pattern }` JSON array `pr body-check` takes | validated (exists, non-empty, parseable) BEFORE any `gh` call; checked against the pull request's CURRENT body, read live over `gh` — never a `--body-from` file, which could have drifted from what GitHub will merge |
 | `--repo <path>` | **yes** | the checkout whose `origin` remote and `nen/gates.json` this merge is judged against | required, exit 2 if omitted; `release.unitPaths` itself is read from the PULL REQUEST'S BASE, not this checkout |
 | `--run` | no | execute the merge once every gate passes | omit to see the plan only |
@@ -2452,7 +2459,10 @@ GitHub's own `MERGED` state is reported as `merged:`; anything else prints
 `queued (auto-merge or merge queue):`, naming the state read back.
 
 **Exit codes:** 0 merged, or a passing plan printed without `--run`; 1 at
-least one gate did not pass; 2 usage (missing `--release-unit`, a bad ref,
+least one gate did not pass; 2 usage (neither or both of `--release-unit`
+and `--delivery`, `--require-head` (read by `--delivery` only), any flag
+`pr merge` does not read (`pr ready`'s own, or another subcommand's such as
+`--base`/`--target` — refused before any `gh` call), a bad ref,
 an unknown product code or an unreadable `nen/repos.json`,
 missing/empty/unparseable `--requirements-from`, `--repo`'s origin naming a
 different repository than the ref or its code resolves to, or an unknown
@@ -2485,6 +2495,110 @@ whose pr: authored by the viewer ('someone'), same repository
 plan only (pass --run to execute): gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe
 ```
 (from `src/pr/mergeunit.test.ts`'s scripted fixture)
+
+<a id="nen-pr-merge-delivery"></a>
+
+#### The `--delivery` form
+
+A RUN'S OWN PULL REQUEST INTO A NON-MAIN, UNPROTECTED BASE, and nothing
+wider ([zheref/nen#286](https://github.com/zheref/nen/issues/286)). Narrowed by
+the maintainer's ruling of 2026-10-03 ("Narrow to non-main bases"), under the
+merge-authority ruling of 2026-09-30: a merge into the trunk is the
+maintainer's, and a run merges only into its own non-main integration branch.
+
+**Usage**
+
+```text
+nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `<n\|owner/name#n\|CODE#n>` | **yes** | the pull request to merge | the same grammar, and the same "must name `--repo`'s origin" rule, as `--release-unit` |
+| `--delivery` | **yes** | says explicitly that this is a run's own delivery merge | exclusive with `--release-unit` (exit 2) |
+| `--requirements-from <path>` | **yes** | the `pr body-check` requirements | validated before any `gh` call, exactly as `--release-unit` |
+| `--repo <path>` | **yes** | the checkout whose `origin` names the repository and whose `nen/workflow.json` `branch.base` is one protected name | — |
+| `--require-head <sha>` | no | pin the commit (7–40 hex digits) | passed to `pr ready`, which gives no verdict on any other head; restated on the head-pin gate |
+| `--run` | no | execute the merge once every gate passes | omit to see the plan only |
+| `--json` | no | machine-readable result | emitted on a refusal by ruling too |
+
+Every other flag — `pr ready`'s own (`--gates`, `--reviewers`, `--approvers`,
+`--round-policy`, `--token-env`, `--exclude-run`, `--exclude-check`,
+`--gh-repo`, `--explain`) and other subcommands' (`--base`, `--target`, …) —
+is refused at exit 2 before any `gh` call, on either form.
+
+**Refused by ruling — exit 2, before any other gate.** The base (a `refs/heads/`
+prefix stripped) is compared with every **protected name**: GitHub's default
+branch; `branch.base` in this checkout's `nen/workflow.json` (`main` when
+absent); `branch.base` in `nen/workflow.json` **at the pull request's base
+commit** (so a head that edits `branch.base` cannot dodge it) and **at the
+default branch**. It is also refused when GitHub reports the base `protected`
+(`gh api repos/{slug}/branches/{base}`, the name percent-encoded as ONE path component: `opus%2Fkurapika%2Fx`), when a ruleset targets it (`gh api
+repos/{slug}/rules/branches/{base}` non-empty), or when an open pull request
+whose head is the base aims at a protected name with auto-merge enabled
+(`gh pr list --head <base> --state open --limit 1000`; a list that fills the limit cannot be proven complete and is unknown, exit 1, as is an auto-merge entry that names no base) — or at a target GitHub reports
+protected or a ruleset binds. That chain check covers **one hop**: each
+auto-merge target is judged like a base, but a chain onward from that target
+is not walked. The transcript and the `--json`
+document are still emitted (`refused: true`, `baseOk: false`), the last line
+reads `nen pr merge: refused by ruling -- not merged (exit 2)` naming the
+ruling, and the maintainer is handed `nen pr ready <n> --gh-repo <slug>
+--require-head <head>` **before** `gh pr merge ... --match-head-commit
+<head>`, because `pr ready` was not evaluated. A usage error writes only
+stderr; a refusal by ruling writes its transcript on stdout.
+
+**Two preconditions on the repository.** `nen/workflow.json` must be committed
+at the pull request's base commit **and** on the default branch for
+`--delivery` to work — an absent file reads as unknown, exit 1. A ruleset
+matching every branch (e.g. `~ALL`) refuses every base until it excludes the
+integration branches.
+
+**Gates, in order, every one evaluated:**
+
+1. **base** — fails (exit 1, nothing merged) when ANY read above fails or is
+   empty: the pull request, its `baseRefName`, a `baseRefOid` that is not a
+   SHA, the default branch, either remote `nen/workflow.json` (an absent file
+   included — the contents route answers both alike — or a `branch` block
+   `nen/workflow.json`'s own loader would refuse, such as a `branch.template`
+   with no `{descriptor}`), the protection or
+   rules reads, or the auto-merge chain. Unknown is never a pass.
+2. **`pr ready`** — in-process, `--require-head` passed through.
+3. **head pin** — as `--release-unit`'s.
+4. **`pr body-check`** — as `--release-unit`'s.
+5. **whose pr** — author is the viewer, never cross-repository, **and** the
+   head ref is in the run form of `branch.template` read at the base commit:
+   every `{token}` is one non-empty segment, so `{model}/{persona}/{descriptor}`
+   is three.
+
+**Under `--run`**, the base is re-read immediately before `gh pr merge` (which
+pins the head, not the base) and a `base (re-read)` gate is appended: a
+retarget onto a protected name is refused by ruling (exit 2); a failed read,
+an empty name or any other retarget fails the gate (exit 1, `ran: false`,
+`mergeArgv: null`, `rereadBase` naming what it read); a refusal there names
+both bases and hands over "'pr ready' passed at <head>; the base moved". Once
+`gh pr merge` exits 0 the state re-read also asks for `baseRefName`, and it is
+checked **whatever the state** — merged or queued: a protected name, any base
+but the one gated, or none at all is **exit 7 — merged without authority**
+(`MERGED INTO '<base>' WITHOUT AUTHORITY ... Tell the maintainer now`, or
+`ACCEPTED (state 'OPEN') INTO ...` for a queued one), and a re-read that
+cannot be read is exit 7 too, **authority unconfirmed** — never 0. The window between the pre-merge re-read and GitHub's own merge is the
+one nothing here can close; exit 7 is what makes it loud.
+
+**Exit codes:** 0 merged, or a passing plan without `--run`; 1 a gate did not
+pass; 2 usage, **or refused by ruling**; 5 `gh` refused the merge; 6 `gh`
+could not be started; 7 merged (or queued) without authority, or authority
+unconfirmed.
+
+**`--json`** — `nen.pr.merge-delivery/v0.1`: `{ contract, target, pr, base,
+baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
+defaultBranchBase, baseProtected, baseRulesets, ready, pinOk, bodyOk, wholeOk,
+ok, ran, spawnFailed, judgedHead, requiredHead, state, rereadBase, mergedBase,
+outsideAuthority, mergeArgv, gates: [{ name, ok, lines }] }` — `baseRulesets`
+counts DISTINCT `ruleset_id`s (the transcript prints `N rule(s) from M
+ruleset(s)`); `rereadBase` is the pre-merge re-read's answer, `mergedBase` the
+post-merge one's.
 
 <a id="family-gate"></a>
 
@@ -3364,7 +3478,7 @@ with every reason it matched, `secret-shape` included, and never appears in
 
 ```text
 nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
-                 [--large-bytes <n>]
+                 [--large-bytes <n>] [--range <base>..<head>]
 ```
 
 **Arguments**
@@ -3375,7 +3489,72 @@ nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
 | `--scope <a,b>` | no | in-scope path prefixes | omit to skip the out-of-scope check entirely |
 | `--mentions <text>` | no | free text (a commit message draft, a PR description) searched for a deleted path's basename | an unmentioned deletion is flagged, never silently staged |
 | `--large-bytes <n>` | no | bytes at or above which a file is flagged `large` | default **1048576** (1 MiB) — no ordinary source file trips it, a multi-megabyte accident does. A default exists here where [`loop slots --local-cap`](#nen-loop-slots) refuses one, because that flag is a concurrency *guard* whose forgotten default silently widens what is allowed, while this is a *detection* threshold on a verb that decides nothing and whose default errs toward flagging. A zero or negative value is refused at exit 2. |
+| `--range <base>..<head>` | no | triage the commits in the range instead of the working copy: names over every path any commit touched, deletions and sizes over the net diff from `merge-base(<base>, <head>)` ([#337](https://github.com/zheref/nen/issues/337)) | `stage triage` only — refused on `stage list` at exit 2. See *Committed-range mode* below. |
 | `--json` | no | machine-readable triage | — |
+
+**Committed-range mode ([#337](https://github.com/zheref/nen/issues/337)).**
+Without `--range` the verb reads the working copy — `git status`, staged,
+unstaged, untracked and ignored — and never a commit; that reading is
+unchanged. With `--range <base>..<head>` it reads ONLY commits, never the
+working copy or the index. Both sides are resolved to commits (`git rev-parse
+--verify <ref>^{commit}`); `<base>..<head>` then means the commits `git log
+<base>..<head>` lists, so **the diff runs from `merge-base(<base>, <head>)` to
+`<head>`, as `git diff <base>...<head>` does** — a base that moved on after the
+branch was cut contributes nothing. Two readings, each for what it can answer:
+
+- **History: every change any commit made** (`git log -z --raw --no-renames
+  --diff-merges=cc`), a merge read as its combined diff — so an evil merge's own
+  additions are seen, and a catch-up merge from the base contributes none of
+  the base's files. The name detectors — secret shape, binary, out-of-scope,
+  local config — run over every path it names, and **every blob it introduced
+  is measured**. A finding on something **not in the range's net change** — a
+  path added then deleted, renamed away, or changed and reverted, or a blob a
+  later commit replaced (a dump committed then dropped, a file grown then
+  shrunk) — is FLAGGED with its reason plus **`in-history`**: it is not at
+  `<head>`, and it is still in the history being pushed. A history-only path
+  with no finding is not reported.
+- **Net change: deletions, mentions and each path's size at `<head>`** (`git
+  diff -z --raw --find-renames`, merge base to `<head>`). A rename is reported
+  by its new path. A path the range deleted is never measured at `<head>`;
+  `--mentions` is matched against a deleted path's basename exactly as in the
+  working-copy mode.
+
+Sizes are blob sizes asked of `git cat-file --batch-check` by bare object id,
+never the disk. Every range read passes `--no-replace-objects`, so a
+`refs/replace/` entry cannot stand a different commit in for the one being
+pushed, and both change reads pass `--ignore-submodules=none`, so neither
+`diff.ignoreSubmodules` nor a committed `.gitmodules` `ignore = all` can hide an
+added gitlink. A name git printed in bytes that are not UTF-8 is flagged
+**`undecodable`** — the path shown is a lenient decode that cannot name the
+file — and two such names are told apart on their raw bytes. The name detectors
+match a whole path segment (`[^/]*`), so a name carrying a newline, a carriage
+return, U+2028 or U+2029 is still matched, and the text report prints every
+path with its control characters removed. Nothing in a commit is git-ignored,
+so `ignored` is always empty. Same detectors, same exit codes on the
+classification, and the **same `--json` shape** as the working-copy mode (see
+*Output and exit codes*). Range mode needs git **2.31** or newer (`log
+--diff-merges`; `--end-of-options` is 2.30). **It never falls back** to
+the working copy. It is a filename check, not a substitute for a content
+scanner.
+
+```bash
+nen stage triage --repo . --range base..review
+```
+```text
+read: committed range base..review (d11d59a37658..ebe3e4e4e3a0, 3 commit(s)), not the working copy
+clean: 2 file(s)
+  notes.txt
+  src/a.ts
+ignored: 0 file(s), not listed
+flagged: 2 file(s) -- never staged without an explicit yes
+  .env  [secret-shape]
+  key.pem  [secret-shape, in-history]
+```
+(from a real run against a throwaway scratch repository, exit 1, the working
+tree clean: three commits on top of `base` — one editing `src/a.ts` and adding
+a `.env`, one adding `key.pem`, one renaming `key.pem` to `notes.txt`. The key
+is gone at the head and still flagged, because it is in the history the range
+would push.)
 
 **The two detectors added for [#57](https://github.com/zheref/nen/issues/57).**
 `local-config` is a **filename** check like the secret shape, not a directory
@@ -3395,11 +3574,30 @@ clean path; `ignored: <n> file(s), not listed` (a count only — this verb has
 no `--verbose` flag, so the ignored paths themselves are never printed in
 text, only under `--json`); and (if any) `flagged: <n> file(s) -- never
 staged without an explicit yes` then each flagged path with its reason tags.
-`--json` top-level keys: `clean[]`, `flagged[]` and `ignored[]` (each of the
-latter two `{ path, reasons[] }`). **The exit code follows `flagged` only**:
-exit 0 when nothing is flagged — including a tree that is entirely
-ignored rows — exit 1 when anything is flagged or the underlying `git
-status` fails, exit 2 on a missing `--repo`.
+`--json` top-level keys, the same in both modes: `read`, `clean[]`,
+`flagged[]` and `ignored[]` (each of the latter two `{ path, reasons[] }`).
+`read` names the reading that produced the document: `{ "mode":
+"working-copy" }`, or `{ "mode": "range", base, head, mergeBase, headSha,
+commits }` with both sides as typed and as resolved. **The exit code follows
+`flagged` only**: exit 0 when nothing is flagged — including a tree that is
+entirely ignored rows — exit 1 when anything is flagged or the underlying `git
+status` fails, exit 2 on a missing `--repo` or a `--large-bytes` that is not a
+positive whole number. **With `--range`** the text report opens with one extra
+line, `read: committed range <base>..<head> (<merge-base>..<head-sha>, <n>
+commit(s)), not the working copy` — or, for a range whose head is its merge
+base, `-- the range names no commits`, still exit 0 with `commits: 0` in
+`--json`. Range mode adds exit **2** for a range that is malformed (not
+`<base>..<head>`, an empty side, the three-dot form, a side beginning with `-`,
+refused before git sees it), a side that does not resolve to a commit, or two
+commits with no common ancestor, or a **shallow clone** — refused when `git
+rev-parse --is-shallow-repository` says so, BEFORE the range is read, because at
+the shallow boundary git reads a commit as a root and a merged side branch's
+history would be cut off into a false clean; fetch full history first — and exit
+**1** when a git read fails (merge-base, the commit count, `git log`, `git
+diff`, `git cat-file`, or the shallow probe itself), naming the read. Two reasons exist only in range mode:
+`in-history` (the finding is not in the range's net change: added then deleted,
+renamed away, or changed and reverted) and `undecodable` (a name that is not
+UTF-8).
 
 **Example**
 
@@ -3424,6 +3622,7 @@ nen stage triage --repo . --scope "src/,docs/" --json
 ```
 ```json
 {
+  "read": { "mode": "working-copy" },
   "clean": ["src/a.ts"],
   "flagged": [{ "path": ".env", "reasons": ["secret-shape", "out-of-scope"] }],
   "ignored": [
@@ -4356,6 +4555,256 @@ labels, classifying issues on two axes as labels, validating the schema set
 itself, resolving a colour by the repository's own precedence, resolving a
 repository token against the registry, and formatting the object notation the
 rest of the surface cross-references objects with.
+
+<a id="family-direct"></a>
+
+**`nen direct`**
+
+The mechanical half of choosing a model for an issue's classification: given the languages and jobs
+the [`classify`](#family-classify) family put on an issue, which **alias** should do the work, on
+which **surface**, at which **effort**. Reading the issue and looking up the live version of a model
+family on a provider's page are a skill's judgement; everything deterministic around them is here.
+Two rulings shape it. **Stable aliases, replaceable versions**: the registry names an alias (a role:
+the frontier author, the execution model, the visual orchestrator), carries no version a
+recommendation resolves through, and nen stores none; the dated `snapshot` block is a quoted record of
+what each alias meant on one day, and the alias is *spelled* for a surface by the consumer's own
+`nen/workflow.json` (`models.<key>.<tier>`, read through the existing loader; an alias the workflow
+does not spell is reported `unspelled`, never an error). **A mismatch is an answer**: the verb
+compares the session that is running with the recommendation and reports every difference, exits 0,
+and never blocks — the skill asks the maintainer once.
+
+Every word of the vocabulary — aliases, surfaces, routing, the effort rule, the dated snapshot — is
+read from the **registry file** `--registry` names (`$schema` of the form `<owner>.direct-registry/v1`);
+the languages, the jobs with their weights and the five domain rules are read from the **taxonomy
+file** `--taxonomy` names (the same file `classify` reads); this binary carries none of it. Every
+path flag (`--registry`, `--taxonomy`, `--record`) resolves against `--repo`'s root; an absolute path
+is used as-is.
+
+### `nen direct registry`
+
+Answers "is this registry valid, and what does it say": it validates the file and prints the snapshot
+date, one line per alias (`provider  family  surface/tier  snapshot: <primary> (<model id>)`, a
+reviewer alias marked), the surfaces table (label, the `models.<key>` it reads, its effort control)
+and the live-lookup sources per provider (the CLI that lists the served models, the docs). A bad file
+is refused at exit 1 naming the pointer into it: a routing cell whose alias or surface is not
+declared, a cell whose surface is not its alias's surface, a reviewer runner-up with no `also`, a non-reviewer alias without a `surface` or a `tier`, a routing `phaseName` that is not its phase's name in `phases`, a surface without a string `modelsKey`, an effort block that does not have four levels or
+whose surface map misses one, effort bands that overlap, leave a score unplaced, or end below the highest reachable score (the highest job weight, 4, plus one per `plusOne` row), a precedence that
+does not rank every alias exactly once, a snapshot date that is not a calendar date.
+
+**Usage**
+
+```text
+nen direct registry --registry <path> [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--registry <path>` | yes | The model-direction registry file. | Relative paths resolve against `--repo`'s root. Missing -> exit 2. |
+| `--repo <path>` | no | Anchors a relative `--registry`. | Defaults to cwd. The only `direct` verb where it is optional: this one reads one file and nothing else. |
+
+**Output and exit codes** — human rendering is `registry <path>`, `snapshot asOf <date>`, one line per
+alias, the surfaces, the live-lookup sources and a counts line. `--json` prints one document;
+top-level keys, in this order: `contract` (`nen.direct.registry/v0.1`), `registry` (the resolved
+path), `snapshot` (`asOf` and the per-alias quotes), `aliases`, `surfaces`, `liveLookup` and `counts`
+(`aliases`, `routingJobs`, `routingCells`). Exit 0 when the file is valid; exit 1 when it is not (the
+refusal names the pointer) or cannot be read; exit 2 when `--registry` is missing.
+
+### `nen direct resolve`
+
+Answers "which model, where, at what effort" for one classification, reporting each step:
+
+1. **Domain.** The taxonomy's `domains.rule` rows are **structured data**, evaluated in `order`, **the
+   first row that matches wins**. A row's `when` is `"otherwise"` (always), or one of:
+   `{"anyOf": [<predicate>, …]}` (any member matches), `{"repoKind": [<values>]}` and
+   `{"repoRole": [<values>]}` (the input is in the list), `{"issueLabels": {"any": [<patterns>]}}` (a
+   label equals a pattern; a `*:name` pattern matches `<ns>:name` under any namespace),
+   `{"jobs": {"anyKey": [<keys>]}}` (the issue carries one of the job keys) and
+   `{"jobs": {"nonEmpty": true, "everyListsOnly": "<domain>"}}` (at least one job, and every carried
+   job's taxonomy `phases` name only that domain). The facts are the flags and nothing else: `--kind`
+   and `--role` verbatim as [`repo classify --json`](#nen-repo-classify) printed them (their vocabulary
+   is not checked here, and the verb never re-derives them from `--repo`), `--labels` the issue's
+   labels, `--job` the job keys. A `when` of any other shape is refused when the taxonomy loads —
+   exit 1, naming the pointer (`domains.rule[0].when.<shape>`). Reported as `domain: <d> (rule <n>:
+   <the row's $comment>)`.
+2. **Cells.** For every (job, language) pair, the registry's `routing[job][domain]` cell for that
+   language, else its shared (`*`) cell. A job with no phase in the domain is routed on the first
+   domain it lists, in the order the taxonomy's `domains.fallback` sentence names them **after its
+   colon** (the derived domain first, then any domain the sentence omits in `domains.keys` order), and
+   the substitution is named (`fallback: <job> has no <domain> phase; routed on <other>`; each pair
+   carries `fallbackFrom` in `--json`).
+3. **Aggregate.** The alias that wins the most pairs wins; a tie goes to the registry's
+   `aggregation.precedence` (earlier first). A reviewer alias is never the winner: a pair it wins
+   counts for its `also` stand-in (or is skipped, reported). The runner-up is the next most frequent
+   winning alias (ties by precedence); when the winner won every pair, the most frequent `runnerUp`
+   alias across the **winning** pairs (never a skipped pair's), a reviewer resolving to its `also`.
+   **The winner is never its own runner-up**: when every candidate equals the winner (a reviewer
+   runner-up whose stand-in is the winner), `runnerUp` is `null` and the human output says
+   `runner-up: none distinct`. A resolved runner-up that is a stand-in carries `substituted`, the
+   reviewer product it stood in for, so the skill can name it. A frontier alias may be recommended —
+   the verdict is for the maintainer's own session.
+4. **Resolve each side.** Provider, family and tier from the alias; the surface from the alias (the
+   registry parser refuses a cell whose surface is not its alias's); the surface alias from the
+   workflow's `models.<modelsKey>.<tier>` (else `unspelled`); the surface's restart line with
+   `<alias>` filled from that spelling and `<level>` from `effort.surfaceMap` — never from the
+   snapshot or anything fetched — its effort control, the interactive tools (the surface's, each
+   language's native one, the cell's, deduplicated), the dated snapshot quote and the provider's
+   live-lookup sources.
+5. **Effort.** `score` is the highest job weight plus one for each add of the registry's rule that
+   holds — many jobs (the rule's threshold), many **code** languages (a language counts unless its
+   taxonomy entry says `"code": false`; the flag is read, never the key's name), and a domain add
+   (the domain named beside its key, else the first rule row's domain) — banded into a level and
+   mapped through the winner surface's own control. Reported as `weight 4 + manyJobs + <domain add> =
+   6 -> max`.
+6. **Mismatch** — for the session flags given: `--surface` is compared by name, `--model` by **alias**
+   against `models.<modelsKey>.<winner tier>` (aliases, not tiers; **when the workflow does not spell
+   that tier the compare is `unread` with `recommended: null`, never a mismatch on a non-fact**), and
+   `--effort` in **dial space**:
+   the recommended level and the session's level are both mapped through `effort.surfaceMap` for the
+   session's surface (the winner's when none was given), so a collapsed top (`max` -> `high` on
+   cursor and antigravity) matches a session at `high`. The literal **`unread`** on any flag marks
+   that compare `unread` — reported, never a mismatch (the harness could not read it). A mismatch is
+   an answer; the skill asks once.
+7. **Record** — with `--record <effort-id>`, the whole result plus `effortId` and `recordedAt` is
+   written to `.nen/direct/<encoded id>.json` under `--repo` (directories created; `.nen/` is
+   gitignored output, never `nen/`). The record is filed before the picker runs, so the
+   maintainer's answer is written into it afterwards by [`direct answer`](#nen-direct-answer). The id is the caller's string (`<CODE>-IS-#<N>` for an issue,
+   `inline-<ISO-8601 UTC>` for a textual effort), **percent-encoded by the same exported encoder
+   [`usage record`](#nen-usage) uses for `--effort`** (`encodeEffortId`, `encodeURIComponent`), which
+   makes a `/` or a `:` in an id a file-name character. **The encoder is shared; the id vocabulary
+   is not**: the usage ledger's own id alphabet refuses `#` and `:`, so it cannot hold the two ids above,
+   while this ledger accepts any id that is not a traversal (that alphabet disagreement belongs to
+   the usage verb's owner and is not changed here). An id that is empty, absolute, carries a backslash
+   or has a `..` segment is refused at exit 2 before anything is read. The write is also checked against
+   the **real** filesystem path (`repo/contain.ts`'s `realContainment`): a `.nen/direct` directory or an
+   existing record that is a symlink out of `--repo`, and a record that is itself a symlink (even a
+   dangling one), are refused at exit 2 and nothing is written.
+
+**The two files must agree.** After both load, a routing cell key that is neither the shared `*`
+cell nor one of the taxonomy's language keys, and a routing domain that is not one of its
+`domains.keys`, are refused at exit 1 naming the pointer (`routing.<job>.<domain>.cells.<key>`): a
+key the *taxonomy* lacks on the command line is exit 2, but a job the registry cannot route, or a file
+that contradicts the other, is exit 1. The registry's `mismatch` block must state exactly the set the
+binary compares (`compares: [surface, model, effort]`, `ledger: .nen/direct/<effort>.json`); any other
+is refused when the registry loads. Likewise a predicate carrying a key that is not its own
+(`issueLabels` takes only `any`; `jobs` takes `anyKey` alone, or `nonEmpty` with `everyListsOnly`) and a
+`domains.firstMatchWins` other than `true` are refused when the taxonomy loads.
+
+**Each verb takes only its own flags.** A flag another verb of the family owns (`--record` on
+`registry`, `--taxonomy` on `answer`, `--answer` on `resolve`) is refused at exit 2 naming the flag
+and the verbs that own it, rather than parsed and silently ignored.
+
+**Empty axes are answers, not errors.** No job (`--job ""`, or the flag omitted) is
+`undirectable: job axis empty` — one line, `winner`, `runnerUp`, `effort` and `mismatch` null, exit 0
+(the caller carries on on its own session); no language (`--lang ""` or omitted) reads the shared `*`
+cell for every job. Inside `hatsu:build` classification has already run, so an empty axis is reported,
+never filled.
+
+**Usage**
+
+```text
+nen direct resolve --registry <path> --taxonomy <path> --repo <path> --kind <kind> [--role <role>] [--labels <a,b>] [--lang <a,b>] [--job <c,d>] [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>] [--record <effort-id>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--registry <path>` | yes | The model-direction registry file. | Relative paths resolve against `--repo`'s root. |
+| `--taxonomy <path>` | yes | The classification taxonomy file. | The file `classify` reads; it must carry job weights and the `domains` block. |
+| `--repo <path>` | yes | The checkout whose `nen/workflow.json` spells the aliases, and the root every path resolves against. | Unbracketed in usage; omitted is refused at exit 2. An absent workflow or `models` block is `unspelled`, not an error. |
+| `--kind <kind>` | yes | The repository's kind, verbatim from [`repo classify --json`](#nen-repo-classify). | Only non-empty is checked; the taxonomy's predicates decide what it means. |
+| `--role <role>` | no | The repository's role, verbatim from `repo classify --json`. | An absent role matches no `repoRole` predicate. |
+| `--labels <a,b>` | no | The issue's labels, as GitHub reports them. | Replaces the former `--issue-kind`: a bug is a label the taxonomy's `issueLabels` predicate names. |
+| `--lang <a,b>` | no | The taxonomy's language keys the issue carries. | An unknown key -> exit 2, naming the valid set. Empty or omitted reads the shared cell. |
+| `--job <c,d>` | no | The taxonomy's job keys the issue carries. | An unknown key -> exit 2, naming the valid set. Empty or omitted is `undirectable`. |
+| `--surface <s>` | no | The surface the running session is on. | One of the registry's surfaces, or `unread`; else exit 2. |
+| `--model <alias>` | no | The model alias the running session is on. | Compared with the winner's spelled alias; `unread` marks it unread. Replaces the former `--tier`. |
+| `--effort <level>` | no | The effort level the running session is at. | One of the registry's levels, or `unread`; else exit 2. Compared in dial space. |
+| `--record <effort-id>` | no | File the result under `.nen/direct/<encoded id>.json`. | A traversal is refused at exit 2. |
+
+**Output and exit codes** — human rendering is the verdict table (winner and runner-up rows: alias,
+surface/tier, the spelled model alias, the restart line), one `interactive:` line per tool, the
+winner's snapshot quote and live-lookup sources, one `pair` line per (job, language), the `domain` and
+`effort` lines, the `mismatch` line when asked (`mismatch: yes|no (surface match; model fable != opus;
+effort unread)`), and `recorded <path>` when written; `undirectable: job axis empty` alone for an empty
+job axis. `--json` prints one document; top-level keys, in this order: `contract`
+(`nen.direct.resolve/v0.1`), `inputs` (`langs`, `jobs`, `kind`, `role`, `labels`, and the session's
+`surface`, `model`, `effort`), `undirectable` (`null`, or the reason), `domain` (`domain`, `rule` — the
+matched row's `order` — `because`, `fallbacks`), `pairs` (an array of `{ job, lang, domain,
+fallbackFrom, phase, phaseName, cell, winner, runnerUp }`), `aggregate` (`skipped`, `tally`),
+`winner` and `runnerUp` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
+restart, effortControl, interactive, note, substituted, snapshot, liveLookup }`), `effort` (`score`, `weight`,
+`level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, compares: [{ field, session,
+recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread`), `effortId` and
+`record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp` and `effort` are
+`null` when undirectable, and `runnerUp` is also `null` when no alias distinct from the winner exists. Exit 0 for every resolution, **including a mismatch and an
+undirectable one**; exit 1 for an invalid registry or taxonomy (an unknown predicate shape, a cell
+whose surface is not its alias's), an unreadable workflow, a taxonomy with no weight on a carried job,
+or a registry that cannot route a job the taxonomy names; exit 2 for a missing flag, an unknown
+language or job key, a surface or level outside the registry's, or a refused `--record`.
+
+**Example** (a real run against the real registry and taxonomy, in a consumer whose
+`nen/workflow.json` spells `models.claude.deep` as `opus`; a canon repository's two prose jobs, the
+session on the right surface but at another model, its effort unreadable)
+
+```bash
+nen direct resolve --registry direct.registry.json --taxonomy classify.taxonomy.json --repo . \
+  --lang prose --job prose-authoring,schema --kind process --role canon --labels enhancement \
+  --surface claude-code --model fable --effort unread
+```
+```text
+|           | alias              | surface/tier     | model alias | restart                                         |
+| --------- | ------------------ | ---------------- | ----------- | ----------------------------------------------- |
+| winner    | SEMANTIC_FRONTIER  | claude-code/deep | opus        | claude --model opus (then /effort high)         |
+| runner-up | EXECUTION_FRONTIER | codex/frontier   | unspelled   | codex -m <alias> -c model_reasoning_effort=high |
+interactive: the Claude desktop app or claude.ai, the same model family
+interactive: the Claude desktop app or claude.ai
+snapshot 2026-10-04: Claude Opus 5.5 (claude-opus-5-5); fallback Claude Fable 5.1
+live lookup (anthropic): the Claude Code model picker (/model), read in-session; https://platform.claude.com/docs/en/models/overview; https://platform.claude.com/docs/en/release-notes/overview
+pair prose-authoring x prose: SEMANTIC_FRONTIER, runner-up BALANCED_AUTHOR  [aigov, AIGOV.REPO.005 Instruction and agentic-prose authoring, cell *]
+pair schema x prose: EXECUTION_FRONTIER, runner-up SEMANTIC_FRONTIER  [aigov, AIGOV.REPO.008 Canonical schema and metadata design, cell *]
+domain: aigov (rule 1: nen repo classify reports kind process, or role canon)
+effort: weight 3 + aigov = 4 -> high (claude-code: high)
+mismatch: yes (surface match; model fable != opus; effort unread)
+```
+(row 1 matched on the canon role, so the domain is the first row's and its domain add fires; the two
+pairs split between the frontier author and the execution model and the tie goes to the registry's
+precedence; the surface matches, the model differs, the effort is unread — exit 0)
+
+### `nen direct answer`
+
+Answers "what did the maintainer say, and where is it recorded": the skill's picker (continue on this
+session, or stop and restart elsewhere) runs *after* [`direct resolve --record`](#nen-direct-resolve)
+has filed `.nen/direct/<encoded id>.json`, so the answer is written into that same record afterwards.
+It reads the record `--record <id>` names under `--repo`'s root — the same id, the same
+percent-encoding and the same traversal refusals as `resolve --record` — sets
+`decision: { answer, answeredAt }` (`answeredAt` the verb's clock, ISO 8601 UTC), and rewrites the file
+in the form `resolve` wrote it (two-space indent, trailing newline), **every other field unchanged**. A
+second answer replaces the first: the record holds the last word. The answer belongs to a resolution
+that exists — a missing record is a failure naming the path, never a created file.
+
+**Usage**
+
+```text
+nen direct answer --record <effort-id> --answer <continue|stop> --repo <path> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--record <effort-id>` | yes | The effort's id, as `direct resolve --record` was given it. | Encoded and refused exactly like `resolve`'s; a traversal -> exit 2. |
+| `--answer <continue\|stop>` | yes | The maintainer's picker answer. | Any other value -> exit 2, naming the two. |
+| `--repo <path>` | yes | The checkout whose `.nen/direct/` holds the record. | Unbracketed in usage; omitted is refused at exit 2. |
+
+**Output and exit codes** — human rendering is `answered <answer> at <time>` then `recorded <path>`.
+`--json` prints one document; top-level keys, in this order: `contract` (`nen.direct.answer/v0.1`),
+`record` (the rewritten file's path) and `decision` (`{ answer, answeredAt }`). Exit 0 when the
+decision was written; exit 1 when the record does not exist, is not JSON, or is not a JSON object (it
+is not rewritten); exit 2 for a missing flag, an answer that is not `continue` or `stop`, or a refused
+`--record`.
 
 <a id="family-label"></a>
 

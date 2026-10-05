@@ -431,6 +431,16 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen epic next-wave --body-file b.md").classification).toBe("read-only");
   });
 
+  // zheref/nen#286 (N10/F6): both merge forms are mutating in every
+  // spelling -- the plan form is not certified watchable either.
+  it("classifies 'pr merge --delivery' as mutating with and without --run, --dry-run or a pre-verb --json", () => {
+    expect(classifyCommand("nen pr merge 9 --delivery --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --delivery --repo . --run").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --delivery --repo . --dry-run").classification).toBe("mutating");
+    expect(classifyCommand("nen --json pr merge 9 --delivery --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen pr merge 9 --release-unit --repo . --requirements-from r.json").classification).toBe("mutating");
+  });
+
   it("classifies through the pre-verb global flags", () => {
     expect(classifyCommand("nen --repo ../elsewhere wc classify").classification).toBe("read-only");
     expect(classifyCommand("nen --json pr ready 925 --gh-repo owner/repo").classification).toBe("read-only");
@@ -442,7 +452,7 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen frobnicate everything").classification).toBe("unknown");
     // A subcommand the table has not classified -- the fail-closed drift
     // path for a future subcommand landing without a table row.
-    expect(classifyCommand("nen pr merge --target o/r --pr 1").classification).toBe("unknown");
+    expect(classifyCommand("nen pr frobnicate --target o/r --pr 1").classification).toBe("unknown");
     // A passthrough hands vitest its own flags -- `-- -u` would rewrite
     // snapshot files under a verb this table calls a checker.
     expect(classifyCommand("nen dev test -- -u").classification).toBe("unknown");
@@ -817,6 +827,7 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "canon mirror check": "nen canon mirror check --rules-dir r",
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
     "classify install": "nen classify install --taxonomy t.json --repo .",
+    "direct resolve": "nen direct resolve --registry r.json --taxonomy t.json --repo . --lang a --job b --kind product",
     "epic next-wave": "nen epic next-wave --body-file b.md",
     "runner plan": "nen runner plan --target o/r --pool p --machine-code NZ --count 1",
     "shu detect": "nen shu detect",

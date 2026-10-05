@@ -35,6 +35,7 @@ import {
 } from "../cli/command.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE } from "./mergeunit.js";
+import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
@@ -113,6 +114,7 @@ nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-r
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
+nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict and every
@@ -374,9 +376,10 @@ open:
   the exit-1 case, where they name the pull request already there.
 
 merge:
-  THE ONE BOUNDED MERGE THIS BINARY PERFORMS. Never a general-purpose
-  merge -- refused (exit 2) without --release-unit: "nen pr merge only
-  merges a release unit". Evaluates, IN ORDER, every one of: 'pr ready'
+  THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms: a release
+  unit (--release-unit) and a run's own delivery into a non-main base
+  (--delivery, below). Never a general-purpose merge -- refused (exit 2)
+  without one of the two, and with both. --release-unit evaluates, IN ORDER, every one of: 'pr ready'
   (../verbs/pr_ready.ts's own gate, called IN-PROCESS -- never a
   subprocess), 'head pin' (GitHub's head must still be the exact commit
   'pr ready' judged), 'pr body-check' (against the pull request's LIVE
@@ -421,7 +424,8 @@ merge:
   --run                       Execute the merge once every gate passes.
                               Omit it to see the plan only.
   Exit codes: 0 merged, or a passing plan printed without --run; 1 at
-  least one gate did not pass; 2 usage (missing --release-unit, a bad ref,
+  least one gate did not pass; 2 usage (neither or both of --release-unit
+  and --delivery, a flag merge does not read, --require-head, a bad ref,
   an unknown or unreadable product code, missing --requirements-from,
   --repo's origin naming a different repository than the ref or the code
   resolves to, or an unknown flag such as --admin/--auto);
@@ -431,7 +435,65 @@ merge:
   which means gh ran and said no.
   --json: '{ contract: "nen.pr.merge-unit/v0.1", target, pr, ready,
   bodyOk, unitOk, pinOk, wholeOk, ok, ran, spawnFailed, judgedHead, state,
-  mergeArgv, gates: [{ name, ok, lines }] }'.`;
+  mergeArgv, gates: [{ name, ok, lines }] }'.
+  --require-head is refused (exit 2) with --release-unit.
+
+merge --delivery (zheref/nen#286):
+  A RUN'S OWN PULL REQUEST INTO A NON-MAIN, UNPROTECTED BASE, and nothing
+  wider -- the maintainer's ruling of 2026-10-03 ("Narrow to non-main
+  bases"), under the maintainer's merge-authority ruling of 2026-09-30: a
+  merge into the trunk is the maintainer's. REFUSED BY RULING (exit 2,
+  before any other gate, the transcript and --json document still emitted
+  with refused: true, baseOk: false) when the base -- 'refs/heads/'
+  stripped -- is a PROTECTED NAME: GitHub's default branch; branch.base in
+  this checkout's nen/workflow.json ('main' when absent), in
+  nen/workflow.json AT THE PULL REQUEST'S BASE COMMIT (so a head that edits
+  branch.base cannot dodge it) or AT THE DEFAULT BRANCH; a branch GitHub
+  reports protected, or one a ruleset targets; or the head of an open pull
+  request into a protected name with auto-merge enabled. The refusal hands
+  the maintainer 'nen pr ready <n> --require-head <head>' BEFORE 'gh pr
+  merge' -- 'pr ready' was not evaluated. No flag widens it.
+  Otherwise evaluates, IN ORDER, every one of: 'base' (fails, exit 1, when
+  any read above fails or the pull request answers no base name or a
+  baseRefOid that is not a SHA -- "unknown" is never a pass), 'pr ready'
+  (IN-PROCESS, --require-head passed through), 'head pin', 'pr body-check'
+  and 'whose pr' (author is the viewer, never cross-repository, AND the
+  head ref is in the run form of branch.template at the base commit:
+  '{model}/{persona}/{descriptor}' is three non-empty segments). Plan,
+  --run, the merged/queued re-read and NEVER --admin/--auto are
+  --release-unit's. Under --run the base is re-read just before 'gh pr
+  merge' (which pins the head, not the base) and a 'base (re-read)' gate
+  is appended: a retarget onto a protected name is refused by ruling (2),
+  a failed read or any other retarget is exit 1, nothing merged. AFTER the
+  merge the base is read once more, WHATEVER the state (merged or queued):
+  a protected name, any base but the one gated, no name, or a re-read that
+  fails ("authority unconfirmed") is EXIT 7, never 0.
+  --requirements-from <path>  Required, as for --release-unit.
+  --require-head <sha>        Pin the commit (7-40 hex digits); 'pr ready'
+                              gives no verdict on any other head.
+  Every flag 'pr merge' does not read -- 'pr ready''s own (--gates,
+  --reviewers, --approvers, --round-policy, --token-env, --exclude-run,
+  --exclude-check, --gh-repo, --explain) and other subcommands' (--base,
+  --target, ...) -- is refused (exit 2) before any gh call.
+  nen/workflow.json must be committed at the base commit AND on the default
+  branch for --delivery to work: an absent file reads as unknown (exit 1).
+  A ruleset matching every branch (e.g. ~ALL) refuses every base until it
+  excludes the integration branches. The auto-merge chain check covers ONE
+  hop: each auto-merge target is judged like a base, its own chain is not;
+  a chain list that fills gh's --limit 1000, or an entry naming no base, is
+  unknown (exit 1). A remote 'branch' block is held to nen/workflow.json's
+  own loader rules (a branch.template must carry {descriptor}).
+  Exit codes: 0 merged, or a passing plan without --run; 1 a gate did not
+  pass (an unknown base included); 2 usage, OR refused by ruling -- told
+  apart by 'refused by ruling' on stdout and refused: true in --json, where
+  a usage error writes only stderr; 5 gh refused the merge; 6 gh could not
+  be run; 7 MERGED WITHOUT AUTHORITY -- tell the maintainer.
+  --json: '{ contract: "nen.pr.merge-delivery/v0.1", target, pr, base,
+  baseOk, refused, defaultBranch, configuredBase, baseCommitBase,
+  defaultBranchBase, baseProtected, baseRulesets (distinct ruleset_id),
+  ready, pinOk, bodyOk, wholeOk, ok, ran, spawnFailed, judgedHead,
+  requiredHead, state, rereadBase, mergedBase, outsideAuthority, mergeArgv,
+  gates: [{ name, ok, lines }] }'.`;
 
 /**
  * `--<flag> <ISO-8601>`, refused by name AND VALUE when it does not parse
@@ -587,7 +649,7 @@ export const prCommand: Command = {
       "title-file",
       "head",
     ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft", "release-unit", "run"],
+    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft", "release-unit", "delivery", "run"],
     // `ready`'s repeatable `--exclude-check` (zheref/nen#243) -- declared as a
     // LIST so a second occurrence is kept, not refused as a repeated value.
     lists: [...PR_READY_FLAGS.lists],
@@ -614,6 +676,9 @@ export const prCommand: Command = {
     // told rather than silently ignored.
     if (subcommand !== "merge" && context.args.booleans.has("release-unit")) {
       throw new VerbUsageError("--release-unit is only read by 'pr merge'.");
+    }
+    if (subcommand !== "merge" && context.args.booleans.has("delivery")) {
+      throw new VerbUsageError("--delivery is only read by 'pr merge'.");
     }
     if (subcommand !== "merge" && context.args.booleans.has("run")) {
       throw new VerbUsageError("--run is only read by 'pr merge'.");
@@ -1455,33 +1520,33 @@ function open(context: CommandContext): number {
  * whole composition; this adapter only reads the CLI's own flags and renders.
  */
 async function doMerge(context: CommandContext): Promise<number> {
-  if (!context.args.booleans.has("release-unit")) {
+  refuseFlagsMergeDoesNotRead(context);
+  const releaseUnit = context.args.booleans.has("release-unit");
+  const delivery = context.args.booleans.has("delivery");
+  if (releaseUnit && delivery) {
+    throw new VerbUsageError("--release-unit and --delivery are mutually exclusive -- a pull request is merged as one or the other, never both.");
+  }
+  if (!releaseUnit && !delivery) {
     throw new VerbUsageError(
-      "nen pr merge only merges a release unit -- pass --release-unit to say so explicitly. There is no general-purpose merge here.",
+      "nen pr merge only merges a release unit (--release-unit) or a run's own delivery pull request into a non-main base (--delivery) -- pass one to say so explicitly. There is no general-purpose merge here.",
     );
   }
   const typedRef = context.args.positionals[2];
+  const form = releaseUnit ? "--release-unit" : "--delivery";
   if (typedRef === undefined) {
     throw new VerbUsageError(
-      "'pr merge' requires a pull-request reference. Try 'pr merge <n> --release-unit ...', 'pr merge owner/name#<n> --release-unit ...' or 'pr merge <CODE>#<n> --release-unit ...'.",
+      `'pr merge' requires a pull-request reference. Try 'pr merge <n> ${form} ...', 'pr merge owner/name#<n> ${form} ...' or 'pr merge <CODE>#<n> ${form} ...'.`,
     );
   }
-  const requirementsPath = requireValue(
-    context.args,
-    "requirements-from",
-    "The same '{ name, pattern }' JSON array 'pr body-check' takes, checked against the pull request's LIVE body.",
-  );
+  if (delivery) return doMergeDelivery(context, typedRef);
+  if (context.args.values["require-head"] !== undefined) {
+    throw new VerbUsageError("--require-head is read by 'pr merge --delivery', not by --release-unit, which pins the head 'pr ready' judges.");
+  }
+  const requirementsPath = requireRequirementsPath(context);
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It is the checkout whose nen/workflow.json declares release.unitPaths."),
   });
-  const rawRequirements = readJsonFile<unknown>(requirementsPath, root);
-  try {
-    validateRequirements(rawRequirements);
-  } catch (error) {
-    if (error instanceof BodyCheckError) throw new VerbUsageError(`'${requirementsPath}': ${error.message}`);
-    throw error;
-  }
-  const requirements: readonly BodyRequirement[] = rawRequirements;
+  const requirements = readRequirements(requirementsPath, root);
 
   let outcome;
   try {
@@ -1499,16 +1564,94 @@ async function doMerge(context: CommandContext): Promise<number> {
   }
 
   emit(context.io, context.json, outcome.report, outcome.lines);
-  if (!outcome.report.ok) {
-    // gh itself refused the merge (branch protection, a required review, ...)
-    // -- distinct from an ordinary gate failure (exit 1) and from gh never
-    // having been RUNNABLE at all (F8(b)) -- so a caller's script can tell
-    // "the checks did not pass" from "the checks passed and gh said no" from
-    // "gh could not even be started" without parsing the message.
-    if (outcome.report.ran === false && outcome.report.mergeArgv !== null) {
-      return outcome.report.spawnFailed ? EXIT_GH_NOT_RUNNABLE : EXIT_GH_REFUSED;
-    }
-    return 1;
+  return mergeExit(outcome.report);
+}
+
+/**
+ * The exit-code mapping both merge forms share. gh itself refusing the merge
+ * (branch protection, a required review, ...) is distinct from an ordinary
+ * gate failure (exit 1) and from gh never having been RUNNABLE at all
+ * (F8(b)), so a caller's script can tell "the checks did not pass" from "the
+ * checks passed and gh said no" from "gh could not even be started" without
+ * parsing the message.
+ */
+export function mergeExit(report: { readonly ok: boolean; readonly ran: boolean; readonly spawnFailed: boolean; readonly mergeArgv: readonly string[] | null }): number {
+  if (report.ok) return 0;
+  if (report.ran === false && report.mergeArgv !== null) return report.spawnFailed ? EXIT_GH_NOT_RUNNABLE : EXIT_GH_REFUSED;
+  return 1;
+}
+
+/**
+ * `nen pr merge <ref> --delivery` (zheref/nen#286, narrowed by the
+ * maintainer's ruling of 2026-10-03 to non-main bases). See
+ * ./mergedelivery.ts's header; this adapter only reads flags and renders.
+ */
+async function doMergeDelivery(context: CommandContext, typedRef: string): Promise<number> {
+  const requirementsPath = requireRequirementsPath(context);
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It is the checkout whose origin names the repository and whose nen/workflow.json declares branch.base."),
+  });
+  const requirements = readRequirements(requirementsPath, root);
+  let outcome;
+  try {
+    outcome = await mergeDelivery({
+      typedRef,
+      repoFlag: context.repoFlag,
+      requirements,
+      requireHead: context.args.values["require-head"] ?? null,
+      run: context.args.booleans.has("run"),
+      seams: context.seams,
+      root,
+    });
+  } catch (error) {
+    if (error instanceof MergeUnitUsageError) throw new VerbUsageError(error.message);
+    throw error;
   }
-  return 0;
+  emit(context.io, context.json, outcome.report, outcome.lines);
+  return deliveryExit(outcome.report, mergeExit);
+}
+
+/** `--requirements-from`, required by BOTH merge forms (zheref/nen#286 AC1 for --delivery). */
+function requireRequirementsPath(context: CommandContext): string {
+  return requireValue(
+    context.args,
+    "requirements-from",
+    "The same '{ name, pattern }' JSON array 'pr body-check' takes, checked against the pull request's LIVE body.",
+  );
+}
+
+/** Reads and validates `--requirements-from` before ANY gh call -- one reader for both merge forms. */
+function readRequirements(requirementsPath: string, root: string): readonly BodyRequirement[] {
+  const rawRequirements = readJsonFile<unknown>(requirementsPath, root);
+  try {
+    validateRequirements(rawRequirements);
+  } catch (error) {
+    if (error instanceof BodyCheckError) throw new VerbUsageError(`'${requirementsPath}': ${error.message}`);
+    throw error;
+  }
+  return rawRequirements;
+}
+
+/** Every flag 'pr merge' reads, globals included (round 2, N7). */
+const MERGE_VALUES: ReadonlySet<string> = new Set(["requirements-from", "require-head", "repo"]);
+const MERGE_BOOLEANS: ReadonlySet<string> = new Set(["release-unit", "delivery", "run", "json", "help"]);
+
+/**
+ * The 'pr' family has ONE flag table, so every family flag parses on 'merge'.
+ * 'merge' reads only the sets above; any other flag -- 'pr ready''s own
+ * (round 1, N11) or another subcommand's, such as --base or --target (round
+ * 2, N7) -- is refused here, before any gh call, rather than silently
+ * ignored, as mark-ready does.
+ */
+function refuseFlagsMergeDoesNotRead(context: CommandContext): void {
+  const given = [
+    ...Object.keys(context.args.values).filter((flag): boolean => context.args.values[flag] !== undefined && !MERGE_VALUES.has(flag)),
+    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
+    ...[...context.args.booleans].filter((flag): boolean => !MERGE_BOOLEANS.has(flag)),
+  ];
+  const first = given[0];
+  if (first === undefined) return;
+  const reads = "'pr merge' reads its ref, --release-unit or --delivery, --requirements-from, --repo, --require-head (--delivery only), --run and --json.";
+  if (PR_READY_ONLY.has(first)) throw new VerbUsageError(`--${first} is only read by 'pr ready'; ${reads}`);
+  throw new VerbUsageError(`--${first} is not read by 'pr merge'; ${reads}`);
 }
