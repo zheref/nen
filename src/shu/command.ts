@@ -489,7 +489,13 @@ flags:
                    of stdout or stderr under '--heartbeat 0' without --stream
                    (the captured path, which buffers) cannot be read and is
                    reported as not started (exit 5); every other form reads it
-                   through and reports the tool's own code. Beyond that they
+                   through and reports the tool's own code. Under the default,
+                   a step holds at most those same 64 MB: past them nen prints
+                   'nen shu: step <i> of <n> output passed 64 MB; relaying the
+                   rest live', relays everything held so far and the rest of
+                   the step as --stream does -- nothing lost, same exit code,
+                   same report. (A 'stdoutTo' step's stdout is kept whole for
+                   its file and is not counted.) Beyond that they
                    change when, and in what interleaving, output reaches you,
                    and add heartbeat lines to stderr. 'warmup' delegates its
                    build and test with the default heartbeat and takes neither
@@ -1084,14 +1090,27 @@ export function readLiveness(context: CommandContext): {
     );
   }
   const seconds = Number(raw);
+  const ms = Math.round(seconds * 1000);
+  // A DIGIT RUN CAN STILL BE NO NUMBER (Copilot B): hundreds of 9s parse to
+  // Infinity, and a large finite one overflows the timer. `setInterval` takes
+  // at most 2^31-1 ms and quietly clamps anything above it to 1 ms, which would
+  // turn a heartbeat meant to be rare into a busy loop.
+  if (!Number.isFinite(seconds) || !Number.isFinite(ms) || ms > MAX_HEARTBEAT_MS) {
+    throw new VerbUsageError(
+      `--heartbeat ${raw.length > 32 ? `${raw.slice(0, 32)}... (${raw.length} characters)` : raw} is past the longest interval a timer can hold, ${MAX_HEARTBEAT_MS / 1000} seconds (2^31-1 ms). Name fewer seconds, or 0 for none.`,
+    );
+  }
   if (seconds === 0) return { stream, heartbeatMs: null };
   if (seconds < 0.1) {
     throw new VerbUsageError(
       `--heartbeat ${raw} is under a tenth of a second. A heartbeat that fine is a busy loop, not a signal; name 0.1 or more, or 0 for none.`,
     );
   }
-  return { stream, heartbeatMs: Math.round(seconds * 1000) };
+  return { stream, heartbeatMs: ms };
 }
+
+/** setInterval's own ceiling, 2^31-1 ms: past it node clamps the period to 1 ms. */
+export const MAX_HEARTBEAT_MS = 2_147_483_647;
 
 function declaresFlag(spec: FlagSpec, flag: string): boolean {
   return (spec.values ?? []).includes(flag) || (spec.booleans ?? []).includes(flag);

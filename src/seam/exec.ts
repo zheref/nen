@@ -384,6 +384,16 @@ export function outputLines(text: string): string[] {
     .filter((line): boolean => line !== "");
 }
 
+/**
+ * How much output the captured runner buffers before it gives up (ENOBUFS).
+ *
+ * ONE CONSTANT, READ BY BOTH RUNNERS' CALLERS: ../shu/run.ts holds a watched
+ * step's output up to this same limit before relaying the rest live
+ * (zheref/nen#244, Copilot A), so "how much nen keeps in memory for one step"
+ * is one number rather than two that drift.
+ */
+export const CAPTURE_MAX_BUFFER = 64 * 1024 * 1024;
+
 export const spawnRunner: Runner = (command, args, options = {}): CommandResult => {
   if (options.bytes === true) return spawnBytes(command, args, options);
   const result = spawnSync(command, [...args], {
@@ -396,7 +406,7 @@ export const spawnRunner: Runner = (command, args, options = {}): CommandResult 
     // Generous, because a backlog sweep's response can be large and a truncated
     // JSON body would be parsed as a syntax error rather than reported as a
     // truncation.
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: CAPTURE_MAX_BUFFER,
   });
   if (result.error !== undefined) {
     return {
@@ -423,7 +433,7 @@ function spawnBytes(command: string, args: readonly string[], options: RunOption
       ? {}
       : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
     ...(options.stdin === undefined ? {} : { input: options.stdin }),
-    maxBuffer: 64 * 1024 * 1024,
+    maxBuffer: CAPTURE_MAX_BUFFER,
   });
   if (result.error !== undefined) {
     return { code: -1, stdout: "", stderr: result.error.message, spawnFailed: true };

@@ -45,6 +45,7 @@ import { dirname, relative, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { containedPath, realContainment } from "../repo/contain.js";
 import {
+  CAPTURE_MAX_BUFFER,
   DEFAULT_POLL_MS,
   PORT_PROBE_TIMEOUT_MS,
   ToolError,
@@ -939,6 +940,12 @@ export interface RunOptions {
    * heartbeat at all -- `--heartbeat 0`.
    */
   readonly heartbeatMs?: number | null;
+  /**
+   * How much relay-bound output one step may hold before the rest is relayed
+   * live. Absent: CAPTURE_MAX_BUFFER, the captured runner's own limit. A seam
+   * for tests (zheref/nen#244, Copilot A) -- no flag sets it.
+   */
+  readonly holdLimitBytes?: number;
 }
 
 /**
@@ -1246,6 +1253,7 @@ export async function runVerb(
   return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink, {
     stream: options.stream === true,
     heartbeatMs: options.heartbeatMs === undefined ? DEFAULT_HEARTBEAT_MS : options.heartbeatMs,
+    holdLimitBytes: options.holdLimitBytes ?? CAPTURE_MAX_BUFFER,
   });
 }
 
@@ -1254,6 +1262,8 @@ interface Liveness {
   readonly stream: boolean;
   /** Null: no heartbeat. */
   readonly heartbeatMs: number | null;
+  /** Held relay-bound output past which the step is relayed live. */
+  readonly holdLimitBytes: number;
 }
 
 /**
@@ -1554,6 +1564,32 @@ async function runWatchedStep(
   // the captured path's own `relay` -- stdout first, then stderr, normalised
   // over the joined text -- so the default run prints what it always printed.
   const heldErr: string[] = [];
+  // HELD OUTPUT IS BOUNDED (zheref/nen#244, Copilot A). The captured runner
+  // this path replaced refused past CAPTURE_MAX_BUFFER; holding without a
+  // bound would trade that refusal for an unbounded heap. So once the output
+  // held for relaying passes the limit, everything held so far is handed to
+  // the line relay -- stdout first, then stderr, the order the default prints
+  // them in -- and the rest of the step is relayed live, as `--stream` does.
+  // Nothing is dropped, and the exit code and report are untouched. A
+  // `stdoutTo` step's stdout is held for its file, not for the relay, and is
+  // not counted: a file must get every byte.
+  let relayingLive = live;
+  let overflowed = false;
+  let heldBytes = 0;
+  const goLive = (): void => {
+    relayingLive = true;
+    overflowed = true;
+    context.io.err(
+      `nen shu: ${label} output passed ${sizeOf(liveness.holdLimitBytes)}; relaying the rest live`,
+    );
+    if (step.stdoutTo === null) {
+      relayer.chunk({ stream: "stdout", text: held.join(""), atMs: 0 });
+      held.length = 0;
+    }
+    relayer.chunk({ stream: "stderr", text: heldErr.join(""), atMs: 0 });
+    heldErr.length = 0;
+  };
+  const pollMs = pollEvery(guard, liveness.heartbeatMs);
 
   const heartbeatMs = liveness.heartbeatMs;
   let nextBeatMs = heartbeatMs ?? Number.POSITIVE_INFINITY;
@@ -1604,23 +1640,30 @@ async function runWatchedStep(
     cwd,
     ...env,
     onOutput: (chunk): void => {
-      if (chunk.stream === "stdout" && (step.stdoutTo !== null || !live)) {
+      if (chunk.stream === "stdout" && step.stdoutTo !== null) {
         held.push(chunk.text);
         return;
       }
-      if (!live) {
-        heldErr.push(chunk.text);
+      if (!relayingLive) {
+        (chunk.stream === "stdout" ? held : heldErr).push(chunk.text);
+        heldBytes += Buffer.byteLength(chunk.text, "utf8");
+        if (heldBytes > liveness.holdLimitBytes) goLive();
         return;
       }
       relayer.chunk(chunk);
     },
-    onWindow,
-    pollMs: pollEvery(guard, heartbeatMs),
+    // NO WATCHER WHEN THERE IS NOTHING TO WATCH FOR (Copilot C). With no guard
+    // and no heartbeat -- `--stream --heartbeat 0` -- the seam is handed no
+    // `onWindow` and so creates no interval at all, rather than one at an
+    // infinite period that node clamps to a 1 ms busy poll.
+    ...(pollMs === null ? {} : { onWindow, pollMs }),
   });
   const seamEndedAt = context.seams.now().getTime();
   relayer.flush();
   const stdout = normalizeEol(held.join(""));
-  if (!live) relay(context, step.stdoutTo === null ? stdout : "", normalizeEol(heldErr.join("")));
+  if (!live && !overflowed) {
+    relay(context, step.stdoutTo === null ? stdout : "", normalizeEol(heldErr.join("")));
+  }
   // WRITTEN WHATEVER HAPPENED NEXT, exactly as the captured path writes it: a
   // step that was abandoned mid-flight still produced the bytes nen saw, and a
   // step that never STARTED produced none to write.
@@ -1657,7 +1700,8 @@ async function runWatchedStep(
 }
 
 /**
- * The watcher's interval: the guard's own, the heartbeat's, or the finer.
+ * The watcher's interval: the guard's own, the heartbeat's, or the finer --
+ * and NULL when there is neither, so no timer is made (Copilot C).
  *
  * THE HEARTBEAT IS POLLED AT A QUARTER OF ITS INTERVAL, not at the interval
  * itself. A timer can fire a millisecond early, and a tick at 29 999 ms against
@@ -1666,12 +1710,19 @@ async function runWatchedStep(
  * interval rather than a whole one. Clamped like the guard's, so a tiny
  * `--heartbeat` cannot become a busy loop.
  */
-function pollEvery(guard: StallGuard | null, heartbeatMs: number | null): number {
+export function pollEvery(guard: StallGuard | null, heartbeatMs: number | null): number | null {
+  if (guard === null && heartbeatMs === null) return null;
   const beat =
     heartbeatMs === null
       ? Number.POSITIVE_INFINITY
       : Math.max(MIN_POLL_MS, Math.min(DEFAULT_POLL_MS, Math.floor(heartbeatMs / 4)));
   return Math.min(guard === null ? Number.POSITIVE_INFINITY : pollFor(guard), beat);
+}
+
+/** A byte count as the overflow notice says it: whole MB at or past one, bytes below. */
+function sizeOf(bytes: number): string {
+  const mb = 1024 * 1024;
+  return bytes >= mb ? `${Math.floor(bytes / mb)} MB` : `${bytes} bytes`;
 }
 
 /** One ORDINARY step: captured, as every step in this family always was. */

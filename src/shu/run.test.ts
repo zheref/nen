@@ -23,11 +23,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
+import { parseArgs } from "../cli/args.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { PORT_PROBE_TIMEOUT_MS, type PortVerdict } from "../seam/exec.js";
 import { SHU_REPO } from "../schema/fixtures/paths.js";
 import { shuCommand } from "./command.js";
-import { assertPreconditions, DEFAULT_HEARTBEAT_MS, heartbeatLine, INTERACTIVE_VERBS } from "./run.js";
+import { assertPreconditions, DEFAULT_HEARTBEAT_MS, heartbeatLine, INTERACTIVE_VERBS, pollEvery, runVerb } from "./run.js";
 import {
   LAUNCHING_VERBS,
   renderArgv,
@@ -4354,5 +4355,89 @@ describe("liveness: --stream and the default heartbeat (zheref/nen#244)", () => 
     // child's -- and the guard still judged 190s of quiet past its 60s budget.
     expect(stallOf(result)?.strikes).toBe(1);
     expect(beats(result.err)).toEqual(["nen shu: step 1 of 1 (placeholder-tool) still running (3m 10s)"]);
+  });
+});
+
+// ── Copilot round 1 on zheref/nen#381 ───────────────────────────────────────
+
+describe("liveness: Copilot round 1 on zheref/nen#381", () => {
+  it("A: past the hold limit, relays everything held and the rest live -- nothing lost, same report", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-shu-hold-"));
+    try {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project: oneLane() }));
+      const script = [
+        timeline([
+          { atMs: 1, stream: "stdout", text: "aaaa\nbb" },
+          { atMs: 2, stream: "stderr", text: "e1\n" },
+          { atMs: 3, stream: "stdout", text: "b\nccc\n" },
+          { atMs: 4, stream: "stderr", text: "e2\n" },
+        ]),
+      ];
+      const run = async (holdLimitBytes?: number): Promise<{ code: number; out: string[]; err: string[] }> => {
+        const out: string[] = [];
+        const err: string[] = [];
+        const context = {
+          args: parseArgs([], {}),
+          repoFlag: dir,
+          json: true,
+          io: { out: (line: string): void => void out.push(line), err: (line: string): void => void err.push(line) },
+          seams: new ScriptedSeams(script, { platform: "linux", env: {} }),
+        };
+        const code = await runVerb(context, dir, {
+          verb: "build",
+          lane: null,
+          dryRun: false,
+          target: null,
+          run: false,
+          ...(holdLimitBytes === undefined ? {} : { holdLimitBytes }),
+        });
+        return { code, out, err };
+      };
+      const bounded = await run(10);
+      const unbounded = await run();
+      const child = (lines: readonly string[]): readonly string[] =>
+        lines.filter((line): boolean => ["aaaa", "bbb", "ccc", "e1", "e2"].includes(line) || line.includes("relaying the rest live"));
+      expect(child(bounded.err)).toEqual([
+        "nen shu: step 1 of 1 output passed 10 bytes; relaying the rest live",
+        "aaaa",
+        "bbb",
+        "ccc",
+        "e1",
+        "e2",
+      ]);
+      // Under the limit nothing changes: held, then stdout before stderr, no notice.
+      expect(child(unbounded.err)).toEqual(["aaaa", "bbb", "ccc", "e1", "e2"]);
+      expect(bounded.code).toBe(unbounded.code);
+      const report = (lines: readonly string[]): unknown =>
+        JSON.parse(lines.join("\n"), (key, value: unknown): unknown => (key === "cwd" ? "<repo>" : value));
+      expect(report(bounded.out)).toEqual(report(unbounded.out));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([["9".repeat(400)], ["3000000"], ["2147484"]])(
+    "B: refuses --heartbeat %s, past the longest interval a timer can hold, at exit 2 naming it",
+    async (value) => {
+      const result = await withDeclaration(oneLane(), ["build", "--heartbeat", value], { script: [] });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("past the longest interval a timer can hold");
+      expect(result.err.join("\n")).toContain(value.slice(0, 32));
+      expect(result.seams.calls).toEqual([]);
+    },
+  );
+
+  it("B: still accepts the longest interval a timer can hold", async () => {
+    const result = await withDeclaration(oneLane(), ["build", "--json", "--heartbeat", "2147483"], {
+      script: [ok("placeholder-tool go")],
+    });
+    expect(result.code).toBe(0);
+  });
+
+  it("C: no guard and no heartbeat means no watcher interval at all", () => {
+    expect(pollEvery(null, null)).toBeNull();
+    expect(pollEvery(null, 30_000)).toBe(5_000);
+    expect(pollEvery({ ...STALL_GUARD, maxStrikes: 2, raw: {} }, null)).toBe(5_000);
   });
 });

@@ -8074,7 +8074,13 @@ exit code or the report (text or `--json`) for the same run of the same step,
 with **one** exception: a step printing more than 64 MB of stdout or stderr
 under `--heartbeat 0` without `--stream` — the captured path, which buffers —
 cannot be read and is reported as not started (exit 5), while every other form
-reads it through and reports the tool's own code. A signal-killed step with no
+reads it through and reports the tool's own code. **Held output is bounded at
+that same 64 MB:** under the default, once a step's held stdout and stderr pass
+it, nen prints `nen shu: step <i> of <n> output passed 64 MB; relaying the rest
+live` on stderr, relays everything held so far (stdout, then stderr) and relays
+the rest of the step live as `--stream` does — no output lost, the same exit
+code, the same report. A `stdoutTo` step's stdout is kept whole for its file and
+is not counted. A signal-killed step with no
 `stall` guard reports exit code `1` in every form, as the captured path always
 has (a guarded step was always watched, and its flags change nothing). Beyond
 that the flags change only when, and in what interleaving, output reaches the

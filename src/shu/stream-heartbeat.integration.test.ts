@@ -14,7 +14,7 @@
 // assertions are floors ("at least two"), never exact counts: a loaded CI host
 // can be late, and a late heartbeat is still a heartbeat.
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -182,4 +182,24 @@ describe("--stream and the heartbeat, on a real child (zheref/nen#244)", () => {
       );
     expect(strip(watched)).toEqual(strip(captured));
   }, 30_000);
+
+  it("creates no interval and raises no TimeoutOverflowWarning under --stream --heartbeat 0 (Copilot C)", async () => {
+    declare("process.stdout.write('one\\n'); setTimeout(() => process.exit(0), 300);");
+    const warnings: string[] = [];
+    const onWarning = (warning: Error): void => void warnings.push(warning.name);
+    process.on("warning", onWarning);
+    const spy = vi.spyOn(globalThis, "setInterval");
+    try {
+      const run = await lint(["--stream", "--heartbeat", "0"]);
+      expect(run.code).toBe(0);
+      expect(run.out).toContain("one");
+      expect(spy).not.toHaveBeenCalled();
+      // A warning is emitted on the next tick; give it one.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(warnings).not.toContain("TimeoutOverflowWarning");
+    } finally {
+      spy.mockRestore();
+      (process as NodeJS.EventEmitter).off("warning", onWarning);
+    }
+  }, 20_000);
 });
