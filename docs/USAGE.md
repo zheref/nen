@@ -960,6 +960,26 @@ same block, each a non-negative integer, and `minRounds` no greater than
   *Unknown keys are refused*, below). A file stating neither makes no extra
   GitHub read and gets the output it got before.
 
+**The pending-request and own-request readings (from v0.20.0, [#240](https://github.com/zheref/nen/issues/240) criterion 4).**
+When **every** round still owed on the rounds-owed row is a pending review
+request — no owed reviewer lacks a round at any head, and no unmet
+`round_quorum` adds a failure — the row's reason says so:
+
+```text
+not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted) — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)
+```
+
+When the identity running the gate (the token's own login, `GET /user`) made
+each of those requests (the `actor` of the latest `review_requested` event
+for that reviewer), it adds `; own-request: every pending request was made by
+<login>, the identity running this gate`. An identity the token cannot name (an
+App installation token) or an unreadable timeline makes no own-request claim.
+**Detail text only**: the row still fails, and the verdict and the exit code
+do not move. A row owing any reviewer a missing round keeps its reason byte for
+byte. Both reads are made only while a review request is pending. This is the
+case on [zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577):
+every later "owed at the current head" there came from the agent's own request.
+
 **Every row is evaluated, not only up to the first failure (zheref/nen#248).**
 Through v0.14.0 the gate stopped at the first failing row and printed every
 later row `unevaluated`. On zheref/nen#247 that hid two real unresolved review

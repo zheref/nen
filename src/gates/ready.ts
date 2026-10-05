@@ -346,6 +346,7 @@ import {
   type ParseError,
 } from "../github/parse.js";
 import { untilText, type GateIdentities } from "../schema/gates.js";
+import { exactLoginPattern } from "../schema/pattern.js";
 
 // ── tiny jq equivalents ──────────────────────────────────────────────────────
 //
@@ -811,6 +812,55 @@ function describeOwedRound(identities: GateIdentities, owed: OwedRound): string 
     case "no-round-at-head":
       return `${owed.reviewer} (no round at head)`;
   }
+}
+
+/**
+ * The PENDING-REQUEST and OWN-REQUEST readings of the rounds-owed row
+ * (zheref/nen#240, criterion 4), appended to its reason -- detail text only:
+ * the row still fails, the verdict and the exit code are unchanged.
+ *
+ * WHY. On zheref/KroApple#577 every later "owed at the current head" was
+ * caused by the agent's own pending request, and the agent read the verdict as
+ * its cue to request again. The row named the reviewer "(review requested, not
+ * yet posted)" but never said that this was the ONLY thing wrong -- that no
+ * reviewer lacked a round at any head. So when EVERY still-owed round is a
+ * pending request (and no unmet quorum adds a failure), the row says so; and
+ * when the identity RUNNING the gate made each of those requests, it says that
+ * too, naming it. The requester is the latest `review_requested` event's
+ * `actor` for that reviewer; the running identity is the token's own login.
+ * Either unread, no own-request claim is made -- never guessed.
+ *
+ * Empty -- the reason byte-identical to before -- in every other case: a
+ * reviewer owed for a missing round, an unmet quorum, or no pending request.
+ */
+function pendingRequestReading(
+  identities: GateIdentities,
+  owed: readonly OwedRound[],
+  state: Record<string, unknown>,
+  quorum: QuorumResult | undefined,
+): string {
+  if (owed.length === 0) return "";
+  if (!owed.every((entry): boolean => entry.reason === "review-requested-not-yet-posted")) return "";
+  if (quorum !== undefined && !quorum.met) return "";
+  const pending =
+    " — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)";
+  const running = state["gate_identity"];
+  const rawEvents = state["review_request_events"];
+  if (typeof running !== "string" || running === "" || !Array.isArray(rawEvents)) return pending;
+  const requesters = owed.map((entry): string | null => {
+    const pattern = identities.reviewer(entry.reviewer)?.loginPattern ?? exactLoginPattern(entry.reviewer);
+    let actor: string | null = null;
+    for (const event of rawEvents) {
+      const reviewer = typeof event === "object" && event !== null ? (event as Record<string, unknown>)["reviewer"] : null;
+      const by = typeof event === "object" && event !== null ? (event as Record<string, unknown>)["actor"] : null;
+      if (typeof reviewer === "string" && pattern.test(reviewer)) actor = typeof by === "string" ? by : null;
+    }
+    return actor;
+  });
+  const own = requesters.every((actor): boolean => actor !== null && actor.toLowerCase() === running.toLowerCase());
+  return own
+    ? `${pending}; own-request: every pending request was made by ${running}, the identity running this gate`
+    : pending;
 }
 
 /**
@@ -1472,7 +1522,8 @@ export function evaluateReady(
         stillOwed.length === 0
           ? null
           : "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
-            stillOwed.map((entry): string => describeOwedRound(identities, entry)).join(";");
+            stillOwed.map((entry): string => describeOwedRound(identities, entry)).join(";") +
+            pendingRequestReading(identities, stillOwed, state, quorum);
       if (quorum === undefined || quorum.met) {
         const excusedClause =
           excused.length === 0

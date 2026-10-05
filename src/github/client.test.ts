@@ -376,6 +376,22 @@ describe("GitHubClient.fileAtRef -- one file at one commit (zheref/nen#249, Feit
   });
 });
 
+describe("GitHubClient.viewerLogin -- the identity running the gate (zheref/nen#240, criterion 4)", () => {
+  it("GETs /user and answers its login", async () => {
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: { login: "zheref", id: 1 } }));
+    expect(await drive(clientWith(stub).viewerLogin())).toBe("zheref");
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toMatch(/\/user$/);
+  });
+
+  it("throws on a token with no user (an App token's 403) and on an answer with no login", async () => {
+    const { fetch: forbidden } = recordingFetch(() => ({ status: 403, body: { message: "Resource not accessible by integration" } }));
+    expect(await rejection(clientWith(forbidden).viewerLogin())).toMatchObject({ status: 403 });
+    const { fetch: blank } = recordingFetch(() => ({ body: { id: 1 } }));
+    expect(String(await rejection(clientWith(blank).viewerLogin()))).toMatch(/answered no login/);
+  });
+});
+
 describe("GitHubClient.commitCheckRuns -- ONE page of a commit's check runs, raw (E7 option B)", () => {
   const payload = {
     total_count: 140,

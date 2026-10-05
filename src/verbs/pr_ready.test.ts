@@ -2252,3 +2252,82 @@ describe("prReady -- review rounds counted against round_policy (zheref/nen#240)
     expect(explained.out.join("\n")).not.toContain("review rounds");
   });
 });
+
+// ── the own-request reading, end to end (zheref/nen#240, criterion 4) ────────
+
+describe("prReady -- the rounds-owed row's own-request reading (zheref/nen#240)", () => {
+  const withPendingSasuke = (overrides: Partial<PrStateSource>): PrStateSource => {
+    const base = stubSource(overrides);
+    return {
+      ...base,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+        const snapshot = await base.pullRequestSnapshot(repo, n);
+        return { ...snapshot, reviewRequests: [{ login: "sasuke" }] };
+      },
+    };
+  };
+  const timeline = async (): Promise<unknown[]> => [
+    { event: "review_requested", actor: { login: "zheref" }, requested_reviewer: { login: "sasuke" } },
+  ];
+
+  it("names the running identity when it made the only pending request; the verdict and exit code do not move", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input(),
+      io,
+      stubDeps(withPendingSasuke({ timeline, viewerLogin: async (): Promise<string> => "zheref" })),
+    );
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    expect(report.firstFailing).toBe("rounds-owed");
+    expect(report.gateLine).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (review requested, not yet posted)" +
+        " — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)" +
+        "; own-request: every pending request was made by zheref, the identity running this gate",
+    );
+  });
+
+  it("an identity the token cannot name (an App token) gets the pending-request reading only", async () => {
+    const { io, out } = capture();
+    await prReady(
+      input(),
+      io,
+      stubDeps(
+        withPendingSasuke({
+          timeline,
+          viewerLogin: async (): Promise<string> => {
+            throw new Error("HTTP 403");
+          },
+        }),
+      ),
+    );
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.gateLine).toMatch(/pending request only: .*\(zheref\/nen#240\)$/);
+    expect(report.gateLine).not.toContain("own-request");
+  });
+
+  it("with no pending request, neither the identity nor the request timeline is read for it", async () => {
+    let viewerReads = 0;
+    let timelineReads = 0;
+    const { io } = capture();
+    await prReady(
+      input(),
+      io,
+      stubDeps(
+        stubSource({
+          viewerLogin: async (): Promise<string> => {
+            viewerReads += 1;
+            return "zheref";
+          },
+          timeline: async (): Promise<unknown[]> => {
+            timelineReads += 1;
+            return [];
+          },
+        }),
+      ),
+    );
+    expect(viewerReads).toBe(0);
+    expect(timelineReads).toBe(0);
+  });
+});

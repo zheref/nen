@@ -166,6 +166,12 @@ export interface PrStateSource {
    * exclusion and says so -- the stricter verdict, never a wider one.
    */
   fileAtRef?(repo: PrRef, path: string, ref: string): Promise<string | null>;
+  /**
+   * The login the token authenticates as -- the identity RUNNING the gate --
+   * for the own-request reading (zheref/nen#240). OPTIONAL, and any failure
+   * (an App token has no user) means "unknown": no own-request claim is made.
+   */
+  viewerLogin?(): Promise<string>;
 }
 
 export interface FetchStateOptions {
@@ -626,18 +632,25 @@ export async function requestedAt(
   return typeof created === "string" && created !== "" ? created : "";
 }
 
+/** One `review_requested` timeline event: who was asked, and who asked. */
+export interface TimelineRequest {
+  readonly reviewer: string;
+  /** The requester's login (`actor`), `null` when the event names none. */
+  readonly actor: string | null;
+}
+
 /**
- * Every `review_requested` event's requested login, in timeline order -- the
- * REQUESTED rounds `round_policy.maxRounds` caps (zheref/nen#240). A request
- * for a team (no `requested_reviewer`) names no reviewer and is skipped.
- * `null` when the timeline could not be read: an unread count is never
- * "nothing requested".
+ * Every `review_requested` event naming a reviewer, in timeline order -- the
+ * REQUESTED rounds `round_policy.maxRounds` caps, and who made each request
+ * (zheref/nen#240). A request for a team (no `requested_reviewer`) names no
+ * reviewer and is skipped. `null` when the timeline could not be read: an
+ * unread count is never "nothing requested".
  */
-export async function reviewRequestedLogins(
+export async function reviewRequestEvents(
   source: PrStateSource,
   repo: PrRef,
   prNumber: number,
-): Promise<string[] | null> {
+): Promise<TimelineRequest[] | null> {
   let events: unknown[];
   try {
     events = await source.timeline(repo, prNumber);
@@ -645,13 +658,25 @@ export async function reviewRequestedLogins(
     return null;
   }
   if (!Array.isArray(events)) return null;
-  const logins: string[] = [];
+  const requests: TimelineRequest[] = [];
   for (const event of events) {
     if (digPath(event, "event") !== "review_requested") continue;
     const login = digPath(event, "requested_reviewer", "login");
-    if (typeof login === "string" && login !== "") logins.push(login);
+    if (typeof login !== "string" || login === "") continue;
+    const actor = digPath(event, "actor", "login");
+    requests.push({ reviewer: login, actor: typeof actor === "string" && actor !== "" ? actor : null });
   }
-  return logins;
+  return requests;
+}
+
+/** The identity running the gate, or `null` when the source cannot say. */
+async function gateIdentity(source: PrStateSource): Promise<string | null> {
+  if (source.viewerLogin === undefined) return null;
+  try {
+    return await source.viewerLogin();
+  } catch {
+    return null;
+  }
 }
 
 function timestampOf(event: unknown): string {
@@ -1192,7 +1217,18 @@ export async function fetchPrState(
   // neither makes no extra call and gets the state it got before.
   const roundCapsDeclared =
     (options.identities.minRounds ?? null) !== null || (options.identities.maxRounds ?? null) !== null;
-  const requestedLogins = roundCapsDeclared ? await reviewRequestedLogins(source, repo, prNumber) : undefined;
+  // The same events carry who made each request, which the own-request
+  // reading needs only while a request is PENDING -- so a PR with none makes
+  // neither read for it (zheref/nen#240, criterion 4).
+  const pendingRequests = requests.length > 0;
+  const requestEvents =
+    roundCapsDeclared || pendingRequests ? await reviewRequestEvents(source, repo, prNumber) : undefined;
+  const requestedLogins = roundCapsDeclared
+    ? requestEvents === undefined || requestEvents === null
+      ? null
+      : requestEvents.map((event): string => event.reviewer)
+    : undefined;
+  const runningIdentity = pendingRequests ? await gateIdentity(source) : null;
   const requestWarnings =
     requestedLogins === null
       ? [
@@ -1244,6 +1280,10 @@ export async function fetchPrState(
       // zheref/nen#240: every `review_requested` login, or `null` when the
       // timeline could not be read. ABSENT when no round cap is declared.
       ...(requestedLogins === undefined ? {} : { review_requested_logins: requestedLogins }),
+      // zheref/nen#240 criterion 4: who made each review request, and who is
+      // running the gate. ABSENT unless a request is pending; `null` when it
+      // could not be read, which makes no own-request claim.
+      ...(pendingRequests ? { review_request_events: requestEvents ?? null, gate_identity: runningIdentity } : {}),
       // The CON-40 delivery evidence. EVERY absent field reads as "not a
       // delivery PR" rather than as unreadable -- isDeliveryPr() requires
       // author, base_ref and default_branch NON-EMPTY -- so a degraded read
