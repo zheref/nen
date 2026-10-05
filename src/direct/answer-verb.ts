@@ -11,8 +11,13 @@
 // last word, which is what a restarted session needs to read.
 //
 // THE ANSWER BELONGS TO A RESOLUTION THAT EXISTS: a missing record is a failure (exit 1,
-// naming the path), never a created file. A record that is not JSON, or not an object,
-// is refused the same way and never rewritten. The vocabulary of the answer is the
+// naming the path), never a created file. A record that is not JSON, not an object, not
+// a `nen.direct.resolve/v0.1` document, or one whose `effortId` is not the id asked for
+// (a copied or stale record under this name) is refused the same way and never rewritten.
+// The read, the edit and the write happen under the ledger lock (../ledger/lock.ts) and
+// the write replaces the file by rename, so two answers, or an answer racing a new
+// `resolve --record`, serialise instead of overwriting each other, and a racing reader
+// never sees a torn record (Copilot review on zheref/nen#380). The vocabulary of the answer is the
 // picker's own two outcomes; any other value is a usage error (exit 2).
 //
 // EXIT CODES (docs/USAGE.md, "Exit codes"): 0 answered, 1 a missing or unreadable
@@ -21,7 +26,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { requireRepoFlag, requireValue, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
+import { withLedgerLock } from "../ledger/lock.js";
 import { assertRecordContained, recordPath, writeRecord } from "./record.js";
+import { RESOLVE_CONTRACT } from "./resolve-verb.js";
 
 export const ANSWER_CONTRACT = "nen.direct.answer/v0.1";
 
@@ -45,20 +52,29 @@ export function runAnswer(context: CommandContext): number {
     context.io.err(`nen: no record at '${path}'. The answer belongs to a resolution that exists: run 'nen direct resolve --record ${id}' first.`);
     return 1;
   }
-  let document: unknown;
-  try {
-    document = JSON.parse(readFileSync(path, "utf8")) as unknown;
-  } catch (error) {
-    context.io.err(`nen: '${path}' is not readable JSON (${error instanceof Error ? error.message : String(error)}); it is not rewritten.`);
-    return 1;
-  }
-  if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    context.io.err(`nen: '${path}' is not a JSON object; it is not rewritten.`);
-    return 1;
-  }
-
   const decision = { answer, answeredAt: context.seams.now().toISOString() };
-  writeRecord(root, path, { ...(document as Record<string, unknown>), decision });
+  const refused = withLedgerLock(path, (): string | null => {
+    let document: unknown;
+    try {
+      document = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    } catch (error) {
+      return `is not readable JSON (${error instanceof Error ? error.message : String(error)})`;
+    }
+    if (typeof document !== "object" || document === null || Array.isArray(document)) return "is not a JSON object";
+    const record = document as Record<string, unknown>;
+    if (record["contract"] !== RESOLVE_CONTRACT) {
+      return `is not a ${RESOLVE_CONTRACT} record (contract: ${JSON.stringify(record["contract"] ?? null)})`;
+    }
+    if (record["effortId"] !== id) {
+      return `records the effort ${JSON.stringify(record["effortId"] ?? null)}, not '${id}'`;
+    }
+    writeRecord(root, path, { ...record, decision });
+    return null;
+  }, { warn: context.io.err });
+  if (refused !== null) {
+    context.io.err(`nen: '${path}' ${refused}; it is not rewritten. The answer belongs to the resolution 'nen direct resolve --record ${id}' filed.`);
+    return 1;
+  }
 
   if (context.json) {
     context.io.out(JSON.stringify({ contract: ANSWER_CONTRACT, record: path, decision }, null, 2));

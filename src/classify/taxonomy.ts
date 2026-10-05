@@ -235,9 +235,13 @@ function parseAxis(path: string, name: AxisName, value: unknown): Axis {
       key,
       title,
       description,
-      code: optionalBoolean(path, `${keyPointer}.code`, keyRecord["code"], true),
-      weight: parseWeight(path, `${keyPointer}.weight`, keyRecord["weight"]),
-      phases: parsePhases(path, `${keyPointer}.phases`, keyRecord["phases"]),
+      // Each optional fact belongs to ONE axis and is read there only: a `code` on a
+      // job, or a `weight`/`phases` on a language, is an unrelated field this parser
+      // ignored before these facts existed and ignores still (Copilot review on
+      // zheref/nen#380) -- so a job is always code, a language never weighs.
+      code: name === "lang" ? optionalBoolean(path, `${keyPointer}.code`, keyRecord["code"], true) : true,
+      weight: name === "job" ? parseWeight(path, `${keyPointer}.weight`, keyRecord["weight"]) : null,
+      phases: name === "job" ? parsePhases(path, `${keyPointer}.phases`, keyRecord["phases"]) : null,
     };
   });
 

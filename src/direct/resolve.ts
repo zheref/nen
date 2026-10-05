@@ -320,7 +320,11 @@ export function collectPairs(
       fallbacks.push(`fallback: ${job} has no ${domain} phase; routed on ${other}`);
     }
     for (const lang of langs) {
-      const specific = own(entry.cells, lang);
+      // A non-code language (the taxonomy's `code: false`) always reads the shared
+      // cell, as the registry's contract states: a language-specific cell the file
+      // happens to carry for it is not consulted (Copilot review on zheref/nen#380).
+      const isCode = taxonomy.axes.lang.keys.find((entry): boolean => entry.key === lang)?.code !== false;
+      const specific = isCode ? own(entry.cells, lang) : undefined;
       const cell = specific ?? own(entry.cells, SHARED_CELL);
       if (cell === undefined) {
         throw new DirectError(`${registry.path}: at routing.${job}.${used}.cells, there is no shared cell.`);

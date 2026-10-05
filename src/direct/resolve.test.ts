@@ -326,6 +326,19 @@ describe("collectPairs -- one cell per (job, language)", () => {
     ]);
   });
 
+  it("never reads a language-specific cell for a non-code language: the shared cell, even when the file carries one", () => {
+    const c = context(
+      (v): void => {
+        setCell(v, "plain", "dev", "beta", side("A_EXEC", "s2"));
+      },
+      (v): void => {
+        v["axes"]["lang"]["keys"][1]["code"] = false;
+      },
+    );
+    const { pairs } = collectPairs(c.registry, c.taxonomy, inputs({ langs: ["beta"] }), "dev");
+    expect(pairs.map((pair): [string, string, string] => [pair.lang, pair.cell, pair.winner.alias])).toEqual([["beta", "*", "A_TOP"]]);
+  });
+
   it("reads the shared cell for a prose language in the real registry", () => {
     const registry = loadDirectRegistry("/", REAL_REGISTRY);
     const taxonomy = loadClassifyTaxonomy("/", REAL_TAXONOMY);

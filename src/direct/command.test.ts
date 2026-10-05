@@ -540,6 +540,33 @@ describe("nen direct answer", () => {
     }
   });
 
+  it("exits 1 for a record that is not a resolve document, or one filed for another effort, and does not rewrite it", async () => {
+    const repo = consumerRepo();
+    const filed = await recorded(repo, "NN-IS-#12");
+    const copied = join(repo, ".nen", "direct", "copied.json");
+    writeFileSync(copied, readFileSync(filed));
+    writeFileSync(join(repo, ".nen", "direct", "empty.json"), "{}\n");
+    for (const [id, why] of [
+      ["copied", /records the effort "NN-IS-#12", not 'copied'/],
+      ["empty", /is not a nen\.direct\.resolve\/v0\.1 record \(contract: null\)/],
+    ] as const) {
+      const file = join(repo, ".nen", "direct", `${id}.json`);
+      const before = readFileSync(file, "utf8");
+      const result = await answer(repo, "--record", id, "--answer", "stop");
+      expect(result.code, id).toBe(1);
+      expect(result.err.join("\n"), id).toMatch(why);
+      expect(readFileSync(file, "utf8"), id).toBe(before);
+    }
+  });
+
+  it("writes under the ledger lock and by rename: no lock or temp file is left beside the record", async () => {
+    const repo = consumerRepo();
+    const file = await recorded(repo, "an-effort");
+    expect((await answer(repo, "--record", "an-effort", "--answer", "continue")).code).toBe(0);
+    expect(readdirSync(join(repo, ".nen", "direct"))).toEqual([`${encodeURIComponent("an-effort")}.json`]);
+    expect((JSON.parse(readFileSync(file, "utf8")) as Json)["decision"]["answer"]).toBe("continue");
+  });
+
   it("exits 2 for an answer that is not continue or stop, naming the valid ones", async () => {
     const repo = consumerRepo();
     await recorded(repo, "an-effort");

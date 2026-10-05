@@ -252,6 +252,17 @@ describe("parseClassifyTaxonomy -- the optional facts nen direct reads", () => {
     }
   });
 
+  it("reads each optional fact on its own axis only: a job's code and a language's weight or phases are ignored, as before", () => {
+    const value = readJson(MINI);
+    value["axes"]["job"]["keys"][0]["code"] = false;
+    value["axes"]["lang"]["keys"][0]["weight"] = 9;
+    value["axes"]["lang"]["keys"][0]["phases"] = "not even a record";
+    const taxonomy = parseClassifyTaxonomy("/x/tax.json", value);
+    expect(taxonomy.axes.job.keys[0]?.code).toBe(true);
+    expect(taxonomy.axes.lang.keys[0]?.weight).toBeNull();
+    expect(taxonomy.axes.lang.keys[0]?.phases).toBeNull();
+  });
+
   it("refuses a weight outside 1..4 or not whole", () => {
     for (const weight of [0, 5, 2.5, "3"]) {
       const error = refusal((v): void => {

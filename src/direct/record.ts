@@ -24,9 +24,10 @@
 // The encoding makes the last check unreachable today; it stays because it is the
 // property the refusal exists for, not the encoding's side effect.
 
-import { lstatSync, mkdirSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
+import { writeLedgerAtomically } from "../ledger/lock.js";
 import { realContainment } from "../repo/contain.js";
 import { encodeEffortId } from "../usage/ledger.js";
 
@@ -77,11 +78,18 @@ export function assertRecordContained(root: string, path: string): void {
   if (stats !== undefined && stats.isSymbolicLink()) refuse("it is a symbolic link");
 }
 
-/** Write the document at `path` (under `root`), creating its directories, after the containment check. */
+/**
+ * Write the document at `path` (under `root`), creating its directories, after the
+ * containment check -- THROUGH A TEMP FILE AND A RENAME (../ledger/lock.ts's
+ * `writeLedgerAtomically`, the phase and usage ledgers' writer), so a reader racing
+ * the write sees the old record or the new one, never a torn one (Copilot review on
+ * zheref/nen#380). The read-modify-write that `answer` performs takes the ledger lock
+ * around this call; a fresh `resolve --record` write needs only the atomic replace.
+ */
 export function writeRecord(root: string, path: string, document: unknown): void {
   assertRecordContained(root, path);
   mkdirSync(dirname(path), { recursive: true });
   // mkdir may have created a directory a racing link redirected; ask again before the bytes go.
   assertRecordContained(root, path);
-  writeFileSync(path, `${JSON.stringify(document, null, 2)}\n`);
+  writeLedgerAtomically(path, document);
 }
