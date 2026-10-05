@@ -30,7 +30,7 @@ const NOW = new Date("2026-09-09T12:34:56.000Z");
 
 const COVERAGE_REPO = join(process.cwd(), "src", "schema", "fixtures", "shu-coverage-repo");
 
-/** The four reads this verb makes, all answered. */
+/** The reads this verb makes, all answered: the four of the branch, then the context's (zheref/nen#258). */
 function script(options: { base?: string; branch?: string | null; log?: string; diff?: string } = {}): ScriptedCall[] {
   const base = options.base ?? "main";
   const branch = options.branch === undefined ? "feat/report" : options.branch;
@@ -40,8 +40,11 @@ function script(options: { base?: string; branch?: string | null; log?: string; 
       match: "git symbolic-ref --short HEAD",
       result: branch === null ? { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref\n" } : { code: 0, stdout: `${branch}\n` },
     },
+    { match: "git remote get-url origin", result: { code: 0, stdout: "git@github.com:zheref/nen.git\n" } },
     { match: `git log ${base}..HEAD --format=${LOG_FORMAT}`, result: { code: 0, stdout: options.log ?? "" } },
     { match: `git diff --name-status ${base}...HEAD`, result: { code: 0, stdout: options.diff ?? "" } },
+    { match: "git rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel", result: { code: 0, stdout: "/w/nen/.git\n/w/nen/.git\n/w/nen\n" } },
+    { match: `git rev-parse --verify --quiet refs/remotes/origin/${branch ?? ""}`, result: { code: 1, stdout: "" } },
   ];
 }
 
@@ -109,6 +112,16 @@ describe("nen report data", () => {
       // prevent.
       "usage",
       "objects",
+      // THE DERIVED CONTEXT (zheref/nen#258), appended after `objects` for the
+      // same reason `objects` was appended after `usage`.
+      "worktree",
+      "effortStage",
+      "gate",
+      "stageClass",
+      "turnNumber",
+      "generatedAtLocal",
+      "generatedDateLocal",
+      "timeZone",
     ]);
     expect(document["contract"]).toBe("nen.report.data/v0.1");
     expect(document["branch"]).toBe("feat/report");
@@ -116,13 +129,26 @@ describe("nen report data", () => {
     expect(document["generatedAt"]).toBe("2026-09-09T12:34:56.000Z");
   });
 
-  it("carries the repository's NAME, never its absolute path", async () => {
+  it("carries the project's owner/name from origin, never the directory's name or its path (zheref/nen#258)", async () => {
     const captured = await capture(
       ["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--json"],
       script(),
     );
-    expect(documentFrom(captured)["repo"]).toBe("shu-coverage-repo");
+    expect(documentFrom(captured)["repo"]).toBe("zheref/nen");
     expect(captured.out.join("\n")).not.toContain(COVERAGE_REPO);
+    expect(captured.out.join("\n")).not.toContain("shu-coverage-repo");
+  });
+
+  it("reports no readable origin as a null repo, with the reason, never the directory name back", async () => {
+    const calls = script().map((call): ScriptedCall =>
+      call.match === "git remote get-url origin" ? { match: call.match, result: { code: 2, stderr: "error: No such remote 'origin'\n" } } : call,
+    );
+    const captured = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--json"], calls);
+    expect(captured.code).toBe(0);
+    expect(documentFrom(captured)["repo"]).toBeNull();
+    expect(captured.err.join("\n")).toMatch(/repo: this checkout has no readable 'origin' remote \(error: No such remote 'origin'\)/);
+    const text = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main"], calls);
+    expect(text.out[0]).toBe("repo: (no owner/name) on 'feat/report', base 'main'");
   });
 
   it("splits a commit on the unit separator, so a subject with a TAB in it stays one field", async () => {
@@ -152,13 +178,16 @@ describe("nen report data", () => {
     expect(files.every((file): boolean => file.tier === null)).toBe(true);
   });
 
-  it("makes exactly four git reads, and no write of any kind", async () => {
+  it("makes only git reads, and no write of any kind", async () => {
     const captured = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main"], script());
-    expect(captured.seams.calls.map((call): string => call.args[0] as string)).toEqual([
-      "rev-parse",
-      "symbolic-ref",
-      "log",
-      "diff",
+    expect(captured.seams.calls.map((call): string => call.args.slice(0, 2).join(" "))).toEqual([
+      "rev-parse --verify",
+      "symbolic-ref --short",
+      "remote get-url",
+      "log main..HEAD",
+      "diff --name-status",
+      "rev-parse --path-format=absolute",
+      "rev-parse --verify",
     ]);
     expect(captured.seams.calls.every((call): boolean => call.cwd === COVERAGE_REPO)).toBe(true);
   });
@@ -192,7 +221,7 @@ describe("nen report data refuses rather than reporting an empty answer", () => 
 
   it("refuses a failed 'git log' at exit 1 -- git itself failing, not a mistyped flag -- rather than reporting a branch with nothing on it", async () => {
     const captured = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main"], [
-      ...script().slice(0, 2),
+      ...script().slice(0, 3),
       { match: `git log main..HEAD --format=${LOG_FORMAT}`, result: { code: 128, stderr: "fatal: bad object\n" } },
     ]);
     expect(captured.code).toBe(1);
@@ -201,7 +230,7 @@ describe("nen report data refuses rather than reporting an empty answer", () => 
 
   it("refuses a failed 'git diff' at exit 1 -- git itself failing, not a mistyped flag -- rather than reporting a branch that changed nothing", async () => {
     const captured = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main"], [
-      ...script().slice(0, 3),
+      ...script().slice(0, 4),
       { match: "git diff --name-status main...HEAD", result: { code: 128, stderr: "fatal: bad object\n" } },
     ]);
     expect(captured.code).toBe(1);

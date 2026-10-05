@@ -101,7 +101,7 @@ function requirePr(context: CommandContext): number {
   return number;
 }
 
-const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> --requirements-from <path>
 nen pr fetch --target <owner/name> --pr <n>
@@ -138,7 +138,20 @@ ready:
                               what the gate does NOT decide.
   --reviewers <a,b,c>         The configured reviewer set (mirrors the shell
                               gate's flag). Also the identity source of last
-                              resort -- see --gates.
+                              resort -- see --gates. On that path each name is
+                              the WHOLE login, case-insensitive, with an
+                              optional [bot] suffix -- never a substring or a
+                              regex (zheref/nen#264): 'alice' is not
+                              'Not-Alice-Fan'.
+  --reviewer-login <name>=<login>
+                              REPEATABLE. The exact login a --reviewers name
+                              posts under, on that flags path only: whole,
+                              case-insensitive, optional [bot]; repeat a name
+                              for alternatives. Nothing is built in -- without
+                              it the name must equal the login. A name
+                              --reviewers does not list is exit 2; beside a
+                              gates file it is ignored with a warning (declare
+                              login_pattern there).
   --approvers <a,b>           The approval set, when identities come from flags.
   --round-policy <p>          strict | bounded. Default bounded.
   --exclude-run <id>          Drop one Actions run's own checks (CON-36 clause

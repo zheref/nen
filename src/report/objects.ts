@@ -13,7 +13,7 @@
 // (`--target`, `--prs`, `--issues`, `--backlog`, `--objects-from`) are the whole
 // of the trigger: with none of them, this module is never called and the field
 // is the empty list a template's `{{#each objects}}` renders as nothing. That
-// keeps `report data`'s v0.11 shape -- local, four git reads, no network -- the
+// keeps `report data`'s v0.11 shape -- local, git reads only, no network -- the
 // DEFAULT rather than a thing you opt out of, because the verb is run inside
 // build loops where a surprise `gh` call is a surprise token requirement.
 //

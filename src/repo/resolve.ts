@@ -295,11 +295,28 @@ export function resolveToken(registry: RepoRegistry, token: string): readonly Re
 // depending on who cloned it and neither is wrong: `https://host/owner/name.git`
 // and `git@host:owner/name.git`. A resolver that understood one would report "not
 // a repository" for half of all checkouts.
+//
+// A SCHEME URL IS READ BY ITS PATHNAME, AND NOTHING ELSE OF IT SURVIVES
+// (Copilot, NN-PR-#375 -- a security finding). `https://host/o/r.git?
+// access_token=s3cr3t` used to keep its query in the last segment, and
+// `report data` printed it into a document that is pasted into pull requests.
+// The userinfo, the query and the fragment are dropped by construction: only
+// `new URL(...).pathname` is ever split.
 export function ownerNameFromRemote(url: string): string | null {
-  const trimmed = url.trim().replace(/\.git$/, "");
+  const trimmed = url.trim();
   if (trimmed === "") return null;
-  const ssh = /^[^@\s]+@[^:\s]+:(.+)$/.exec(trimmed);
-  const path = ssh?.[1] ?? trimmed.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/]+\//, "");
+  let path: string;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed)) {
+    try {
+      path = new URL(trimmed).pathname;
+    } catch {
+      return null;
+    }
+  } else {
+    const ssh = /^[^@\s]+@[^:\s]+:(.+)$/.exec(trimmed);
+    path = (ssh?.[1] ?? trimmed).replace(/[?#].*$/, "");
+  }
+  path = path.replace(/\/+$/, "").replace(/\.git$/, "");
   const parts = path.split("/").filter((part): boolean => part !== "");
   if (parts.length < 2) return null;
   const name = parts[parts.length - 1];

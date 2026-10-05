@@ -533,10 +533,19 @@ describe("identitiesFromFlags -- the reduced, conservative identity set", () => 
     const identities = identitiesFromFlags(["alice", "some-bot"], []);
     expect(identities.reviewer("alice")?.loginPattern.test("ALICE")).toBe(true);
     expect(identities.reviewer("some-bot")?.loginPattern.test("Some-Bot")).toBe(true);
-    // ...including the escaped spelling of a bracketed bot login, which is a
-    // REGEX here and not a literal (unchanged by this guard, asserted so the
-    // guard is not later blamed for it).
-    expect(identitiesFromFlags(["x\\[bot\\]"], []).reviewer("x\\[bot\\]")?.loginPattern.test("x[bot]")).toBe(true);
+    // A typed name is the WHOLE login, literal, with GitHub's optional
+    // `[bot]` suffix (Feitan F1 on zheref/nen#264) -- no longer a regex.
+    expect(identitiesFromFlags(["x"], []).reviewer("x")?.loginPattern.test("x[bot]")).toBe(true);
+    expect(identitiesFromFlags(["x[bot]"], []).reviewer("x[bot]")?.loginPattern.test("X[BOT]")).toBe(true);
+    expect(identitiesFromFlags(["a.b"], []).reviewer("a.b")?.loginPattern.test("axb")).toBe(false);
+  });
+
+  it("a stranger whose login merely CONTAINS a typed name is not that reviewer (Feitan F1, zheref/nen#264)", () => {
+    const pattern = identitiesFromFlags(["sasuke"], []).reviewer("sasuke")?.loginPattern;
+    expect(pattern?.test("Not-Sasuke-Fan")).toBe(false);
+    expect(pattern?.test("sasuke2")).toBe(false);
+    expect(pattern?.test("SASUKE")).toBe(true);
+    expect(pattern?.test("sasuke[bot]")).toBe(true);
   });
 
   it("an explicitly empty approver set is honoured as vacuous, not refused", () => {
@@ -993,6 +1002,85 @@ describe("prReady -- the --reviewers identity path never lets an omitted --appro
     expect(report.meta.approvers).toEqual(["sasuke", "tenma"]);
     expect(report.gateLine).toContain("sasuke (no APPROVE at the current head)");
     expect(report.gateLine).toContain("tenma (no APPROVE at the current head)");
+  });
+
+  it("a stranger's APPROVED review never satisfies approvals or rounds for a typed name (Feitan F1, zheref/nen#264)", async () => {
+    const emptyRepo = mkdtempSync(join(tmpdir(), "nen-pr-ready-flags-"));
+    const strangers = stubSource({
+      reviews: async (): Promise<unknown[]> => [
+        { user: { login: "Not-Sasuke-Fan" }, state: "APPROVED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+        { user: { login: "tenma-impostor" }, state: "APPROVED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+      ],
+    });
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { "gh-repo": "zheref/example", reviewers: "sasuke,tenma" }, repoFlag: emptyRepo }),
+      io,
+      stubDeps(strangers),
+    );
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    const status = (id: string): string | undefined => report.conjuncts.find((row) => row.id === id)?.status;
+    expect(status("rounds-owed")).toBe("failed");
+    expect(status("approvals-at-head")).toBe("failed");
+  });
+
+  // --reviewer-login (zheref/nen#264): the exact login a typed name posts
+  // under, stated by the caller -- nothing is built in.
+  const BOT = "copilot-pull-request-reviewer[bot]";
+  const loginRun = async (logins: string[], reviewers: string[], extra: Record<string, string> = {}): Promise<{ code: number; out: string[]; err: string[] }> => {
+    const emptyRepo = mkdtempSync(join(tmpdir(), "nen-pr-ready-logins-"));
+    const source = stubSource({
+      reviews: async (): Promise<unknown[]> =>
+        reviewers.map((login) => ({ user: { login }, state: "APPROVED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" })),
+    });
+    const { io, out, err } = capture();
+    const code = await prReady(
+      input({ values: { "gh-repo": "zheref/example", reviewers: "copilot", ...extra }, lists: { "reviewer-login": logins }, repoFlag: emptyRepo }),
+      io,
+      stubDeps(source),
+    );
+    return { code, out, err };
+  };
+
+  it("--reviewer-login copilot=<bot login> lets that exact login count for --reviewers copilot", async () => {
+    const { code, out } = await loginRun([`copilot=${BOT}`], [BOT]);
+    expect(code).toBe(0);
+    expect((JSON.parse(out.join("\n")) as ReadyReport).verdict).toBe("ready");
+  });
+
+  it("...and a login that merely starts with or contains the name still does not", async () => {
+    for (const stranger of ["copilot-evil", "Not-copilot", "copilot-pull-request-reviewer-evil[bot]"]) {
+      const { code, out } = await loginRun([`copilot=${BOT}`], [stranger]);
+      expect(code).toBe(1);
+      const report = JSON.parse(out.join("\n")) as ReadyReport;
+      expect(report.conjuncts.find((row) => row.id === "approvals-at-head")?.status).toBe("failed");
+      expect(report.conjuncts.find((row) => row.id === "rounds-owed")?.status).toBe("failed");
+    }
+  });
+
+  it("without the flag the name must EQUAL the login: the bot's real login does not count for 'copilot'", async () => {
+    const without = await loginRun([], [BOT]);
+    expect(without.code).toBe(1);
+    const exact = await loginRun([], ["Copilot"]);
+    expect(exact.code).toBe(0);
+  });
+
+  it("a stated login REPLACES the name; repeat the flag for alternatives", async () => {
+    expect((await loginRun([`copilot=${BOT}`], ["copilot"])).code).toBe(1);
+    expect((await loginRun([`copilot=${BOT}`, "copilot=copilot"], ["copilot"])).code).toBe(0);
+  });
+
+  it("refuses a malformed occurrence and a name --reviewers does not list, at exit 2", async () => {
+    const malformed = await loginRun(["copilot"], [BOT]);
+    expect(malformed.code).toBe(2);
+    expect(malformed.err.join("\n")).toMatch(/--reviewer-login takes <name>=<login>/);
+    const empty = await loginRun(["copilot="], [BOT]);
+    expect(empty.code).toBe(2);
+    const stranger = await loginRun([`someone=${BOT}`], [BOT]);
+    expect(stranger.code).toBe(2);
+    expect(stranger.err.join("\n")).toMatch(/--reviewer-login names 'someone', which --reviewers does not/);
   });
 
   it("an EXPLICIT --approvers '' is still honoured as vacuous -- the escape hatch survives the fix", async () => {

@@ -873,8 +873,11 @@ describe("reviewerLoginPattern", () => {
     // through this one and 0ms through the guarded twin.
     const pattern = reviewerLoginPattern(BANKAI, "(a+)+$");
     // The compiled SOURCE, not the timing, is the real assertion: a timing
-    // bound alone would pass on a machine fast enough to hide the bug.
-    expect(pattern.source).toBe("(?!)");
+    // bound alone would pass on a machine fast enough to hide the bug. Since
+    // zheref/nen#264 the name is the LITERAL login, escaped and anchored, so
+    // nothing in it is a quantifier at all -- and it matches only itself.
+    expect(pattern.source).toBe("^(?:\\(a\\+\\)\\+\\$)(\\[bot\\])?$");
+    expect(pattern.test("(a+)+$")).toBe(true);
 
     // And the property that assertion stands for, measured. A 38-character
     // subject is inside GitHub's 39-character login limit, so this is the size
@@ -2039,9 +2042,13 @@ describe("names are data -- the same predicates against a different vocabulary",
   it("matches a reviewer's login through the FILE's pattern", () => {
     expect(reviewerLoginPattern(ALT, "itachi").test("itachi-akatsuki[bot]")).toBe(true);
     expect(reviewerLoginPattern(ALT, "sentry").test("watchtower-app[bot]")).toBe(true);
-    // A reviewer the ALT file does not declare falls through to the original's
-    // `default:` reading -- it matches its own name, case-insensitively.
-    expect(reviewerLoginPattern(ALT, "sasuke").test("sasuke-bankai[bot]")).toBe(true);
+    // A reviewer the ALT file does not declare falls through to its name AS
+    // its login -- the WHOLE login, case-insensitively, optional `[bot]`
+    // (zheref/nen#264). The original's unanchored reading is gone: a login
+    // that merely CONTAINS the name is somebody else.
+    expect(reviewerLoginPattern(ALT, "sasuke").test("SASUKE[bot]")).toBe(true);
+    expect(reviewerLoginPattern(ALT, "sasuke").test("sasuke-bankai[bot]")).toBe(false);
+    expect(reviewerLoginPattern(ALT, "sasuke").test("Not-Sasuke-Fan")).toBe(false);
     // ...but it does NOT inherit the other repository's identity: the bankai
     // fixture's `bugbot` matches `cursor`, and ALT declares no such reviewer.
     expect(reviewerLoginPattern(BANKAI, "bugbot").test("cursor[bot]")).toBe(true);

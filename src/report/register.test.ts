@@ -44,6 +44,11 @@ function script(): ScriptedCall[] {
     { match: "git symbolic-ref --short HEAD", result: { code: 0, stdout: "feat/register\n" } },
     { match: `git log main..HEAD --format=${LOG_FORMAT}`, result: { code: 0, stdout: "" } },
     { match: "git diff --name-status main...HEAD", result: { code: 0, stdout: "" } },
+    // The context reads (zheref/nen#258): owner/name, the worktree, origin, HEAD.
+    { match: "git remote get-url origin", result: { code: 0, stdout: "https://github.com/zheref/nen.git\n" } },
+    { match: "git rev-parse --path-format=absolute --git-dir --git-common-dir --show-toplevel", result: { code: 0, stdout: "/w/.git\n/w/.git\n/w\n" } },
+    { match: "git rev-parse --verify --quiet refs/remotes/origin/feat/register", result: { code: 1, stdout: "" } },
+    { match: "git rev-parse --verify --quiet HEAD", result: { code: 0, stdout: "0000000000000000000000000000000000000000\n" } },
   ];
 }
 
@@ -213,6 +218,9 @@ describe("nen report data --register", () => {
       "tallyScope", "tallyNeedsYou", "tallyBlockers", "tallyReady", "tallyInFlight",
       "gates", "architectureCaption", "graphJson", "graphMermaid", "graphNodes", "graphEdges",
       "spendEfforts", "legendRows",
+      // The derived context (zheref/nen#258), AFTER the register; its `gate`
+      // and `generatedAtLocal` are the register's own, in their places above.
+      "worktree", "effortStage", "stageClass", "turnNumber", "generatedDateLocal", "timeZone",
     ]);
     // The offline path stays offline.
     expect(captured.seams.calls.every((call): boolean => call.command === "git")).toBe(true);
