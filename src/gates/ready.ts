@@ -324,6 +324,7 @@ import {
   resolveDeclaredExclusions,
   reviewsAllApprovedAtHead,
   reviewerReviewCheckPattern,
+  reviewerRoundFacts,
   roundQuorum,
   unapprovedApprovers,
   uncheckedChecks,
@@ -337,6 +338,7 @@ import {
   type RoundPolicy,
   type UnapprovedApprover,
 } from "./predicates.js";
+import { countRounds, type RoundCounts } from "./round_counts.js";
 import {
   parseCheckRollup,
   parseReviewRequests,
@@ -667,6 +669,15 @@ export interface EvaluationContext {
    * conjunct and never part of the verdict.
    */
   readonly settlement: Settlement;
+  /**
+   * Each configured reviewer's (and each `round_quorum` member's) review
+   * rounds against `round_policy.minRounds`/`.maxRounds` (zheref/nen#240) --
+   * ./round_counts.ts. ABSENT when the identities state neither key, and when
+   * the rounds-owed row was not judged through the ordinary owed-round path
+   * (a CON-30 carve-out, an unreadable review list), so a repository that
+   * declares neither gets the evaluation it got before. Never a conjunct.
+   */
+  readonly roundCounts?: RoundCounts;
 }
 
 /**
@@ -1322,6 +1333,7 @@ export function evaluateReady(
   // ── rows 3, 4, 5: CON-32(b) ─────────────────────────────────────────────
   let stalledRow: RowResult;
   let owedRow: RowResult;
+  let roundCounts: RoundCounts | undefined;
   let approvalsRow: RowResult;
 
   const approvalsFrom = (reviews: Parameters<typeof reviewsAllApprovedAtHead>[1]): RowResult => {
@@ -1436,6 +1448,26 @@ export function evaluateReady(
       const quorum =
         roundQuorum(identities, roundInputs, head, policy, delivery) ?? undefined;
       const { owed: stillOwed, excused } = quorumExcusedRounds(owed, quorum);
+      // zheref/nen#240: the round counts, read off the SAME inputs and the
+      // SAME quorum this row was judged by, so the counts and the row cannot
+      // disagree about who has a round or who the quorum covers.
+      const minRounds = identities.minRounds ?? null;
+      const maxRounds = identities.maxRounds ?? null;
+      if (minRounds !== null || maxRounds !== null) {
+        const counted = [...reviewers, ...(quorum?.anyOf ?? []).filter((name): boolean => !reviewers.includes(name))];
+        const rawRequested = state["review_requested_logins"];
+        const requestedLogins =
+          Array.isArray(rawRequested) && rawRequested.every((login): boolean => typeof login === "string")
+            ? (rawRequested as string[])
+            : null;
+        roundCounts = countRounds(
+          reviewerRoundFacts(identities, roundInputs, head, counted, policy, delivery),
+          requestedLogins,
+          minRounds,
+          maxRounds,
+          quorum,
+        );
+      }
       const owedReason =
         stillOwed.length === 0
           ? null
@@ -1543,6 +1575,7 @@ export function evaluateReady(
       warnings: excludeCheckWarnings,
       declaredExclusions: declared.outcomes,
       settlement: settlementOf(),
+      ...(roundCounts === undefined ? {} : { roundCounts }),
     },
   };
 

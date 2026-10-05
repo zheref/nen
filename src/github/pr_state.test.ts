@@ -5,7 +5,6 @@
 // precisely so this file can drive it with plain objects.
 
 import { describe, expect, it } from "vitest";
-import { loadOwnGates } from "../schema/fixtures/own_gates.js";
 import {
   EARLIER_COMMIT_READS_DEFAULT,
   PULL_REQUEST_COMMITS_CAP,
@@ -1162,8 +1161,7 @@ describe("readEarlierRoundChecks -- what qualifies (review of E7: C1, H1, L1)", 
 });
 
 describe("earlierRoundCheckWanted -- the narrowing that keeps the walk at zero calls", () => {
-  // TODO(zheref/nen#240): loadGateIdentities(process.cwd()) once #240 lands.
-  const OWN = loadOwnGates().identities; // copilot (exempt) + bugbot + round_quorum
+  const OWN = loadGateIdentities(process.cwd()); // copilot (exempt) + bugbot + round_quorum
   const headClean = { name: "Cursor Bugbot", status: "COMPLETED", conclusion: "SUCCESS" };
   const reviewBy = (author: string): Record<string, unknown> => ({
     author,
@@ -1227,8 +1225,7 @@ describe("earlierRoundCheckWanted -- the narrowing that keeps the walk at zero c
 });
 
 describe("fetchPrState -- earlier-head round checks are wired in, bounded, and fail closed", () => {
-  // TODO(zheref/nen#240): loadGateIdentities(process.cwd()) once #240 lands.
-  const OWN = loadOwnGates().identities;
+  const OWN = loadGateIdentities(process.cwd());
   const ownOptions = (overrides: Partial<FetchStateOptions> = {}): FetchStateOptions =>
     baseOptions({ identities: OWN, ...overrides });
   const refuseEarlierReads = {

@@ -241,8 +241,8 @@ describe("nen pr ready --exclude-check -- the CLI flag repeats (zheref/nen#243)"
     const io: Io = { out: (l): void => void out.push(l), err: (l): void => void err.push(l) };
     const code = await run(
       // `--repo` names a fixture with no nen/gates.json, so `--reviewers` is the
-      // identity source (the process's own checkout's file is refused until
-      // zheref/nen#240; see ./command.test.ts's --json fold test).
+      // identity source, never the process's own checkout's file (see
+      // ./command.test.ts's --json fold test).
       ["pr", "ready", "5", "--gh-repo", "o/r", "--reviewers", "alice", "--token-env", TOKEN_ENV, "--json", "--repo", SHU_REPO, ...argv],
       io,
     );

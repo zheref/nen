@@ -287,6 +287,18 @@ export interface GateIdentities {
    * own bound rather than living with one it did not choose.
    */
   readonly stallMinutes: number | null;
+  /**
+   * `round_policy.minRounds` and `.maxRounds` (zheref/nen#240), each `null`
+   * when the file states none. A non-negative integer, `minRounds <=
+   * maxRounds` when both are stated. `maxRounds` caps the review rounds
+   * REQUESTED of one reviewer on one pull request -- `nen pr request-reviews`
+   * refuses the request past it; `minRounds` is how many rounds a reviewer
+   * stands owed -- `nen pr ready --explain` reports each reviewer against both.
+   * Neither is a CON-32 conjunct. OPTIONAL in the type for the reason
+   * `roundQuorum` is: the `--reviewers` identity path names no file.
+   */
+  readonly minRounds?: number | null;
+  readonly maxRounds?: number | null;
   readonly delivery: DeliveryIdentity;
   /** CON-30's carve-out, or `null` when the file declares none. */
   readonly dependabotCarveOut: DependabotCarveOut | null;
@@ -475,6 +487,21 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 // consumer's existing values were written to that consumer's meaning, not
 // nen's; reading them under nen's would change a verdict nobody re-declared.
 //
+// THE ONE SANCTIONED SAME-NAME ADOPTION, AND WHY IT IS NOT A CARVE-OUT. The
+// same ruling ("Retire 2, adopt 2") adopts `round_policy.minRounds` and
+// `round_policy.maxRounds` -- until then Hatsu's own keys (zheref/hatsu#102) --
+// as nen keys under the SAME names, through zheref/nen#240. That is the binding
+// applied, not an exception to it: the maintainer ruled the adoption by name,
+// and nen reads each value to the meaning the consumer already wrote it under
+// (maxRounds caps the review rounds REQUESTED per reviewer on one pull request;
+// minRounds is how many rounds a reviewer stands owed), so no existing value
+// changes meaning and no verdict changes that nobody re-declared. From that
+// change on the keys are nen's: tabled here with `introducedIn`, validated by
+// pointer like every other, and refused when misspelt. A same-name adoption
+// therefore needs all three: a maintainer ruling naming the key, nen reading
+// the consumer's existing meaning unchanged, and the key entering this table
+// in the change that reads it. Without them the binding above holds.
+//
 // `introducedIn` for a key shipped after v0.19.0 is the next release's number,
 // 0.20.0 -- the release proposal corrects it if that release is cut under
 // another number.
@@ -538,6 +565,11 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
     introducedIn: "0.11.0",
     object: {
       stallMinutes: { introducedIn: "0.11.0" },
+      // Adopted under the consumer's own names (zheref/nen#240; ruling of
+      // 2026-10-04, "Retire 2, adopt 2") -- see "THE ONE SANCTIONED SAME-NAME
+      // ADOPTION" in the section header above.
+      minRounds: { introducedIn: NEXT_RELEASE },
+      maxRounds: { introducedIn: NEXT_RELEASE },
     },
   },
   round_quorum: {
@@ -870,6 +902,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
   // indistinguishable from "the file explicitly chose nen's default".
   const rawRoundPolicy = root["round_policy"];
   let stallMinutes: number | null = null;
+  const { minRounds, maxRounds } = readRoundCaps(path, rawRoundPolicy);
   if (rawRoundPolicy !== undefined && rawRoundPolicy !== null) {
     const record = requireRecord(path, "round_policy", rawRoundPolicy);
     const rawStallMinutes = record["stallMinutes"];
@@ -974,6 +1007,8 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     approvalPolicy,
     baseReviewers,
     stallMinutes,
+    minRounds,
+    maxRounds,
     delivery,
     dependabotCarveOut,
     roundQuorum,
@@ -1122,6 +1157,60 @@ export const GLOB_MIN_LITERAL_PREFIX = 3;
  *   * the same `name` twice (under the same `match`) is two reasons for one
  *     exclusion, and the report could quote only one of them.
  */
+/** `round_policy.minRounds` / `.maxRounds` (zheref/nen#240), each `null` when unstated. */
+export interface RoundCaps {
+  readonly minRounds: number | null;
+  readonly maxRounds: number | null;
+}
+
+/**
+ * `round_policy.minRounds` and `.maxRounds` -- OPTIONAL, and REFUSED BY
+ * POINTER when malformed (zheref/nen#240). Each is a non-negative integer:
+ * `0` is a statement (`maxRounds: 0` requests no round at all; `minRounds: 0`
+ * owes none), never "unset" -- unset is `null`. Both stated, `minRounds` above
+ * `maxRounds` is refused: the rounds owed could never be requested, so the
+ * pair would hold every reviewer owed forever and say nothing about why.
+ */
+function readRoundCaps(path: string, raw: unknown): RoundCaps {
+  if (raw === undefined || raw === null) return { minRounds: null, maxRounds: null };
+  const record = requireRecord(path, "round_policy", raw);
+  const read = (key: "minRounds" | "maxRounds"): number | null => {
+    const value = record[key];
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+      throw new SchemaError(
+        path,
+        `round_policy.${key}`,
+        `expected a non-negative integer number of review rounds, got ${describeValue(value)}`,
+      );
+    }
+    return value;
+  };
+  const minRounds = read("minRounds");
+  const maxRounds = read("maxRounds");
+  if (minRounds !== null && maxRounds !== null && minRounds > maxRounds) {
+    throw new SchemaError(
+      path,
+      "round_policy.minRounds",
+      `is ${minRounds}, above round_policy.maxRounds (${maxRounds}). The rounds a reviewer stands owed could never all be requested, so every reviewer would stay owed with no request left to make. State minRounds <= maxRounds.`,
+    );
+  }
+  return { minRounds, maxRounds };
+}
+
+/**
+ * The base-only reader `nen pr request-reviews` uses for its ceiling
+ * (zheref/nen#240): the version guard and the unknown-key sweep every reader
+ * of this file applies, then `round_policy`'s two caps and nothing else -- a
+ * reviewer identity the verb never consults is not refused here.
+ */
+export function parseRoundCaps(path: string, rootValue: unknown): RoundCaps {
+  const root = requireRecord(path, "$", rootValue);
+  requireGatesVersion(path, root);
+  refuseUnknownKeys(path, root);
+  return readRoundCaps(path, root["round_policy"]);
+}
+
 export function parseCheckExclusions(path: string, rootValue: unknown): DeclaredCheckExclusion[] {
   const root = requireRecord(path, "$", rootValue);
   requireGatesVersion(path, root);

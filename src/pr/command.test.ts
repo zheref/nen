@@ -10,6 +10,7 @@ import type { Target } from "../github/target.js";
 import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
 import { collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsArgv } from "./bots.js";
 import { requestReviewsArgv } from "./reviewers.js";
+import { requestTimelineArgv } from "./round_ceiling.js";
 import { markReadyArgv, readDraftStateArgv } from "./markready.js";
 import { prCommand } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
@@ -122,9 +123,8 @@ describe("nen pr ready (registry wiring onto ../verbs/pr_ready.ts)", () => {
   // the ref and identities from flags alone, with no repository schema read.
   //
   // `--repo` names a fixture that ships no nen/gates.json, so `--reviewers` is
-  // the identity source as this test intends. It used to inherit the process's
-  // own checkout, whose nen/gates.json is refused until zheref/nen#240 tables
-  // minRounds/maxRounds (zheref/nen#310) -- a fact about that file, not about
+  // the identity source as this test intends, rather than whatever gates file
+  // the process's own checkout carries -- a fact about that file, not about
   // the --json fold this test proves.
   it("--json is the SAME invocation whether given before or after 'pr' (mutation-proven fold)", async () => {
     const tokenEnv = "NEN_TEST_DEFINITELY_UNSET_TOKEN";
@@ -766,13 +766,14 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   // FIRST -- against this pull request's own known bots, then against
   // --target's collaborators -- before either route is called.
   const KNOWN_BOTS_TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
-  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_1", reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
+  const NO_KNOWN_BOTS = { stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_1", baseRefOid: "BASE1", reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }) };
   const KNOWN_BOT_COPILOT = {
     stdout: JSON.stringify({
       data: {
         repository: {
           pullRequest: {
             id: "PR_1",
+            baseRefOid: "BASE1",
             reviewRequests: { nodes: [] },
             timelineItems: { nodes: [{ author: { __typename: "Bot", login: "copilot-pull-request-reviewer", id: "BOT_1" } }] },
           },
@@ -783,6 +784,13 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   const collaboratorFound = (login: string, id: string): Partial<{ stdout: string }> => ({
     stdout: JSON.stringify({ data: { repository: { collaborators: { nodes: [{ login, id }] } } } }),
   });
+  // zheref/nen#240: every bot request first reads round_policy.maxRounds from
+  // nen/gates.json at the pull request's base. These cases are about routing,
+  // so the base carries no gates file -- no ceiling, the verb's old behaviour.
+  const NO_BASE_GATES: ScriptedCall = {
+    match: "gh api repos/zheref/nen/contents/nen/gates.json?ref=BASE1",
+    result: { code: 1, stderr: "gh: Not Found (HTTP 404)" },
+  };
   const COLLABORATOR_NONE = { stdout: JSON.stringify({ data: { repository: { collaborators: { nodes: [] } } } }) };
   // `ids` defaults to BOT_1, BOT_2, ... by position. Since zheref/nen#277 the
   // ids MATTER -- a requested id the response does not carry is reported as
@@ -806,6 +814,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("resolves a login this pull request already knows as a bot and routes it through the requestReviews mutation's botIds, never gh pr edit --add-reviewer", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      NO_BASE_GATES,
       {
         match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`,
         result: botMutationOk(["copilot-pull-request-reviewer"]),
@@ -823,6 +832,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("resolves a login as a collaborator and requests it through gh pr edit --add-reviewer, unchanged from before", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
       { match: `gh ${requestReviewsArgv(KNOWN_BOTS_TARGET, 9, ["sasuke"]).join(" ")}`, result: {} },
     ];
@@ -869,6 +879,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("a mixed list routes each entry to its own lane -- team straight through, a known bot to the mutation, a collaborator to gh pr edit", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
     ];
     const result = await capture(
@@ -896,6 +907,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("a bare unknown login still refuses (exit 2) even alongside a team slug that routes cleanly", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "ghost").join(" ")}`, result: COLLABORATOR_NONE },
     ];
     const result = await capture(
@@ -912,6 +924,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("--add-bots routes a node id straight to botIds, with no --add-reviewers resolution at all", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`, result: botMutationOk(["some-other-bot"], ["BOT_2"]) },
     ];
     const result = await capture(
@@ -933,6 +946,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("exits 9 naming the bot when GitHub accepts an --add-bots request but records no pending review for it (zheref/nen#277)", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
     ];
     const result = await capture(
@@ -949,6 +963,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("--json carries the same fact: ok false, unrecordedBots naming the bot, under exit 9", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
     ];
     const result = await capture(
@@ -967,6 +982,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("names an unrecorded bot by the login it was requested under, when it came in through --add-reviewers", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      NO_BASE_GATES,
       { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
     ];
     const result = await capture(
@@ -982,6 +998,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("a route whose gh call FAILED outranks an unrecorded bot: exit 1, and --json still names the bot", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
       { match: `gh ${requestReviewsArgv(KNOWN_BOTS_TARGET, 9, ["sasuke"]).join(" ")}`, result: { code: 1, stderr: "could not add reviewer" } },
       { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_kgDOCnlnWA"]).join(" ")}`, result: BOT_MUTATION_RECORDS_NOTHING },
@@ -1012,6 +1029,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("a recorded request exits 0 and --json carries an EMPTY unrecordedBots, never an absent key", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`, result: botMutationOk(["some-other-bot"], ["BOT_2"]) },
     ];
     const result = await capture(
@@ -1023,6 +1041,208 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown };
     expect(report.ok).toBe(true);
     expect(report.unrecordedBots).toEqual([]);
+  });
+
+  // ── the round ceiling, round_policy.maxRounds (zheref/nen#240) ───────────
+  //
+  // Read from nen/gates.json AT THE BASE (BASE1 here), counted off the
+  // timeline's review_requested events for the bot by node id.
+  const gatesAtBase = (gates: unknown): ScriptedCall => ({
+    match: "gh api repos/zheref/nen/contents/nen/gates.json?ref=BASE1",
+    result: {
+      stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(JSON.stringify(gates)).toString("base64") }),
+    },
+  });
+  const CEILING_3 = gatesAtBase({ version: 1, round_policy: { minRounds: 1, maxRounds: 3 } });
+  const timelineWith = (requests: number, id = "BOT_1"): ScriptedCall => ({
+    match: `gh ${requestTimelineArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`,
+    result: {
+      stdout: JSON.stringify([
+        Array.from({ length: requests }, (): unknown => ({
+          event: "review_requested",
+          requested_reviewer: { login: "Copilot", node_id: id },
+        })),
+        // Another bot's request and a team's count toward nobody here.
+        [
+          { event: "review_requested", requested_reviewer: { login: "other", node_id: "BOT_9" } },
+          { event: "review_requested", requested_team: { slug: "acme" } },
+        ],
+      ]),
+    },
+  });
+
+  it("refuses the (M+1)th request for a bot at exit 2, naming the count and the ceiling, and requests nothing", async () => {
+    // No mutation is scripted: were it called, the scripted seam would throw.
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      CEILING_3,
+      timelineWith(3),
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "copilot-pull-request-reviewer"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(2);
+    const out = result.out.join("\n");
+    expect(out).toContain(
+      "refused: copilot-pull-request-reviewer (BOT_1) has been requested 3 times, so this would be request 4 of 3 on zheref/nen#9, past the round_policy.maxRounds ceiling declared in zheref/nen@BASE1:nen/gates.json. Nothing was requested.",
+    );
+  });
+
+  it("the request inside the ceiling goes through and says which request of M it was", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      CEILING_3,
+      timelineWith(2),
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1"]).join(" ")}`, result: botMutationOk(["copilot-pull-request-reviewer"]) },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "copilot-pull-request-reviewer", "--json"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; message: string; ceiling: unknown; rounds: unknown };
+    expect(report.ok).toBe(true);
+    expect(report.message).toContain("copilot-pull-request-reviewer (BOT_1): request 3 of 3");
+    expect(report.ceiling).toEqual({ maxRounds: 3, source: "zheref/nen@BASE1:nen/gates.json" });
+    expect(report.rounds).toEqual([
+      { id: "BOT_1", login: "copilot-pull-request-reviewer", requested: 2, next: 3, maxRounds: 3, refused: false },
+    ]);
+  });
+
+  it("--dry-run prints 'request N of M' and requests nothing", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      CEILING_3,
+      timelineWith(1, "BOT_kgDOCnlnWA"),
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_kgDOCnlnWA", "--dry-run"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain(
+      "  BOT_kgDOCnlnWA: request 2 of 3 (round_policy.maxRounds, zheref/nen@BASE1:nen/gates.json)",
+    );
+  });
+
+  it("--dry-run past the ceiling previews the refusal at exit 2", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      CEILING_3,
+      timelineWith(3, "BOT_kgDOCnlnWA"),
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_kgDOCnlnWA", "--dry-run", "--json"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(2);
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; dryRun: boolean; message: string };
+    expect(report.ok).toBe(false);
+    expect(report.dryRun).toBe(true);
+    expect(report.message).toMatch(/^refused: BOT_kgDOCnlnWA has been requested 3 times/);
+  });
+
+  it("refuses the WHOLE call -- the user route too -- when any bot is past the ceiling", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+      gatesAtBase({ version: 1, round_policy: { maxRounds: 0 } }),
+      timelineWith(0, "BOT_kgDOCnlnWA"),
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "sasuke", "--add-bots", "BOT_kgDOCnlnWA"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(2);
+    expect(result.out.join("\n")).toContain("so this would be request 1 of 0");
+  });
+
+  it("a base file stating no maxRounds declares no ceiling: no timeline read, the request goes through", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      gatesAtBase({ version: 1, round_policy: { stallMinutes: 30 } }),
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_2"]).join(" ")}`, result: botMutationOk(["some-other-bot"], ["BOT_2"]) },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2", "--json"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { ceiling: unknown; rounds: unknown };
+    expect(report.ceiling).toBeNull();
+    expect(report.rounds).toEqual([]);
+  });
+
+  it("an unreadable timeline under a declared ceiling refuses at exit 1: a ceiling it cannot check is never 'no ceiling'", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      CEILING_3,
+      { match: `gh ${requestTimelineArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: { code: 1, stderr: "HTTP 502" } },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toMatch(/could not read zheref\/nen#9's timeline: HTTP 502.*Nothing was requested/);
+  });
+
+  it("a base file that does not validate refuses at exit 1, naming the pointer -- a misspelt ceiling included", async () => {
+    for (const [gates, pattern] of [
+      [{ version: 1, round_policy: { maxRound: 3 } }, /'maxRound' -> 'maxRounds'\?/],
+      [{ version: 1, round_policy: { maxRounds: -1 } }, /at round_policy\.maxRounds, expected a non-negative integer/],
+      [{ version: 1, round_policy: { minRounds: 4, maxRounds: 3 } }, /above round_policy\.maxRounds \(3\)/],
+    ] as const) {
+      const script: readonly ScriptedCall[] = [
+        { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+        gatesAtBase(gates),
+      ];
+      const result = await capture(
+        ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2"],
+        null,
+        new ScriptedSeams(script),
+      );
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toMatch(pattern);
+      expect(result.out.join("\n")).toContain("Nothing was requested");
+    }
+  });
+
+  it("a base that cannot be read refuses the bot request at exit 1", async () => {
+    const noBase = {
+      stdout: JSON.stringify({ data: { repository: { pullRequest: { id: "PR_1", reviewRequests: { nodes: [] }, timelineItems: { nodes: [] } } } } }),
+    };
+    const script: readonly ScriptedCall[] = [{ match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: noBase }];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toContain("GitHub answered no base commit for the pull request");
+  });
+
+  it("a User-only request reads no ceiling at all -- the ceiling caps bot rounds", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+      { match: `gh ${requestReviewsArgv(KNOWN_BOTS_TARGET, 9, ["sasuke"]).join(" ")}`, result: {} },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "sasuke", "--json"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(0);
+    expect("ceiling" in (JSON.parse(result.out.join("\n")) as object)).toBe(false);
   });
 
   it("--help documents exit 9 and the unrecordedBots field under request-reviews", async () => {
@@ -1040,6 +1260,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("folds an --add-bots id resolved from --add-reviewers AND an explicit --add-bots id into ONE mutation call", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      NO_BASE_GATES,
       {
         match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_1", "BOT_2"]).join(" ")}`,
         result: botMutationOk(["copilot-pull-request-reviewer", "some-other-bot"]),
@@ -1067,6 +1288,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("--dry-run resolves (still reads GitHub) but requests nothing, and prints which route each name went to", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
+      NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
     ];
     const result = await capture(
@@ -1093,6 +1315,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
   it("refuses (exit 2) a login that resolves to neither a known bot nor a collaborator, naming it and pointing at --add-bots", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "ghost").join(" ")}`, result: COLLABORATOR_NONE },
     ];
     const result = await capture(

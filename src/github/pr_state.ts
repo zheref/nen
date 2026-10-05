@@ -626,6 +626,34 @@ export async function requestedAt(
   return typeof created === "string" && created !== "" ? created : "";
 }
 
+/**
+ * Every `review_requested` event's requested login, in timeline order -- the
+ * REQUESTED rounds `round_policy.maxRounds` caps (zheref/nen#240). A request
+ * for a team (no `requested_reviewer`) names no reviewer and is skipped.
+ * `null` when the timeline could not be read: an unread count is never
+ * "nothing requested".
+ */
+export async function reviewRequestedLogins(
+  source: PrStateSource,
+  repo: PrRef,
+  prNumber: number,
+): Promise<string[] | null> {
+  let events: unknown[];
+  try {
+    events = await source.timeline(repo, prNumber);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(events)) return null;
+  const logins: string[] = [];
+  for (const event of events) {
+    if (digPath(event, "event") !== "review_requested") continue;
+    const login = digPath(event, "requested_reviewer", "login");
+    if (typeof login === "string" && login !== "") logins.push(login);
+  }
+  return logins;
+}
+
 function timestampOf(event: unknown): string {
   const value = digPath(event, "created_at");
   return typeof value === "string" ? value : "";
@@ -1159,6 +1187,19 @@ export async function fetchPrState(
     stallRequestedAt = await requestedAt(source, repo, prNumber, exempt.loginPattern);
   }
 
+  // zheref/nen#240: the requested rounds, read only when the file states
+  // `round_policy.minRounds` or `.maxRounds` -- a repository that states
+  // neither makes no extra call and gets the state it got before.
+  const roundCapsDeclared =
+    (options.identities.minRounds ?? null) !== null || (options.identities.maxRounds ?? null) !== null;
+  const requestedLogins = roundCapsDeclared ? await reviewRequestedLogins(source, repo, prNumber) : undefined;
+  const requestWarnings =
+    requestedLogins === null
+      ? [
+          "the pull request's timeline could not be read, so the review rounds requested of each reviewer are not counted against round_policy.maxRounds (zheref/nen#240)",
+        ]
+      : [];
+
   // Option B of the 2026-09-29 ruling: under `bounded`, a round-check
   // reviewer's completed run on an EARLIER commit of this pull request. A
   // SEPARATE field -- `checks` stays the head's rollup, byte for byte, for
@@ -1181,7 +1222,7 @@ export async function fetchPrState(
 
   return {
     ok: true,
-    warnings: [...threads.warnings, ...earlier.warnings],
+    warnings: [...threads.warnings, ...earlier.warnings, ...requestWarnings],
     state: {
       mergeable,
       // CON-42/1's draft clause (zheref/nen#331): a draft is never ready.
@@ -1200,6 +1241,9 @@ export async function fetchPrState(
       // Earlier-head round-check runs (option B, 2026-09-29), `[]` when none
       // were wanted, none were found, or the read failed closed.
       earlier_round_checks: earlier.checks,
+      // zheref/nen#240: every `review_requested` login, or `null` when the
+      // timeline could not be read. ABSENT when no round cap is declared.
+      ...(requestedLogins === undefined ? {} : { review_requested_logins: requestedLogins }),
       // The CON-40 delivery evidence. EVERY absent field reads as "not a
       // delivery PR" rather than as unreadable -- isDeliveryPr() requires
       // author, base_ref and default_branch NON-EMPTY -- so a degraded read

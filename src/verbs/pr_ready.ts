@@ -85,6 +85,7 @@ import {
 } from "../gates/predicates.js";
 import { createClient, tokenFromEnv } from "../github/client.js";
 import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state.js";
+import { renderRoundCounts, type RoundCounts } from "../gates/round_counts.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { SchemaError } from "../schema/errors.js";
 import { GIT, spawnRunner } from "../seam/exec.js";
@@ -511,6 +512,16 @@ export interface ReadyMeta {
    * never by the default output. Always the array. Additive.
    */
   readonly notes: readonly string[];
+  /**
+   * Each configured reviewer's review rounds against `nen/gates.json`'s
+   * `round_policy.minRounds`/`.maxRounds` (zheref/nen#240): requested (from
+   * the timeline; `null` when it could not be read), posted, the rounds
+   * counted, and a `min`/`max` status. ABSENT when the file states neither key
+   * or the rounds-owed row was not judged through the ordinary owed-round
+   * path, so such a report is byte-identical to before. Context, never a
+   * conjunct. Additive to v0.1.
+   */
+  readonly roundCounts?: RoundCounts;
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -1181,6 +1192,9 @@ export function renderExplain(report: ReadyReport): string[] {
     if (!isDeclarationNotice(warning)) lines.push(`  warning: ${warning}`);
   }
   for (const note of report.meta.notes) lines.push(`  note: ${note}`);
+  if (report.meta.roundCounts !== undefined) {
+    for (const line of renderRoundCounts(report.meta.roundCounts)) lines.push(line);
+  }
   lines.push("");
   lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
   lines.push("  when every row is ready, and the line above is the first failing row's reason.");
@@ -1607,6 +1621,7 @@ export async function readReady(
       declaredExclusions: evaluation.context.declaredExclusions,
       declaredExclusionsSource: base.origin,
       notes: base.notes,
+      ...(evaluation.context.roundCounts === undefined ? {} : { roundCounts: evaluation.context.roundCounts }),
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,

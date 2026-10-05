@@ -1242,6 +1242,54 @@ export function roundsAtHead(
   return found;
 }
 
+// --- roundCountInputs (zheref/nen#240) ---------------------------------------
+// What `nen pr ready --explain` counts per reviewer against `round_policy`'s
+// minRounds/maxRounds: how many reviews the reviewer posted (by its login
+// pattern), whether a review request naming it is pending, and whether it HAS
+// a round by the gate's own rule -- `reviewerRound`, the branches
+// `pendingRounds` and `roundQuorum` already ask, never a second copy. A
+// round-check reviewer (its check IS its round) can have a round with no
+// review posted, which is why the two are reported apart.
+export interface ReviewerRoundFacts {
+  readonly reviewer: string;
+  readonly posted: number;
+  readonly pendingRequest: boolean;
+  readonly round: RoundVia | null;
+  readonly loginPattern: RegExp;
+}
+
+export function reviewerRoundFacts(
+  identities: GateIdentities,
+  inputs: RoundInputs,
+  headSha: string,
+  reviewers: readonly string[],
+  policy: RoundPolicy,
+  deliveryPr = false,
+): ReviewerRoundFacts[] {
+  const checks = latestChecks(inputs.checks);
+  return normalizeReviewerNames(reviewers).map((name): ReviewerRoundFacts => {
+    const identity: ReviewerIdentity | undefined = identities.reviewer(name);
+    const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
+    const outcome = reviewerRound(
+      identity,
+      loginPattern,
+      inputs.reviews,
+      checks,
+      inputs.earlierChecks ?? [],
+      headSha,
+      policy,
+      deliveryPr,
+    );
+    return {
+      reviewer: name,
+      posted: inputs.reviews.filter((review): boolean => loginPattern.test(review.author)).length,
+      pendingRequest: inputs.reviewRequests.some((request): boolean => requestMatches(request, loginPattern)),
+      round: outcome.had ? outcome.via : null,
+      loginPattern,
+    };
+  });
+}
+
 /** Which branch of `reviewerRound` found a reviewer's round. */
 export type RoundVia =
   | "review"

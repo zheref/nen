@@ -11,7 +11,6 @@
 // shell used to hard-code a persona for.
 
 import { describe, expect, it } from "vitest";
-import { loadOwnGates } from "../schema/fixtures/own_gates.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -1136,9 +1135,8 @@ describe("CAVEATS -- the fixed 'what the gate does not decide' set", () => {
 // fixture of it -- so a later edit to that file that changes these verdicts
 // fails here, where it can be read, rather than on a pull request.
 describe("evaluateReady -- round_quorum on this repository's nen/gates.json (ruling 2026-09-29)", () => {
-  // TODO(zheref/nen#240): read the file directly once #240 lands.
-  const OWN = loadOwnGates().identities;
-  const OWN_RAW = loadOwnGates().raw;
+  const OWN = loadGateIdentities(process.cwd());
+  const OWN_RAW = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as Record<string, unknown>;
   // THE PRE-QUORUM READING: every nen release before the one that ships
   // `round_quorum` (v0.15.1 and v0.16.0 verified) ignores the key and applies
   // the rest of the file. Parsing the file with the key removed IS that
