@@ -221,6 +221,113 @@ describe("nen pr body-check", () => {
     expect(result.out).toEqual([]);
     expect(result.err.join("\n")).toMatch(/empty/);
   });
+
+  // zheref/nen#239: a shipped file's human output is unchanged; --json gains
+  // only the additive 'source' field.
+  it("a shipped --requirements-from reports source { kind: shipped, path } in --json", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-"));
+    writeFileSync(join(dir, "body.md"), "## Summary\nok\n");
+    writeFileSync(join(dir, "req.json"), JSON.stringify([{ name: "summary", pattern: "## Summary" }]));
+    // A template on disk must NOT be read when a file is given.
+    mkdirSync(join(dir, ".github"));
+    writeFileSync(join(dir, ".github", "pull_request_template.md"), "## Something else\n");
+    const human = await capture(["pr", "body-check", "--body-from", "body.md", "--requirements-from", "req.json"], dir);
+    expect(human.code).toBe(0);
+    expect(human.out).toEqual(["1/1 requirement(s) satisfied", "ok  summary"]);
+    const json = await capture(["pr", "body-check", "--body-from", "body.md", "--requirements-from", "req.json", "--json"], dir);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.out.join("\n"))).toEqual({
+      results: [{ name: "summary", pattern: "## Summary", satisfied: true }],
+      ok: true,
+      source: { kind: "shipped", path: "req.json" },
+    });
+  });
+
+  it("an explicitly EMPTY --requirements-from is still a usage refusal, never a fall-through to derivation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-"));
+    writeFileSync(join(dir, "body.md"), "## Summary\n");
+    writeFileSync(join(dir, "pull_request_template.md"), "## Summary\n");
+    const result = await capture(["pr", "body-check", "--body-from", "body.md", "--requirements-from", ""], dir);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--requirements-from is required/);
+  });
+});
+
+describe("nen pr body-check -- derived from the pull-request template (zheref/nen#239)", () => {
+  function repoWith(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-"));
+    for (const [relative, contents] of Object.entries(files)) {
+      mkdirSync(join(dir, relative, ".."), { recursive: true });
+      writeFileSync(join(dir, relative), contents);
+    }
+    return dir;
+  }
+
+  it("derives the set from the template's headings and names the source on the verdict line", async () => {
+    const dir = repoWith({
+      ".github/PULL_REQUEST_TEMPLATE.md": "## Summary\n<!-- what -->\n\n## How to verify\n",
+      "body.md": "## Summary\nA change.\n",
+    });
+    const result = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual([
+      "1/2 requirement(s) satisfied (DERIVED from the pull-request template '.github/PULL_REQUEST_TEMPLATE.md'; no --requirements-from given)",
+      "ok  ## Summary",
+      "MISSING  ## How to verify",
+    ]);
+  });
+
+  it("--json carries source { kind: derived, path } and exits 0 when every heading is present", async () => {
+    const dir = repoWith({
+      "docs/pull_request_template.md": "## Summary\n## Test plan\n",
+      "body.md": "## Summary\nx\n## Test plan\ny\n",
+    });
+    const result = await capture(["pr", "body-check", "--body-from", "body.md", "--json"], dir);
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; source: unknown; results: unknown[] };
+    expect(report.ok).toBe(true);
+    expect(report.results).toHaveLength(2);
+    expect(report.source).toEqual({ kind: "derived", path: "docs/pull_request_template.md" });
+  });
+
+  it("reads the template under --repo, not the process directory", async () => {
+    const dir = repoWith({ "PULL_REQUEST_TEMPLATE/only.md": "## Only\n", "body.md": "## Only\n" });
+    const result = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(result.code).toBe(0);
+    expect(result.out[0]).toMatch(/DERIVED from the pull-request template 'PULL_REQUEST_TEMPLATE\/only\.md'/);
+  });
+
+  it("no file and no template refuses at exit 2, naming the missing input and the documented bootstrap", async () => {
+    const dir = repoWith({ "body.md": "## Summary\n" });
+    const result = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/no --requirements-from was given and no pull-request template was found/);
+    expect(err).toMatch(/docs\/USAGE\.md, "Bootstrapping a body-check requirements file"/);
+  });
+
+  it("an ambiguous template refuses at exit 2, listing the candidates", async () => {
+    const dir = repoWith({
+      ".github/pull_request_template.md": "## A\n",
+      "pull_request_template.md": "## B\n",
+      "body.md": "## A\n",
+    });
+    const result = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/ambiguous: \.github\/pull_request_template\.md, pull_request_template\.md/);
+    expect(err).toMatch(/Bootstrapping a body-check requirements file/);
+  });
+
+  it("a template with no headings refuses at exit 2 rather than passing vacuously", async () => {
+    const dir = repoWith({ ".github/pull_request_template.md": "Describe the change.\n", "body.md": "anything\n" });
+    const result = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/'\.github\/pull_request_template\.md' has no headings/);
+  });
 });
 
 // --- verbs/4-remainders: fetch, next-blocker, cascade-main, retarget,

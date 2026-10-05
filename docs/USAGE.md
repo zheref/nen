@@ -707,7 +707,7 @@ verbs need a token and which run offline. Every verb accepts the global
 |---|---|---|---|---|
 | [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | nen/gates.json + nen/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
 | [`pr`](#family-pr) | [`nen pr staleness`](#nen-pr-staleness) | stale + Ready merge-permission arithmetic over a verified-wake history | caller-supplied --wakes-from JSON file, no schema/git/gh | yes |
-| [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns | caller-supplied --body-from/--requirements-from files | yes |
+| [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns, or, with no `--requirements-from`, against the headings of the repository's own PR template (named as derived) | caller-supplied --body-from/--requirements-from files; else the PR template (`pull_request_template.md` at the root, `.github/` or `docs/`, or `PULL_REQUEST_TEMPLATE/*.md`) | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
@@ -1639,12 +1639,14 @@ merge PERMITTED (stale + Ready)
 
 Checks a pull-request body against this repository's own template
 requirements — every requirement is checked, never stopping at the first
-miss. The requirement patterns are never built in.
+miss. The requirement patterns are never built in: they come from the
+caller's `--requirements-from` file (**shipped**) or, when that flag is
+absent, are **derived** from the repository's own pull-request template.
 
 **Usage**
 
 ```text
-nen pr body-check --body-from <path> --requirements-from <path>
+nen pr body-check --body-from <path> [--requirements-from <path>]
 ```
 
 **Arguments**
@@ -1652,15 +1654,52 @@ nen pr body-check --body-from <path> --requirements-from <path>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--body-from <path>` | yes | the pull-request body to check | plain text |
-| `--requirements-from <path>` | yes | a JSON array of `{ name, pattern }` | an empty array is refused, exit 1 — a vacuous pass having checked nothing is never reported as success |
-| `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root | default cwd |
+| `--requirements-from <path>` | no | a JSON array of `{ name, pattern }` | an empty array is refused, exit 1 — a vacuous pass having checked nothing is never reported as success. Omitted: the set is derived from the PR template (below). Given but empty (`--requirements-from ""`): exit 2, never a fall-through to derivation |
+| `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root, and is where the PR template is looked for | default cwd |
 | `--json` | no | machine-readable report | — |
 
+**Deriving the set from the PR template** (zheref/nen#239). With no
+`--requirements-from`, the verb looks for the template in GitHub's own
+locations under the `--repo` root, matching file names in any letter case:
+
+1. a default template, `pull_request_template.md`, in `.github/`, the root or
+   `docs/`. Exactly one is the source; it is what GitHub pre-fills a new PR
+   with, so any `PULL_REQUEST_TEMPLATE/` alternatives beside it are ignored.
+   Two or more (say `.github/` and the root) is **ambiguous**;
+2. otherwise, a `*.md` file directly inside a `PULL_REQUEST_TEMPLATE/`
+   directory in one of those three places. Exactly one is the source; more
+   than one is **ambiguous**, because GitHub chooses among them only by a
+   `?template=` query the verb cannot see.
+
+Each ATX heading in the template (`#` to `######`) becomes one requirement:
+the body must carry a heading at the **same level** with the **same text**,
+letter case and spacing aside. The requirement's `name` is the heading as
+written (`## How to verify`). Headings inside fenced code, inside an HTML
+comment, or in a leading front-matter block are skipped; a repeated heading
+counts once; Setext (underlined) headings are not read. The derived set is
+deliberately minimal — it says which sections the body must have, not what
+they must say. A repository that needs more ships a file.
+
+The verb never picks among ambiguous templates and never skips the check.
+Each of these refuses at **exit 2**, naming what is missing and pointing to
+[the bootstrap step](#bootstrapping-a-body-check-requirements-file):
+
+- no `--requirements-from` and no template in any location (the message lists every path searched);
+- an ambiguous template (the message lists the candidates);
+- a template with no headings, which would otherwise pass having checked nothing.
+
 **Output and exit codes** — human lines: `<n>/<total> requirement(s)
-satisfied`, then `ok`/`MISSING` per requirement; `--json` top-level keys:
-`results[]` (`name`, `pattern`, `satisfied`), `ok`. Exit 0 when every
-requirement is satisfied, exit 1 when at least one is missing **or** the
-requirement list is empty, exit 2 on a missing flag.
+satisfied`, then `ok`/`MISSING` per requirement. When the set was derived,
+the verdict line itself names the source — `<n>/<total> requirement(s)
+satisfied (DERIVED from the pull-request template '<path>'; no
+--requirements-from given)` — so quoting the verdict also quotes where its
+requirements came from. A shipped file's lines are unchanged. `--json`
+top-level keys: `results[]` (`name`, `pattern`, `satisfied`), `ok`, and
+`source` — `{ "kind": "shipped", "path": <the --requirements-from value> }`
+or `{ "kind": "derived", "path": <the template's repo-relative path> }`.
+Exit 0 when every requirement is satisfied, exit 1 when at least one is
+missing **or** a shipped requirement list is empty, exit 2 on a missing flag
+or any of the derivation refusals above.
 
 **Example**
 
@@ -1674,6 +1713,34 @@ ok  how-to-verify
 ok  test-plan
 ```
 (from a real run; `req.json` = `[{"name":"summary","pattern":"## Summary"},{"name":"how-to-verify","pattern":"## How to verify"},{"name":"test-plan","pattern":"## Test plan"}]` against a body carrying all three headings)
+
+```bash
+nen pr body-check --body-from body.md
+```
+```text
+1/2 requirement(s) satisfied (DERIVED from the pull-request template '.github/PULL_REQUEST_TEMPLATE.md'; no --requirements-from given)
+ok  ## Summary
+MISSING  ## How to verify
+```
+(a repository shipping no requirements file, whose template carries `## Summary` and `## How to verify`, against a body carrying only the first)
+
+#### Bootstrapping a body-check requirements file
+
+When `nen pr body-check` refuses for want of an input, give it one. Either:
+
+- **add a pull-request template** at `.github/pull_request_template.md` whose
+  headings are the sections every PR body must carry. The verb derives its
+  requirements from it with no further flag, and says so on every verdict; or
+- **ship a requirements file** in the repository, a JSON array of
+  `{ "name": ..., "pattern": ... }` where each `pattern` is a regular
+  expression (matched case-insensitively and per line) the body must match,
+  and pass it as `--requirements-from <path>`. A template-derived set is a
+  fine starting point: `nen pr body-check --body-from <body> --json` prints
+  each derived `name` and `pattern` under `results[]`, ready to copy into the
+  file and extend.
+
+What the file requires is the repository's decision. Nen never writes it.
+Where the template is ambiguous, the file is the way to say which one counts.
 
 ### `nen pr fetch`
 
