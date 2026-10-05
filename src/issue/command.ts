@@ -651,8 +651,9 @@ usage:
       since, limit, holdLabels, scanned: { openIssues, mergedPullRequests },
       truncated: { openIssues, mergedPullRequests }, proposals: [{ issue,
       title, url, labels, action, reason, openPullRequests, evidence: [{ pr,
-      url, title, base, mergedAt, mergeCommit, landing, references: [{
-      source: linked | body | commit, text, commit }] }] }], notOpen,
+      url, title, base, mergedAt, mergeCommit, landing, delivery: { pr,
+      url, mergedAt } | null, references: [{ source: linked | body |
+      commit, text, commit }] }] }], notOpen,
       findings: [{ source, detail }], complete }'.`;
 
 export const issueCommand: Command = {
@@ -2001,8 +2002,11 @@ function chainTerminus(context: CommandContext): number {
 function parseSince(raw: string | undefined): string | null {
   if (raw === undefined) return null;
   const value = raw.trim();
+  // getTime() FIRST: '2026-99-99' makes an Invalid Date, and toISOString() on
+  // one throws a RangeError -- a typo must be a usage refusal, not a crash.
+  const date = new Date(`${value}T00:00:00Z`);
   const valid =
-    /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+    /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
   if (!valid) throw new VerbUsageError(`--since takes a calendar date as YYYY-MM-DD; '${raw}' is not one.`);
   return value;
 }

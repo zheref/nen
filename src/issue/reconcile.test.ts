@@ -717,3 +717,39 @@ describe("round 2 (Nobunaga) on the delivery of #332", () => {
     expect(bare.findings[0]?.detail).toMatch(/not a JSON-encoded name/);
   });
 });
+
+describe("Copilot round 1 on zheref/nen#387", () => {
+  it("B: a four-backtick fence holding a triple-backtick line does not close on it", () => {
+    const text = ["````md", "```", "Closes #9", "```", "````", "Resolves #4"].join("\n");
+    expect(closingReferencesIn(text, TARGET).map(([n]): number => n)).toEqual([4]);
+  });
+
+  it("B: a fence closes only on its own character, and an unterminated one runs to the end", () => {
+    expect(closingReferencesIn(["~~~", "```", "Closes #9", "~~~", "Fixes #4"].join("\n"), TARGET).map(([n]): number => n)).toEqual([4]);
+    expect(closingReferencesIn(["Resolves #4", "```", "Closes #9"].join("\n"), TARGET).map(([n]): number => n)).toEqual([4]);
+  });
+
+  it("C: a repeated search cursor stops paging with a finding, and the run is incomplete", () => {
+    const { report } = run({
+      issues: [issue(5)],
+      pulls: [pull(40)],
+      nextCursor: "P1",
+      issueCount: 3,
+      extraPages: [
+        { match: gh(mergedPullsArgv(TARGET, 99, null, "P1")), result: page([pull(41)], "P1", 3) },
+        // Only an unguarded loop reaches this second answer, and fails on it.
+        { match: gh(mergedPullsArgv(TARGET, 99, null, "P1")), result: { code: 1, stderr: "a read the guard should have prevented" } },
+      ],
+    });
+    expect(report.complete).toBe(false);
+    expect(report.truncated.mergedPullRequests).toBe(true);
+    expect(report.findings.map((f): string => f.detail)).toContainEqual(expect.stringMatching(/repeated the cursor 'P1'/));
+  });
+
+  it("D: a default-branch PR with no merge commit is verify plus a finding, never close", () => {
+    const { report } = run({ issues: [issue(5)], pulls: [pull(40, { mergeCommit: null, body: "Closes #5" })] });
+    expect(report.proposals[0]?.action).toBe("verify");
+    expect(report.findings).toEqual([{ source: "merge-commit #40", detail: expect.stringMatching(/no merge commit recorded/) }]);
+    expect(report.complete).toBe(false);
+  });
+});

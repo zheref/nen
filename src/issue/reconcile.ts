@@ -104,12 +104,38 @@ const REFERENCE = new RegExp(
  * itself does not act on either.
  */
 export function stripNonReferenceText(text: string): string {
-  const unfenced = text
-    .replace(/\r\n/g, "\n")
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/```[\s\S]*?(?:```|$)/g, " ")
-    .replace(/~~~[\s\S]*?(?:~~~|$)/g, " ");
+  const unfenced = stripFences(text.replace(/\r\n/g, "\n").replace(/<!--[\s\S]*?-->/g, " "));
   return stripIndentedCode(unfenced).replace(CODE_SPAN, " ");
+}
+
+/**
+ * Drop fenced code blocks, CommonMark's way: the opening line's delimiter is
+ * a run of 3+ backticks or 3+ tildes (up to 3 spaces in), and the block closes
+ * only on a line holding a run of the SAME character at least as long, and
+ * nothing else. So a four-backtick fence can quote a triple-backtick line
+ * without ending, and a fence never closed runs to the end of the text.
+ */
+function stripFences(text: string): string {
+  let open: { readonly char: string; readonly length: number } | null = null;
+  return text
+    .split("\n")
+    .map((line): string => {
+      if (open === null) {
+        const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+        if (opener === null) return line;
+        const run = opener[1] as string;
+        // A backtick fence's info string may not contain a backtick; such a
+        // line is inline code, which CODE_SPAN handles.
+        if (run.startsWith("`") && line.slice(opener[0].length).includes("`")) return line;
+        open = { char: run.charAt(0), length: run.length };
+        return "";
+      }
+      const closer = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+      const run = closer?.[1];
+      if (run !== undefined && run.charAt(0) === open.char && run.length >= open.length) open = null;
+      return "";
+    })
+    .join("\n");
 }
 
 // A code span is a run of N backticks closed by a run of EXACTLY N (CommonMark),
@@ -555,6 +581,9 @@ function readMergedPulls(
   const seen = new Set<number>();
   let after: string | null = null;
   let truncated = false;
+  // A cursor the search already handed out means the next read would repeat
+  // one already made -- the loop would spin or re-read the same page.
+  const cursors = new Set<string>();
   for (;;) {
     const first = Math.min(100, limit - rows.length);
     const result = seams.run(GH, mergedPullsArgv(target, first, since, after));
@@ -616,6 +645,12 @@ function readMergedPulls(
       truncated = true;
       break;
     }
+    if (cursors.has(page.endCursor)) {
+      findings.push({ source: "merged-pull-requests", detail: `the search repeated the cursor '${page.endCursor}', so its pages made no progress` });
+      truncated = true;
+      break;
+    }
+    cursors.add(page.endCursor);
     after = page.endCursor;
   }
   return { pulls: parseMergedPulls(JSON.stringify(rows), target), truncated };
@@ -684,7 +719,7 @@ export interface Proposal {
 }
 
 export interface Finding {
-  /** Which source: `default-branch`, `open-issues`, `merged-pull-requests`, `compare #<pr>`, `delivery <branch>`, `open-pr-guard`, `hold-labels`. */
+  /** Which source: `default-branch`, `open-issues`, `merged-pull-requests`, `compare #<pr>`, `delivery <branch>`, `merge-commit #<pr>`, `open-pr-guard`, `hold-labels`. */
   readonly source: string;
   readonly detail: string;
 }
@@ -775,7 +810,15 @@ function landingOf(
   findings: Finding[],
 ): Landing {
   if (defaultBranch === null) return "unknown";
-  if (pull.base === defaultBranch) return "default-branch";
+  if (pull.base === defaultBranch) {
+    // Every proposal cites a merge commit; a merged PR with none recorded is
+    // evidence the verb cannot cite, so it is verify, never close.
+    if (pull.mergeCommit === null) {
+      findings.push({ source: `merge-commit #${pull.number}`, detail: `PR #${pull.number} merged into '${pull.base}' with no merge commit recorded, so there is no commit to cite` });
+      return "unknown";
+    }
+    return "default-branch";
+  }
   if (pull.mergeCommit === null) {
     findings.push({ source: `compare #${pull.number}`, detail: `PR #${pull.number} merged into '${pull.base}' with no merge commit recorded, so whether it reached '${defaultBranch}' cannot be checked` });
     return "unknown";

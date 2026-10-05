@@ -3434,6 +3434,9 @@ describe("nen issue reconcile -- read-only, proposes only (zheref/nen#332)", () 
   it.each([
     [["--since", "2026-02-30"], /--since takes a calendar date/],
     [["--since", "yesterday"], /--since takes a calendar date/],
+    // Copilot A on zheref/nen#387: an Invalid Date used to reach toISOString()
+    // and throw a RangeError instead of refusing.
+    [["--since", "2026-99-99"], /--since takes a calendar date/],
     [["--limit", "0"], /--limit takes a whole number from 1 to 1000/],
     [["--limit", "1001"], /--limit takes a whole number/],
     [["--issues", "5,x"], /not one: 'x'/],
@@ -3452,5 +3455,7 @@ describe("nen issue reconcile -- read-only, proposes only (zheref/nen#332)", () 
     const out = (await capture(["issue", "--help"])).out.join("\n");
     expect(out).toMatch(/nen issue reconcile --target <owner\/name> \[--since <YYYY-MM-DD>\]/);
     expect(out).toMatch(/READ-ONLY, PROPOSES ONLY/);
+    // Copilot E on zheref/nen#387: the --json shape in --help matches USAGE.
+    expect(out).toMatch(/landing, delivery: \{ pr,\s+url, mergedAt \} \| null, references:/);
   });
 });
