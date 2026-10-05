@@ -135,7 +135,7 @@ export function validateTrees(trees: readonly string[], flag = "--trees"): reado
 /** The real path of `path`, or null when it cannot be resolved (gone, dangling, looping, unreadable). */
 function real(path: string): string | null {
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
     return null;
   }
@@ -182,7 +182,7 @@ export function classifyError(error: unknown): InspectionFailure {
 /** The real path of `path`, or how resolving it failed. */
 function resolveReal(path: string): { readonly real: string } | { readonly failure: InspectionFailure; readonly code: string } {
   try {
-    return { real: realpathSync(path) };
+    return { real: realpathSync.native(path) };
   } catch (error) {
     return { failure: classifyError(error), code: (error as NodeJS.ErrnoException).code ?? "error" };
   }

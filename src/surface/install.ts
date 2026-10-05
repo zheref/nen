@@ -9,9 +9,12 @@
 //   claude-code  a symlink at `<config>/skills/<plugin>` loads the checkout IN
 //                PLACE as `<plugin>@skills-dir`. An installed marketplace copy
 //                `<plugin>@<marketplace>` takes precedence over it, so a prior
-//                one from the checkout's OWN marketplace is handed over first
-//                (`claude plugin uninstall`, then `claude plugin marketplace
-//                remove`), and `claude plugin list --json` is the read-back.
+//                one from the checkout's OWN marketplace is handed over:
+//                `claude plugin uninstall`, then ONE `claude plugin marketplace
+//                remove` for the known entry. That remove does not clear a
+//                settings.json declaration of the same marketplace; the SECOND
+//                remove that would is never run here -- it is an action owed
+//                (below). `claude plugin list --json` is the read-back.
 //   codex        `codex plugin marketplace add <checkout>` reads the checkout's
 //                `.claude-plugin/marketplace.json`; `codex plugin add
 //                <plugin>@<marketplace>` installs from it; `codex plugin list`
@@ -29,11 +32,13 @@
 // Antigravity plugin (`--surface-dir`) are the caller's; nothing here names
 // any one plugin.
 //
-// THE OWNERSHIP RULE: NEVER REPLACE WHAT THIS VERB DID NOT MAKE. A destination
-// is replaced only when it is absent or a symlink to a root of the SAME plugin
-// (for Antigravity, to that root's `--surface-dir`). A real directory, a file,
-// a dangling link or a link anywhere else is refused, named, and left exactly
-// as it was. A marketplace install of the plugin from a marketplace the
+// THE OWNERSHIP RULE: A LINK TO ANY ROOT OF THE SAME PLUGIN COUNTS AS OURS;
+// ONLY A LINK IS EVER REPLACED, NEVER DATA. A destination is written only when
+// it is absent or a link to some root of the same plugin (for Antigravity, to
+// that root's `--surface-dir`) -- whoever made that link. A real directory, a
+// file, a dangling link or a link anywhere else is refused, named, and left
+// exactly as it was, and the destination is inspected again right before the
+// write, so one swapped in meanwhile is refused too. A marketplace install of the plugin from a marketplace the
 // checkout does not publish is refused the same way, and so is a Codex
 // marketplace of the same name pointed at another root.
 //
@@ -51,7 +56,7 @@
 // swallowed into "not found".
 
 import { homedir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { outputLines, type Seams } from "../seam/exec.js";
@@ -121,7 +126,23 @@ export const STATUS_EXIT: Readonly<Record<StatusVerdict, number>> = {
 export interface Step {
   readonly kind: "mkdir" | "link" | "re-point" | "run";
   readonly detail: string;
+  /** True only once the step SUCCEEDED -- never for a planned or a failed one. */
   readonly done: boolean;
+  /** `planned` (--dry-run), `ok`, or `failed`: a step that failed is shown as failed. */
+  readonly outcome: "planned" | "ok" | "failed";
+}
+
+/** A step while it runs: its outcome is set once it is known. */
+interface MutableStep {
+  readonly kind: Step["kind"];
+  readonly detail: string;
+  done: boolean;
+  outcome: Step["outcome"];
+}
+
+function settle(step: MutableStep, ok: boolean): void {
+  step.done = ok;
+  step.outcome = ok ? "ok" : "failed";
 }
 
 /** A change the caller owes, which this verb will not make (a settings declaration). */
@@ -171,6 +192,8 @@ export interface InstallReport {
 // ---------------------------------------------------------------------------
 
 const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
+/** A marketplace name this verb will hand a CLI: no shell or flag meaning possible. */
+const MARKETPLACE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 const CONTROL_ALL = /[\x00-\x1f\x7f-\x9f]/g;
 
 /** The last non-empty line of a tool's output, credentials redacted, control characters removed, capped at 200. */
@@ -278,8 +301,11 @@ export function readMarketplace(root: string, plugin: string): MarketplaceRead {
   if (read.state === "absent") return { state: "absent" };
   if (read.state === "bad") return read;
   const name = read.value["name"];
-  if (typeof name !== "string" || name === "" || CONTROL.test(name) || /[@/\\\s]/.test(name)) {
-    return { state: "bad", reason: `${safe(path)} carries no usable 'name' (a non-empty string with no '@', '/', '\\', space or control character)` };
+  if (typeof name !== "string" || !MARKETPLACE_NAME.test(name)) {
+    return {
+      state: "bad",
+      reason: `${safe(path)} carries no usable 'name' (only letters, digits, '.', '_' and '-', not starting with '-': it is passed to the surface's CLI as an argument)`,
+    };
   }
   const plugins = read.value["plugins"];
   const listsPlugin = Array.isArray(plugins)
@@ -481,21 +507,40 @@ export function surfaceConfigDir(surface: InstallSurface, flag: string | null, e
   return join(homeOf(env), surface === "codex" ? ".codex" : ".gemini");
 }
 
-/** The environment a surface CLI is run with, so it reads and writes the directory this verb reads. */
-function toolEnv(surface: InstallSurface, configDir: string): Readonly<Record<string, string>> {
+/** True when `--config-dir` or the surface's own variable named the directory: only then is it passed on. */
+export function configDirIsExplicit(surface: InstallSurface, flag: string | null, env: Readonly<Record<string, string | undefined>>): boolean {
+  if (flag !== null) return true;
+  const variable = surface === "claude-code" ? "CLAUDE_CONFIG_DIR" : surface === "codex" ? "CODEX_HOME" : "GEMINI_CONFIG_DIR";
+  const value = env[variable];
+  return value !== undefined && value !== "";
+}
+
+/**
+ * The environment a surface CLI is run with. The directory is passed ONLY
+ * when the caller named it (--config-dir or the surface's variable): the
+ * default is the CLI's own, and setting it would be a second source for it.
+ */
+function toolEnv(surface: InstallSurface, configDir: string, explicit: boolean): Readonly<Record<string, string>> {
+  if (!explicit) return {};
   if (surface === "claude-code") return { CLAUDE_CONFIG_DIR: configDir };
   if (surface === "codex") return { CODEX_HOME: configDir };
   return {};
 }
 
-/** A command the caller can paste: the config directory named when it is not the surface's own default. */
-function suggest(surface: InstallSurface, configDir: string, env: Readonly<Record<string, string | undefined>>, command: string): string {
-  if (surface !== "claude-code" || configDir === join(homeOf(env), ".claude")) return command;
+/** A command line a human can paste: every token quoted for a POSIX shell. */
+export function commandText(tokens: readonly string[]): string {
+  return tokens.map(shellQuote).join(" ");
+}
+
+/** A suggested command: the config directory named exactly when the CLI is run with it. */
+function suggest(surface: InstallSurface, configDir: string, explicit: boolean, tokens: readonly string[]): string {
+  const command = commandText(tokens);
+  if (surface !== "claude-code" || !explicit) return command;
   return `CLAUDE_CONFIG_DIR=${shellQuote(configDir)} ${command}`;
 }
 
-function shellQuote(text: string): string {
-  return /^[A-Za-z0-9_./:@=+-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
+export function shellQuote(text: string): string {
+  return /^[A-Za-z0-9_./:@=+,-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +615,15 @@ export function validateSurfaceDir(root: string, surfaceDir: string, plugin: str
 
 export type LinkState =
   | { readonly kind: "absent" }
-  | { readonly kind: "link"; readonly raw: string; readonly real: string | null; readonly owner: string | null }
+  | {
+      readonly kind: "link";
+      readonly raw: string;
+      readonly real: string | null;
+      readonly owner: string | null;
+      /** The link's own lstat identity, so a swap between plan and write is seen. */
+      readonly dev: number;
+      readonly ino: number;
+    }
   | { readonly kind: "directory" }
   | { readonly kind: "file" }
   | { readonly kind: "other" }
@@ -596,11 +649,11 @@ export function inspectDestination(dest: string, owner: Owner): LinkState {
     }
     let real: string | null = null;
     try {
-      real = realpathSync(dest);
+      real = realpathSync.native(dest);
     } catch {
       real = null;
     }
-    return { kind: "link", raw, real, owner: real === null ? null : owner(real) };
+    return { kind: "link", raw, real, owner: real === null ? null : owner(real), dev: stats.dev, ino: stats.ino };
   }
   if (stats.isDirectory()) return { kind: "directory" };
   if (stats.isFile()) return { kind: "file" };
@@ -646,54 +699,88 @@ function linkType(platform: NodeJS.Platform): "junction" | "dir" {
   return platform === "win32" ? "junction" : "dir";
 }
 
-/** Create, or atomically re-point, the link at `dest`. Throws Stop on a write that failed. */
-function placeLink(dest: string, target: string, replacing: boolean, platform: NodeJS.Platform): void {
-  const code = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? "error";
-  if (!replacing) {
-    try {
-      mkdirSync(dirname(dest), { recursive: true });
-      symlinkSync(target, dest, linkType(platform));
-    } catch (error) {
-      throw new Stop("failed", `could not create the link ${safe(dest)} (${code(error)})`);
-    }
-    return;
-  }
-  // Re-pointing: a fresh link beside the old one, renamed over it -- the
-  // destination is never absent in between, and the old link is replaced as
-  // an entry, never followed.
-  const temporary = `${dest}.nen-relink`;
+/**
+ * The filesystem writes a link takes, injectable so a test can make one fail
+ * -- the Windows fallback below is otherwise unreachable on a POSIX host.
+ */
+export interface LinkOps {
+  readonly symlink: (target: string, path: string, type: "junction" | "dir") => void;
+  readonly rename: (from: string, to: string) => void;
+  readonly unlink: (path: string) => void;
+  readonly rmdir: (path: string) => void;
+}
+
+export const FS_LINK_OPS: LinkOps = {
+  symlink: (target, path, type): void => symlinkSync(target, path, type),
+  rename: (from, to): void => renameSync(from, to),
+  unlink: (path): void => unlinkSync(path),
+  rmdir: (path): void => rmdirSync(path),
+};
+
+/** Remove a LINK (never data): a Windows junction is a directory entry, so it goes by rmdir, which is not recursive. */
+function removeLink(path: string, platform: NodeJS.Platform, ops: LinkOps): void {
+  if (platform === "win32") ops.rmdir(path);
+  else ops.unlink(path);
+}
+
+const code = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? "error";
+
+/** Create the link at an absent `dest`. Throws Stop on a write that failed. */
+function createLink(dest: string, target: string, platform: NodeJS.Platform, ops: LinkOps): void {
   try {
-    const stale = lstatSync(temporary);
-    if (!stale.isSymbolicLink()) throw new Stop("refused", `${safe(temporary)} exists and is not a link this verb left behind; it is never removed`);
-    unlinkSync(temporary);
+    ops.symlink(target, dest, linkType(platform));
   } catch (error) {
-    if (error instanceof Stop) throw error;
-    if (classifyError(error) !== "absent") throw new Stop("failed", `could not inspect ${safe(temporary)} (${code(error)})`);
-  }
-  try {
-    symlinkSync(target, temporary, linkType(platform));
-  } catch (error) {
-    throw new Stop("failed", `could not create the link ${safe(temporary)} (${code(error)})`);
-  }
-  try {
-    renameSync(temporary, dest);
-  } catch (error) {
-    /* c8 ignore start -- Windows will not rename over a junction; the old junction (a link, never a real directory: rmdir is not recursive) goes first */
-    if (platform === "win32") {
-      try {
-        rmdirSync(dest);
-        renameSync(temporary, dest);
-        return;
-      } catch (second) {
-        throw new Stop("failed", `could not re-point ${safe(dest)} (${code(second)})`);
-      }
-    }
-    /* c8 ignore stop */
-    throw new Stop("failed", `could not re-point ${safe(dest)} (${code(error)})`);
+    throw new Stop("failed", `could not create the link ${safe(dest)} (${code(error)})`);
   }
 }
 
-/** After a write: `dest` is a link and resolves to `target`. A link elsewhere is not ours (a race lost): refused. */
+/**
+ * Re-point the link at `dest`: a fresh link beside it (`.<name>.nen-relink`),
+ * renamed over it, so the destination is never absent and the old link is
+ * replaced as an entry, never followed. A stale temporary is removed only when
+ * it is a link to a root of the same plugin (`owner`) -- never anything else.
+ */
+function repointLink(dest: string, target: string, platform: NodeJS.Platform, ops: LinkOps, owner: Owner): void {
+  const temporary = join(dirname(dest), `.${basename(dest)}.nen-relink`);
+  let stale;
+  try {
+    stale = lstatSync(temporary);
+  } catch (error) {
+    if (classifyError(error) !== "absent") throw new Stop("failed", `could not inspect ${safe(temporary)} (${code(error)})`);
+  }
+  if (stale !== undefined) {
+    let ours = false;
+    if (stale.isSymbolicLink()) {
+      try {
+        ours = owner(realpathSync.native(temporary)) !== null;
+      } catch {
+        ours = false;
+      }
+    }
+    if (!ours) throw new Stop("refused", `${safe(temporary)} exists and is not a link to a root of this plugin; it is never removed`);
+    try {
+      removeLink(temporary, platform, ops);
+    } catch (error) {
+      throw new Stop("failed", `could not remove the stale ${safe(temporary)} (${code(error)})`);
+    }
+  }
+  createLink(temporary, target, platform, ops);
+  try {
+    ops.rename(temporary, dest);
+  } catch (error) {
+    // Windows will not rename over a junction: the old junction -- a link,
+    // never data (rmdir is not recursive) -- goes first, then the rename.
+    if (platform !== "win32") throw new Stop("failed", `could not re-point ${safe(dest)} (${code(error)})`);
+    try {
+      ops.rmdir(dest);
+      ops.rename(temporary, dest);
+    } catch (second) {
+      throw new Stop("failed", `could not re-point ${safe(dest)} (${code(second)})`);
+    }
+  }
+}
+
+/** After a write: `dest` is a link and resolves to `target`. Anything else is a write that did not take: failed. */
 function readBackLink(dest: string, target: string): void {
   let isLink = false;
   try {
@@ -705,7 +792,7 @@ function readBackLink(dest: string, target: string): void {
   const destId = identityOf(dest);
   const targetId = identityOf(target);
   if (destId === null || targetId === null || !sameIdentity(destId, targetId)) {
-    throw new Stop("refused", `${safe(dest)} is not ours after writing it: it resolves to ${destId === null ? "nothing" : safe(destId.real)}, not ${safe(target)}`);
+    throw new Stop("failed", `${safe(dest)} does not resolve to ${safe(target)} after writing it (it resolves to ${destId === null ? "nothing" : safe(destId.real)})`);
   }
 }
 
@@ -713,37 +800,69 @@ function readBackLink(dest: string, target: string): void {
 interface LinkPlan {
   readonly kind: "link" | "already" | "re-point";
   readonly previous: string | null;
+  /** What the destination was when planned: re-checked right before the write. */
+  readonly seen: LinkState;
 }
 
 function planLink(dest: string, target: string, state: LinkState, plugin: string): LinkPlan {
   if (state.kind === "unreadable") throw new VerbUsageError(`${state.reason}: the destination cannot be judged, so nothing is written.`);
-  if (state.kind === "absent") return { kind: "link", previous: null };
+  if (state.kind === "absent") return { kind: "link", previous: null, seen: state };
   if (state.kind === "link" && state.owner !== null && state.real !== null) {
     const targetId = identityOf(target);
     const currentId = identityOf(state.real);
-    if (targetId !== null && currentId !== null && sameIdentity(targetId, currentId)) return { kind: "already", previous: null };
-    return { kind: "re-point", previous: state.real };
+    if (targetId !== null && currentId !== null && sameIdentity(targetId, currentId)) return { kind: "already", previous: null, seen: state };
+    return { kind: "re-point", previous: state.real, seen: state };
   }
   throw new Stop("refused", `${safe(dest)} is ${describeForeign(state, plugin)}: refusing to replace it -- a first-party install never discards what it did not make`);
 }
 
+/** True when `now` is still exactly what the plan saw: absent, or the same link entry with the same target. */
+function unchanged(seen: LinkState, now: LinkState): boolean {
+  if (seen.kind === "absent") return now.kind === "absent";
+  return seen.kind === "link" && now.kind === "link" && seen.dev === now.dev && seen.ino === now.ino && seen.raw === now.raw;
+}
+
 /** Carry out a link plan (or record it under --dry-run), reading the result back. */
-function applyLink(dest: string, target: string, plan: LinkPlan, draft: Draft, dryRun: boolean, platform: NodeJS.Platform): void {
+function applyLink(dest: string, target: string, plan: LinkPlan, draft: Draft, inputs: InstallInputs, owner: Owner): void {
   if (plan.kind === "already") {
     draft.link = "already linked";
     return;
   }
-  if (plan.kind === "link") {
-    draft.steps.push({ kind: "mkdir", detail: dirname(dest), done: !dryRun });
-    draft.steps.push({ kind: "link", detail: `${dest} -> ${target}`, done: !dryRun });
-  } else {
-    draft.steps.push({ kind: "re-point", detail: `${dest} -> ${target} (was ${plan.previous ?? "?"})`, done: !dryRun });
-  }
+  const mkdir = plan.kind === "link" ? draft.addStep("mkdir", dirname(dest)) : null;
+  const link =
+    plan.kind === "link" ? draft.addStep("link", `${dest} -> ${target}`) : draft.addStep("re-point", `${dest} -> ${target} (was ${plan.previous ?? "?"})`);
   draft.link = plan.kind === "link" ? "linked" : "re-pointed";
   draft.previous = plan.previous;
-  if (dryRun) return;
-  placeLink(dest, target, plan.kind === "re-point", platform);
-  readBackLink(dest, target);
+  if (inputs.dryRun) return;
+  const platform = inputs.seams.platform;
+  const ops: LinkOps = { ...FS_LINK_OPS, ...inputs.hooks?.linkOps };
+  if (mkdir !== null) {
+    try {
+      mkdirSync(dirname(dest), { recursive: true });
+      settle(mkdir, true);
+    } catch (error) {
+      settle(mkdir, false);
+      throw new Stop("failed", `could not create ${safe(dirname(dest))} (${code(error)})`);
+    }
+  }
+  inputs.hooks?.beforePlace?.();
+  // CHECKED AGAIN RIGHT BEFORE THE WRITE: what was planned against is still
+  // what is there -- absent, or the very link entry seen, with the same target.
+  // Anything else (a file dropped in, a link swapped) is not ours: refused.
+  const now = inspectDestination(dest, owner);
+  if (!unchanged(plan.seen, now)) {
+    settle(link, false);
+    throw new Stop("refused", `${safe(dest)} changed after it was inspected (it is now ${describeLink(now, inputs.plugin)}): refusing to replace it`);
+  }
+  try {
+    if (plan.kind === "link") createLink(dest, target, platform, ops);
+    else repointLink(dest, target, platform, ops, owner);
+    readBackLink(dest, target);
+  } catch (error) {
+    settle(link, false);
+    throw error;
+  }
+  settle(link, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -760,42 +879,81 @@ export interface InstallInputs {
   readonly surfaceDir: string | null;
   readonly dryRun: boolean;
   readonly seams: Seams;
+  /** True when --config-dir or the surface's variable named configDir: only then is it passed to the CLI. */
+  readonly configExplicit: boolean;
+  /** Test seams: a moment between the plan and the write, and the link writes themselves. */
+  readonly hooks?: {
+    readonly beforePlace?: () => void;
+    readonly linkOps?: Partial<LinkOps>;
+  };
+}
+
+/** A read-back problem, and -- where an owed settings change accounts for it -- the install key that change is about. */
+interface Problem {
+  readonly text: string;
+  readonly explainedBy: string | null;
 }
 
 interface Draft {
   destination: string | null;
   link: string | null;
   previous: string | null;
-  steps: Step[];
+  steps: MutableStep[];
   actions: OwedAction[];
+  /** The install keys the owed actions are about (an action explains a problem with the same key). */
+  actionKeys: Set<string>;
   readBack: ReadBack;
   served: Served | null;
-  problems: string[];
+  problems: Problem[];
   /** Set when the surface's CLI could not be started and the install went ahead without it. */
   missing: string | null;
+  addStep(kind: Step["kind"], detail: string): MutableStep;
 }
 
 function newDraft(destination: string | null): Draft {
-  return { destination, link: null, previous: null, steps: [], actions: [], readBack: { checked: false, detail: "not reached" }, served: null, problems: [], missing: null };
+  const steps: MutableStep[] = [];
+  return {
+    destination,
+    link: null,
+    previous: null,
+    steps,
+    actions: [],
+    actionKeys: new Set<string>(),
+    readBack: { checked: false, detail: "not reached" },
+    served: null,
+    problems: [],
+    missing: null,
+    addStep(kind, detail): MutableStep {
+      const added: MutableStep = { kind, detail, done: false, outcome: "planned" };
+      steps.push(added);
+      return added;
+    },
+  };
+}
+
+function problem(draft: Draft, text: string, explainedBy: string | null = null): void {
+  draft.problems.push({ text, explainedBy });
 }
 
 /** Run one tool step, recording it; a step that could not run or failed stops the flow. */
 function step(draft: Draft, inputs: InstallInputs, args: readonly string[]): ToolResult {
   const cli = SURFACE_CLI[inputs.surface];
-  draft.steps.push({ kind: "run", detail: `${cli} ${args.join(" ")}`, done: !inputs.dryRun });
+  const line = commandText([cli, ...args]);
+  const recorded = draft.addStep("run", line);
   if (inputs.dryRun) return { ok: true, spawnFailed: false, stdout: "", last: "" };
-  const result = callTool(inputs.seams, cli, args, toolEnv(inputs.surface, inputs.configDir));
+  const result = callTool(inputs.seams, cli, args, toolEnv(inputs.surface, inputs.configDir, inputs.configExplicit));
+  settle(recorded, result.ok);
   if (result.spawnFailed) throw new Stop("tool missing", result.last);
-  if (!result.ok) throw new Stop("failed", `${cli} ${args.join(" ")} failed: ${result.last}`);
+  if (!result.ok) throw new Stop("failed", `${line} failed: ${result.last}`);
   return result;
 }
 
 /** A read the verb needs even under --dry-run (it changes nothing): run, or stop on a tool that is missing or failed. */
 function read(inputs: InstallInputs, args: readonly string[]): ToolResult {
   const cli = SURFACE_CLI[inputs.surface];
-  const result = callTool(inputs.seams, cli, args, toolEnv(inputs.surface, inputs.configDir));
+  const result = callTool(inputs.seams, cli, args, toolEnv(inputs.surface, inputs.configDir, inputs.configExplicit));
   if (result.spawnFailed) throw new Stop("tool missing", result.last);
-  if (!result.ok) throw new Stop("failed", `${cli} ${args.join(" ")} failed: ${result.last}`);
+  if (!result.ok) throw new Stop("failed", `${commandText([cli, ...args])} failed: ${result.last}`);
   return result;
 }
 
@@ -813,12 +971,19 @@ export function install(inputs: InstallInputs): InstallReport {
     if (inputs.surface === "claude-code") installClaudeCode(inputs, draft);
     else if (inputs.surface === "codex") installCodex(inputs, draft);
     else installAntigravity(inputs, draft);
-    if (draft.problems.length > 0) {
+    // A read-back problem an owed settings change accounts for -- the link is
+    // in place, and settings.json disables it -- is owed, not failed.
+    const unexplained = draft.problems.filter((entry): boolean => entry.explainedBy === null || !draft.actionKeys.has(entry.explainedBy));
+    if (unexplained.length > 0) {
       verdict = "failed";
-      reason = draft.problems.join("; ");
+      reason = unexplained.map((entry): string => entry.text).join("; ");
     } else if (draft.actions.length > 0) {
       verdict = "owed";
-      reason = `the install is in place, and ${draft.actions.length === 1 ? "one change is" : `${draft.actions.length} changes are`} owed that this verb never makes`;
+      const owedCount = draft.actions.length === 1 ? "one change is" : `${draft.actions.length} changes are`;
+      reason =
+        draft.problems.length === 0
+          ? `the install is in place, and ${owedCount} owed that this verb never makes`
+          : `the install is in place, and ${owedCount} owed that this verb never makes, which also account${draft.actions.length === 1 ? "s" : ""} for the read-back: ${draft.problems.map((entry): string => entry.text).join("; ")}`;
     } else if (draft.missing !== null) {
       verdict = "tool missing";
       reason = draft.missing;
@@ -840,7 +1005,7 @@ export function install(inputs: InstallInputs): InstallReport {
     destination: draft.destination,
     link: draft.link,
     previous: draft.previous,
-    steps: draft.steps,
+    steps: draft.steps.map((entry): Step => ({ ...entry })),
     actions: draft.actions,
     readBack: draft.readBack,
     served: draft.served,
@@ -879,32 +1044,54 @@ function readClaudeState(configDir: string, plugin: string): ClaudeState {
   };
 }
 
+/** An owed action, and the install key it is about (a read-back problem with that key is accounted for). */
+interface PendingAction {
+  readonly action: OwedAction;
+  readonly key: string | null;
+}
+
 /** The settings declarations still standing, as actions the caller owes. */
-function claudeActions(state: ClaudeState, inputs: InstallInputs, marketplace: string | null): OwedAction[] {
-  const actions: OwedAction[] = [];
+function claudeActions(state: ClaudeState, inputs: InstallInputs, marketplace: string | null): PendingAction[] {
+  const actions: PendingAction[] = [];
   const settings = join(inputs.configDir, "settings.json");
-  const env = inputs.seams.env;
+  const say = (tokens: readonly string[]): string => suggest(inputs.surface, inputs.configDir, inputs.configExplicit, tokens);
   const skills = skillsDirKey(inputs.plugin);
   for (const [key, value] of Object.entries(state.enabled)) {
     if (!key.startsWith(`${inputs.plugin}@`) || key === skills || value !== true) continue;
     actions.push({
-      what: `${settings} enables ${key} in enabledPlugins: an enabled marketplace copy takes precedence over skills/${inputs.plugin}, and one that is not cached is downloaded again on the next reload`,
-      command: suggest(inputs.surface, inputs.configDir, env, `claude plugin disable ${key} --scope user`),
+      key,
+      action: {
+        what: `${settings} enables ${key} in enabledPlugins: an enabled marketplace copy takes precedence over skills/${inputs.plugin}, and one that is not cached is downloaded again on the next reload`,
+        command: say(["claude", "plugin", "disable", key, "--scope", "user"]),
+      },
     });
   }
   if (state.enabled[skills] === false) {
     actions.push({
-      what: `${settings} disables ${skills} in enabledPlugins: the link is in place and will not be loaded`,
-      command: suggest(inputs.surface, inputs.configDir, env, `claude plugin enable ${skills} --scope user`),
+      key: skills,
+      action: {
+        what: `${settings} disables ${skills} in enabledPlugins: the link is in place and will not be loaded`,
+        command: say(["claude", "plugin", "enable", skills, "--scope", "user"]),
+      },
     });
   }
   if (marketplace !== null && own(state.extraMarketplaces, marketplace)) {
     actions.push({
-      what: `${settings} declares extraKnownMarketplaces.${marketplace}: Claude Code clones a declared marketplace again on the next reload, and with it the copy that shadows skills/${inputs.plugin}`,
-      command: suggest(inputs.surface, inputs.configDir, env, `claude plugin marketplace remove ${marketplace}`),
+      key: null,
+      action: {
+        what: `${settings} declares extraKnownMarketplaces.${marketplace}: Claude Code clones a declared marketplace again on the next reload, and with it the copy that shadows skills/${inputs.plugin}. The hand-over's own 'claude plugin marketplace remove' clears only the known entry; a SECOND remove, run by you, clears this declaration (the first consumer's live record, 2026-09-29)`,
+        command: say(["claude", "plugin", "marketplace", "remove", marketplace]),
+      },
     });
   }
   return actions;
+}
+
+function owe(draft: Draft, pending: readonly PendingAction[]): void {
+  for (const entry of pending) {
+    draft.actions.push(entry.action);
+    if (entry.key !== null) draft.actionKeys.add(entry.key);
+  }
 }
 
 /** Claude Code's files read again AFTER a change: one that cannot be trusted now is a failed step, with the report. */
@@ -921,14 +1108,14 @@ function reread(configDir: string, plugin: string): ClaudeState {
 function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
   const { plugin, root, configDir } = inputs;
   const dest = draft.destination as string;
+  const env = toolEnv("claude-code", configDir, inputs.configExplicit);
   // EVERY PRECONDITION IS READ BEFORE ANYTHING IS WRITTEN: a file that cannot
-  // be trusted, a destination that is not ours, a shadow from a foreign
-  // marketplace or a handover the CLI is missing for changes nothing at all.
+  // be trusted, a shadow from a foreign marketplace, a handover the CLI is
+  // missing for, or a destination that is not ours changes nothing at all.
   const market = readMarketplace(root, plugin);
   if (market.state === "bad") throw new VerbUsageError(`${market.reason}: the marketplace whose copy is handed over cannot be named.`);
   const marketplace = market.state === "read" ? market.name : null;
   const ours = marketplace === null ? null : `${plugin}@${marketplace}`;
-  const plan = planLink(dest, root, inspectDestination(dest, claudeOwner(plugin)), plugin);
   const state = readClaudeState(configDir, plugin);
   const foreign = state.recordKeys.filter((key): boolean => key !== ours && key !== skillsDirKey(plugin));
   if (foreign.length > 0) {
@@ -940,16 +1127,22 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
   const installed = ours !== null && state.recordKeys.includes(ours);
   const known = marketplace !== null && own(state.known, marketplace);
   const pending = claudeActions(state, inputs, marketplace);
-  // The CLI's presence is asked first, read-only: a handover it cannot perform
-  // must not leave a link behind for the marketplace copy to keep shadowing.
-  const probe = callTool(inputs.seams, "claude", ["--version"], toolEnv("claude-code", configDir));
+  // The CLI's presence is asked BEFORE the destination is planned, read-only:
+  // a handover it cannot perform must not leave a link behind for the
+  // marketplace copy to keep shadowing, and nothing runs between the plan and
+  // the write.
+  const probe = callTool(inputs.seams, "claude", ["--version"], env);
   const owed = installed || known || pending.length > 0;
   if (probe.spawnFailed && owed) {
-    throw new Stop("tool missing", `claude could not be started, and a handover is owed (${[installed ? `${ours} is installed` : "", known ? `the ${marketplace} marketplace is known` : "", pending.length > 0 ? "settings.json declares it" : ""].filter((part): boolean => part !== "").join(", ")}); nothing was changed`);
+    throw new Stop(
+      "tool missing",
+      `claude could not be started, and a handover is owed (${[installed ? `${ours} is installed` : "", known ? `the ${marketplace} marketplace is known` : "", pending.length > 0 ? "settings.json declares it" : ""].filter((part): boolean => part !== "").join(", ")}); nothing was changed`,
+    );
   }
   if (!probe.spawnFailed && !probe.ok) throw new Stop("failed", `claude --version failed: ${probe.last}`);
-
-  applyLink(dest, root, plan, draft, inputs.dryRun, inputs.seams.platform);
+  const owner = claudeOwner(plugin);
+  const plan = planLink(dest, root, inspectDestination(dest, owner), plugin);
+  applyLink(dest, root, plan, draft, inputs, owner);
 
   if (probe.spawnFailed) {
     draft.missing = `claude could not be started: ${inputs.dryRun ? "the link is planned, and" : "the link is in place, but"} the read-back (claude plugin list --json) cannot be performed`;
@@ -962,6 +1155,9 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
       throw new Stop("failed", `${ours} is still recorded in installed_plugins.json after claude plugin uninstall`);
     }
   }
+  // ONE remove, for the KNOWN entry: that is the hand-over. A settings.json
+  // declaration of the same marketplace survives it, and the second remove
+  // that would clear it is an action owed by the caller (claudeActions).
   if (known && marketplace !== null) {
     step(draft, inputs, ["plugin", "marketplace", "remove", marketplace]);
     if (!inputs.dryRun && own(reread(configDir, plugin).known, marketplace)) {
@@ -969,34 +1165,36 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
     }
   }
   if (inputs.dryRun) {
-    draft.actions.push(...pending);
+    owe(draft, pending);
     draft.readBack = { checked: false, detail: "--dry-run: nothing to read back" };
     return;
   }
   // What the handover left standing in settings.json is owed by the caller.
-  draft.actions.push(...claudeActions(reread(configDir, plugin), inputs, marketplace));
+  owe(draft, claudeActions(reread(configDir, plugin), inputs, marketplace));
   const listed = read(inputs, ["plugin", "list", "--json"]);
   const entries = parseClaudeList(listed.stdout);
   if (typeof entries === "string") throw new Stop("failed", `claude plugin list --json could not be read: ${entries}`);
-  const skills = entries.find((entry): boolean => entry.id === skillsDirKey(plugin));
+  const skillsKey = skillsDirKey(plugin);
+  const skills = entries.find((entry): boolean => entry.id === skillsKey);
   const rootVersion = pluginManifest(root, plugin)?.version ?? null;
   if (skills !== undefined) {
     draft.served = { id: skills.id, version: skills.version, path: skills.installPath, enabled: skills.enabled === true, status: null };
   }
-  const shadows = entries.filter((entry): boolean => entry.id.startsWith(`${plugin}@`) && entry.id !== skillsDirKey(plugin) && entry.enabled === true);
-  if (skills === undefined || skills.enabled !== true) {
-    draft.problems.push(`claude plugin list --json has no enabled ${skillsDirKey(plugin)} entry after linking ${dest}`);
+  const shadows = entries.filter((entry): boolean => entry.id.startsWith(`${plugin}@`) && entry.id !== skillsKey && entry.enabled === true);
+  if (skills === undefined) {
+    problem(draft, `claude plugin list --json has no ${skillsKey} entry after linking ${dest}`);
   } else {
+    if (skills.enabled !== true) problem(draft, `claude plugin list --json shows ${skillsKey} not enabled after linking ${dest}`, skillsKey);
     const servedId = skills.installPath === null ? null : identityOf(skills.installPath);
     const rootId = identityOf(root);
     if (servedId === null || rootId === null || !sameIdentity(servedId, rootId)) {
-      draft.problems.push(`${skillsDirKey(plugin)} is served from ${safe(skills.installPath ?? "no installPath")}, which is not ${safe(root)}`);
+      problem(draft, `${skillsKey} is served from ${safe(skills.installPath ?? "no installPath")}, which is not ${safe(root)}`);
     }
-    if (rootVersion !== null && skills.version !== null && skills.version !== rootVersion) {
-      draft.problems.push(`${skillsDirKey(plugin)} serves version ${skills.version}, but ${safe(root)}'s plugin.json says ${rootVersion}`);
-    }
+    if (rootVersion === null) problem(draft, `${safe(root)}'s plugin.json carries no version, so the served version cannot be compared`);
+    else if (skills.version === null) problem(draft, `claude plugin list --json reports no version for ${skillsKey}`);
+    else if (skills.version !== rootVersion) problem(draft, `${skillsKey} serves version ${skills.version}, but ${safe(root)}'s plugin.json says ${rootVersion}`);
   }
-  if (shadows.length > 0) draft.problems.push(`claude plugin list --json still shows ${shadows.map((entry): string => entry.id).join(", ")} enabled: the shadow was not cleared`);
+  for (const shadow of shadows) problem(draft, `claude plugin list --json still shows ${shadow.id} enabled: the shadow was not cleared`, shadow.id);
   draft.readBack = { checked: true, detail: skills === undefined ? "no skills-directory entry" : `${skills.id} ${skills.enabled === true ? "enabled" : "not enabled"}, version ${skills.version ?? "?"}` };
 }
 
@@ -1014,6 +1212,15 @@ function installCodex(inputs: InstallInputs, draft: Draft): void {
   const id = `${plugin}@${marketplace}`;
   const compare = codexManifest(root, plugin);
   const rootId = identityOf(root);
+
+  // An installed copy of the plugin from ANOTHER marketplace is not this
+  // verb's to replace or to sit beside: refused before anything is added.
+  const before = parseCodexPlugins(read(inputs, ["plugin", "list"]).stdout).filter(
+    (row): boolean => row.id.startsWith(`${plugin}@`) && row.id !== id && row.status.toLowerCase().split(/,\s*/).includes("installed"),
+  );
+  if (before.length > 0) {
+    throw new Stop("refused", `${before.map((row): string => row.id).join(", ")} ${before.length === 1 ? "is" : "are"} installed from a marketplace this checkout does not publish (${marketplace}); removing it is not this verb's to do`);
+  }
 
   const listed = read(inputs, ["plugin", "marketplace", "list"]);
   const row = parseCodexMarketplaces(listed.stdout).find((entry): boolean => entry.name === marketplace);
@@ -1042,16 +1249,15 @@ function installCodex(inputs: InstallInputs, draft: Draft): void {
   const plugins = parseCodexPlugins(read(inputs, ["plugin", "list"]).stdout);
   const mine = plugins.find((entry): boolean => entry.id === id);
   if (mine === undefined) {
-    draft.problems.push(`codex plugin list has no ${id} row after installing it`);
+    problem(draft, `codex plugin list has no ${id} row after installing it`);
     draft.readBack = { checked: true, detail: `no ${id} row` };
     return;
   }
   draft.served = { id, version: mine.version, path: mine.path ?? cachePath, enabled: codexEnabled(mine.status), status: mine.status };
   draft.readBack = { checked: true, detail: `${id} ${mine.status} ${mine.version ?? "?"} (compared against ${compare.path})` };
-  if (!codexEnabled(mine.status)) draft.problems.push(`codex plugin list shows ${id} '${mine.status}', expected installed and enabled`);
-  if (mine.version !== compare.version) {
-    draft.problems.push(`codex plugin list shows ${id} at ${mine.version ?? "no version"}, but ${compare.path} says ${compare.version}`);
-  }
+  if (!codexEnabled(mine.status)) problem(draft, `codex plugin list shows ${id} '${mine.status}', expected installed and enabled`);
+  if (mine.version === null) problem(draft, `codex plugin list reports no version for ${id}`);
+  else if (mine.version !== compare.version) problem(draft, `codex plugin list shows ${id} at ${mine.version}, but ${compare.path} says ${compare.version}`);
 }
 
 function installAntigravity(inputs: InstallInputs, draft: Draft): void {
@@ -1059,20 +1265,24 @@ function installAntigravity(inputs: InstallInputs, draft: Draft): void {
   const surfaceDir = inputs.surfaceDir as string;
   const dest = draft.destination as string;
   const target = join(root, ...surfaceDir.split("/"));
-  const plan = planLink(dest, target, inspectDestination(dest, antigravityOwner(plugin, surfaceDir)), plugin);
-  applyLink(dest, target, plan, draft, inputs.dryRun, inputs.seams.platform);
+  const owner = antigravityOwner(plugin, surfaceDir);
+  const plan = planLink(dest, target, inspectDestination(dest, owner), plugin);
+  applyLink(dest, target, plan, draft, inputs, owner);
   if (inputs.dryRun) {
     draft.readBack = { checked: false, detail: "--dry-run: nothing to read back" };
     return;
   }
   const manifest = flatManifest(dest);
   draft.served = { id: plugin, version: manifest?.version ?? null, path: dest, enabled: true, status: null };
+  if (manifest?.version === null || manifest === null) problem(draft, `the linked ${safe(join(dest, "plugin.json"))} carries no version`);
   const validate = callTool(inputs.seams, "agy", ["plugin", "validate", dest], {});
   if (validate.spawnFailed) {
-    draft.readBack = { checked: true, detail: `linked plugin.json version ${manifest?.version ?? "?"}; agy could not be started, so agy plugin validate is NOT CHECKED` };
+    // The accepted rule: an unperformed read-back is never a clean one.
+    draft.missing = `agy could not be started: the link is in place and its plugin.json reads version ${manifest?.version ?? "?"}, but agy plugin validate was not performed`;
+    draft.readBack = { checked: false, detail: "agy could not be started: agy plugin validate NOT CHECKED" };
     return;
   }
-  if (!validate.ok) draft.problems.push(`agy plugin validate ${dest} failed: ${validate.last}`);
+  if (!validate.ok) problem(draft, `agy plugin validate ${dest} failed: ${validate.last}`);
   draft.readBack = { checked: true, detail: `linked plugin.json version ${manifest?.version ?? "?"}; agy plugin validate ${validate.ok ? "ok" : "failed"}` };
 }
 
@@ -1088,6 +1298,8 @@ export interface StatusInputs {
   readonly configDir: string;
   readonly surfaceDir: string | null;
   readonly seams: Seams;
+  /** As InstallInputs': the directory is passed to the CLI only when the caller named it. */
+  readonly configExplicit: boolean;
 }
 
 export interface StatusReport {
@@ -1197,7 +1409,7 @@ function statusClaudeCode(inputs: StatusInputs): StatusReport {
   }
   let readBack: ReadBack;
   let listed: Served[] = [];
-  const result = callTool(inputs.seams, "claude", ["plugin", "list", "--json"], toolEnv("claude-code", configDir));
+  const result = callTool(inputs.seams, "claude", ["plugin", "list", "--json"], toolEnv("claude-code", configDir, inputs.configExplicit));
   if (result.spawnFailed) {
     readBack = { checked: false, detail: `${result.last}: claude plugin list --json was not read, so nothing is known to be served` };
   } else if (!result.ok) {
@@ -1227,7 +1439,8 @@ function statusClaudeCode(inputs: StatusInputs): StatusReport {
     });
     if (fromRoot === undefined) mismatch = `serves ${served.map((entry): string => `${entry.id} from ${entry.path ?? "?"}`).join(", ")}, not ${root}`;
     else if (served.length > 1) mismatch = `serves ${root} as ${fromRoot.id}, but another enabled copy shadows it`;
-    else if (rootVersion !== null && fromRoot.version !== rootVersion) mismatch = `serves ${fromRoot.id} at version ${fromRoot.version ?? "?"}, but ${root}'s plugin.json says ${rootVersion}`;
+    else if (rootVersion === null) mismatch = `${root}'s plugin.json carries no version, so the served version cannot be compared`;
+    else if (fromRoot.version !== rootVersion) mismatch = `serves ${fromRoot.id} at version ${fromRoot.version ?? "(none reported)"}, but ${root}'s plugin.json says ${rootVersion}`;
   }
   const outcome = verdictOf(problems, readBack, served, mismatch, `claude plugin list --json lists no enabled ${plugin}@ entry`);
   return {
@@ -1247,7 +1460,7 @@ function statusClaudeCode(inputs: StatusInputs): StatusReport {
 
 function statusCodex(inputs: StatusInputs): StatusReport {
   const { plugin, root, configDir } = inputs;
-  const env = toolEnv("codex", configDir);
+  const env = toolEnv("codex", configDir, inputs.configExplicit);
   const problems: string[] = [];
   let readBack: ReadBack;
   let listed: Served[] = [];
@@ -1274,8 +1487,9 @@ function statusCodex(inputs: StatusInputs): StatusReport {
       const at = marketplaceRoots.get(name);
       return at === undefined ? `${entry.id}: no '${name}' marketplace is registered` : `${entry.id}: marketplace '${name}' at ${at}`;
     });
-  let mismatch: string | null = null;
-  if (root !== null && served.length > 0) {
+  let mismatch: string | null =
+    served.length > 1 ? `${served.length} rows are enabled (${served.map((entry): string => entry.id).join(", ")}): one plugin is installed from more than one marketplace` : null;
+  if (mismatch === null && root !== null && served.length > 0) {
     const market = readMarketplace(root, plugin);
     if (market.state !== "read") {
       mismatch = `${root} carries no usable .claude-plugin/marketplace.json, so what Codex serves cannot be its install`;
@@ -1319,7 +1533,7 @@ function statusAntigravity(inputs: StatusInputs): StatusReport {
   let mismatch: string | null = null;
   if (served.length > 0) {
     const validate = callTool(inputs.seams, "agy", ["plugin", "validate", dest], {});
-    if (validate.spawnFailed) readBack = { checked: true, detail: `${readBack.detail}; agy could not be started, so agy plugin validate is NOT CHECKED` };
+    if (validate.spawnFailed) readBack = { checked: false, detail: `${readBack.detail}; agy could not be started, so agy plugin validate was not performed` };
     else if (!validate.ok) mismatch = `agy plugin validate ${dest} failed: ${validate.last}`;
     else readBack = { checked: true, detail: `${readBack.detail}; agy plugin validate ok` };
   }

@@ -17,7 +17,9 @@
 //
 // THAT LEDGER DOES NOT EXIST HERE, and the constraint it imposed does not come
 // with it. Nen's D16 rule is the opposite one -- "a binary plus git and gh is
-// the whole requirement", with no jq and no shell in an executed path -- and
+// the whole requirement" (a surface's own CLI is an optional, per-surface
+// dependency of `surface install|status` alone, zheref/nen#298), with no jq
+// and no shell in an executed path -- and
 // ./client.ts already carries an octokit client with an EXPLICIT token
 // (tokenFromEnv), which is the property `gh` cannot offer: `gh` picks
 // credentials up ambiently, so which identity a readiness read ran as becomes a

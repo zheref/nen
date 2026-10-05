@@ -186,8 +186,8 @@ change from a compatible one.
 [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
 here is the ruling rather than the silence. A `contract` field is **earned by a
 shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. Thirty shapes
-qualify today and declare one (thirty-two ids: `nen.stop.mark` and
+document half-understood is worse than not reading it at all. Thirty-two shapes
+qualify today and declare one (thirty-four ids: `nen.stop.mark` and
 `nen.runner.plan` each have two versions):
 
 `nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.2` ·
@@ -298,7 +298,7 @@ verb it invoked. The complete list:
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
 | [`surface install`](#nen-surface-install) | `3` / `4` / `5` | refused: the destination, an installed copy or a Codex marketplace is not this verb's to replace, nothing written / owed: installed and read back, and a `settings.json` declaration the caller must clear (never edited) / the surface's CLI could not be started. Its `1` is a CLI step or the read-back failing ([#298](https://github.com/zheref/nen/issues/298)) |
-| [`surface status`](#nen-surface-status) | `3` / `5` | not installed / the surface's CLI could not be started, so nothing is known to be served. Its `1` is a mismatch (served, but not `--root` at its version). With `--trees` the exit is the judgement's, [`check --plugin`](#nen-surface-mirror-check---plugin)'s table ([#298](https://github.com/zheref/nen/issues/298)) |
+| [`surface status`](#nen-surface-status) | `3` / `5` | not installed / the surface's CLI could not be started, so nothing is known to be served. Its `1` is a mismatch (served, but not `--root` at its version). With `--trees` the exit is the judgement's, [`check --plugin`](#nen-surface-mirror-check---plugin)'s table -- or the worse of it and the status's own `2`/`5` when the surface could not be read ([#298](https://github.com/zheref/nen/issues/298)) |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
@@ -340,7 +340,7 @@ verb does by default:
 | [`changelog collate`](#nen-changelog-collate) | yes | `--write` | without it, nothing is rewritten and no fragment is deleted |
 | [`tag cut`](#nen-tag-cut) | yes | `--push` | the tag is created locally; a tag is never auto-pushed |
 | [`canon mirror generate`](#nen-canon-mirror-generate) | no | `--dry-run` | writes into every declared surface's rules location under `--repo`; the dry form reports every write, deletion and foreign file and performs none. [`canon mirror check`](#nen-canon-mirror-check) writes nothing but its `--markdown-out` table (creating that table's parent directory) and refuses `--dry-run` |
-| [`surface install`](#nen-surface-install) | no | `--dry-run` | prints every directory, link and CLI step it would make and makes none; it **still runs** the read-only probes (`git rev-parse --show-toplevel`, `claude --version`, `codex plugin marketplace list`) so every refusal answers exactly as the real run would ([#298](https://github.com/zheref/nen/issues/298)) |
+| [`surface install`](#nen-surface-install) | no | `--dry-run` | prints every directory, link and CLI step it would make and makes none; it **still runs** the read-only probes (`git rev-parse --show-toplevel`, `claude --version`, `codex plugin list`, `codex plugin marketplace list`) so every refusal answers exactly as the real run would ([#298](https://github.com/zheref/nen/issues/298)) |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
@@ -12425,9 +12425,9 @@ nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
 
 | Surface | The install | The read-back |
 |---|---|---|
-| `claude-code` | a link at `<config>/skills/<name>`, which Claude Code loads in place as `<name>@skills-dir`. A prior `<name>@<marketplace>` install from the checkout's **own** marketplace takes precedence over that link, so it is handed over: `claude plugin uninstall <name>@<marketplace>` when the install record holds it, then `claude plugin marketplace remove <marketplace>` when `known_marketplaces.json` does -- each re-read from the file afterwards | `claude plugin list --json`: an **enabled** `<name>@skills-dir` whose `installPath` resolves to `--root`, at `--root`'s `plugin.json` version, and no other enabled `<name>@` entry |
-| `codex` | `codex plugin marketplace add <root>` (unless that marketplace is already registered **at this root**, re-read afterwards), then `codex plugin add <name>@<marketplace>` | `codex plugin list`: the row `installed, enabled`, at the version of `.codex-plugin/plugin.json` -- or of `.claude-plugin/plugin.json` where the checkout carries no Codex overlay -- the manifest used named in the report |
-| `antigravity` | a link at `<config>/config/plugins/<name>` to `<root>/<surface-dir>`, the checkout's generated Antigravity plugin (`agy plugin install` copies, so it is never used) | the link resolves to that directory; its `plugin.json` version; `agy plugin validate <link>` -- where `agy` cannot be started the validation is reported **NOT CHECKED** |
+| `claude-code` | a link at `<config>/skills/<name>`, which Claude Code loads in place as `<name>@skills-dir`. A prior `<name>@<marketplace>` install from the checkout's **own** marketplace takes precedence over that link, so it is handed over: `claude plugin uninstall <name>@<marketplace>` when the install record holds it, then **one** `claude plugin marketplace remove <marketplace>` when `known_marketplaces.json` does -- each re-read from the file afterwards. That remove clears only the known entry; the **second** remove, which clears a `settings.json` declaration of the same marketplace, is never run here: it is reported as an action owed | `claude plugin list --json`: an **enabled** `<name>@skills-dir` whose `installPath` resolves to `--root`, at `--root`'s `plugin.json` version, and no other enabled `<name>@` entry |
+| `codex` | refused first when `codex plugin list` shows the plugin **installed** from another marketplace; then `codex plugin marketplace add <root>` (unless that marketplace is already registered **at this root**, re-read afterwards), then `codex plugin add <name>@<marketplace>` | `codex plugin list`: the row `installed, enabled`, at the version of `.codex-plugin/plugin.json` -- or of `.claude-plugin/plugin.json` where the checkout carries no Codex overlay -- the manifest used named in the report |
+| `antigravity` | a link at `<config>/config/plugins/<name>` to `<root>/<surface-dir>`, the checkout's generated Antigravity plugin (`agy plugin install` copies, so it is never used) | the link resolves to that directory; its `plugin.json` carries a version; `agy plugin validate <link>` -- where `agy` cannot be started the read-back is **NOT CHECKED** and the verdict `tool missing` (exit 5): an unperformed validation is never a clean one |
 
 **Arguments**
 
@@ -12443,9 +12443,11 @@ nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
 - `--config-dir <dir>` -- the surface's own directory: `claude-code`
   `$CLAUDE_CONFIG_DIR`, else `~/.claude`; `codex` `$CODEX_HOME`, else
   `~/.codex`; `antigravity` `$GEMINI_CONFIG_DIR`, else `~/.gemini`. `$HOME` is
-  read from the invocation's environment. The surface's CLI is run with the
-  same directory (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), so what it writes is what
-  the verb reads back.
+  read from the invocation's environment. When `--config-dir` or the surface's
+  variable named the directory, the CLI is run with it (`CLAUDE_CONFIG_DIR` /
+  `CODEX_HOME`), so what it writes is what the verb reads back; the default is
+  the CLI's own and is **never** passed, and a suggested command names the
+  directory exactly when the CLI was run with it.
 - `--surface-dir <dir>` -- `antigravity` only, and **required** there: the
   checkout-relative directory holding the generated plugin. A plain relative
   path (no `..`, `.`, `:` or absolute path), a real directory with every
@@ -12453,23 +12455,35 @@ nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
 - `--dry-run` -- prints every directory, link and CLI step as `would mkdir:`,
   `would link:`, `would re-point:`, `would run:`, and makes none of them. The
   read-only probes still run (`git rev-parse`, `claude --version`, `codex
-  plugin marketplace list`), so every refusal answers as the real run would.
+  plugin list`, `codex plugin marketplace list`), so every refusal answers as
+  the real run would. Every `would run:` line, like every suggested command, is
+  quoted token by token for a POSIX shell.
 
-**Never replaces what it did not make.** A destination is replaced only when it
-is absent or a link to a root of the **same** plugin (for Antigravity, to that
-root's `--surface-dir`); a re-point is a fresh link renamed over the old one, so
-the destination is never absent in between and the old link is never followed.
-A real directory, a file, a dangling link or a link anywhere else is refused,
-named and left exactly as it was -- and so is a `<name>@<other>` marketplace
-install from a marketplace the checkout does not publish, and a Codex
-marketplace of the same name registered at another root.
+**A link to any root of the same plugin counts as ours; only a link is ever
+replaced, never data.** A destination is written only when it is absent or a
+link to some root of the **same** plugin (for Antigravity, to that root's
+`--surface-dir`), whoever made it. It is inspected **again right before the
+write**: unless it is still absent, or still the very link entry (same `lstat`
+device and inode) with the same target, the write is refused at exit 3. A
+re-point is a fresh link, `.<name>.nen-relink`, renamed over the old one, so the
+destination is never absent in between and the old link is never followed; on
+Windows, where a rename will not replace a junction, the old junction is removed
+with `rmdir` (never recursive) first. A stale `.<name>.nen-relink` is removed
+only when it is itself a link to a root of the plugin. A real directory, a
+file, a dangling link or a link anywhere else is refused, named and left exactly
+as it was -- and so is a `<name>@<other>` install from a marketplace the
+checkout does not publish (Claude Code or Codex), and a Codex marketplace of the
+same name registered at another root. The checkout's marketplace name must be
+letters, digits, `.`, `_` and `-`, not starting with `-` (exit 2 otherwise).
 
 **Never edits a settings file.** A declaration in Claude Code's
 `settings.json` that would bring a marketplace copy back on the next reload --
 `enabledPlugins["<name>@<marketplace>"]: true`, `enabledPlugins["<name>@skills-dir"]:
 false`, `extraKnownMarketplaces.<marketplace>` -- is reported as an **action
 owed**, with the command that clears it, and the verb neither writes the file
-nor runs that command. Under `--dry-run` the actions are the declarations
+nor runs that command. For `extraKnownMarketplaces` that command is a
+**second** `claude plugin marketplace remove`: the hand-over runs the first,
+once, for the known entry only. Under `--dry-run` the actions are the declarations
 standing now; after a real run, the ones still standing once the hand-over
 ran.
 
@@ -12486,22 +12500,23 @@ never read as "not found".
 `config:`, `destination:` (with the link's state), one line per step, each
 `action owed:` with its `  run:` command, `read back:` (or `NOT CHECKED`),
 `serves:`, `verdict: <verdict> -- <reason>` and `apply:` (how a running session
-picks the change up). `--json`: `{ contract: "nen.surface.install/v0.1",
+picks the change up). A step that failed is printed `FAILED <kind>:`. `--json`: `{ contract: "nen.surface.install/v0.1",
 surface, plugin, root, configDir, dryRun, destination, link, previous, steps: [
-{ kind, detail, done } ], actions: [ { what, command } ], readBack: { checked,
+{ kind, detail, done, outcome } ], actions: [ { what, command } ], readBack: { checked,
 detail }, served: { id, version, path, enabled, status }, verdict, reason,
 apply, exit }` -- `link` is `linked`, `already linked`, `re-pointed` or `null`
 (Codex takes no link); a step's `kind` is `mkdir`, `link`, `re-point` or
-`run`; `done` is false under `--dry-run`.
+`run`; `done` is true only once the step **succeeded**, and `outcome` is
+`planned` (under `--dry-run`), `ok` or `failed`.
 
 | Exit | Verdict | Meaning |
 |---|---|---|
 | `0` | `ok` | installed and read back -- or, under `--dry-run`, a complete plan |
-| `1` | `failed` | a CLI step failed, or the read-back did not show the install (an uninstall that did not take, a shadow still enabled, another path or version, unparseable output); the last line is quoted |
+| `1` | `failed` | a CLI step or a link write failed, or the read-back did not show the install (a link that does not resolve to the target after writing it, an uninstall that did not take, a shadow still enabled, another path, another version or **none** reported on either side, unparseable output); the last line is quoted |
 | `2` | -- | usage or wiring, on stderr with no report: a bad flag, a `--root` or `--surface-dir` refused, a file that cannot be trusted |
-| `3` | `refused` | not ours to replace; nothing written |
-| `4` | `owed` | installed and read back, and a settings change is owed that this verb never makes |
-| `5` | `tool missing` | the surface's CLI could not be started: before anything is touched when a hand-over is owed, otherwise after the link -- an unperformed read-back is never a clean one |
+| `3` | `refused` | not ours to replace -- at planning, or because it changed before the write; nothing written |
+| `4` | `owed` | installed, and a settings change is owed that this verb never makes -- including when every read-back problem is one that owed change accounts for (the skills-directory copy disabled in `enabledPlugins`, a shadow it enables) |
+| `5` | `tool missing` | the surface's CLI could not be started: before anything is touched when a hand-over is owed, otherwise after the link (`agy` included) -- an unperformed read-back is never a clean one |
 
 **Example**
 
@@ -12548,7 +12563,9 @@ declarations that would bring a marketplace copy back on the next reload are
 reported as `warning:` lines; `codex` -- `codex plugin list` (served: installed
 and enabled) and `codex plugin marketplace list` for each marketplace's root;
 `antigravity` -- the `config/plugins/<name>` entry and its `plugin.json`, plus
-`agy plugin validate` (reported **NOT CHECKED** where `agy` cannot be started).
+`agy plugin validate` (where `agy` cannot be started, **NOT CHECKED** and
+`tool missing`). A CLI is run with the config directory only when
+`--config-dir` or its variable named it, as with `install`.
 `--root` here needs only to be a root of the plugin; it is compared against,
 never written to. With `--surface antigravity` it needs `--surface-dir`, since
 the link is compared against `<root>/<surface-dir>`.
@@ -12577,13 +12594,16 @@ label, reason } ], exit }`.
 | Exit | Verdict | Meaning |
 |---|---|---|
 | `0` | `serving` | the surface serves the plugin -- and, with `--root`, from that checkout at its version |
-| `1` | `mismatch` | served, but from another checkout or marketplace root, at another version, shadowed by a second enabled copy, or rejected by `agy plugin validate` |
+| `1` | `mismatch` | served, but from another checkout or marketplace root, at another version (or none), shadowed by a second enabled copy, from more than one enabled Codex row, or rejected by `agy plugin validate` |
 | `2` | `wiring` | a usage refusal (stderr), or the surface's list failed or could not be parsed, or a file that cannot be trusted |
 | `3` | `not installed` | nothing enabled is served |
-| `5` | `tool missing` | the surface's CLI could not be started: nothing is known to be served |
+| `5` | `tool missing` | the surface's CLI could not be started: nothing is known to be served (or, for Antigravity, nothing validated it) |
 
-With `--trees` the exit is the **judgement's** (`check --plugin`'s `0`-`5`), and
-the status verdict is still in the report.
+With `--trees` the exit is the **judgement's** (`check --plugin`'s `0`-`5`) --
+except when the status itself is `wiring` or `tool missing`: then it is the
+**worse** of the two, in `check --plugin`'s order `2 > 1 > 5 > 4 > 0 > 3`, so a
+surface that could not be read is never hidden behind an identical copy. The
+status verdict is in the report either way.
 
 **Example**
 

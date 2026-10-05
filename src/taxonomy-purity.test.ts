@@ -931,7 +931,9 @@ describe("§3: names are data", () => {
 
   it("spawns no forbidden tool from shipped code (D16)", () => {
     // "no make, no bats/pytest, no runtime python3, no jq/yq anywhere in an
-    // executed path". A binary plus git and gh is the whole requirement.
+    // executed path". A binary plus git and gh is the whole requirement; a
+    // surface's own CLI (claude, codex, agy) is an optional, per-surface
+    // dependency of `surface install|status` only (zheref/nen#298).
     //
     // TWO SHAPES, because the two languages spell a spawn differently. In
     // TypeScript the tool is an argv entry, so it sits against a quote. In the

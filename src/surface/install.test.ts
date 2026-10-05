@@ -12,13 +12,18 @@
 // on the scripted call. The plugin is a made-up name: names are data.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { CommandResult } from "../seam/exec.js";
+import { statusTreesExit } from "./install-command.js";
 import {
+  commandText,
+  install,
+  shellQuote,
+  type InstallInputs,
   codexEnabled,
   codexInstalledRoot,
   lastLine,
@@ -37,6 +42,11 @@ const MARKET = "zephyr-market";
 const SKILLS_ID = `${PLUGIN}@skills-dir`;
 const MARKET_ID = `${PLUGIN}@${MARKET}`;
 const POSIX = process.platform !== "win32";
+
+/** A directory link: a junction on Windows (no admin rights needed), a symlink elsewhere. */
+function link(target: string, path: string): void {
+  symlinkSync(target, path, POSIX ? undefined : "junction");
+}
 
 interface World {
   readonly work: string;
@@ -61,11 +71,11 @@ function checkout(dir: string, version = "1.0.0", options: { overlay?: boolean; 
   writeFileSync(join(dir, "gen", "ag", "plugin.json"), JSON.stringify({ name: PLUGIN, version, description: "d" }, null, 2));
   mkdirSync(join(dir, "skills", "one"), { recursive: true });
   writeFileSync(join(dir, "skills", "one", "SKILL.md"), "one\n");
-  return realpathSync(dir);
+  return realpathSync.native(dir);
 }
 
 function world(): World {
-  const work = realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-install-")));
+  const work = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-install-")));
   const root = checkout(join(work, "root"));
   const other = checkout(join(work, "other"), "0.9.0");
   const cfg = join(work, "cfg");
@@ -303,7 +313,7 @@ describe("surface install: usage and --root refusals (exit 2)", () => {
 // install: claude-code
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
+describe("surface install --surface claude-code", () => {
   it("links a fresh install, runs the CLI against --config-dir, and reads it back (exit 0)", async () => {
     const w = world();
     const s = seams(w, [git(w.root), ok("claude --version", "2.1.284"), claudeList([servedLink(w)])]);
@@ -311,7 +321,7 @@ describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
     expect(result.code).toBe(0);
     const dest = join(w.cfg, "skills", PLUGIN);
     expect(lstatSync(dest).isSymbolicLink()).toBe(true);
-    expect(realpathSync(dest)).toBe(w.root);
+    expect(realpathSync.native(dest)).toBe(w.root);
     const doc = result.doc();
     expect(doc).toMatchObject({ contract: INSTALL_CONTRACT, verdict: "ok", exit: 0, link: "linked", destination: dest, readBack: { checked: true } });
     expect(doc["served"]).toMatchObject({ id: SKILLS_ID, version: "1.0.0" });
@@ -339,7 +349,7 @@ describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
     const w = world();
     const dest = join(w.cfg, "skills", PLUGIN);
     mkdirSync(join(w.cfg, "skills"));
-    symlinkSync(w.root, dest);
+    link(w.root, dest);
     const same = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, [git(w.root), ok("claude --version"), claudeList([servedLink(w)])]));
     expect(same.code).toBe(0);
     expect(same.doc()).toMatchObject({ link: "already linked", steps: [] });
@@ -347,11 +357,11 @@ describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
     const v = world();
     const destV = join(v.cfg, "skills", PLUGIN);
     mkdirSync(join(v.cfg, "skills"));
-    symlinkSync(v.other, destV);
+    link(v.other, destV);
     const moved = await capture([...installArgs(v, "claude-code"), "--json"], seams(v, [git(v.root), ok("claude --version"), claudeList([servedLink(v)])]));
     expect(moved.code).toBe(0);
     expect(moved.doc()).toMatchObject({ link: "re-pointed", previous: v.other });
-    expect(realpathSync(destV)).toBe(v.root);
+    expect(realpathSync.native(destV)).toBe(v.root);
     expect(existsSync(`${destV}.nen-relink`)).toBe(false);
   });
 
@@ -359,23 +369,24 @@ describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
     const cases: Array<[string, (dest: string, w: World) => void, RegExp]> = [
       ["a real directory", (dest): void => mkdirSync(dest), /a real directory/],
       ["a file", (dest): void => writeFileSync(dest, "mine"), /a file/],
-      ["a foreign link", (dest, w): void => symlinkSync(w.work, dest), /no root of 'zephyr'/],
+      ["a foreign link", (dest, w): void => link(w.work, dest), /no root of 'zephyr'/],
       ["a dangling link", (dest, w): void => symlinkSync(join(w.work, "gone"), dest), /does not resolve/],
     ];
     for (const [name, make, why] of cases) {
+      if (!POSIX && name === "a dangling link") continue;
       const w = world();
       const dest = join(w.cfg, "skills", PLUGIN);
       mkdirSync(join(w.cfg, "skills"));
       make(dest, w);
       const before = lstatSync(dest);
-      const s = seams(w, [git(w.root)]);
+      const s = seams(w, [git(w.root), ok("claude --version")]);
       const result = await capture([...installArgs(w, "claude-code"), "--json"], s);
       expect(result.code, name).toBe(3);
       expect(result.doc(), name).toMatchObject({ verdict: "refused", exit: 3, steps: [] });
       expect(String(result.doc()["reason"]), name).toMatch(why);
       expect(lstatSync(dest).ino, name).toBe(before.ino);
       if (before.isSymbolicLink()) expect(readlinkSync(dest)).toBeTruthy();
-      expect(commandsOf(s), name).toEqual(["git rev-parse --show-toplevel"]);
+      expect(commandsOf(s), name).toEqual(["git rev-parse --show-toplevel", "claude --version"]);
     }
   });
 
@@ -462,7 +473,8 @@ describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
     const result = await capture(["surface", "install", "--surface", "claude-code", "--plugin", PLUGIN, "--root", w.root, "--json"], s);
     expect(result.code).toBe(4);
     expect((result.doc()["actions"] as Array<{ command: string }>)[0]?.command).toBe(`claude plugin disable ${MARKET_ID} --scope user`);
-    expect(s.calls.find((call): boolean => call.command === "claude")?.env).toEqual({ CLAUDE_CONFIG_DIR: cfg });
+    // N12: the default directory is the CLI's own, so it is never passed on.
+    expect(s.calls.filter((call): boolean => call.command === "claude").map((call) => call.env)).toEqual([{}, {}]);
   });
 
   it("refuses a marketplace copy from a marketplace the checkout does not publish (exit 3, nothing linked)", async () => {
@@ -487,7 +499,7 @@ describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
     const w = world();
     const result = await capture(installArgs(w, "claude-code"), seams(w, [git(w.root), { match: "claude --version", result: { spawnFailed: true, code: -1 } }]));
     expect(result.code).toBe(5);
-    expect(realpathSync(join(w.cfg, "skills", PLUGIN))).toBe(w.root);
+    expect(realpathSync.native(join(w.cfg, "skills", PLUGIN))).toBe(w.root);
     expect(result.out.join("\n")).toMatch(/read back: NOT CHECKED/);
     const v = world();
     const dry = await capture([...installArgs(v, "claude-code"), "--dry-run"], seams(v, [git(v.root), { match: "claude --version", result: { spawnFailed: true, code: -1 } }]));
@@ -514,8 +526,9 @@ describe.skipIf(!POSIX)("surface install --surface claude-code", () => {
   it("fails the read-back on a shadow still enabled, a missing entry, another path, another version, a broken list (exit 1)", async () => {
     const cases: Array<[string, (w: World) => ScriptedCall, RegExp]> = [
       ["shadow", (w): ScriptedCall => claudeList([servedLink(w), { id: MARKET_ID, enabled: true, installPath: "/c" }]), /still shows zephyr@zephyr-market enabled/],
-      ["missing", (): ScriptedCall => claudeList([]), /no enabled zephyr@skills-dir entry/],
-      ["disabled", (w): ScriptedCall => claudeList([servedLink(w, { enabled: false })]), /no enabled zephyr@skills-dir entry/],
+      ["missing", (): ScriptedCall => claudeList([]), /no zephyr@skills-dir entry/],
+      ["disabled", (w): ScriptedCall => claudeList([servedLink(w, { enabled: false })]), /shows zephyr@skills-dir not enabled/],
+      ["no served version", (w): ScriptedCall => claudeList([servedLink(w, { version: null })]), /reports no version for zephyr@skills-dir/],
       ["elsewhere", (w): ScriptedCall => claudeList([servedLink(w, { installPath: w.other })]), /which is not/],
       ["version", (w): ScriptedCall => claudeList([servedLink(w, { version: "0.1.0" })]), /serves version 0.1.0/],
       ["not json", (): ScriptedCall => ok("claude plugin list --json", "Plugins:\n  zephyr"), /could not be read: its output is not JSON/],
@@ -554,6 +567,7 @@ describe("surface install --surface codex", () => {
     const cache = join(w.cfg, "plugins", "cache", MARKET, PLUGIN, "1.0.0");
     const s = seams(w, [
       git(w.root),
+      ok("codex plugin list", `${fillerPlugins}\n`),
       ok("codex plugin marketplace list", `${HEADER}\n${fillerMarkets}\n`),
       ok(`codex plugin marketplace add ${w.root}`, `Added marketplace \`${MARKET}\``),
       ok("codex plugin marketplace list", `${HEADER}\n${fillerMarkets}\n${MARKET}  ${w.root}\n`),
@@ -571,7 +585,7 @@ describe("surface install --surface codex", () => {
   it("does not add a marketplace already at this checkout, and compares against the Claude manifest with no overlay", async () => {
     const w = world();
     const root = checkout(join(w.work, "plain"), "2.0.0", { overlay: false });
-    const s = seams(w, [git(root), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${root}\n`), ok(`codex plugin add ${MARKET_ID}`), ok("codex plugin list", `${MARKET_ID}  installed, enabled  2.0.0  /c\n`)]);
+    const s = seams(w, [git(root), ok("codex plugin list", ""), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${root}\n`), ok(`codex plugin add ${MARKET_ID}`), ok("codex plugin list", `${MARKET_ID}  installed, enabled  2.0.0  /c\n`)]);
     const result = await capture(["surface", "install", "--surface", "codex", "--plugin", PLUGIN, "--root", root, "--config-dir", w.cfg], s);
     expect(result.code).toBe(0);
     expect(commandsOf(s)).not.toContain(`codex plugin marketplace add ${root}`);
@@ -580,11 +594,11 @@ describe("surface install --surface codex", () => {
 
   it("refuses a same-named marketplace at another root (exit 3), adding nothing", async () => {
     const w = world();
-    const s = seams(w, [git(w.root), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${w.other}\n`)]);
+    const s = seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${w.other}\n`)]);
     const result = await capture([...installArgs(w, "codex"), "--json"], s);
     expect(result.code).toBe(3);
     expect(String(result.doc()["reason"])).toMatch(/already points at/);
-    expect(commandsOf(s)).toHaveLength(2);
+    expect(commandsOf(s)).toHaveLength(3);
   });
 
   it("fails the read-back on a wrong version, a disabled row, a missing row, an add that did not register (exit 1)", async () => {
@@ -593,12 +607,13 @@ describe("surface install --surface codex", () => {
       ["version", (w): ScriptedCall[] => [at(w), ok(`codex plugin add ${MARKET_ID}`), ok("codex plugin list", `${MARKET_ID}  installed, enabled  0.9.0  /c`)], /at 0.9.0, but .codex-plugin\/plugin.json says 1.0.0/],
       ["disabled", (w): ScriptedCall[] => [at(w), ok(`codex plugin add ${MARKET_ID}`), ok("codex plugin list", `${MARKET_ID}  installed, disabled  1.0.0  /c`)], /expected installed and enabled/],
       ["missing", (w): ScriptedCall[] => [at(w), ok(`codex plugin add ${MARKET_ID}`), ok("codex plugin list", fillerPlugins)], /no zephyr@zephyr-market row/],
+      ["no version", (w): ScriptedCall[] => [at(w), ok(`codex plugin add ${MARKET_ID}`), ok("codex plugin list", `${MARKET_ID}  installed, enabled`)], /reports no version for zephyr@zephyr-market/],
       ["unregistered", (w): ScriptedCall[] => [ok("codex plugin marketplace list", HEADER), ok(`codex plugin marketplace add ${w.root}`), ok("codex plugin marketplace list", HEADER)], /does not show 'zephyr-market'/],
       ["add fails", (w): ScriptedCall[] => [at(w), { match: `codex plugin add ${MARKET_ID}`, result: { code: 1, stdout: "Error: network down\n" } }], /codex plugin add zephyr@zephyr-market failed: Error: network down/],
     ];
     for (const [name, script, why] of cases) {
       const w = world();
-      const result = await capture([...installArgs(w, "codex"), "--json"], seams(w, [git(w.root), ...script(w)]));
+      const result = await capture([...installArgs(w, "codex"), "--json"], seams(w, [git(w.root), ok("codex plugin list", ""), ...script(w)]));
       expect(result.code, name).toBe(1);
       expect(String(result.doc()["reason"]), name).toMatch(why);
     }
@@ -606,7 +621,7 @@ describe("surface install --surface codex", () => {
 
   it("reports codex missing (exit 5), and refuses a checkout with no marketplace or an unversioned overlay (exit 2)", async () => {
     const w = world();
-    const missing = await capture([...installArgs(w, "codex"), "--json"], seams(w, [git(w.root), { match: "codex plugin marketplace list", result: { spawnFailed: true, code: -1 } }]));
+    const missing = await capture([...installArgs(w, "codex"), "--json"], seams(w, [git(w.root), { match: "codex plugin list", result: { spawnFailed: true, code: -1 } }]));
     expect(missing.code).toBe(5);
 
     const bare = checkout(join(w.work, "bare"), "1.0.0", { market: false });
@@ -623,10 +638,10 @@ describe("surface install --surface codex", () => {
 
   it("--dry-run reads the marketplace list and runs nothing that changes the host", async () => {
     const w = world();
-    const s = seams(w, [git(w.root), ok("codex plugin marketplace list", HEADER)]);
+    const s = seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", HEADER)]);
     const result = await capture([...installArgs(w, "codex"), "--dry-run"], s);
     expect(result.code).toBe(0);
-    expect(commandsOf(s)).toEqual(["git rev-parse --show-toplevel", "codex plugin marketplace list"]);
+    expect(commandsOf(s)).toEqual(["git rev-parse --show-toplevel", "codex plugin list", "codex plugin marketplace list"]);
     expect(result.out.join("\n")).toMatch(/would run: codex plugin marketplace add [\s\S]*would run: codex plugin add zephyr@zephyr-market/);
   });
 });
@@ -635,26 +650,26 @@ describe("surface install --surface codex", () => {
 // install: antigravity
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!POSIX)("surface install --surface antigravity", () => {
+describe("surface install --surface antigravity", () => {
   it("links <root>/<surface-dir> into the global plugins directory and validates it (exit 0)", async () => {
     const w = world();
     const dest = join(w.cfg, "config", "plugins", PLUGIN);
     const s = seams(w, [git(w.root), ok(`agy plugin validate ${dest}`, "[ok]")]);
     const result = await capture([...installArgs(w, "antigravity", "--surface-dir", "gen/ag"), "--json"], s);
     expect(result.code).toBe(0);
-    expect(realpathSync(dest)).toBe(join(w.root, "gen", "ag"));
+    expect(realpathSync.native(dest)).toBe(join(w.root, "gen", "ag"));
     expect(result.doc()).toMatchObject({ verdict: "ok", served: { version: "1.0.0" }, readBack: { checked: true } });
   });
 
-  it("re-points a link to another checkout's surface dir, and says NOT CHECKED when agy is missing", async () => {
+  it("re-points a link to another checkout's surface dir; agy missing is tool missing (exit 5, N9)", async () => {
     const w = world();
     const dest = join(w.cfg, "config", "plugins", PLUGIN);
     mkdirSync(join(w.cfg, "config", "plugins"), { recursive: true });
-    symlinkSync(join(w.other, "gen", "ag"), dest);
+    link(join(w.other, "gen", "ag"), dest);
     const result = await capture([...installArgs(w, "antigravity", "--surface-dir", "gen/ag"), "--json"], seams(w, [git(w.root), { match: `agy plugin validate ${dest}`, result: { spawnFailed: true, code: -1 } }]));
-    expect(result.code).toBe(0);
-    expect(result.doc()).toMatchObject({ link: "re-pointed" });
-    expect(String((result.doc()["readBack"] as { detail: string }).detail)).toMatch(/NOT CHECKED/);
+    expect(result.code).toBe(5);
+    expect(result.doc()).toMatchObject({ link: "re-pointed", verdict: "tool missing", readBack: { checked: false } });
+    expect(realpathSync.native(dest)).toBe(join(w.root, "gen", "ag"));
   });
 
   it("refuses a copy agy installed (a real directory) and a link to another checkout's root (exit 3)", async () => {
@@ -665,7 +680,7 @@ describe.skipIf(!POSIX)("surface install --surface antigravity", () => {
     const v = world();
     const destV = join(v.cfg, "config", "plugins", PLUGIN);
     mkdirSync(join(v.cfg, "config", "plugins"), { recursive: true });
-    symlinkSync(v.other, destV);
+    link(v.other, destV);
     expect((await capture(installArgs(v, "antigravity", "--surface-dir", "gen/ag"), seams(v, [git(v.root)]))).code).toBe(3);
   });
 
@@ -690,11 +705,11 @@ describe.skipIf(!POSIX)("surface install --surface antigravity", () => {
 // status
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!POSIX)("surface status --surface claude-code", () => {
+describe("surface status --surface claude-code", () => {
   it("reports what is served, and that it is this checkout at its version (exit 0)", async () => {
     const w = world();
     mkdirSync(join(w.cfg, "skills"));
-    symlinkSync(w.root, join(w.cfg, "skills", PLUGIN));
+    link(w.root, join(w.cfg, "skills", PLUGIN));
     const s = seams(w, [claudeList([servedLink(w), { id: "unrelated@x", enabled: true }])]);
     const result = await capture([...statusArgs(w, "claude-code", "--root", w.root), "--json"], s);
     expect(result.code).toBe(0);
@@ -711,7 +726,7 @@ describe.skipIf(!POSIX)("surface status --surface claude-code", () => {
       ["shadow", [servedLink(w), { id: MARKET_ID, enabled: true, installPath: w.other }], /another enabled copy shadows it/],
     ];
     mkdirSync(join(w.cfg, "skills"));
-    symlinkSync(w.root, join(w.cfg, "skills", PLUGIN));
+    link(w.root, join(w.cfg, "skills", PLUGIN));
     for (const [name, entries, why] of cases) {
       const result = await capture([...statusArgs(w, "claude-code", "--root", w.root), "--json"], seams(w, [claudeList(entries)]));
       expect(result.code, name).toBe(1);
@@ -748,7 +763,7 @@ describe.skipIf(!POSIX)("surface status --surface claude-code", () => {
     checkout(cache, "0.9.0");
     writeJson(join(w.cfg, "plugins", "installed_plugins.json"), { version: 2, plugins: { [MARKET_ID]: [{ installPath: cache }] } });
     mkdirSync(join(w.cfg, "skills"));
-    symlinkSync(w.root, join(w.cfg, "skills", PLUGIN));
+    link(w.root, join(w.cfg, "skills", PLUGIN));
 
     // Not enabled: the marketplace copy is set aside, the skills link judged identical to --source.
     const linkServed = await capture([...statusArgs(w, "claude-code", "--trees", "skills", "--source", source), "--json"], seams(w, [claudeList([servedLink(w)])]));
@@ -813,12 +828,12 @@ describe("surface status --surface codex", () => {
   });
 });
 
-describe.skipIf(!POSIX)("surface status --surface antigravity", () => {
+describe("surface status --surface antigravity", () => {
   it("reads the linked plugin.json, validates it, and compares it against <root>/<surface-dir>", async () => {
     const w = world();
     const dest = join(w.cfg, "config", "plugins", PLUGIN);
     mkdirSync(join(w.cfg, "config", "plugins"), { recursive: true });
-    symlinkSync(join(w.root, "gen", "ag"), dest);
+    link(join(w.root, "gen", "ag"), dest);
     const serving = await capture([...statusArgs(w, "antigravity", "--root", w.root, "--surface-dir", "gen/ag"), "--json"], seams(w, [ok(`agy plugin validate ${dest}`)]));
     expect(serving.code).toBe(0);
     expect(serving.doc()).toMatchObject({ verdict: "serving", served: [{ version: "1.0.0" }] });
@@ -830,8 +845,8 @@ describe.skipIf(!POSIX)("surface status --surface antigravity", () => {
     expect(rejected.code).toBe(1);
 
     const noAgy = await capture(statusArgs(w, "antigravity", "--surface-dir", "gen/ag"), seams(w, [{ match: `agy plugin validate ${dest}`, result: { spawnFailed: true, code: -1 } }]));
-    expect(noAgy.code).toBe(0);
-    expect(noAgy.out.join("\n")).toMatch(/NOT CHECKED/);
+    expect(noAgy.code).toBe(5);
+    expect(noAgy.out.join("\n")).toMatch(/read back: NOT CHECKED/);
   });
 
   it("is not installed when absent or holding another plugin, and warns of a copied directory", async () => {
@@ -846,5 +861,299 @@ describe.skipIf(!POSIX)("surface status --surface antigravity", () => {
     expect(copied.code).toBe(0);
     expect((copied.doc()["warnings"] as string[])[0]).toMatch(/a real directory, a copy/);
     expect((await capture(statusArgs(w, "antigravity", "--root", w.root), seams(w, []))).code).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Nobunaga round 1 on zheref/nen#298: one test per finding, each failing
+// without its fix.
+// ---------------------------------------------------------------------------
+
+/** install() called directly, for the seams the command line cannot reach (the moment between plan and write). */
+function direct(w: World, s: ScriptedSeams, hooks: InstallInputs["hooks"]): ReturnType<typeof install> {
+  return install({ surface: "claude-code", plugin: PLUGIN, root: w.root, configDir: w.cfg, surfaceDir: null, dryRun: false, seams: s, configExplicit: true, hooks });
+}
+
+describe("surface install: Nobunaga round 1", () => {
+  it("N2: a destination swapped for a file between the plan and the write is refused, and the file survives", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    const s = seams(w, [ok("claude --version")]);
+    const report = direct(w, s, {
+      beforePlace: (): void => {
+        if (POSIX) unlinkSync(dest);
+        else rmdirSync(dest);
+        writeFileSync(dest, "the user's own file");
+      },
+    });
+    expect(report.verdict).toBe("refused");
+    expect(report.reason).toMatch(/changed after it was inspected .*a file/);
+    expect(readFileSync(dest, "utf8")).toBe("the user's own file");
+    expect(report.steps.map((step) => step.outcome)).toEqual(["failed"]);
+    // the probe ran BEFORE the plan, so nothing else ran in between
+    expect(commandsOf(s)).toEqual(["claude --version"]);
+
+    const v = world();
+    const destV = join(v.cfg, "skills", PLUGIN);
+    const appeared = direct(v, seams(v, [ok("claude --version")]), {
+      beforePlace: (): void => writeFileSync(destV, "appeared"),
+    });
+    expect(appeared.verdict).toBe("refused");
+    expect(readFileSync(destV, "utf8")).toBe("appeared");
+  });
+
+  it("N2: a link re-pointed to another target between plan and write is refused too", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    const third = checkout(join(w.work, "third"));
+    const report = direct(w, seams(w, [ok("claude --version")]), {
+      beforePlace: (): void => {
+        if (POSIX) unlinkSync(dest);
+        else rmdirSync(dest);
+        link(third, dest);
+      },
+    });
+    expect(report.verdict).toBe("refused");
+    expect(realpathSync.native(dest)).toBe(third);
+  });
+
+  it("N3: a read-back problem an owed action accounts for is owed (exit 4), not failed", async () => {
+    const w = world();
+    writeJson(join(w.cfg, "settings.json"), { enabledPlugins: { [SKILLS_ID]: false } });
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, [git(w.root), ok("claude --version"), claudeList([servedLink(w, { enabled: false })])]));
+    expect(result.code).toBe(4);
+    expect(String(result.doc()["reason"])).toMatch(/account.*for the read-back: .*not enabled/);
+    // An unexplained problem beside it still fails.
+    const v = world();
+    writeJson(join(v.cfg, "settings.json"), { enabledPlugins: { [SKILLS_ID]: false } });
+    const mixed = await capture([...installArgs(v, "claude-code"), "--json"], seams(v, [git(v.root), ok("claude --version"), claudeList([servedLink(v, { enabled: false, version: "0.0.1" })])]));
+    expect(mixed.code).toBe(1);
+    // A shadow still enabled, accounted for by its owed disable, is owed too.
+    const x = world();
+    writeJson(join(x.cfg, "settings.json"), { enabledPlugins: { [MARKET_ID]: true } });
+    const shadow = await capture([...installArgs(x, "claude-code"), "--json"], seams(x, [git(x.root), ok("claude --version"), claudeList([servedLink(x), { id: MARKET_ID, enabled: true }])]));
+    expect(shadow.code).toBe(4);
+  });
+
+  it("N4: a root plugin.json with no version fails the read-back, as status reports a mismatch", async () => {
+    const w = world();
+    writeFileSync(join(w.root, ".claude-plugin", "plugin.json"), JSON.stringify({ name: PLUGIN }));
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, [git(w.root), ok("claude --version"), claudeList([servedLink(w)])]));
+    expect(result.code).toBe(1);
+    expect(String(result.doc()["reason"])).toMatch(/carries no version/);
+    mkdirSync(join(w.cfg, "skills"), { recursive: true });
+    const status = await capture([...statusArgs(w, "claude-code", "--root", w.root), "--json"], seams(w, [claudeList([servedLink(w)])]));
+    expect(status.code).toBe(1);
+    expect(String(status.doc()["reason"])).toMatch(/carries no version/);
+  });
+
+  it("N4: a linked Antigravity plugin.json with no version fails the read-back", async () => {
+    const w = world();
+    writeFileSync(join(w.root, "gen", "ag", "plugin.json"), JSON.stringify({ name: PLUGIN }));
+    const dest = join(w.cfg, "config", "plugins", PLUGIN);
+    const result = await capture([...installArgs(w, "antigravity", "--surface-dir", "gen/ag"), "--json"], seams(w, [git(w.root), ok(`agy plugin validate ${dest}`)]));
+    expect(result.code).toBe(1);
+    expect(String(result.doc()["reason"])).toMatch(/carries no version/);
+  });
+
+  it("N5: a step that failed is shown as failed, never done -- in --json and in text", async () => {
+    const w = world();
+    writeJson(join(w.cfg, "plugins", "installed_plugins.json"), { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }] } });
+    const script = [git(w.root), ok("claude --version"), { match: `claude plugin uninstall ${MARKET_ID}`, result: { code: 1, stderr: "locked" } }];
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, script));
+    expect(result.code).toBe(1);
+    const steps = result.doc()["steps"] as Array<{ kind: string; done: boolean; outcome: string }>;
+    expect(steps.map((step) => [step.kind, step.done, step.outcome])).toEqual([
+      ["mkdir", true, "ok"],
+      ["link", true, "ok"],
+      ["run", false, "failed"],
+    ]);
+    const v = world();
+    writeJson(join(v.cfg, "plugins", "installed_plugins.json"), { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }] } });
+    const text = await capture(installArgs(v, "claude-code"), seams(v, [git(v.root), ok("claude --version"), { match: `claude plugin uninstall ${MARKET_ID}`, result: { code: 1, stderr: "locked" } }]));
+    expect(text.out.join("\n")).toMatch(/FAILED run: claude plugin uninstall zephyr@zephyr-market/);
+  });
+
+  it("N6: codex refuses before plugin add when the plugin is installed from another marketplace (exit 3)", async () => {
+    const w = world();
+    const s = seams(w, [git(w.root), ok("codex plugin list", `${fillerPlugins}\n${PLUGIN}@elsewhere  installed, enabled  0.1.0  /c\n`)]);
+    const result = await capture([...installArgs(w, "codex"), "--json"], s);
+    expect(result.code).toBe(3);
+    expect(String(result.doc()["reason"])).toMatch(/zephyr@elsewhere is installed from a marketplace this checkout does not publish/);
+    expect(commandsOf(s)).toEqual(["git rev-parse --show-toplevel", "codex plugin list"]);
+    // A row merely available from another marketplace is no install.
+    const v = world();
+    const available = await capture(
+      [...installArgs(v, "codex"), "--dry-run"],
+      seams(v, [git(v.root), ok("codex plugin list", `${PLUGIN}@elsewhere  not installed  0.1.0`), ok("codex plugin marketplace list", HEADER)]),
+    );
+    expect(available.code).toBe(0);
+  });
+
+  it("N6: codex status is a mismatch when more than one row of the plugin is enabled", async () => {
+    const w = world();
+    const result = await capture(
+      [...statusArgs(w, "codex"), "--json"],
+      seams(w, [ok("codex plugin list", `${MARKET_ID}  installed, enabled  1.0.0  /a\n${PLUGIN}@b  installed, enabled  1.0.0  /b\n`), ok("codex plugin marketplace list", HEADER)]),
+    );
+    expect(result.code).toBe(1);
+    expect(String(result.doc()["reason"])).toMatch(/2 rows are enabled/);
+  });
+
+  it("N7: status --trees takes the worse exit when the status could not read the surface", async () => {
+    expect(statusTreesExit({ verdict: "serving" }, { verdict: "identical" })).toBe(0);
+    expect(statusTreesExit({ verdict: "mismatch" }, { verdict: "identical" })).toBe(0);
+    expect(statusTreesExit({ verdict: "tool missing" }, { verdict: "identical" })).toBe(5);
+    expect(statusTreesExit({ verdict: "tool missing" }, { verdict: "different" })).toBe(1);
+    expect(statusTreesExit({ verdict: "wiring" }, { verdict: "different" })).toBe(2);
+    expect(statusTreesExit({ verdict: "tool missing" }, { verdict: "not installed" })).toBe(5);
+    const w = world();
+    const source = checkout(join(w.work, "source"));
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.root, join(w.cfg, "skills", PLUGIN));
+    const result = await capture(
+      [...statusArgs(w, "claude-code", "--trees", "skills", "--source", source), "--json"],
+      seams(w, [{ match: "claude plugin list --json", result: { spawnFailed: true, code: -1 } }]),
+    );
+    expect((result.doc()["judgement"] as { verdict: string }).verdict).toBe("identical");
+    expect(result.code).toBe(5);
+  });
+
+  it("N8: every token of a suggested command and of a would-run line is shell-quoted", async () => {
+    expect(shellQuote("plain-1.0")).toBe("plain-1.0");
+    expect(shellQuote("a b")).toBe("'a b'");
+    expect(shellQuote("it's")).toBe("'it'\\''s'");
+    expect(shellQuote("$(x)")).toBe("'$(x)'");
+    expect(commandText(["claude", "plugin", "disable", "z@a;rm -rf ~", "--scope", "user"])).toBe("claude plugin disable 'z@a;rm -rf ~' --scope user");
+    const w = world();
+    writeJson(join(w.cfg, "settings.json"), { enabledPlugins: { [`${PLUGIN}@a;touch x`]: true } });
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, [git(w.root), ok("claude --version"), claudeList([servedLink(w)])]));
+    expect((result.doc()["actions"] as Array<{ command: string }>)[0]?.command).toBe(`CLAUDE_CONFIG_DIR=${shellQuote(w.cfg)} claude plugin disable 'zephyr@a;touch x' --scope user`);
+    const spaced = checkout(join(w.work, "with space"));
+    const dry = await capture(
+      ["surface", "install", "--surface", "codex", "--plugin", PLUGIN, "--root", spaced, "--config-dir", w.cfg, "--dry-run"],
+      seams(w, [git(spaced), ok("codex plugin list", ""), ok("codex plugin marketplace list", HEADER)]),
+    );
+    expect(dry.out.join("\n")).toContain(`would run: codex plugin marketplace add '${spaced}'`);
+  });
+
+  it("N8: a marketplace name outside [A-Za-z0-9._-], or with a leading '-', is refused (exit 2)", async () => {
+    for (const name of ["-x", "a;b", "a b", "$(x)", "a/b", ""]) {
+      const w = world();
+      writeFileSync(join(w.root, ".claude-plugin", "marketplace.json"), JSON.stringify({ name, plugins: [{ name: PLUGIN }] }));
+      for (const surface of ["claude-code", "codex"]) {
+        const result = await capture(installArgs(w, surface), seams(w, [git(w.root), ok("codex plugin list", "")]));
+        expect(result.code, `${surface} ${name}`).toBe(2);
+        expect(result.err.join("\n")).toMatch(/carries no usable 'name'/);
+      }
+    }
+  });
+
+  it("N12: the config directory reaches the CLI only when --config-dir or the environment named it", async () => {
+    const w = world();
+    const flagged = seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", HEADER)]);
+    await capture([...installArgs(w, "codex"), "--dry-run"], flagged);
+    expect(flagged.calls.filter((call) => call.command === "codex").map((call) => call.env)).toEqual([{ CODEX_HOME: w.cfg }, { CODEX_HOME: w.cfg }]);
+    const fromEnv = new ScriptedSeams([git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", HEADER)], { env: { HOME: w.home, CODEX_HOME: w.cfg } });
+    await capture(["surface", "install", "--surface", "codex", "--plugin", PLUGIN, "--root", w.root, "--dry-run"], fromEnv);
+    expect(fromEnv.calls.find((call) => call.command === "codex")?.env).toEqual({ CODEX_HOME: w.cfg });
+    const byDefault = seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", HEADER)]);
+    await capture(["surface", "install", "--surface", "codex", "--plugin", PLUGIN, "--root", w.root, "--dry-run"], byDefault);
+    expect(byDefault.calls.find((call) => call.command === "codex")?.env).toEqual({});
+  });
+
+  it("N13: on Windows a refused rename over a junction falls back to rmdir-then-rename", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    let renames = 0;
+    const removed: string[] = [];
+    const removeLink = (path: string): void => {
+      removed.push(path);
+      if (POSIX) unlinkSync(path);
+      else rmdirSync(path);
+    };
+    const s = new ScriptedSeams([ok("claude --version"), claudeList([servedLink(w)])], { env: { HOME: w.home }, platform: "win32" });
+    const report = direct(w, s, {
+      linkOps: {
+        symlink: (target, path): void => link(target, path),
+        rename: (from, to): void => {
+          renames += 1;
+          if (renames === 1) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+          renameSync(from, to);
+        },
+        rmdir: removeLink,
+        unlink: (): void => {
+          throw new Error("a junction is never unlinked on win32");
+        },
+      },
+    });
+    expect(report.verdict).toBe("ok");
+    expect(report.link).toBe("re-pointed");
+    expect(removed).toEqual([dest]);
+    expect(realpathSync.native(dest)).toBe(w.root);
+  });
+
+  it("N13: off Windows a refused rename is a failed step, the old link left in place", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    const report = direct(w, seams(w, [ok("claude --version")]), {
+      linkOps: {
+        rename: (): void => {
+          throw Object.assign(new Error("EXDEV"), { code: "EXDEV" });
+        },
+      },
+    });
+    expect(report.verdict).toBe("failed");
+    expect(report.reason).toMatch(/could not re-point .*EXDEV/);
+    expect(report.steps.map((step) => step.outcome)).toEqual(["failed"]);
+    expect(realpathSync.native(dest)).toBe(w.other);
+  });
+
+  it("N16: a write whose read-back resolves elsewhere is failed (1), not refused", () => {
+    const w = world();
+    const report = direct(w, seams(w, [ok("claude --version")]), {
+      linkOps: { symlink: (_target, path): void => link(w.other, path) },
+    });
+    expect(report.verdict).toBe("failed");
+    expect(report.reason).toMatch(/does not resolve to/);
+  });
+
+  it("N17: a stale dot-named temporary is removed only when it is a link to a root of the plugin", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    const temporary = join(w.cfg, "skills", `.${PLUGIN}.nen-relink`);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    link(w.other, temporary);
+    const report = direct(w, seams(w, [ok("claude --version"), claudeList([servedLink(w)])]), undefined);
+    expect(report.verdict).toBe("ok");
+    expect(existsSync(temporary)).toBe(false);
+    expect(realpathSync.native(dest)).toBe(w.root);
+
+    const v = world();
+    const destV = join(v.cfg, "skills", PLUGIN);
+    const tempV = join(v.cfg, "skills", `.${PLUGIN}.nen-relink`);
+    mkdirSync(join(v.cfg, "skills"));
+    link(v.other, destV);
+    writeFileSync(tempV, "not ours");
+    const kept = direct(v, seams(v, [ok("claude --version")]), undefined);
+    expect(kept.verdict).toBe("refused");
+    expect(readFileSync(tempV, "utf8")).toBe("not ours");
+    const x = world();
+    const destX = join(x.cfg, "skills", PLUGIN);
+    const tempX = join(x.cfg, "skills", `.${PLUGIN}.nen-relink`);
+    mkdirSync(join(x.cfg, "skills"));
+    link(x.other, destX);
+    link(x.work, tempX);
+    expect(direct(x, seams(x, [ok("claude --version")]), undefined).verdict).toBe("refused");
+    expect(lstatSync(tempX).isSymbolicLink()).toBe(true);
   });
 });

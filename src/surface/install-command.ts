@@ -13,6 +13,7 @@ import {
   STATUS_CONTRACT,
   STATUS_EXIT,
   claudeSelector,
+  configDirIsExplicit,
   status,
   surfaceConfigDir,
   validateRoot,
@@ -48,9 +49,11 @@ install of a plugin from the checkout --root names, on one surface:
   claude-code  a link at <config>/skills/<name> (loaded in place as
                <name>@skills-dir); a prior <name>@<marketplace> install from
                the checkout's own marketplace (.claude-plugin/marketplace.json
-               'name') is handed over -- claude plugin uninstall, then claude
-               plugin marketplace remove -- and claude plugin list --json is
-               read back.
+               'name') is handed over -- claude plugin uninstall, then ONE
+               claude plugin marketplace remove for the known entry -- and
+               claude plugin list --json is read back. The SECOND remove
+               that clears a settings.json declaration is an action owed,
+               never run here.
   codex        the checkout added as its marketplace (codex plugin
                marketplace add), then codex plugin add <name>@<marketplace>;
                codex plugin list is read back, its version compared against
@@ -59,11 +62,12 @@ install of a plugin from the checkout --root names, on one surface:
                (the checkout's generated Antigravity plugin; --surface-dir is
                REQUIRED here); the linked plugin.json and agy plugin validate
                are read back.
-NEVER REPLACES WHAT IT DID NOT MAKE: a destination is replaced only when absent
-or a link to a root of the same plugin; a real directory, a file, a dangling
+A LINK TO ANY ROOT OF THE SAME PLUGIN COUNTS AS OURS; ONLY A LINK IS EVER
+REPLACED, NEVER DATA: a destination is written only when absent or such a link
+(re-inspected right before the write); a real directory, a file, a dangling
 link or a link elsewhere is refused (exit 3) and left as it was -- as is an
-installed copy from another marketplace, or a Codex marketplace of the same
-name at another root. NEVER EDITS A SETTINGS FILE: a settings.json declaration
+installed copy from another marketplace (Claude Code or Codex), or a Codex
+marketplace of the same name at another root. NEVER EDITS A SETTINGS FILE: a settings.json declaration
 that would bring a marketplace copy back on the next reload is reported as an
 action owed, with the command that clears it (exit 4). Every precondition is
 read before anything is written; every write is previewed by --dry-run and
@@ -77,6 +81,10 @@ read back after it is made.
                       ~/.gemini. The surface CLI is run with the same one.
   --surface-dir <dir> antigravity: the checkout-relative directory holding the
                       generated plugin (a plugin.json naming --plugin).
+Every suggested command and every 'would run:' line is quoted token by token
+for a POSIX shell; a marketplace name outside [A-Za-z0-9._-], or starting with
+'-', is refused (exit 2). The config directory is passed to the CLI only when
+--config-dir or the surface's variable named it.
 install exits: 0 ok (installed and read back, or a complete --dry-run plan);
 1 failed (a CLI step or the read-back, its last line quoted); 2 usage or
 wiring (a file that cannot be trusted, a bad --root); 3 refused (not ours to
@@ -91,9 +99,12 @@ a marketplace copy only when settings.json enabledPlugins enables it, the
 skills-directory copy unless enabledPlugins disables it or an enabled
 marketplace copy takes precedence; --source defaults to --root.
 status exits: 0 serving; 1 mismatch (not --root, another version, a shadowing
-copy, or agy plugin validate refused it); 2 wiring; 3 not installed; 5 the
-surface's CLI could not be started (nothing is known to be served). With
---trees the exit is the judgement's ('mirror check --plugin''s six verdicts).`;
+copy, more than one enabled Codex row, or agy plugin validate refused it); 2
+wiring; 3 not installed; 5 the surface's CLI could not be started (nothing is
+known to be served, or agy could not validate). With --trees the exit is the
+judgement's ('mirror check --plugin''s six verdicts) -- or, when the status
+itself is wiring or tool missing, the worse of the two in the order
+2 > 1 > 5 > 4 > 0 > 3.`;
 
 function value(context: CommandContext, flag: string): string | null {
   const raw = context.args.values[flag];
@@ -144,21 +155,22 @@ export function runInstall(context: CommandContext): number {
   }
   const root = validateRoot(rootFlag, plugin, context.seams);
   const surfaceDir = surfaceDirFlag === null ? null : validateSurfaceDir(root, surfaceDirFlag, plugin);
-  const configDir = surfaceConfigDir(surface, value(context, "config-dir"), context.seams.env);
-  const report = install({ surface, plugin, root, configDir, surfaceDir, dryRun: context.args.booleans.has("dry-run"), seams: context.seams });
+  const configFlag = value(context, "config-dir");
+  const configDir = surfaceConfigDir(surface, configFlag, context.seams.env);
+  const configExplicit = configDirIsExplicit(surface, configFlag, context.seams.env);
+  const report = install({ surface, plugin, root, configDir, configExplicit, surfaceDir, dryRun: context.args.booleans.has("dry-run"), seams: context.seams });
   const exit = INSTALL_EXIT[report.verdict];
   emit(context.io, context.json, { contract: INSTALL_CONTRACT, ...report, exit }, installLines(report));
   return exit;
 }
 
 function installLines(report: InstallReport): string[] {
-  const would = report.dryRun ? "would " : "";
   return [
     `surface: ${report.surface} (plugin ${report.plugin})`,
     plainLine(`root: ${report.root}`),
     plainLine(`config: ${report.configDir}`),
     ...(report.destination === null ? [] : [plainLine(`destination: ${report.destination}${report.link === null ? "" : ` (${report.link})`}`)]),
-    ...report.steps.map((step): string => plainLine(`${step.done ? "" : would}${step.kind}: ${step.detail}`)),
+    ...report.steps.map((step): string => plainLine(`${step.outcome === "failed" ? "FAILED " : step.outcome === "planned" ? (report.dryRun ? "would " : "not reached: ") : ""}${step.kind}: ${step.detail}`)),
     ...report.actions.flatMap((action): string[] => [plainLine(`action owed: ${action.what}`), ...(action.command === null ? [] : [plainLine(`  run: ${action.command}`)])]),
     plainLine(`read back: ${report.readBack.checked ? report.readBack.detail : `NOT CHECKED (${report.readBack.detail})`}`),
     ...(report.served === null ? [] : [`serves: ${servedLine(report.served)}`]),
@@ -199,7 +211,9 @@ export function runStatus(context: CommandContext): number {
   if (judging && surface !== "claude-code") {
     throw new VerbUsageError(`--trees judges a Claude Code plugin copy in its own layout; --surface ${surface} has none. Drop --trees.`);
   }
-  const configDir = surfaceConfigDir(surface, value(context, "config-dir"), context.seams.env);
+  const configFlag = value(context, "config-dir");
+  const configDir = surfaceConfigDir(surface, configFlag, context.seams.env);
+  const configExplicit = configDirIsExplicit(surface, configFlag, context.seams.env);
   let judgement: PluginCheckReport | null = null;
   if (judging) {
     const source = value(context, "source") ?? rootFlag;
@@ -207,8 +221,8 @@ export function runStatus(context: CommandContext): number {
     const judge = readJudgeContext(context, plugin, source, configDir);
     judgement = checkRecordedCopies(judge, claudeSelector(configDir, plugin));
   }
-  const report = status({ surface, plugin, root, configDir, surfaceDir, seams: context.seams });
-  const exit = judgement === null ? STATUS_EXIT[report.verdict] : VERDICT_EXIT[judgement.verdict];
+  const report = status({ surface, plugin, root, configDir, configExplicit, surfaceDir, seams: context.seams });
+  const exit = judgement === null ? STATUS_EXIT[report.verdict] : statusTreesExit(report, judgement);
   emit(
     context.io,
     context.json,
@@ -221,6 +235,21 @@ export function runStatus(context: CommandContext): number {
     statusLines(report, judgement),
   );
   return exit;
+}
+
+/**
+ * The exit of `status --trees`: the judgement's, unless the status itself
+ * could not read the surface (`wiring`, `tool missing`) -- then the WORSE of
+ * the two, in `check --plugin`'s order 2 > 1 > 5 > 4 > 0 > 3, so an unread
+ * surface is never hidden behind an identical copy.
+ */
+const EXIT_RANK: Readonly<Record<number, number>> = { 2: 5, 1: 4, 5: 3, 4: 2, 0: 1, 3: 0 };
+
+export function statusTreesExit(report: Pick<StatusReport, "verdict">, judgement: Pick<PluginCheckReport, "verdict">): number {
+  const judged = VERDICT_EXIT[judgement.verdict];
+  if (report.verdict !== "wiring" && report.verdict !== "tool missing") return judged;
+  const own = STATUS_EXIT[report.verdict];
+  return (EXIT_RANK[own] ?? 0) > (EXIT_RANK[judged] ?? 0) ? own : judged;
 }
 
 function validateRelative(surfaceDir: string): string {
