@@ -295,6 +295,7 @@ verb it invoked. The complete list:
 | [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body) | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329)). A check that could not run is `1`, never `4` and never `0` |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
+| [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
@@ -773,7 +774,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
-| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim | caller-named --source + --agents + --out or --installed; writes nothing at all; no git/gh | yes |
+| [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim — and, with [`--plugin <name>`](#nen-surface-mirror-check---plugin), judges a Claude Code plugin cache or skills-directory install in the plugin's own layout against an independent source, six verdicts on six exits | caller-named --source + --agents + --out or --installed; with --plugin: --source's trees, the copy, `<config>/plugins/*.json` and `<config>/skills/<name>`, plus read-only `git rev-parse`/`symbolic-ref` probes of the stand-in and served checkouts; writes nothing at all; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
 | [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
 | [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv; an interactive Windows plan asks no password and registers logon tasks instead of services), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
@@ -12220,6 +12221,173 @@ nen surface mirror check --source claude/skills --agents claude/agents \
 ```
 (exit 1, after one byte of the installed `breath/SKILL.md` was changed; on a
 fresh install the same command exits 0 with every file under `ok`)
+
+<a id="nen-surface-mirror-check---plugin"></a>
+
+#### `check --plugin <name> --installed <dir|auto>`
+
+`--installed` alone diffs a target `.claude/` layout, and a Claude Code
+**plugin** is never placed that way: it is served from its own layout, the
+plugin cache (`<config>/plugins/cache/<marketplace>/<plugin>/<version>`) or a
+skills-directory install (`<config>/skills/<plugin>`, usually a link to a
+checkout). Pointed at a real cache, the mirror check read every skill
+`missing`. `--plugin` judges the copy the host serves **in the plugin's own
+layout** ([#339](https://github.com/zheref/nen/issues/339)), porting
+zheref/hatsu's `scripts/plugin_cache_check.sh` so that shell can be retired.
+
+**Usage**
+
+```text
+nen surface mirror check --surface claude-code --plugin <name>
+                         --source <plugin root> --installed <dir>|auto
+                         --trees <dir,dir,...> [--config-dir <dir>]
+                         [--independent-source <dir>] [--repo <path>] [--json]
+```
+
+**Arguments**
+
+- `--plugin <name>` — the plugin's manifest name (no `@`, `/` or `\`, not
+  `.` or `..`). A directory is a copy of the
+  plugin only when its `.claude-plugin/plugin.json` is a **regular file** (never
+  opened through a link) naming it; a copy of another plugin is never judged as
+  drift.
+- `--source <plugin root>` — in this mode, the plugin's **source root** (the
+  directory holding `.claude-plugin/plugin.json`), not a skills directory.
+- `--installed <dir>` judges that one copy; `--installed auto` judges **every
+  copy the host has recorded**: each `installPath` of each
+  `<name>@<marketplace>` entry of `<config>/plugins/installed_plugins.json`,
+  and `<config>/skills/<name>` when it exists — each once, by real path.
+- `--trees <a,b,...>` — **required**: the directories the plugin ships,
+  relative to its root (zheref/hatsu: `claude/skills,claude/agents,claude/rules,hooks,templates,contracts,scripts`).
+  Which trees a plugin ships is the plugin's fact, so it is caller data. An
+  entry is split on **both** `/` and `\` on every host; an absolute path, a
+  `:`, a `.`/`..`/empty segment or a control character is refused. Every entry
+  must be a **real directory in `--source`**, walked one segment at a time with
+  `lstat` — a typo'd tree, one that reaches a file, or one that passes through
+  a symlink is refused at exit 2 rather than compared as empty and read
+  identical. (In an independent source, the same failure is the `wiring`
+  verdict in the report.)
+  `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` are
+  always compared too.
+- `--config-dir <dir>` — Claude Code's config directory: default
+  `$CLAUDE_CONFIG_DIR`, else `~/.claude`.
+- `--independent-source <dir>` — see the independence rule below. It must be
+  a root of the plugin (exit 2 otherwise), and it is **refused** (exit 2) when
+  no judged copy is `--source` — the only case it is consulted — rather than
+  accepted and ignored.
+- `--repo <path>` — the checkout the caller stands in (default: the working
+  directory), the rule's last candidate.
+
+The mirror inputs (`--agents`, `--invocation-prefix`, `--hooks`, `--hooks-root`,
+`--manifest`, `--models`, `--source-surface`, `--rules`, `--permissions`,
+`--stamp`, `--out`) are **refused** in this mode, and `--trees`,
+`--config-dir` and `--independent-source` are refused without it, as is
+`--installed auto`. Any `--surface` other than `claude-code` is refused.
+
+**What is compared** — every regular file and symlink under each tree, and
+the two manifests, byte for byte; each differing path is named by side:
+`differs`, `only in source`, `only in copy`. Every path is walked **one segment
+at a time with `lstat`**, the trees' own segments and `.claude-plugin/`
+included. A **symlink is never opened or descended into**: it is an entry,
+and two links with the same target string are equal while anything else is
+`differs (symlink; never opened)` — so a link to a FIFO cannot hang the check,
+a link out of the tree is never read, and a copy whose `claude` is a link into
+the source reads `differs` at `claude`, never identical. A copy whose
+`.claude-plugin` is a link is no copy of the plugin at all. A **file where the
+source has a directory** is drift, not wiring: the file is `only in copy` and
+each source file under it `only in source`. A FIFO, socket or device in a tree is not a
+shipped file and is not listed. A name carrying a **control character, or bytes
+that are not UTF-8**, is never compared or printed raw (`unexpected`, the
+character shown as `?`). `.DS_Store` is ignored on both sides; a tree the
+plugin does not name (`docs/`) is never read. Unlike `mirror check`, there is no
+marker and no generation: the plugin's source tree *is* the expectation (the
+verbatim row), so `stale` and `hand-edited` do not arise here.
+
+**A copy is never its own evidence.** When the copy and `--source` are the
+same real path — `ten` resolving its root from the very skill directory the
+host serves — comparing them proves nothing, so a source named
+**independently** of the copy is looked for, in order:
+
+1. `--independent-source <dir>`;
+2. the `<name>@<marketplace>` entry's `directory` source in
+   `<config>/plugins/known_marketplaces.json`;
+3. the checkout `--repo` (or the working directory) stands in — **only** on its
+   trunk (its `nen/workflow.json` `branch.base`, else `origin/HEAD`, else
+   `main`) or on the branch the served copy itself is checked out at. A feature
+   branch is the change being authored, not what should be served; a skipped
+   one is named in the verdict.
+
+The first found that is a root of the plugin is the source. When it **is** the
+copy (a link to that checkout) and the copy is a git checkout, the copy is
+`identical` **by link** (`byLink: true`); when it is not a git checkout it is
+`not comparable`. When the stand-in checkout **is** the served copy, it is
+identical by link **only on its trunk**: a served checkout on a feature
+branch is what is wrongly served, so it is `not comparable`, naming the
+branch. With no independent source the copy is `not comparable` — **never**
+`identical`. Copy and source are the same when their real paths **or** their
+device and inode match. The `git` probes run with `GIT_DIR`, `GIT_WORK_TREE`
+and `GIT_INDEX_FILE` removed from their environment, so a hook's repository
+never answers for the stand-in.
+
+**Output and exit codes** — the text form prints `surface:`, `source:`,
+`installed:`, `trees:`, `install record:` (auto only), then one
+`<verdict> -- <reason>` line per copy with its differing paths indented under
+it, and `verdict: <overall>` last. `--json`: `{ contract:
+"nen.surface.mirror.check-plugin/v0.1", surface, plugin, source, installed,
+configDir, trees, record, verdict, exit, copies: [ { label, path, verdict,
+source, namedBy, byLink, sourceVersion, copyVersion, differences: [ { kind,
+path } ], reason } ] }` — `record` is `read`, `absent`, `unreadable` or `not
+read` (an explicit `--installed`); `namedBy` is `source`,
+`independent-source`, `marketplace` or `checkout`; a `kind` is
+`only-in-source`, `only-in-copy`, `differs`, `differs-symlink`,
+`unexpected-in-copy` or `unexpected-in-source`. Six verdicts, never collapsed,
+each its own exit; under `auto` the overall verdict is the worst copy's, in the
+order `2 > 1 > 5 > 4 > 0`:
+
+| Exit | Verdict | Meaning |
+|---|---|---|
+| `0` | `identical` | every compared file equal, none missing or extra — or served by link to a git checkout named independently |
+| `1` | `different` | every differing path named, by side |
+| `2` | `wiring` | a usage refusal (stderr, no report) — a `--source`, `--independent-source` or explicit `--installed` that is not a copy of the plugin, a `--trees` entry that is not a real directory in `--source`, an `--independent-source` no copy consults — or a recorded path, install record, `skills/<name>` or `plugin.json` that could not be **inspected** (EACCES and the like: an inspection failure is never absence and never a broken install), or a file or directory in a copy or the source that could not be read, reported with the `--json` document: **never** read as missing |
+| `3` | `not installed` | no `<name>@` entry in the install record and no `skills/<name>` |
+| `4` | `not comparable` | a copy is the source itself and no independent source exists (a stand-in on a feature branch is not one) |
+| `5` | `broken install` | an entry with no usable `installPath`, a recorded path that is gone (a stale record), a dangling or looping `skills/<name>` link, a recorded path that is not a directory, an `installPath` carrying a control character (one install, refused, **never split**), an install record that is not JSON — or is itself a dangling or looping link (`record: "unreadable"`) — or a recorded copy that holds another plugin |
+
+**An inspection failure is not absence.** Only `ENOENT` means a thing is not
+there; a loop (`ELOOP`) or a file where a directory belongs (`ENOTDIR`) is a
+`broken install`; any other failure (`EACCES`, …) is `wiring`. That holds for
+`<config>/plugins`, the install record, each recorded path and
+`<config>/skills/<name>`. A `.claude-plugin/plugin.json` that could not be read
+is `wiring`, and one that is not JSON or names another plugin is "holds no
+plugin". Identical **by link** needs git's own `rev-parse --show-toplevel` for
+the copy to resolve to the copy: an empty `.git`, or a repository enclosing the
+copy, is no proof, and the copy is `not comparable`. Symlink targets are compared
+as bytes. The text form strips control characters from every reason line
+(`--json` keeps the field as built).
+
+The record is read by this binary as JSON, so a host without `jq` is no case at
+all. Not yet judged: which of several recorded copies Claude Code has
+**enabled** — every recorded copy is judged.
+
+**Example**
+
+```bash
+nen surface mirror check --surface claude-code --plugin hatsu --source . \
+  --installed auto --trees claude/skills,claude/agents,claude/rules,hooks,templates,contracts,scripts
+```
+```text
+surface: claude-code (plugin hatsu)
+source: /Users/me/Code/hatsu
+installed: auto (/Users/me/.claude)
+trees: claude/skills, claude/agents, claude/rules, hooks, templates, contracts, scripts + .claude-plugin/plugin.json, .claude-plugin/marketplace.json
+install record: read
+different -- /Users/me/.claude/plugins/cache/hatsu/hatsu/0.85.0 (plugin 0.85.0) is not the source /Users/me/Code/hatsu (plugin 0.86.0)
+  differs:        .claude-plugin/plugin.json
+  differs:        claude/skills/ten/SKILL.md
+verdict: different
+```
+(exit 1: the cache holds the previous release; after the host's plugin update
+the same command exits 0)
 
 ## Self-hosted runners
 
