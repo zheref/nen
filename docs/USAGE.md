@@ -11899,10 +11899,22 @@ order `2 > 1 > 5 > 4 > 0`:
 |---|---|---|
 | `0` | `identical` | every compared file equal, none missing or extra — or served by link to a git checkout named independently |
 | `1` | `different` | every differing path named, by side |
-| `2` | `wiring` | a usage refusal (stderr, no report) — a `--source`, `--independent-source` or explicit `--installed` that is not a copy of the plugin, a `--trees` entry that is not a real directory in `--source`, an `--independent-source` no copy consults — or a file or directory in a copy or the source that could not be read, reported with the `--json` document: **never** read as missing |
+| `2` | `wiring` | a usage refusal (stderr, no report) — a `--source`, `--independent-source` or explicit `--installed` that is not a copy of the plugin, a `--trees` entry that is not a real directory in `--source`, an `--independent-source` no copy consults — or a recorded path, install record, `skills/<name>` or `plugin.json` that could not be **inspected** (EACCES and the like: an inspection failure is never absence and never a broken install), or a file or directory in a copy or the source that could not be read, reported with the `--json` document: **never** read as missing |
 | `3` | `not installed` | no `<name>@` entry in the install record and no `skills/<name>` |
 | `4` | `not comparable` | a copy is the source itself and no independent source exists (a stand-in on a feature branch is not one) |
 | `5` | `broken install` | an entry with no usable `installPath`, a recorded path that is gone (a stale record), a dangling or looping `skills/<name>` link, a recorded path that is not a directory, an `installPath` carrying a control character (one install, refused, **never split**), an install record that is not JSON — or is itself a dangling or looping link (`record: "unreadable"`) — or a recorded copy that holds another plugin |
+
+**An inspection failure is not absence.** Only `ENOENT` means a thing is not
+there; a loop (`ELOOP`) or a file where a directory belongs (`ENOTDIR`) is a
+`broken install`; any other failure (`EACCES`, …) is `wiring`. That holds for
+`<config>/plugins`, the install record, each recorded path and
+`<config>/skills/<name>`. A `.claude-plugin/plugin.json` that could not be read
+is `wiring`, and one that is not JSON or names another plugin is "holds no
+plugin". Identical **by link** needs git's own `rev-parse --show-toplevel` for
+the copy to resolve to the copy: an empty `.git`, or a repository enclosing the
+copy, is no proof, and the copy is `not comparable`. Symlink targets are compared
+as bytes. The text form strips control characters from every reason line
+(`--json` keeps the field as built).
 
 The record is read by this binary as JSON, so a host without `jq` is no case at
 all. Not yet judged: which of several recorded copies Claude Code has

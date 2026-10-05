@@ -265,7 +265,7 @@ describe("check --plugin, a copy is never its own evidence", () => {
     const plain = w.fresh("plain");
     const notGit = await capture(argv(w, plain, plain, ["--independent-source", plain]));
     expect(notGit.code).toBe(4);
-    expect(copiesOf(notGit)[0]?.reason).toMatch(/not a git checkout/);
+    expect(copiesOf(notGit)[0]?.reason).toMatch(/no proof/);
 
     // The copy given as --source is compared with the independent source instead.
     const drift = w.fresh("drift");
@@ -358,7 +358,7 @@ describe("check --plugin --installed auto", () => {
       [{ plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: null }] } }, /carries no usable installPath/],
       [{ plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: join(w.work, "gone") }] } }, /stale record/],
       [{ plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: other }] } }, /holds no 'demo' plugin/],
-      ["not json", /not readable: it is not JSON/],
+      ["not json", /not usable: it is not JSON/],
     ];
     for (const [value, reason] of cases) {
       record(w, value);
@@ -619,5 +619,158 @@ describe("check --plugin, hanten round 1 (zheref/nen#339)", () => {
       if (saved === undefined) delete process.env["GIT_DIR"];
       else process.env["GIT_DIR"] = saved;
     }
+  });
+});
+
+describe("check --plugin, Copilot round 1 on NN-PR-#378: an inspection failure is not absence", () => {
+  const noPerms = process.platform === "win32" || process.getuid?.() === 0;
+  const initGit = (dir: string): void => {
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "init");
+  };
+  /** Runs `body` with `path` at mode 000, always restoring it. */
+  async function locked<T>(path: string, body: () => Promise<T>): Promise<T> {
+    chmodSync(path, 0o000);
+    try {
+      return await body();
+    } finally {
+      chmodSync(path, 0o755);
+    }
+  }
+
+  it("1: a reason is made inert at the human boundary, and kept as built under --json", async () => {
+    const w = world();
+    const same = w.fresh("same");
+    const odd = join(w.work, "odd\u001b[2Jdir");
+    symlinkSync(same, odd);
+    mkdirSync(join(w.cfg, "skills"));
+    symlinkSync(odd, join(w.cfg, "skills", PLUGIN));
+    record(w, { plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: join(w.work, "gone\u0007here") }] } });
+    const text = await capture(argv(w, w.src, "auto").filter((arg): boolean => arg !== "--json"));
+    for (const line of text.out) expect(line).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+    const machine = await capture(argv(w, w.src, "auto"));
+    expect(copiesOf(machine).map((copy): string => copy.verdict).sort()).toEqual(["broken install", "identical"]);
+    expect(text.out.some((line): boolean => line.startsWith("broken install -- "))).toBe(true);
+  });
+
+  it.skipIf(noPerms)("2: an unreadable plugin.json in a recorded copy is wiring (2), not 'holds no plugin' (5)", async () => {
+    const w = world();
+    const copy = w.fresh("lockedmanifest");
+    record(w, { plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: copy }] } });
+    const manifest = join(copy, ".claude-plugin", "plugin.json");
+    const result = await locked(manifest, async () => capture(argv(w, w.src, "auto")));
+    expect(result.code).toBe(2);
+    expect(json(result)["verdict"]).toBe("wiring");
+    expect(copiesOf(result)[0]?.reason).toMatch(/could not be read \(EACCES\)/);
+    expect(copiesOf(result)[0]?.reason).not.toMatch(/holds no/);
+    // A manifest that is there and names another plugin is still a broken install.
+    writeFileSync(manifest, '{"name":"otherplug"}\n');
+    expect((await capture(argv(w, w.src, "auto"))).code).toBe(5);
+  });
+
+  it.skipIf(noPerms)("3: an unreadable parent in a source tree is a wiring REPORT, not a missing-tree refusal", async () => {
+    const w = world();
+    const copy = w.fresh("same");
+    const result = await locked(join(w.src, "claude"), async () => capture(argv(w, w.src, copy)));
+    expect(result.code).toBe(2);
+    expect(result.out).not.toEqual([]);
+    expect(json(result)["verdict"]).toBe("wiring");
+    expect(copiesOf(result)[0]?.reason).toMatch(/unreadable: claude\/skills under the source/);
+    expect(result.err.join("\n")).not.toMatch(/does not exist in the source/);
+  });
+
+  it.skipIf(process.platform === "win32")("4: symlink targets are compared as bytes, never as decoded strings", async () => {
+    const w = world();
+    const left = w.fresh("left");
+    const right = w.fresh("right");
+    // 0xfe and 0xff both decode to U+FFFD: equal as strings, different as bytes.
+    symlinkSync(Buffer.from([0x61, 0xfe]), join(left, "claude", "agents", "t.md"));
+    symlinkSync(Buffer.from([0x61, 0xff]), join(right, "claude", "agents", "t.md"));
+    const result = await capture(argv(w, left, right));
+    expect(result.code).toBe(1);
+    expect(copiesOf(result)[0]?.differences).toEqual([{ kind: "differs-symlink", path: "claude/agents/t.md" }]);
+  });
+
+  it.skipIf(process.platform === "win32")("5: a looping <config>/plugins is broken (5); an unreadable one is wiring (2)", async () => {
+    const w = world();
+    rmSync(join(w.cfg, "plugins"), { recursive: true });
+    symlinkSync(join(w.cfg, "plugins"), join(w.cfg, "plugins"));
+    const loop = await capture(argv(w, w.src, "auto"));
+    expect(loop.code).toBe(5);
+    expect(json(loop)["record"]).toBe("unreadable");
+    expect(copiesOf(loop)[0]?.reason).toMatch(/ELOOP/);
+    if (noPerms) return;
+    rmSync(join(w.cfg, "plugins"));
+    mkdirSync(join(w.cfg, "plugins"));
+    record(w, { plugins: {} });
+    const unreadable = await locked(join(w.cfg, "plugins"), async () => capture(argv(w, w.src, "auto")));
+    expect(unreadable.code).toBe(2);
+    expect(copiesOf(unreadable)[0]?.reason).toMatch(/could not be read \(EACCES\)/);
+    const file = join(w.cfg, "plugins", "installed_plugins.json");
+    chmodSync(file, 0o000);
+    const lockedFile = await capture(argv(w, w.src, "auto"));
+    chmodSync(file, 0o644);
+    expect(lockedFile.code).toBe(2);
+  });
+
+  it("6: identical by link needs git's own toplevel to be the copy -- an empty .git or an enclosing repo is no proof", async () => {
+    const w = world();
+    const empty = w.fresh("emptygit");
+    mkdirSync(join(empty, ".git"));
+    const hollow = await capture(argv(w, empty, empty, ["--independent-source", empty]));
+    expect(hollow.code).toBe(4);
+    expect(copiesOf(hollow)[0]?.reason).toMatch(/no proof/);
+
+    const outer = join(w.work, "outer");
+    mkdirSync(outer);
+    writeFileSync(join(outer, "README"), "outer\n");
+    initGit(outer);
+    const inner = join(outer, "inner");
+    cpSync(w.src, inner, { recursive: true });
+    mkdirSync(join(inner, ".git"));
+    const enclosed = await capture(argv(w, inner, inner, ["--independent-source", inner]));
+    expect(enclosed.code).toBe(4);
+    expect(copiesOf(enclosed)[0]?.byLink).toBe(false);
+
+    initGit(w.src);
+    const proven = await capture(argv(w, w.src, w.src, ["--independent-source", w.src]));
+    expect(proven.code).toBe(0);
+    expect(copiesOf(proven)[0]?.byLink).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("7: a recorded path that is gone or loops is broken (5); one that cannot be inspected is wiring (2)", async () => {
+    const w = world();
+    const loopDir = join(w.work, "loopdir");
+    symlinkSync(loopDir, loopDir);
+    record(w, { plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: join(loopDir, "copy") }] } });
+    const loop = await capture(argv(w, w.src, "auto"));
+    expect(loop.code).toBe(5);
+    expect(copiesOf(loop)[0]?.reason).toMatch(/ELOOP/);
+    if (noPerms) return;
+    const fence = join(w.work, "fence");
+    mkdirSync(fence);
+    cpSync(w.src, join(fence, "copy"), { recursive: true });
+    record(w, { plugins: { [`${PLUGIN}@hatsu`]: [{ installPath: join(fence, "copy") }] } });
+    const fenced = await locked(fence, async () => capture(argv(w, w.src, "auto")));
+    expect(fenced.code).toBe(2);
+    expect(json(fenced)["verdict"]).toBe("wiring");
+    expect(copiesOf(fenced)[0]?.reason).toMatch(/could not be inspected \(EACCES\)/);
+  });
+
+  it.skipIf(process.platform === "win32")("8: <config>/skills -- only ENOENT is absent; a loop is broken, a permission error wiring", async () => {
+    const w = world();
+    symlinkSync(join(w.cfg, "skills"), join(w.cfg, "skills"));
+    const loop = await capture(argv(w, w.src, "auto"));
+    expect(loop.code).toBe(5);
+    expect(copiesOf(loop)[0]?.label).toBe(`skills/${PLUGIN}`);
+    rmSync(join(w.cfg, "skills"));
+    if (noPerms) return;
+    mkdirSync(join(w.cfg, "skills"));
+    symlinkSync(w.fresh("same"), join(w.cfg, "skills", PLUGIN));
+    const fenced = await locked(join(w.cfg, "skills"), async () => capture(argv(w, w.src, "auto")));
+    expect(fenced.code).toBe(2);
+    expect(json(fenced)["verdict"]).toBe("wiring");
+    expect(json(fenced)["verdict"]).not.toBe("not installed");
   });
 });

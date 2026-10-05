@@ -49,11 +49,14 @@ import {
   SurfacePackError,
 } from "./packs.js";
 import { commaList } from "../cli/comma.js";
+import { plainLine } from "../cli/plain.js";
 import { GIT } from "../seam/exec.js";
 import {
   assertTreesInSource,
   checkExplicitCopy,
   identityOf,
+  inspectManifest,
+  Unreadable,
   checkRecordedCopies,
   PluginCheckError,
   pluginManifest,
@@ -692,7 +695,9 @@ function differenceLine(difference: Difference): string {
 }
 
 function copyLines(copy: CopyJudgement): string[] {
-  return [`${copy.verdict} -- ${copy.reason}`, ...copy.differences.map(differenceLine)];
+  // The human boundary: a reason carries paths the host recorded, so it is
+  // made inert here (../cli/plain.ts); --json keeps the field as built.
+  return [`${copy.verdict} -- ${plainLine(copy.reason)}`, ...copy.differences.map(differenceLine)];
 }
 
 /**
@@ -720,7 +725,11 @@ function runPluginCheck(context: CommandContext): number {
   const installed = required(context, "installed", "It names the installed copy to judge, or 'auto' for every copy the host has recorded.");
   const trees = validateTrees(commaList(context.args.values["trees"]));
   const sourceFlag = required(context, "source", "With --plugin it names the plugin's source root: the directory holding .claude-plugin/plugin.json.");
-  if (pluginManifest(sourceFlag, plugin) === null) {
+  const sourceManifest = inspectManifest(sourceFlag, plugin);
+  if (sourceManifest.state === "unreadable") {
+    throw new VerbUsageError(`--source '${safe(sourceFlag)}' could not be inspected: ${sourceManifest.reason}.`);
+  }
+  if (sourceManifest.state === "none") {
     throw new VerbUsageError(
       `--source '${safe(sourceFlag)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`,
     );
@@ -732,7 +741,13 @@ function runPluginCheck(context: CommandContext): number {
   }
   // Every tree a real directory in the source, every segment lstat'ed (N1):
   // a typo'd tree would otherwise compare as empty on both sides and read identical.
-  assertTreesInSource(sourceId.real, trees);
+  try {
+    assertTreesInSource(sourceId.real, trees);
+  } catch (error) {
+    // A segment that could not be READ is no claim that the tree is missing:
+    // each copy's judgement reports it as wiring, with the report printed.
+    if (!(error instanceof Unreadable)) throw error;
+  }
   const independent = optionalPath(context, "independent-source");
   if (independent !== null && pluginManifest(independent, plugin) === null) {
     throw new VerbUsageError(

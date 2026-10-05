@@ -164,6 +164,85 @@ export function sameIdentity(left: Identity, right: Identity): boolean {
   return left.real === right.real || (left.dev === right.dev && left.ino === right.ino);
 }
 
+/**
+ * What an error met while INSPECTING a path means (Copilot on NN-PR-#378: an
+ * inspection failure is not absence). Only ENOENT is absence; a loop or a
+ * file where a directory belongs (ELOOP, ENOTDIR) is a broken path; anything
+ * else -- EACCES, EIO, ... -- is a path that could not be read: wiring.
+ */
+export type InspectionFailure = "absent" | "broken" | "unreadable";
+
+export function classifyError(error: unknown): InspectionFailure {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  if (code === "ENOENT") return "absent";
+  if (code === "ELOOP" || code === "ENOTDIR") return "broken";
+  return "unreadable";
+}
+
+/** The real path of `path`, or how resolving it failed. */
+function resolveReal(path: string): { readonly real: string } | { readonly failure: InspectionFailure; readonly code: string } {
+  try {
+    return { real: realpathSync(path) };
+  } catch (error) {
+    return { failure: classifyError(error), code: (error as NodeJS.ErrnoException).code ?? "error" };
+  }
+}
+
+/** A root of the plugin, a directory that is not one, or one whose manifest could not be READ. */
+export type ManifestInspection =
+  | { readonly state: "plugin"; readonly version: string | null }
+  | { readonly state: "none" }
+  | { readonly state: "unreadable"; readonly reason: string };
+
+/**
+ * `dir` inspected as a root of `plugin`. A manifest that is missing, a link,
+ * not JSON or naming another plugin is `none`; one that could not be read
+ * (EACCES and the like) is `unreadable` -- wiring, never "holds no plugin".
+ */
+export function inspectManifest(dir: string, plugin: string): ManifestInspection {
+  const step = (path: string): { readonly stats: ReturnType<typeof lstatSync> } | ManifestInspection => {
+    try {
+      return { stats: lstatSync(path) };
+    } catch (error) {
+      const failure = classifyError(error);
+      return failure === "unreadable"
+        ? { state: "unreadable", reason: `${safe(path)} could not be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})` }
+        : { state: "none" };
+    }
+  };
+  try {
+    if (!statSync(dir).isDirectory()) return { state: "none" };
+  } catch (error) {
+    if (classifyError(error) === "unreadable") {
+      return { state: "unreadable", reason: `${safe(dir)} could not be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})` };
+    }
+    return { state: "none" };
+  }
+  // Segment by segment: a `.claude-plugin` that is a link is never followed.
+  const folder = step(join(dir, ".claude-plugin"));
+  if ("state" in folder) return folder;
+  if (folder.stats === undefined || !folder.stats.isDirectory()) return { state: "none" };
+  const file = join(dir, ".claude-plugin", "plugin.json");
+  const manifest = step(file);
+  if ("state" in manifest) return manifest;
+  if (manifest.stats === undefined || !manifest.stats.isFile()) return { state: "none" };
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    return { state: "unreadable", reason: `${safe(file)} could not be read (${(error as NodeJS.ErrnoException).code ?? "error"})` };
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { state: "none" };
+    const record = parsed as Record<string, unknown>;
+    if (record["name"] !== plugin) return { state: "none" };
+    return { state: "plugin", version: typeof record["version"] === "string" ? record["version"] : null };
+  } catch {
+    return { state: "none" };
+  }
+}
+
 function isDirectory(path: string): boolean {
   try {
     return statSync(path).isDirectory();
@@ -178,20 +257,8 @@ function isDirectory(path: string): boolean {
  * the plugin's. Null otherwise.
  */
 export function pluginManifest(dir: string, plugin: string): { readonly version: string | null } | null {
-  if (!isDirectory(dir)) return null;
-  const file = join(dir, ".claude-plugin", "plugin.json");
-  try {
-    // Segment by segment: a `.claude-plugin` that is a link is never followed.
-    if (!lstatSync(join(dir, ".claude-plugin")).isDirectory()) return null;
-    if (!lstatSync(file).isFile()) return null;
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    const record = parsed as Record<string, unknown>;
-    if (record["name"] !== plugin) return null;
-    return { version: typeof record["version"] === "string" ? record["version"] : null };
-  } catch {
-    return null;
-  }
+  const inspected = inspectManifest(dir, plugin);
+  return inspected.state === "plugin" ? { version: inspected.version } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,7 +274,7 @@ interface Listing {
 }
 
 /** A directory that could not be listed, or a file that could not be read: the copy is not judged. */
-class Unreadable extends Error {}
+export class Unreadable extends Error {}
 
 /** A `--trees` entry that is not a real directory in a source: wiring, never an empty tree. */
 class TreeNotInSource extends PluginCheckError {}
@@ -249,12 +316,9 @@ function walkSegments(base: string, relative: string): Walked {
 /** Throws TreeNotInSource unless every tree is a real directory under `source`, every segment lstat'ed. */
 export function assertTreesInSource(source: string, trees: readonly string[]): void {
   for (const tree of trees) {
-    let walked: Walked;
-    try {
-      walked = walkSegments(source, tree);
-    } catch {
-      throw new TreeNotInSource(`--trees entry '${tree}' could not be read in the source ${safe(source)}`);
-    }
+    // An Unreadable segment propagates: it is a wiring REPORT, never a
+    // claim that the tree is missing (Copilot on NN-PR-#378).
+    const walked = walkSegments(source, tree);
     if (walked.kind !== "dir") {
       const why =
         walked.kind === "absent"
@@ -366,7 +430,9 @@ function compareTrees(source: string, copy: string, trees: readonly string[]): C
         const same =
           a === "link" &&
           b === "link" &&
-          readlinkSync(join(source, ...path.split("/"))) === readlinkSync(join(copy, ...path.split("/")));
+          readlinkSync(join(source, ...path.split("/")), { encoding: "buffer" }).equals(
+            readlinkSync(join(copy, ...path.split("/")), { encoding: "buffer" }),
+          );
         if (!same) differences.push({ kind: "differs-symlink", path });
       } catch {
         return { ok: false, reason: `unreadable: the link ${path} could not be read` };
@@ -414,7 +480,12 @@ export type SourceOrigin = "source" | "independent-source" | "marketplace" | "ch
 type RecordRead =
   | { readonly state: "absent" }
   | { readonly state: "read"; readonly plugins: Readonly<Record<string, unknown>> }
-  | { readonly state: "unreadable"; readonly reason: string };
+  | {
+      readonly state: "unreadable";
+      readonly reason: string;
+      /** A record that is there and malformed is broken (5); one that could not be READ is wiring (2). */
+      readonly verdict: "broken install" | "wiring";
+    };
 
 function readJsonFile(path: string): unknown {
   // Opened only when it is a regular file: a FIFO there must not hang the check.
@@ -424,28 +495,49 @@ function readJsonFile(path: string): unknown {
 
 export function readInstallRecord(configDir: string): RecordRead {
   const path = join(configDir, "plugins", "installed_plugins.json");
+  const broken = (reason: string): RecordRead => ({ state: "unreadable", reason, verdict: "broken install" });
+  const unread = (error: unknown): RecordRead => ({
+    state: "unreadable",
+    reason: `it could not be read (${(error as NodeJS.ErrnoException).code ?? "error"})`,
+    verdict: "wiring",
+  });
+  // Only ENOENT is absence (Copilot on NN-PR-#378): a loop or a file where
+  // <config>/plugins belongs is a broken install, a permission error wiring.
   let isLink: boolean;
   try {
     isLink = lstatSync(path).isSymbolicLink();
-  } catch {
-    return { state: "absent" };
-  }
-  // A record that is a dangling or looping link is there and unusable: a
-  // broken install, never "not installed" (zheref/nen#339, N9).
-  if (isLink && real(path) === null) return { state: "unreadable", reason: "it is a dangling or looping link" };
-  try {
-    const parsed = readJsonFile(path);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return { state: "unreadable", reason: "its top level is not an object" };
-    }
-    const plugins = (parsed as Record<string, unknown>)["plugins"] ?? {};
-    if (typeof plugins !== "object" || plugins === null || Array.isArray(plugins)) {
-      return { state: "unreadable", reason: "its 'plugins' is not an object" };
-    }
-    return { state: "read", plugins: plugins as Record<string, unknown> };
   } catch (error) {
-    return { state: "unreadable", reason: error instanceof SyntaxError ? "it is not JSON" : (error as Error).message };
+    const failure = classifyError(error);
+    if (failure === "absent") return { state: "absent" };
+    return failure === "broken" ? broken(`its path cannot be resolved (${(error as NodeJS.ErrnoException).code ?? "error"})`) : unread(error);
   }
+  let stats;
+  try {
+    stats = statSync(path);
+  } catch (error) {
+    // A record that is a dangling or looping link is there and unusable: a
+    // broken install, never "not installed" (zheref/nen#339, N9).
+    if (classifyError(error) !== "unreadable") return broken(isLink ? "it is a dangling or looping link" : "it cannot be resolved");
+    return unread(error);
+  }
+  // Opened only when it is a regular file: a FIFO there must not hang the check.
+  if (!stats.isFile()) return broken("it is not a regular file");
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    return unread(error);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return broken("it is not JSON");
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return broken("its top level is not an object");
+  const plugins = (parsed as Record<string, unknown>)["plugins"] ?? {};
+  if (typeof plugins !== "object" || plugins === null || Array.isArray(plugins)) return broken("its 'plugins' is not an object");
+  return { state: "read", plugins: plugins as Record<string, unknown> };
 }
 
 /** Every `<plugin>@<marketplace>` key in the record, in order. */
@@ -589,7 +681,12 @@ export function judgeCopy(label: string, path: string, copyId: Identity, context
     source = found.path;
     namedBy = found.how;
     if (sameIdentity(found.id, copyId)) {
-      if (existsSync(join(copy, ".git"))) {
+      // Proof the copy IS a git checkout: git's own toplevel for it resolves
+      // to the copy. An empty .git, or a repository enclosing the copy, is
+      // not that proof (Copilot on NN-PR-#378).
+      const top = context.git(copy, ["rev-parse", "--show-toplevel"]);
+      const topId = top.code === 0 && top.stdout !== "" ? identityOf(top.stdout) : null;
+      if (topId !== null && sameIdentity(topId, copyId)) {
         return {
           label,
           path: shown,
@@ -606,7 +703,7 @@ export function judgeCopy(label: string, path: string, copyId: Identity, context
         path: shown,
         verdict: "not comparable",
         ...NONE,
-        reason: `${shown} is named by ${namedBy} but is not a git checkout, so it is no independent source`,
+        reason: `${shown} is named by ${namedBy} but git does not answer for it as the toplevel of a checkout (an empty .git, or a repository enclosing it, is no proof), so it is no independent source`,
       };
     }
   }
@@ -649,6 +746,11 @@ function broken(label: string, path: string, reason: string): CopyJudgement {
   return { label, path: safe(path), verdict: "broken install", ...NONE, reason };
 }
 
+/** A recorded path or record that could not be inspected: nothing is known about it, so it is wiring (2). */
+function wiringCopy(label: string, path: string, reason: string): CopyJudgement {
+  return { label, path: safe(path), verdict: "wiring", ...NONE, reason };
+}
+
 /** The verdict over many judgements: the worst one, or `not installed` when there were none. */
 export function overallVerdict(copies: readonly CopyJudgement[]): PluginVerdict {
   let worst: PluginVerdict = "not installed";
@@ -683,27 +785,49 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
   const copies: CopyJudgement[] = [];
   const judged = new Set<string>();
   let sawSource = false;
+  // An inspection failure is not absence (Copilot on NN-PR-#378): a recorded
+  // path that is gone (ENOENT), loops (ELOOP) or runs through a file
+  // (ENOTDIR) is a broken install; one that could not be inspected (EACCES
+  // and the like) is wiring -- nothing is known about it either way.
   const judgePath = (path: string, label: string): void => {
     let linkStats;
     try {
       linkStats = lstatSync(path);
-    } catch {
-      copies.push(broken(label, path, `${label} ${safe(path)} does not exist (a stale record)`));
+    } catch (error) {
+      const failure = classifyError(error);
+      const code = (error as NodeJS.ErrnoException).code ?? "error";
+      if (failure === "absent") copies.push(broken(label, path, `${label} ${safe(path)} does not exist (a stale record)`));
+      else if (failure === "broken") copies.push(broken(label, path, `${label} ${safe(path)} cannot be resolved (${code}: a loop, or a file where a directory belongs)`));
+      else copies.push(wiringCopy(label, path, `${label} ${safe(path)} could not be inspected (${code})`));
       return;
     }
-    const id = identityOf(path);
-    const resolved = id?.real ?? null;
-    if (id === null || resolved === null) {
-      copies.push(
-        broken(label, path, linkStats.isSymbolicLink() ? `${label} ${safe(path)} is a dangling or looping link` : `${label} ${safe(path)} cannot be resolved`),
-      );
+    const resolvedPath = resolveReal(path);
+    if ("failure" in resolvedPath) {
+      if (resolvedPath.failure === "unreadable") {
+        copies.push(wiringCopy(label, path, `${label} ${safe(path)} could not be resolved (${resolvedPath.code})`));
+      } else {
+        copies.push(
+          broken(label, path, linkStats.isSymbolicLink() ? `${label} ${safe(path)} is a dangling or looping link` : `${label} ${safe(path)} cannot be resolved (${resolvedPath.code})`),
+        );
+      }
       return;
     }
+    const id = identityOf(resolvedPath.real);
+    if (id === null) {
+      copies.push(wiringCopy(label, path, `${label} ${safe(path)} could not be inspected`));
+      return;
+    }
+    const resolved = id.real;
     if (!isDirectory(resolved)) {
       copies.push(broken(label, path, `${label} ${safe(path)} is not a directory`));
       return;
     }
-    if (pluginManifest(resolved, context.plugin) === null) {
+    const manifest = inspectManifest(resolved, context.plugin);
+    if (manifest.state === "unreadable") {
+      copies.push(wiringCopy(label, path, `${label} ${safe(path)}: ${manifest.reason}`));
+      return;
+    }
+    if (manifest.state === "none") {
       copies.push(broken(label, path, `${label} ${safe(path)} holds no '${context.plugin}' plugin (a regular .claude-plugin/plugin.json naming it)`));
       return;
     }
@@ -718,7 +842,9 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
 
   const record = readInstallRecord(context.configDir);
   if (record.state === "unreadable") {
-    copies.push(broken("the install record", join(context.configDir, "plugins", "installed_plugins.json"), `the install record is not readable: ${record.reason}`));
+    const recordPath = join(context.configDir, "plugins", "installed_plugins.json");
+    const reason = `the install record is not usable: ${record.reason}`;
+    copies.push(record.verdict === "wiring" ? wiringCopy("the install record", recordPath, reason) : broken("the install record", recordPath, reason));
   } else if (record.state === "read") {
     for (const key of pluginKeys(record.plugins, context.plugin)) {
       const label = `the ${safe(key)} installPath`;
@@ -742,12 +868,13 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
   }
   // The first-party skills-directory install: usually a link to a checkout.
   const skills = join(context.configDir, "skills", context.plugin);
-  let present = false;
+  // Only ENOENT is absence here too: a loop or a malformed path is broken,
+  // a permission error wiring -- judgePath's own lstat says which.
+  let present = true;
   try {
     lstatSync(skills);
-    present = true;
-  } catch {
-    present = false;
+  } catch (error) {
+    present = classifyError(error) !== "absent";
   }
   if (present) judgePath(skills, `skills/${context.plugin}`);
   if (context.independentSource !== null && !sawSource) throw new PluginCheckError(INDEPENDENT_UNREAD);
