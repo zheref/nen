@@ -80,6 +80,7 @@ import {
 } from "./editbody.js";
 import { chainPosition, parseRoleMap, terminus, type ChainPositionResult, type TerminusResult } from "./chain.js";
 import { conjoin } from "../cli/prose.js";
+import { reconcile, renderReconcile, RECONCILE_LIMIT, RECONCILE_MAX_LIMIT } from "./reconcile.js";
 
 export function numberList(value: string | undefined): readonly number[] {
   return commaList(value)
@@ -149,6 +150,7 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   },
   "chain-position": { values: ["target", "issue", "chain-labels"] },
   terminus: { values: ["target", "issue", "chain-labels", "integration-prefix", "trunk"] },
+  reconcile: { values: ["target", "since", "limit", "issues", "hold-labels"] },
 };
 
 /**
@@ -244,6 +246,12 @@ const FOREIGN_FLAG_ADVICE: Readonly<Record<string, Readonly<Record<string, strin
   "open-pr-check": { "dry-run": readOnlyDryRunAdvice("open-pr-check") },
   "chain-position": { "dry-run": readOnlyDryRunAdvice("chain-position") },
   terminus: { "dry-run": readOnlyDryRunAdvice("terminus") },
+  // Not the generic read-only line: reconcile's readers expect a sweep to have
+  // a write half (#332 first asked for one), so the refusal says it was RULED
+  // away rather than merely absent.
+  reconcile: {
+    "dry-run": `${DRY_RUN_OWNERS_SENTENCE} 'issue reconcile' proposes only, by the maintainer's ruling recorded on this verb's PR (zheref/nen#332's delivery): it never closes, comments or labels, so every run is already what a dry run would be.`,
+  },
   file: {
     body: "'issue file' takes --body-file <path>: a body typed on the command line is a body nobody reviewed. --body belongs to 'issue comment'.",
   },
@@ -593,7 +601,60 @@ usage:
       pull request: GitHub numbers issues and PRs in one sequence and serves
       both from issues/{n}, and a delivery-chain position is defined only for
       issues -- classifying a PR's labels answers something plausible and
-      silently wrong. Ask the 'nen pr' family about a pull request.`;
+      silently wrong. Ask the 'nen pr' family about a pull request.
+  nen issue reconcile --target <owner/name> [--since <YYYY-MM-DD>]
+                      [--limit <n>] [--issues 12,34] [--hold-labels a,b]
+      READ-ONLY, PROPOSES ONLY, by the maintainer's ruling recorded on this
+      verb's PR (zheref/nen#332's delivery): finds OPEN issues a
+      MERGED pull request already closes, and proposes what to do with each --
+      it never closes, comments, labels or writes anything, in text or --json,
+      and takes no --dry-run because there is no write to preview. A proposal
+      exists only where a merged PR carries a CLOSING REFERENCE to the issue:
+      GitHub's closingIssuesReferences, or a closing keyword (close/closes/
+      closed, fix/fixes/fixed, resolve/resolves/resolved, optional ':') before
+      '#n', 'owner/name#n' or the issue's URL, in the PR body or a commit
+      message. Fenced code, inline code, indented code (column 4+, also in a
+      blockquote) and HTML comments are not read; a bare
+      mention, 'Part of #n' and title similarity are never evidence. Each
+      proposal cites the PR, its merge commit and the reference as written.
+      LANDED means on the default branch: a PR merged into it, or merged
+      elsewhere with its merge commit reachable from it (compare API). A
+      'diverged' compare asserts nothing (a squash or rebase landing reads
+      that way): a merged delivery PR from that base into the default branch
+      (same-repository head, merged at or after the closing PR; up to 10
+      listed) makes it verify, citing that PR; none makes it wait, worded
+      "not reachable".
+      Proposed actions: close (landed, nothing in flight); hold (carries one of
+      --hold-labels -- the repository's own "do not close" names; none are
+      built in; matched case-insensitively against the repository's own
+      label list, read only then -- a name that is not a label there, or an
+      unreadable list, is a finding; one on no open issue is fine); review (landed, but the issue was REOPENED, or an open PR
+      still closes or mentions it -- the open-pr-check guard); wait (merged
+      into a branch not yet on the default branch); verify (the landing or the
+      guard could not be read, or a diverged base has a delivery PR). --since scans only PRs merged on or after the
+      date; --limit (default ${RECONCILE_LIMIT}, at most ${RECONCILE_MAX_LIMIT}) bounds both lists; --issues
+      restricts the proposals and names any entry that is not open.
+      Merged PRs are read by a GraphQL search QUERY ('gh api graphql',
+      cursor-paged up to --limit, commit oid and message only, each PR once;
+      a PR with over 100 commits has the rest read by a follow-up query, and
+      GitHub serves at most 250 of them -- any not read is a finding).
+      Search stops at 1000 results; more matched (issueCount) than read, or a
+      final page with no issueCount, is a finding whatever the cursor says.
+      AN UNREADABLE SOURCE IS A FINDING: a failed read, a GraphQL error, an
+      open list that came back full, a search that reached --limit with more
+      left, a PR with more closing references (50) or commits than were read,
+      or a hold label matching nothing, is
+      reported and exits 1, and an empty proposal list under a finding is
+      never "nothing to reconcile". Exits: 0 every source read
+      (proposals or none), 1 a finding, 2 usage. --json: '{ contract:
+      "nen.issue.reconcile/v0.1", target, proposesOnly: true, defaultBranch,
+      since, limit, holdLabels, scanned: { openIssues, mergedPullRequests },
+      truncated: { openIssues, mergedPullRequests }, proposals: [{ issue,
+      title, url, labels, action, reason, openPullRequests, evidence: [{ pr,
+      url, title, base, mergedAt, mergeCommit, landing, delivery: { pr,
+      url, mergedAt } | null, references: [{ source: linked | body |
+      commit, text, commit }] }] }], notOpen,
+      findings: [{ source, detail }], complete }'.`;
 
 export const issueCommand: Command = {
   name: "issue",
@@ -628,6 +689,8 @@ export const issueCommand: Command = {
         return consolidate(context);
       case "chain-position":
         return position(context);
+      case "reconcile":
+        return reconcileVerb(context);
       default:
         return chainTerminus(context);
     }
@@ -1931,4 +1994,66 @@ function chainTerminus(context: CommandContext): number {
   for (const reason of result.evidence) context.io.out(`  ${reason}`);
   // Same discipline as chain-position above: "undecidable" is a refusal.
   return result.kind === "undecidable" ? 1 : 0;
+}
+
+// --- reconcile (zheref/nen#332) ----------------------------------------------
+
+/** A calendar date as `YYYY-MM-DD` that is also a real date (no 2026-02-30). */
+function parseSince(raw: string | undefined): string | null {
+  if (raw === undefined) return null;
+  const value = raw.trim();
+  // getTime() FIRST: '2026-99-99' makes an Invalid Date, and toISOString() on
+  // one throws a RangeError -- a typo must be a usage refusal, not a crash.
+  const date = new Date(`${value}T00:00:00Z`);
+  const valid =
+    /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+  if (!valid) throw new VerbUsageError(`--since takes a calendar date as YYYY-MM-DD; '${raw}' is not one.`);
+  return value;
+}
+
+function parseLimit(raw: string | undefined): number {
+  if (raw === undefined) return RECONCILE_LIMIT;
+  const value = Number(raw.trim());
+  if (!/^\d+$/.test(raw.trim()) || !Number.isInteger(value) || value < 1 || value > RECONCILE_MAX_LIMIT) {
+    throw new VerbUsageError(`--limit takes a whole number from 1 to ${RECONCILE_MAX_LIMIT}; '${raw}' is not one.`);
+  }
+  return value;
+}
+
+/**
+ * --issues, STRICTLY: unlike open-pr-check's `numberList`, an entry that is not
+ * an issue number is refused rather than dropped, because a dropped entry here
+ * is an issue the caller asked about and was silently never told about.
+ */
+function parseIssueFilter(raw: string | undefined): readonly number[] | null {
+  if (raw === undefined) return null;
+  const items = commaList(raw);
+  const bad = items.filter((item): boolean => !/^#?[1-9]\d*$/.test(item));
+  if (items.length === 0 || bad.length > 0) {
+    throw new VerbUsageError(
+      `--issues takes a comma-separated list of issue numbers${bad.length === 0 ? "" : `; not one: ${bad.map((item): string => `'${item}'`).join(", ")}`}.`,
+    );
+  }
+  return [...new Set(items.map((item): number => Number(item.replace(/^#/, ""))))];
+}
+
+function reconcileVerb(context: CommandContext): number {
+  const target = requireTarget(context);
+  const since = parseSince(context.args.values["since"]);
+  const limit = parseLimit(context.args.values["limit"]);
+  const issues = parseIssueFilter(context.args.values["issues"]);
+  const holdLabels = commaList(context.args.values["hold-labels"]);
+  const report = reconcile(context.seams, target, { since, limit, issues, holdLabels });
+  if (context.json) {
+    context.io.out(JSON.stringify(report, null, 2));
+  } else {
+    for (const line of renderReconcile(report)) context.io.out(line);
+  }
+  if (!report.complete) {
+    context.io.err(
+      `nen issue reconcile: ${report.findings.length} source(s) could not be read in full; what was not read was not reconciled.`,
+    );
+    return 1;
+  }
+  return 0;
 }
