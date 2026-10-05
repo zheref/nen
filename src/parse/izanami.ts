@@ -1028,6 +1028,21 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       completeness: RO("reconciles 'git log --merges' against the changelog -- reads only"),
     },
   },
+  classify: {
+    subcommands: {
+      labels: RO("validates the taxonomy file and prints its label set -- reads one file"),
+      // READS BY DEFAULT: the bare form and --dry-run only compare the
+      // taxonomy with the consumer's nen/labels.json. --write rewrites that
+      // file; --sync edits GitHub. A `--write --dry-run` or `--sync --dry-run`
+      // line is a read in fact, and is refused here all the same -- the safe
+      // direction, since either write flag's presence is enough.
+      install: GATED(["--write", "--sync"], "--write rewrites nen/labels.json and --sync creates/updates GitHub labels"),
+      status: RO("reports each issue's classification labels -- gh reads only"),
+      // NOT dry-run-gated, for label apply's reason: every invocation appends a
+      // ledger line per label, dry run included, so no form is a pure read.
+      apply: MUT("appends a ledger line per label on every call (dry run included), and edits GitHub with --run"),
+    },
+  },
   color: { subcommands: { status: RO("resolves a colour by the repository's own precedence") } },
   commit: {
     subcommands: {
