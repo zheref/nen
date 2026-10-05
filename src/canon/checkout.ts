@@ -43,8 +43,8 @@
 // get-url`, `status`, `ls-files`, under GIT_OPTIONAL_LOCKS=0 and with
 // `--no-optional-locks` on the status, so not even the index is refreshed.
 
-import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { nativePaths, samePath, type PathSeam } from "./paths.js";
 import { parseRemoteUrl } from "../github/target.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
 import { ENV_NAME_RE, type ToolCheckout } from "../schema/repos.js";
@@ -124,6 +124,8 @@ export interface ResolveCheckoutOptions {
   /** The source's declaration in the consumer's registry, or null. */
   readonly declaration: ToolCheckout | null;
   readonly seams: Seams;
+  /** The filesystem's answers; the host's own unless a test models another. */
+  readonly paths?: PathSeam;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +305,7 @@ export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutR
     );
   }
 
-  const checked = verifyCanonCheckout(seams, candidate.path, source, ref, root);
+  const checked = verifyCanonCheckout(seams, candidate.path, source, ref, root, options.paths);
   if ("failure" in checked) return fail(checked.failure.code, checked.failure.message, checked.path, candidate.step);
   return done(checked.path, candidate.step, checked.verified, null);
 }
@@ -398,13 +400,23 @@ export function remoteHost(url: string): string | null {
  * is read from the same host the consumer (`consumerRoot`) lives on. Read-only:
  * every git call runs under `verificationGitEnv`.
  */
-export function verifyCanonCheckout(seams: Seams, path: string, source: string, ref: string, consumerRoot: string): Verified {
+export function verifyCanonCheckout(
+  seams: Seams,
+  path: string,
+  source: string,
+  ref: string,
+  consumerRoot: string,
+  paths: PathSeam = nativePaths,
+): Verified {
   const failed = (at: string, code: CheckoutFailureCode, message: string): Verified => ({ path: at, failure: { code, message } });
 
+  // THE OS'S OWN SPELLING (`realpathSync.native`): on Windows it expands an
+  // 8.3 short name, which the JavaScript realpath keeps -- and git always
+  // answers with the long one (zheref/nen#294, Windows CI).
   let real: string;
   try {
-    if (!statSync(path).isDirectory()) return failed(path, "not-found", `'${path}' is not a directory.`);
-    real = realpathSync(path);
+    if (!paths.isDirectory(path)) return failed(path, "not-found", `'${path}' is not a directory.`);
+    real = paths.realpath(path);
   } catch {
     return failed(path, "not-found", `'${path}' does not exist. Clone ${source} there and check out ${ref}, or point the declaration at the checkout you keep.`);
   }
@@ -420,7 +432,10 @@ export function verifyCanonCheckout(seams: Seams, path: string, source: string, 
   if (top.spawnFailed) return failed(real, "git-unavailable", `git could not be started, so '${real}' cannot be verified as a checkout of ${source}@${ref}.`);
   const topLine = outputLines(top.stdout)[0];
   if (top.code !== 0 || topLine === undefined) return failed(real, "not-a-checkout", `'${real}' is not inside a git work tree.`);
-  if (realpathOrSelf(topLine) !== real) {
+  // ONE DIRECTORY, TWO SPELLINGS: git's toplevel is forward-slashed and in
+  // its own case on Windows. Both sides are resolved and compared as the
+  // platform compares paths (./paths.ts).
+  if (!samePath(topLine, real, seams.platform, paths)) {
     return failed(real, "not-checkout-root", `'${real}' is inside the work tree at '${topLine}' but is not its top. Name the checkout's root; nen does not walk up to find one.`);
   }
 
@@ -490,14 +505,6 @@ export function verifyCanonCheckout(seams: Seams, path: string, source: string, 
   return { path: real, verified: { origin: redacted, originSlug: parsed.slug, host, head: headCommit, tag: ref, tagCommit, clean: true } };
 }
 
-function realpathOrSelf(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    /* c8 ignore next -- git just named it as its top-level, so it exists */
-    return path;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Rendering

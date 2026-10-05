@@ -66,7 +66,7 @@ let canonB = "";
 
 beforeAll(() => {
   if (!HAVE_GIT) return;
-  base = realpathSync(mkdtempSync(join(tmpdir(), "nen-canon-checkout-it-")));
+  base = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-canon-checkout-it-")));
   // Machine A keeps its canon wherever it likes, and says so in the variable.
   canonA = join(base, "machine-a", "src", "handbooks");
   const rules = join(canonA, "handbooks", "stacks", "scenario-x", "rules");
@@ -206,7 +206,7 @@ function makeCanon(at: string, origin = ORIGIN, extra: (root: string) => void = 
   git(at, ["commit", "--quiet", "-m", "canon"]);
   git(at, ["tag", "v1.2.0"]);
   git(at, ["remote", "add", "origin", origin]);
-  return realpathSync(at);
+  return realpathSync.native(at);
 }
 
 let fresh = 0;
@@ -256,7 +256,7 @@ describe.skipIf(!HAVE_GIT)("Nobunaga round 1 -- the git shapes that verified whe
 
   it("N2: an inherited GIT_DIR does not make an unrelated directory verify as the canon", async () => {
     const canon = freshCanon();
-    const unrelated = realpathSync(mkdtempSync(join(base, "unrelated-")));
+    const unrelated = realpathSync.native(mkdtempSync(join(base, "unrelated-")));
     const saved = process.env["GIT_DIR"];
     process.env["GIT_DIR"] = join(canon, ".git");
     try {

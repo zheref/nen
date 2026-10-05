@@ -18,7 +18,7 @@ const REF = "v1.2.0";
 const TAG_SHA = "a".repeat(40);
 
 function dir(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), "nen-canon-checkout-")));
+  return realpathSync.native(mkdtempSync(join(tmpdir(), "nen-canon-checkout-")));
 }
 
 /** A git that answers for `path` as a clean checkout of SOURCE at REF, with `over` replacing any one answer. */

@@ -26,7 +26,7 @@
 // pin a reader of the marker can reason about, and "cut the tag before
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
@@ -34,7 +34,7 @@ import { loadRepoRegistry } from "../schema/repos.js";
 import { REPOS_FILE } from "../schema/source.js";
 import { commaList } from "../cli/comma.js";
 import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
-import { isContained } from "../repo/contain.js";
+import { containedOn, resolvedOrSelf, samePath } from "./paths.js";
 import { parseTarget } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
@@ -677,13 +677,12 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
     // the checkout pointing outside it passes a lexical check and reads rules
     // the verified tag never held. A directory that does not exist keeps its
     // lexical path, and the rules reader refuses it by name.
-    let real = lexical;
-    try {
-      real = realpathSync(lexical);
-    } catch {
-      real = lexical;
-    }
-    if (!isContained(checkout.path, lexical) || !isContained(checkout.path, real) || real === checkout.path) {
+    // Resolved by the OS (`realpathSync.native`, which expands a Windows short
+    // name) and compared as the PLATFORM compares paths -- separators and
+    // case on win32 -- never as two strings (./paths.ts).
+    const platform = context.seams.platform;
+    const real = resolvedOrSelf(lexical, undefined, platform);
+    if (!containedOn(checkout.path, lexical, platform) || !containedOn(checkout.path, real, platform) || samePath(real, checkout.path, platform)) {
       throw new VerbUsageError(
         `--stack-dir '${stackDir}' and --leaf '${leaf}' resolve to '${real}', which is not inside the canon checkout '${checkout.path}' (symbolic links resolved).`,
       );
@@ -695,7 +694,7 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
   for (const row of rows) {
     const rule = row.canonMirror;
     if (rule === null || rule.kind !== "directory") continue;
-    if (isContained(resolve(root, ...rule.dir.split("/")), resolve(rulesDir))) {
+    if (containedOn(resolve(root, ...rule.dir.split("/")), resolve(rulesDir), context.seams.platform)) {
       throw new VerbUsageError(
         `--rules-dir '${rulesDirFlag ?? rulesDir}' resolves inside '${row.surface}''s rules location (${rule.dir}/) under --repo. The canon would be read from the mirror it renders, and the next run would mirror its own output. Point --rules-dir at the canonical handbooks checkout.`,
       );
