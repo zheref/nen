@@ -286,6 +286,8 @@ verb it invoked. The complete list:
 | every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
 | [`stage list`](#nen-stage-list) | `3` | the add list is empty and nothing is flagged — a tree with no stageable change, never a tree the verb failed to read (that is `1`) ([#237](https://github.com/zheref/nen/issues/237)) |
 | [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
+| [`shu coverage`](#nen-shu-coverage) | `8` | `--from-capture` refused the capture on disk as not proven this tree's: no provenance sidecar, a different tree fingerprint, lane or report list, or a report whose sha256 changed; nothing measured, no document ([#250](https://github.com/zheref/nen/issues/250)). A third use of `8`, unrelated to `pr ready`'s and `pr mark-ready`'s |
+| [`shu tools`](#nen-shu-tools) | `7` | every row passes, but nen is inside its `dependency.minimum` and **behind** `dependency.pinned_ref` (a BEHIND row): install the pinned ref the row's remedy names ([#327](https://github.com/zheref/nen/issues/327)) |
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
@@ -296,6 +298,7 @@ verb it invoked. The complete list:
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
+| [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 
@@ -342,7 +345,7 @@ verb does by default:
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
-| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` carries the table's one **second** read gate, `--from-artifacts`, which never reaches the executor at all |
+| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is its one writing form: `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself. So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
@@ -1001,11 +1004,16 @@ commit. Three things make that visible:
   else, or GitHub answered none, the verb exits **`8`** with status
   `head-mismatch`, prints both SHAs, and prints **no verdict**. A `8` is never
   `ready` or `not-ready`, because the question was about a commit GitHub does not
-  hold as the head. The code collides with nothing else this CLI or its
-  bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s,
-  `commit write`'s and `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and
-  `shu coverage`'s, `9` is `pr request-reviews`', and `3`–`7` are the
-  bootstrap script's). Under `--json` the mismatch
+  hold as the head. [`pr mark-ready`](#nen-pr-mark-ready) returns the same
+  `8` for the same fact, deliberately, so a caller that pins a head across both
+  verbs branches on one number. [`shu coverage
+  --from-capture`](#coverage-from-capture)'s `8` (a capture not proven this
+  tree's, [#250](https://github.com/zheref/nen/issues/250)) is a third,
+  unrelated use, per the [exit-code table](#exit-codes)'s rule that a code
+  above `2` is read against the verb that returned it. Otherwise (`1`/`2` are
+  every verb's, `3`–`5` are `shu`'s, `wc`'s, `commit write`'s and
+  `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and `shu coverage`'s,
+  `9` is `pr request-reviews`', and `3`–`7` are the bootstrap script's). Under `--json` the mismatch
   prints its own document with its own contract,
   `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
   `requiredHead`, `githubHead`, `message`, `evaluatedAt` and `generator`. It deliberately does
@@ -8306,7 +8314,7 @@ classification as `test`: a coverage run writes its report tree by definition.
 **Usage**
 
 ```text
-nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref>] [--dry-run] [--json]
+nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref> [--from-capture]] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -8316,7 +8324,8 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touche
 | `--lane <name>` | no | Which lane to measure. | Defaults to `project.defaultLane`, as everywhere else in this family. |
 | `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. Under `--touched`, also reported **per row**, and giving it OVERRIDES the workflow-file ladder below for that run. |
 | `--touched` | no | Narrow `targets` to the rows a change touched. | Requires `--base`; given without it, **exit 2**. Reads **every** declared report nen can parse, each resolved against its own root; **0 matched against a non-empty touched set is exit 6**. With `--threshold` absent, also loads `nen/workflow.json`'s coverage ladder (defaulting to 80/85/90 when that file is absent) and bands each row; a malformed policy is exit 1 before anything is spawned. See below. |
-| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. |
+| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. Checked before anything runs: a value beginning with `-` (git would read it as an option — `--base=--output=<p>`) and one `git rev-parse --verify --quiet --end-of-options <base>^{commit}` cannot resolve are **exit 2**. **A deliberate exit change** ([#250](https://github.com/zheref/nen/issues/250)): a base naming no commit used to surface as exit 1 from the diff, after the whole coverage run; it is now exit 2 before anything runs. |
+| `--from-capture` | only with `--touched` | Build the touched table from the reports already on disk and **run nothing**. | nen proves the capture this tree's from its provenance sidecar first; one it cannot prove is **exit 8**, nothing reused. Given without `--touched`, with `--dry-run`, or with `--effort`: **exit 2**. See [below](#coverage-from-capture). |
 | `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
@@ -8407,7 +8416,9 @@ plus: **exit 1** when the run succeeded and the report is missing, unreadable, i
 no format nen reads, or not declared at all — under `--touched`, when **any**
 declared report is, each one named — and **exit 6**, under `--touched` only, when
 the run succeeded, its reports parsed, the diff named at least one file, and
-**not one** of them joined to a report row (below). A run that did **not** succeed is
+**not one** of them joined to a report row (below) — and **exit 8**, under
+`--from-capture` only, when the capture on disk is not proven this tree's
+([below](#coverage-from-capture)). A run that did **not** succeed is
 not parsed at all — the file on disk may be a previous run's, and nen cannot tell
 by looking. On **exit 5** (the tool could not be started) the executor's report
 is still printed, and under `--json` stdout still carries exactly one document,
@@ -8419,9 +8430,11 @@ per *file*, so a large repository prints a long table; `--json` carries the same
 rows. Pipe it (`| head`), or read `total` alone, until a `--top <n>` exists.
 
 **`--touched --base <ref>` narrows `targets` to the rows a change touched.**
-After the run and the parse above, nen computes `git diff --name-only
-<base>...HEAD` **in the repository root** and filters the per-target table down
-to the rows that diff names — the same *files a pull request touched* scope
+After the run and the parse above, nen computes `git -c core.quotePath=false
+diff --name-only -z <base>...HEAD` **in the repository root** — paths split on
+NUL and never C-quoted, so `src/café.ts` is matched as itself
+([#250](https://github.com/zheref/nen/issues/250)) — and filters the
+per-target table down to the rows that diff names — the same *files a pull request touched* scope
 `--threshold`'s own policy already talks about, made real. `--touched` requires
 `--base`; either flag given without the other is **exit 2**, before anything
 runs.
@@ -8583,6 +8596,96 @@ touched, so there was nothing to join. A change that touches only files no
 test measures (a README) *is* exit 6, deliberately: nen cannot tell "nothing
 to measure" from "could not join" by looking, and it reports neither as a
 pass. A dry run and a run whose tool failed are never 6.
+
+<a id="coverage-from-capture"></a>
+**`--from-capture` — the touched table from a capture already on disk**
+([#250](https://github.com/zheref/nen/issues/250)). A suite that has just run
+has already written the report; running the coverage command again to measure
+it repeats the whole suite on the same tree for the same numbers.
+`--touched --base <ref> --from-capture` runs **nothing**: it resolves the lane's
+`coverage` invocation exactly as a run does — so a seated `coverage` is still
+exit 4, an excluded host still 3, an unknown lane still 2 — and reads the
+reports its `artifacts` name. The declared argv and its preconditions are never
+spawned; it starts only nen's own fixed-argv git reads.
+
+**Whether the capture is this tree's is nen's decision, never the caller's —
+and it is decided by provenance, not by any clock.** Every nen run that produces
+the lane's declared coverage reports writes a sidecar,
+`.nen/coverage-capture/<lane>.json` (`nen.shu.coverage-capture/v0.1`): the
+lane, the producing verb, each declared report's path and sha256, `HEAD`, the
+start time (for a reader, never compared), and a **tree fingerprint taken at
+the START of the run** — sha256 over `HEAD`, the bytes of
+`git -c core.quotePath=false diff HEAD --binary --submodule=diff
+--ignore-submodules=none` (no colour, no external diff, no textconv), the
+sorted NUL list of untracked non-ignored files
+(`git ls-files -z --others --exclude-standard`) with each file's content
+sha256 read from the path's exact bytes, and — for every file `git ls-files -v`
+tags assume-unchanged (`h`) or skip-worktree (`S`), whose edits `git diff`
+does not show — `git hash-object --no-filters` of its working-tree bytes
+(read-only, no `-w`). The declared reports and `.nen/coverage-capture/` are
+left out of the fingerprint, since the run writes both. Which runs write one is read off the
+declaration:
+
+- **`nen shu coverage`** (the run form) — always, once its run exits 0 with
+  every declared report on disk;
+- **`nen shu test`** and **`nen shu test-report`** (the run form) — only when
+  the same lane's `test` row declares **every** report the `coverage` row
+  names among its own `artifacts`: the repository saying, in its own file,
+  that its test command writes the capture. A `test` row that declares none
+  of them, or only some, records nothing;
+- never a `--dry-run`, and never a run that failed. Nothing is recorded, with a
+  line on stderr saying why, when the run exited 0 but left a declared report
+  missing, or did **not rewrite** one — its sha256, size, mtime and inode all
+  as they were before the run, so it may be an earlier tree's report; an
+  existing sidecar is then left to fail on its own fingerprint. Nor when the
+  tree cannot be fingerprinted: not a git work tree or no commit yet, a path
+  whose raw bytes a strict UTF-8 decoder rejects (a real filename that merely
+  contains U+FFFD is fine), or an untracked file it cannot read. Nor when the
+  sidecar's own path resolves outside the repository (a symlinked `.nen` or
+  `coverage-capture`): it is held to the same real-path containment as every
+  declared path, and a sidecar that escapes is never written and, on reuse,
+  is refused as unreadable. Under `--from-capture` every declared artifact —
+  report or not — is contained before anything is read (exit 2 for one that
+  escapes), and a git that cannot be **started** is exit 1, never a refused
+  capture or a bad `--base`. The run's document is
+  unchanged either way.
+
+`--from-capture` reads the sidecar, recomputes the fingerprint **now** and
+hashes the reports **now**, and is **refused at exit 8**, with **no document**
+on stdout and every reason named on stderr, when there is no sidecar, the
+fingerprint differs (the message says whether `HEAD` moved), the lane or the
+declared report list differs, or any report's sha256 differs from the one
+recorded — naming that report. Nothing is reused silently, and never a subset.
+So an edit made during or after the run, a merge or pull that rewrote files the
+change does not touch, a rename, a deletion, a new untracked file, an edit to an
+assume-unchanged or skip-worktree file and a skewed clock are all caught. **A
+commit after the capture is a new `HEAD`: measure again** — the ordinary loop
+measures and then commits, and the reuse is for the step that follows the
+measurement on the same tree, not for the tree after the commit. **A capture produced outside nen — no sidecar — is refused
+by design**: nen cannot vouch for a tree it did not fingerprint. The way out is
+always to measure again — the same line without `--from-capture`.
+
+**The limits that remain, stated rather than hidden** — the same sentence
+`nen shu --help` prints. Not caught: a change to an IGNORED file; an edit made during the run and undone
+byte for byte before the reuse; the contents of a NESTED untracked repository
+(it counts only as present); a difference a clean filter or end-of-line
+normalisation hides from 'git diff'; an exec-bit change under
+core.fileMode=false; and two edits to a non-UTF-8 text file that differ only in
+bytes UTF-8 cannot decode. A run that
+leaves an **undeclared, unignored** output beside its report (an HTML tree, a
+second report nobody declared) makes its own capture unreusable — the
+fingerprint sees a new untracked file — so ignore that output or declare it.
+
+A proven capture gets exactly what a run's report gets: the same parse, the
+same per-report roots, the same ladder and `touched` shape, and exit 6 when
+nothing joined. `exitCode` is then about the **read**. In text mode the
+executor's report is replaced by two lines, `lane:` and `read: --from-capture
+-- nothing was run. Reused <path>, proven a capture of this exact tree by
+<sidecar> …` (on stderr under `--json`); a lane declaring no report says so and
+claims no proof. `--from-capture` is refused at **exit 2** without `--touched`,
+with `--dry-run` (both run nothing and answer different questions), and with
+`--effort` (the ledger records steps a run performed). izanami certifies this
+form **read-only**, beside `--dry-run`.
 
 **The ladder — `nen/workflow.json`'s `coverage.{minimum,recommended,ideal}`,
 when `--threshold` is not given.** The design's own shape for that file states
