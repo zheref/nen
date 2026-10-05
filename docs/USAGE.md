@@ -8075,10 +8075,10 @@ with **one** exception: a step printing more than 64 MB of stdout or stderr
 under `--heartbeat 0` without `--stream` — the captured path, which buffers —
 cannot be read and is reported as not started (exit 5), while every other form
 reads it through and reports the tool's own code. A signal-killed step with no
-`stall` guard reports exit code `1` in every form, as the captured path
-always has (a guarded step was always watched, and its flags change nothing). Beyond that the
-flags change only when, and in what interleaving, output reaches the caller,
-and add heartbeat lines to stderr. `src/shu/run.test.ts` pins the order on a
+`stall` guard reports exit code `1` in every form, as the captured path always
+has (a guarded step was always watched, and its flags change nothing). Beyond
+that the flags change only when, and in what interleaving, output reaches the
+caller, and add heartbeat lines to stderr. `src/shu/run.test.ts` pins the order on a
 scripted clock and `src/shu/stream-heartbeat.integration.test.ts` on a real
 child.
 

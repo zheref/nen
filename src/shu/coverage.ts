@@ -212,8 +212,7 @@ export function validateFromCapture(
     throw new VerbUsageError(
       `--effort is not read with --from-capture: the phase ledger records the steps a run performed, and --from-capture runs nothing, so there is nothing to append. Drop --effort, or drop --from-capture to measure with a run the ledger records.`,
     );
-  }  // WITH --stream OR --heartbeat, there is no step to relay or to say is
-  // still running (zheref/nen#244): the same "accepted and ignored" refusal.
+  }
   if (livenessGiven(options.liveness)) {
     throw new VerbUsageError(
       `--stream and --heartbeat are not read with --from-capture: they relay a running step's output and say it is still running, and --from-capture runs nothing. Drop them, or drop --from-capture to measure with a run.`,
