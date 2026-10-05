@@ -86,6 +86,8 @@ export interface CoverageOptions {
   readonly dryRun: boolean;
   /** `--effort <id>`: the phase ledger the run's steps are appended to (zheref/nen#227). */
   readonly effort?: string | null;
+  /** `--stream` / `--heartbeat`, handed to the executor unchanged (zheref/nen#244). */
+  readonly liveness?: { readonly stream: boolean; readonly heartbeatMs?: number | null };
   /** `--threshold`, exactly as it was typed. Parsed here, refused here. */
   readonly threshold: string | null;
   /**
@@ -908,6 +910,7 @@ export async function runCoverage(
           run: false,
           sink,
           effort: options.effort ?? null,
+          ...options.liveness,
         }),
     );
   } catch (error) {

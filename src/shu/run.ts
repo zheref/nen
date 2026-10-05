@@ -920,6 +920,55 @@ export interface RunOptions {
    * instead; absent there too, no ledger is touched. See `ledgerSink`.
    */
   readonly effort?: string | null;
+  /**
+   * `--stream` (zheref/nen#244): relay every step's stdout and stderr AS IT IS
+   * PRODUCED, line by line, instead of once the step has exited. Absent or
+   * false, an unguarded step's output is relayed after it exits, exactly as it
+   * always was. A step that declares a stall guard is relayed live either way
+   * -- its declaration already asked to be watched.
+   *
+   * IT CHANGES NOTHING BUT WHEN THE LINES APPEAR. The same lines, on the same
+   * streams (stdout to stderr under `--json`), the same exit code, the same
+   * report, the same redirect file.
+   */
+  readonly stream?: boolean;
+  /**
+   * The heartbeat interval in milliseconds (zheref/nen#244): while a step is
+   * still running, one `nen shu: ... still running (...)` line on stderr per
+   * interval. Absent (`undefined`): DEFAULT_HEARTBEAT_MS. `null`: no
+   * heartbeat at all -- `--heartbeat 0`.
+   */
+  readonly heartbeatMs?: number | null;
+}
+
+/**
+ * How often a still-running step says so on stderr, when nobody names an
+ * interval (zheref/nen#244).
+ *
+ * THIRTY SECONDS, AND THE NUMBER IS THE EVIDENCE'S. The watchdog that killed
+ * healthy compiles on zheref/KroApple#577 read "about sixty seconds with no new
+ * log output" as hung. A heartbeat at that same sixty would sit exactly on the
+ * threshold and lose the race to timer jitter; half of it is the coarsest
+ * interval that keeps such a watchdog's window from ever closing on a step that
+ * is merely busy.
+ */
+export const DEFAULT_HEARTBEAT_MS = 30_000;
+
+/**
+ * The heartbeat line, in the one place it is worded.
+ *
+ * `nen shu:` LEADS so a reader scanning a build's interleaved output can tell
+ * nen's own line from the tool's, and the elapsed time is whole seconds below a
+ * minute and `<m>m <ss>s` above it -- the issue's floor is "the step name and
+ * elapsed seconds", and a twelve-minute compile reads better as minutes.
+ */
+export function heartbeatLine(label: string, exe: string, elapsedMs: number): string {
+  const seconds = Math.floor(elapsedMs / 1000);
+  const elapsed =
+    seconds < 60
+      ? `${seconds}s`
+      : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+  return `nen shu: ${label} (${exe}) still running (${elapsed})`;
 }
 
 /**
@@ -1194,7 +1243,17 @@ export async function runVerb(
   if (INTERACTIVE_VERBS.includes(plan.verb)) {
     return runInteractively(context, plan, cwd, repoRoot, preconditions, sink);
   }
-  return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink);
+  return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink, {
+    stream: options.stream === true,
+    heartbeatMs: options.heartbeatMs === undefined ? DEFAULT_HEARTBEAT_MS : options.heartbeatMs,
+  });
+}
+
+/** How a run relays its steps' output and says it is still alive (zheref/nen#244). */
+interface Liveness {
+  readonly stream: boolean;
+  /** Null: no heartbeat. */
+  readonly heartbeatMs: number | null;
 }
 
 /**
@@ -1457,15 +1516,29 @@ interface StepOutcome {
  * the caller, and the report says exactly that. Waiting instead would hang the
  * caller on the one path where hanging is what they came to be rescued from.
  */
+//
+// THE SAME SEAM CARRIES THE TWO LIVENESS SIGNALS OF zheref/nen#244, because
+// both need a clock that runs WHILE the child does and the captured seam has
+// none. `live` false (the default, no `--stream`, no guard) HOLDS both streams
+// and relays them once the child has exited -- the same lines, in the same
+// order, that the captured seam always printed -- and only the heartbeat is
+// new. `live` true relays each whole line as it lands. A guarded step is
+// always live; its declaration asked to be watched.
+//
+// THE HEARTBEAT IS NEN'S LINE, NOT THE CHILD'S, so it never touches the quiet
+// window a stall guard judges: a step that has said nothing for ten minutes is
+// still ten minutes quiet however many times nen has said it is running.
 async function runWatchedStep(
   context: CommandContext,
   step: RenderedStep,
-  guard: StallGuard,
+  guard: StallGuard | null,
   cwd: string,
   env: { readonly env?: Readonly<Record<string, string>> },
   label: string,
   repoRoot: string,
+  liveness: Liveness,
 ): Promise<StepOutcome> {
+  const live = liveness.stream || guard !== null;
   const relayer = lineRelay(context);
   const at: number[] = [];
   let stalled = false;
@@ -1477,8 +1550,24 @@ async function runWatchedStep(
   // where a tool says what went wrong, and a watched step is exactly when a
   // reader is watching for it.
   const held: string[] = [];
+  // NOT LIVE: stderr is held too, and both are relayed after the exit through
+  // the captured path's own `relay` -- stdout first, then stderr, normalised
+  // over the joined text -- so the default run prints what it always printed.
+  const heldErr: string[] = [];
+
+  const heartbeatMs = liveness.heartbeatMs;
+  let nextBeatMs = heartbeatMs ?? Number.POSITIVE_INFINITY;
+  const beat = (window: OutputWindow): void => {
+    if (heartbeatMs === null || window.elapsedMs < nextBeatMs) return;
+    context.io.err(heartbeatLine(label, step.exe, window.elapsedMs));
+    // THE NEXT MULTIPLE PAST NOW, not `+= interval`: a tick that arrived late
+    // (a remedy that took a while, a busy host) owes one line, not a burst.
+    nextBeatMs = (Math.floor(window.elapsedMs / heartbeatMs) + 1) * heartbeatMs;
+  };
 
   const onWindow = (window: OutputWindow): WatchVerdict => {
+    beat(window);
+    if (guard === null) return "watch";
     if (window.elapsedMs < guard.elapsedMs || window.quietMs < guard.quietMs) return "watch";
     if (at.length >= guard.maxStrikes) {
       stalled = true;
@@ -1510,40 +1599,74 @@ async function runWatchedStep(
     return "reset";
   };
 
+  const stepStarted = context.seams.now().getTime();
   const result = await context.seams.runStreamed(step.exe, step.argv, {
     cwd,
     ...env,
     onOutput: (chunk): void => {
-      if (step.stdoutTo !== null && chunk.stream === "stdout") {
+      if (chunk.stream === "stdout" && (step.stdoutTo !== null || !live)) {
         held.push(chunk.text);
+        return;
+      }
+      if (!live) {
+        heldErr.push(chunk.text);
         return;
       }
       relayer.chunk(chunk);
     },
     onWindow,
-    pollMs: pollFor(guard),
+    pollMs: pollEvery(guard, heartbeatMs),
   });
+  const seamEndedAt = context.seams.now().getTime();
   relayer.flush();
+  const stdout = normalizeEol(held.join(""));
+  if (!live) relay(context, step.stdoutTo === null ? stdout : "", normalizeEol(heldErr.join("")));
   // WRITTEN WHATEVER HAPPENED NEXT, exactly as the captured path writes it: a
   // step that was abandoned mid-flight still produced the bytes nen saw, and a
   // step that never STARTED produced none to write.
-  if (!result.spawnFailed) writeRedirect(step, normalizeEol(held.join("")), repoRoot);
+  if (!result.spawnFailed) writeRedirect(step, stdout, repoRoot);
 
   const ran = !result.spawnFailed && !result.abandoned;
   return {
     exitCode: ran ? result.code : null,
-    durationMs: ran ? result.durationMs : null,
+    // AN UNGUARDED STEP KEEPS THE CAPTURED PATH'S CLOCK. It took that path
+    // until zheref/nen#244 and its `durationMs` was always read off
+    // `Seams.now()`; watching it for a heartbeat must not move the number the
+    // report and the phase ledger print. A guarded step keeps the seam's own,
+    // as it always did.
+    durationMs: ran ? (guard === null ? seamEndedAt - stepStarted : result.durationMs) : null,
     spawnFailed: result.spawnFailed,
-    stall: {
-      elapsedMs: guard.elapsedMs,
-      quietMs: guard.quietMs,
-      maxStrikes: guard.maxStrikes,
-      onStall: guard.onStall,
-      strikes: at.length,
-      at,
-      stalled,
-    },
+    stall:
+      guard === null
+        ? null
+        : {
+            elapsedMs: guard.elapsedMs,
+            quietMs: guard.quietMs,
+            maxStrikes: guard.maxStrikes,
+            onStall: guard.onStall,
+            strikes: at.length,
+            at,
+            stalled,
+          },
   };
+}
+
+/**
+ * The watcher's interval: the guard's own, the heartbeat's, or the finer.
+ *
+ * THE HEARTBEAT IS POLLED AT A QUARTER OF ITS INTERVAL, not at the interval
+ * itself. A timer can fire a millisecond early, and a tick at 29 999 ms against
+ * a 30 000 ms beat would skip the first line and only catch up at the second --
+ * so the beat is checked often enough that jitter costs a fraction of an
+ * interval rather than a whole one. Clamped like the guard's, so a tiny
+ * `--heartbeat` cannot become a busy loop.
+ */
+function pollEvery(guard: StallGuard | null, heartbeatMs: number | null): number {
+  const beat =
+    heartbeatMs === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(MIN_POLL_MS, Math.min(DEFAULT_POLL_MS, Math.floor(heartbeatMs / 4)));
+  return Math.min(guard === null ? Number.POSITIVE_INFINITY : pollFor(guard), beat);
 }
 
 /** One ORDINARY step: captured, as every step in this family always was. */
@@ -1588,6 +1711,7 @@ async function runCaptured(
   repoRoot: string,
   preconditions: readonly AssertedPrecondition[],
   sink: ReportSink | undefined,
+  liveness: Liveness,
 ): Promise<number> {
   const started = context.seams.now().getTime();
   const steps: ShuStepReport[] = [];
@@ -1595,14 +1719,17 @@ async function runCaptured(
   for (const [index, step] of plan.steps.entries()) {
     const label = `step ${index + 1} of ${plan.steps.length}`;
     const guard = step.stall ?? null;
-    // TWO SEAMS, AND THE DECLARATION PICKS. A step with no guard goes through
-    // the captured seam exactly as it always has -- same call, same buffering,
-    // same output -- because watching a step nobody asked to have watched would
-    // change the behaviour of every verb in this family to buy nothing.
-    const outcome =
-      guard === null
-        ? runCapturedStep(context, step, cwd, env, repoRoot)
-        : await runWatchedStep(context, step, guard, cwd, env, label, repoRoot);
+    // TWO SEAMS, AND WHAT THE RUN NEEDS PICKS. A step needs the watched seam
+    // when anything must happen WHILE it runs -- a declared stall guard, a
+    // `--stream` relay, a heartbeat (zheref/nen#244, on by default: a step
+    // that printed nothing until it exited was read as hung by every
+    // log-growth watchdog above it). Only `--heartbeat 0` with no `--stream`
+    // and no guard leaves nothing to watch for, and that step goes through the
+    // captured seam exactly as every step once did.
+    const watched = guard !== null || liveness.stream || liveness.heartbeatMs !== null;
+    const outcome = watched
+      ? await runWatchedStep(context, step, guard, cwd, env, label, repoRoot, liveness)
+      : runCapturedStep(context, step, cwd, env, repoRoot);
     steps.push({
       exe: step.exe,
       argv: step.argv,

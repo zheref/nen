@@ -95,6 +95,8 @@ export interface TestReportOptions {
   readonly fromArtifacts: boolean;
   /** `--effort <id>`: the phase ledger the run's steps are appended to (zheref/nen#227). */
   readonly effort?: string | null;
+  /** `--stream` / `--heartbeat`, handed to the executor unchanged (zheref/nen#244). */
+  readonly liveness?: { readonly stream: boolean; readonly heartbeatMs?: number | null };
 }
 
 /**
@@ -304,6 +306,7 @@ export async function runTestReport(
           run: false,
           sink,
           effort: options.effort ?? null,
+          ...options.liveness,
         }),
     );
   } catch (error) {

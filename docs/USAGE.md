@@ -8036,6 +8036,39 @@ entry is open (a run outside a phase is never a phase of its own), when no
 ledger exists, on `--dry-run`, or on an interactive pre-flight; a ledger that
 cannot be written is a line on stderr and never a failed run.
 
+<a id="shu-liveness"></a>
+**Liveness — the heartbeat and `--stream`**
+([#244](https://github.com/zheref/nen/issues/244)). A step that prints nothing
+until it exits looks hung to anything watching its log grow, and a log-growth
+watchdog killed healthy multi-minute compiles for exactly that reason. Two
+signals answer it, on `build`, `test`, `ui-test`, `lint`, `archive`, `release`,
+`deploy`, `coverage` and `test-report` (not on `dev`/`run`, which already hand
+the terminal to the child, and not on `warmup`, whose delegated build and test
+carry the default heartbeat):
+
+- **The heartbeat — ON BY DEFAULT.** While a step is still running, nen prints
+  `nen shu: step <i> of <n> (<exe>) still running (<elapsed>)` on **stderr**
+  once per interval — `30s` by default, `--heartbeat <seconds>` to change it
+  (a decimal, `0.1` or more), `--heartbeat 0` to turn it off. Elapsed is whole
+  seconds under a minute and `<m>m <ss>s` above it. The line is nen's own,
+  never the child's: a declared `stall` guard still judges the **child's**
+  silence, which no heartbeat resets.
+- **`--stream` — NOT the default.** Each step's stdout and stderr are relayed
+  as they are produced, one whole line at a time, instead of once the step has
+  exited. Under `--json` the relayed stdout goes to stderr as it always does,
+  so stdout stays one document. A step that declares a `stall` guard is
+  relayed live either way, and a step with a `stdoutTo` keeps its stdout for
+  that file under both modes.
+
+**Neither changes a step's exit code, nen's exit code, or the report** — text
+or `--json`, byte for byte: they change only *when* output reaches the caller,
+and add heartbeat lines to stderr. With `--heartbeat 0` and no `--stream`, a
+step runs exactly as every step did before this release, and a long one says
+nothing until it exits — so **run a log-growth watchdog only against the
+default or `--stream`**, never against that form. `src/shu/run.test.ts` pins
+the order on a scripted clock and `src/shu/stream-heartbeat.integration.test.ts`
+on a real child.
+
 <a id="shu-run-report"></a>
 **The shared `--json` run report.** Every `shu` verb that EXECUTES a declared
 invocation emits one object with the same top-level keys, in this order:
@@ -8613,6 +8646,8 @@ nen shu build [--repo <path>] [--lane <name>] [--dry-run] [--json]
 | `--lane <name>` | no | Which lane to build. | Defaults to `project.defaultLane`; exit 2 naming every declared lane when neither is given. |
 | `--dry-run` | no | Print every step and run nothing. | The argv printed **is** the argv that would be spawned — same rendering, same plan. |
 | `--effort <id>` | no | The `nen phase` effort whose OPEN entry this run's steps are appended to. | Or `NEN_EFFORT` from the environment; see [`--effort`](#stall-two-gate) above. Nothing is written when no entry is open. |
+| `--stream` | no | Relay each step's output live, line by line. | Not the default; see [liveness](#shu-liveness). Changes no exit code and no report byte. |
+| `--heartbeat <s>` | no | The still-running line's interval, in seconds. | On by default every `30`; `0` turns it off. See [liveness](#shu-liveness). |
 
 **Output and exit codes** — the report, as text or `--json`. `0`/`1`/`2`/`3`/`4`/`5` as the family's table above. `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.build/v0.1"`.
 
