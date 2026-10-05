@@ -684,15 +684,29 @@ function bodyCheck(context: CommandContext): number {
   // A DERIVED set says so ON the verdict line (zheref/nen#239), naming the
   // template and where it was read, so quoting the verdict quotes its
   // provenance. A heading present with nothing under it is EMPTY, not ok.
-  const reader = base === undefined ? workingTreeReader(cwd) : gitReader(context.seams, cwd, base);
-  const { requirements, source } = derivedRequirements(reader, cwd);
+  //
+  // EVERY HUMAN LINE THROUGH plainLine (Feitan F4's rule, Copilot on #385):
+  // the template's path and headings are repository-controlled and the ref is
+  // the caller's, so a newline in a filename or an ESC in a heading could
+  // otherwise forge or erase a verdict line. The refusals below name the same
+  // values, so they pass through it too. `--json` keeps the original bytes.
+  let reader: TemplateReader;
+  let derived: ReturnType<typeof derivedRequirements>;
+  try {
+    reader = base === undefined ? workingTreeReader(cwd) : gitReader(context.seams, cwd, base);
+    derived = derivedRequirements(reader, cwd);
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw new VerbUsageError(plainLine(error.message));
+    throw error;
+  }
+  const { requirements, source } = derived;
   const report = checkDerivedBody(body, requirements);
   const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
   const label = { ok: "ok", missing: "MISSING", empty: "EMPTY" } as const;
   const lines = [
     `${satisfiedCount}/${report.results.length} requirement(s) satisfied (DERIVED from the pull-request template '${source.path}' ${describeReader(reader)}; no --requirements-from given)`,
     ...report.results.map((result): string => `${label[result.status]}  ${result.name}`),
-  ];
+  ].map(plainLine);
   emit(context.io, context.json, { ...report, source }, lines);
   return report.ok ? 0 : 1;
 }

@@ -436,24 +436,36 @@ function sectionOf(read: readonly ReadLine[], index: number, level: number): rea
  * Each ATX heading of `template` (`#` .. `######`) as one requirement: the body
  * must carry a heading at the SAME level with the SAME text (letter case and
  * whitespace runs aside), optionally followed by `<!-- ... -->` spans -- so a
- * body that kept GitHub's prefilled inline comment still matches. A heading
- * repeated verbatim yields one requirement.
+ * body that kept GitHub's prefilled inline comment still matches.
+ *
+ * A HEADING REPEATED -- verbatim, or differing only in letter case or
+ * whitespace, which the pattern cannot tell apart anyway -- YIELDS ONE
+ * REQUIREMENT, keyed on its level and its folded title, whose placeholder set
+ * is the UNION of every occurrence's. Keeping only the first occurrence's
+ * placeholders would let an untouched body pass on the second occurrence's
+ * text; keeping variants apart would let each read the other's placeholder as
+ * content.
  */
 export function deriveRequirements(template: string): DerivedRequirement[] {
   const read = readLines(template);
-  const requirements: DerivedRequirement[] = [];
-  const seen = new Set<string>();
+  const byKey = new Map<string, { name: string; pattern: string; level: number; placeholder: Set<string> }>();
   read.forEach((line, index): void => {
     if (line.kind !== "heading" || !line.atx || line.title === "") return;
     const text = line.title;
+    const key = `${line.level} ${normalized(text)}`;
+    const placeholder = sectionOf(read, index, line.level).flatMap((entry): string[] => (entry.kind === "content" ? [normalized(entry.text)] : []));
+    const existing = byKey.get(key);
+    if (existing !== undefined) {
+      for (const entry of placeholder) existing.placeholder.add(entry);
+      return;
+    }
     const marks = "#".repeat(line.level);
     const pattern = `^ {0,3}${marks}[ \\t]+${escapeRegExp(text).replace(/[ \t]+/g, "[ \\t]+")}(?:[ \\t]+#+)?(?:[ \\t]*<!--.*?-->)*[ \\t]*$`;
-    if (seen.has(pattern)) return;
-    seen.add(pattern);
-    const placeholder = sectionOf(read, index, line.level).flatMap((entry): string[] => (entry.kind === "content" ? [normalized(entry.text)] : []));
-    requirements.push({ name: `${marks} ${text.replace(/[ \t]+/g, " ")}`, pattern, level: line.level, placeholder });
+    byKey.set(key, { name: `${marks} ${text.replace(/[ \t]+/g, " ")}`, pattern, level: line.level, placeholder: new Set(placeholder) });
   });
-  return requirements;
+  return [...byKey.values()].map(
+    (entry): DerivedRequirement => ({ name: entry.name, pattern: entry.pattern, level: entry.level, placeholder: [...entry.placeholder] }),
+  );
 }
 
 export type DerivedStatus = "ok" | "missing" | "empty";

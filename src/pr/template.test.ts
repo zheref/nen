@@ -304,6 +304,27 @@ describe("the section rules (round 2)", () => {
   });
 });
 
+describe("repeated headings (Copilot on #385)", () => {
+  // A: the placeholder sets of every occurrence merge into one requirement.
+  it("an exact repeat is one requirement whose placeholders are every occurrence's -- an untouched body is EMPTY", () => {
+    const template = "## A\nfirst\n## A\nsecond\n";
+    expect(names(template)).toEqual(["## A"]);
+    expect(statuses(template, template)).toEqual(["empty ## A"]);
+  });
+
+  it("a case/whitespace variant folds into the same requirement -- an untouched body is EMPTY", () => {
+    const template = "## Test plan\nfirst\n##   test  PLAN\nsecond\n";
+    expect(names(template)).toEqual(["## Test plan"]);
+    expect(statuses(template, template)).toEqual(["empty ## Test plan"]);
+    // A real answer under either occurrence still fills it.
+    expect(statuses("## Test plan\nfirst\n## test plan\nran the suite\n", template)).toEqual(["ok ## Test plan"]);
+  });
+
+  it("the same title at a different level stays a separate requirement", () => {
+    expect(names("## A\n### A\n")).toEqual(["## A", "### A"]);
+  });
+});
+
 describe("isContained (R8)", () => {
   // Chosen by the platform ARGUMENT, never the host's path module: this case
   // must evaluate the same on a Windows runner (where `path.sep` is '\\').

@@ -371,6 +371,46 @@ describe("nen pr body-check -- derived from the pull-request template (zheref/ne
     expect(result.err.join("\n")).toMatch(/outside the repository root/);
   });
 
+  // B: repository-controlled text cannot forge or erase a human line.
+  it("an ESC sequence in a template heading is stripped from the human lines and kept in --json", async () => {
+    const dir = repoWith({ ".github/pull_request_template.md": "## Sum\u001b[2Kmary\n", "body.md": "nothing here\n" });
+    const human = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(human.code).toBe(1);
+    expect(human.out).toEqual([
+      "0/1 requirement(s) satisfied (DERIVED from the pull-request template '.github/pull_request_template.md' in the working tree; no --requirements-from given)",
+      "MISSING  ## Sum[2Kmary",
+    ]);
+    const json = await capture(["pr", "body-check", "--body-from", "body.md", "--json"], dir);
+    const report = JSON.parse(json.out.join("\n")) as { results: { name: string }[] };
+    expect(report.results[0]?.name).toBe("## Sum\u001b[2Kmary");
+  });
+
+  it("a newline in an alternative template's filename cannot forge a verdict line", async (context) => {
+    const dir = repoWith({ "body.md": "## Only\nx\n" });
+    const folder = join(dir, ".github", "PULL_REQUEST_TEMPLATE");
+    mkdirSync(folder, { recursive: true });
+    const evil = "a\nok  forged.md";
+    try {
+      writeFileSync(join(folder, evil), "## Only\n");
+    } catch {
+      context.skip();
+    }
+    const human = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(human.code).toBe(0);
+    expect(human.out).toHaveLength(2);
+    for (const line of human.out) expect(line).not.toMatch(/[\u0000-\u001F]/);
+    expect(human.out[0]).toContain("'.github/PULL_REQUEST_TEMPLATE/aok  forged.md'");
+    const json = await capture(["pr", "body-check", "--body-from", "body.md", "--json"], dir);
+    expect((JSON.parse(json.out.join("\n")) as { source: { path: string } }).source.path).toBe(`.github/PULL_REQUEST_TEMPLATE/${evil}`);
+
+    // The refusal that names it goes through the same strip.
+    writeFileSync(join(folder, "b.md"), "## Only\n");
+    const refused = await capture(["pr", "body-check", "--body-from", "body.md"], dir);
+    expect(refused.code).toBe(2);
+    for (const line of refused.err) expect(line).not.toMatch(/[\u0000-\u001F]/);
+    expect(refused.err.join("\n")).toContain(".github/PULL_REQUEST_TEMPLATE/aok  forged.md, .github/PULL_REQUEST_TEMPLATE/b.md");
+  });
+
   it("--base with --requirements-from is refused -- there is no template to read", async () => {
     const dir = repoWith({ "body.md": "x\n", "req.json": JSON.stringify([{ name: "x", pattern: "x" }]) });
     const result = await capture(["pr", "body-check", "--body-from", "body.md", "--requirements-from", "req.json", "--base", "main"], dir);
