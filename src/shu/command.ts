@@ -160,6 +160,7 @@ export const EXECUTING_VERBS: readonly string[] = [
 const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
 const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
+                  [--stream] [--heartbeat <s>]   (the nine verbs that run a step)
 
 --repo is bracketed there because fourteen of the fifteen verbs default it to the
 directory you are standing in. It is REQUIRED on 'warmup', the one verb here
@@ -459,28 +460,40 @@ flags:
   --stream         build, test, ui-test, lint, archive, release, deploy,
                    coverage and test-report. Relay each step's stdout and
                    stderr AS IT IS PRODUCED, whole line by whole line, instead
-                   of once the step has exited (zheref/nen#244). Under --json
-                   the relayed stdout goes to stderr, as it always does, so
-                   stdout stays one document. NOT THE DEFAULT: bare, an
-                   unguarded step's output is relayed after it exits, exactly
-                   as before. A step declaring a 'stall' guard is relayed live
-                   either way. A step with a declared 'stdoutTo' keeps its
-                   stdout for that file under both modes.
+                   of once the step has exited (zheref/nen#244). The STREAMS
+                   ARE KEPT: the child's stdout stays on stdout (on stderr
+                   under --json, so stdout stays one document) and its stderr
+                   on stderr -- but the two now INTERLEAVE IN ARRIVAL ORDER,
+                   where the default prints all of a step's stdout and then
+                   all of its stderr. NOT THE DEFAULT. A step declaring a
+                   'stall' guard is relayed live either way. A step with a
+                   declared 'stdoutTo' keeps its stdout for that file under
+                   both modes. ONLY --stream makes the log's growth reflect the
+                   CHILD.
   --heartbeat <s>  The same nine verbs. While a step is still running, print
                    'nen shu: step <i> of <n> (<exe>) still running (<elapsed>)'
                    on stderr once per <s> seconds. ON BY DEFAULT, every 30
                    seconds, with or without --stream; '--heartbeat 0' turns it
                    off. A decimal is accepted (0.1 or more); anything else is
-                   exit 2. The line is nen's, never the child's: a declared
-                   stall guard still judges the CHILD's silence, which no
-                   heartbeat resets. Run under a log-growth watchdog, keep
-                   one of the two on -- with both off, a long step says nothing
-                   until it exits and reads as hung.
-                   NEITHER --stream NOR THE HEARTBEAT CHANGES A STEP'S EXIT
-                   CODE, NEN'S EXIT CODE, OR ONE BYTE OF THE REPORT (text or
-                   --json): they change only WHEN output reaches you, and add
-                   heartbeat lines to stderr. 'warmup' delegates its build and
-                   test with the default heartbeat and takes neither flag.
+                   exit 2. The line is NEN'S, never the child's: under the
+                   heartbeat alone, a growing log proves nen is alive and
+                   NEVER that the child is -- so a log-growth watchdog no
+                   longer kills a healthy compile, and can no longer catch a
+                   hung one either. To detect a hang, declare a 'stall' guard:
+                   it judges the CHILD's silence, which no heartbeat resets.
+                   Neither flag is read with coverage --from-capture or
+                   test-report --from-artifacts, which run nothing (exit 2).
+                   NEITHER FLAG CHANGES A STEP'S EXIT CODE, NEN'S EXIT CODE OR
+                   THE REPORT (text or --json) for the same run of the same
+                   step -- with ONE exception: a step printing more than 64 MB
+                   of stdout or stderr under '--heartbeat 0' without --stream
+                   (the captured path, which buffers) cannot be read and is
+                   reported as not started (exit 5); every other form reads it
+                   through and reports the tool's own code. Beyond that they
+                   change when, and in what interleaving, output reaches you,
+                   and add heartbeat lines to stderr. 'warmup' delegates its
+                   build and test with the default heartbeat and takes neither
+                   flag.
   --only <t[,t]>   'tools' only. Check (and install) just these tools, by the
                    name the declaration gives them. A name it does not declare
                    is exit 2 listing the ones it does -- an empty report is not

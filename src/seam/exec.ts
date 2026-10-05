@@ -528,13 +528,34 @@ function exitCodeOf(status: number | null, signal: NodeJS.Signals | null): numbe
 export const spawnStreamedRunner: StreamedRunner = (command, args, options = {}) =>
   new Promise<StreamedResult>((resolve): void => {
     const startedAt = Date.now();
-    const child = spawn(command, [...args], {
-      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-      ...(options.env === undefined
-        ? {}
-        : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, [...args], {
+        ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+        ...(options.env === undefined
+          ? {}
+          : { env: { ...process.env, ...options.env } as NodeJS.ProcessEnv }),
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      // A SYNCHRONOUS THROW IS STILL "COULD NOT BE STARTED" (zheref/nen#244,
+      // Nobunaga N3). `spawn` raises rather than emitting `error` for an argv
+      // the OS refuses outright -- E2BIG for an argument list past the
+      // kernel's limit, EINVAL for a `.cmd` on Windows with no shell -- and
+      // escaping here would end the verb with no report at all. It is answered
+      // exactly as the `error` handler below answers it, which is also what
+      // `spawnSync` answers with for the same argv.
+      const message = error instanceof Error ? error.message : String(error);
+      options.onOutput?.({ stream: "stderr", text: message, atMs: Date.now() - startedAt });
+      resolve({ code: -1, signal: null, spawnFailed: true, abandoned: false, durationMs: Date.now() - startedAt });
+      return;
+    }
+    // DECODED AS A STREAM, NOT PER CHUNK (Nobunaga N1). A chunk boundary can
+    // fall inside a multi-byte UTF-8 sequence, and `Buffer#toString` on each
+    // half turns both halves into U+FFFD -- in the relay AND in a `stdoutTo`
+    // file. `setEncoding` holds an incomplete sequence back for the next chunk.
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
 
     let lastOutputAt = startedAt;
     let timer: NodeJS.Timeout | null = null;

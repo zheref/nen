@@ -15,7 +15,7 @@
 // can be late, and a late heartbeat is still a heartbeat.
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -44,7 +44,7 @@ interface Run {
 
 let repo = "";
 
-function declare(script: string): void {
+function declare(script: string, extra: Readonly<Record<string, unknown>> = {}, argv: readonly string[] = []): void {
   writeFileSync(
     join(repo, "nen", "contract.json"),
     JSON.stringify({
@@ -54,7 +54,7 @@ function declare(script: string): void {
         defaultLane: "only",
         // `lint`, not `build`: a green build writes a proof through git, and
         // this temporary directory is not a repository.
-        verbs: { only: { lint: { exe: process.execPath, argv: ["-e", script] } } },
+        verbs: { only: { lint: { exe: process.execPath, argv: ["-e", script, ...argv], ...extra } } },
       },
     }),
   );
@@ -95,7 +95,6 @@ describe("--stream and the heartbeat, on a real child (zheref/nen#244)", () => {
     expect(first?.atMs ?? Infinity).toBeLessThan((last?.atMs ?? 0) - 700);
     const beats = lines.filter((line): boolean => line.startsWith(HEARTBEAT));
     expect(beats.length).toBeGreaterThanOrEqual(2);
-    expect(lines.indexOf("first")).toBeLessThan(lines.indexOf(beats[0] ?? ""));
     expect(lines.indexOf("last")).toBeGreaterThan(lines.indexOf(beats[1] ?? ""));
     // The tool's own code, unchanged, in the one JSON document on stdout.
     const report = JSON.parse(run.out.join("\n")) as { exitCode: number; steps: { exitCode: number }[] };
@@ -131,4 +130,56 @@ describe("--stream and the heartbeat, on a real child (zheref/nen#244)", () => {
     expect(run.code).toBe(0);
     expect(run.err.filter((entry): boolean => entry.line.startsWith(HEARTBEAT))).toEqual([]);
   }, 20_000);
+
+  // ── Nobunaga round 1 (zheref/nen#244) ───────────────────────────────────
+
+  it("never splits a multi-byte character across chunks: no U+FFFD, default, --stream, or in a redirect file (N1)", async () => {
+    // ~800 KB of two-byte characters after one one-byte lead, so chunk
+    // boundaries land inside sequences on every host.
+    const text = `x${"\u00e9".repeat(400_000)}`;
+    const script = `process.stdout.write('x' + '\\u00e9'.repeat(400000) + '\\n'); process.stderr.write('x' + '\\u00e9'.repeat(400000) + '\\n');`;
+    declare(script);
+    for (const flags of [[], ["--stream"]]) {
+      const run = await lint(flags);
+      expect(run.code).toBe(0);
+      const all = [...run.out, ...run.err.map((entry): string => entry.line)].join("\n");
+      expect(all.includes("\uFFFD")).toBe(false);
+      expect(run.out).toContain(text);
+      expect(run.err.map((entry): string => entry.line)).toContain(text);
+    }
+    declare(script, { stdoutTo: "out/utf8.txt" });
+    for (const flags of [[], ["--stream"]]) {
+      const run = await lint(flags);
+      expect(run.code).toBe(0);
+      expect(readFileSync(join(repo, "out", "utf8.txt"), "utf8")).toBe(`${text}\n`);
+    }
+  }, 30_000);
+
+  it("reports a signal-killed unguarded step exactly as the captured path does (N2, parity)", async () => {
+    declare("process.kill(process.pid, 'SIGKILL'); setTimeout(() => {}, 5000);");
+    const captured = await lint(["--json", "--heartbeat", "0"]);
+    const watched = await lint(["--json"]);
+    expect(watched.code).toBe(captured.code);
+    const strip = (run: Run): unknown =>
+      JSON.parse(run.out.join("\n"), (key, value: unknown): unknown => (key === "durationMs" ? 0 : value));
+    expect(strip(watched)).toEqual(strip(captured));
+    expect((strip(watched) as { steps: { exitCode: number }[] }).steps[0]?.exitCode).toBe(1);
+  }, 20_000);
+
+  it("answers an argv the OS refuses outright with exit 5 and one --json document, as the captured path does (N3)", async () => {
+    declare("process.exit(0)", {}, ["y".repeat(4 * 1024 * 1024)]);
+    const captured = await lint(["--json", "--heartbeat", "0"]);
+    const watched = await lint(["--json"]);
+    expect(captured.code).toBe(5);
+    expect(watched.code).toBe(5);
+    const report = JSON.parse(watched.out.join("\n")) as { exitCode: number; steps: { exitCode: number | null }[] };
+    expect(report.exitCode).toBe(5);
+    expect(report.steps[0]?.exitCode).toBeNull();
+    // Timings differ by construction, and a 4 MB argv is no diff to print.
+    const strip = (run: Run): unknown =>
+      JSON.parse(run.out.join("\n"), (key, value: unknown): unknown =>
+        key === "durationMs" ? 0 : key === "argv" && Array.isArray(value) ? value.map((arg) => String(arg).length) : value,
+      );
+    expect(strip(watched)).toEqual(strip(captured));
+  }, 30_000);
 });

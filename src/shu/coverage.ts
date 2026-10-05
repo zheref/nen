@@ -191,9 +191,11 @@ function verifyBase(context: CommandContext, repoRoot: string, base: string): vo
  *     `--from-artifacts`, for the same reason).
  *   * WITH --effort, there is no step to append to the phase ledger: the
  *     ledger records what RAN, and this form runs nothing.
+ *   * WITH --stream or --heartbeat, there is no running step to relay or to
+ *     report alive (zheref/nen#244).
  */
 export function validateFromCapture(
-  options: Pick<CoverageOptions, "touched" | "dryRun" | "effort" | "fromCapture">,
+  options: Pick<CoverageOptions, "touched" | "dryRun" | "effort" | "fromCapture" | "liveness">,
 ): void {
   if (options.fromCapture !== true) return;
   if (!options.touched) {
@@ -210,7 +212,20 @@ export function validateFromCapture(
     throw new VerbUsageError(
       `--effort is not read with --from-capture: the phase ledger records the steps a run performed, and --from-capture runs nothing, so there is nothing to append. Drop --effort, or drop --from-capture to measure with a run the ledger records.`,
     );
+  }  // WITH --stream OR --heartbeat, there is no step to relay or to say is
+  // still running (zheref/nen#244): the same "accepted and ignored" refusal.
+  if (livenessGiven(options.liveness)) {
+    throw new VerbUsageError(
+      `--stream and --heartbeat are not read with --from-capture: they relay a running step's output and say it is still running, and --from-capture runs nothing. Drop them, or drop --from-capture to measure with a run.`,
+    );
   }
+}
+
+/** True when the caller typed --stream or --heartbeat (zheref/nen#244). */
+export function livenessGiven(
+  liveness: { readonly stream: boolean; readonly heartbeatMs?: number | null } | undefined,
+): boolean {
+  return liveness !== undefined && (liveness.stream || liveness.heartbeatMs !== undefined);
 }
 
 /**

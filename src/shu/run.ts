@@ -1628,7 +1628,12 @@ async function runWatchedStep(
 
   const ran = !result.spawnFailed && !result.abandoned;
   return {
-    exitCode: ran ? result.code : null,
+    // A SIGNAL-KILLED UNGUARDED STEP REPORTS 1, AS IT DID ON THE CAPTURED SEAM
+    // (Nobunaga N2, ruled parity). `spawnSync`'s `status ?? 1` is what that
+    // path printed, and moving an unguarded step onto this seam for a heartbeat
+    // must not turn the same kill into 137 in the report. A guarded step keeps
+    // the seam's 128 + signal, as it always did.
+    exitCode: ran ? (guard === null && result.signal !== null ? 1 : result.code) : null,
     // AN UNGUARDED STEP KEEPS THE CAPTURED PATH'S CLOCK. It took that path
     // until zheref/nen#244 and its `durationMs` was always read off
     // `Seams.now()`; watching it for a heartbeat must not move the number the

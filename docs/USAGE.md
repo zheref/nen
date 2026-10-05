@@ -8044,30 +8044,43 @@ watchdog killed healthy multi-minute compiles for exactly that reason. Two
 signals answer it, on `build`, `test`, `ui-test`, `lint`, `archive`, `release`,
 `deploy`, `coverage` and `test-report` (not on `dev`/`run`, which already hand
 the terminal to the child, and not on `warmup`, whose delegated build and test
-carry the default heartbeat):
+carry the default heartbeat). Neither is read with `coverage --from-capture` or
+`test-report --from-artifacts`, which run nothing: both are exit 2 there.
 
 - **The heartbeat — ON BY DEFAULT.** While a step is still running, nen prints
   `nen shu: step <i> of <n> (<exe>) still running (<elapsed>)` on **stderr**
   once per interval — `30s` by default, `--heartbeat <seconds>` to change it
   (a decimal, `0.1` or more), `--heartbeat 0` to turn it off. Elapsed is whole
-  seconds under a minute and `<m>m <ss>s` above it. The line is nen's own,
-  never the child's: a declared `stall` guard still judges the **child's**
-  silence, which no heartbeat resets.
+  seconds under a minute and `<m>m <ss>s` above it.
 - **`--stream` — NOT the default.** Each step's stdout and stderr are relayed
   as they are produced, one whole line at a time, instead of once the step has
-  exited. Under `--json` the relayed stdout goes to stderr as it always does,
-  so stdout stays one document. A step that declares a `stall` guard is
-  relayed live either way, and a step with a `stdoutTo` keeps its stdout for
-  that file under both modes.
+  exited. **The streams are kept:** the child's stdout stays on stdout without
+  `--json` and goes to stderr under it (so stdout stays one document), and its
+  stderr stays on stderr — but the two now **interleave in arrival order**,
+  where the default prints all of a step's stdout and then all of its stderr.
+  A step that declares a `stall` guard is relayed live either way, and a step
+  with a `stdoutTo` keeps its stdout for that file under both modes.
 
-**Neither changes a step's exit code, nen's exit code, or the report** — text
-or `--json`, byte for byte: they change only *when* output reaches the caller,
-and add heartbeat lines to stderr. With `--heartbeat 0` and no `--stream`, a
-step runs exactly as every step did before this release, and a long one says
-nothing until it exits — so **run a log-growth watchdog only against the
-default or `--stream`**, never against that form. `src/shu/run.test.ts` pins
-the order on a scripted clock and `src/shu/stream-heartbeat.integration.test.ts`
-on a real child.
+**What a growing log proves.** Under the heartbeat alone, log growth proves
+**nen** is alive, never that the child is: a log-growth watchdog no longer
+kills a healthy compile, but it can never catch a hung one either. **Only
+`--stream` makes growth reflect the child.** To detect a hang, declare a
+[`stall` guard](#stall-two-gate): it judges the child's own silence, which no
+heartbeat resets. With `--heartbeat 0` and no `--stream`, a long step says
+nothing until it exits — the form a growth watchdog misreads.
+
+**Exit codes and the report.** Neither flag changes a step's exit code, nen's
+exit code or the report (text or `--json`) for the same run of the same step,
+with **one** exception: a step printing more than 64 MB of stdout or stderr
+under `--heartbeat 0` without `--stream` — the captured path, which buffers —
+cannot be read and is reported as not started (exit 5), while every other form
+reads it through and reports the tool's own code. A signal-killed step with no
+`stall` guard reports exit code `1` in every form, as the captured path
+always has (a guarded step was always watched, and its flags change nothing). Beyond that the
+flags change only when, and in what interleaving, output reaches the caller,
+and add heartbeat lines to stderr. `src/shu/run.test.ts` pins the order on a
+scripted clock and `src/shu/stream-heartbeat.integration.test.ts` on a real
+child.
 
 <a id="shu-run-report"></a>
 **The shared `--json` run report.** Every `shu` verb that EXECUTES a declared
@@ -8636,7 +8649,7 @@ Compile or assemble the lane, by running the `build` invocation its declaration 
 **Usage**
 
 ```text
-nen shu build [--repo <path>] [--lane <name>] [--dry-run] [--json]
+nen shu build [--repo <path>] [--lane <name>] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 **Arguments**
@@ -8735,7 +8748,7 @@ then parses the results file it names under `artifacts`.
 **Usage**
 
 ```text
-nen shu test [--repo <path>] [--lane <name>] [--dry-run] [--json]
+nen shu test [--repo <path>] [--lane <name>] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 **Output and exit codes** — as `build`, and `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.test/v0.1"`. Like every executing verb in this family it is **`dry-run-gated`** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository — a declared test task may well write, and one keystroke separates a golden-image check from its recorder — so the bare form is never certified, while the dry run is, because rendering and spawning nothing is a property of nen rather than a claim about that argv.
@@ -8967,7 +8980,7 @@ stated as a refusal.
 **Usage**
 
 ```text
-nen shu deploy --target <name> [--run] [--repo <path>] [--lane <name>] [--dry-run] [--json]
+nen shu deploy --target <name> [--run] [--repo <path>] [--lane <name>] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 Bare, this is a safe, exit-0 plan -- the target resolved, every precondition
@@ -9116,7 +9129,7 @@ classification as `test`: a coverage run writes its report tree by definition.
 **Usage**
 
 ```text
-nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref> [--from-capture]] [--dry-run] [--json]
+nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref> [--from-capture]] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 **Arguments**
@@ -9695,7 +9708,7 @@ with the two halves disagreeing.
 **Usage**
 
 ```text
-nen shu test-report [--repo <path>] [--lane <name>] [--from-artifacts] [--dry-run] [--json]
+nen shu test-report [--repo <path>] [--lane <name>] [--from-artifacts] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 **Arguments**
