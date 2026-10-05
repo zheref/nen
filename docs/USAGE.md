@@ -13,8 +13,8 @@ with the `nen` spelling. This document covers the **v0.13.0 line** (one new fami
 new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 42 command
-families, 124 verbs, every flag checked against the binary this repository
+arrive with them): 43 command
+families, 127 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -696,7 +696,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 124 verbs, grouped as the README groups them. **Reads** is what a
+All 127 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -747,6 +747,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`classify`](#family-classify) | [`nen classify install`](#nen-classify-install) | compares the taxonomy's labels with nen/labels.json (present, drift, absent, foreign), rewrites the declaration with --write, or syncs only those labels to GitHub with --sync once the declaration is landed | local file (--taxonomy), nen/labels.json; gh only with --sync | yes |
 | [`classify`](#family-classify) | [`nen classify status`](#nen-classify-status) | which issues carry a label on every axis, which are missing one, which carry an unknown key, and whether the declaration and GitHub both hold the taxonomy's labels | local file (--taxonomy), nen/labels.json, gh (issue reads, label list) | yes |
 | [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
+| [`direct`](#family-direct) | [`nen direct registry`](#nen-direct-registry) | validates a model-direction registry file and prints it: the snapshot date, each alias (provider, family, surface/tier, snapshot quote), the surfaces and the live-lookup sources | local file (--registry) | yes |
+| [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
+| [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
@@ -4466,6 +4469,256 @@ labels, classifying issues on two axes as labels, validating the schema set
 itself, resolving a colour by the repository's own precedence, resolving a
 repository token against the registry, and formatting the object notation the
 rest of the surface cross-references objects with.
+
+<a id="family-direct"></a>
+
+**`nen direct`**
+
+The mechanical half of choosing a model for an issue's classification: given the languages and jobs
+the [`classify`](#family-classify) family put on an issue, which **alias** should do the work, on
+which **surface**, at which **effort**. Reading the issue and looking up the live version of a model
+family on a provider's page are a skill's judgement; everything deterministic around them is here.
+Two rulings shape it. **Stable aliases, replaceable versions**: the registry names an alias (a role:
+the frontier author, the execution model, the visual orchestrator), carries no version a
+recommendation resolves through, and nen stores none; the dated `snapshot` block is a quoted record of
+what each alias meant on one day, and the alias is *spelled* for a surface by the consumer's own
+`nen/workflow.json` (`models.<key>.<tier>`, read through the existing loader; an alias the workflow
+does not spell is reported `unspelled`, never an error). **A mismatch is an answer**: the verb
+compares the session that is running with the recommendation and reports every difference, exits 0,
+and never blocks — the skill asks the maintainer once.
+
+Every word of the vocabulary — aliases, surfaces, routing, the effort rule, the dated snapshot — is
+read from the **registry file** `--registry` names (`$schema` of the form `<owner>.direct-registry/v1`);
+the languages, the jobs with their weights and the five domain rules are read from the **taxonomy
+file** `--taxonomy` names (the same file `classify` reads); this binary carries none of it. Every
+path flag (`--registry`, `--taxonomy`, `--record`) resolves against `--repo`'s root; an absolute path
+is used as-is.
+
+### `nen direct registry`
+
+Answers "is this registry valid, and what does it say": it validates the file and prints the snapshot
+date, one line per alias (`provider  family  surface/tier  snapshot: <primary> (<model id>)`, a
+reviewer alias marked), the surfaces table (label, the `models.<key>` it reads, its effort control)
+and the live-lookup sources per provider (the CLI that lists the served models, the docs). A bad file
+is refused at exit 1 naming the pointer into it: a routing cell whose alias or surface is not
+declared, a cell whose surface is not its alias's surface, a reviewer runner-up with no `also`, a non-reviewer alias without a `surface` or a `tier`, a routing `phaseName` that is not its phase's name in `phases`, a surface without a string `modelsKey`, an effort block that does not have four levels or
+whose surface map misses one, effort bands that overlap, leave a score unplaced, or end below the highest reachable score (the highest job weight, 4, plus one per `plusOne` row), a precedence that
+does not rank every alias exactly once, a snapshot date that is not a calendar date.
+
+**Usage**
+
+```text
+nen direct registry --registry <path> [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--registry <path>` | yes | The model-direction registry file. | Relative paths resolve against `--repo`'s root. Missing -> exit 2. |
+| `--repo <path>` | no | Anchors a relative `--registry`. | Defaults to cwd. The only `direct` verb where it is optional: this one reads one file and nothing else. |
+
+**Output and exit codes** — human rendering is `registry <path>`, `snapshot asOf <date>`, one line per
+alias, the surfaces, the live-lookup sources and a counts line. `--json` prints one document;
+top-level keys, in this order: `contract` (`nen.direct.registry/v0.1`), `registry` (the resolved
+path), `snapshot` (`asOf` and the per-alias quotes), `aliases`, `surfaces`, `liveLookup` and `counts`
+(`aliases`, `routingJobs`, `routingCells`). Exit 0 when the file is valid; exit 1 when it is not (the
+refusal names the pointer) or cannot be read; exit 2 when `--registry` is missing.
+
+### `nen direct resolve`
+
+Answers "which model, where, at what effort" for one classification, reporting each step:
+
+1. **Domain.** The taxonomy's `domains.rule` rows are **structured data**, evaluated in `order`, **the
+   first row that matches wins**. A row's `when` is `"otherwise"` (always), or one of:
+   `{"anyOf": [<predicate>, …]}` (any member matches), `{"repoKind": [<values>]}` and
+   `{"repoRole": [<values>]}` (the input is in the list), `{"issueLabels": {"any": [<patterns>]}}` (a
+   label equals a pattern; a `*:name` pattern matches `<ns>:name` under any namespace),
+   `{"jobs": {"anyKey": [<keys>]}}` (the issue carries one of the job keys) and
+   `{"jobs": {"nonEmpty": true, "everyListsOnly": "<domain>"}}` (at least one job, and every carried
+   job's taxonomy `phases` name only that domain). The facts are the flags and nothing else: `--kind`
+   and `--role` verbatim as [`repo classify --json`](#nen-repo-classify) printed them (their vocabulary
+   is not checked here, and the verb never re-derives them from `--repo`), `--labels` the issue's
+   labels, `--job` the job keys. A `when` of any other shape is refused when the taxonomy loads —
+   exit 1, naming the pointer (`domains.rule[0].when.<shape>`). Reported as `domain: <d> (rule <n>:
+   <the row's $comment>)`.
+2. **Cells.** For every (job, language) pair, the registry's `routing[job][domain]` cell for that
+   language, else its shared (`*`) cell. A job with no phase in the domain is routed on the first
+   domain it lists, in the order the taxonomy's `domains.fallback` sentence names them **after its
+   colon** (the derived domain first, then any domain the sentence omits in `domains.keys` order), and
+   the substitution is named (`fallback: <job> has no <domain> phase; routed on <other>`; each pair
+   carries `fallbackFrom` in `--json`).
+3. **Aggregate.** The alias that wins the most pairs wins; a tie goes to the registry's
+   `aggregation.precedence` (earlier first). A reviewer alias is never the winner: a pair it wins
+   counts for its `also` stand-in (or is skipped, reported). The runner-up is the next most frequent
+   winning alias (ties by precedence); when the winner won every pair, the most frequent `runnerUp`
+   alias across the **winning** pairs (never a skipped pair's), a reviewer resolving to its `also`.
+   **The winner is never its own runner-up**: when every candidate equals the winner (a reviewer
+   runner-up whose stand-in is the winner), `runnerUp` is `null` and the human output says
+   `runner-up: none distinct`. A resolved runner-up that is a stand-in carries `substituted`, the
+   reviewer product it stood in for, so the skill can name it. A frontier alias may be recommended —
+   the verdict is for the maintainer's own session.
+4. **Resolve each side.** Provider, family and tier from the alias; the surface from the alias (the
+   registry parser refuses a cell whose surface is not its alias's); the surface alias from the
+   workflow's `models.<modelsKey>.<tier>` (else `unspelled`); the surface's restart line with
+   `<alias>` filled from that spelling and `<level>` from `effort.surfaceMap` — never from the
+   snapshot or anything fetched — its effort control, the interactive tools (the surface's, each
+   language's native one, the cell's, deduplicated), the dated snapshot quote and the provider's
+   live-lookup sources.
+5. **Effort.** `score` is the highest job weight plus one for each add of the registry's rule that
+   holds — many jobs (the rule's threshold), many **code** languages (a language counts unless its
+   taxonomy entry says `"code": false`; the flag is read, never the key's name), and a domain add
+   (the domain named beside its key, else the first rule row's domain) — banded into a level and
+   mapped through the winner surface's own control. Reported as `weight 4 + manyJobs + <domain add> =
+   6 -> max`.
+6. **Mismatch** — for the session flags given: `--surface` is compared by name, `--model` by **alias**
+   against `models.<modelsKey>.<winner tier>` (aliases, not tiers; **when the workflow does not spell
+   that tier the compare is `unread` with `recommended: null`, never a mismatch on a non-fact**), and
+   `--effort` in **dial space**:
+   the recommended level and the session's level are both mapped through `effort.surfaceMap` for the
+   session's surface (the winner's when none was given), so a collapsed top (`max` -> `high` on
+   cursor and antigravity) matches a session at `high`. The literal **`unread`** on any flag marks
+   that compare `unread` — reported, never a mismatch (the harness could not read it). A mismatch is
+   an answer; the skill asks once.
+7. **Record** — with `--record <effort-id>`, the whole result plus `effortId` and `recordedAt` is
+   written to `.nen/direct/<encoded id>.json` under `--repo` (directories created; `.nen/` is
+   gitignored output, never `nen/`). The record is filed before the picker runs, so the
+   maintainer's answer is written into it afterwards by [`direct answer`](#nen-direct-answer). The id is the caller's string (`<CODE>-IS-#<N>` for an issue,
+   `inline-<ISO-8601 UTC>` for a textual effort), **percent-encoded by the same exported encoder
+   [`usage record`](#nen-usage) uses for `--effort`** (`encodeEffortId`, `encodeURIComponent`), which
+   makes a `/` or a `:` in an id a file-name character. **The encoder is shared; the id vocabulary
+   is not**: the usage ledger's own id alphabet refuses `#` and `:`, so it cannot hold the two ids above,
+   while this ledger accepts any id that is not a traversal (that alphabet disagreement belongs to
+   the usage verb's owner and is not changed here). An id that is empty, absolute, carries a backslash
+   or has a `..` segment is refused at exit 2 before anything is read. The write is also checked against
+   the **real** filesystem path (`repo/contain.ts`'s `realContainment`): a `.nen/direct` directory or an
+   existing record that is a symlink out of `--repo`, and a record that is itself a symlink (even a
+   dangling one), are refused at exit 2 and nothing is written.
+
+**The two files must agree.** After both load, a routing cell key that is neither the shared `*`
+cell nor one of the taxonomy's language keys, and a routing domain that is not one of its
+`domains.keys`, are refused at exit 1 naming the pointer (`routing.<job>.<domain>.cells.<key>`): a
+key the *taxonomy* lacks on the command line is exit 2, but a job the registry cannot route, or a file
+that contradicts the other, is exit 1. The registry's `mismatch` block must state exactly the set the
+binary compares (`compares: [surface, model, effort]`, `ledger: .nen/direct/<effort>.json`); any other
+is refused when the registry loads. Likewise a predicate carrying a key that is not its own
+(`issueLabels` takes only `any`; `jobs` takes `anyKey` alone, or `nonEmpty` with `everyListsOnly`) and a
+`domains.firstMatchWins` other than `true` are refused when the taxonomy loads.
+
+**Each verb takes only its own flags.** A flag another verb of the family owns (`--record` on
+`registry`, `--taxonomy` on `answer`, `--answer` on `resolve`) is refused at exit 2 naming the flag
+and the verbs that own it, rather than parsed and silently ignored.
+
+**Empty axes are answers, not errors.** No job (`--job ""`, or the flag omitted) is
+`undirectable: job axis empty` — one line, `winner`, `runnerUp`, `effort` and `mismatch` null, exit 0
+(the caller carries on on its own session); no language (`--lang ""` or omitted) reads the shared `*`
+cell for every job. Inside `hatsu:build` classification has already run, so an empty axis is reported,
+never filled.
+
+**Usage**
+
+```text
+nen direct resolve --registry <path> --taxonomy <path> --repo <path> --kind <kind> [--role <role>] [--labels <a,b>] [--lang <a,b>] [--job <c,d>] [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>] [--record <effort-id>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--registry <path>` | yes | The model-direction registry file. | Relative paths resolve against `--repo`'s root. |
+| `--taxonomy <path>` | yes | The classification taxonomy file. | The file `classify` reads; it must carry job weights and the `domains` block. |
+| `--repo <path>` | yes | The checkout whose `nen/workflow.json` spells the aliases, and the root every path resolves against. | Unbracketed in usage; omitted is refused at exit 2. An absent workflow or `models` block is `unspelled`, not an error. |
+| `--kind <kind>` | yes | The repository's kind, verbatim from [`repo classify --json`](#nen-repo-classify). | Only non-empty is checked; the taxonomy's predicates decide what it means. |
+| `--role <role>` | no | The repository's role, verbatim from `repo classify --json`. | An absent role matches no `repoRole` predicate. |
+| `--labels <a,b>` | no | The issue's labels, as GitHub reports them. | Replaces the former `--issue-kind`: a bug is a label the taxonomy's `issueLabels` predicate names. |
+| `--lang <a,b>` | no | The taxonomy's language keys the issue carries. | An unknown key -> exit 2, naming the valid set. Empty or omitted reads the shared cell. |
+| `--job <c,d>` | no | The taxonomy's job keys the issue carries. | An unknown key -> exit 2, naming the valid set. Empty or omitted is `undirectable`. |
+| `--surface <s>` | no | The surface the running session is on. | One of the registry's surfaces, or `unread`; else exit 2. |
+| `--model <alias>` | no | The model alias the running session is on. | Compared with the winner's spelled alias; `unread` marks it unread. Replaces the former `--tier`. |
+| `--effort <level>` | no | The effort level the running session is at. | One of the registry's levels, or `unread`; else exit 2. Compared in dial space. |
+| `--record <effort-id>` | no | File the result under `.nen/direct/<encoded id>.json`. | A traversal is refused at exit 2. |
+
+**Output and exit codes** — human rendering is the verdict table (winner and runner-up rows: alias,
+surface/tier, the spelled model alias, the restart line), one `interactive:` line per tool, the
+winner's snapshot quote and live-lookup sources, one `pair` line per (job, language), the `domain` and
+`effort` lines, the `mismatch` line when asked (`mismatch: yes|no (surface match; model fable != opus;
+effort unread)`), and `recorded <path>` when written; `undirectable: job axis empty` alone for an empty
+job axis. `--json` prints one document; top-level keys, in this order: `contract`
+(`nen.direct.resolve/v0.1`), `inputs` (`langs`, `jobs`, `kind`, `role`, `labels`, and the session's
+`surface`, `model`, `effort`), `undirectable` (`null`, or the reason), `domain` (`domain`, `rule` — the
+matched row's `order` — `because`, `fallbacks`), `pairs` (an array of `{ job, lang, domain,
+fallbackFrom, phase, phaseName, cell, winner, runnerUp }`), `aggregate` (`skipped`, `tally`),
+`winner` and `runnerUp` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
+restart, effortControl, interactive, note, substituted, snapshot, liveLookup }`), `effort` (`score`, `weight`,
+`level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, compares: [{ field, session,
+recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread`), `effortId` and
+`record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp` and `effort` are
+`null` when undirectable, and `runnerUp` is also `null` when no alias distinct from the winner exists. Exit 0 for every resolution, **including a mismatch and an
+undirectable one**; exit 1 for an invalid registry or taxonomy (an unknown predicate shape, a cell
+whose surface is not its alias's), an unreadable workflow, a taxonomy with no weight on a carried job,
+or a registry that cannot route a job the taxonomy names; exit 2 for a missing flag, an unknown
+language or job key, a surface or level outside the registry's, or a refused `--record`.
+
+**Example** (a real run against the real registry and taxonomy, in a consumer whose
+`nen/workflow.json` spells `models.claude.deep` as `opus`; a canon repository's two prose jobs, the
+session on the right surface but at another model, its effort unreadable)
+
+```bash
+nen direct resolve --registry direct.registry.json --taxonomy classify.taxonomy.json --repo . \
+  --lang prose --job prose-authoring,schema --kind process --role canon --labels enhancement \
+  --surface claude-code --model fable --effort unread
+```
+```text
+|           | alias              | surface/tier     | model alias | restart                                         |
+| --------- | ------------------ | ---------------- | ----------- | ----------------------------------------------- |
+| winner    | SEMANTIC_FRONTIER  | claude-code/deep | opus        | claude --model opus (then /effort high)         |
+| runner-up | EXECUTION_FRONTIER | codex/frontier   | unspelled   | codex -m <alias> -c model_reasoning_effort=high |
+interactive: the Claude desktop app or claude.ai, the same model family
+interactive: the Claude desktop app or claude.ai
+snapshot 2026-10-04: Claude Opus 5.5 (claude-opus-5-5); fallback Claude Fable 5.1
+live lookup (anthropic): the Claude Code model picker (/model), read in-session; https://platform.claude.com/docs/en/models/overview; https://platform.claude.com/docs/en/release-notes/overview
+pair prose-authoring x prose: SEMANTIC_FRONTIER, runner-up BALANCED_AUTHOR  [aigov, AIGOV.REPO.005 Instruction and agentic-prose authoring, cell *]
+pair schema x prose: EXECUTION_FRONTIER, runner-up SEMANTIC_FRONTIER  [aigov, AIGOV.REPO.008 Canonical schema and metadata design, cell *]
+domain: aigov (rule 1: nen repo classify reports kind process, or role canon)
+effort: weight 3 + aigov = 4 -> high (claude-code: high)
+mismatch: yes (surface match; model fable != opus; effort unread)
+```
+(row 1 matched on the canon role, so the domain is the first row's and its domain add fires; the two
+pairs split between the frontier author and the execution model and the tie goes to the registry's
+precedence; the surface matches, the model differs, the effort is unread — exit 0)
+
+### `nen direct answer`
+
+Answers "what did the maintainer say, and where is it recorded": the skill's picker (continue on this
+session, or stop and restart elsewhere) runs *after* [`direct resolve --record`](#nen-direct-resolve)
+has filed `.nen/direct/<encoded id>.json`, so the answer is written into that same record afterwards.
+It reads the record `--record <id>` names under `--repo`'s root — the same id, the same
+percent-encoding and the same traversal refusals as `resolve --record` — sets
+`decision: { answer, answeredAt }` (`answeredAt` the verb's clock, ISO 8601 UTC), and rewrites the file
+in the form `resolve` wrote it (two-space indent, trailing newline), **every other field unchanged**. A
+second answer replaces the first: the record holds the last word. The answer belongs to a resolution
+that exists — a missing record is a failure naming the path, never a created file.
+
+**Usage**
+
+```text
+nen direct answer --record <effort-id> --answer <continue|stop> --repo <path> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--record <effort-id>` | yes | The effort's id, as `direct resolve --record` was given it. | Encoded and refused exactly like `resolve`'s; a traversal -> exit 2. |
+| `--answer <continue\|stop>` | yes | The maintainer's picker answer. | Any other value -> exit 2, naming the two. |
+| `--repo <path>` | yes | The checkout whose `.nen/direct/` holds the record. | Unbracketed in usage; omitted is refused at exit 2. |
+
+**Output and exit codes** — human rendering is `answered <answer> at <time>` then `recorded <path>`.
+`--json` prints one document; top-level keys, in this order: `contract` (`nen.direct.answer/v0.1`),
+`record` (the rewritten file's path) and `decision` (`{ answer, answeredAt }`). Exit 0 when the
+decision was written; exit 1 when the record does not exist, is not JSON, or is not a JSON object (it
+is not rewritten); exit 2 for a missing flag, an answer that is not `continue` or `stop`, or a refused
+`--record`.
 
 <a id="family-label"></a>
 

@@ -33,6 +33,7 @@ import { classifyCommand } from "../classify/command.js";
 import { colorCommand } from "../color/command.js";
 import { commitCommand } from "../commit/command.js";
 import { devCommand } from "../dev/command.js";
+import { directCommand } from "../direct/command.js";
 import { effortCommand } from "../effort/command.js";
 import { epicCommand } from "../epic/command.js";
 import { fanoutCommand } from "../fanout/command.js";
@@ -75,6 +76,7 @@ export const COMMANDS: readonly Command[] = [
   colorCommand,
   commitCommand,
   devCommand,
+  directCommand,
   effortCommand,
   epicCommand,
   fanoutCommand,
