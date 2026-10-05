@@ -307,3 +307,31 @@ describe("toolPins -- the canon pin is data on the maintained_tools entry (CON-1
     ).toThrow(/maintained_tools\[0\]\.pinned/);
   });
 });
+
+describe("toolCheckouts -- where a maintained tool's checkout is found is declared, never a literal in nen (zheref/nen#294)", () => {
+  const at = "nen/repos.json";
+
+  it("reads checkout_env and checkout off a maintained_tools entry, with its index, and leaves undeclared tools out", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [],
+      maintained_tools: [
+        { repo: "owner/tool", role: "a tool" },
+        { repo: "owner/handbooks", pinned: "v0.6.0", checkout_env: "MY_CANON", checkout: "${HOME}/c" },
+        { repo: "owner/env-only", checkout_env: "ONLY_ENV" },
+      ],
+    });
+    expect(registry.toolCheckouts).toEqual({
+      "owner/handbooks": { index: 1, checkoutEnv: "MY_CANON", checkout: "${HOME}/c" },
+      "owner/env-only": { index: 2, checkoutEnv: "ONLY_ENV", checkout: null },
+    });
+    expect(parseRepoRegistry(at, { consumers: [] }).toolCheckouts).toEqual({});
+  });
+
+  it("refuses, by pointer, a checkout_env that is not a variable name and an empty checkout -- never read as undeclared", () => {
+    expect(() => parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "o/h", checkout_env: "/abs/path" }] })).toThrow(
+      /maintained_tools\[0\]\.checkout_env.*environment variable NAME/,
+    );
+    expect(() => parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "o/h", checkout_env: 3 }] })).toThrow(/maintained_tools\[0\]\.checkout_env/);
+    expect(() => parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "o/h", checkout: "  " }] })).toThrow(/maintained_tools\[0\]\.checkout.*empty string/);
+  });
+});

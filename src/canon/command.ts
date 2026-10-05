@@ -27,7 +27,7 @@
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
 import { loadRepoRegistry } from "../schema/repos.js";
@@ -38,7 +38,9 @@ import { isContained } from "../repo/contain.js";
 import { parseTarget } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
+import type { ToolCheckout } from "../schema/repos.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
+import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, type CheckoutResolution } from "./checkout.js";
 import {
   CanonMirrorError,
   checkSurface,
@@ -87,6 +89,34 @@ usage:
       to record it in), when several maintained tools are pinned and --source
       does not say which, or when the recorded pin is not tag-shaped.
 
+  nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
+                     [--canon-checkout <path>] [--json]
+      WHERE the canon checkout is on this machine, resolved from the
+      consumer's declaration and the environment -- never guessed -- and
+      verified as a checkout of --source AT --ref. Source and ref default to
+      the recorded pin, as on 'mirror'. The order is fixed:
+        1. --canon-checkout <path> (relative: against --repo);
+        2. the variable the source's maintained_tools entry NAMES in
+           'checkout_env', when set and non-empty (its value must be
+           absolute);
+        3. that entry's 'checkout' path template: $VAR, \${VAR} and
+           \${VAR:-default} expand from the environment (an unset VAR with no
+           default is refused, never spliced in empty); '~' is not expanded;
+           relative: against --repo.
+      An absent step is passed over and reported. A present step that does
+      not yield a valid checkout FAILS THE RUN -- it never falls through to
+      the next. Valid means: a directory; the top of a git work tree; an
+      'origin' naming --source; tag --ref present with HEAD at its commit;
+      a clean tree. nen fetches nothing and moves no checkout.
+      Prints the path, how it was resolved (every step, the passed-over ones
+      included) and what was verified; --json carries the same as
+      { contract, ok, source, ref, path, resolvedFrom, steps, verified,
+      failure }. Exit 1, with failure.code naming the reason (unresolvable,
+      bad-template, env-not-absolute, not-found, not-a-checkout,
+      not-checkout-root, no-origin, wrong-source, tag-missing, off-pin, dirty,
+      git-unavailable); exit 2 on an omitted --repo, an empty flag, or no pin
+      to resolve source/ref from.
+
   nen canon resolve --repo <path> --target <owner/name>
                     --always-load <path,path,...> --stack-dir <dir>
                     [--leaf architecture.md]
@@ -103,7 +133,9 @@ usage:
       directory's missing-or-unrelated registry instead of the forgotten
       flag (zheref/nen#28).
 
-  nen canon mirror generate --repo <consumer> --rules-dir <dir> --canon-values <path>
+  nen canon mirror generate --repo <consumer> --canon-values <path>
+                            (--rules-dir <dir> | --stack-dir <dir> --leaf <name>
+                             [--canon-checkout <path>])
                             [--source <owner/name>] [--ref <tag>]
                             [--surfaces <a,b,...>] [--scenario <name>]
                             [--not-mirrored <a,b>] [--dry-run] [--json]
@@ -148,7 +180,20 @@ ${SURFACE_LIST}
       floating main", and cut the tag BEFORE repinning a consumer to it.
       --dry-run reports every write and performs none.
 
-  nen canon mirror check --repo <consumer> --rules-dir <dir> --canon-values <path>
+      THE RULES DIRECTORY, ONE OF TWO WAYS. --rules-dir names it outright (a
+      machine-local path). Or --stack-dir and --leaf name it INSIDE the canon
+      checkout, as <checkout>/<stack-dir>/<scenario>/<leaf>: the checkout is
+      resolved and verified at the pin exactly as 'nen canon checkout' does,
+      so the whole command is portable argv a declared gate can carry --
+      e.g. --stack-dir handbooks/stacks --leaf rules. Both forms together, or
+      neither, is exit 2; so is a checkout that does not resolve or verify
+      (never exit 1, which on 'check' is drift). The output names the
+      checkout and how it was resolved; --json adds rulesDir and
+      canonCheckout (null under --rules-dir).
+
+  nen canon mirror check --repo <consumer> --canon-values <path>
+                         (--rules-dir <dir> | --stack-dir <dir> --leaf <name>
+                          [--canon-checkout <path>])
                          [--source <owner/name>] [--ref <tag>]
                          [--surfaces <a,b,...>] [--scenario <name>]
                          [--not-mirrored <a,b>] [--markdown-out <path>] [--json]
@@ -172,7 +217,7 @@ ${SURFACE_LIST}
 
 export const canonCommand: Command = {
   name: "canon",
-  subcommands: ["resolve", "mirror", "pin"],
+  subcommands: ["resolve", "mirror", "pin", "checkout"],
   summary: "Resolve a repo's handbook set, read its canon pin, or render/check its canon-rule mirror on every surface it uses.",
   usage: USAGE,
   flags: {
@@ -189,6 +234,7 @@ export const canonCommand: Command = {
       "surfaces",
       "not-mirrored",
       "markdown-out",
+      "canon-checkout",
     ],
     booleans: ["dry-run"],
   },
@@ -204,9 +250,10 @@ export const canonCommand: Command = {
     "--header-pattern": "the marker is read back by nen itself now; there is no pattern to give. Pass --source and --ref, and 'check' tells stale from hand-edited on its own.",
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin"]);
+    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin", "checkout"]);
     if (subcommand === "resolve") return resolveVerb(context);
     if (subcommand === "pin") return pinVerb(context);
+    if (subcommand === "checkout") return checkoutVerb(context);
     return mirror(context, context.args.positionals[2]);
   },
 };
@@ -337,6 +384,74 @@ function resolvePin(context: CommandContext, root: string): { readonly source: s
   return { source, ref };
 }
 
+// ---------------------------------------------------------------------------
+// The canon checkout: resolved from declaration and environment (zheref/nen#294)
+// ---------------------------------------------------------------------------
+
+/** The source's checkout declaration in `--repo`'s registry, or null when it has no registry or declares none. */
+function declarationFor(root: string, source: string): ToolCheckout | null {
+  if (!existsSync(join(root, ...REPOS_FILE.split("/")))) return null;
+  return loadRepoRegistry(root).toolCheckouts?.[source] ?? null;
+}
+
+/**
+ * The flags another `canon` verb reads, refused by name on the one that does
+ * not: the family shares one flag table, and a flag accepted and ignored is
+ * worse than one refused -- `--rules-dir` on `checkout` would read as though
+ * it steered the resolution.
+ */
+function refuseForeignFlags(context: CommandContext, verb: string, flags: readonly string[]): void {
+  for (const flag of flags) {
+    const given = flag === "dry-run" ? context.args.booleans.has(flag) : context.args.values[flag] !== undefined;
+    if (given) throw new VerbUsageError(`--${flag} is not read by 'canon ${verb}'. A flag accepted and ignored is worse than one refused.`);
+  }
+}
+
+/** The `--json` document for a resolution: the same object on success and on failure. */
+function checkoutDocument(resolution: CheckoutResolution): Record<string, unknown> {
+  return {
+    contract: CHECKOUT_CONTRACT,
+    ok: resolution.failure === null,
+    source: resolution.source,
+    ref: resolution.ref,
+    path: resolution.path,
+    resolvedFrom: resolution.resolvedFrom,
+    steps: resolution.steps,
+    verified: resolution.verified,
+    failure: resolution.failure,
+  };
+}
+
+function resolveCheckout(context: CommandContext, root: string, source: string, ref: string): CheckoutResolution {
+  return resolveCanonCheckout({
+    root,
+    source,
+    ref,
+    flag: optionalValue(context, "canon-checkout"),
+    declaration: declarationFor(root, source),
+    seams: context.seams,
+  });
+}
+
+function checkoutVerb(context: CommandContext): number {
+  const repoFlag = requireRepoFlag(
+    context,
+    `It is the consumer whose ${REPOS_FILE} records the canon pin and declares where a checkout of the canon is found.`,
+  );
+  refuseForeignFlags(context, "checkout", [
+    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "scenario", "surfaces", "not-mirrored", "markdown-out", "dry-run",
+  ]);
+  const root = assertRepoRoot({ repoFlag });
+  const { source, ref } = resolvePin(context, root);
+  const resolution = resolveCheckout(context, root, source, ref);
+  emit(context.io, context.json, checkoutDocument(resolution), checkoutLines(resolution));
+  if (resolution.failure !== null) {
+    context.io.err(`nen: ${resolution.failure.code}: ${resolution.failure.message}`);
+    return 1;
+  }
+  return 0;
+}
+
 function resolveVerb(context: CommandContext): number {
   // FIRST, in usage-line order: --repo is listed unbracketed, so its absence
   // is refused at the parser exactly like --target/--stack-dir/--always-load
@@ -411,6 +526,8 @@ function required(context: CommandContext, flag: string, why: string): string {
 interface MirrorInputs {
   readonly root: string;
   readonly rulesDir: string;
+  /** How the canon checkout was resolved, when `--rules-dir` was not given; null when it was. */
+  readonly checkout: CheckoutResolution | null;
   readonly pin: CanonPin;
   readonly rows: readonly SurfaceRow[];
   readonly renderings: readonly SurfaceRendering[];
@@ -423,7 +540,26 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
     "It is the CONSUMER repository this mirror is rendered into, and a cwd default would render a mirror into whatever directory the shell was standing in.",
   );
   const root = assertRepoRoot({ repoFlag });
-  const rulesDirFlag = required(context, "rules-dir", "It names the stack's rules/ directory inside a checkout of the canonical handbooks repository at the pinned tag.");
+  // TWO WAYS TO NAME THE RULES DIRECTORY, EXACTLY ONE PER RUN (zheref/nen#294).
+  // `--rules-dir` names it outright -- a machine-local path. `--stack-dir` +
+  // `--leaf` name it INSIDE the canon checkout, which nen resolves from the
+  // consumer's declaration and the environment and verifies at the pin -- so
+  // the whole command is portable argv. Both given is ambiguous, and neither
+  // is a question never asked: each is refused by name.
+  const rulesDirFlag = optionalValue(context, "rules-dir");
+  const stackDirFlag = optionalValue(context, "stack-dir");
+  const leafFlag = optionalValue(context, "leaf");
+  const checkoutFlagGiven = context.args.values["canon-checkout"] !== undefined;
+  if (rulesDirFlag !== null && (stackDirFlag !== null || leafFlag !== null || checkoutFlagGiven)) {
+    throw new VerbUsageError(
+      "--rules-dir names the rules directory outright, and --stack-dir/--leaf/--canon-checkout resolve it inside the canon checkout; give one or the other, never both.",
+    );
+  }
+  if (rulesDirFlag === null && (stackDirFlag === null || leafFlag === null)) {
+    throw new VerbUsageError(
+      `--rules-dir is required, or --stack-dir <dir> and --leaf <name> together. --rules-dir names the stack's rules/ directory inside a checkout of the canonical handbooks repository at the pinned tag; --stack-dir and --leaf name it inside the canon checkout nen resolves (see 'nen canon checkout'), as <checkout>/<stack-dir>/<scenario>/<leaf>.${stackDirFlag === null && leafFlag === null ? "" : ` Missing: ${stackDirFlag === null ? "--stack-dir" : "--leaf"}.`}`,
+    );
+  }
   const canonValuesPath = required(context, "canon-values", "It names the consumer's own {{TOKEN}} bindings (and, optionally, its 'scenario:' and 'surfaces:').");
   const { source, ref } = resolvePin(context, root);
 
@@ -478,15 +614,41 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
     rows.push(row);
   }
 
-  const rulesDir = resolveAgainstRepo(root, rulesDirFlag);
-  // A --rules-dir that IS a rendered location would mirror the mirror: the
-  // second run would read its own output, marker and all, as canon.
+  let rulesDir: string;
+  let checkout: CheckoutResolution | null = null;
+  if (rulesDirFlag !== null) {
+    rulesDir = resolveAgainstRepo(root, rulesDirFlag);
+  } else {
+    // Narrowed by the refusal above: neither is null here.
+    const stackDir = stackDirFlag ?? "";
+    const leaf = leafFlag ?? "";
+    checkout = resolveCheckout(context, root, source, ref);
+    if (checkout.failure !== null || checkout.path === null) {
+      // EXIT 2, NEVER 1: on `check`, 1 is drift, and a checkout that is not
+      // there or not at the pin is a question that could not be asked
+      // (zheref/nen#101's line between a typo and a finding).
+      throw new VerbUsageError(
+        `the canon checkout did not resolve (${checkout.failure?.code ?? "unresolvable"}): ${checkout.failure?.message ?? "no path"} Run 'nen canon checkout --repo ${repoFlag}' to see every step.`,
+      );
+    }
+    if (isAbsolute(stackDir) || isAbsolute(leaf)) {
+      throw new VerbUsageError("--stack-dir and --leaf name a location INSIDE the canon checkout, so neither may be absolute. Give --rules-dir to name a directory outright.");
+    }
+    rulesDir = resolve(checkout.path, stackDir, scenario, leaf);
+    if (!isContained(checkout.path, rulesDir) || rulesDir === checkout.path) {
+      throw new VerbUsageError(
+        `--stack-dir '${stackDir}' and --leaf '${leaf}' resolve to '${rulesDir}', which is not inside the canon checkout '${checkout.path}'.`,
+      );
+    }
+  }
+  // A rules directory that IS a rendered location would mirror the mirror:
+  // the second run would read its own output, marker and all, as canon.
   for (const row of rows) {
     const rule = row.canonMirror;
     if (rule === null || rule.kind !== "directory") continue;
     if (isContained(resolve(root, ...rule.dir.split("/")), resolve(rulesDir))) {
       throw new VerbUsageError(
-        `--rules-dir '${rulesDirFlag}' resolves inside '${row.surface}''s rules location (${rule.dir}/) under --repo. The canon would be read from the mirror it renders, and the next run would mirror its own output. Point --rules-dir at the canonical handbooks checkout.`,
+        `--rules-dir '${rulesDirFlag ?? rulesDir}' resolves inside '${row.surface}''s rules location (${rule.dir}/) under --repo. The canon would be read from the mirror it renders, and the next run would mirror its own output. Point --rules-dir at the canonical handbooks checkout.`,
       );
     }
   }
@@ -495,7 +657,7 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
   try {
     const sources = readCanonSources(rulesDir, values.values, new Set(commaList(context.args.values["not-mirrored"])));
     const renderings = rows.map((row): SurfaceRendering => renderSurface(row, sources, pin));
-    return { root, rulesDir, pin, rows, renderings, sources };
+    return { root, rulesDir, checkout, pin, rows, renderings, sources };
   } catch (error) {
     // A refusal the mirror raised is a refusal the CALLER made -- an unbound
     // token, an empty rules directory, a file over a surface's limit. It
@@ -510,6 +672,16 @@ const listOr = (items: readonly string[]): string => (items.length === 0 ? "(non
 
 function pinLine(pin: CanonPin): string {
   return `source: ${pin.source}@${pin.ref} (scenario ${pin.scenario})`;
+}
+
+/** The lines naming where the canon was read from: the resolved checkout and how, or the --rules-dir given. */
+function rulesLines(inputs: MirrorInputs): string[] {
+  if (inputs.checkout === null) return [`rules: ${inputs.rulesDir} (--rules-dir)`];
+  const from = inputs.checkout.resolvedFrom;
+  return [
+    `canon checkout: ${inputs.checkout.path ?? "(unresolved)"}${from === null ? "" : ` (resolved from ${from.kind} ${from.from}; verified at ${inputs.pin.ref})`}`,
+    `rules: ${inputs.rulesDir}`,
+  ];
 }
 
 function mirror(context: CommandContext, mirrorSub: string | undefined): number {
@@ -544,7 +716,7 @@ function generate(context: CommandContext, inputs: MirrorInputs): number {
   }
 
   const results = inputs.renderings.map((rendering) => writeSurface(inputs.root, rendering, dryRun));
-  const lines: string[] = [pinLine(inputs.pin), `root: ${inputs.root}${dryRun ? " (--dry-run: nothing written)" : ""}`];
+  const lines: string[] = [pinLine(inputs.pin), ...rulesLines(inputs), `root: ${inputs.root}${dryRun ? " (--dry-run: nothing written)" : ""}`];
   for (const result of results) {
     lines.push(
       `surface: ${result.surface} -> ${result.location}`,
@@ -564,6 +736,8 @@ function generate(context: CommandContext, inputs: MirrorInputs): number {
       ref: inputs.pin.ref,
       scenario: inputs.pin.scenario,
       root: inputs.root,
+      rulesDir: inputs.rulesDir,
+      canonCheckout: inputs.checkout === null ? null : checkoutDocument(inputs.checkout),
       dryRun,
       surfaces: results,
     },
@@ -650,7 +824,7 @@ function check(context: CommandContext, inputs: MirrorInputs): number {
     if (markdownOut.trim() === "") throw new VerbUsageError("--markdown-out was given an empty value. Omit it, or name the file to write the drift table to.");
     writeDriftTable(inputs.root, markdownOut, renderReportMarkdown(reports), drift);
   }
-  const lines: string[] = [pinLine(inputs.pin), `root: ${inputs.root}`];
+  const lines: string[] = [pinLine(inputs.pin), ...rulesLines(inputs), `root: ${inputs.root}`];
   for (const report of reports) {
     lines.push(
       `surface: ${report.surface} -> ${report.location}`,
@@ -672,6 +846,8 @@ function check(context: CommandContext, inputs: MirrorInputs): number {
       ref: inputs.pin.ref,
       scenario: inputs.pin.scenario,
       root: inputs.root,
+      rulesDir: inputs.rulesDir,
+      canonCheckout: inputs.checkout === null ? null : checkoutDocument(inputs.checkout),
       drift,
       surfaces: reports,
     },

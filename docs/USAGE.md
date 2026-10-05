@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 127 verbs, every flag checked against the binary this repository
+families, 128 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -364,7 +364,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | File | What it holds | What reads it |
 |---|---|---|
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
-| `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
+| `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`), plus where that repository's checkout is found on a machine (`checkout_env`, `checkout` -- [#294](https://github.com/zheref/nen/issues/294)) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon checkout`](#nen-canon-checkout) (the pin and the checkout declaration), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted; the checkout declaration, when `--rules-dir` is), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
 | `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, read at the pull request's base) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
@@ -697,7 +697,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 127 verbs, grouped as the README groups them. **Reads** is what a
+All 128 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -798,8 +798,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
 | [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to | nen/repos.json | yes |
-| [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | caller-named --rules-dir (a handbooks checkout at the pinned tag) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no git/gh | yes |
-| [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | caller-named --rules-dir + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no git/gh | yes |
+| [`canon`](#family-canon) | [`nen canon checkout`](#nen-canon-checkout) | resolve WHERE the canon checkout is on this machine -- `--canon-checkout`, then the variable the pinned entry's `checkout_env` names, then its `checkout` path template -- and verify it is a clean checkout of the pinned source at the pinned tag, reporting every step | nen/repos.json + the environment; read-only git (rev-parse, remote get-url, status); fetches nothing | yes |
+| [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
+| [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
@@ -7307,7 +7308,7 @@ post-steps (nen does NOT run these):
 
 Resolves which handbooks a target repository loads, reads the canon pin its registry records, and keeps a canonical-rule mirror in sync with a `canon-values.yml` -- in the rules location of **every agent surface the consumer declares**, not one directory. It never decides handbook CONTENT -- it only resolves the always-load set plus one stack handbook from a recorded scenario (`nen/repos.json`), and renders/diffs the stack's rule set into each surface's own location, the way the reference implementation's `scripts/sync_canon.py` did for one.
 
-**Where the canon lives.** The single canonical source of every handbook and rule set is the public [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks) repository (`CON-13`): `handbooks/INDEX.md` is its manifest -- the always-load set plus exactly one `stacks/<scenario>/` handbook per scenario, each stack carrying its operational `rules/` set. Every path flag on this family (`--always-load`, `--stack-dir`, `--rules-dir`) names a location inside a **checkout of that repository at the tag the consumer pins**; nen fetches nothing and knows no repository by name. The scenario-to-stack mapping is derived, not looked up: the recorded scenario IS the directory name under `--stack-dir`, so a stack added to the canon needs no change here. The reference implementation these verbs were ported from is frozen; nothing in this family reads it.
+**Where the canon lives.** The single canonical source of every handbook and rule set is the public [`zheref/bankai-handbooks`](https://github.com/zheref/bankai-handbooks) repository (`CON-13`): `handbooks/INDEX.md` is its manifest -- the always-load set plus exactly one `stacks/<scenario>/` handbook per scenario, each stack carrying its operational `rules/` set. Every path flag on this family (`--always-load`, `--stack-dir`, `--rules-dir`) names a location inside a **checkout of that repository at the tag the consumer pins**; nen fetches nothing and knows no repository by name. **Where that checkout is on a given machine is data too** ([#294](https://github.com/zheref/nen/issues/294)): [`canon checkout`](#nen-canon-checkout) resolves it from the consumer's declaration and the environment and verifies it at the pin, and `canon mirror` does the same when `--rules-dir` is omitted -- so a mirror command is portable argv a declared iteration gate can carry. The scenario-to-stack mapping is derived, not looked up: the recorded scenario IS the directory name under `--stack-dir`, so a stack added to the canon needs no change here. The reference implementation these verbs were ported from is frozen; nothing in this family reads it.
 
 ### `nen canon resolve`
 
@@ -7381,6 +7382,72 @@ nen canon pin --repo /path/to/consumer --json
 ```
 (for a registry whose `maintained_tools` carries `{ "repo": "owner/handbooks", "role": "canonical handbooks", "pinned": "v0.6.0" }`; shape from `src/canon/command.test.ts`)
 
+### `nen canon checkout`
+
+Answers "where is the canon checkout on THIS machine, and is it really the pinned source at the pinned tag" -- from declared configuration and the environment, never by guessing ([#294](https://github.com/zheref/nen/issues/294)). It exists so that [`canon mirror`](#nen-canon-mirror-generate) can take portable argv: the declaration is committed in the consumer's registry, and the path it yields is each machine's own.
+
+**The declaration** lives on the same `maintained_tools` entry that records the pin, in the consumer's `nen/repos.json`. Both fields are optional; nen hard-codes neither a variable name nor a directory (§3):
+
+```json
+{
+  "repo": "owner/handbooks",
+  "role": "canonical handbooks",
+  "pinned": "v0.6.0",
+  "checkout_env": "MY_CANON_CHECKOUT",
+  "checkout": "${XDG_CACHE_HOME:-${HOME}/.cache}/canon/owner/handbooks"
+}
+```
+
+| Field | Meaning | Validated at load |
+|---|---|---|
+| `checkout_env` | The **name** of an environment variable a machine exports its checkout path in. The value must be absolute -- a variable has no directory of its own to be relative to. | A portable variable name (`[A-Za-z_][A-Za-z0-9_]*`), else the registry is refused by pointer. |
+| `checkout` | A path template. `$VAR`, `${VAR}` and `${VAR:-default}` expand from the environment (a default is itself expanded); nothing else does -- no `~`, no command substitution, no globbing. A relative result resolves against `--repo`. | A non-empty string. |
+
+**The order is fixed, and reported step by step:**
+
+1. `--canon-checkout <path>` -- the caller, explicitly (relative: against `--repo`);
+2. the variable `checkout_env` names, when it is set and non-empty;
+3. the `checkout` template.
+
+An **absent** step (no flag, no declaration, the variable unset) is passed over, and the output says so. A **present** step that does not yield a valid checkout **fails the run there** -- it never falls through to the next step, because a fall-through would read the canon from a directory the caller did not mean while reporting success.
+
+**Valid** means five facts, each its own failure code: the path is a directory (`not-found`); it is the **top** of a git work tree (`not-a-checkout`, `not-checkout-root` -- a subdirectory is refused, never walked up from); its `origin` names `--source`, compared as `owner/name` case-insensitively on any host (`no-origin`, `wrong-source`); tag `--ref` exists there and `HEAD` is its commit (`tag-missing`, `off-pin`); and `git status --porcelain` is empty (`dirty`). Resolution failures are `unresolvable` (nothing given or declared), `bad-template` (an unset `${VAR}` with no default, a leading `~`, an unbalanced brace) and `env-not-absolute`; `git-unavailable` when git cannot be started. Every git call is read-only. **nen fetches nothing and moves no checkout**: one that is behind is reported, and the fix (`git fetch --tags`, `git checkout <tag>`) is named, not run.
+
+**Usage**
+
+```text
+nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
+                   [--canon-checkout <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The consumer whose registry records the pin and the checkout declaration. | Listed unbracketed: omitted, exits 2 by name. |
+| `--source <owner/name>` | no, when the registry pins it | The canonical repository. | Defaults exactly as on [`canon mirror generate`](#nen-canon-mirror-generate). |
+| `--ref <tag>` | no, when the registry pins it | The tag the checkout must sit on. | Tag-shaped, as everywhere in this family. |
+| `--canon-checkout <path>` | no | An explicit checkout, step 1 of the order. | An empty value is exit 2. |
+
+Every other `canon` flag (`--rules-dir`, `--stack-dir`, `--canon-values`, ...) is refused here at exit 2: a flag accepted and ignored would read as though it steered the resolution.
+
+**Output and exit codes** -- prints `source: <owner/name>@<tag>`, `checkout: <path>` (or `(unresolved)`), `resolved from: <kind> <what>`, one `  passed over: <kind> <what> (<why>)` line per absent step, then `verified: origin <url> names <owner/name>; HEAD <sha12> is <tag>; clean` -- or `failed: <code>: <reason>`. Credentials in an origin URL are redacted. `--json`, the same document on success and failure: `{ contract: "nen.canon.checkout/v0.1", ok, source, ref, path, resolvedFrom: { kind, status, from } | null, steps: [{ kind, status, from, note? }], verified: { origin, originSlug, head, tag, tagCommit, clean } | null, failure: { code, message } | null }`. `kind` is `flag`, `env` or `declared-path`. Exit 0 on a verified checkout; exit **1** on any resolution or verification failure, with `nen: <code>: <reason>` on stderr; exit 2 on an omitted `--repo`, an empty or foreign flag, or no pin to take `--source`/`--ref` from (the same refusal `mirror` gives).
+
+**Example** -- on a machine with no `MY_CANON_CHECKOUT`, whose cache slot holds a clone at the pin:
+
+```bash
+nen canon checkout --repo /path/to/consumer
+```
+```text
+source: owner/handbooks@v0.6.0
+checkout: /home/me/.cache/canon/owner/handbooks
+resolved from: declared-path '${XDG_CACHE_HOME:-${HOME}/.cache}/canon/owner/handbooks' (nen/repos.json maintained_tools[2].checkout)
+  passed over: flag --canon-checkout (not given)
+  passed over: env $MY_CANON_CHECKOUT (nen/repos.json maintained_tools[2].checkout_env) (not set in this environment)
+verified: origin https://github.com/owner/handbooks.git names owner/handbooks; HEAD 1a2b3c4d5e6f is v0.6.0; clean
+```
+(shape from `src/canon/checkout.test.ts` and `src/canon/checkout.integration.test.ts`)
+
 ### `nen canon mirror generate`
 
 Renders the stack's canonical rule set -- every `.md` in `--rules-dir` except `--not-mirrored` (the canon directory's own `README.md` and `placeholders.md`), with every `{{TOKEN}}` bound from `--canon-values` -- into the rules location of **each agent surface the consumer declares**, under the consumer's own root (`--repo`). The location, the file extension, the frontmatter the surface needs and its size limit are the surface's **row** in `src/surface/rules.ts` (its `canonMirror` block, each fact cited to the page it was read from); adding a surface is adding a row, never a change to this verb. Only files whose bytes changed are written; a mirror file whose canon source is gone is deleted as an orphan.
@@ -7398,12 +7465,23 @@ Renders the stack's canonical rule set -- every `.md` in `--rules-dir` except `-
 
 **The pin is data, and the flags default to it.** `--source` and `--ref` may be omitted: they then come from the consumer's own `nen/repos.json` -- the `pinned` tag on the canonical repository's `maintained_tools` entry, the same fact [`canon pin`](#nen-canon-pin) reads -- when exactly one maintained tool is pinned, or the one `--source` names. Given, a flag overrides the recorded pin. Neither given nor recorded is refused by name, saying both ways to supply it. **Pin discipline is enforced** either way: the ref must be tag-shaped (`v1.2`, `v1.2.3`, `v0.6.0-rc1`) -- a canon mirror is rendered from a **tag** of the canonical repository, never a branch or a bare commit -- and the incident `CON-13` records is a consumer pinned to a tag that predated the canon, whose next regen wiped its mirror from an empty source. Cut the tag first, then pin. `--rules-dir` names the stack's `rules/` directory inside a checkout of that repository **at that tag** (`nen canon resolve --leaf rules` derives the path); nen fetches nothing and checks nothing out.
 
+**Or let nen find the checkout: portable argv** ([#294](https://github.com/zheref/nen/issues/294)). Omit `--rules-dir` and give `--stack-dir <dir>` and `--leaf <name>` instead: the rules directory is then `<checkout>/<stack-dir>/<scenario>/<leaf>` -- the derivation [`canon resolve`](#nen-canon-resolve) uses, with the scenario this run already read -- where `<checkout>` is resolved and verified at `--source@--ref` exactly as [`canon checkout`](#nen-canon-checkout) does (`--canon-checkout`, then the declared variable, then the declared template; no fall-through; clean, on the tag, from the right origin). Nothing in the command names a host path, so it can sit verbatim in a declared iteration gate and run unchanged on another machine:
+
+```bash
+nen canon mirror check --repo . --canon-values .claude/canon-values.yml \
+  --stack-dir handbooks/stacks --leaf rules --not-mirrored README.md,placeholders.md
+```
+
+Both forms together, or neither, is exit 2 by name; so is an absolute `--stack-dir`/`--leaf` or one that climbs out of the checkout, and so is a checkout that does not resolve or verify -- `the canon checkout did not resolve (<code>): <reason>` -- **never exit 1**, which on `check` is drift. The output adds `canon checkout: <path> (resolved from <kind> <what>; verified at <tag>)` and `rules: <dir>` after the `source:` line (under `--rules-dir`, `rules: <dir> (--rules-dir)`); `--json` adds `rulesDir` and `canonCheckout` (the [`canon checkout`](#nen-canon-checkout) document, or `null` under `--rules-dir`).
+
 **AGENTS.md is read by more than Codex** -- Cursor and Antigravity read it as plain prose, and Claude Code (v2.1.277+) reads it **only when the consumer has no `CLAUDE.md`, `.claude/CLAUDE.md` or `CLAUDE.local.md` at or above the root** (`~/.claude/CLAUDE.md`, a managed `CLAUDE.md` and `.claude/rules/` do not count and keep loading beside it). So rendering `claude-code` and `codex` into one consumer is safe -- the two coexist -- but a consumer that renders both keeps a `CLAUDE.md` (its project-specifics header) so each surface reads the canon once; the Claude Code setting that reads both files (`claude-md-and-agents-md`) is honoured in **user and managed scope only**, is ignored in a repository's settings files, and is therefore not part of this design. The portable single-file pattern, where a consumer wants one shared file, is a `CLAUDE.md` containing `@AGENTS.md` -- never double-loaded on any version or setting. Each surface's caveat, including this one, prints on stderr as `nen: note: <surface>: ...` and is never acted on.
 
 **Usage**
 
 ```text
-nen canon mirror generate --repo <consumer> --rules-dir <dir> --canon-values <path>
+nen canon mirror generate --repo <consumer> --canon-values <path>
+                          (--rules-dir <dir> | --stack-dir <dir> --leaf <name>
+                           [--canon-checkout <path>])
                           [--source <owner/name>] [--ref <tag>]
                           [--surfaces <a,b,...>] [--scenario <name>]
                           [--not-mirrored <a,b>] [--dry-run] [--json]
@@ -7414,7 +7492,9 @@ nen canon mirror generate --repo <consumer> --rules-dir <dir> --canon-values <pa
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The CONSUMER repository the mirror is rendered into. | Listed unbracketed: omitted, exits 2 by name. This verb writes into the consumer's tree, and a cwd default would render a mirror into whatever directory the shell was standing in. `--rules-dir`, `--canon-values` and `--markdown-out` resolve against it; an absolute value is used as-is ([#100](https://github.com/zheref/nen/issues/100)). |
-| `--rules-dir <dir>` | yes | The stack's `rules/` directory in a checkout of the canonical handbooks repository at `--ref`. | Refused (exit 2) if unreadable, if it holds no rule file (an empty rendering would delete every mirrored file as orphaned), if a rule file's name is not one a marker can carry and read back (letters, digits, `.`, `_`, `-`, ending `.md` -- no whitespace, no separator; list such a file under `--not-mirrored` or rename it upstream), or if it resolves inside a declared surface's own rules location (the mirror would be rendered from itself). |
+| `--rules-dir <dir>` | one of the two forms | The stack's `rules/` directory in a checkout of the canonical handbooks repository at `--ref`. | Refused (exit 2) if unreadable, if it holds no rule file (an empty rendering would delete every mirrored file as orphaned), if a rule file's name is not one a marker can carry and read back (letters, digits, `.`, `_`, `-`, ending `.md` -- no whitespace, no separator; list such a file under `--not-mirrored` or rename it upstream), or if it resolves inside a declared surface's own rules location (the mirror would be rendered from itself). Not with `--stack-dir`/`--leaf`/`--canon-checkout`. |
+| `--stack-dir <dir>` + `--leaf <name>` | the other form | The rules directory as `<checkout>/<stack-dir>/<scenario>/<leaf>`, inside the canon checkout nen resolves and verifies. | Both required together; each relative and contained in the checkout. See *Or let nen find the checkout*, above. |
+| `--canon-checkout <path>` | no | Step 1 of the checkout's resolution order, with the `--stack-dir` form only. | As on [`canon checkout`](#nen-canon-checkout). |
 | `--canon-values <path>` | yes | The consumer's `{{TOKEN}}` bindings, plus its `scenario:` and `surfaces:`. | `surfaces:` is an inline comma list (`claude-code, codex`) or a `- name` block list. An unbound token refuses the run naming the file and the token (exit 2). |
 | `--source <owner/name>` | no, when the registry pins it | The canonical handbooks repository, as the marker cites it. | Defaults to the one pinned `maintained_tools` entry in the consumer's `nen/repos.json`; required when none or several are pinned. Refused unless it is an `owner/name` slug. |
 | `--ref <tag>` | no, when the registry pins it | The tag of `--source` the mirror is rendered from, as the marker cites it. | Defaults to `--source`'s recorded `pinned` tag. Refused unless tag-shaped (`v<major>.<minor>[.<patch>][-pre]`), whichever way it arrived. |
@@ -7423,7 +7503,7 @@ nen canon mirror generate --repo <consumer> --rules-dir <dir> --canon-values <pa
 | `--not-mirrored <a,b>` | no | Files in `--rules-dir` that are never mirrored. | The canon directory's own meta files (`README.md,placeholders.md`). Default: none. |
 | `--dry-run` | no | Report every write, deletion and foreign file; write nothing. | |
 
-**Output and exit codes** -- prints `source: <owner/name>@<ref> (scenario <name>)`, `root: <path>`, then per surface `surface: <name> -> <location>` with indented `written:`, `unchanged:`, `deleted (orphaned):` lists (each `(none)` when empty), a `foreign (the consumer's own, left alone):` line when there are any, and `note:` lines (a block past a document surface's documented read limit, a file past a surface's line advice). `--json`: `{ contract: "nen.canon.mirror.generate/v0.1", source, ref, scenario, root, dryRun, surfaces: [{ surface, location, written, unchanged, deleted, foreign, notes }] }`. Exit 0 on a completed run; exit **2** on a missing or malformed flag, an unknown or empty surface list, an unreadable `--canon-values` (the shared reader's named refusal, `could not read '<resolved path>' (ENOENT). --canon-values names the vocabulary every mirrored rule is keyed by, ...` -- [#101](https://github.com/zheref/nen/issues/101)), an unbound token, a rules file over a surface's byte limit, or a destination this mirror does not own (nothing written on any surface). The one-directory shape's flags (`--out-dir`, `--mirror-dir`, `--header-template`, `--header-pattern`) are refused by name with where each meaning went.
+**Output and exit codes** -- prints `source: <owner/name>@<ref> (scenario <name>)`, the `rules:` line (preceded by `canon checkout:` in the `--stack-dir` form), `root: <path>`, then per surface `surface: <name> -> <location>` with indented `written:`, `unchanged:`, `deleted (orphaned):` lists (each `(none)` when empty), a `foreign (the consumer's own, left alone):` line when there are any, and `note:` lines (a block past a document surface's documented read limit, a file past a surface's line advice). `--json`: `{ contract: "nen.canon.mirror.generate/v0.1", source, ref, scenario, root, rulesDir, canonCheckout, dryRun, surfaces: [{ surface, location, written, unchanged, deleted, foreign, notes }] }`. Exit 0 on a completed run; exit **2** on a missing or malformed flag, an unknown or empty surface list, an unreadable `--canon-values` (the shared reader's named refusal, `could not read '<resolved path>' (ENOENT). --canon-values names the vocabulary every mirrored rule is keyed by, ...` -- [#101](https://github.com/zheref/nen/issues/101)), an unbound token, a rules file over a surface's byte limit, or a destination this mirror does not own (nothing written on any surface). The one-directory shape's flags (`--out-dir`, `--mirror-dir`, `--header-template`, `--header-pattern`) are refused by name with where each meaning went.
 
 **Example** -- a consumer whose `.claude/canon-values.yml` declares `scenario: swiftui-tca-uzf-v2` and `surfaces: claude-code, codex`, with the canonical repository checked out beside it at `v0.6.0`:
 
@@ -7435,6 +7515,7 @@ nen canon mirror generate --repo /path/to/consumer \
 ```
 ```text
 source: owner/handbooks@v0.6.0 (scenario swiftui-tca-uzf-v2)
+rules: /path/to/handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules (--rules-dir)
 root: /path/to/consumer
 surface: claude-code -> .claude/rules/
   written: .claude/rules/00-overview.md, .claude/rules/01-folder-layout.md, ...
@@ -7469,7 +7550,9 @@ On a document surface the block's sections are classified one canon file at a ti
 **Usage**
 
 ```text
-nen canon mirror check --repo <consumer> --rules-dir <dir> --canon-values <path>
+nen canon mirror check --repo <consumer> --canon-values <path>
+                       (--rules-dir <dir> | --stack-dir <dir> --leaf <name>
+                        [--canon-checkout <path>])
                        [--source <owner/name>] [--ref <tag>]
                        [--surfaces <a,b,...>] [--scenario <name>]
                        [--not-mirrored <a,b>] [--markdown-out <path>] [--json]
@@ -7480,7 +7563,9 @@ nen canon mirror check --repo <consumer> --rules-dir <dir> --canon-values <path>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The consumer whose committed mirror is checked. | Same as `generate`; never written to. |
-| `--rules-dir <dir>` | yes | Same as `generate`. | |
+| `--rules-dir <dir>` | one of the two forms | Same as `generate`. | |
+| `--stack-dir <dir>` + `--leaf <name>` | the other form | Same as `generate`: the rules directory inside the resolved canon checkout. | A checkout that does not resolve or verify is exit 2, never 1. |
+| `--canon-checkout <path>` | no | Same as `generate`. | |
 | `--canon-values <path>` | yes | Same as `generate`. | |
 | `--source <owner/name>` | no, when the registry pins it | Same as `generate`. | A file whose marker names another source is `stale`. |
 | `--ref <tag>` | no, when the registry pins it | The pin this run expects; defaults to the recorded one. | A file whose marker names another ref is `stale` -- so moving the recorded pin without regenerating is exactly what turns every mirror file stale. |
@@ -7489,7 +7574,7 @@ nen canon mirror check --repo <consumer> --rules-dir <dir> --canon-values <path>
 | `--not-mirrored <a,b>` | no | Same as `generate`. | |
 | `--markdown-out <path>` | no | Also write the drift as a table: `Surface \| File \| Issue`. | Written regardless of `--json`, clean mirror or not, and its **parent directory is created** ([#292](https://github.com/zheref/nen/issues/292)); a relative path resolves against `--repo`, never the shell's directory, so no `mkdir -p` beforehand is needed (one run from the shell's directory would have made it in the wrong tree anyway). An empty value is refused. A table that cannot be written is exit **2** (see below). `--dry-run` is refused here: check writes nothing to begin with. |
 
-**Output and exit codes** -- prints the same `source:` and `root:` lines as `generate`, then per surface `surface: <name> -> <location>` with indented `ok: <n>`, `missing:`, `extra:`, `stale:`, `hand-edited:` lists (each `(none)` when empty) and a `foreign (the consumer's own, not drift):` line when there are any, closing with `drift: none` or `drift: yes`. `--json`: `{ contract: "nen.canon.mirror.check/v0.1", source, ref, scenario, root, drift, surfaces: [{ surface, location, ok, missing, extra, stale, handEdited, foreign }] }`. Exit 0 when no surface has drift; exit **1** iff any surface has a missing, extra, stale or hand-edited entry and the run completed. An unreadable `--canon-values`, an unbound token, an unknown surface or a missing flag is exit **2**, not 1 -- a typo and a finding must stay distinguishable by exit code alone ([#101](https://github.com/zheref/nen/issues/101)). So is a `--markdown-out` that cannot be written -- a parent that is a file (`EEXIST`/`ENOTDIR`), a path that is a directory (`EISDIR`), no permission (`EACCES`/`EPERM`), or any other write failure (`ENOSPC`, `EROFS`, …): exit **2** on a clean mirror and a drifting one alike, because a report you asked for and did not get is a failed run, and it is **never** exit 1, which means drift. The refusal names the value as typed, the path it resolved to, the errno and the verdict the check reached, and it is raised before the verdict prints, so stdout carries no `drift` document beside it. Through v0.17.0 each of these -- and a missing parent directory, which is now created -- escaped as a raw error at exit **1**, so a clean mirror whose report could not be written read as drift ([#292](https://github.com/zheref/nen/issues/292)).
+**Output and exit codes** -- prints the same `source:`, `canon checkout:`/`rules:` and `root:` lines as `generate`, then per surface `surface: <name> -> <location>` with indented `ok: <n>`, `missing:`, `extra:`, `stale:`, `hand-edited:` lists (each `(none)` when empty) and a `foreign (the consumer's own, not drift):` line when there are any, closing with `drift: none` or `drift: yes`. `--json`: `{ contract: "nen.canon.mirror.check/v0.1", source, ref, scenario, root, rulesDir, canonCheckout, drift, surfaces: [{ surface, location, ok, missing, extra, stale, handEdited, foreign }] }`. Exit 0 when no surface has drift; exit **1** iff any surface has a missing, extra, stale or hand-edited entry and the run completed. An unreadable `--canon-values`, an unbound token, an unknown surface or a missing flag is exit **2**, not 1 -- a typo and a finding must stay distinguishable by exit code alone ([#101](https://github.com/zheref/nen/issues/101)). So is a `--markdown-out` that cannot be written -- a parent that is a file (`EEXIST`/`ENOTDIR`), a path that is a directory (`EISDIR`), no permission (`EACCES`/`EPERM`), or any other write failure (`ENOSPC`, `EROFS`, …): exit **2** on a clean mirror and a drifting one alike, because a report you asked for and did not get is a failed run, and it is **never** exit 1, which means drift. The refusal names the value as typed, the path it resolved to, the errno and the verdict the check reached, and it is raised before the verdict prints, so stdout carries no `drift` document beside it. Through v0.17.0 each of these -- and a missing parent directory, which is now created -- escaped as a raw error at exit **1**, so a clean mirror whose report could not be written read as drift ([#292](https://github.com/zheref/nen/issues/292)).
 
 **Example**
 
@@ -7502,6 +7587,7 @@ nen canon mirror check --repo /path/to/consumer \
 ```
 ```text
 source: owner/handbooks@v0.7.0 (scenario swiftui-tca-uzf-v2)
+rules: /path/to/handbooks/handbooks/stacks/swiftui-tca-uzf-v2/rules (--rules-dir)
 root: /path/to/consumer
 surface: claude-code -> .claude/rules/
   ok: 0
@@ -7520,7 +7606,7 @@ drift: yes
 ```
 (the pin moved to `v0.7.0` and nothing was regenerated: every file is stale on every surface, and the fix is one `generate` at the new pin; shape derived from `src/canon/mirror.ts`'s `checkSurface` and `src/canon/command.test.ts`)
 
-**Driving the pair from a skill or CI.** The sequence a sync skill runs is: `nen canon pin --repo <consumer> --json` to learn the canonical repository and the tag the consumer is pinned to; check that repository out **at the tag**; `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; `nen canon mirror generate --repo <consumer> --rules-dir <that> --canon-values <path>` (source and ref default to the recorded pin; its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check` with the same inputs and fails on exit 1 -- the drift check `CON-13` asks for. Repinning is then one edit to `maintained_tools[].pinned` followed by one `generate`; a repin without the regenerate is what `check` reports as stale on every surface.
+**Driving the pair from a skill or CI.** Where the consumer declares its checkout (`checkout_env`/`checkout`, [`canon checkout`](#nen-canon-checkout)), the whole sequence is one portable command per half: `nen canon mirror generate|check --repo <consumer> --canon-values <path> --stack-dir handbooks/stacks --leaf rules --not-mirrored README.md,placeholders.md` -- the pin, the checkout and the rules directory are all resolved from data, and a checkout that is missing, behind or dirty is exit 2 with its code. Without a declaration, the sequence a sync skill runs is: `nen canon pin --repo <consumer> --json` to learn the canonical repository and the tag the consumer is pinned to; check that repository out **at the tag**; `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; `nen canon mirror generate --repo <consumer> --rules-dir <that> --canon-values <path>` (source and ref default to the recorded pin; its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check` with the same inputs and fails on exit 1 -- the drift check `CON-13` asks for. Repinning is then one edit to `maintained_tools[].pinned` followed by one `generate`; a repin without the regenerate is what `check` reports as stale on every surface.
 
 <a id="family-quality"></a>
 

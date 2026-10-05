@@ -140,11 +140,40 @@ export interface RepoRegistry {
    * reader meets one word for one idea.
    */
   readonly toolPins: Readonly<Record<string, string>>;
+  /**
+   * `owner/name` -> where a checkout of that `maintained_tools` entry is found
+   * on a machine, for the entries that declare it (zheref/nen#294): the NAME of
+   * an environment variable holding the path (`checkout_env`), a path template
+   * (`checkout`), or both. Read by `nen canon checkout` and by `nen canon
+   * mirror` without `--rules-dir`, so a mirror command is portable argv: the
+   * declaration is committed, the path it yields is each machine's own.
+   *
+   * THE VARIABLE'S NAME IS DATA, never a literal in this binary (§3): nen
+   * knows no `HATSU_CANON_CHECKOUT`, only that this registry names one.
+   *
+   * OPTIONAL IN THE TYPE, ALWAYS SET BY THE LOADER -- the `listed` reason: a
+   * hand-built test registry predates the field, and its absence reads as
+   * "no entry declares a checkout".
+   */
+  readonly toolCheckouts?: Readonly<Record<string, ToolCheckout>>;
   byRepo(repo: string): ConsumerEntry | undefined;
   byCode(code: string): ConsumerEntry | undefined;
   /** Consumers whose `consumes` intersects `changed`. Order is the file's. */
   affectedBy(changed: readonly string[]): readonly ConsumerEntry[];
 }
+
+/** How a `maintained_tools` entry says its checkout is found. See `RepoRegistry.toolCheckouts`. */
+export interface ToolCheckout {
+  /** The entry's position in `maintained_tools`, so a report can name the field by pointer. */
+  readonly index: number;
+  /** The NAME of an environment variable whose value is the checkout's absolute path, or null. */
+  readonly checkoutEnv: string | null;
+  /** A path template (`${VAR}`, `${VAR:-default}` expanded; relative to the registry's repository), or null. */
+  readonly checkout: string | null;
+}
+
+/** A portable environment variable name: what every shell nen runs under can export. */
+export const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const CALLER_PIN_SUFFIX = "_pinned";
 
@@ -164,6 +193,10 @@ const CALLER_PIN_SUFFIX = "_pinned";
 interface ListedRepo extends ListedEntry {
   /** The entry's `pinned` tag, when it records one (a canon pin -- see `RepoRegistry.toolPins`). */
   readonly pinned: string | null;
+  /** The entry's `checkout_env`, when it declares one (see `RepoRegistry.toolCheckouts`). */
+  readonly checkoutEnv: string | null;
+  /** The entry's `checkout` path template, when it declares one. */
+  readonly checkout: string | null;
 }
 
 function parseListedRepos(path: string, section: ListedSection, raw: unknown): readonly ListedRepo[] {
@@ -185,8 +218,35 @@ function parseListedRepos(path: string, section: ListedSection, raw: unknown): r
       index,
       scenario: optionalString(path, `${pointer}.scenario`, record["scenario"]),
       pinned: optionalString(path, `${pointer}.pinned`, record["pinned"]),
+      checkoutEnv: checkoutEnvField(path, pointer, record["checkout_env"]),
+      checkout: checkoutField(path, pointer, record["checkout"]),
     };
   });
+}
+
+// A DECLARED CHECKOUT IS VALIDATED AT LOAD, because the verb that reads it
+// fails closed on it: an empty or mis-shaped value is refused by pointer here,
+// never read as "not declared" and fallen through past.
+function checkoutEnvField(path: string, pointer: string, raw: unknown): string | null {
+  const value = optionalString(path, `${pointer}.checkout_env`, raw);
+  if (value === null) return null;
+  if (!ENV_NAME_RE.test(value)) {
+    throw new SchemaError(
+      path,
+      `${pointer}.checkout_env`,
+      `expected an environment variable NAME (letters, digits, '_', not starting with a digit), got '${value}'. It names the variable a machine exports its checkout path in; the path itself is never committed here`,
+    );
+  }
+  return value;
+}
+
+function checkoutField(path: string, pointer: string, raw: unknown): string | null {
+  const value = optionalString(path, `${pointer}.checkout`, raw);
+  if (value === null) return null;
+  if (value.trim() === "") {
+    throw new SchemaError(path, `${pointer}.checkout`, "expected a path template, got an empty string; omit the field to declare no path");
+  }
+  return value;
 }
 
 export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
@@ -294,6 +354,14 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     entries.map((entry): string => entry.repo);
   const toolPins: Record<string, string> = {};
   for (const tool of maintained) if (tool.pinned !== null) toolPins[tool.repo] = tool.pinned;
+  const toolCheckouts: Record<string, ToolCheckout> = {};
+  for (const tool of maintained) {
+    if (tool.checkoutEnv === null && tool.checkout === null) continue;
+    // LAST WINS, exactly as `toolPins` above: two rows for one tool are not
+    // refused by this loader, and the pin and the checkout must come from the
+    // same row.
+    toolCheckouts[tool.repo] = { index: tool.index, checkoutEnv: tool.checkoutEnv, checkout: tool.checkout };
+  }
   // `listed` carries the four fields its type names and not the pin, which
   // `toolPins` already holds keyed by slug -- one home per fact.
   const asEntry = ({ repo, section, index, scenario }: ListedRepo): ListedEntry => ({ repo, section, index, scenario });
@@ -307,6 +375,7 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     pendingOnboarding: slugs(pending),
     listed: [...maintained, ...pending].map(asEntry),
     toolPins,
+    toolCheckouts,
     byRepo: (repo): ConsumerEntry | undefined => byRepoIndex.get(repo),
     byCode: (code): ConsumerEntry | undefined => byCodeIndex.get(code),
     affectedBy: (changed): readonly ConsumerEntry[] => {
