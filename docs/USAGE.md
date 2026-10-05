@@ -929,7 +929,7 @@ minutes and can be overridden per repository with `nen/gates.json`'s
 Omitting `round_policy` (or `stallMinutes` within it) keeps the built-in
 30-minute default.
 
-**The round caps: `round_policy.minRounds` and `.maxRounds` (from v0.20.0,
+**The round caps: `round_policy.minRounds` and `.maxRounds` (from v0.21.0,
 [#240](https://github.com/zheref/nen/issues/240)).** Two more keys in the
 same block, each a non-negative integer, and `minRounds` no greater than
 `maxRounds` when both are stated (refused by pointer otherwise):
@@ -962,7 +962,7 @@ same block, each a non-negative integer, and `minRounds` no greater than
   *Unknown keys are refused*, below). A file stating neither makes no extra
   GitHub read and gets the output it got before.
 
-**The pending-request and own-request readings (from v0.20.0, [#240](https://github.com/zheref/nen/issues/240) criterion 4).**
+**The pending-request and own-request readings (from v0.21.0, [#240](https://github.com/zheref/nen/issues/240) criterion 4).**
 When **every** round still owed on the rounds-owed row is a pending review
 request, and no unmet `round_quorum` adds a failure, the row's reason ends in
 one of two readings. If some owed reviewer never posted at any head (and no
@@ -1434,7 +1434,7 @@ Cursor Bugbot". `round_quorum` says it:
   the one that ships `round_quorum`** (v0.15.1 and v0.16.0 verified) ignores
   the key and applies the rest of the file. The file is still valid, and every
   requested or enrolled round is still owed, but there is no one-reviewer
-  floor. From v0.20.0 a key a binary does not read is refused instead of
+  floor. From v0.21.0 a key a binary does not read is refused instead of
   ignored — see the next paragraph.
 
 **Unknown keys are refused, never ignored (zheref/nen#310; maintainer ruling
@@ -1457,7 +1457,7 @@ gate, and said nothing.
 | `dependabot_carve_out` (`author_pattern`, `satisfied_by_context`) | 0.7.0 |
 | `approval_policy` | 0.10.0 |
 | `round_policy.stallMinutes` | 0.11.0 |
-| `round_policy.minRounds`, `round_policy.maxRounds` | 0.20.0 |
+| `round_policy.minRounds`, `round_policy.maxRounds` | 0.21.0 |
 | `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
 | `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
 
@@ -1502,7 +1502,7 @@ those two stay refused here.
 **The limit of a forward fix.** A binary can name the release of every key it
 knows, and no key released after it. So the refusal says "this is nen
 <version>; a key a newer nen introduced is read only by that nen", not which
-release that was. And a release **before** this one (through v0.19.0) cannot
+release that was. And a release **before** this one (through v0.20.0) cannot
 refuse at all: it still ignores what it does not know. The mitigation for a
 pinned consumer is moving the pin (zheref/hatsu#168).
 
@@ -2132,14 +2132,18 @@ Before any **bot** is requested, the verb reads `round_policy.maxRounds` from
 and the tip of the repository's default branch — and applies the **lower**;
 never the local checkout, since `--target` may name another repository. A file
 absent at the base but declaring `maxRounds` on the default branch is declared.
-Each commit is read first (`repos/<slug>/commits/<sha>`); only a 404 on the
+Each commit is read first (`repos/<slug>/git/commits/<sha>`, which returns no diff); only a 404 on the
 **file** at a commit that reads means "no file" — a 404 on the commit (a
 repository the token cannot see), "No commit found for the ref", or anything
 else is a failed read. It then counts each bot's `review_requested` events on
 the pull request's timeline, every page (`gh api --method GET --paginate
---slurp`), by node id and by the bot's canonical login on any non-User event
-(an `--add-bots` id nothing else named is resolved with one `nodes(ids:)`
-read; an id that is not a Bot is refused). Every request counts, whoever made
+--slurp`), **by node id**. An `--add-bots` id nothing else named is resolved
+with one `nodes(ids:)` read: an id that is not a Bot is refused, and so is an
+id GitHub answers under a different canonical id (a legacy id), the refusal
+naming the canonical id to use instead. The bot's canonical login also counts
+a non-User event that carries another id, but only as a fallback: the REST
+timeline names Copilot `Copilot` where GraphQL names it
+`copilot-pull-request-reviewer`, so for real bots the id does the counting. Every request counts, whoever made
 it and by whatever route, raw GraphQL included
 ([zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577) carries
 eight under a two-round ruling).
@@ -5492,7 +5496,7 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 nen schema check --repo <path> [--json]
 ```
 
-**Exit codes.** `0` every required file loaded; `1` one did not; `2` from v0.20.0 when
+**Exit codes.** `0` every required file loaded; `1` one did not; `2` from v0.21.0 when
 `nen/gates.json` carries a key this build does not read (zheref/nen#310). The gates row FAILs naming
 every such key, the keys its object takes with the release that introduced each, and the running
 version; `--json` adds `unknownKeys: ["nen/gates.json: <pointer>.<key>", ...]`, empty when every key is

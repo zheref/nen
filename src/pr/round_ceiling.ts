@@ -33,7 +33,7 @@
 // it always did.
 //
 // ABSENT MEANS ONE THING (Feitan F8 / N2). Each commit is first read itself
-// (`repos/<slug>/commits/<sha>`); only when it reads does a 404 on the FILE
+// (`repos/<slug>/git/commits/<sha>`, no diff); only when it reads does a 404 on the FILE
 // mean "no nen/gates.json here". A 404 reading the commit (a repository the
 // token cannot see), "No commit found for the ref", or any other failure is
 // `failed`, and a failed read REFUSES the bot request (exit 1): a ceiling that
@@ -133,11 +133,17 @@ export function readRequestEvents(seams: Seams, target: Target, prNumber: number
 }
 
 /**
- * How many of `events` request this bot: every event carrying its node id,
- * and every event naming its CANONICAL login (case-insensitive) that is not a
- * User's -- whatever id that event carries (N5): a Bot event whose id matches
- * no bot nen resolved but whose login is this bot's is counted, never read as
- * zero requests.
+ * How many of `events` request this bot. COUNTED BY NODE ID: every event
+ * carrying the bot's id. An id GitHub answers under a DIFFERENT canonical id (a
+ * legacy id) is refused before this runs (`canonicalBotLogins`), so the id
+ * counted is the one the timeline carries.
+ *
+ * The login limb is a FALLBACK ONLY, and for real bots it is usually inert
+ * (R2): the REST timeline names Copilot `Copilot` while GraphQL names the same
+ * bot `copilot-pull-request-reviewer`, so the canonical login rarely matches
+ * an event the id did not already count. It still counts a non-User event
+ * naming the canonical login under another id (N5), so such an event is never
+ * read as zero requests.
  */
 export function requestsOf(events: readonly RequestEvent[], id: string, login: string | null): number {
   const wanted = login?.toLowerCase() ?? null;
@@ -181,9 +187,18 @@ export function canonicalBotLogins(seams: Seams, ids: readonly string[]): Readon
   ids.forEach((id, index): void => {
     const node = Array.isArray(nodes) ? (nodes[index] as unknown) : undefined;
     const login = field(node, "login");
-    if (field(node, "__typename") !== "Bot" || field(node, "id") !== id || typeof login !== "string" || login === "") {
+    const canonicalId = field(node, "id");
+    if (field(node, "__typename") !== "Bot" || typeof login !== "string" || login === "") {
       throw new RoundCeilingError(
         `${id} does not resolve to a Bot, so the review rounds already requested of it cannot be counted`,
+      );
+    }
+    // R2: a LEGACY id -- GitHub answers it, but under another canonical id.
+    // The timeline carries the canonical one, so counting under the id given
+    // would read zero requests. Refused, naming the id to use instead.
+    if (canonicalId !== id) {
+      throw new RoundCeilingError(
+        `${id} resolves to the Bot ${login} under the canonical id ${typeof canonicalId === "string" ? canonicalId : "(none)"}, and the timeline counts requests by that id -- name it with --add-bots ${typeof canonicalId === "string" ? canonicalId : "<its canonical id>"} instead`,
       );
     }
     logins.set(id, login);
@@ -193,9 +208,13 @@ export function canonicalBotLogins(seams: Seams, ids: readonly string[]): Readon
 
 // ── the ceiling's two sources (Feitan F1, F8 / N2) ───────────────────────────
 
-/** `repos/<slug>/commits/<ref>`: the commit itself, read before its file. */
+/**
+ * `repos/<slug>/git/commits/<sha>`: the commit OBJECT itself, read before its
+ * file -- the git-data endpoint, which returns no diff (R3), unlike
+ * `repos/<slug>/commits/<sha>`.
+ */
 export function commitArgv(target: Target, ref: string): readonly string[] {
-  return ["api", "--method", "GET", `repos/${target.slug}/commits/${ref}`];
+  return ["api", "--method", "GET", `repos/${target.slug}/git/commits/${ref}`];
 }
 
 /** `nen/gates.json` at one commit. */

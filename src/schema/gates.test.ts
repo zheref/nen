@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   GATES_KNOWN_KEYS,
   GatesUnknownKeyError,
+  NEXT_RELEASE,
   loadGateIdentities,
   parseCheckExclusions,
   parseGateIdentities,
@@ -967,8 +968,11 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
   it("tables minRounds and maxRounds under round_policy, introduced in the next release", () => {
     const policy = GATES_KNOWN_KEYS["round_policy"]?.object ?? {};
     expect(Object.keys(policy)).toEqual(["stallMinutes", "minRounds", "maxRounds"]);
-    expect(policy["minRounds"]?.introducedIn).toBe("0.20.0");
-    expect(policy["maxRounds"]?.introducedIn).toBe("0.20.0");
+    expect(policy["minRounds"]?.introducedIn).toBe("0.21.0");
+    expect(policy["maxRounds"]?.introducedIn).toBe("0.21.0");
+    // R1: checks.excluded DID ship in v0.20.0, and says so literally.
+    expect(GATES_KNOWN_KEYS["checks"]?.introducedIn).toBe("0.20.0");
+    expect(GATES_KNOWN_KEYS["checks"]?.object?.["excluded"]?.introducedIn).toBe("0.20.0");
   });
 
   it("still refuses a near miss of the adopted keys, naming the one meant", () => {
@@ -979,7 +983,7 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     ]);
     expect(error.message).toContain("'maxRound' -> 'maxRounds'?");
     expect(error.message).toContain("'minround' -> 'minRounds'?");
-    expect(error.message).toContain("maxRounds (nen >= 0.20.0)");
+    expect(error.message).toContain("maxRounds (nen >= 0.21.0)");
   });
 
   it("N6: the hint is the NEAREST key -- an exact match ignoring case, '_' and '-' wins over one two edits away", () => {
@@ -1022,19 +1026,26 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     expect(() => parseGatesText(at, "{nope")).toThrow(/is not valid JSON/);
   });
 
-  it("the table: no nen key starts with '$', and every introducedIn is a release no later than the next minor (N8)", () => {
+  it("R1: NEXT_RELEASE is above VERSION, and is VERSION's next minor -- a release cut without bumping it fails here", () => {
+    const [major, minor] = VERSION.split(".").map(Number);
+    expect(NEXT_RELEASE).toBe(`${major ?? 0}.${(minor ?? 0) + 1}.0`);
+  });
+
+  it("the table: no nen key starts with '$', and every introducedIn is a shipped release or exactly NEXT_RELEASE (N8, tightened by R1)", () => {
+    const rank = (version: string): number => {
+      const [major, minor, patch] = version.split(".").map(Number);
+      return (major ?? 0) * 1_000_000 + (minor ?? 0) * 1_000 + (patch ?? 0);
+    };
     const walk = (level: GatesKeyLevel, at: string): void => {
       for (const [key, spec] of Object.entries(level)) {
         expect(key.startsWith("$"), `${at}${key}`).toBe(false);
         expect(spec.introducedIn, `${at}${key}`).toMatch(/^\d+\.\d+\.\d+$/);
-        // N8: no key is dated past the next minor of this build -- a key is
-        // tabled in the change that reads it, and ships in the next release.
-        const [major, minor] = spec.introducedIn.split(".").map(Number);
-        const [vMajor, vMinor] = VERSION.split(".").map(Number);
-        const rank = (a: number | undefined, b: number | undefined): number => (a ?? 0) * 10_000 + (b ?? 0);
-        expect(rank(major, minor), `${at}${key} ${spec.introducedIn}`).toBeLessThanOrEqual(
-          rank(vMajor, (vMinor ?? 0) + 1),
-        );
+        // A key is either in a release this build is at or past (<= VERSION),
+        // or tabled for the next one -- and then it is NEXT_RELEASE exactly,
+        // never a number picked by hand that a release can overtake.
+        if (rank(spec.introducedIn) > rank(VERSION)) {
+          expect(spec.introducedIn, `${at}${key}: unshipped, so NEXT_RELEASE`).toBe(NEXT_RELEASE);
+        }
         if (spec.object !== undefined) walk(spec.object, `${at}${key}.`);
         if (spec.items !== undefined) walk(spec.items, `${at}${key}[].`);
       }

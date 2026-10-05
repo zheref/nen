@@ -1832,6 +1832,21 @@ describe("evaluateReady -- the rounds-owed row's pending-request and own-request
     );
   });
 
+  it("R4: under --round-policy strict, an EARLIER-head round check still counts as a round at some head", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        review_requests: [{ login: "bisky" }],
+        reviewers: "sasuke,tenma,bisky",
+        earlier_round_checks: [{ sha: "0ldhead", name: "bisky / review", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      { ...OPTIONS, roundPolicyDefault: "strict" as const },
+    );
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.reason).toBe(
+      `${OWED_PREFIX}bisky (review requested, not yet posted)${PENDING_ONLY}`,
+    );
+  });
+
   it("own-request: the identity running the gate made the pending request, and the row names it", () => {
     const evaluation = evaluateReady(
       IDENTITIES,

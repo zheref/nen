@@ -285,16 +285,17 @@ request-reviews:
   THE ROUND CEILING (zheref/nen#240): before any bot is requested,
   round_policy.maxRounds is read from nen/gates.json at the PULL
   REQUEST'S BASE and at the DEFAULT BRANCH's tip, the LOWER applied,
-  and each bot's review_requested timeline events are counted (by node
-  id, and by its canonical login on any Bot event). A request that
+  and each bot's review_requested timeline events are counted by node
+  id (its canonical login only as a fallback). A request that
   would pass the ceiling refuses the WHOLE call at exit 2 -- naming the
   bot, its count, the request it would be and the ceiling's sources --
   and nothing is requested; --dry-run previews the same, and prints
   'request N of M' per bot inside it. Neither commit stating maxRounds
   (only a file-level 404 at a readable commit is "no file") is no
   ceiling. A commit, file or timeline that cannot be read, a file that
-  does not validate, or an id that is not a Bot refuses the bot request
-  at exit 1. Users and teams are not capped. A GUARDRAIL, not a lock:
+  does not validate, an id that is not a Bot, or a legacy id GitHub
+  answers under another canonical id (named in the refusal) refuses the
+  bot request at exit 1. Users and teams are not capped. A GUARDRAIL, not a lock:
   'gh pr edit', raw GraphQL and the web UI request reviews without this
   verb, and the count is not atomic with the request.
   --json adds 'ceiling' ({ maxRounds, source } or null) and 'rounds'

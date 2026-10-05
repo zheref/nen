@@ -1558,12 +1558,15 @@ export function evaluateReady(
               stillOwed,
               state,
               quorum,
+              // R4: "a round at ANY head" is asked under `bounded` whatever
+              // --round-policy says, so an earlier-head round check counts,
+              // as the reading's own words claim.
               reviewerRoundFacts(
                 identities,
                 roundInputs,
                 head,
                 stillOwed.map((entry): string => entry.reviewer),
-                policy,
+                "bounded",
                 delivery,
               ),
             );

@@ -507,9 +507,13 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 // same-name adoption needs a ruling of its own; without one the binding above
 // holds.
 //
-// `introducedIn` for a key shipped after v0.19.0 is the next release's number,
-// 0.20.0 -- the release proposal corrects it if that release is cut under
-// another number.
+// `introducedIn` for a key not yet in a release is NEXT_RELEASE, the next
+// minor after this build's VERSION -- today `round_policy.minRounds` and
+// `.maxRounds` (zheref/nen#240), which missed v0.20.0. A key that HAS
+// shipped carries that release's literal number (`checks.*`, v0.20.0). The
+// release proposal corrects NEXT_RELEASE if the release is cut under another
+// number, and `gates.test.ts` fails the build while NEXT_RELEASE is not
+// above VERSION, so a release that ships without bumping it cannot pass.
 
 /** One key nen reads, and the release that introduced it. */
 export interface GatesKeySpec {
@@ -522,7 +526,8 @@ export interface GatesKeySpec {
 
 export type GatesKeyLevel = Readonly<Record<string, GatesKeySpec>>;
 
-const NEXT_RELEASE = "0.20.0";
+/** The release a key tabled in this change ships in: the next minor after VERSION (R1). */
+export const NEXT_RELEASE = "0.21.0";
 
 const pattern = (introducedIn: string): GatesKeySpec => ({
   introducedIn,
@@ -585,18 +590,18 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
     },
   },
   checks: {
-    introducedIn: NEXT_RELEASE,
+    introducedIn: "0.20.0",
     object: {
       excluded: {
-        introducedIn: NEXT_RELEASE,
+        introducedIn: "0.20.0",
         items: {
-          name: { introducedIn: NEXT_RELEASE },
-          match: { introducedIn: NEXT_RELEASE },
-          reason: { introducedIn: NEXT_RELEASE },
-          ruled: { introducedIn: NEXT_RELEASE },
+          name: { introducedIn: "0.20.0" },
+          match: { introducedIn: "0.20.0" },
+          reason: { introducedIn: "0.20.0" },
+          ruled: { introducedIn: "0.20.0" },
           until: {
-            introducedIn: NEXT_RELEASE,
-            object: { condition: { introducedIn: NEXT_RELEASE } },
+            introducedIn: "0.20.0",
+            object: { condition: { introducedIn: "0.20.0" } },
           },
         },
       },

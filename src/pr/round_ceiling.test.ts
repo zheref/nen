@@ -3,7 +3,10 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  botNodesArgv,
   botRounds,
+  canonicalBotLogins,
+  commitArgv,
   ceilingRefusal,
   parseRequestEvents,
   readRequestEvents,
@@ -28,6 +31,27 @@ describe("requestTimelineArgv", () => {
       "-F",
       "per_page=100",
     ]);
+  });
+});
+
+describe("commitArgv (R3)", () => {
+  it("reads the git commit OBJECT, which carries no diff", () => {
+    expect(commitArgv(TARGET, "abc123")).toEqual(["api", "--method", "GET", "repos/zheref/nen/git/commits/abc123"]);
+  });
+});
+
+describe("canonicalBotLogins (R2)", () => {
+  const answer = (node: unknown): ScriptedSeams =>
+    new ScriptedSeams([{ match: `gh ${botNodesArgv(["BOT_OLD"]).join(" ")}`, result: { stdout: JSON.stringify({ data: { nodes: [node] } }) } }]);
+
+  it("a legacy id GitHub answers under another canonical id is refused, naming the canonical id", () => {
+    expect(() => canonicalBotLogins(answer({ __typename: "Bot", id: "BOT_NEW", login: "copilot-pull-request-reviewer" }), ["BOT_OLD"])).toThrow(
+      "BOT_OLD resolves to the Bot copilot-pull-request-reviewer under the canonical id BOT_NEW, and the timeline counts requests by that id -- name it with --add-bots BOT_NEW instead",
+    );
+  });
+
+  it("an id that is its own canonical id resolves to its login", () => {
+    expect(canonicalBotLogins(answer({ __typename: "Bot", id: "BOT_OLD", login: "x" }), ["BOT_OLD"]).get("BOT_OLD")).toBe("x");
   });
 });
 

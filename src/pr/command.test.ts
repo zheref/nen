@@ -1416,6 +1416,25 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.out.join("\n")).toContain("U_1 does not resolve to a Bot");
   });
 
+  it("R2: an --add-bots id GitHub answers under a different canonical id is refused at exit 1, naming that id", async () => {
+    const script: readonly ScriptedCall[] = [
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      ...CEILING_3,
+      {
+        match: `gh ${botNodesArgv(["BOT_OLD"]).join(" ")}`,
+        result: { stdout: JSON.stringify({ data: { nodes: [{ __typename: "Bot", id: "BOT_kgDOCnlnWA", login: "copilot-pull-request-reviewer" }] } }) },
+      },
+    ];
+    const result = await capture(
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_OLD"],
+      null,
+      new ScriptedSeams(script),
+    );
+    expect(result.code).toBe(1);
+    expect(result.out.join("\n")).toContain("under the canonical id BOT_kgDOCnlnWA");
+    expect(result.out.join("\n")).toContain("Nothing was requested");
+  });
+
   it("N11: a ceiling that could not be checked under --dry-run says dryRun in --json", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: KNOWN_BOT_COPILOT },
