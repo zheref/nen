@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { ToolCheckout } from "../schema/repos.js";
-import { checkoutLines, expandCheckoutTemplate, resolveCanonCheckout, verifyCanonCheckout } from "./checkout.js";
+import { checkoutLines, expandCheckoutTemplate, remoteHost, resolveCanonCheckout, verificationGitEnv, verifyCanonCheckout } from "./checkout.js";
 
 const SOURCE = "owner/handbooks";
 const REF = "v1.2.0";
@@ -19,16 +19,28 @@ function dir(): string {
 }
 
 /** A git that answers for `path` as a clean checkout of SOURCE at REF, with `over` replacing any one answer. */
-function gitFor(path: string, over: Readonly<Record<string, ScriptedCall["result"]>> = {}): ScriptedCall[] {
+const CONSUMER = "/consumer";
+const STATUS = "--no-optional-locks status --porcelain=v1 --untracked-files=all --ignored=matching --ignore-submodules=none";
+
+function gitFor(
+  path: string,
+  over: Readonly<Record<string, ScriptedCall["result"]>> = {},
+  consumer = CONSUMER,
+  consumerOrigin: ScriptedCall["result"] = { stdout: "git@github.com:owner/consumer.git\n" },
+): ScriptedCall[] {
   const answers: Record<string, ScriptedCall["result"]> = {
     "rev-parse --show-toplevel": { stdout: `${path}\n` },
     "remote get-url origin": { stdout: "https://github.com/owner/handbooks.git\n" },
     [`rev-parse --verify --quiet refs/tags/${REF}^{commit}`]: { stdout: `${TAG_SHA}\n` },
     "rev-parse --verify --quiet HEAD^{commit}": { stdout: `${TAG_SHA}\n` },
-    "status --porcelain": { stdout: "" },
+    [STATUS]: { stdout: "" },
+    "ls-files -v": { stdout: "H handbooks/a.md\n" },
     ...over,
   };
-  return Object.entries(answers).map(([args, result]): ScriptedCall => ({ match: `git -C ${path} ${args}`, result }));
+  return [
+    ...Object.entries(answers).map(([args, result]): ScriptedCall => ({ match: `git -C ${path} ${args}`, result })),
+    { match: `git -C ${consumer} remote get-url origin`, result: consumerOrigin },
+  ];
 }
 
 const declared = (fields: Partial<ToolCheckout>): ToolCheckout => ({ index: 2, checkoutEnv: null, checkout: null, ...fields });
@@ -62,19 +74,19 @@ describe("resolveCanonCheckout -- the fixed order, each step reported, no fall-t
     const root = dir();
     mkdirSync(join(root, "canon"));
     const path = join(root, "canon");
-    const seams = new ScriptedSeams(gitFor(path), { env: { CANON: "/elsewhere" } });
+    const seams = new ScriptedSeams(gitFor(path, {}, root), { env: { CANON: "/elsewhere" } });
     const result = resolveCanonCheckout({ root, source: SOURCE, ref: REF, flag: "canon", declaration: declared({ checkoutEnv: "CANON" }), seams });
     expect(result.failure).toBeNull();
     expect(result.path).toBe(path);
     expect(result.resolvedFrom).toEqual({ kind: "flag", status: "used", from: "--canon-checkout" });
     expect(result.steps).toHaveLength(1);
-    expect(result.verified).toEqual({ origin: "https://github.com/owner/handbooks.git", originSlug: SOURCE, head: TAG_SHA, tag: REF, tagCommit: TAG_SHA, clean: true });
+    expect(result.verified).toEqual({ origin: "https://github.com/owner/handbooks.git", originSlug: SOURCE, host: "github.com", head: TAG_SHA, tag: REF, tagCommit: TAG_SHA, clean: true });
   });
 
   it("uses the variable the declaration NAMES, citing the registry field, when no flag is given", () => {
     const root = dir();
     const path = dir();
-    const seams = new ScriptedSeams(gitFor(path), { env: { MY_CANON: path } });
+    const seams = new ScriptedSeams(gitFor(path, {}, root), { env: { MY_CANON: path } });
     const result = resolveCanonCheckout({ root, source: SOURCE, ref: REF, flag: null, declaration: declared({ checkoutEnv: "MY_CANON", checkout: "/never/read" }), seams });
     expect(result.failure).toBeNull();
     expect(result.resolvedFrom).toEqual({ kind: "env", status: "used", from: "$MY_CANON (nen/repos.json maintained_tools[2].checkout_env)" });
@@ -86,7 +98,7 @@ describe("resolveCanonCheckout -- the fixed order, each step reported, no fall-t
     const cache = dir();
     const path = join(cache, "canon", "owner", "handbooks");
     mkdirSync(path, { recursive: true });
-    const seams = new ScriptedSeams(gitFor(path), { env: { HOME: "/nope", XDG_CACHE_HOME: cache } });
+    const seams = new ScriptedSeams(gitFor(path, {}, root), { env: { HOME: "/nope", XDG_CACHE_HOME: cache } });
     const result = resolveCanonCheckout({
       root, source: SOURCE, ref: REF, flag: null,
       declaration: declared({ checkoutEnv: "MY_CANON", checkout: "${XDG_CACHE_HOME:-${HOME}/.cache}/canon/owner/handbooks" }),
@@ -109,7 +121,7 @@ describe("resolveCanonCheckout -- the fixed order, each step reported, no fall-t
     const path = join(base, "handbooks");
     mkdirSync(root);
     mkdirSync(path);
-    const result = resolveCanonCheckout({ root, source: SOURCE, ref: REF, flag: null, declaration: declared({ checkout: "../handbooks" }), seams: new ScriptedSeams(gitFor(path)) });
+    const result = resolveCanonCheckout({ root, source: SOURCE, ref: REF, flag: null, declaration: declared({ checkout: "../handbooks" }), seams: new ScriptedSeams(gitFor(path, {}, root)) });
     expect(result.failure).toBeNull();
     expect(result.path).toBe(path);
   });
@@ -125,7 +137,7 @@ describe("resolveCanonCheckout -- the fixed order, each step reported, no fall-t
   it("does NOT fall through when a present step fails: an invalid env path ends the run though a valid template is declared", () => {
     const root = dir();
     const good = dir();
-    const seams = new ScriptedSeams(gitFor(good), { env: { MY_CANON: join(root, "missing") } });
+    const seams = new ScriptedSeams(gitFor(good, {}, root), { env: { MY_CANON: join(root, "missing") } });
     const result = resolveCanonCheckout({ root, source: SOURCE, ref: REF, flag: null, declaration: declared({ checkoutEnv: "MY_CANON", checkout: good }), seams });
     expect(result.failure?.code).toBe("not-found");
     expect(result.resolvedFrom?.kind).toBe("env");
@@ -151,14 +163,19 @@ describe("verifyCanonCheckout -- five facts, each its own named failure", () => 
     ["no such tag", { [`rev-parse --verify --quiet refs/tags/${REF}^{commit}`]: { code: 1, stdout: "" } }, "tag-missing", /has no tag v1\.2\.0.*fetch --tags/],
     ["HEAD elsewhere", { "rev-parse --verify --quiet HEAD^{commit}": { stdout: `${"b".repeat(40)}\n` } }, "off-pin", /is at bbbbbbbbbbbb, not at v1\.2\.0 \(aaaaaaaaaaaa\)/],
     ["no HEAD", { "rev-parse --verify --quiet HEAD^{commit}": { code: 1, stdout: "" } }, "off-pin", /has no HEAD commit/],
-    ["a dirty tree", { "status --porcelain": { stdout: " M handbooks/x.md\n?? y\n" } }, "dirty", /has 2 uncommitted changes \(first: 'M handbooks\/x\.md'\)/],
-    ["a failing status", { "status --porcelain": { code: 128 } }, "not-a-checkout", /git status failed/],
+    ["a dirty tree", { [STATUS]: { stdout: " M handbooks/x.md\n?? y\n" } }, "dirty", /has 2 uncommitted, untracked or ignored entries \(first: 'M handbooks\/x\.md'\)/],
+    ["an ignored file", { [STATUS]: { stdout: "!! handbooks/stacks/s/rules/99-injected.md\n" } }, "dirty", /1 uncommitted, untracked or ignored entry/],
+    ["a failing status", { [STATUS]: { code: 128 } }, "not-a-checkout", /git status failed/],
+    ["an assume-unchanged file", { "ls-files -v": { stdout: "H a.md\nh handbooks/b.md\n" } }, "dirty", /1 file marked assume-unchanged or skip-worktree \(first: 'h handbooks\/b\.md'\)/],
+    ["a skip-worktree file", { "ls-files -v": { stdout: "S handbooks/b.md\n" } }, "dirty", /marked assume-unchanged or skip-worktree/],
+    ["a failing ls-files", { "ls-files -v": { code: 128 } }, "not-a-checkout", /git ls-files failed/],
+    ["an origin on another host", { "remote get-url origin": { stdout: "https://evil.example/owner/handbooks.git\n" } }, "wrong-host", /is on evil\.example, but the consumer's origin is on github\.com/],
     ["no git", { "rev-parse --show-toplevel": { spawnFailed: true, code: 127 } }, "git-unavailable", /git could not be started/],
   ];
   for (const [what, over, code, message] of cases) {
     it(`fails '${code}' on ${what}`, () => {
       const path = dir();
-      const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, over)), path, SOURCE, REF);
+      const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, over)), path, SOURCE, REF, CONSUMER);
       expect("failure" in result && result.failure.code).toBe(code);
       expect("failure" in result && result.failure.message).toMatch(message);
     });
@@ -168,7 +185,7 @@ describe("verifyCanonCheckout -- five facts, each its own named failure", () => 
     const top = dir();
     const sub = join(top, "handbooks");
     mkdirSync(sub);
-    const result = verifyCanonCheckout(new ScriptedSeams(gitFor(sub, { "rev-parse --show-toplevel": { stdout: `${top}\n` } })), sub, SOURCE, REF);
+    const result = verifyCanonCheckout(new ScriptedSeams(gitFor(sub, { "rev-parse --show-toplevel": { stdout: `${top}\n` } })), sub, SOURCE, REF, CONSUMER);
     expect("failure" in result && result.failure.code).toBe("not-checkout-root");
   });
 
@@ -176,15 +193,67 @@ describe("verifyCanonCheckout -- five facts, each its own named failure", () => 
     const base = dir();
     writeFileSync(join(base, "file"), "x");
     const seams = new ScriptedSeams([]);
-    expect(verifyCanonCheckout(seams, join(base, "file"), SOURCE, REF)).toMatchObject({ failure: { code: "not-found", message: expect.stringMatching(/is not a directory/) as unknown } });
-    expect(verifyCanonCheckout(seams, join(base, "nope"), SOURCE, REF)).toMatchObject({ failure: { code: "not-found", message: expect.stringMatching(/does not exist/) as unknown } });
+    expect(verifyCanonCheckout(seams, join(base, "file"), SOURCE, REF, CONSUMER)).toMatchObject({ failure: { code: "not-found", message: expect.stringMatching(/is not a directory/) as unknown } });
+    expect(verifyCanonCheckout(seams, join(base, "nope"), SOURCE, REF, CONSUMER)).toMatchObject({ failure: { code: "not-found", message: expect.stringMatching(/does not exist/) as unknown } });
     expect(seams.calls).toEqual([]);
   });
 
   it("matches the source case-insensitively and redacts credentials in the reported origin", () => {
     const path = dir();
-    const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://me:s3cret@github.com/Owner/Handbooks\n" } })), path, SOURCE, REF);
+    const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://me:s3cret@github.com/Owner/Handbooks\n" } })), path, SOURCE, REF, CONSUMER);
     expect("verified" in result && result.verified.origin).toBe("https://me:***@github.com/Owner/Handbooks");
     expect(JSON.stringify(result)).not.toMatch(/s3cret/);
+  });
+});
+
+describe("Nobunaga round 1 -- the fail-open shapes, scripted", () => {
+  it("N10: refuses an empty ':-' default even when the variable is set", () => {
+    expect(expandCheckoutTemplate("${X:-}/a", { X: "/x" })).toMatchObject({ ok: false, reason: expect.stringMatching(/empty ':-' default/) as unknown });
+    expect(expandCheckoutTemplate("${X:-}/a", {})).toMatchObject({ ok: false });
+  });
+
+  it("N9: a whitespace-only value is present and bad, in the template and in checkout_env", () => {
+    expect(expandCheckoutTemplate("${X:-/d}/a", { X: "  " })).toMatchObject({ ok: false, reason: expect.stringMatching(/X, which is set to whitespace only/) as unknown });
+    expect(expandCheckoutTemplate("$X/a", { X: "\t" })).toMatchObject({ ok: false, reason: expect.stringMatching(/whitespace only/) as unknown });
+    const root = dir();
+    const result = resolveCanonCheckout({ root, source: SOURCE, ref: REF, flag: null, declaration: declared({ checkoutEnv: "MY_CANON", checkout: root }), seams: new ScriptedSeams([], { env: { MY_CANON: "   " } }) });
+    expect(result.failure?.code).toBe("env-not-absolute");
+    expect(result.failure?.message).toMatch(/whitespace only/);
+  });
+
+  it("N4: reads the host of every remote spelling the same way, user and port dropped", () => {
+    expect(remoteHost("https://u:p@GitHub.com:443/o/n.git")).toBe("github.com");
+    expect(remoteHost("ssh://git@github.com:22/o/n")).toBe("github.com");
+    expect(remoteHost("git@github.com:o/n.git")).toBe("github.com");
+    expect(remoteHost("github.com:o/n")).toBe("github.com");
+    expect(remoteHost("/srv/git/n.git")).toBeNull();
+    expect(remoteHost("C:/repos/n")).toBeNull();
+    expect(remoteHost("file:///srv/n")).toBeNull();
+  });
+
+  it("N4: ssh and https spellings of one host agree; a consumer with no readable origin is its own named failure", () => {
+    const path = dir();
+    const ssh = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "ssh://git@GitHub.com/owner/handbooks\n" } }, CONSUMER, { stdout: "https://github.com/owner/consumer\n" })), path, SOURCE, REF, CONSUMER);
+    expect("verified" in ssh && ssh.verified.host).toBe("github.com");
+    const none = verifyCanonCheckout(new ScriptedSeams(gitFor(path, {}, CONSUMER, { code: 2, stdout: "" })), path, SOURCE, REF, CONSUMER);
+    expect("failure" in none && none.failure.code).toBe("no-consumer-origin");
+    const local = verifyCanonCheckout(new ScriptedSeams(gitFor(path, {}, CONSUMER, { stdout: "/srv/git/consumer.git\n" })), path, SOURCE, REF, CONSUMER);
+    expect("failure" in local && local.failure.code).toBe("no-consumer-origin");
+  });
+
+  it("N2/N7: every git call drops the redirect variables, every GIT_CONFIG_KEY_/VALUE_ pair, and disables optional locks", () => {
+    const env = verificationGitEnv({ GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: "/x", GIT_CONFIG_KEY_ZZ: "kept", PATH: "/bin" });
+    expect(env).toMatchObject({ GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_COMMON_DIR: undefined, GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: undefined, GIT_CONFIG_KEY_0: undefined, GIT_CONFIG_VALUE_0: undefined, GIT_OPTIONAL_LOCKS: "0" });
+    expect(Object.keys(env)).toEqual(expect.arrayContaining(["GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"]));
+    expect("PATH" in env).toBe(false);
+    expect("GIT_CONFIG_KEY_ZZ" in env).toBe(false);
+    const path = dir();
+    const seams = new ScriptedSeams(gitFor(path), { env: { GIT_DIR: "/elsewhere/.git" } });
+    verifyCanonCheckout(seams, path, SOURCE, REF, CONSUMER);
+    expect(seams.calls.length).toBeGreaterThan(0);
+    for (const call of seams.calls) {
+      expect(call.env).toMatchObject({ GIT_DIR: undefined, GIT_OPTIONAL_LOCKS: "0" });
+      expect("GIT_DIR" in (call.env ?? {})).toBe(true);
+    }
   });
 });

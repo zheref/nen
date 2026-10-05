@@ -14,7 +14,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -93,6 +93,9 @@ beforeAll(() => {
   mkdirSync(join(consumer, ".claude"));
   writeFileSync(join(consumer, "nen", "repos.json"), JSON.stringify(REGISTRY, null, 2));
   writeFileSync(join(consumer, ".claude", "canon-values.yml"), "scenario: scenario-x\nsurfaces: claude-code\nvalues:\n  NAME: World\n");
+  // The consumer's own origin is the host the canon is held to (Nobunaga N4).
+  git(consumer, ["init", "--quiet"]);
+  git(consumer, ["remote", "add", "origin", "git@github.com:owner/consumer.git"]);
 });
 
 afterAll(() => {
@@ -125,7 +128,7 @@ describe.skipIf(!HAVE_GIT)("canon checkout + mirror -- one literal argv, two mac
       ref: "v1.2.0",
       path: canonA,
       resolvedFrom: { kind: "env", from: "$NEN_TEST_CANON (nen/repos.json maintained_tools[1].checkout_env)" },
-      verified: { originSlug: "owner/handbooks", tag: "v1.2.0", clean: true },
+      verified: { originSlug: "owner/handbooks", host: "github.com", tag: "v1.2.0", clean: true },
       failure: null,
     });
   });
@@ -136,7 +139,7 @@ describe.skipIf(!HAVE_GIT)("canon checkout + mirror -- one literal argv, two mac
     expect(result.out).toContain(`checkout: ${canonB}`);
     expect(result.out).toContain("resolved from: declared-path '${XDG_CACHE_HOME:-${HOME}/.cache}/canon/owner/handbooks'");
     expect(result.out).toContain("passed over: env $NEN_TEST_CANON");
-    expect(result.out).toMatch(/verified: origin https:\/\/github\.com\/owner\/handbooks\.git names owner\/handbooks; HEAD [0-9a-f]{12} is v1\.2\.0; clean/);
+    expect(result.out).toMatch(/verified: origin https:\/\/github\.com\/owner\/handbooks\.git names owner\/handbooks on github\.com; HEAD [0-9a-f]{12} is v1\.2\.0; clean/);
   });
 
   it("generates on A and checks clean on B with the SAME argv, naming the checkout and how it resolved", async () => {
@@ -187,5 +190,120 @@ describe.skipIf(!HAVE_GIT)("mirror's checkout form -- the rules directory stays 
     const climbing = await run(["canon", "mirror", "check", "--canon-values", ".claude/canon-values.yml", "--stack-dir", "../../..", "--leaf", "x"], MACHINE_A());
     expect(climbing.code).toBe(2);
     expect(climbing.err).toMatch(/is not inside the canon checkout/);
+  });
+});
+
+/** A fresh canon repository at `at`: the scenario-x rules, `extra` files beside them, committed, tagged v1.2.0, origin `origin`. */
+function makeCanon(at: string, origin = ORIGIN, extra: (root: string) => void = (): void => undefined): string {
+  const rules = join(at, "handbooks", "stacks", "scenario-x", "rules");
+  mkdirSync(rules, { recursive: true });
+  writeFileSync(join(rules, "01-a.md"), "# A\n\nHello {{NAME}}.\n");
+  writeFileSync(join(rules, "README.md"), "the index\n");
+  writeFileSync(join(rules, "placeholders.md"), "the registry\n");
+  extra(at);
+  git(at, ["init", "--quiet"]);
+  git(at, ["add", "-A"]);
+  git(at, ["commit", "--quiet", "-m", "canon"]);
+  git(at, ["tag", "v1.2.0"]);
+  git(at, ["remote", "add", "origin", origin]);
+  return realpathSync(at);
+}
+
+let fresh = 0;
+function freshCanon(origin = ORIGIN, extra?: (root: string) => void): string {
+  fresh += 1;
+  return makeCanon(join(base, `canon-${fresh}`), origin, extra);
+}
+
+async function verdict(canon: string): Promise<Record<string, unknown>> {
+  const result = await run(["canon", "checkout", "--canon-checkout", canon], machine({}), true);
+  return JSON.parse(result.out) as Record<string, unknown>;
+}
+
+describe.skipIf(!HAVE_GIT)("Nobunaga round 1 -- the git shapes that verified when they must not", () => {
+  it("N1: an untracked file under status.showUntrackedFiles=no is dirty", async () => {
+    const canon = freshCanon();
+    git(canon, ["config", "status.showUntrackedFiles", "no"]);
+    writeFileSync(join(canon, "handbooks", "stacks", "scenario-x", "rules", "99-injected.md"), "# injected\n");
+    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty" } });
+  });
+
+  it("N1: an ignored file is dirty, and mirror generate writes nothing from it", async () => {
+    const canon = freshCanon();
+    writeFileSync(join(canon, ".git", "info", "exclude"), "99-*.md\n");
+    writeFileSync(join(canon, "handbooks", "stacks", "scenario-x", "rules", "99-injected.md"), "# injected\n");
+    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty", message: expect.stringMatching(/!! handbooks\/stacks\/scenario-x\/rules\/99-injected\.md/) as unknown } });
+    const generated = await run([...MIRROR("generate"), "--canon-checkout", canon], machine({}));
+    expect(generated.code).toBe(2);
+    expect(existsSync(join(consumer, ".claude", "rules", "99-injected.md"))).toBe(false);
+  });
+
+  it("N1: a skip-worktree edit is dirty", async () => {
+    const canon = freshCanon();
+    const file = join("handbooks", "stacks", "scenario-x", "rules", "01-a.md");
+    git(canon, ["update-index", "--skip-worktree", file]);
+    writeFileSync(join(canon, file), "# A\n\nInjected.\n");
+    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty", message: expect.stringMatching(/assume-unchanged or skip-worktree \(first: 'S handbooks/) as unknown } });
+  });
+
+  it("N1: an assume-unchanged edit is dirty", async () => {
+    const canon = freshCanon();
+    const file = join("handbooks", "stacks", "scenario-x", "rules", "01-a.md");
+    git(canon, ["update-index", "--assume-unchanged", file]);
+    writeFileSync(join(canon, file), "# A\n\nInjected.\n");
+    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty", message: expect.stringMatching(/first: 'h handbooks/) as unknown } });
+  });
+
+  it("N2: an inherited GIT_DIR does not make an unrelated directory verify as the canon", async () => {
+    const canon = freshCanon();
+    const unrelated = realpathSync(mkdtempSync(join(base, "unrelated-")));
+    const saved = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = join(canon, ".git");
+    try {
+      const result = await run(["canon", "checkout", "--canon-checkout", unrelated], { ...defaultSeams(), env: { ...process.env } }, true);
+      expect(result.code).toBe(1);
+      expect(JSON.parse(result.out)).toMatchObject({ ok: false, failure: { code: "not-a-checkout" } });
+    } finally {
+      if (saved === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved;
+    }
+  });
+
+  it("N3: a committed symlink out of the checkout is refused after resolving it, even at a verified tag", async () => {
+    const outside = join(base, "outside", "scenario-x", "rules");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "01-a.md"), "# Outside\n");
+    const canon = freshCanon(ORIGIN, (root): void => {
+      symlinkSync(join(base, "outside"), join(root, "handbooks", "evil"));
+    });
+    expect(await verdict(canon)).toMatchObject({ ok: true });
+    const result = await run(["canon", "mirror", "check", "--canon-values", ".claude/canon-values.yml", "--stack-dir", "handbooks/evil", "--leaf", "rules", "--canon-checkout", canon], machine({}));
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/is not inside the canon checkout .*\(symbolic links resolved\)/);
+  });
+
+  it("N3: an excluded symlink out of the checkout never gets that far: it is dirty", async () => {
+    const canon = freshCanon();
+    symlinkSync(join(base, "outside"), join(canon, "handbooks", "evil"));
+    writeFileSync(join(canon, ".git", "info", "exclude"), "handbooks/evil\n");
+    const result = await run(["canon", "mirror", "check", "--canon-values", ".claude/canon-values.yml", "--stack-dir", "handbooks/evil", "--leaf", "rules", "--canon-checkout", canon], machine({}));
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/\(dirty\)/);
+  });
+
+  it("N4: a canon whose origin is on another host than the consumer's is refused", async () => {
+    const canon = freshCanon("https://evil.example/owner/handbooks.git");
+    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "wrong-host", message: expect.stringMatching(/evil\.example.*github\.com/) as unknown } });
+  });
+
+  it("N7: verifying rewrites nothing -- the index mtime is unchanged though a tracked file's stat went stale", async () => {
+    const canon = freshCanon();
+    const tracked = join(canon, "handbooks", "stacks", "scenario-x", "rules", "01-a.md");
+    const later = new Date(Date.now() + 60_000);
+    utimesSync(tracked, later, later);
+    const index = join(canon, ".git", "index");
+    const before = statSync(index).mtimeMs;
+    expect(await verdict(canon)).toMatchObject({ ok: true });
+    expect(statSync(index).mtimeMs).toBe(before);
   });
 });

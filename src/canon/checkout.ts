@@ -29,14 +29,19 @@
 // a directory the caller did not mean while reporting success -- the exact
 // failure "never by guessing" rules out.
 //
-// VALID MEANS FIVE FACTS, each its own named failure: the path is a directory;
+// VALID MEANS SIX FACTS, each its own named failure: the path is a directory;
 // it is the TOP of a git work tree (a subdirectory is refused, not walked up
-// from); its `origin` names the pinned source; the pinned tag exists there and
-// HEAD is that tag's commit; and the tree is clean. nen fetches nothing and
-// checks nothing out -- a checkout that is behind is reported, never moved.
+// from); its `origin` names the pinned source ON THE CONSUMER'S OWN ORIGIN
+// HOST; the pinned tag exists there and HEAD is that tag's commit; nothing
+// differs from it on disk -- modified, untracked, ignored, or hidden from
+// status by assume-unchanged/skip-worktree; and every git call ran against
+// that directory alone, with no inherited GIT_DIR-style redirect (Nobunaga
+// round 1). nen fetches nothing and checks nothing out -- a checkout that is
+// behind is reported, never moved.
 //
 // EVERY GIT CALL GOES THROUGH THE SEAM, read-only: `rev-parse`, `remote
-// get-url`, `status --porcelain`. Nothing here writes to the checkout.
+// get-url`, `status`, `ls-files`, under GIT_OPTIONAL_LOCKS=0 and with
+// `--no-optional-locks` on the status, so not even the index is refreshed.
 
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
@@ -67,6 +72,8 @@ export interface CheckoutVerification {
   readonly origin: string;
   /** The `owner/name` origin reads as. */
   readonly originSlug: string;
+  /** The host origin is on -- the consumer's own origin host, which it must equal. */
+  readonly host: string;
   readonly head: string;
   readonly tag: string;
   readonly tagCommit: string;
@@ -82,6 +89,8 @@ export type CheckoutFailureCode =
   | "not-checkout-root"
   | "no-origin"
   | "wrong-source"
+  | "no-consumer-origin"
+  | "wrong-host"
   | "tag-missing"
   | "off-pin"
   | "dirty"
@@ -169,7 +178,10 @@ function expand(text: string, env: Readonly<Record<string, string | undefined>>)
       const name = separator === -1 ? body : body.slice(0, separator);
       if (!ENV_NAME_RE.test(name)) throw new TemplateError(`'\${${body}}' does not name a variable (letters, digits, '_')`);
       const value = env[name];
-      if (value !== undefined && value !== "") out += value;
+      if (separator !== -1 && body.slice(separator + 2) === "") {
+        throw new TemplateError(`'\${${body}}' has an empty ':-' default, which would splice nothing into the path; name a default, or drop ':-'`);
+      }
+      if (value !== undefined && value !== "") out += presentValue(name, value);
       else if (separator !== -1) out += expand(body.slice(separator + 2), env);
       else throw new TemplateError(`it names \${${name}}, which is not set in this environment and has no ':-' default`);
       index = close + 1;
@@ -180,10 +192,20 @@ function expand(text: string, env: Readonly<Record<string, string | undefined>>)
     const name = bare[0];
     const value = env[name];
     if (value === undefined || value === "") throw new TemplateError(`it names $${name}, which is not set in this environment`);
-    out += value;
+    out += presentValue(name, value);
     index += 1 + name.length;
   }
   return out;
+}
+
+/**
+ * A set variable's value, refused when it is whitespace only: present, so not
+ * "unset" (no default applies), and bad, so never spliced into a path -- the
+ * same reading `checkout_env` gives a whitespace-only value (Nobunaga N9).
+ */
+function presentValue(name: string, value: string): string {
+  if (value.trim() === "") throw new TemplateError(`it names ${name}, which is set to whitespace only -- present but not a path`);
+  return value;
 }
 
 /** The index of the `}` closing the `{` at `open`, counting nested `${`; -1 when unbalanced. */
@@ -238,7 +260,9 @@ export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutR
     } else {
       const from = `$${name} (${pointer(declaration, "checkout_env")})`;
       const value = seams.env[name];
-      if (value === undefined || value.trim() === "") {
+      // UNSET OR EMPTY IS ABSENT; WHITESPACE ONLY IS PRESENT AND BAD (Nobunaga
+      // N9): it falls to the absolute-path refusal below, never past it.
+      if (value === undefined || value === "") {
         steps.push({ kind: "env", status: "absent", from, note: "not set in this environment" });
       } else {
         const step: CheckoutStep = { kind: "env", status: "used", from };
@@ -246,7 +270,7 @@ export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutR
         if (!isAbsolute(value)) {
           return fail(
             "env-not-absolute",
-            `$${name} is '${value}', which is not an absolute path. A variable is machine state with no directory of its own to be relative to, so a relative value is refused rather than resolved against something the caller did not choose.`,
+            `$${name} is '${value}', which is not an absolute path${value.trim() === "" ? " (whitespace only)" : ""}. A variable is machine state with no directory of its own to be relative to, so a relative value is refused rather than resolved against something the caller did not choose.`,
             null,
             step,
           );
@@ -279,7 +303,7 @@ export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutR
     );
   }
 
-  const checked = verifyCanonCheckout(seams, candidate.path, source, ref);
+  const checked = verifyCanonCheckout(seams, candidate.path, source, ref, root);
   if ("failure" in checked) return fail(checked.failure.code, checked.failure.message, checked.path, candidate.step);
   return done(checked.path, candidate.step, checked.verified, null);
 }
@@ -290,8 +314,67 @@ export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutR
 
 type Verified = { readonly path: string; readonly verified: CheckoutVerification } | { readonly path: string; readonly failure: CheckoutFailure };
 
-/** The five facts that make `path` a checkout of `source` at `ref`. Read-only. */
-export function verifyCanonCheckout(seams: Seams, path: string, source: string, ref: string): Verified {
+/**
+ * The git variables that would point a `git -C <path>` call at some OTHER
+ * repository, index, object store or configuration than the one at `path`
+ * (Nobunaga N2). Each is passed as `undefined`, which the runner drops from the
+ * child's environment: with `GIT_DIR` inherited, `git -C /unrelated rev-parse`
+ * answers for the inherited repository, and an unrelated directory verifies.
+ */
+const GIT_REDIRECTS = [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_COMMON_DIR",
+  "GIT_NAMESPACE",
+  "GIT_CEILING_DIRECTORIES",
+  "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+  "GIT_CONFIG_PARAMETERS",
+  "GIT_CONFIG_COUNT",
+] as const;
+
+/**
+ * The environment every verification git call runs under: the redirects above
+ * and every `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` in this environment
+ * dropped, and `GIT_OPTIONAL_LOCKS=0`, so a `status` never refreshes and
+ * rewrites the index of a checkout this verb promises only to read (N7).
+ */
+export function verificationGitEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const name of GIT_REDIRECTS) out[name] = undefined;
+  for (const name of Object.keys(env)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) out[name] = undefined;
+  }
+  out["GIT_OPTIONAL_LOCKS"] = "0";
+  return out;
+}
+
+/**
+ * The host a remote URL names, lowercased, user and port dropped -- the same
+ * host whichever spelling git wrote: `ssh://git@Host:22/o/n`, `git@host:o/n`
+ * and `https://u:p@host:443/o/n` all read `host`. Null for a local path or
+ * anything else with no host (Nobunaga N4).
+ */
+export function remoteHost(url: string): string | null {
+  const trimmed = url.trim();
+  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[^@/]*@)?(\[[^\]]+\]|[^/:]+)/.exec(trimmed);
+  if (scheme !== null) return scheme[1] === undefined || scheme[1] === "" ? null : scheme[1].toLowerCase();
+  if (trimmed.includes("://")) return null;
+  const scp = /^(?:[^@/:]+@)?([^/:]+):(?!\/\/)/.exec(trimmed);
+  if (scp === null || scp[1] === undefined) return null;
+  // `C:` on Windows is a drive, not a host: a one-letter "host" is a path.
+  if (scp[1].length === 1) return null;
+  return scp[1].toLowerCase();
+}
+
+/**
+ * The facts that make `path` a checkout of `source` at `ref`, where `source`
+ * is read from the same host the consumer (`consumerRoot`) lives on. Read-only:
+ * every git call runs under `verificationGitEnv`.
+ */
+export function verifyCanonCheckout(seams: Seams, path: string, source: string, ref: string, consumerRoot: string): Verified {
   const failed = (at: string, code: CheckoutFailureCode, message: string): Verified => ({ path: at, failure: { code, message } });
 
   let real: string;
@@ -302,10 +385,12 @@ export function verifyCanonCheckout(seams: Seams, path: string, source: string, 
     return failed(path, "not-found", `'${path}' does not exist. Clone ${source} there and check out ${ref}, or point the declaration at the checkout you keep.`);
   }
 
-  const git = (args: readonly string[]): { code: number; stdout: string; spawnFailed: boolean } => {
-    const result = seams.run(GIT, ["-C", real, ...args]);
+  const env = verificationGitEnv(seams.env);
+  const gitIn = (dir: string, args: readonly string[]): { code: number; stdout: string; spawnFailed: boolean } => {
+    const result = seams.run(GIT, ["-C", dir, ...args], { env });
     return { code: result.code, stdout: result.stdout, spawnFailed: result.spawnFailed };
   };
+  const git = (args: readonly string[]): { code: number; stdout: string; spawnFailed: boolean } => gitIn(real, args);
 
   const top = git(["rev-parse", "--show-toplevel"]);
   if (top.spawnFailed) return failed(real, "git-unavailable", `git could not be started, so '${real}' cannot be verified as a checkout of ${source}@${ref}.`);
@@ -324,6 +409,25 @@ export function verifyCanonCheckout(seams: Seams, path: string, source: string, 
     return failed(real, "wrong-source", `'${real}''s origin is '${redacted}', which ${parsed === null ? "does not read as an owner/name repository" : `names ${parsed.slug}`}, not ${source}.`);
   }
 
+  // THE HOST IS THE CONSUMER'S OWN (Nobunaga N4, ruled). An owner/name slug is
+  // only an identity on a host: `evil.example/owner/handbooks` names the same
+  // slug as the real one. The consumer's origin is the one host this run has
+  // any reason to trust, so the canon must come from it.
+  const consumerOrigin = gitIn(consumerRoot, ["remote", "get-url", "origin"]);
+  const consumerUrl = outputLines(consumerOrigin.stdout)[0];
+  const consumerHost = consumerOrigin.code === 0 && consumerUrl !== undefined ? remoteHost(consumerUrl) : null;
+  if (consumerHost === null) {
+    return failed(
+      real,
+      "no-consumer-origin",
+      `the consumer '${consumerRoot}' has no readable 'origin' remote with a host${consumerUrl === undefined ? "" : ` ('${redactRemoteCredentials(consumerUrl)}')`}, so there is no host to hold ${source}'s checkout to. Add the consumer's origin.`,
+    );
+  }
+  const host = remoteHost(url);
+  if (host !== consumerHost) {
+    return failed(real, "wrong-host", `'${real}''s origin '${redacted}' is on ${host ?? "no host"}, but the consumer's origin is on ${consumerHost}. The canon is read from the consumer's own host.`);
+  }
+
   const tag = git(["rev-parse", "--verify", "--quiet", `refs/tags/${ref}^{commit}`]);
   const tagCommit = outputLines(tag.stdout)[0];
   if (tag.code !== 0 || tagCommit === undefined) {
@@ -336,14 +440,30 @@ export function verifyCanonCheckout(seams: Seams, path: string, source: string, 
     return failed(real, "off-pin", `'${real}' is at ${headCommit.slice(0, 12)}, not at ${ref} (${tagCommit.slice(0, 12)}). Check ${ref} out there; nen never moves a checkout.`);
   }
 
-  const status = git(["status", "--porcelain"]);
+  // CLEAN MEANS NOTHING ON DISK DIFFERS FROM THE TAG, whatever the checkout's
+  // own configuration hides (Nobunaga N1): untracked files under
+  // status.showUntrackedFiles=no, ignored files -- a rule file an exclude
+  // hides is still a rule file the mirror reads -- and submodules are all
+  // shown, explicitly, rather than left to config.
+  const status = git(["--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching", "--ignore-submodules=none"]);
   if (status.code !== 0) return failed(real, "not-a-checkout", `git status failed in '${real}', so its cleanliness cannot be read.`);
   const dirty = outputLines(status.stdout);
   if (dirty.length > 0) {
-    return failed(real, "dirty", `'${real}' is at ${ref} but has ${dirty.length} uncommitted change${dirty.length === 1 ? "" : "s"} (first: '${dirty[0] ?? ""}'). A mirror rendered from it would cite ${ref} for bytes ${ref} does not hold.`);
+    return failed(real, "dirty", `'${real}' is at ${ref} but has ${dirty.length} uncommitted, untracked or ignored entr${dirty.length === 1 ? "y" : "ies"} (first: '${dirty[0] ?? ""}'). A mirror rendered from it would cite ${ref} for bytes ${ref} does not hold.`);
+  }
+  // AND NOTHING STATUS IS TOLD TO LOOK AWAY FROM: an assume-unchanged entry
+  // (a lowercase tag) or a skip-worktree one (`S`) hides an edit from status.
+  const files = git(["ls-files", "-v"]);
+  if (files.code !== 0) return failed(real, "not-a-checkout", `git ls-files failed in '${real}', so its hidden-change flags cannot be read.`);
+  const hidden = outputLines(files.stdout).filter((line): boolean => {
+    const flag = line.charAt(0);
+    return flag === "S" || /^[a-z]$/.test(flag);
+  });
+  if (hidden.length > 0) {
+    return failed(real, "dirty", `'${real}' has ${hidden.length} file${hidden.length === 1 ? "" : "s"} marked assume-unchanged or skip-worktree (first: '${hidden[0] ?? ""}'), so status cannot vouch for ${ref}'s bytes. Clear the flags (git update-index --no-assume-unchanged / --no-skip-worktree).`);
   }
 
-  return { path: real, verified: { origin: redacted, originSlug: parsed.slug, head: headCommit, tag: ref, tagCommit, clean: true } };
+  return { path: real, verified: { origin: redacted, originSlug: parsed.slug, host, head: headCommit, tag: ref, tagCommit, clean: true } };
 }
 
 function realpathOrSelf(path: string): string {
@@ -368,7 +488,7 @@ export function checkoutLines(resolution: CheckoutResolution): string[] {
   }
   if (resolution.verified !== null) {
     const v = resolution.verified;
-    lines.push(`verified: origin ${v.origin} names ${v.originSlug}; HEAD ${v.head.slice(0, 12)} is ${v.tag}; clean`);
+    lines.push(`verified: origin ${v.origin} names ${v.originSlug} on ${v.host}; HEAD ${v.head.slice(0, 12)} is ${v.tag}; clean`);
   }
   if (resolution.failure !== null) lines.push(`failed: ${resolution.failure.code}: ${resolution.failure.message}`);
   return lines;

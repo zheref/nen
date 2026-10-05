@@ -352,15 +352,21 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
   const pending = parseListedRepos(path, "pending_onboarding", root["pending_onboarding"]);
   const slugs = (entries: readonly ListedRepo[]): readonly string[] =>
     entries.map((entry): string => entry.repo);
+  // THE PIN AND THE CHECKOUT COME FROM ONE ROW: the LAST row naming the tool.
+  // Two rows for one tool are not refused by this loader, so the row that
+  // answers must be one row -- a pin from the first and a checkout from the
+  // second would verify a checkout against a tag its own row never recorded.
+  // A last row that declares no checkout means there is none, whatever an
+  // earlier row said (zheref/nen#294, Nobunaga N8).
+  const lastRow = new Map<string, ListedRepo>();
+  for (const tool of maintained) lastRow.set(tool.repo, tool);
   const toolPins: Record<string, string> = {};
-  for (const tool of maintained) if (tool.pinned !== null) toolPins[tool.repo] = tool.pinned;
   const toolCheckouts: Record<string, ToolCheckout> = {};
-  for (const tool of maintained) {
-    if (tool.checkoutEnv === null && tool.checkout === null) continue;
-    // LAST WINS, exactly as `toolPins` above: two rows for one tool are not
-    // refused by this loader, and the pin and the checkout must come from the
-    // same row.
-    toolCheckouts[tool.repo] = { index: tool.index, checkoutEnv: tool.checkoutEnv, checkout: tool.checkout };
+  for (const [repo, tool] of lastRow) {
+    if (tool.pinned !== null) toolPins[repo] = tool.pinned;
+    if (tool.checkoutEnv !== null || tool.checkout !== null) {
+      toolCheckouts[repo] = { index: tool.index, checkoutEnv: tool.checkoutEnv, checkout: tool.checkout };
+    }
   }
   // `listed` carries the four fields its type names and not the pin, which
   // `toolPins` already holds keyed by slug -- one home per fact.

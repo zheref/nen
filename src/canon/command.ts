@@ -26,7 +26,7 @@
 // pin a reader of the marker can reason about, and "cut the tag before
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
@@ -39,6 +39,7 @@ import { parseTarget } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
 import type { ToolCheckout } from "../schema/repos.js";
+import { SchemaError } from "../schema/errors.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
 import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, type CheckoutResolution } from "./checkout.js";
 import {
@@ -98,23 +99,29 @@ usage:
         1. --canon-checkout <path> (relative: against --repo);
         2. the variable the source's maintained_tools entry NAMES in
            'checkout_env', when set and non-empty (its value must be
-           absolute);
+           absolute; whitespace only is refused, not passed over);
         3. that entry's 'checkout' path template: $VAR, \${VAR} and
            \${VAR:-default} expand from the environment (an unset VAR with no
-           default is refused, never spliced in empty); '~' is not expanded;
+           default is refused, never spliced in empty; so is a value of
+           whitespace only and an empty ':-' default); '~' is not expanded;
            relative: against --repo.
       An absent step is passed over and reported. A present step that does
       not yield a valid checkout FAILS THE RUN -- it never falls through to
       the next. Valid means: a directory; the top of a git work tree; an
-      'origin' naming --source; tag --ref present with HEAD at its commit;
-      a clean tree. nen fetches nothing and moves no checkout.
+      'origin' naming --source on the SAME HOST as the consumer's own
+      origin; tag --ref present with HEAD at its commit; nothing modified,
+      untracked or ignored (whatever status.showUntrackedFiles says) and no
+      file marked assume-unchanged or skip-worktree. Every git call drops
+      inherited GIT_DIR-style redirects and GIT_CONFIG_* injections and runs
+      with optional locks off, so not even the index is rewritten. nen
+      fetches nothing and moves no checkout.
       Prints the path, how it was resolved (every step, the passed-over ones
       included) and what was verified; --json carries the same as
       { contract, ok, source, ref, path, resolvedFrom, steps, verified,
       failure }. Exit 1, with failure.code naming the reason (unresolvable,
       bad-template, env-not-absolute, not-found, not-a-checkout,
-      not-checkout-root, no-origin, wrong-source, tag-missing, off-pin, dirty,
-      git-unavailable); exit 2 on an omitted --repo, an empty flag, or no pin
+      not-checkout-root, no-origin, wrong-source, no-consumer-origin,
+      wrong-host, tag-missing, off-pin, dirty, git-unavailable); exit 2 on an omitted --repo, an empty flag, or no pin
       to resolve source/ref from.
 
   nen canon resolve --repo <path> --target <owner/name>
@@ -186,7 +193,9 @@ ${SURFACE_LIST}
       resolved and verified at the pin exactly as 'nen canon checkout' does,
       so the whole command is portable argv a declared gate can carry --
       e.g. --stack-dir handbooks/stacks --leaf rules. Both forms together, or
-      neither, is exit 2; so is a checkout that does not resolve or verify
+      neither, is exit 2; so is an absolute --stack-dir/--leaf, a rules
+      directory outside the checkout once symbolic links are resolved, a
+      malformed nen/repos.json, and a checkout that does not resolve or verify
       (never exit 1, which on 'check' is drift). The output names the
       checkout and how it was resolved; --json adds rulesDir and
       canonCheckout (null under --rules-dir).
@@ -301,6 +310,7 @@ function pinVerb(context: CommandContext): number {
     context,
     `It is the consumer whose ${REPOS_FILE} records the canonical repository it mirrors and the tag it is pinned to.`,
   );
+  refuseForeignFlags(context, "pin", ["canon-checkout"]);
   const root = assertRepoRoot({ repoFlag });
   const sourceFlag = optionalValue(context, "source");
   const registry = readRegistryPins(root);
@@ -391,7 +401,12 @@ function resolvePin(context: CommandContext, root: string): { readonly source: s
 /** The source's checkout declaration in `--repo`'s registry, or null when it has no registry or declares none. */
 function declarationFor(root: string, source: string): ToolCheckout | null {
   if (!existsSync(join(root, ...REPOS_FILE.split("/")))) return null;
-  return loadRepoRegistry(root).toolCheckouts?.[source] ?? null;
+  // CASE-INSENSITIVE, as GitHub's own slugs are: `--source Owner/Handbooks`
+  // names the row recorded as `owner/handbooks` (Nobunaga N11).
+  const checkouts = loadRepoRegistry(root).toolCheckouts ?? {};
+  const wanted = source.toLowerCase();
+  const key = Object.keys(checkouts).find((slug): boolean => slug.toLowerCase() === wanted);
+  return key === undefined ? null : (checkouts[key] ?? null);
 }
 
 /**
@@ -460,6 +475,7 @@ function resolveVerb(context: CommandContext): number {
     context,
     "It is the checkout whose nen/repos.json maps --target to the scenario this handbook set derives from; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
   );
+  refuseForeignFlags(context, "resolve", ["canon-checkout"]);
   const targetRaw = context.args.values["target"];
   if (targetRaw === undefined) throw new VerbUsageError("--target owner/name is required.");
   const stackDir = context.args.values["stack-dir"];
@@ -622,6 +638,11 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
     // Narrowed by the refusal above: neither is null here.
     const stackDir = stackDirFlag ?? "";
     const leaf = leafFlag ?? "";
+    // SHAPE FIRST, then the checkout (Nobunaga N11): a malformed flag is
+    // refused without a single git call.
+    if (isAbsolute(stackDir) || isAbsolute(leaf)) {
+      throw new VerbUsageError("--stack-dir and --leaf name a location INSIDE the canon checkout, so neither may be absolute. Give --rules-dir to name a directory outright.");
+    }
     checkout = resolveCheckout(context, root, source, ref);
     if (checkout.failure !== null || checkout.path === null) {
       // EXIT 2, NEVER 1: on `check`, 1 is drift, and a checkout that is not
@@ -631,15 +652,23 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
         `the canon checkout did not resolve (${checkout.failure?.code ?? "unresolvable"}): ${checkout.failure?.message ?? "no path"} Run 'nen canon checkout --repo ${repoFlag}' to see every step.`,
       );
     }
-    if (isAbsolute(stackDir) || isAbsolute(leaf)) {
-      throw new VerbUsageError("--stack-dir and --leaf name a location INSIDE the canon checkout, so neither may be absolute. Give --rules-dir to name a directory outright.");
+    const lexical = resolve(checkout.path, stackDir, scenario, leaf);
+    // CONTAINED AFTER SYMLINKS, NOT ONLY ON PAPER (Nobunaga N3): a link inside
+    // the checkout pointing outside it passes a lexical check and reads rules
+    // the verified tag never held. A directory that does not exist keeps its
+    // lexical path, and the rules reader refuses it by name.
+    let real = lexical;
+    try {
+      real = realpathSync(lexical);
+    } catch {
+      real = lexical;
     }
-    rulesDir = resolve(checkout.path, stackDir, scenario, leaf);
-    if (!isContained(checkout.path, rulesDir) || rulesDir === checkout.path) {
+    if (!isContained(checkout.path, lexical) || !isContained(checkout.path, real) || real === checkout.path) {
       throw new VerbUsageError(
-        `--stack-dir '${stackDir}' and --leaf '${leaf}' resolve to '${rulesDir}', which is not inside the canon checkout '${checkout.path}'.`,
+        `--stack-dir '${stackDir}' and --leaf '${leaf}' resolve to '${real}', which is not inside the canon checkout '${checkout.path}' (symbolic links resolved).`,
       );
     }
+    rulesDir = real;
   }
   // A rules directory that IS a rendered location would mirror the mirror:
   // the second run would read its own output, marker and all, as canon.
@@ -694,7 +723,16 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
   if (mirrorSub === "generate" && context.args.values["markdown-out"] !== undefined) {
     throw new VerbUsageError("--markdown-out is not read by 'canon mirror generate': it renders a drift table, and generate reports writes. Use it with 'check'.");
   }
-  const inputs = readMirrorInputs(context);
+  let inputs: MirrorInputs;
+  try {
+    inputs = readMirrorInputs(context);
+  } catch (error) {
+    // A MALFORMED REGISTRY IS A QUESTION NEVER ASKED, NOT DRIFT (Nobunaga N5):
+    // the loader's SchemaError would surface at exit 1, which on 'check' is
+    // the drift code. It keeps its message whole and exits 2.
+    if (error instanceof SchemaError) throw new VerbUsageError(error.message);
+    throw error;
+  }
   for (const row of inputs.rows) {
     const rule = row.canonMirror;
     if (rule !== null) context.io.err(`nen: note: ${row.surface}: ${rule.caveat}.`);

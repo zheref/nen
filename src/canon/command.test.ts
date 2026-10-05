@@ -816,3 +816,59 @@ describe("nen canon checkout + mirror's checkout form -- the refusals that come 
     expect(result.err.join("\n")).toMatch(/--source not given/);
   });
 });
+
+describe("Nobunaga round 1 -- the registry and flag findings (zheref/nen#294)", () => {
+  /** The mirror args in the checkout form, --source/--ref and --rules-dir dropped. */
+  function checkoutFormArgs(sub: "generate" | "check", fx: Fixture, extra: readonly string[] = []): string[] {
+    const argv = unpinnedArgs(sub, fx).filter((arg, index, all): boolean => arg !== "--rules-dir" && all[index - 1] !== "--rules-dir");
+    return [...argv, "--stack-dir", "handbooks/stacks", "--leaf", "rules", ...extra];
+  }
+  function writeRaw(root: string, registry: unknown): void {
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "repos.json"), JSON.stringify(registry));
+  }
+
+  it("N5: a malformed registry is exit 2 on generate and check -- never drift's 1 -- through the pin and through the checkout declaration", async () => {
+    const fx = fixture();
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: 3 }] });
+    for (const sub of ["generate", "check"] as const) {
+      const viaPin = await capture(checkoutFormArgs(sub, fx), fx.root);
+      expect(viaPin.code, viaPin.err.join("\n")).toBe(2);
+      expect(viaPin.err.join("\n")).toMatch(/maintained_tools\[0\]\.pinned/);
+    }
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", checkout_env: "/not/a/name" }] });
+    for (const sub of ["generate", "check"] as const) {
+      const viaDeclaration = await capture(checkoutFormArgs(sub, fx, ["--source", "owner/handbooks", "--ref", "v1.2.0"]), fx.root);
+      expect(viaDeclaration.code, viaDeclaration.err.join("\n")).toBe(2);
+      expect(viaDeclaration.err.join("\n")).toMatch(/maintained_tools\[0\]\.checkout_env/);
+    }
+  });
+
+  it("N6: --canon-checkout is refused on 'canon pin' and 'canon resolve'", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const pin = await capture(["canon", "pin", "--canon-checkout", "/x"], fx.root);
+    expect(pin.code).toBe(2);
+    expect(pin.err.join("\n")).toMatch(/--canon-checkout is not read by 'canon pin'/);
+    const resolved = await capture([...resolveArgs({ target: "zheref/KroApple", "always-load": "a.md", "stack-dir": "s" }), "--canon-checkout", "/x"]);
+    expect(resolved.code).toBe(2);
+    expect(resolved.err.join("\n")).toMatch(/--canon-checkout is not read by 'canon resolve'/);
+  });
+
+  it("N11: an absolute --stack-dir is refused before any git call (this harness throws on one)", async () => {
+    const fx = fixture();
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: "v1.2.0", checkout: fx.root }] });
+    const argv = unpinnedArgs("check", fx).filter((arg, index, all): boolean => arg !== "--rules-dir" && all[index - 1] !== "--rules-dir");
+    const result = await capture([...argv, "--stack-dir", "/etc", "--leaf", "rules"], fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/neither may be absolute/);
+  });
+
+  it("N11: --source in another case still finds the declaration recorded for the slug", async () => {
+    const fx = fixture();
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: "v1.2.0", checkout: "${NEN_TEST_UNSET_VARIABLE}/x" }] });
+    const result = await capture(["canon", "checkout", "--source", "Owner/Handbooks", "--ref", "v1.2.0", "--json"], fx.root);
+    expect(result.code).toBe(1);
+    expect(json(result)).toMatchObject({ failure: { code: "bad-template" } });
+  });
+});

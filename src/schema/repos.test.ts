@@ -335,3 +335,19 @@ describe("toolCheckouts -- where a maintained tool's checkout is found is declar
     expect(() => parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "o/h", checkout: "  " }] })).toThrow(/maintained_tools\[0\]\.checkout.*empty string/);
   });
 });
+
+describe("toolPins + toolCheckouts -- one row answers for a tool (Nobunaga N8)", () => {
+  it("takes the pin and the checkout from the LAST row; a last row with no checkout means none, whatever an earlier row said", () => {
+    const registry = parseRepoRegistry("nen/repos.json", {
+      consumers: [],
+      maintained_tools: [
+        { repo: "owner/handbooks", pinned: "v0.5.0", checkout_env: "OLD_CANON", checkout: "/old" },
+        { repo: "owner/handbooks", pinned: "v0.6.0" },
+        { repo: "owner/other", pinned: "v1.0.0", checkout: "/first" },
+        { repo: "owner/other", pinned: "v2.0.0", checkout: "/second" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({ "owner/handbooks": "v0.6.0", "owner/other": "v2.0.0" });
+    expect(registry.toolCheckouts).toEqual({ "owner/other": { index: 3, checkoutEnv: null, checkout: "/second" } });
+  });
+});
