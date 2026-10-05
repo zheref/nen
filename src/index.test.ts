@@ -784,6 +784,52 @@ describe("nen schema check -- an unknown nen/gates.json key is exit 2 (zheref/ne
     }
   });
 
+  it("N9: a gates row refused only for its keys never says the taxonomy could not be read", async () => {
+    const root = withGates((gates): void => {
+      gates["round_quorom"] = { any_of: ["sasuke"], minimum: 1 };
+    });
+    try {
+      const text = await capture(["schema", "check", "--repo", root]);
+      expect(text.code).toBe(2);
+      expect(text.err.join("\n")).not.toContain("could not be read");
+      expect(text.err.join("\n")).toContain("round_quorom -- a key this nen");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("F2: a hostile unknown key reaches neither stream raw", async () => {
+    const root = withGates((gates): void => {
+      gates["evil\u001b[2Jkey"] = 1;
+    });
+    try {
+      const text = await capture(["schema", "check", "--repo", root]);
+      expect(text.code).toBe(2);
+      const all = [...text.out, ...text.err].join("\n");
+      expect(all).not.toContain("\u001b");
+      expect(text.err.join("\n")).toContain('nen/gates.json: "evil\\u001b[2Jkey"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("F3: a key repeated in one object is exit 2, named by pointer, and listed in duplicateKeys", async () => {
+    const root = withGates((): void => undefined);
+    try {
+      const path = join(root, "nen", "gates.json");
+      writeFileSync(path, readFileSync(path, "utf8").replace(/^\{/, '{"version":1,'));
+      const text = await capture(["schema", "check", "--repo", root]);
+      expect(text.code).toBe(2);
+      expect(text.out.join("\n")).toContain("at $, carries the key 'version' twice");
+      expect(text.err.join("\n")).not.toContain("could not be read");
+      const json = await capture(["schema", "check", "--repo", root, "--json"]);
+      expect(json.code).toBe(2);
+      expect(JSON.parse(json.out.join("\n"))).toMatchObject({ ok: false, duplicateKeys: ["nen/gates.json: version"] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("any other failure stays exit 1", async () => {
     const root = withGates((gates): void => {
       gates["base_reviewers"] = [];

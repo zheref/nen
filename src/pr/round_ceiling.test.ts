@@ -42,8 +42,8 @@ describe("parseRequestEvents", () => {
       [{ event: "review_requested", requested_reviewer: { login: "sasuke" } }],
     ];
     expect(parseRequestEvents(JSON.stringify(pages), "x")).toEqual([
-      { login: "Copilot", nodeId: "BOT_1" },
-      { login: "sasuke", nodeId: null },
+      { login: "Copilot", nodeId: "BOT_1", type: null },
+      { login: "sasuke", nodeId: null, type: null },
     ]);
   });
 
@@ -59,25 +59,45 @@ describe("parseRequestEvents", () => {
     ]);
     expect(() => readRequestEvents(seams, TARGET, 9)).toThrow(/could not read zheref\/nen#9's timeline: HTTP 502/);
   });
+
+  it("F7: a token in gh's stderr never reaches the message", () => {
+    const token = `ghp_${"a".repeat(36)}`;
+    const seams = new ScriptedSeams([
+      {
+        match: `gh ${requestTimelineArgv(TARGET, 9).join(" ")}`,
+        result: { code: 1, stderr: `HTTP 401 for https://x:${token}@api.github.com and ${token}` },
+      },
+    ]);
+    let message = "";
+    try {
+      readRequestEvents(seams, TARGET, 9);
+    } catch (error) {
+      message = String(error);
+    }
+    expect(message).toContain("could not read zheref/nen#9's timeline");
+    expect(message).not.toContain(token);
+  });
 });
 
 describe("requestsOf / botRounds", () => {
   const events = [
-    { login: "Copilot", nodeId: "BOT_1" },
-    { login: "copilot", nodeId: null },
-    { login: "other", nodeId: "BOT_2" },
-    { login: "Copilot", nodeId: "BOT_1" },
+    { login: "Copilot", nodeId: "BOT_1", type: "Bot" },
+    { login: "copilot", nodeId: null, type: null },
+    { login: "other", nodeId: "BOT_2", type: "Bot" },
+    { login: "Copilot", nodeId: "BOT_1", type: "Bot" },
+    { login: "copilot", nodeId: "U_1", type: "User" },
   ];
 
-  it("counts by node id, and by login only for an event that carries no id", () => {
+  it("counts by node id, and by the canonical login on any non-User event, whatever its id (N5)", () => {
     expect(requestsOf(events, "BOT_1", null)).toBe(2);
     expect(requestsOf(events, "BOT_1", "copilot")).toBe(3);
-    expect(requestsOf(events, "BOT_2", "copilot")).toBe(2); // the id-less copilot event names that login
+    expect(requestsOf(events, "BOT_9", "copilot")).toBe(3); // an id nen never resolved still counts by login
+    expect(requestsOf(events, "BOT_2", "other")).toBe(1);
     expect(requestsOf(events, "BOT_3", null)).toBe(0);
   });
 
   it("refuses the request that would pass the ceiling, and only that one", () => {
-    const rounds = botRounds(events, [{ id: "BOT_1", login: null }, { id: "BOT_2", login: null }], 2);
+    const rounds = botRounds(events.slice(0, 4), [{ id: "BOT_1", login: null }, { id: "BOT_2", login: null }], 2);
     expect(rounds).toEqual([
       { id: "BOT_1", login: null, requested: 2, next: 3, maxRounds: 2, refused: true },
       { id: "BOT_2", login: null, requested: 1, next: 2, maxRounds: 2, refused: false },

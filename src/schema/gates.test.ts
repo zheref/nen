@@ -8,6 +8,10 @@ import {
   parseCheckExclusions,
   parseGateIdentities,
   parseRoundCaps,
+  parseGatesText,
+  findDuplicateKey,
+  GatesDuplicateKeyError,
+  visibleKey,
   type GatesKeyLevel,
 } from "./gates.js";
 import { SchemaError } from "./errors.js";
@@ -976,6 +980,46 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     expect(error.message).toContain("'maxRound' -> 'maxRounds'?");
     expect(error.message).toContain("'minround' -> 'minRounds'?");
     expect(error.message).toContain("maxRounds (nen >= 0.20.0)");
+  });
+
+  it("N6: the hint is the NEAREST key -- an exact match ignoring case, '_' and '-' wins over one two edits away", () => {
+    for (const key of ["MaxRounds", "max_rounds", "MAX-ROUNDS"]) {
+      const error = refusal({ ...minimal, round_policy: { [key]: 3 } });
+      expect(error.message, key).toContain(`'${key}' -> 'maxRounds'?`);
+      expect(error.message, key).not.toContain("-> 'minRounds'?");
+    }
+    expect(refusal({ ...minimal, round_policy: { minRound: 1 } }).message).toContain("'minRound' -> 'minRounds'?");
+  });
+
+  it("F2: an unknown key is escaped before it reaches any message -- ESC/CSI, a newline and a zero-width character are shown, never interpreted", () => {
+    const hostile = ["evil\u001b[2J\u001b[31mkey", "line\nbreak", "max\u200bRounds"];
+    const error = refusal({ ...minimal, round_policy: Object.fromEntries(hostile.map((key) => [key, 1])) });
+    expect(error.message).not.toMatch(/[\u001b\n\u200b]/);
+    expect(error.message).toContain('"evil\\u001b[2J\\u001b[31mkey"');
+    expect(error.message).toContain('"line\\nbreak"');
+    expect(error.message).toContain('"max\\u200bRounds" -> \'maxRounds\'?');
+    // The raw key stays raw in the structured list, for --json.
+    expect(error.unread.map((entry) => entry.key)).toEqual(hostile);
+    expect(visibleKey("plain_key")).toBe("'plain_key'");
+  });
+
+  it("F3: a key repeated in one object is refused by pointer, never read as the last value", () => {
+    expect(() => parseGatesText(at, '{"version":1,"round_policy":{"maxRounds":1,"maxRounds":999}}')).toThrow(GatesDuplicateKeyError);
+    let error: unknown = null;
+    try {
+      parseGatesText(at, '{"version":1,"reviewers":[{"name":"a"},{"name":"b","name":"c"}]}');
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(SchemaError);
+    expect((error as SchemaError).message).toBe(
+      `${at}: at reviewers[1], carries the key 'name' twice. JSON keeps only the last of the two, so the other value would be dropped without a word -- refused, so the file says one thing (Feitan F3). Remove one of them.`,
+    );
+    // Equal keys in DIFFERENT objects, and a key-like string VALUE, are fine.
+    expect(parseGatesText(at, '{"a":{"x":1},"b":{"x":"\\"x\\"","y":"x"}}')).toEqual({ a: { x: 1 }, b: { x: '"x"', y: "x" } });
+    expect(findDuplicateKey('{"a":1,"b":[{"a":1},{"a":2}]}')).toBeNull();
+    expect(findDuplicateKey('{"a":1,"a":2}')).toEqual({ pointer: "$", key: "a" });
+    expect(() => parseGatesText(at, "{nope")).toThrow(/is not valid JSON/);
   });
 
   it("the table: no nen key starts with '$', and every introducedIn is a release no later than the next minor (N8)", () => {

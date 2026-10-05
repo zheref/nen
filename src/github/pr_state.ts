@@ -607,10 +607,12 @@ export async function requestedAt(
   repo: PrRef,
   prNumber: number,
   loginPattern: RegExp,
+  // The timeline read, shareable so one `fetchPrState` reads it once (N11).
+  readTimeline: () => Promise<unknown[]> = (): Promise<unknown[]> => source.timeline(repo, prNumber),
 ): Promise<string> {
   let events: unknown[];
   try {
-    events = await source.timeline(repo, prNumber);
+    events = await readTimeline();
   } catch {
     return "";
   }
@@ -650,10 +652,11 @@ export async function reviewRequestEvents(
   source: PrStateSource,
   repo: PrRef,
   prNumber: number,
+  readTimeline: () => Promise<unknown[]> = (): Promise<unknown[]> => source.timeline(repo, prNumber),
 ): Promise<TimelineRequest[] | null> {
   let events: unknown[];
   try {
-    events = await source.timeline(repo, prNumber);
+    events = await readTimeline();
   } catch {
     return null;
   }
@@ -1202,6 +1205,11 @@ export async function fetchPrState(
   // `bounded_policy_exempt` one -- the reviewer nothing re-requests after a
   // final push, which is precisely the reviewer a pending request can go stale
   // on. The original tested `/copilot/i`.
+  // ONE timeline read per evaluation, shared by the stall bound and the
+  // request counts (N11): the second reader gets the first's answer -- or its
+  // failure -- rather than paying another paginated walk.
+  let timelineRead: Promise<unknown[]> | undefined;
+  const readTimeline = (): Promise<unknown[]> => (timelineRead ??= source.timeline(repo, prNumber));
   let stallRequestedAt = "";
   const exempt: ReviewerIdentity | undefined = options.identities.reviewers.find(
     (reviewer): boolean =>
@@ -1209,7 +1217,7 @@ export async function fetchPrState(
       requests.some((login): boolean => reviewer.loginPattern.test(login)),
   );
   if (exempt !== undefined) {
-    stallRequestedAt = await requestedAt(source, repo, prNumber, exempt.loginPattern);
+    stallRequestedAt = await requestedAt(source, repo, prNumber, exempt.loginPattern, readTimeline);
   }
 
   // zheref/nen#240: the requested rounds, read only when the file states
@@ -1222,7 +1230,7 @@ export async function fetchPrState(
   // neither read for it (zheref/nen#240, criterion 4).
   const pendingRequests = requests.length > 0;
   const requestEvents =
-    roundCapsDeclared || pendingRequests ? await reviewRequestEvents(source, repo, prNumber) : undefined;
+    roundCapsDeclared || pendingRequests ? await reviewRequestEvents(source, repo, prNumber, readTimeline) : undefined;
   const requestedLogins = roundCapsDeclared
     ? requestEvents === undefined || requestEvents === null
       ? null

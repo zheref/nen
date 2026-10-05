@@ -734,6 +734,21 @@ describe("prReady -- usage errors (exit 2, never a verdict)", () => {
     }
   });
 
+  it("F3: a --gates file repeating a key is exit 2 before GitHub is read, named by pointer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-ready-dup-key-"));
+    try {
+      const path = join(dir, "gates.json");
+      writeFileSync(path, readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8").replace(/^\s*\{/, '{"version":1,'));
+      const { io, out, err } = capture();
+      const code = await prReady(input({ values: { ...input().values, gates: path } }), io, stubDeps(null));
+      expect(code).toBe(2);
+      expect(out).toEqual([]);
+      expect(err.join("\n")).toContain("at $, carries the key 'version' twice");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("an unknown 'pr' subcommand", async () => {
     const { io, err } = capture();
     const code = await prReady(input({ positionals: ["pr", "list"] }), io, stubDeps(null));
@@ -2232,6 +2247,27 @@ describe("prReady -- review rounds counted against round_policy (zheref/nen#240)
     const text = out.join("\n");
     expect(text).toContain("    copilot: requested ? of max 3 (requests could not be counted)");
     expect(text).toContain("timeline could not be read, so the review rounds requested of each reviewer are not counted");
+  });
+
+  it("N11: the stall bound, the round counts and the own-request reading share ONE timeline read", async () => {
+    let timelineReads = 0;
+    const base = threeRounds();
+    const source: PrStateSource = {
+      ...base,
+      // A pending request for the bounded_policy_exempt copilot: the stall
+      // bound reads the timeline, and so do the counts and the reading.
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => ({
+        ...(await base.pullRequestSnapshot(repo, n)),
+        reviewRequests: [{ login: "Copilot" }],
+      }),
+      timeline: async (repo: PrRef, n: number): Promise<unknown[]> => {
+        timelineReads += 1;
+        return await base.timeline(repo, n);
+      },
+    };
+    const { io } = capture();
+    await prReady(input({ values: { ...input().values, gates: gatesWith(CAPS) } }), io, stubDeps(source));
+    expect(timelineReads).toBe(1);
   });
 
   it("a file stating neither key gets no roundCounts and makes no timeline read for them", async () => {

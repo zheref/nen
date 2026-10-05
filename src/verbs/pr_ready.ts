@@ -96,7 +96,7 @@ import {
   type ReviewerIdentity,
 } from "../schema/gates.js";
 import { loadRepoRegistry } from "../schema/repos.js";
-import { GATES_FILE, readSchemaJson, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
+import { GATES_FILE, readSchemaFile, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
 import { plainLine } from "../cli/plain.js";
 import {
@@ -105,7 +105,7 @@ import {
   type BaseExclusions,
   type BaseGatesRead,
 } from "../gates/base_exclusions.js";
-import { untilText, type DeclaredCheckExclusion } from "../schema/gates.js";
+import { parseGatesText, untilText, type DeclaredCheckExclusion } from "../schema/gates.js";
 import { ExcludeCheckError, parseExcludeCheckNames } from "../pr/excludecheck.js";
 
 /**
@@ -1008,16 +1008,8 @@ export function resolveIdentities(
     } catch (error) {
       throw gatesReadFailure(gatesPath, gatesFlag, error);
     }
-    let value: unknown;
-    try {
-      value = JSON.parse(text);
-    } catch (error) {
-      throw new SchemaError(
-        gatesPath,
-        null,
-        `is not valid JSON (${error instanceof Error ? error.message : String(error)})`,
-      );
-    }
+    // Duplicate keys refused by pointer before the parse (Feitan F3).
+    const value = parseGatesText(gatesPath, text);
     return { identities: parseGateIdentities(gatesPath, value), source: "schema", path: gatesPath };
   }
   // THE IN-REPO PATH IS THE RESOLVER'S, NOT THIS FILE'S. This verb bypasses
@@ -1037,13 +1029,13 @@ export function resolveIdentities(
   if (inRepo.canonical.present) {
     // Same shaping as the `--gates <path>` branch above: a malformed
     // gates.json must fail as a path-bearing SchemaError, not as a bare
-    // SyntaxError with no file/pointer context. readSchemaJson is the shared
+    // SyntaxError with no file/pointer context. readSchemaFile + parseGatesText is the shared
     // reader every other in-repo taxonomy load already goes through (see
     // ../schema/gates.ts's own loadGateIdentities, ../schema/repos.ts's
     // loadRepoRegistry) -- reusing it here instead of hand-rolling a second
     // JSON.parse keeps this the ONE failure channel schema/errors.ts documents.
-    const { path, value } = readSchemaJson(repoRoot, GATES_FILE);
-    return { identities: parseGateIdentities(path, value), source: "schema", path };
+    const { path, text } = readSchemaFile(repoRoot, GATES_FILE);
+    return { identities: parseGateIdentities(path, parseGatesText(path, text)), source: "schema", path };
   }
   if (reviewers.length > 0) {
     return { identities: identitiesFromFlags(reviewers, approvers, logins), source: "flags", path: null };

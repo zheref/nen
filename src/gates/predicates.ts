@@ -1603,15 +1603,28 @@ export function quorumExcusedRounds(
   quorum: QuorumResult | null | undefined,
 ): { readonly owed: readonly OwedRound[]; readonly excused: readonly OwedRound[] } {
   if (quorum === null || quorum === undefined || !quorum.met) return { owed, excused: [] };
+  const inFlight = quorumMembersInFlight(quorum);
   const unavailable = new Set(
-    quorum.members
-      .filter((member): boolean => member.roundCheck?.state !== "pending")
-      .map((member): string => member.reviewer),
+    quorum.members.map((member): string => member.reviewer).filter((name): boolean => !inFlight.has(name)),
   );
   return {
     owed: owed.filter((round): boolean => !unavailable.has(round.reviewer)),
     excused: owed.filter((round): boolean => unavailable.has(round.reviewer)),
   };
+}
+
+/**
+ * The `round_quorum` members MID-REVIEW: a round-check run at head still in
+ * flight (state `pending`). The one test both `quorumExcusedRounds` (above)
+ * and ./round_counts.ts's `owed-in-flight` reading ask, so the row and the
+ * counts cannot disagree about who a met quorum covers (zheref/nen#361, #240).
+ */
+export function quorumMembersInFlight(quorum: QuorumResult | null | undefined): ReadonlySet<string> {
+  return new Set(
+    (quorum?.members ?? [])
+      .filter((member): boolean => member.roundCheck?.state === "pending")
+      .map((member): string => member.reviewer),
+  );
 }
 
 export interface QuorumResult {

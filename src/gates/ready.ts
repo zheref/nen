@@ -18,8 +18,9 @@
 //
 // THE LOGIC IS UNCHANGED, EXCEPT WHERE A NUMBERED DIVERGENCE BELOW SAYS
 // OTHERWISE -- (8) evaluates every row, (9) adds the `round_quorum` branch,
-// and (10) narrows which round-check run counts, which moves per-reviewer
-// verdicts for every file that declares a `round_check_pattern`. Otherwise
+// (10) narrows which round-check run counts, which moves per-reviewer
+// verdicts for every file that declares a `round_check_pattern`, and (11)
+// appends a pending-request reading to the rounds-owed row. Otherwise
 // every branch, every ordering, every asymmetry and every conservative
 // direction is exactly as it was. The gate is NEVER PARTIALLY
 // READY -- the whole conjunction -- and the reason returned is always the FIRST
@@ -197,6 +198,18 @@
 //     to change a NEUTRAL fixture to SUCCESS to keep proving its own subject --
 //     and it is fail-safe: a round-check reviewer can only become owed where
 //     it used to be cleared, never the reverse.
+//
+// (11) THE ROUNDS-OWED ROW MAY END IN A READING THE ORIGINAL NEVER PRINTS
+//     (zheref/nen#240, criterion 4). When every round still owed is a pending
+//     review request and no unmet quorum adds a failure, the reason gains ONE
+//     suffix, opening " — ": either `pending request only: ...` (every owed
+//     reviewer has a round at some head; with `; own-request: ...` when the
+//     identity running the gate made each request) or `no round at any head
+//     yet: <names>; ...` (some owed reviewer never had one). Detail text ONLY:
+//     no row's status, no verdict and no exit code moves. It is the one case in
+//     which this gate's line is no longer the shell's byte for byte, so
+//     ../shadow/run.ts strips the suffix (`PENDING_ONLY_READING` /
+//     `NO_ROUND_YET_READING`, below) before it compares the two.
 // ============================================================================
 // pr_ready_gate.ts -- the TypeScript port of scripts/pr_ready_gate.sh
 // (BC-IS-#733 Phase 2, BC-IS-#737, rank 1).
@@ -334,11 +347,12 @@ import {
   type OwedRound,
   type QuorumMember,
   type QuorumResult,
+  type ReviewerRoundFacts,
   type RoundAtHead,
   type RoundPolicy,
   type UnapprovedApprover,
 } from "./predicates.js";
-import { countRounds, type RoundCounts } from "./round_counts.js";
+import { countRounds, requestLoginMatcher, type RoundCounts } from "./round_counts.js";
 import {
   parseCheckRollup,
   parseReviewRequests,
@@ -838,22 +852,34 @@ function pendingRequestReading(
   owed: readonly OwedRound[],
   state: Record<string, unknown>,
   quorum: QuorumResult | undefined,
+  facts: readonly ReviewerRoundFacts[],
 ): string {
   if (owed.length === 0) return "";
   if (!owed.every((entry): boolean => entry.reason === "review-requested-not-yet-posted")) return "";
   if (quorum !== undefined && !quorum.met) return "";
-  const pending =
-    " — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)";
+  // N1: "no owed reviewer lacks a round at any head" is a CLAIM, and it holds
+  // only for a reviewer that posted at some head or whose check holds a round
+  // (bounded earlier-head runs included). A reviewer that never had one gets
+  // the distinct reading instead, and no own-request claim rides on it.
+  const hadRound = (name: string): boolean => {
+    const fact = facts.find((entry): boolean => entry.reviewer === name);
+    return fact !== undefined && (fact.posted > 0 || fact.round !== null);
+  };
+  const never = owed.filter((entry): boolean => !hadRound(entry.reviewer)).map((entry): string => entry.reviewer);
+  if (never.length > 0) {
+    return ` — ${NO_ROUND_YET_READING}: ${never.join(", ")}; a review request for each is pending (zheref/nen#240)`;
+  }
+  const pending = ` — ${PENDING_ONLY_READING}: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)`;
   const running = state["gate_identity"];
   const rawEvents = state["review_request_events"];
   if (typeof running !== "string" || running === "" || !Array.isArray(rawEvents)) return pending;
   const requesters = owed.map((entry): string | null => {
-    const pattern = identities.reviewer(entry.reviewer)?.loginPattern ?? exactLoginPattern(entry.reviewer);
+    const matches = requestLoginMatcher(identities.reviewer(entry.reviewer)?.loginPattern ?? exactLoginPattern(entry.reviewer));
     let actor: string | null = null;
     for (const event of rawEvents) {
       const reviewer = typeof event === "object" && event !== null ? (event as Record<string, unknown>)["reviewer"] : null;
       const by = typeof event === "object" && event !== null ? (event as Record<string, unknown>)["actor"] : null;
-      if (typeof reviewer === "string" && pattern.test(reviewer)) actor = typeof by === "string" ? by : null;
+      if (typeof reviewer === "string" && matches(reviewer)) actor = typeof by === "string" ? by : null;
     }
     return actor;
   });
@@ -862,6 +888,10 @@ function pendingRequestReading(
     ? `${pending}; own-request: every pending request was made by ${running}, the identity running this gate`
     : pending;
 }
+
+/** The two readings' openings -- ../shadow/run.ts strips either suffix (divergence 11). */
+export const PENDING_ONLY_READING = "pending request only";
+export const NO_ROUND_YET_READING = "no round at any head yet";
 
 /**
  * One `round_quorum` member, as the rounds-owed row names it: what it HAS, or
@@ -1523,7 +1553,20 @@ export function evaluateReady(
           ? null
           : "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): " +
             stillOwed.map((entry): string => describeOwedRound(identities, entry)).join(";") +
-            pendingRequestReading(identities, stillOwed, state, quorum);
+            pendingRequestReading(
+              identities,
+              stillOwed,
+              state,
+              quorum,
+              reviewerRoundFacts(
+                identities,
+                roundInputs,
+                head,
+                stillOwed.map((entry): string => entry.reviewer),
+                policy,
+                delivery,
+              ),
+            );
       if (quorum === undefined || quorum.met) {
         const excusedClause =
           excused.length === 0

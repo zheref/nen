@@ -22,26 +22,45 @@
 // this request's event from an earlier one's needs a clock window. Counting
 // needs no window: every event is a round asked for, and the count is the sum.
 //
-// WHERE THE CEILING COMES FROM: `nen/gates.json` AT THE PULL REQUEST'S BASE,
-// read the way `checks.excluded` is (../gates/base_exclusions.ts, Feitan F1),
-// never the local checkout -- `--target` may name another repository than the
-// one the caller stands in, and a pull request must not raise its own ceiling.
-// No file at the base, or a file stating no `maxRounds`, declares no ceiling
-// and the verb behaves as it always did. A base that cannot be read, or a file
-// that does not validate, REFUSES the bot request (exit 1): a ceiling that was
-// declared and could not be checked is never read as "no ceiling".
+// WHERE THE CEILING COMES FROM: `nen/gates.json` at TWO commits -- the pull
+// request's BASE and the tip of the repository's DEFAULT BRANCH -- and the
+// LOWER `maxRounds` of the two applies (Feitan F1). Never the local checkout:
+// `--target` may name another repository than the one the caller stands in.
+// The base alone would let a pull request based on a branch it controls carry
+// its own ceiling; the default branch alone would let a stale base outrank a
+// lowered ruling. "Absent at the base, declared on the default branch" is
+// declared. Neither stating `maxRounds` is no ceiling, and the verb behaves as
+// it always did.
+//
+// ABSENT MEANS ONE THING (Feitan F8 / N2). Each commit is first read itself
+// (`repos/<slug>/commits/<sha>`); only when it reads does a 404 on the FILE
+// mean "no nen/gates.json here". A 404 reading the commit (a repository the
+// token cannot see), "No commit found for the ref", or any other failure is
+// `failed`, and a failed read REFUSES the bot request (exit 1): a ceiling that
+// may be declared and could not be checked is never read as "no ceiling".
+//
+// A GUARDRAIL, NOT A LOCK (F5). The ceiling binds this verb. `gh pr edit`, a
+// raw GraphQL `requestReviews` and the web UI request reviews without asking
+// it, and the count is read before the request is made, so two concurrent
+// calls can each see room for one more. Every request still COUNTS, whoever
+// made it, so the next call through this verb sees them.
 //
 // BOTS ONLY. The ceiling caps the automated review rounds an agent requests
 // (zheref/hatsu#102); a User or Team reviewer requested through `gh pr edit
 // --add-reviewer` is a person asked once, and is not counted or capped.
 
-import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { GH, outputLines, redactRemoteCredentials, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
+import { BASE_GATES_PATH, decodeContentsPayload } from "../gates/base_exclusions.js";
+import { parseGatesText, parseRoundCaps } from "../schema/gates.js";
+import { SchemaError } from "../schema/errors.js";
 
 /** One `review_requested` timeline event's requested reviewer. */
 export interface RequestEvent {
   readonly login: string | null;
   readonly nodeId: string | null;
+  /** The reviewer's account type (`Bot`, `User`), `null` when the event says none. */
+  readonly type: string | null;
 }
 
 export class RoundCeilingError extends Error {
@@ -91,9 +110,11 @@ export function parseRequestEvents(stdout: string, what: string): RequestEvent[]
     if (reviewer === undefined || reviewer === null) continue; // a team request names no bot
     const login = field(reviewer, "login");
     const nodeId = field(reviewer, "node_id");
+    const type = field(reviewer, "type");
     events.push({
       login: typeof login === "string" && login !== "" ? login : null,
       nodeId: typeof nodeId === "string" && nodeId !== "" ? nodeId : null,
+      type: typeof type === "string" && type !== "" ? type : null,
     });
   }
   return events;
@@ -105,19 +126,167 @@ export function readRequestEvents(seams: Seams, target: Target, prNumber: number
   const result = seams.run(GH, [...requestTimelineArgv(target, prNumber)]);
   if (result.code !== 0) {
     throw new RoundCeilingError(
-      `could not read ${what}'s timeline: ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`,
+      `could not read ${what}'s timeline: ${redactRemoteCredentials(outputLines(result.stderr).join(" ")) || `exit ${result.code}`}`,
     );
   }
   return parseRequestEvents(result.stdout, what);
 }
 
-/** How many of `events` request this bot: by node id, or by login (case-insensitive) where one is known. */
+/**
+ * How many of `events` request this bot: every event carrying its node id,
+ * and every event naming its CANONICAL login (case-insensitive) that is not a
+ * User's -- whatever id that event carries (N5): a Bot event whose id matches
+ * no bot nen resolved but whose login is this bot's is counted, never read as
+ * zero requests.
+ */
 export function requestsOf(events: readonly RequestEvent[], id: string, login: string | null): number {
   const wanted = login?.toLowerCase() ?? null;
   return events.filter(
     (event): boolean =>
-      event.nodeId === id || (wanted !== null && event.nodeId === null && event.login?.toLowerCase() === wanted),
+      event.nodeId === id || (wanted !== null && event.type !== "User" && event.login?.toLowerCase() === wanted),
   ).length;
+}
+
+// ── canonical bot logins (N5) ────────────────────────────────────────────────
+
+const BOT_NODES_QUERY = "query($ids:[ID!]!){nodes(ids:$ids){__typename ... on Bot{id login}}}";
+
+/** One `nodes(ids:)` read for the `--add-bots` ids whose login nothing else gave. */
+export function botNodesArgv(ids: readonly string[]): readonly string[] {
+  const argv = ["api", "--method", "POST", "graphql", "-f", `query=${BOT_NODES_QUERY}`];
+  for (const id of ids) argv.push("-f", `ids[]=${id}`);
+  return argv;
+}
+
+/**
+ * Each id's canonical Bot login. Throws `RoundCeilingError` when the read
+ * fails, or an id is not a Bot -- a bot whose requests cannot be counted is
+ * refused, never counted as zero.
+ */
+export function canonicalBotLogins(seams: Seams, ids: readonly string[]): ReadonlyMap<string, string> {
+  const logins = new Map<string, string>();
+  if (ids.length === 0) return logins;
+  const result = seams.run(GH, [...botNodesArgv(ids)]);
+  if (result.code !== 0) {
+    throw new RoundCeilingError(
+      `could not resolve ${ids.join(", ")} to a bot: ${redactRemoteCredentials(outputLines(result.stderr).join(" ")) || `exit ${result.code}`}`,
+    );
+  }
+  let nodes: unknown;
+  try {
+    nodes = field(field(JSON.parse(result.stdout) as unknown, "data"), "nodes");
+  } catch (error) {
+    throw new RoundCeilingError(`the bot lookup for ${ids.join(", ")} did not read as JSON (${String(error)})`);
+  }
+  ids.forEach((id, index): void => {
+    const node = Array.isArray(nodes) ? (nodes[index] as unknown) : undefined;
+    const login = field(node, "login");
+    if (field(node, "__typename") !== "Bot" || field(node, "id") !== id || typeof login !== "string" || login === "") {
+      throw new RoundCeilingError(
+        `${id} does not resolve to a Bot, so the review rounds already requested of it cannot be counted`,
+      );
+    }
+    logins.set(id, login);
+  });
+  return logins;
+}
+
+// ── the ceiling's two sources (Feitan F1, F8 / N2) ───────────────────────────
+
+/** `repos/<slug>/commits/<ref>`: the commit itself, read before its file. */
+export function commitArgv(target: Target, ref: string): readonly string[] {
+  return ["api", "--method", "GET", `repos/${target.slug}/commits/${ref}`];
+}
+
+/** `nen/gates.json` at one commit. */
+export function gatesAtArgv(target: Target, sha: string): readonly string[] {
+  const path = BASE_GATES_PATH.split("/").map((segment): string => encodeURIComponent(segment)).join("/");
+  return ["api", "--method", "GET", `repos/${target.slug}/contents/${path}?ref=${sha}`];
+}
+
+export type GatesAtRef =
+  | { readonly kind: "absent" }
+  | { readonly kind: "read"; readonly text: string }
+  | { readonly kind: "failed"; readonly message: string };
+
+function stderrOf(result: { readonly stderr: string; readonly code: number }): string {
+  return redactRemoteCredentials(outputLines(result.stderr).join(" ")) || `exit ${result.code}`;
+}
+
+/**
+ * `nen/gates.json` at `sha`, where only a FILE-level 404 at a commit that
+ * itself reads is `absent` (N2): the commit is read first, and "No commit
+ * found for the ref" on the file read is `failed` too.
+ */
+export function readGatesAt(seams: Seams, target: Target, sha: string): GatesAtRef {
+  if (sha === "") return { kind: "failed", message: "GitHub answered no commit to read nen/gates.json at" };
+  const commit = seams.run(GH, [...commitArgv(target, sha)]);
+  if (commit.code !== 0) {
+    return { kind: "failed", message: `the commit ${target.slug}@${sha} could not be read (${stderrOf(commit)})` };
+  }
+  const file = seams.run(GH, [...gatesAtArgv(target, sha)]);
+  if (file.code !== 0) {
+    const stderr = stderrOf(file);
+    if (/HTTP 404|Not Found/i.test(stderr) && !/No commit found/i.test(stderr)) return { kind: "absent" };
+    return { kind: "failed", message: `${target.slug}@${sha}:${BASE_GATES_PATH} could not be read (${stderr})` };
+  }
+  try {
+    return { kind: "read", text: decodeContentsPayload(JSON.parse(file.stdout) as unknown, BASE_GATES_PATH, sha) };
+  } catch (error) {
+    return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export type CeilingRead =
+  | { readonly kind: "none" }
+  | { readonly kind: "declared"; readonly maxRounds: number; readonly source: string }
+  | { readonly kind: "failed"; readonly message: string };
+
+/** One commit the ceiling is read at: the base, or the default branch's tip. */
+export interface CeilingRef {
+  readonly label: string;
+  readonly sha: string;
+}
+
+/**
+ * `round_policy.maxRounds` at every ref (deduplicated by sha), the LOWER
+ * declared value applied (Feitan F1). `source` names every ref read, with
+ * what each states. Any read that fails, or a file that does not validate,
+ * is `failed`.
+ */
+export function resolveCeiling(seams: Seams, target: Target, refs: readonly CeilingRef[]): CeilingRead {
+  const unique = refs.filter((ref, index): boolean => refs.findIndex((other): boolean => other.sha === ref.sha) === index);
+  const stated: { readonly ref: CeilingRef; readonly where: string; readonly maxRounds: number | null }[] = [];
+  for (const ref of unique) {
+    const where = `${target.slug}@${ref.sha === "" ? "(unknown)" : ref.sha}:${BASE_GATES_PATH}`;
+    const read = readGatesAt(seams, target, ref.sha);
+    if (read.kind === "failed") {
+      return { kind: "failed", message: `could not read round_policy.maxRounds at the ${ref.label} (${read.message})` };
+    }
+    if (read.kind === "absent") {
+      stated.push({ ref, where, maxRounds: null });
+      continue;
+    }
+    try {
+      stated.push({ ref, where, maxRounds: parseRoundCaps(where, parseGatesText(where, read.text)).maxRounds });
+    } catch (error) {
+      if (error instanceof SchemaError) return { kind: "failed", message: error.message };
+      throw error;
+    }
+  }
+  const declared = stated.filter((entry): boolean => entry.maxRounds !== null);
+  if (declared.length === 0) return { kind: "none" };
+  const maxRounds = Math.min(...declared.map((entry): number => entry.maxRounds ?? Number.POSITIVE_INFINITY));
+  const source =
+    stated.length === 1
+      ? (stated[0]?.where ?? "")
+      : stated
+          .map(
+            (entry): string =>
+              `${entry.where} (${entry.ref.label}: ${entry.maxRounds === null ? "no maxRounds" : `maxRounds ${entry.maxRounds}`})`,
+          )
+          .join(" and ") + `, the lower applied`;
+  return { kind: "declared", maxRounds, source };
 }
 
 /** One bot this call would request, counted against the ceiling. */

@@ -47,6 +47,17 @@ describe("countRounds", () => {
     expect(countRounds([fact("a")], ["a", "a", "a"], null, 3, undefined).reviewers[0]?.max).toBe("reached");
   });
 
+  it("N10: a request is the reviewer's only when the WHOLE login matches -- 'copilot' never counts copilot-swe-agent", () => {
+    const counts = countRounds(
+      [fact("copilot", { loginPattern: /copilot/i })],
+      ["Copilot", "copilot[bot]", "copilot-swe-agent", "not-copilot"],
+      null,
+      3,
+      undefined,
+    );
+    expect(counts.reviewers[0]?.requested).toBe(2);
+  });
+
   it("an unread timeline is 'unknown', never zero", () => {
     const counts = countRounds([fact("a")], null, 1, 3, undefined);
     expect(counts.requestsRead).toBe(false);

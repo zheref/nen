@@ -22,7 +22,7 @@
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
 import { describeContract, loadContract } from "./contract.js";
-import { GatesUnknownKeyError, loadGateIdentities, type GateIdentities } from "./gates.js";
+import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, visibleKey, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
@@ -143,6 +143,12 @@ export interface CheckReport {
    * much as the file. Empty when every key is known.
    */
   readonly unknownKeys: readonly string[];
+  /**
+   * A key repeated within one object of `nen/gates.json`, as `<file>:
+   * <pointer>.<key>` (Feitan F3). Also a failed row, and also exit 2. Empty
+   * when none is repeated. Additive.
+   */
+  readonly duplicateKeys: readonly string[];
 }
 
 // The ONE leftover-cleanup sentence, written once so a caller reading two
@@ -346,6 +352,14 @@ function pointerCheck(root: string, pointer: string, describe: (workflow: Workfl
 export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
   const root = assertRepoRoot(options);
   const unknownKeys: string[] = [];
+  const duplicateKeys: string[] = [];
+  // A key as the list shows it: plain when printable ASCII, else escaped
+  // (Feitan F2) -- the file's text never reaches a terminal raw.
+  const shown = (pointer: string, key: string): string => {
+    const visible = visibleKey(key);
+    const bare = visible.startsWith("'") ? visible.slice(1, -1) : visible;
+    return `${GATES_FILE}: ${pointer === "$" ? "" : `${pointer}.`}${bare}`;
+  };
   const checks: SchemaCheck[] = [
     run(LABELS_FILE, root, true, (): string => {
       const labels = loadLabelTaxonomy(root);
@@ -368,10 +382,9 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
         // Recorded for the exit code (zheref/nen#310), then failed as any other
         // present-and-wrong gates.json: the row and its `detail` are unchanged.
         if (error instanceof GatesUnknownKeyError) {
-          for (const { pointer, key } of error.unread) {
-            unknownKeys.push(`${GATES_FILE}: ${pointer === "$" ? "" : `${pointer}.`}${key}`);
-          }
+          for (const { pointer, key } of error.unread) unknownKeys.push(shown(pointer, key));
         }
+        if (error instanceof GatesDuplicateKeyError) duplicateKeys.push(shown(error.pointer ?? "$", error.key));
         throw error;
       }
       // `checks.excluded` (zheref/nen#249) is counted only when declared, so a
@@ -422,5 +435,6 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
       .map((check): string | null => (check.note === null ? null : `${check.file}: ${check.note}`))
       .filter((note): note is string => note !== null),
     unknownKeys,
+    duplicateKeys,
   };
 }

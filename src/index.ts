@@ -57,6 +57,7 @@ import { COMMANDS, findCommand } from "./cli/registry.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { WORKFLOW_FILE } from "./schema/workflow.js";
+import { GATES_FILE } from "./schema/source.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
@@ -451,10 +452,12 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
   const report = checkTaxonomy({ repoFlag });
   // An unknown gates.json key is exit 2 (zheref/nen#310), as it is in
   // `nen pr ready`: the file asks for a gate this binary cannot apply.
-  const failed = report.unknownKeys.length > 0 ? 2 : 1;
+  // A repeated key (Feitan F3) is refused the same way.
+  const refusedGates = report.unknownKeys.length > 0 || report.duplicateKeys.length > 0;
+  const failCode = refusedGates ? 2 : 1;
   if (json) {
     io.out(JSON.stringify(report, null, 2));
-    return report.ok ? 0 : failed;
+    return report.ok ? 0 : failCode;
   }
   io.out(`repository: ${report.root}`);
   for (const check of report.checks) {
@@ -494,20 +497,37 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     // way, a row that failed because only a legacy `schemas/` copy was found
     // already named the migration in its own `detail`, printed above -- this
     // closing line does not repeat it.
-    const failed = report.checks.filter((check): boolean => !check.ok && check.required);
-    const unreadable = failed.some((check): boolean => check.file !== WORKFLOW_FILE);
-    io.err(
-      unreadable
-        ? `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`
-        : `${PROGRAM}: this repository's '${WORKFLOW_FILE}' is present and could not be read -- the pointer is named above. Every parameter in that file HAS a default, and nen is deliberately not applying one: a policy this repository states and nen cannot parse is not a policy nen may quietly replace with its own.`,
+    //
+    // A gates row refused ONLY for its keys (unknown or repeated) is not an
+    // unreadable taxonomy: the key line below says exactly what is wrong, and
+    // "could not be read" beside it would send the reader looking for a
+    // broken file that is not broken (N9).
+    const failedChecks = report.checks.filter((check): boolean => !check.ok && check.required);
+    const unreadable = failedChecks.some(
+      (check): boolean => check.file !== WORKFLOW_FILE && !(check.file === GATES_FILE && refusedGates),
     );
+    const workflowFailed = failedChecks.some((check): boolean => check.file === WORKFLOW_FILE);
+    if (unreadable) {
+      io.err(
+        `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`,
+      );
+    } else if (workflowFailed) {
+      io.err(
+        `${PROGRAM}: this repository's '${WORKFLOW_FILE}' is present and could not be read -- the pointer is named above. Every parameter in that file HAS a default, and nen is deliberately not applying one: a policy this repository states and nen cannot parse is not a policy nen may quietly replace with its own.`,
+      );
+    }
+    if (report.duplicateKeys.length > 0) {
+      io.err(
+        `${PROGRAM}: ${report.duplicateKeys.join(", ")} -- a key repeated in one object; JSON keeps only the last. Exit 2: remove the duplicate.`,
+      );
+    }
     if (report.unknownKeys.length > 0) {
       io.err(
         `${PROGRAM}: ${report.unknownKeys.join(", ")} -- a key this nen (${VERSION}) does not read. Exit 2: upgrade nen if a newer release introduced it, otherwise correct the file.`,
       );
     }
   }
-  return report.ok ? 0 : failed;
+  return report.ok ? 0 : failCode;
 }
 
 /**

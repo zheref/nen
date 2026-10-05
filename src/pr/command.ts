@@ -38,7 +38,7 @@ import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE }
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
-import { loadGateIdentities, parseRoundCaps } from "../schema/gates.js";
+import { loadGateIdentities } from "../schema/gates.js";
 import { SchemaError } from "../schema/errors.js";
 import {
   BASE_GATES_PATH,
@@ -61,8 +61,10 @@ import { requestReviews } from "./reviewers.js";
 import {
   botLabel,
   botRounds,
+  canonicalBotLogins,
   ceilingRefusal,
   readRequestEvents,
+  resolveCeiling,
   RoundCeilingError,
   type BotRound,
   type RequestEvent,
@@ -281,15 +283,20 @@ request-reviews:
                          requested; prints which route -- bot, user or
                          team -- each name or id went to instead.
   THE ROUND CEILING (zheref/nen#240): before any bot is requested,
-  round_policy.maxRounds is read from nen/gates.json AT THE PULL
-  REQUEST'S BASE, and each bot's review_requested timeline events are
-  counted (by node id). A request that would pass the ceiling refuses
-  the WHOLE call at exit 2 -- naming the bot, its count, the request it
-  would be and the ceiling -- and nothing is requested; --dry-run
-  previews the same, and prints 'request N of M' per bot inside it. No
-  file at the base, or none stating maxRounds, is no ceiling. A base or
-  timeline that cannot be read, or a file that does not validate,
-  refuses the bot request at exit 1. Users and teams are not capped.
+  round_policy.maxRounds is read from nen/gates.json at the PULL
+  REQUEST'S BASE and at the DEFAULT BRANCH's tip, the LOWER applied,
+  and each bot's review_requested timeline events are counted (by node
+  id, and by its canonical login on any Bot event). A request that
+  would pass the ceiling refuses the WHOLE call at exit 2 -- naming the
+  bot, its count, the request it would be and the ceiling's sources --
+  and nothing is requested; --dry-run previews the same, and prints
+  'request N of M' per bot inside it. Neither commit stating maxRounds
+  (only a file-level 404 at a readable commit is "no file") is no
+  ceiling. A commit, file or timeline that cannot be read, a file that
+  does not validate, or an id that is not a Bot refuses the bot request
+  at exit 1. Users and teams are not capped. A GUARDRAIL, not a lock:
+  'gh pr edit', raw GraphQL and the web UI request reviews without this
+  verb, and the count is not atomic with the request.
   --json adds 'ceiling' ({ maxRounds, source } or null) and 'rounds'
   ([{ id, login, requested, next, maxRounds, refused }]) when a bot is
   named.
@@ -1139,32 +1146,55 @@ function doRequestReviews(context: CommandContext): number {
   // THE ROUND CEILING (zheref/nen#240), checked BEFORE anything is requested
   // and under --dry-run too, which previews exactly what the real call would
   // do. Bots only -- see ./round_ceiling.ts's header. `known` is read here
-  // when only --add-bots was given, because the base commit the ceiling is
-  // read at comes with it.
+  // when only --add-bots was given, because the base commit and the default
+  // branch the ceiling is read at come with it.
   let knownBots: PrAndKnownBots | null = known;
   let ceiling: { readonly maxRounds: number; readonly source: string; readonly rounds: readonly BotRound[] } | null = null;
+  // A ceiling that could not be checked refuses at exit 1; `dryRun` rides in
+  // the --json of that refusal too (N11).
+  const unchecked = (message: string): number => {
+    emit(
+      context.io,
+      context.json,
+      { ok: false, ...(dryRun ? { dryRun: true } : {}), routing: routes, message, ceiling: null, rounds: [], unrecordedBots: [] },
+      [message],
+    );
+    return 1;
+  };
   if (botIds.length > 0) {
     knownBots ??= fetchPrAndKnownBots(context.seams, target, prNumber);
-    const loginOf = (id: string): string | null =>
-      reviewerRoutes.find((route): boolean => route.route === "bot" && route.id === id)?.name ??
-      knownBots?.bots.find((bot): boolean => bot.id === id)?.login ??
-      null;
-    const read = readRoundCeiling(context.seams, target, knownBots.baseRefOid);
+    const read =
+      knownBots.defaultBranch === null
+        ? ({ kind: "failed", message: "GitHub answered no default branch for the repository" } as const)
+        : resolveCeiling(context.seams, target, [
+            { label: "pull request's base", sha: knownBots.baseRefOid },
+            { label: `default branch (${knownBots.defaultBranch.name})`, sha: knownBots.defaultBranch.oid },
+          ]);
     if (read.kind === "failed") {
-      const message = `${read.message}. Nothing was requested: a round_policy.maxRounds ceiling that cannot be checked is never read as no ceiling (zheref/nen#240).`;
-      emit(context.io, context.json, { ok: false, routing: routes, message, ceiling: null, rounds: [], unrecordedBots: [] }, [message]);
-      return 1;
+      return unchecked(
+        `${read.message}. Nothing was requested: a round_policy.maxRounds ceiling that cannot be checked is never read as no ceiling (zheref/nen#240).`,
+      );
     }
     if (read.kind === "declared") {
       let events: RequestEvent[];
+      let canonical: ReadonlyMap<string, string>;
+      // Each bot's CANONICAL login (N5): from the route or this pull
+      // request's known bots where it came from GraphQL already, else one
+      // `nodes(ids:)` read for the --add-bots ids nothing else named.
+      const knownLogin = (id: string): string | null =>
+        reviewerRoutes.find((route): boolean => route.route === "bot" && route.id === id)?.name ??
+        knownBots?.bots.find((bot): boolean => bot.id === id)?.login ??
+        null;
       try {
+        canonical = canonicalBotLogins(context.seams, botIds.filter((id): boolean => knownLogin(id) === null));
         events = readRequestEvents(context.seams, target, prNumber);
       } catch (error) {
         if (!(error instanceof RoundCeilingError)) throw error;
-        const message = `${error.message}, so the requests already made of each bot cannot be counted against the round_policy.maxRounds ceiling of ${read.maxRounds} declared in ${read.source}. Nothing was requested (zheref/nen#240).`;
-        emit(context.io, context.json, { ok: false, routing: routes, message, ceiling: null, rounds: [], unrecordedBots: [] }, [message]);
-        return 1;
+        return unchecked(
+          `${error.message}, so the requests already made of each bot cannot be counted against the round_policy.maxRounds ceiling of ${read.maxRounds} declared in ${read.source}. Nothing was requested (zheref/nen#240).`,
+        );
       }
+      const loginOf = (id: string): string | null => knownLogin(id) ?? canonical.get(id) ?? null;
       const rounds = botRounds(events, botIds.map((id): { id: string; login: string | null } => ({ id, login: loginOf(id) })), read.maxRounds);
       ceiling = { maxRounds: read.maxRounds, source: read.source, rounds };
       const refused = rounds.filter((round): boolean => round.refused);
@@ -1241,35 +1271,7 @@ function doRequestReviews(context: CommandContext): number {
  */
 export const EXIT_ROUND_CEILING = 2;
 
-type CeilingRead =
-  | { readonly kind: "none" }
-  | { readonly kind: "declared"; readonly maxRounds: number; readonly source: string }
-  | { readonly kind: "failed"; readonly message: string };
 
-/**
- * `round_policy.maxRounds` from `nen/gates.json` AT THE PULL REQUEST'S BASE
- * (./round_ceiling.ts's header). No file, or a file stating no maxRounds, is
- * `none`; an unreadable base or a file that does not validate is `failed`.
- */
-function readRoundCeiling(seams: Seams, target: Target, baseSha: string): CeilingRead {
-  const source = `${target.slug}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
-  const read = readBaseGatesWithGh(seams, target, baseSha);
-  if (read.kind === "absent") return { kind: "none" };
-  if (read.kind === "failed") return { kind: "failed", message: `could not read ${source} for round_policy.maxRounds (${read.message})` };
-  let value: unknown;
-  try {
-    value = JSON.parse(read.text) as unknown;
-  } catch (error) {
-    return { kind: "failed", message: `${source} is not valid JSON (${error instanceof Error ? error.message : String(error)})` };
-  }
-  try {
-    const caps = parseRoundCaps(source, value);
-    return caps.maxRounds === null ? { kind: "none" } : { kind: "declared", maxRounds: caps.maxRounds, source };
-  } catch (error) {
-    if (error instanceof SchemaError) return { kind: "failed", message: error.message };
-    throw error;
-  }
-}
 
 /**
  * The first and last line of a body, for --dry-run's summary.

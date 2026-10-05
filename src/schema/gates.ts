@@ -183,7 +183,7 @@ import {
   SchemaError,
 } from "./errors.js";
 import { patternHazard } from "./pattern.js";
-import { GATES_FILE, readSchemaJson } from "./source.js";
+import { GATES_FILE, readSchemaFile } from "./source.js";
 import { VERSION } from "../version.js";
 
 export interface ReviewerIdentity {
@@ -292,8 +292,9 @@ export interface GateIdentities {
    * when the file states none. A non-negative integer, `minRounds <=
    * maxRounds` when both are stated. `maxRounds` caps the review rounds
    * REQUESTED of one reviewer on one pull request -- `nen pr request-reviews`
-   * refuses the request past it; `minRounds` is how many rounds a reviewer
-   * stands owed -- `nen pr ready --explain` reports each reviewer against both.
+   * refuses the request past it; `minRounds` is how many POSTED rounds a
+   * reviewer stands owed -- `nen pr ready --explain` reports each reviewer
+   * against both.
    * Neither is a CON-32 conjunct. OPTIONAL in the type for the reason
    * `roundQuorum` is: the `--reviewers` identity path names no file.
    */
@@ -487,20 +488,24 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 // consumer's existing values were written to that consumer's meaning, not
 // nen's; reading them under nen's would change a verdict nobody re-declared.
 //
-// THE ONE SANCTIONED SAME-NAME ADOPTION, AND WHY IT IS NOT A CARVE-OUT. The
-// same ruling ("Retire 2, adopt 2") adopts `round_policy.minRounds` and
+// THE ONE RULED EXCEPTION TO THAT BINDING. The maintainer's ruling of
+// 2026-10-04 ("Retire 2, adopt 2") adopts `round_policy.minRounds` and
 // `round_policy.maxRounds` -- until then Hatsu's own keys (zheref/hatsu#102) --
-// as nen keys under the SAME names, through zheref/nen#240. That is the binding
-// applied, not an exception to it: the maintainer ruled the adoption by name,
-// and nen reads each value to the meaning the consumer already wrote it under
-// (maxRounds caps the review rounds REQUESTED per reviewer on one pull request;
-// minRounds is how many rounds a reviewer stands owed), so no existing value
-// changes meaning and no verdict changes that nobody re-declared. From that
-// change on the keys are nen's: tabled here with `introducedIn`, validated by
-// pointer like every other, and refused when misspelt. A same-name adoption
-// therefore needs all three: a maintainer ruling naming the key, nen reading
-// the consumer's existing meaning unchanged, and the key entering this table
-// in the change that reads it. Without them the binding above holds.
+// as nen keys under the SAME names, through zheref/nen#240. It is an
+// exception, made by name, and it is the only one: nen now reads two names a
+// consumer already used for its own data. The meanings are close but not
+// identical, and the difference is stated rather than hidden: `maxRounds` caps
+// the review rounds REQUESTED of one reviewer on one pull request, as Hatsu
+// reads it; `minRounds` is counted by nen as rounds POSTED (a posted review, or
+// the round a reviewer's check holds), by that ruling, where Hatsu's skills
+// count RESOLVED rounds. WHY IT IS SAFE: neither key is a CON-32 conjunct.
+// `minRounds` only labels `pr ready --explain`'s counts, and `maxRounds` only
+// refuses a further request in `pr request-reviews`; no readiness row, verdict
+// or exit code moves on either, so no verdict changes that nobody re-declared.
+// From that change on the keys are nen's: tabled here with `introducedIn`,
+// validated by pointer like every other, and refused when misspelt. Any other
+// same-name adoption needs a ruling of its own; without one the binding above
+// holds.
 //
 // `introducedIn` for a key shipped after v0.19.0 is the next release's number,
 // 0.20.0 -- the release proposal corrects it if that release is cut under
@@ -566,8 +571,8 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
     object: {
       stallMinutes: { introducedIn: "0.11.0" },
       // Adopted under the consumer's own names (zheref/nen#240; ruling of
-      // 2026-10-04, "Retire 2, adopt 2") -- see "THE ONE SANCTIONED SAME-NAME
-      // ADOPTION" in the section header above.
+      // 2026-10-04, "Retire 2, adopt 2") -- see "THE ONE RULED EXCEPTION" in
+      // the section header above.
       minRounds: { introducedIn: NEXT_RELEASE },
       maxRounds: { introducedIn: NEXT_RELEASE },
     },
@@ -633,12 +638,28 @@ function describeLevel(level: GatesKeyLevel): string {
     .join(", ");
 }
 
-/** Whether `a` is within two edits of `b`, ignoring case, `_` and `-`. */
-function closeTo(a: string, b: string): boolean {
+/**
+ * A key as a message shows it (Feitan F2). A key is the FILE's text, so it is
+ * never interpolated raw: a plain printable-ASCII key is quoted as `'key'`;
+ * any other -- a quote, a backslash, a control or escape sequence, a newline,
+ * a non-ASCII or zero-width character -- is shown JSON-escaped with every
+ * character outside printable ASCII as `\uXXXX`, so a terminal renders it as
+ * text and a look-alike key is visibly not the key it imitates.
+ */
+export function visibleKey(key: string): string {
+  if (/^[\x20-\x7e]*$/.test(key) && !/['"\\]/.test(key)) return `'${key}'`;
+  return JSON.stringify(key).replace(
+    /[^\x20-\x7e]/g,
+    (char): string => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/** The edit distance between `a` and `b`, ignoring case, `_` and `-`. */
+function keyDistance(a: string, b: string): number {
   const x = a.toLowerCase().replace(/[_-]/g, "");
   const y = b.toLowerCase().replace(/[_-]/g, "");
-  if (x === y) return true;
-  if (Math.abs(x.length - y.length) > 2) return false;
+  if (x === y) return 0;
+  if (Math.abs(x.length - y.length) > 2) return Number.POSITIVE_INFINITY;
   let previous = Array.from({ length: y.length + 1 }, (_, index): number => index);
   for (let i = 1; i <= x.length; i += 1) {
     const current = [i];
@@ -650,7 +671,26 @@ function closeTo(a: string, b: string): boolean {
     }
     previous = current;
   }
-  return (previous[y.length] ?? Number.POSITIVE_INFINITY) <= 2;
+  return previous[y.length] ?? Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The known key `key` most likely means, or `null` (Feitan F4): an exact match
+ * once case, `_` and `-` are ignored first, then the smallest edit distance up
+ * to two, ties broken by the table's own order -- so `MaxRounds` and
+ * `max_rounds` both mean `maxRounds`, never the `minRounds` two edits away.
+ */
+function nearestKey(key: string, candidates: readonly string[]): string | null {
+  let best: string | null = null;
+  let bestDistance = 3;
+  for (const candidate of candidates) {
+    const distance = keyDistance(key, candidate);
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 interface UnreadAt extends UnreadGatesKey {
@@ -698,11 +738,11 @@ function refuseUnknownKeys(path: string, root: Record<string, unknown>): void {
   for (const entry of found) groups.set(entry.pointer, [...(groups.get(entry.pointer) ?? []), entry]);
   const sentences = [...groups.values()].map((group, index): string => {
     const level = group[0]?.level ?? {};
-    const keys = group.map((entry): string => `'${entry.key}'`).join(", ");
+    const keys = group.map((entry): string => visibleKey(entry.key)).join(", ");
     const near = group
       .map((entry): string | null => {
-        const known = Object.keys(level).find((candidate): boolean => closeTo(entry.key, candidate));
-        return known === undefined ? null : `'${entry.key}' -> '${known}'?`;
+        const known = nearestKey(entry.key, Object.keys(level));
+        return known === null ? null : `${visibleKey(entry.key)} -> '${known}'?`;
       })
       .filter((hint): hint is string => hint !== null);
     const head = index === 0 ? `carries ${keys}` : `Also at ${group[0]?.pointer ?? "$"}: ${keys}`;
@@ -1130,33 +1170,6 @@ export function isIsoDate(text: string): boolean {
  */
 export const GLOB_MIN_LITERAL_PREFIX = 3;
 
-/**
- * `checks.excluded` -- OPTIONAL, and REFUSED BY POINTER at load when malformed
- * (zheref/nen#249). An exclusion only ever WIDENS the verdict -- it removes a
- * check CON-32(a) would otherwise wait on -- so a malformed one must be a loud
- * refusal, never an entry silently read as something its author did not write.
- * Each refusal below is named for what it would have done instead:
- *
- *   * a missing or blank `name`, `reason`, `ruled` or `until` is a binding
- *     with part of its condition unstated;
- *   * surrounding whitespace on any field is refused on its own: a name with
- *     it matches no label, and a date with it is not the strict shape;
- *   * a name with a `*` and no `match` has two readings (literal or wildcard)
- *     and the file has not said which; guessing changes which check is dropped;
- *   * a glob whose literal prefix before the first `*` is shorter than
- *     GLOB_MIN_LITERAL_PREFIX matches checks nobody named (`*`, `*)`, `?*`);
- *   * a `ruled` or a string `until` that is not a strict, real `YYYY-MM-DD`
- *     date has no day it was ruled on or lapses on -- and a near-date string
- *     ("2026/10/01", "2026-10-1", a timestamp, fullwidth digits, a Unicode
- *     hyphen) read as a condition would NEVER lapse, so it is refused rather
- *     than reinterpreted; a condition is the explicit `{ "condition": ... }`;
- *   * an `until` date BEFORE `ruled` is born expired;
- *   * a key an entry (or its `until` object) does not define, `$` keys
- *     aside, is a condition nobody reads -- refused by the file-wide
- *     known-key sweep (zheref/nen#310) before this reader runs;
- *   * the same `name` twice (under the same `match`) is two reasons for one
- *     exclusion, and the report could quote only one of them.
- */
 /** `round_policy.minRounds` / `.maxRounds` (zheref/nen#240), each `null` when unstated. */
 export interface RoundCaps {
   readonly minRounds: number | null;
@@ -1211,6 +1224,33 @@ export function parseRoundCaps(path: string, rootValue: unknown): RoundCaps {
   return readRoundCaps(path, root["round_policy"]);
 }
 
+/**
+ * `checks.excluded` -- OPTIONAL, and REFUSED BY POINTER at load when malformed
+ * (zheref/nen#249). An exclusion only ever WIDENS the verdict -- it removes a
+ * check CON-32(a) would otherwise wait on -- so a malformed one must be a loud
+ * refusal, never an entry silently read as something its author did not write.
+ * Each refusal below is named for what it would have done instead:
+ *
+ *   * a missing or blank `name`, `reason`, `ruled` or `until` is a binding
+ *     with part of its condition unstated;
+ *   * surrounding whitespace on any field is refused on its own: a name with
+ *     it matches no label, and a date with it is not the strict shape;
+ *   * a name with a `*` and no `match` has two readings (literal or wildcard)
+ *     and the file has not said which; guessing changes which check is dropped;
+ *   * a glob whose literal prefix before the first `*` is shorter than
+ *     GLOB_MIN_LITERAL_PREFIX matches checks nobody named (`*`, `*)`, `?*`);
+ *   * a `ruled` or a string `until` that is not a strict, real `YYYY-MM-DD`
+ *     date has no day it was ruled on or lapses on -- and a near-date string
+ *     ("2026/10/01", "2026-10-1", a timestamp, fullwidth digits, a Unicode
+ *     hyphen) read as a condition would NEVER lapse, so it is refused rather
+ *     than reinterpreted; a condition is the explicit `{ "condition": ... }`;
+ *   * an `until` date BEFORE `ruled` is born expired;
+ *   * a key an entry (or its `until` object) does not define, `$` keys
+ *     aside, is a condition nobody reads -- refused by the file-wide
+ *     known-key sweep (zheref/nen#310) before this reader runs;
+ *   * the same `name` twice (under the same `match`) is two reasons for one
+ *     exclusion, and the report could quote only one of them.
+ */
 export function parseCheckExclusions(path: string, rootValue: unknown): DeclaredCheckExclusion[] {
   const root = requireRecord(path, "$", rootValue);
   requireGatesVersion(path, root);
@@ -1335,6 +1375,107 @@ function readCheckExclusions(path: string, raw: unknown): DeclaredCheckExclusion
 }
 
 export function loadGateIdentities(repoRoot: string): GateIdentities {
-  const { path, value } = readSchemaJson(repoRoot, GATES_FILE);
-  return parseGateIdentities(path, value);
+  const { path, text } = readSchemaFile(repoRoot, GATES_FILE);
+  return parseGateIdentities(path, parseGatesText(path, text));
+}
+
+// ── DUPLICATE KEYS ARE REFUSED, NEVER COLLAPSED (Feitan F3) ──────────────────
+//
+// `JSON.parse` keeps the LAST of two equal keys in one object and says nothing,
+// so `{"round_policy":{"maxRounds":1,"maxRounds":999}}` reads as 999 -- and a
+// reviewer of the file sees the 1. Every reader of `nen/gates.json` text goes
+// through `parseGatesText`, which scans for a repeated key BEFORE parsing and
+// refuses the file by pointer (a usage error, exit 2, where the verb refuses a
+// gates file at all).
+
+/** A key that appears twice in one object of `nen/gates.json`. */
+export class GatesDuplicateKeyError extends SchemaError {
+  readonly key: string;
+
+  constructor(path: string, pointer: string, key: string) {
+    super(
+      path,
+      pointer,
+      `carries the key ${visibleKey(key)} twice. JSON keeps only the last of the two, so the other value would be dropped without a word -- refused, so the file says one thing (Feitan F3). Remove one of them.`,
+    );
+    this.name = "GatesDuplicateKeyError";
+    this.key = key;
+  }
+}
+
+/**
+ * The first key repeated within one object of `text`, with the pointer of
+ * that object (`$` for the root, else e.g. `round_policy` or `reviewers[1]`),
+ * or `null`. A scan over the raw text, string- and escape-aware; text that is
+ * not JSON is left for `JSON.parse` to refuse.
+ */
+export function findDuplicateKey(text: string): { readonly pointer: string; readonly key: string } | null {
+  interface ObjectFrame {
+    readonly kind: "object";
+    readonly path: string;
+    readonly keys: Set<string>;
+    expectKey: boolean;
+    lastKey: string | null;
+  }
+  interface ArrayFrame {
+    readonly kind: "array";
+    readonly path: string;
+    index: number;
+  }
+  const stack: (ObjectFrame | ArrayFrame)[] = [];
+  const childPath = (): string => {
+    const top = stack[stack.length - 1];
+    if (top === undefined) return "$";
+    if (top.kind === "array") return `${top.path}[${top.index}]`;
+    const key = top.lastKey ?? "?";
+    return top.path === "$" ? key : `${top.path}.${key}`;
+  };
+  let i = 0;
+  while (i < text.length) {
+    const char = text[i];
+    if (char === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === "\\" ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (top?.kind === "object" && top.expectKey) {
+        let key: string;
+        try {
+          key = JSON.parse(text.slice(i, j + 1)) as string;
+        } catch {
+          return null;
+        }
+        if (top.keys.has(key)) return { pointer: top.path, key };
+        top.keys.add(key);
+        top.lastKey = key;
+        top.expectKey = false;
+      }
+      i = j + 1;
+      continue;
+    }
+    if (char === "{") stack.push({ kind: "object", path: childPath(), keys: new Set(), expectKey: true, lastKey: null });
+    else if (char === "[") stack.push({ kind: "array", path: childPath(), index: 0 });
+    else if (char === "}" || char === "]") stack.pop();
+    else if (char === ",") {
+      const top = stack[stack.length - 1];
+      if (top?.kind === "object") top.expectKey = true;
+      else if (top?.kind === "array") top.index += 1;
+    }
+    i += 1;
+  }
+  return null;
+}
+
+/**
+ * `nen/gates.json` text to a value: duplicate keys refused by pointer
+ * (`GatesDuplicateKeyError`), then `JSON.parse`, its failure a path-bearing
+ * `SchemaError`. The one door every reader of the file's text goes through.
+ */
+export function parseGatesText(path: string, text: string): unknown {
+  const duplicate = findDuplicateKey(text);
+  if (duplicate !== null) throw new GatesDuplicateKeyError(path, duplicate.pointer, duplicate.key);
+  try {
+    return JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new SchemaError(path, null, `is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+  }
 }
