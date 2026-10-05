@@ -122,3 +122,84 @@ export function watchUntil(seams: Seams, options: WatchOptions): WatchResult {
     sleep(options.intervalMs);
   }
 }
+
+// ── the async form (zheref/nen#264) ────────────────────────────────────────
+//
+// `nen watch until --pr <ref> --until <predicate>` observes through the SAME
+// in-process read `nen pr ready` makes (../verbs/pr_ready.ts's readReady),
+// which is a network read and therefore a Promise -- there is no synchronous
+// way to read GitHub, exactly as ../cli/command.ts says of `pr ready` itself.
+// So the observation is a callback rather than a spawned command, and the
+// loop awaits it. EVERYTHING ELSE IS THE LOOP ABOVE, unchanged: one line per
+// observation, the three-error streak, the optional bound, the pacing. The
+// caller decides `errored` and `conditionTrue` itself because only it knows
+// what its read could not see.
+
+/** One observation the async loop is handed: the caller's own verdict on it. */
+export interface WatchObservation {
+  readonly errored: boolean;
+  readonly conditionTrue: boolean;
+  readonly message: string;
+}
+
+export interface AsyncWatchOptions {
+  readonly observe: () => Promise<WatchObservation>;
+  readonly intervalMs: number;
+  readonly maxIterations?: number;
+  /** Injectable so tests never actually sleep. Defaults to a real, non-blocking wait. */
+  readonly sleep?: (ms: number) => void | Promise<void>;
+  readonly onIteration?: (iteration: WatchIteration) => void;
+}
+
+/**
+ * The longest delay a timer honours: setTimeout stores it as a signed 32-bit
+ * integer and fires a LARGER one after 1 ms (N1 on zheref/nen#264). So a long
+ * wait is slept in slices no larger than this.
+ */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+export async function asyncSleep(ms: number): Promise<void> {
+  let remaining = ms;
+  do {
+    const slice = Math.min(remaining, MAX_TIMER_MS);
+    await new Promise((resolve): void => {
+      setTimeout(resolve, slice);
+    });
+    remaining -= slice;
+  } while (remaining > 0);
+}
+
+export async function watchUntilAsync(options: AsyncWatchOptions): Promise<WatchResult> {
+  const sleep = options.sleep ?? asyncSleep;
+  const iterations: WatchIteration[] = [];
+  let consecutiveErrors = 0;
+  let iteration = 0;
+
+  for (;;) {
+    iteration += 1;
+    const observed = await options.observe();
+    // An errored observation is never true, whatever the caller said: the
+    // same rule the synchronous loop applies through `!errored && isTrue`.
+    const conditionTrue = !observed.errored && observed.conditionTrue;
+    const entry: WatchIteration = { iteration, conditionTrue, errored: observed.errored, message: observed.message };
+    iterations.push(entry);
+    options.onIteration?.(entry);
+
+    if (observed.errored) {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= ERROR_STREAK_LIMIT) {
+        return { outcome: "error-streak", iterations };
+      }
+    } else {
+      consecutiveErrors = 0;
+      if (conditionTrue) {
+        return { outcome: "condition-true", iterations };
+      }
+    }
+
+    if (options.maxIterations !== undefined && iteration >= options.maxIterations) {
+      return { outcome: "max-iterations", iterations };
+    }
+    await sleep(options.intervalMs);
+  }
+}

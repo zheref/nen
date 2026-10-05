@@ -480,3 +480,31 @@ export function safePattern(source: string): RegExp {
   }
   return catastrophicShape(source) === null ? compiled : /(?!)/;
 }
+
+/**
+ * The login pattern for a reviewer NAMED ON THE COMMAND LINE (`--reviewers`,
+ * `--approvers`) -- the whole login, case-insensitively, with GitHub's
+ * optional `[bot]` suffix: `^<escaped name>(\[bot\])?$`, flag `i`.
+ *
+ * WHY NOT `safePattern(name)` (Feitan F1 on zheref/nen#264). That compiles the
+ * bare name UNANCHORED, the shell's `test($name; "i")`, so `--reviewers
+ * alice` matched a stranger's `Not-Alice-Fan` and that stranger's APPROVED
+ * review satisfied both the approve limb and the owed round. A name typed on a
+ * command line is an identity, not a pattern; a repository that needs a
+ * pattern declares one in `nen/gates.json`'s `login_pattern`, and a caller on
+ * the flags path names the exact login with `--reviewer-login <name>=<login>`
+ * (several are alternatives). NOTHING IS BUILT IN: which login a bot posts
+ * under is data (§3), never a table in this binary. Escaping every
+ * metacharacter also means no typed name can be catastrophic, so the shape
+ * guard has nothing to refuse.
+ *
+ * ALSO the fallback ../gates/predicates.ts uses for a reviewer NAME its
+ * identities do not declare: the name is the login, exactly.
+ */
+export function exactLoginPattern(logins: string | readonly string[]): RegExp {
+  const list = typeof logins === "string" ? [logins] : logins;
+  // No login at all matches nothing -- never the empty login.
+  if (list.length === 0) return /(?!)/;
+  const escaped = list.map((login): string => login.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&"));
+  return new RegExp(`^(?:${escaped.join("|")})(\\[bot\\])?$`, "i");
+}

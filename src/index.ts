@@ -35,14 +35,15 @@
 // of them is the same as not being strict at all, because one family's typo
 // would parse as another family's flag (./cli/args.ts).
 //
-// `run()` IS ASYNC because `nen pr ready` reads GitHub over the network
+// `run()` IS ASYNC because some verbs read GitHub over the network
 // (./github/pr_state.ts, on top of octokit) and there is no synchronous way to
-// do that from Node. Every other verb here and in the registry is still
-// synchronous under the hood (spawnSync, readFileSync) and returns its number
-// the same way it always did; awaiting an already-resolved value costs nothing.
-// `runFamily`, below, awaits `family.run(...)` for exactly the same reason: the
-// "pr" family is a Command like any other, and the dispatch layer cannot know
-// in advance which of its subcommands needed the network.
+// do that from Node -- `nen pr ready` and the verbs that read it in-process
+// (`pr merge`, `watch until --pr`, zheref/nen#264), among others. Many verbs
+// stay synchronous under the hood (spawnSync, readFileSync) and return their
+// number the same way they always did; awaiting an already-resolved value
+// costs nothing. `runFamily`, below, awaits `family.run(...)` for exactly the
+// same reason: a family is a Command like any other, and the dispatch layer
+// cannot know in advance which of its subcommands needed the network.
 //
 // EXIT CODES. 0 success, 1 a verb's own failure, 2 a usage error, and whatever
 // the bootstrap script returned for `nen bootstrap` (its codes are a published
@@ -346,8 +347,8 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
 // `--repo`/`--json` merge across the two stages, neither of which a test that
 // only calls `family.run(...)` touches at all.
 //
-// ASYNC because a family's `run()` may itself be async (the "pr" family's
-// `ready` subcommand reads GitHub over the network); `await`ing a synchronous
+// ASYNC because a family's `run()` may itself be async (`pr ready`, `watch
+// until --pr` and others read GitHub over the network); `await`ing a synchronous
 // family's already-resolved return costs nothing.
 export async function runFamily(
   family: Command,

@@ -1427,7 +1427,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   warmup: { subcommands: { "*": RO("detects stale pins and sweeps questions -- reads only") } },
   watch: {
     subcommands: {
-      until: RO("re-classifies its own --command against this very table before the first observation"),
+      until: RO("re-classifies its own --command against this very table before the first observation; --pr reads only, through pr ready's own read"),
     },
   },
   usage: {
