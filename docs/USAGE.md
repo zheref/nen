@@ -707,7 +707,7 @@ verbs need a token and which run offline. Every verb accepts the global
 |---|---|---|---|---|
 | [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | nen/gates.json + nen/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
 | [`pr`](#family-pr) | [`nen pr staleness`](#nen-pr-staleness) | stale + Ready merge-permission arithmetic over a verified-wake history | caller-supplied --wakes-from JSON file, no schema/git/gh | yes |
-| [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns | caller-supplied --body-from/--requirements-from files | yes |
+| [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns, or, with no `--requirements-from`, against the headings of the repository's own PR template, each required present and filled (named as derived, with where it was read) | caller-supplied --body-from/--requirements-from files; else the PR template (`pull_request_template.md`/`.txt` at the root, `.github/` or `docs/`, or `PULL_REQUEST_TEMPLATE/*.md`/`.txt`) in the working tree, or at `--base <ref>` through git (`rev-parse`, `ls-tree`, `cat-file`) | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
@@ -1639,12 +1639,14 @@ merge PERMITTED (stale + Ready)
 
 Checks a pull-request body against this repository's own template
 requirements — every requirement is checked, never stopping at the first
-miss. The requirement patterns are never built in.
+miss. The requirement patterns are never built in: they come from the
+caller's `--requirements-from` file (**shipped**) or, when that flag is
+absent, are **derived** from the repository's own pull-request template.
 
 **Usage**
 
 ```text
-nen pr body-check --body-from <path> --requirements-from <path>
+nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 ```
 
 **Arguments**
@@ -1652,15 +1654,115 @@ nen pr body-check --body-from <path> --requirements-from <path>
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--body-from <path>` | yes | the pull-request body to check | plain text |
-| `--requirements-from <path>` | yes | a JSON array of `{ name, pattern }` | an empty array is refused, exit 1 — a vacuous pass having checked nothing is never reported as success |
-| `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root | default cwd |
+| `--requirements-from <path>` | no | a JSON array of `{ name, pattern }` | an empty array is refused, exit 1 — a vacuous pass having checked nothing is never reported as success. Omitted: the set is derived from the PR template (below). Given but empty (`--requirements-from ""`): exit 2, never a fall-through to derivation |
+| `--base <ref>` | no | read the PR template from git at `<ref>`, never from the working tree | only with a derived set; with `--requirements-from` it is refused, exit 2. A ref that does not resolve to a single commit (a range such as `main..feat` included), or that begins with `-`, exits 2 |
+| `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root, and is where the PR template is looked for (the working tree, or the git checkout `--base` is read in) | default cwd |
 | `--json` | no | machine-readable report | — |
 
+**Which template** (zheref/nen#239). With no `--requirements-from`, the
+verb looks for the template in GitHub's own locations under the `--repo`
+root. A name matches in any letter case; the extension must be `.md` or
+`.txt` — a file named `pull_request_template` with no extension, or with any
+other, is not read:
+
+1. a default template, `pull_request_template.md` or
+   `pull_request_template.txt`, in `.github/`, the root or `docs/`. Exactly
+   one is the source; it is what GitHub pre-fills a new PR with, so any
+   `PULL_REQUEST_TEMPLATE/` alternatives beside it are ignored. Two or more
+   (say `.github/` and the root, or a `.md` and a `.txt` side by side) is
+   **ambiguous**;
+2. otherwise, a `.md` or `.txt` file directly inside a
+   `PULL_REQUEST_TEMPLATE/` directory in one of those three places. Exactly
+   one is the source; more than one is **ambiguous**, because GitHub chooses
+   among them only by a `?template=` query the verb cannot see.
+
+**Where it is read.** Without `--base`, from the working tree. A template
+whose real path leaves the `--repo` root (a symlink pointing outside it) is
+refused, exit 2, and never read; on Windows that comparison folds letter
+case and path separators, and a directory junction is followed and checked
+the same way. **A pull request's own head can edit its
+working-tree template** — drop a section it did not fill, and the check it
+must pass goes with it — so a gate passes `--base <ref>` (the PR's base),
+the same reasoning as `nen pr ready` reading `checks.excluded` at the base
+(zheref/nen#249). With `--base`, the ref is resolved once to a single commit
+(`git rev-parse --verify --quiet --end-of-options <ref>^{commit}`, so a range
+is refused rather than read as its tip), the locations are listed with
+`git ls-tree` at that commit and the chosen file read with `git cat-file`;
+nothing in the working tree is read. A template candidate that is a symlink
+in the tree is refused at exit 2, naming it — never followed, and never
+reported as "none found". Every git call runs with `GIT_DIR`,
+`GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_NAMESPACE`,
+`GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` unset, so a caller's
+environment cannot point the read at another repository.
+
+**How headings become requirements.** The template is read line by line:
+
+- a leading UTF-8 byte-order mark is dropped;
+- every `<!-- … -->` span on a line is removed, pair by pair across the
+  whole line, before the line is read; a `<!--` left open hides every
+  following line up to the one that closes it. So `## Summary <!-- note`
+  is the heading `## Summary`, and in `<!-- a --> text <!--` the second
+  comment hides what follows;
+- a line that **starts** with `<!--`, or that starts inside a comment opened
+  on an earlier line (the text after its `-->`), is never a heading;
+- fenced code (```` ``` ```` or `~~~`) is never a heading;
+- a leading `---` is a horizontal rule — there is no front-matter rule;
+- requirements come only from titled ATX headings (`#` to `######`). A bare
+  `##` and a Setext heading (a line underlined with `===` or `---`) are
+  section boundaries, never requirements.
+
+Each heading becomes one requirement: the body must carry a heading at the
+**same level** with the **same text**, letter case and runs of spaces or
+tabs aside, optionally followed by `<!-- … -->` spans (so a body that kept
+GitHub's prefilled inline comment on the heading still matches). The
+requirement's `name` is the heading as written, whitespace runs collapsed
+(`## How to verify`). A repeated heading counts once.
+
+**A derived heading must also have content.** The body is read the same way
+(comments removed, fenced code masked, so a heading hidden in a comment or a
+fence does not count). Under a matched heading, before the next heading at
+its level or higher (a bare `##` and a Setext heading included), there must
+be at least one line of content. Blank lines, comments, thematic breaks
+(`---`, `***`, `___`), lines made only of HTML tags (`<details>`), and a
+Setext heading's title are not content, and neither is a line that is one of
+the template's own lines for that section, compared after lowercasing and
+collapsing whitespace — so an answer identical to the template's own line
+reads as EMPTY. The content under a deeper sub-heading counts. A heading
+with none is **EMPTY**, distinct from **MISSING**. So a body that is the
+untouched template fails.
+The derived set is deliberately minimal — which sections the body must have,
+and that each says something; not what it must say. A repository that needs
+more ships a file. A shipped `--requirements-from` file is checked exactly as
+before: its patterns run against the raw body, with no masking and no
+content rule.
+
+The verb never picks among ambiguous templates and never skips the check.
+Each of these refuses at **exit 2**, naming what is missing and pointing to
+[the bootstrap step](#bootstrapping-a-body-check-requirements-file):
+
+- no `--requirements-from` and no template in any location (the message lists every path searched, and where);
+- an ambiguous template (the message lists the candidates);
+- a template that cannot be read (the message names the file and the error), or that resolves outside the repository;
+- a template with no headings, which would otherwise pass having checked nothing.
+
 **Output and exit codes** — human lines: `<n>/<total> requirement(s)
-satisfied`, then `ok`/`MISSING` per requirement; `--json` top-level keys:
-`results[]` (`name`, `pattern`, `satisfied`), `ok`. Exit 0 when every
-requirement is satisfied, exit 1 when at least one is missing **or** the
-requirement list is empty, exit 2 on a missing flag.
+satisfied`, then `ok`/`MISSING` per requirement, and for a derived set
+`EMPTY` too. When the set was derived, the verdict line itself names the
+source and where it was read — `<n>/<total> requirement(s) satisfied
+(DERIVED from the pull-request template '<path>' in the working tree; no
+--requirements-from given)`, or `… '<path>' at <ref> (<short oid>); …` with
+`--base` — so
+quoting the verdict also quotes where its requirements came from. A shipped
+file's lines are unchanged. `--json` top-level keys: `results[]` (`name`,
+`pattern`, `satisfied`, and for a derived set `status`: `ok`, `missing` or
+`empty`), `ok`, and `source` — `{ "kind": "shipped", "path": <the
+--requirements-from value>, "ref": null, "commit": null }` or `{ "kind":
+"derived", "path": <the template's repo-relative path>, "ref": <the --base
+ref, or null for the working tree>, "commit": <the full oid the ref resolved
+to, or null for the working tree> }`. Exit 0 when every requirement is satisfied, exit 1 when at
+least one is missing or empty **or** a shipped requirement list is empty,
+exit 2 on a missing flag or any of the refusals above.
 
 **Example**
 
@@ -1674,6 +1776,36 @@ ok  how-to-verify
 ok  test-plan
 ```
 (from a real run; `req.json` = `[{"name":"summary","pattern":"## Summary"},{"name":"how-to-verify","pattern":"## How to verify"},{"name":"test-plan","pattern":"## Test plan"}]` against a body carrying all three headings)
+
+```bash
+nen pr body-check --body-from body.md --base origin/main
+```
+```text
+1/3 requirement(s) satisfied (DERIVED from the pull-request template '.github/PULL_REQUEST_TEMPLATE.md' at origin/main (9cfc972); no --requirements-from given)
+ok  ## Summary
+EMPTY  ## Test plan
+MISSING  ## How to verify
+```
+(a repository shipping no requirements file, whose template at `origin/main` carries `## Summary`, `## Test plan` and `## How to verify`, against a body that filled the first, repeated the second's own placeholder line in another letter case, and dropped the third; `9cfc972` is the commit `origin/main` resolved to in that run)
+
+#### Bootstrapping a body-check requirements file
+
+When `nen pr body-check` refuses for want of an input, give it one. Either:
+
+- **add a pull-request template** at `.github/pull_request_template.md` whose
+  headings are the sections every PR body must carry. The verb derives its
+  requirements from it with no further flag, and says so on every verdict; or
+- **ship a requirements file** in the repository, a JSON array of
+  `{ "name": ..., "pattern": ... }` where each `pattern` is a regular
+  expression (matched case-insensitively and per line) the body must match,
+  and pass it as `--requirements-from <path>`. A template-derived set is a
+  starting point: `nen pr body-check --body-from <body> --json` prints each
+  derived `name` and `pattern` under `results[]`, ready to copy into the
+  file and extend. A copied pattern checks that the heading is present; the
+  derived check's content rule does not travel with it.
+
+What the file requires is the repository's decision. Nen never writes it.
+Where the template is ambiguous, the file is the way to say which one counts.
 
 ### `nen pr fetch`
 
