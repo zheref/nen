@@ -300,7 +300,7 @@ verb it invoked. The complete list:
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
-| [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded |
+| [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 
 One inconsistency is worth knowing before it surprises you: a missing
@@ -342,7 +342,7 @@ verb does by default:
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, before printing the byte count and first/last line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
-| [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, so it can print which route each name or `--add-bots` id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160) |
+| [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, so it can print which route each name or `--add-bots` id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
@@ -929,6 +929,65 @@ minutes and can be overridden per repository with `nen/gates.json`'s
 Omitting `round_policy` (or `stallMinutes` within it) keeps the built-in
 30-minute default.
 
+**The round caps: `round_policy.minRounds` and `.maxRounds` (from v0.21.0,
+[#240](https://github.com/zheref/nen/issues/240)).** Two more keys in the
+same block, each a non-negative integer, and `minRounds` no greater than
+`maxRounds` when both are stated (refused by pointer otherwise):
+
+```json
+"round_policy": { "stallMinutes": 30, "minRounds": 1, "maxRounds": 3 }
+```
+
+- `maxRounds` caps the review rounds **requested** of one reviewer on one pull
+  request. [`nen pr request-reviews`](#nen-pr-request-reviews) refuses a bot's
+  request past it (exit `2`), reading it from this file at the pull request's
+  base **and** at the default branch's tip, the lower applied. `0` requests no
+  round at all. It is a guardrail on that verb, not a lock: see that verb.
+- `minRounds` is how many **posted** rounds a reviewer stands owed. A round is
+  a posted review, or — for a reviewer whose check is its round — the round the
+  gate's own rule finds, counted as one. Hatsu's skills count *resolved* rounds
+  against the same number; nen counts posted ones, by the ruling below.
+- `nen pr ready --explain` prints each configured reviewer (and each
+  `round_quorum` member) against both: requested (counted from the pull
+  request's `review_requested` timeline events), posted, and a status.
+  `--json` carries the same under `meta.roundCounts`. **Neither key is a
+  conjunct**: no row, verdict or exit code moves on them.
+- **The quorum rule holds** ([#361](https://github.com/zheref/nen/issues/361)):
+  a member of a **met** `round_quorum` short of `minRounds` reads *fulfilled by
+  the met round quorum*, while a member whose round check is still in flight at
+  head stays *owed*, as on the rounds-owed row.
+- Both keys were Hatsu's own
+  ([zheref/hatsu#102](https://github.com/zheref/hatsu/issues/102)); nen adopted
+  them under the same names as the one ruled exception of 2026-10-04 (see
+  *Unknown keys are refused*, below). A file stating neither makes no extra
+  GitHub read and gets the output it got before.
+
+**The pending-request and own-request readings (from v0.21.0, [#240](https://github.com/zheref/nen/issues/240) criterion 4).**
+When **every** round still owed on the rounds-owed row is a pending review
+request, and no unmet `round_quorum` adds a failure, the row's reason ends in
+one of two readings. If some owed reviewer never posted at any head (and no
+check of its holds a round, earlier heads included), it is `— no round at any
+head yet: <names>; a review request for each is pending (zheref/nen#240)`.
+Otherwise every owed reviewer has a round at some head, and it says so:
+
+```text
+not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted) — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)
+```
+
+Only on that second reading, when the identity running the gate (the token's
+own login, `GET /user`) made each of those requests (the `actor` of the latest `review_requested` event
+for that reviewer), it adds `; own-request: every pending request was made by
+<login>, the identity running this gate`. An identity the token cannot name (an
+App installation token) or an unreadable timeline makes no own-request claim.
+**Detail text only**: the row still fails, and the verdict and the exit code
+do not move. A row owing any reviewer a missing round keeps its reason byte for
+byte. Both reads are made only while a review request is pending. This is the
+case on [zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577):
+every later "owed at the current head" there came from the agent's own request.
+These suffixes are the one place this gate's line differs from the original
+shell gate's (`src/gates/ready.ts` divergence (11)); the shadow harness strips
+them before it compares the two.
+
 **Every row is evaluated, not only up to the first failure (zheref/nen#248).**
 Through v0.14.0 the gate stopped at the first failing row and printed every
 later row `unevaluated`. On zheref/nen#247 that hid two real unresolved review
@@ -1046,7 +1105,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 |---|---|---|---|
 | `<ref>` | yes | `<CODE>#<N>` (the `#` optional) or a bare `<N>` with `--gh-repo` | the shorthand splits at the LONGEST trailing digit run; a code ending in a digit needs the `#` |
 | `--gh-repo <owner/name>` | no | the repository, when `<ref>` is a bare number | wins over a code if both are given |
-| `--explain` | no | print the full conjunct table plus what the gate does not decide | suppressed by `--json` (the JSON already carries the table) |
+| `--explain` | no | print the full conjunct table plus what the gate does not decide, and — when `nen/gates.json` states `round_policy.minRounds` or `.maxRounds` — each reviewer's requested and posted rounds against both ([#240](https://github.com/zheref/nen/issues/240)) | suppressed by `--json` (the JSON already carries the table, and `meta.roundCounts`) |
 | `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies. On that flags path each name (and each `--approvers` name) matches the **whole** login, case-insensitively, with an optional `[bot]` suffix — `^<name>(\[bot\])?$`, the name taken literally — never a substring or a regex, so `sasuke` is not `Not-Sasuke-Fan` ([#264](https://github.com/zheref/nen/issues/264), Feitan F1). A repository that needs a pattern declares `login_pattern` in `nen/gates.json`. The same exact reading now applies wherever a reviewer name has no declared identity (a `--reviewers` name a gates file does not declare): the name is the login |
 | `--reviewer-login <name>=<login>` | no, repeatable | the exact login a `--reviewers` name posts under | flags path only ([#264](https://github.com/zheref/nen/issues/264)). Whole login, case-insensitive, optional `[bot]` suffix, taken literally; repeat a name for alternative logins. **Nothing is built in** — which login a bot posts under is data (§3), so without this flag the name must equal the login, e.g. `--reviewers copilot --reviewer-login copilot=copilot-pull-request-reviewer[bot]`. Split at the first `=`; an empty half is exit `2`, and so is a name `--reviewers` does not list. Beside a gates file it is ignored with a warning in `meta.warnings` — declare `login_pattern` there instead |
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
@@ -1205,6 +1264,15 @@ What `nen pr ready` does with what it read:
   (an unevaluated report's entries, the checkout's own file, never checked
   against the base; `--explain` says `local, not verified at base`). It is
   `null` for identities from `--reviewers`. `meta.notes` is always an array.
+- `meta.roundCounts` (additive, [#240](https://github.com/zheref/nen/issues/240))
+  is present only when the gates file states `round_policy.minRounds` or
+  `.maxRounds` and the rounds-owed row was judged through the ordinary path:
+  `{ minRounds, maxRounds, requestsRead, reviewers: [{ reviewer, requested,
+  posted, rounds, pendingRequest, min, max }] }`. `requested` is `null` when the
+  timeline could not be read (with a warning), never `0`. `min` is `met`,
+  `owed`, `owed-in-flight`, `fulfilled-by-quorum` or `no-minimum`; `max` is
+  `under`, `reached`, `over`, `unknown` or `no-ceiling`. Absent otherwise, so
+  a file stating neither key gets a byte-identical report.
 - A rollup that held **only** excluded checks is still
   `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
   names from both sources listed once. An exclusion never turns an empty or
@@ -1366,7 +1434,77 @@ Cursor Bugbot". `round_quorum` says it:
   the one that ships `round_quorum`** (v0.15.1 and v0.16.0 verified) ignores
   the key and applies the rest of the file. The file is still valid, and every
   requested or enrolled round is still owed, but there is no one-reviewer
-  floor.
+  floor. From v0.21.0 a key a binary does not read is refused instead of
+  ignored — see the next paragraph.
+
+**Unknown keys are refused, never ignored (zheref/nen#310; maintainer ruling
+2026-10-03, "Refuse unknown keys").** The binary carries every
+`nen/gates.json` key it reads, each with the nen release that introduced it.
+A key outside that set fails the read: `nen pr ready` exits **2** before
+GitHub is read, and [`nen schema check`](#nen-schema-check) fails the gates
+row and exits **2**. The refusal names every unread key by pointer, the keys
+that object takes with each one's release (`round_quorum (nen >= 0.17.0)`),
+the nearest known key when one is within two edits (`'minRound' ->
+'minRounds'?`), and the running version, so the reader can tell a key from a
+newer nen (upgrade) from a misspelling (correct it). Before this, an older
+binary meeting a newer key — `round_quorum` under v0.15.1 and v0.16.0 —
+applied the rest of the file and answered `pr ready` without the declared
+gate, and said nothing.
+
+| Key | Read by nen ≥ |
+|---|---|
+| `version`, `reviewers[]` (`name`, `login_pattern`, `review_check_pattern`, `round_check_pattern`, `enrolment_check_pattern`, `bounded_policy_exempt`, `delivery_holistic_pass`, `approves_when_posted_at_head`), each pattern's `pattern`/`ignoreCase`, `default_approvers`, `base_reviewers`, `delivery` (`author_pattern`, `head_ref_prefixes`, `labels`) | 0.1.0 |
+| `dependabot_carve_out` (`author_pattern`, `satisfied_by_context`) | 0.7.0 |
+| `approval_policy` | 0.10.0 |
+| `round_policy.stallMinutes` | 0.11.0 |
+| `round_policy.minRounds`, `round_policy.maxRounds` | 0.21.0 |
+| `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
+| `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
+
+**Repeated keys are refused too** (Feitan F3): `{"round_policy":{"maxRounds":1,"maxRounds":999}}`
+is refused by pointer (`at round_policy, carries the key 'maxRounds' twice`) at exit `2`, wherever the
+file is read, rather than read as the last value. Every unknown key is shown escaped when it is not
+printable ASCII, and the "Did you mean" hint names the **nearest** known key (an exact match ignoring
+case, `_` and `-` first: `MaxRounds` and `max_rounds` both point at `maxRounds`).
+
+**Only `$`-prefixed keys are allowed without being read**, at every level —
+`$comment` and any other annotation. nen binds itself never to introduce a
+gate under a `$` key, so such a key can be neither a misspelling of one nor a
+newer one. There is **no consumer-owned carve-out** (maintainer ruling of
+2026-10-04): another tool's own data in this file goes under a `$` key, and an
+unprefixed key nen does not read is refused whoever reads it.
+
+**And nen binds itself the other way** (Nobunaga's proposal, adopted with
+that ruling): *"nen never starts reading a key under a name a consumer already
+uses for its own data; when nen adopts a feature, it introduces the key in its
+own table with introducedIn"*. A consumer's existing values were written to
+its meaning, not nen's; reading them under nen's would change a verdict nobody
+re-declared.
+
+**The one ruled exception** to that binding is how `round_policy.minRounds`
+and `.maxRounds` became nen's ([#240](https://github.com/zheref/nen/issues/240);
+the maintainer's ruling of 2026-10-04, "Retire 2, adopt 2"): nen now reads two
+names a consumer already used for its own data. The meanings are stated, not
+assumed equal: `maxRounds` caps requested rounds as Hatsu reads it, while nen
+counts `minRounds` as rounds **posted**, by that ruling, where Hatsu's skills
+count resolved rounds. It is safe because **neither key is a CON-32
+conjunct**: `minRounds` only labels `pr ready --explain`'s counts and
+`maxRounds` only refuses a further request in `pr request-reviews`, so no
+readiness row, verdict or exit code moves on either. From then on the keys are
+nen's — tabled above with `introducedIn`, validated by pointer and refused when
+misspelt (`'maxRound' -> 'maxRounds'?`) like any other. It is not a carve-out
+(nothing is carried unread), and any other same-name adoption needs a ruling
+of its own. The same ruling's other half retires
+Hatsu's `check_exclusions` (into `checks.excluded`) and `reviewer_fallback`
+in Hatsu ([zheref/hatsu#227](https://github.com/zheref/hatsu/issues/227)), so
+those two stay refused here.
+
+**The limit of a forward fix.** A binary can name the release of every key it
+knows, and no key released after it. So the refusal says "this is nen
+<version>; a key a newer nen introduced is read only by that nen", not which
+release that was. And a release **before** this one (through v0.20.0) cannot
+refuse at all: it still ignores what it does not know. The mitigation for a
+pinned consumer is moving the pin (zheref/hatsu#168).
 
 **Consumer note: a round check must conclude `SUCCESS` (review of E7, finding
 C1).** Until this change, any `round_check_pattern` run that completed with a
@@ -1567,8 +1705,9 @@ Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
 Exit 2 on a malformed ref, an unresolvable code (unknown, or matching two registry keys
 that differ only by letter case), a malformed `--require-head`, a non-numeric
 `--exclude-run`, an ambiguous `--exclude-check` value (an opener never closed, with a
-comma after it), or no reviewer-identity source at all. That is a usage problem, never a
-verdict.
+comma after it), no reviewer-identity source at all, or a refused gates file — unreadable,
+malformed, or carrying a key this build does not read (zheref/nen#310). That is a usage
+problem, never a verdict.
 Exit **8** on `head-mismatch`: `--require-head` named a commit that is not GitHub's head, and no verdict was
 decided.
 
@@ -1727,6 +1866,12 @@ requirement (`## How to verify`, CON-17). It does not re-derive the CON-32
 predicates; it composes the ported, tested gate engine over one fetched
 snapshot. The changelog.d/ fragment half of CON-33(a) is diff-shaped and not
 checked here.
+
+| Exit | Meaning |
+|---|---|
+| `0` | nothing blocks, by this check |
+| `1` | something blocks (the blocker is printed) |
+| `2` | usage, or a refused gates file — unreadable, malformed, or carrying a key this build does not read (zheref/nen#310); no blocker is reported, as in `pr ready` |
 
 **`round_quorum`, and the head only (review of E7, finding H2).** When the
 `gates.json` declares a `round_quorum`, the owed-round step asks it too. It
@@ -1981,6 +2126,53 @@ next-blocker` rather than its own
 This verb reads no `--repo` — every call addresses the PR and its
 repository entirely via `--target`/`--pr`.
 
+**The round ceiling ([#240](https://github.com/zheref/nen/issues/240)).**
+Before any **bot** is requested, the verb reads `round_policy.maxRounds` from
+`nen/gates.json` at **two** commits — the pull request's base (`baseRefOid`)
+and the tip of the repository's default branch — and applies the **lower**;
+never the local checkout, since `--target` may name another repository. A file
+absent at the base but declaring `maxRounds` on the default branch is declared.
+Each commit is read first (`repos/<slug>/git/commits/<sha>`, which returns no diff); only a 404 on the
+**file** at a commit that reads means "no file" — a 404 on the commit (a
+repository the token cannot see), "No commit found for the ref", or anything
+else is a failed read. It then counts each bot's `review_requested` events on
+the pull request's timeline, every page (`gh api --method GET --paginate
+--slurp`), **by node id**. An `--add-bots` id nothing else named is resolved
+with one `nodes(ids:)` read: an id that is not a Bot is refused, and so is an
+id GitHub answers under a different canonical id (a legacy id), the refusal
+naming the canonical id to use instead. The bot's canonical login also counts
+a non-User event that carries another id, but only as a fallback: the REST
+timeline names Copilot `Copilot` where GraphQL names it
+`copilot-pull-request-reviewer`, so for real bots the id does the counting. Every request counts, whoever made
+it and by whatever route, raw GraphQL included
+([zheref/KroApple#577](https://github.com/zheref/KroApple/pull/577) carries
+eight under a two-round ruling).
+
+- A request that would pass the ceiling refuses the **whole** call at exit
+  `2`, the user route included, and nothing is requested:
+
+  ```text
+  refused: copilot-pull-request-reviewer (BOT_1) has been requested 3 times, so this would be request 4 of 3 on zheref/nen#9, past the round_policy.maxRounds ceiling declared in zheref/nen@BASE1:nen/gates.json. Nothing was requested. A further round is the maintainer's to grant (a pull request raising maxRounds), never this verb's (zheref/nen#240).
+  ```
+
+- Inside the ceiling, each bot gets a line `<bot>: request N of M
+  (round_policy.maxRounds, <source>)`, under `--dry-run` as well, which
+  previews a refusal at exit `2` too.
+- Neither commit stating `maxRounds` is no ceiling: no timeline read, and the
+  verb behaves as before.
+- A commit, file or timeline that cannot be read, a file that does not
+  validate (a misspelt `maxRound` or a repeated key included), or an id that
+  is not a Bot refuses the bot request at exit `1`: a ceiling that may be
+  declared and could not be checked is never read as no ceiling.
+- **A guardrail, not a lock.** The ceiling binds this verb only: `gh pr edit`,
+  a raw GraphQL `requestReviews` and the web UI request reviews without it,
+  and the count is read before the request is made, so two concurrent calls
+  can each see room for one more. Those requests still count against the next
+  call through this verb.
+- Users and teams are not counted or capped. `--json` adds `ceiling`
+  (`{ maxRounds, source }`, or `null`) and `rounds` (`[{ id, login,
+  requested, next, maxRounds, refused }]`) whenever a bot is named.
+
 **Output and exit codes** — human line(s): one per route actually called
 (`requested <a>, <b> on <target>#<pr>` for the user route; for the bot
 route, what the mutation's OWN response says is now pending review, not an
@@ -1988,11 +2180,13 @@ echo of what this verb sent — see `src/pr/bots.ts`'s header for why:
 the identical mutation call has been observed answering `NOT_FOUND` for a
 botId under one token and succeeding under another, so success is reported
 from GitHub's answer, never assumed from an exit code alone); `--json`
-top-level keys: `ok`, `message`, `routing`, `unrecordedBots` (a `--dry-run`
-carries `ok`, `dryRun`, `routing`, `message`). Exit 0 on success (or a
-`--dry-run`), exit 1 when no reviewers were named or a route's `gh` call
-failed or answered something unreadable, exit 2 on a missing `--pr` or an
-unresolved `--add-reviewers` login, and **exit `9` when every call was
+top-level keys: `ok`, `message`, `routing`, `unrecordedBots`, plus `ceiling`
+and `rounds` when a bot is named (a `--dry-run` carries `ok`, `dryRun`,
+`routing`, `message`, and the same two). Exit 0 on success (or a
+`--dry-run`), exit 1 when no reviewers were named, a route's `gh` call
+failed or answered something unreadable, or the round ceiling could not be
+checked, exit 2 on a missing `--pr`, an unresolved `--add-reviewers` login or
+a bot past `round_policy.maxRounds`, and **exit `9` when every call was
 accepted but GitHub did not record at least one requested bot**.
 
 **Exit `9` — a bot request GitHub accepted and never recorded
@@ -2025,9 +2219,11 @@ route's `gh` call failed outright in the same invocation, exit `1` wins and
 at all is exit `1` too (nothing was read that could say which bot landed). The
 code was chosen, like [`pr ready`](#nen-pr-ready)'s `8`, because it collides
 with nothing else this CLI or its bootstrap returns. The PR timeline's
-`ReviewRequestedEvent` is deliberately **not** read: telling this request's
-event from an earlier request's needs a clock window, and the mutation's own
-response is the same transaction's answer.
+`ReviewRequestedEvent` is deliberately **not** read to decide whether *this*
+request landed: telling this request's event from an earlier request's needs a
+clock window, and the mutation's own response is the same transaction's
+answer. (The round ceiling above reads the timeline for a different question
+— how many requests stand — which needs no window: every event counts.)
 
 **Example — a login this pull request already knows as a bot**
 
@@ -2055,7 +2251,10 @@ would request review on zheref/nen#9:
 (scripted the same way — `sasuke` resolves as a collaborator, and the node
 id named with `--add-bots` needs no resolution at all; `--dry-run` still
 performs both reads but calls neither `gh pr edit --add-reviewer` nor the
-mutation)
+mutation. The base here carries no `nen/gates.json`, so no ceiling line is
+printed; under a declared `maxRounds` a line such as `  BOT_kgDOCnlnWA:
+request 2 of 3 (round_policy.maxRounds, zheref/nen@<base>:nen/gates.json)`
+follows the routes)
 
 ### `nen pr edit-body`
 
@@ -5296,6 +5495,18 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 ```text
 nen schema check --repo <path> [--json]
 ```
+
+**Exit codes.** `0` every required file loaded; `1` one did not; `2` from v0.21.0 when
+`nen/gates.json` carries a key this build does not read (zheref/nen#310). The gates row FAILs naming
+every such key, the keys its object takes with the release that introduced each, and the running
+version; `--json` adds `unknownKeys: ["nen/gates.json: <pointer>.<key>", ...]`, empty when every key is
+known. The field is **additive**: every existing key and the row shape are unchanged, so a reader that
+ignores unknown fields reads the report as before. Only `$`-prefixed keys are allowed outside the known
+set — see [unknown keys under `pr ready`](#nen-pr-ready) for the table. A key **repeated** within one
+object (JSON would keep only the last) is exit `2` too, the row naming its pointer, and `--json` adds
+`duplicateKeys` in the same shape. A key that is not printable ASCII is shown JSON-escaped (`"evil\u001b[2Jkey"`)
+in every message, never written raw to the terminal. When the only failure is the gates file's keys, the
+closing line names the keys and does not say the taxonomy could not be read.
 
 **Four POINTER rows (zheref/nen#220, #227).** Four rows name a pointer
 rather than a file — `nen/workflow.json#reports.sections`,

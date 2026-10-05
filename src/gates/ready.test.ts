@@ -57,6 +57,14 @@ function readyState(overrides: Record<string, unknown> = {}): Record<string, unk
   };
 }
 
+// The rounds-owed row's pending-request reading (zheref/nen#240, criterion 4),
+// appended when every still-owed round is a pending request.
+const PENDING_ONLY =
+  " — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)";
+// ...and the distinct reading when an owed reviewer never had a round (N1).
+const NO_ROUND_YET = (names: string): string =>
+  ` — no round at any head yet: ${names}; a review request for each is pending (zheref/nen#240)`;
+
 const OPTIONS = {
   roundPolicyDefault: "bounded" as const,
   stallMinutes: 30,
@@ -897,7 +905,8 @@ describe("evaluateReady -- CON-32(b), the round-stalled / rounds-owed split", ()
     const evaluation = evaluateReady(IDENTITIES, pendingCopilot("2025-06-01T11:31:00Z"), OPTIONS);
     expect(evaluation.firstFailing).toBe("rounds-owed");
     expect(evaluation.line).toBe(
-      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted)",
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted)" +
+        NO_ROUND_YET("copilot"),
     );
   });
 
@@ -1136,9 +1145,7 @@ describe("CAVEATS -- the fixed 'what the gate does not decide' set", () => {
 // fails here, where it can be read, rather than on a pull request.
 describe("evaluateReady -- round_quorum on this repository's nen/gates.json (ruling 2026-09-29)", () => {
   const OWN = loadGateIdentities(process.cwd());
-  const OWN_RAW = JSON.parse(
-    readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8"),
-  ) as Record<string, unknown>;
+  const OWN_RAW = JSON.parse(readFileSync(join(process.cwd(), "nen", "gates.json"), "utf8")) as Record<string, unknown>;
   // THE PRE-QUORUM READING: every nen release before the one that ships
   // `round_quorum` (v0.15.1 and v0.16.0 verified) ignores the key and applies
   // the rest of the file. Parsing the file with the key removed IS that
@@ -1405,8 +1412,12 @@ describe("evaluateReady -- round_quorum on this repository's nen/gates.json (rul
       OPTIONS,
     );
     const row = rowOf(evaluation, "rounds-owed");
+    // Byte for byte as before #361; the pending-request reading (#240,
+    // criterion 4) is the one addition, since the pending request is all that
+    // fails the row.
     expect(evaluation.line).toBe(
-      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted)",
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): copilot (review requested, not yet posted)" +
+        NO_ROUND_YET("copilot"),
     );
     expect(row).not.toHaveProperty("roundQuorum");
     expect(row.note).toBeNull();
@@ -1741,5 +1752,176 @@ describe("evaluateReady -- round_quorum is ADDITIVE for a repository that declar
     const row = evaluation.conjuncts.find((c) => c.id === "rounds-owed");
     expect(row?.note).toMatch(/^satisfied by dependabot_carve_out/);
     expect(row).not.toHaveProperty("roundQuorum");
+  });
+});
+
+// ── the pending-request and own-request readings (zheref/nen#240, criterion 4) ──
+//
+// "The CON-32(b) row distinguishes 'no round at any head' from 'a pending
+// request exists' in its detail text." Detail text only: the row still fails,
+// so the verdict and the exit code are unchanged.
+describe("evaluateReady -- the rounds-owed row's pending-request and own-request readings (zheref/nen#240)", () => {
+  const OWED_PREFIX = "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): ";
+  // sasuke posted at an EARLIER head and is requested again: a round at some
+  // head, owed only because of the pending request.
+  const earlier = (author: string): Record<string, unknown> => ({
+    author,
+    state: "COMMENTED",
+    commit_id: "0ldhead",
+    submitted_at: "2025-05-01T00:00:00Z",
+  });
+  const pendingSasuke = (extra: Record<string, unknown> = {}): Record<string, unknown> =>
+    readyState({
+      reviews: [earlier("sasuke"), approvedAtHead("tenma")],
+      review_requests: [{ login: "sasuke" }],
+      ...extra,
+    });
+  const asked = (reviewer: string, actor: string | null): Record<string, unknown> => ({ reviewer, actor });
+
+  it("a pending request for a reviewer that posted at an earlier head: says no owed reviewer lacks a round at any head", () => {
+    const evaluation = evaluateReady(IDENTITIES, pendingSasuke(), OPTIONS);
+    expect(evaluation.ready).toBe(false);
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.status).toBe("failed");
+    expect(evaluation.line).toBe(`${OWED_PREFIX}sasuke (review requested, not yet posted)${PENDING_ONLY}`);
+  });
+
+  it("N1: a pending request for a reviewer that NEVER posted reads 'no round at any head yet', never the pending-only claim -- and no own-request rides on it", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        reviews: [approvedAtHead("tenma")],
+        review_requests: [{ login: "sasuke" }],
+        gate_identity: "zheref",
+        review_request_events: [asked("sasuke", "zheref")],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(`${OWED_PREFIX}sasuke (review requested, not yet posted)${NO_ROUND_YET("sasuke")}`);
+    expect(evaluation.line).not.toContain("lacks a round");
+    expect(evaluation.line).not.toContain("own-request");
+  });
+
+  it("N1: one owed reviewer with a round and one without reads 'no round at any head yet', naming only the one without", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({ reviews: [earlier("sasuke")], review_requests: [{ login: "sasuke" }, { login: "tenma" }] }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(
+      `${OWED_PREFIX}sasuke (review requested, not yet posted);tenma (review requested, not yet posted)${NO_ROUND_YET("tenma")}`,
+    );
+  });
+
+  it("N1: a met quorum's member whose round check is IN FLIGHT at head, requested and never posted, stays owed with the no-round reading", () => {
+    const own = loadGateIdentities(process.cwd());
+    const evaluation = evaluateReady(
+      own,
+      readyState({
+        checks: [greenCheck(), { name: "Cursor Bugbot", status: "IN_PROGRESS", conclusion: null }],
+        reviews: [earlier("copilot-pull-request-reviewer[bot]")],
+        review_requests: [{ login: "cursor" }],
+        reviewers: "copilot,bugbot",
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false);
+    // Row 2 fails first (the run is still going); the rounds-owed row is read
+    // on its own, as every row is evaluated (zheref/nen#248).
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.reason).toBe(
+      `${OWED_PREFIX}bugbot (review requested, not yet posted)${NO_ROUND_YET("bugbot")}`,
+    );
+  });
+
+  it("R4: under --round-policy strict, an EARLIER-head round check still counts as a round at some head", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        review_requests: [{ login: "bisky" }],
+        reviewers: "sasuke,tenma,bisky",
+        earlier_round_checks: [{ sha: "0ldhead", name: "bisky / review", status: "COMPLETED", conclusion: "SUCCESS" }],
+      }),
+      { ...OPTIONS, roundPolicyDefault: "strict" as const },
+    );
+    expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.reason).toBe(
+      `${OWED_PREFIX}bisky (review requested, not yet posted)${PENDING_ONLY}`,
+    );
+  });
+
+  it("own-request: the identity running the gate made the pending request, and the row names it", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      pendingSasuke({
+        gate_identity: "zheref",
+        review_request_events: [asked("sasuke", "someone-else"), asked("tenma", "zheref"), asked("sasuke", "ZHEREF")],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.ready).toBe(false); // the verdict does not move
+    expect(evaluation.line).toBe(
+      `${OWED_PREFIX}sasuke (review requested, not yet posted)${PENDING_ONLY}; own-request: every pending request was made by zheref, the identity running this gate`,
+    );
+  });
+
+  it("a request someone else made is NOT own-request -- the latest event's actor decides", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      pendingSasuke({ gate_identity: "zheref", review_request_events: [asked("sasuke", "zheref"), asked("sasuke", "maintainer")] }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(`${OWED_PREFIX}sasuke (review requested, not yet posted)${PENDING_ONLY}`);
+  });
+
+  it("N10: a request event for a login the pattern only CONTAINS is not this reviewer's request", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      pendingSasuke({ gate_identity: "zheref", review_request_events: [asked("sasuke", "maintainer"), asked("not-sasuke", "zheref")] }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(`${OWED_PREFIX}sasuke (review requested, not yet posted)${PENDING_ONLY}`);
+  });
+
+  it("an unread identity or unread events make no own-request claim, never a guess", () => {
+    for (const extra of [
+      { gate_identity: null, review_request_events: [asked("sasuke", "zheref")] },
+      { gate_identity: "zheref", review_request_events: null },
+      { gate_identity: "zheref", review_request_events: [asked("sasuke", null)] },
+      { gate_identity: "zheref", review_request_events: [] },
+    ]) {
+      expect(evaluateReady(IDENTITIES, pendingSasuke(extra), OPTIONS).line).toBe(
+        `${OWED_PREFIX}sasuke (review requested, not yet posted)${PENDING_ONLY}`,
+      );
+    }
+  });
+
+  it("every owed reviewer must be own-request for the claim: one requested by another identity withholds it", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        reviews: [earlier("sasuke"), earlier("tenma")],
+        review_requests: [{ login: "sasuke" }, { login: "tenma" }],
+        gate_identity: "zheref",
+        review_request_events: [asked("sasuke", "zheref"), asked("tenma", "maintainer")],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(
+      `${OWED_PREFIX}sasuke (review requested, not yet posted);tenma (review requested, not yet posted)${PENDING_ONLY}`,
+    );
+  });
+
+  it("a reviewer with NO round at any head and no request keeps the row's reason byte for byte: no reading is added", () => {
+    const evaluation = evaluateReady(
+      IDENTITIES,
+      readyState({
+        reviews: [approvedAtHead("tenma")],
+        review_requests: [{ login: "tenma" }],
+        gate_identity: "zheref",
+        review_request_events: [asked("tenma", "zheref")],
+      }),
+      OPTIONS,
+    );
+    expect(evaluation.line).toBe(
+      `${OWED_PREFIX}sasuke (no round at head);tenma (review requested, not yet posted)`,
+    );
   });
 });

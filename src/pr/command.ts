@@ -39,6 +39,7 @@ import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { loadGateIdentities } from "../schema/gates.js";
+import { SchemaError } from "../schema/errors.js";
 import {
   BASE_GATES_PATH,
   decodeContentsPayload,
@@ -57,6 +58,17 @@ import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
+import {
+  botLabel,
+  botRounds,
+  canonicalBotLogins,
+  ceilingRefusal,
+  readRequestEvents,
+  resolveCeiling,
+  RoundCeilingError,
+  type BotRound,
+  type RequestEvent,
+} from "./round_ceiling.js";
 import {
   EXIT_BOT_REQUEST_UNRECORDED,
   fetchPrAndKnownBots,
@@ -126,7 +138,9 @@ ready:
   parent. Every output states the judged head, and warns (naming both SHAs)
   when run inside a checkout of the PR's head branch whose tip differs.
   --require-head <sha> pins it. Exit 0 ready; 1 not-ready or unevaluated;
-  2 usage; 8 head-mismatch (--require-head did not match; no verdict).
+  2 usage or a refused gates file (unreadable, malformed, or carrying a key
+  this build does not read, zheref/nen#310); 8 head-mismatch (--require-head
+  did not match; no verdict).
   <ref>                       <CODE>#<N> via the target repo's product codes,
                               or a bare <N> with --gh-repo. The '#' may be
                               omitted (AB123 = AB#123); the shorthand reads the
@@ -135,7 +149,11 @@ ready:
                               <CODE>#<N> is the unambiguous form.
   --gh-repo <owner/name>      The repository, when the ref is a bare number.
   --explain                   The conjunct table, in evaluation order, plus
-                              what the gate does NOT decide.
+                              what the gate does NOT decide. When nen/gates.json
+                              states round_policy.minRounds or .maxRounds, also
+                              each reviewer's requested and posted rounds
+                              against both (--json: meta.roundCounts) --
+                              counted, never a conjunct (zheref/nen#240).
   --reviewers <a,b,c>         The configured reviewer set (mirrors the shell
                               gate's flag). Also the identity source of last
                               resort -- see --gates. On that path each name is
@@ -211,6 +229,7 @@ next-blocker:
   The FIRST blocking condition, fixed order: conflict -> red required
   check -> owed reviewer round -> unresolved thread -> missing body
   requirement ('## How to verify', CON-17). Exits 1 when something blocks,
+  2 on usage or a refused gates file (as pr ready does, zheref/nen#310),
   0 when this check finds nothing -- the adversarial confirmation pass
   stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
   diff-shaped and not checked here; see ../pr/blocker.ts's header.
@@ -263,12 +282,32 @@ request-reviews:
                          network-free even here) but nothing is
                          requested; prints which route -- bot, user or
                          team -- each name or id went to instead.
+  THE ROUND CEILING (zheref/nen#240): before any bot is requested,
+  round_policy.maxRounds is read from nen/gates.json at the PULL
+  REQUEST'S BASE and at the DEFAULT BRANCH's tip, the LOWER applied,
+  and each bot's review_requested timeline events are counted by node
+  id (its canonical login only as a fallback). A request that
+  would pass the ceiling refuses the WHOLE call at exit 2 -- naming the
+  bot, its count, the request it would be and the ceiling's sources --
+  and nothing is requested; --dry-run previews the same, and prints
+  'request N of M' per bot inside it. Neither commit stating maxRounds
+  (only a file-level 404 at a readable commit is "no file") is no
+  ceiling. A commit, file or timeline that cannot be read, a file that
+  does not validate, an id that is not a Bot, or a legacy id GitHub
+  answers under another canonical id (named in the refusal) refuses the
+  bot request at exit 1. Users and teams are not capped. A GUARDRAIL, not a lock:
+  'gh pr edit', raw GraphQL and the web UI request reviews without this
+  verb, and the count is not atomic with the request.
+  --json adds 'ceiling' ({ maxRounds, source } or null) and 'rounds'
+  ([{ id, login, requested, next, maxRounds, refused }]) when a bot is
+  named.
   A bot is reported as requested only when the mutation's OWN response
   lists it, by node id, as pending review (zheref/nen#277): GitHub has
   been seen to accept the call and record nothing, and no review then
   arrives. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
-  named, or a route's gh call failed or answered something unreadable;
-  2 usage (a missing --pr, an unresolved --add-reviewers login); 9 every
+  named, or a route's gh call failed or answered something unreadable,
+  or the round ceiling could not be checked; 2 usage (a missing --pr, an
+  unresolved --add-reviewers login) or a bot past round_policy.maxRounds; 9 every
   call was ACCEPTED but at least one requested bot is not pending review
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
   }], login null for a bot this pull request has never seen). No review
@@ -829,10 +868,20 @@ function blocker(context: CommandContext): number {
   // what it always was -- an override handed to nextBlocker() below, never an
   // identity SOURCE.
   const gatesFlag = context.args.values["gates"];
-  const identities =
-    gatesFlag === undefined
-      ? loadGateIdentities(root)
-      : resolveIdentities(root, gatesFlag, [], []).identities;
+  // A refused identity file -- unreadable, malformed, or carrying a key this
+  // build does not read (zheref/nen#310) -- is a usage error, exit 2, as it is
+  // in `pr ready`: nobody asked a question GitHub could answer, so no blocker
+  // is reported. Re-raised whole, so the path and pointer survive.
+  let identities;
+  try {
+    identities =
+      gatesFlag === undefined
+        ? loadGateIdentities(root)
+        : resolveIdentities(root, gatesFlag, [], []).identities;
+  } catch (error) {
+    if (error instanceof SchemaError) throw new VerbUsageError(error.message);
+    throw error;
+  }
   const snapshot = fetchPullRequest(context.seams, target, prNumber);
   // `checks.excluded` AT THE BASE (zheref/nen#249, Feitan F1), the same source
   // `pr ready` reads -- never the local file, which in a worktree is the pull
@@ -1095,9 +1144,87 @@ function doRequestReviews(context: CommandContext): number {
   // duplicate and a repeated id tells a reader nothing a single one does not.
   const botIds = [...new Set([...resolvedBotIds, ...explicitBotIds])];
 
+  // THE ROUND CEILING (zheref/nen#240), checked BEFORE anything is requested
+  // and under --dry-run too, which previews exactly what the real call would
+  // do. Bots only -- see ./round_ceiling.ts's header. `known` is read here
+  // when only --add-bots was given, because the base commit and the default
+  // branch the ceiling is read at come with it.
+  let knownBots: PrAndKnownBots | null = known;
+  let ceiling: { readonly maxRounds: number; readonly source: string; readonly rounds: readonly BotRound[] } | null = null;
+  // A ceiling that could not be checked refuses at exit 1; `dryRun` rides in
+  // the --json of that refusal too (N11).
+  const unchecked = (message: string): number => {
+    emit(
+      context.io,
+      context.json,
+      { ok: false, ...(dryRun ? { dryRun: true } : {}), routing: routes, message, ceiling: null, rounds: [], unrecordedBots: [] },
+      [message],
+    );
+    return 1;
+  };
+  if (botIds.length > 0) {
+    knownBots ??= fetchPrAndKnownBots(context.seams, target, prNumber);
+    const read =
+      knownBots.defaultBranch === null
+        ? ({ kind: "failed", message: "GitHub answered no default branch for the repository" } as const)
+        : resolveCeiling(context.seams, target, [
+            { label: "pull request's base", sha: knownBots.baseRefOid },
+            { label: `default branch (${knownBots.defaultBranch.name})`, sha: knownBots.defaultBranch.oid },
+          ]);
+    if (read.kind === "failed") {
+      return unchecked(
+        `${read.message}. Nothing was requested: a round_policy.maxRounds ceiling that cannot be checked is never read as no ceiling (zheref/nen#240).`,
+      );
+    }
+    if (read.kind === "declared") {
+      let events: RequestEvent[];
+      let canonical: ReadonlyMap<string, string>;
+      // Each bot's CANONICAL login (N5): from the route or this pull
+      // request's known bots where it came from GraphQL already, else one
+      // `nodes(ids:)` read for the --add-bots ids nothing else named.
+      const knownLogin = (id: string): string | null =>
+        reviewerRoutes.find((route): boolean => route.route === "bot" && route.id === id)?.name ??
+        knownBots?.bots.find((bot): boolean => bot.id === id)?.login ??
+        null;
+      try {
+        canonical = canonicalBotLogins(context.seams, botIds.filter((id): boolean => knownLogin(id) === null));
+        events = readRequestEvents(context.seams, target, prNumber);
+      } catch (error) {
+        if (!(error instanceof RoundCeilingError)) throw error;
+        return unchecked(
+          `${error.message}, so the requests already made of each bot cannot be counted against the round_policy.maxRounds ceiling of ${read.maxRounds} declared in ${read.source}. Nothing was requested (zheref/nen#240).`,
+        );
+      }
+      const loginOf = (id: string): string | null => knownLogin(id) ?? canonical.get(id) ?? null;
+      const rounds = botRounds(events, botIds.map((id): { id: string; login: string | null } => ({ id, login: loginOf(id) })), read.maxRounds);
+      ceiling = { maxRounds: read.maxRounds, source: read.source, rounds };
+      const refused = rounds.filter((round): boolean => round.refused);
+      if (refused.length > 0) {
+        const message = ceilingRefusal(`${target.slug}#${prNumber}`, refused, read.source);
+        emit(
+          context.io,
+          context.json,
+          { ok: false, ...(dryRun ? { dryRun: true } : {}), routing: routes, message, ceiling: { maxRounds: read.maxRounds, source: read.source }, rounds, unrecordedBots: [] },
+          [message],
+        );
+        return EXIT_ROUND_CEILING;
+      }
+    }
+  }
+  const ceilingJson =
+    botIds.length === 0
+      ? {}
+      : {
+          ceiling: ceiling === null ? null : { maxRounds: ceiling.maxRounds, source: ceiling.source },
+          rounds: ceiling?.rounds ?? [],
+        };
+  const ceilingLines = (ceiling?.rounds ?? []).map(
+    (round): string => `  ${botLabel(round)}: request ${round.next} of ${round.maxRounds} (round_policy.maxRounds, ${ceiling?.source ?? ""})`,
+  );
+
   if (dryRun) {
-    const lines = [`would request review on ${target.slug}#${prNumber}:`, ...routes.map(routeLine)];
-    emit(context.io, context.json, { ok: true, dryRun: true, routing: routes, message: lines.join("\n") }, lines);
+    const lines = [`would request review on ${target.slug}#${prNumber}:`, ...routes.map(routeLine), ...ceilingLines];
+    emit(context.io, context.json, { ok: true, dryRun: true, routing: routes, message: lines.join("\n"), ...ceilingJson }, lines);
     return 0;
   }
 
@@ -1112,8 +1239,8 @@ function doRequestReviews(context: CommandContext): number {
     // mutation's pullRequestId -- is fetched here instead. The same read's
     // bot list rides along so an unrecorded bot (zheref/nen#277) is named by
     // its login where this pull request already knows it, not only by id.
-    const knownBots = known ?? fetchPrAndKnownBots(context.seams, target, prNumber);
-    results.push(requestBotReviews(context.seams, target, prNumber, knownBots.pullRequestId, botIds, knownBots.bots));
+    const bots = knownBots ?? fetchPrAndKnownBots(context.seams, target, prNumber);
+    results.push(requestBotReviews(context.seams, target, prNumber, bots.pullRequestId, botIds, bots.bots));
   }
 
   const ok = results.every((result): boolean => result.ok);
@@ -1127,15 +1254,25 @@ function doRequestReviews(context: CommandContext): number {
   // least one requested bot is not pending review.
   const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
   const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
-  const lines = results.map((result): string => result.message);
+  const lines = [...results.map((result): string => result.message), ...ceilingLines];
   // JOINED WITH A NEWLINE, matching the human rendering line for line
   // (Copilot review, PR #174) -- both routes running in the same call
   // prints two lines to the terminal, and `--json`'s `message` field
   // silently collapsing them with a space would be a fact the human
   // rendering states plainly and the JSON rendering blurs.
-  emit(context.io, context.json, { ok, routing: routes, message: lines.join("\n"), unrecordedBots }, lines);
+  emit(context.io, context.json, { ok, routing: routes, message: lines.join("\n"), unrecordedBots, ...ceilingJson }, lines);
   return code;
 }
+
+/**
+ * Exit 2 for a request past `round_policy.maxRounds` (zheref/nen#240): the
+ * invocation asked for something the repository's declared policy refuses.
+ * The same code a usage error carries, as the issue asks; the message names
+ * the reviewer, the count and the ceiling, which a usage error never does.
+ */
+export const EXIT_ROUND_CEILING = 2;
+
+
 
 /**
  * The first and last line of a body, for --dry-run's summary.

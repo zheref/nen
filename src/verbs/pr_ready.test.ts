@@ -712,6 +712,43 @@ function input(overrides: Partial<PrReadyInput> = {}): PrReadyInput {
 }
 
 describe("prReady -- usage errors (exit 2, never a verdict)", () => {
+  it("a nen/gates.json key this build does not read (zheref/nen#310): exit 2 before GitHub is read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-ready-unknown-key-"));
+    try {
+      const gates = JSON.parse(readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8")) as Record<string, unknown>;
+      gates["round_policy"] = { stallMinutes: 30, minimumRounds: 1 };
+      const path = join(dir, "gates.json");
+      writeFileSync(path, JSON.stringify(gates));
+      const { io, out, err } = capture();
+      const code = await prReady(
+        input({ values: { ...input().values, gates: path } }),
+        io,
+        stubDeps(null),
+      );
+      expect(code).toBe(2);
+      expect(out).toEqual([]); // no verdict, not even an unevaluated one
+      expect(err.join("\n")).toContain("at round_policy, carries 'minimumRounds', which this build does not read");
+      expect(err.join("\n")).toContain(`This is nen ${VERSION}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("F3: a --gates file repeating a key is exit 2 before GitHub is read, named by pointer", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-ready-dup-key-"));
+    try {
+      const path = join(dir, "gates.json");
+      writeFileSync(path, readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8").replace(/^\s*\{/, '{"version":1,'));
+      const { io, out, err } = capture();
+      const code = await prReady(input({ values: { ...input().values, gates: path } }), io, stubDeps(null));
+      expect(code).toBe(2);
+      expect(out).toEqual([]);
+      expect(err.join("\n")).toContain("at $, carries the key 'version' twice");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("an unknown 'pr' subcommand", async () => {
     const { io, err } = capture();
     const code = await prReady(input({ positionals: ["pr", "list"] }), io, stubDeps(null));
@@ -2100,5 +2137,233 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     );
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/checks\.excluded\[0\]\.reason/);
+  });
+});
+
+// ── round_policy.minRounds / maxRounds, counted (zheref/nen#240) ─────────────
+
+describe("prReady -- review rounds counted against round_policy (zheref/nen#240)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  // The bankai fixture, plus the two adopted keys and the Copilot-or-Bugbot
+  // quorum, written to a scratch file the verb reads through --gates.
+  const gatesWith = (extra: Record<string, unknown>): string => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pr-ready-rounds-"));
+    dirs.push(dir);
+    const gates = JSON.parse(readFileSync(schemaPath(BANKAI_REPO, GATES_FILE), "utf8")) as Record<string, unknown>;
+    const path = join(dir, "gates.json");
+    writeFileSync(path, JSON.stringify({ ...gates, ...extra }));
+    return path;
+  };
+  const CAPS = {
+    round_policy: { minRounds: 1, maxRounds: 3 },
+    round_quorum: { any_of: ["copilot", "bugbot"], minimum: 1 },
+  };
+  const requested = (login: string, at: string): unknown => ({
+    event: "review_requested",
+    created_at: at,
+    requested_reviewer: { login, node_id: `id-${login}` },
+  });
+  // THREE requested Copilot rounds, one posted; one sasuke request; and a team
+  // request, which names no reviewer and counts toward nobody.
+  const threeRounds = (): PrStateSource =>
+    stubSource({
+      reviews: async (): Promise<unknown[]> => [
+        { user: { login: "sasuke" }, state: "APPROVED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+        { user: { login: "tenma" }, state: "APPROVED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" },
+        {
+          user: { login: "copilot-pull-request-reviewer[bot]" },
+          state: "COMMENTED",
+          commit_id: "0ldhead",
+          submitted_at: "2024-12-31T00:00:00Z",
+        },
+      ],
+      timeline: async (): Promise<unknown[]> => [
+        requested("Copilot", "2024-12-30T00:00:00Z"),
+        requested("sasuke", "2024-12-30T00:01:00Z"),
+        requested("Copilot", "2024-12-30T01:00:00Z"),
+        { event: "review_requested", created_at: "2024-12-30T01:30:00Z", requested_team: { slug: "acme" } },
+        { event: "commented" },
+        requested("Copilot", "2024-12-30T02:00:00Z"),
+      ],
+    });
+
+  it("--explain prints each reviewer's requested and posted rounds against min and max, on a PR with three requested rounds", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input({ values: { ...input().values, gates: gatesWith(CAPS) }, booleans: new Set(["explain"]) }),
+      io,
+      stubDeps(threeRounds()),
+    );
+    expect(code).toBe(0); // counted, never a conjunct: the verdict is unchanged
+    const text = out.join("\n");
+    expect(text).toContain(
+      "  review rounds (round_policy minRounds 1, maxRounds 3; counted, never a conjunct, zheref/nen#240):",
+    );
+    expect(text).toContain(
+      "    copilot: requested 3 of max 3 (ceiling reached: no further request) · rounds 1 of min 1 (met)",
+    );
+    expect(text).toContain("    sasuke: requested 1 of max 3 (another request allowed) · rounds 1 of min 1 (met)");
+    expect(text).toContain("    tenma: requested 0 of max 3 (another request allowed) · rounds 1 of min 1 (met)");
+    // bugbot is not configured on this PR but is a quorum member: short of
+    // minRounds, and covered by the met quorum (#361) -- no round check in flight.
+    expect(text).toContain(
+      "    bugbot: requested 0 of max 3 (another request allowed) · rounds 0 of min 1 (fulfilled by the met round quorum)",
+    );
+  });
+
+  it("--json carries the same counts under meta.roundCounts", async () => {
+    const { io, out } = capture();
+    await prReady(input({ values: { ...input().values, gates: gatesWith(CAPS) } }), io, stubDeps(threeRounds()));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.meta.roundCounts?.minRounds).toBe(1);
+    expect(report.meta.roundCounts?.maxRounds).toBe(3);
+    expect(report.meta.roundCounts?.requestsRead).toBe(true);
+    expect(report.meta.roundCounts?.reviewers.find((entry) => entry.reviewer === "copilot")).toEqual({
+      reviewer: "copilot",
+      requested: 3,
+      posted: 1,
+      rounds: 1,
+      pendingRequest: false,
+      min: "met",
+      max: "reached",
+    });
+  });
+
+  it("an unreadable timeline is 'requests could not be counted', never zero requested, and says so", async () => {
+    const { io, out } = capture();
+    const source = stubSource({
+      timeline: async (): Promise<unknown[]> => {
+        throw new Error("HTTP 502");
+      },
+    });
+    await prReady(
+      input({ values: { ...input().values, gates: gatesWith(CAPS) }, booleans: new Set(["explain"]) }),
+      io,
+      stubDeps(source),
+    );
+    const text = out.join("\n");
+    expect(text).toContain("    copilot: requested ? of max 3 (requests could not be counted)");
+    expect(text).toContain("timeline could not be read, so the review rounds requested of each reviewer are not counted");
+  });
+
+  it("N11: the stall bound, the round counts and the own-request reading share ONE timeline read", async () => {
+    let timelineReads = 0;
+    const base = threeRounds();
+    const source: PrStateSource = {
+      ...base,
+      // A pending request for the bounded_policy_exempt copilot: the stall
+      // bound reads the timeline, and so do the counts and the reading.
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => ({
+        ...(await base.pullRequestSnapshot(repo, n)),
+        reviewRequests: [{ login: "Copilot" }],
+      }),
+      timeline: async (repo: PrRef, n: number): Promise<unknown[]> => {
+        timelineReads += 1;
+        return await base.timeline(repo, n);
+      },
+    };
+    const { io } = capture();
+    await prReady(input({ values: { ...input().values, gates: gatesWith(CAPS) } }), io, stubDeps(source));
+    expect(timelineReads).toBe(1);
+  });
+
+  it("a file stating neither key gets no roundCounts and makes no timeline read for them", async () => {
+    let timelineReads = 0;
+    const source = stubSource({
+      timeline: async (): Promise<unknown[]> => {
+        timelineReads += 1;
+        return [];
+      },
+    });
+    const { io, out } = capture();
+    await prReady(input(), io, stubDeps(source));
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect("roundCounts" in report.meta).toBe(false);
+    expect(timelineReads).toBe(0);
+    const explained = capture();
+    await prReady(input({ booleans: new Set(["explain"]) }), explained.io, stubDeps(stubSource()));
+    expect(explained.out.join("\n")).not.toContain("review rounds");
+  });
+});
+
+// ── the own-request reading, end to end (zheref/nen#240, criterion 4) ────────
+
+describe("prReady -- the rounds-owed row's own-request reading (zheref/nen#240)", () => {
+  const withPendingSasuke = (overrides: Partial<PrStateSource>): PrStateSource => {
+    const base = stubSource(overrides);
+    return {
+      ...base,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+        const snapshot = await base.pullRequestSnapshot(repo, n);
+        return { ...snapshot, reviewRequests: [{ login: "sasuke" }] };
+      },
+    };
+  };
+  const timeline = async (): Promise<unknown[]> => [
+    { event: "review_requested", actor: { login: "zheref" }, requested_reviewer: { login: "sasuke" } },
+  ];
+
+  it("names the running identity when it made the only pending request; the verdict and exit code do not move", async () => {
+    const { io, out } = capture();
+    const code = await prReady(
+      input(),
+      io,
+      stubDeps(withPendingSasuke({ timeline, viewerLogin: async (): Promise<string> => "zheref" })),
+    );
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.verdict).toBe("not-ready");
+    expect(report.firstFailing).toBe("rounds-owed");
+    expect(report.gateLine).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): sasuke (review requested, not yet posted)" +
+        " — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)" +
+        "; own-request: every pending request was made by zheref, the identity running this gate",
+    );
+  });
+
+  it("an identity the token cannot name (an App token) gets the pending-request reading only", async () => {
+    const { io, out } = capture();
+    await prReady(
+      input(),
+      io,
+      stubDeps(
+        withPendingSasuke({
+          timeline,
+          viewerLogin: async (): Promise<string> => {
+            throw new Error("HTTP 403");
+          },
+        }),
+      ),
+    );
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(report.gateLine).toMatch(/pending request only: .*\(zheref\/nen#240\)$/);
+    expect(report.gateLine).not.toContain("own-request");
+  });
+
+  it("with no pending request, neither the identity nor the request timeline is read for it", async () => {
+    let viewerReads = 0;
+    let timelineReads = 0;
+    const { io } = capture();
+    await prReady(
+      input(),
+      io,
+      stubDeps(
+        stubSource({
+          viewerLogin: async (): Promise<string> => {
+            viewerReads += 1;
+            return "zheref";
+          },
+          timeline: async (): Promise<unknown[]> => {
+            timelineReads += 1;
+            return [];
+          },
+        }),
+      ),
+    );
+    expect(viewerReads).toBe(0);
+    expect(timelineReads).toBe(0);
   });
 });

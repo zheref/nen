@@ -1242,6 +1242,54 @@ export function roundsAtHead(
   return found;
 }
 
+// --- roundCountInputs (zheref/nen#240) ---------------------------------------
+// What `nen pr ready --explain` counts per reviewer against `round_policy`'s
+// minRounds/maxRounds: how many reviews the reviewer posted (by its login
+// pattern), whether a review request naming it is pending, and whether it HAS
+// a round by the gate's own rule -- `reviewerRound`, the branches
+// `pendingRounds` and `roundQuorum` already ask, never a second copy. A
+// round-check reviewer (its check IS its round) can have a round with no
+// review posted, which is why the two are reported apart.
+export interface ReviewerRoundFacts {
+  readonly reviewer: string;
+  readonly posted: number;
+  readonly pendingRequest: boolean;
+  readonly round: RoundVia | null;
+  readonly loginPattern: RegExp;
+}
+
+export function reviewerRoundFacts(
+  identities: GateIdentities,
+  inputs: RoundInputs,
+  headSha: string,
+  reviewers: readonly string[],
+  policy: RoundPolicy,
+  deliveryPr = false,
+): ReviewerRoundFacts[] {
+  const checks = latestChecks(inputs.checks);
+  return normalizeReviewerNames(reviewers).map((name): ReviewerRoundFacts => {
+    const identity: ReviewerIdentity | undefined = identities.reviewer(name);
+    const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
+    const outcome = reviewerRound(
+      identity,
+      loginPattern,
+      inputs.reviews,
+      checks,
+      inputs.earlierChecks ?? [],
+      headSha,
+      policy,
+      deliveryPr,
+    );
+    return {
+      reviewer: name,
+      posted: inputs.reviews.filter((review): boolean => loginPattern.test(review.author)).length,
+      pendingRequest: inputs.reviewRequests.some((request): boolean => requestMatches(request, loginPattern)),
+      round: outcome.had ? outcome.via : null,
+      loginPattern,
+    };
+  });
+}
+
 /** Which branch of `reviewerRound` found a reviewer's round. */
 export type RoundVia =
   | "review"
@@ -1555,15 +1603,28 @@ export function quorumExcusedRounds(
   quorum: QuorumResult | null | undefined,
 ): { readonly owed: readonly OwedRound[]; readonly excused: readonly OwedRound[] } {
   if (quorum === null || quorum === undefined || !quorum.met) return { owed, excused: [] };
+  const inFlight = quorumMembersInFlight(quorum);
   const unavailable = new Set(
-    quorum.members
-      .filter((member): boolean => member.roundCheck?.state !== "pending")
-      .map((member): string => member.reviewer),
+    quorum.members.map((member): string => member.reviewer).filter((name): boolean => !inFlight.has(name)),
   );
   return {
     owed: owed.filter((round): boolean => !unavailable.has(round.reviewer)),
     excused: owed.filter((round): boolean => unavailable.has(round.reviewer)),
   };
+}
+
+/**
+ * The `round_quorum` members MID-REVIEW: a round-check run at head still in
+ * flight (state `pending`). The one test both `quorumExcusedRounds` (above)
+ * and ./round_counts.ts's `owed-in-flight` reading ask, so the row and the
+ * counts cannot disagree about who a met quorum covers (zheref/nen#361, #240).
+ */
+export function quorumMembersInFlight(quorum: QuorumResult | null | undefined): ReadonlySet<string> {
+  return new Set(
+    (quorum?.members ?? [])
+      .filter((member): boolean => member.roundCheck?.state === "pending")
+      .map((member): string => member.reviewer),
+  );
 }
 
 export interface QuorumResult {

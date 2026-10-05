@@ -166,6 +166,12 @@ export interface PrStateSource {
    * exclusion and says so -- the stricter verdict, never a wider one.
    */
   fileAtRef?(repo: PrRef, path: string, ref: string): Promise<string | null>;
+  /**
+   * The login the token authenticates as -- the identity RUNNING the gate --
+   * for the own-request reading (zheref/nen#240). OPTIONAL, and any failure
+   * (an App token has no user) means "unknown": no own-request claim is made.
+   */
+  viewerLogin?(): Promise<string>;
 }
 
 export interface FetchStateOptions {
@@ -601,10 +607,12 @@ export async function requestedAt(
   repo: PrRef,
   prNumber: number,
   loginPattern: RegExp,
+  // The timeline read, shareable so one `fetchPrState` reads it once (N11).
+  readTimeline: () => Promise<unknown[]> = (): Promise<unknown[]> => source.timeline(repo, prNumber),
 ): Promise<string> {
   let events: unknown[];
   try {
-    events = await source.timeline(repo, prNumber);
+    events = await readTimeline();
   } catch {
     return "";
   }
@@ -624,6 +632,54 @@ export async function requestedAt(
   const created = digPath(sorted[sorted.length - 1], "created_at");
   // `.created_at // empty` -- absent yields nothing at all, i.e. "".
   return typeof created === "string" && created !== "" ? created : "";
+}
+
+/** One `review_requested` timeline event: who was asked, and who asked. */
+export interface TimelineRequest {
+  readonly reviewer: string;
+  /** The requester's login (`actor`), `null` when the event names none. */
+  readonly actor: string | null;
+}
+
+/**
+ * Every `review_requested` event naming a reviewer, in timeline order -- the
+ * REQUESTED rounds `round_policy.maxRounds` caps, and who made each request
+ * (zheref/nen#240). A request for a team (no `requested_reviewer`) names no
+ * reviewer and is skipped. `null` when the timeline could not be read: an
+ * unread count is never "nothing requested".
+ */
+export async function reviewRequestEvents(
+  source: PrStateSource,
+  repo: PrRef,
+  prNumber: number,
+  readTimeline: () => Promise<unknown[]> = (): Promise<unknown[]> => source.timeline(repo, prNumber),
+): Promise<TimelineRequest[] | null> {
+  let events: unknown[];
+  try {
+    events = await readTimeline();
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(events)) return null;
+  const requests: TimelineRequest[] = [];
+  for (const event of events) {
+    if (digPath(event, "event") !== "review_requested") continue;
+    const login = digPath(event, "requested_reviewer", "login");
+    if (typeof login !== "string" || login === "") continue;
+    const actor = digPath(event, "actor", "login");
+    requests.push({ reviewer: login, actor: typeof actor === "string" && actor !== "" ? actor : null });
+  }
+  return requests;
+}
+
+/** The identity running the gate, or `null` when the source cannot say. */
+async function gateIdentity(source: PrStateSource): Promise<string | null> {
+  if (source.viewerLogin === undefined) return null;
+  try {
+    return await source.viewerLogin();
+  } catch {
+    return null;
+  }
 }
 
 function timestampOf(event: unknown): string {
@@ -1149,6 +1205,11 @@ export async function fetchPrState(
   // `bounded_policy_exempt` one -- the reviewer nothing re-requests after a
   // final push, which is precisely the reviewer a pending request can go stale
   // on. The original tested `/copilot/i`.
+  // ONE timeline read per evaluation, shared by the stall bound and the
+  // request counts (N11): the second reader gets the first's answer -- or its
+  // failure -- rather than paying another paginated walk.
+  let timelineRead: Promise<unknown[]> | undefined;
+  const readTimeline = (): Promise<unknown[]> => (timelineRead ??= source.timeline(repo, prNumber));
   let stallRequestedAt = "";
   const exempt: ReviewerIdentity | undefined = options.identities.reviewers.find(
     (reviewer): boolean =>
@@ -1156,8 +1217,32 @@ export async function fetchPrState(
       requests.some((login): boolean => reviewer.loginPattern.test(login)),
   );
   if (exempt !== undefined) {
-    stallRequestedAt = await requestedAt(source, repo, prNumber, exempt.loginPattern);
+    stallRequestedAt = await requestedAt(source, repo, prNumber, exempt.loginPattern, readTimeline);
   }
+
+  // zheref/nen#240: the requested rounds, read only when the file states
+  // `round_policy.minRounds` or `.maxRounds` -- a repository that states
+  // neither makes no extra call and gets the state it got before.
+  const roundCapsDeclared =
+    (options.identities.minRounds ?? null) !== null || (options.identities.maxRounds ?? null) !== null;
+  // The same events carry who made each request, which the own-request
+  // reading needs only while a request is PENDING -- so a PR with none makes
+  // neither read for it (zheref/nen#240, criterion 4).
+  const pendingRequests = requests.length > 0;
+  const requestEvents =
+    roundCapsDeclared || pendingRequests ? await reviewRequestEvents(source, repo, prNumber, readTimeline) : undefined;
+  const requestedLogins = roundCapsDeclared
+    ? requestEvents === undefined || requestEvents === null
+      ? null
+      : requestEvents.map((event): string => event.reviewer)
+    : undefined;
+  const runningIdentity = pendingRequests ? await gateIdentity(source) : null;
+  const requestWarnings =
+    requestedLogins === null
+      ? [
+          "the pull request's timeline could not be read, so the review rounds requested of each reviewer are not counted against round_policy.maxRounds (zheref/nen#240)",
+        ]
+      : [];
 
   // Option B of the 2026-09-29 ruling: under `bounded`, a round-check
   // reviewer's completed run on an EARLIER commit of this pull request. A
@@ -1181,7 +1266,7 @@ export async function fetchPrState(
 
   return {
     ok: true,
-    warnings: [...threads.warnings, ...earlier.warnings],
+    warnings: [...threads.warnings, ...earlier.warnings, ...requestWarnings],
     state: {
       mergeable,
       // CON-42/1's draft clause (zheref/nen#331): a draft is never ready.
@@ -1200,6 +1285,13 @@ export async function fetchPrState(
       // Earlier-head round-check runs (option B, 2026-09-29), `[]` when none
       // were wanted, none were found, or the read failed closed.
       earlier_round_checks: earlier.checks,
+      // zheref/nen#240: every `review_requested` login, or `null` when the
+      // timeline could not be read. ABSENT when no round cap is declared.
+      ...(requestedLogins === undefined ? {} : { review_requested_logins: requestedLogins }),
+      // zheref/nen#240 criterion 4: who made each review request, and who is
+      // running the gate. ABSENT unless a request is pending; `null` when it
+      // could not be read, which makes no own-request claim.
+      ...(pendingRequests ? { review_request_events: requestEvents ?? null, gate_identity: runningIdentity } : {}),
       // The CON-40 delivery evidence. EVERY absent field reads as "not a
       // delivery PR" rather than as unreadable -- isDeliveryPr() requires
       // author, base_ref and default_branch NON-EMPTY -- so a degraded read

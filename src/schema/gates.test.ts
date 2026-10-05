@@ -1,7 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
-import { loadGateIdentities, parseCheckExclusions, parseGateIdentities } from "./gates.js";
+import { fileURLToPath } from "node:url";
+import {
+  GATES_KNOWN_KEYS,
+  GatesUnknownKeyError,
+  NEXT_RELEASE,
+  loadGateIdentities,
+  parseCheckExclusions,
+  parseGateIdentities,
+  parseRoundCaps,
+  parseGatesText,
+  findDuplicateKey,
+  GatesDuplicateKeyError,
+  visibleKey,
+  type GatesKeyLevel,
+} from "./gates.js";
 import { SchemaError } from "./errors.js";
+import { VERSION } from "../version.js";
 
 describe("loadGateIdentities -- reads the TARGET repository", () => {
   it("reads whichever reviewers the target repo declares", () => {
@@ -138,10 +153,76 @@ describe("parseGateIdentities -- validation", () => {
       ).toThrow(/stallMinutes/);
     });
 
-    it("REFUSES a round_policy that is not an object", () => {
+    it("REFUSES a round_policy that is not an object (minRounds/maxRounds read it too)", () => {
       expect(() => parseGateIdentities(at, { ...minimal, round_policy: "bounded" })).toThrow(
         /round_policy/,
       );
+    });
+  });
+
+  describe("round_policy.minRounds / maxRounds (zheref/nen#240)", () => {
+    it("are null when unstated, in an absent block and in a declared one", () => {
+      expect(parseGateIdentities(at, minimal).minRounds).toBeNull();
+      expect(parseGateIdentities(at, minimal).maxRounds).toBeNull();
+      const declared = parseGateIdentities(at, { ...minimal, round_policy: { stallMinutes: 5 } });
+      expect(declared.minRounds).toBeNull();
+      expect(declared.maxRounds).toBeNull();
+    });
+
+    it("read both, independently of stallMinutes", () => {
+      const identities = parseGateIdentities(at, { ...minimal, round_policy: { minRounds: 1, maxRounds: 3 } });
+      expect(identities.minRounds).toBe(1);
+      expect(identities.maxRounds).toBe(3);
+      expect(identities.stallMinutes).toBeNull();
+    });
+
+    it("read either one alone", () => {
+      expect(parseGateIdentities(at, { ...minimal, round_policy: { maxRounds: 2 } }).maxRounds).toBe(2);
+      expect(parseGateIdentities(at, { ...minimal, round_policy: { minRounds: 2 } }).minRounds).toBe(2);
+    });
+
+    it("accept zero as a statement, never as unset", () => {
+      const identities = parseGateIdentities(at, { ...minimal, round_policy: { minRounds: 0, maxRounds: 0 } });
+      expect(identities.minRounds).toBe(0);
+      expect(identities.maxRounds).toBe(0);
+    });
+
+    it("accept minRounds equal to maxRounds", () => {
+      expect(parseGateIdentities(at, { ...minimal, round_policy: { minRounds: 2, maxRounds: 2 } }).maxRounds).toBe(2);
+    });
+
+    it("REFUSE a negative, fractional, non-finite or non-number value, by pointer", () => {
+      for (const key of ["minRounds", "maxRounds"]) {
+        for (const bad of [-1, 1.5, Number.POSITIVE_INFINITY, "1", true, [1], {}]) {
+          let refused: unknown = null;
+          try {
+            parseGateIdentities(at, { ...minimal, round_policy: { [key]: bad } });
+          } catch (error) {
+            refused = error;
+          }
+          expect(refused, `${key}=${String(bad)}`).toBeInstanceOf(SchemaError);
+          expect((refused as SchemaError).message, `${key}=${String(bad)}`).toContain(
+            `at round_policy.${key}, expected a non-negative integer`,
+          );
+        }
+      }
+    });
+
+    it("REFUSE minRounds above maxRounds, naming both", () => {
+      expect(() =>
+        parseGateIdentities(at, { ...minimal, round_policy: { minRounds: 4, maxRounds: 3 } }),
+      ).toThrow(/round_policy\.minRounds, is 4, above round_policy\.maxRounds \(3\)/);
+    });
+
+    it("the base-only ceiling reader applies the version guard, the key sweep and the same validation", () => {
+      expect(parseRoundCaps(at, { version: 1, round_policy: { minRounds: 1, maxRounds: 3 } })).toEqual({
+        minRounds: 1,
+        maxRounds: 3,
+      });
+      expect(parseRoundCaps(at, { version: 1 })).toEqual({ minRounds: null, maxRounds: null });
+      expect(() => parseRoundCaps(at, { round_policy: { maxRounds: 3 } })).toThrow(/version/);
+      expect(() => parseRoundCaps(at, { version: 1, round_policy: { maxRound: 3 } })).toThrow(GatesUnknownKeyError);
+      expect(() => parseRoundCaps(at, { version: 1, round_policy: { maxRounds: -1 } })).toThrow(/maxRounds/);
     });
   });
 
@@ -737,5 +818,241 @@ describe("parseGateIdentities -- checks.excluded (zheref/nen#249)", () => {
       withExcluded(entry({ name: "abc*d", match: "exact" }), entry({ name: "abc*d", match: "glob" })),
     );
     expect(identities.excludedChecks?.map((e): string => e.match)).toEqual(["exact", "glob"]);
+  });
+});
+
+describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
+  const at = "/fake/nen/gates.json";
+  const minimal = {
+    version: 1,
+    reviewers: [{ name: "a", login_pattern: { pattern: "a", ignoreCase: true } }],
+    default_approvers: ["a"],
+    base_reviewers: ["a"],
+    delivery: { author_pattern: { pattern: "bot", ignoreCase: true }, head_ref_prefixes: ["x/"] },
+  };
+  const refusal = (file: unknown): GatesUnknownKeyError => {
+    try {
+      parseGateIdentities(at, file);
+    } catch (error) {
+      expect(error).toBeInstanceOf(GatesUnknownKeyError);
+      expect(error).toBeInstanceOf(SchemaError);
+      return error as GatesUnknownKeyError;
+    }
+    throw new Error("expected a refusal");
+  };
+
+  it("refuses a root key it does not read, naming the key, the running version and the remedy", () => {
+    const error = refusal({ ...minimal, reviewer_quorum: { any_of: ["a"] } });
+    expect(error.unread).toEqual([{ pointer: "$", key: "reviewer_quorum" }]);
+    expect(error.runningVersion).toBe(VERSION);
+    expect(error.message).toContain("carries 'reviewer_quorum', which this build does not read");
+    expect(error.message).toContain(`This is nen ${VERSION}`);
+    expect(error.message).toMatch(/upgrade nen/);
+    // The keys the object takes, each with the release that introduced it.
+    expect(error.message).toContain("round_quorum (nen >= 0.17.0)");
+    expect(error.message).toContain("approval_policy (nen >= 0.10.0)");
+  });
+
+  it("refuses at every nested level nen reads, by pointer", () => {
+    const cases: [unknown, string, string][] = [
+      [{ ...minimal, round_policy: { stallMinutes: 5, stall: 1 } }, "round_policy", "stall"],
+      [{ ...minimal, round_quorum: { any_of: ["a"], minimum: 1, maximum: 1 } }, "round_quorum", "maximum"],
+      [{ ...minimal, reviewers: [{ ...minimal.reviewers[0], weight: 2 }] }, "reviewers[0]", "weight"],
+      [
+        { ...minimal, reviewers: [{ name: "a", login_pattern: { pattern: "a", ignoreCase: true, flags: "u" } }] },
+        "reviewers[0].login_pattern",
+        "flags",
+      ],
+      [{ ...minimal, delivery: { ...minimal.delivery, branches: [] } }, "delivery", "branches"],
+      [
+        {
+          ...minimal,
+          dependabot_carve_out: {
+            author_pattern: { pattern: "^dependabot$", ignoreCase: true },
+            satisfied_by_context: ["x"],
+            contexts: ["y"],
+          },
+        },
+        "dependabot_carve_out",
+        "contexts",
+      ],
+      [{ ...minimal, checks: { excluded: [], required: [] } }, "checks", "required"],
+    ];
+    for (const [file, pointer, key] of cases) {
+      const error = refusal(file);
+      expect(error.unread, key).toEqual([{ pointer, key }]);
+      expect(error.pointer, key).toBe(pointer);
+    }
+  });
+
+  it("names EVERY unread key in one refusal, and suggests the near miss", () => {
+    const error = refusal({
+      ...minimal,
+      round_policy: { stall_minutes: 1, stallMinute: 5 },
+      reviewer_quorum: {},
+    });
+    expect(error.unread).toEqual([
+      { pointer: "round_policy", key: "stall_minutes" },
+      { pointer: "round_policy", key: "stallMinute" },
+      { pointer: "$", key: "reviewer_quorum" },
+    ]);
+    expect(error.message).toContain("'stall_minutes' -> 'stallMinutes'?");
+    expect(error.message).toContain("'stallMinute' -> 'stallMinutes'?");
+    expect(error.message).toContain("Also at $: 'reviewer_quorum'");
+  });
+
+  it("refuses before any field is read, so a newer file meets 'upgrade', not a field error", () => {
+    // `minimum: 0` would be refused by readRoundQuorum; the unknown key wins.
+    const error = refusal({ ...minimal, round_quorum: { any_of: ["a"], minimum: 0, weighted: true } });
+    expect(error.unread).toEqual([{ pointer: "round_quorum", key: "weighted" }]);
+  });
+
+  it("allows any '$'-prefixed key at every level, never only $comment", () => {
+    expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        $comment: "x",
+        $check_exclusions: "Hatsu's annotation",
+        reviewers: [{ ...minimal.reviewers[0], $note: "y", login_pattern: { pattern: "a", ignoreCase: true, $why: "z" } }],
+        delivery: { ...minimal.delivery, $comment: "d" },
+        round_policy: { $comment: "r", stallMinutes: 5 },
+        round_quorum: { $comment: "q", any_of: ["a"], minimum: 1 },
+      }),
+    ).not.toThrow();
+  });
+
+  it("has NO consumer-owned carve-out: another tool's unprefixed data is refused (ruling of 2026-10-04)", () => {
+    // The ruling's "retire 2" half: check_exclusions and reviewer_fallback are
+    // nobody's nen keys. Its "adopt 2" half -- minRounds/maxRounds, beside them
+    // here -- loads, because zheref/nen#240 made them nen's own.
+    const error = refusal({
+      ...minimal,
+      round_policy: { stallMinutes: 30, minRounds: 1, maxRounds: 3 },
+      check_exclusions: [],
+      reviewer_fallback: { chain: ["copilot"] },
+    });
+    expect(error.unread).toEqual([
+      { pointer: "$", key: "check_exclusions" },
+      { pointer: "$", key: "reviewer_fallback" },
+    ]);
+    // The same data under '$' keys is an annotation, and loads.
+    expect(() =>
+      parseGateIdentities(at, {
+        ...minimal,
+        round_policy: { stallMinutes: 30, $minRounds: 1 },
+        $reviewer_fallback: { chain: ["copilot"] },
+      }),
+    ).not.toThrow();
+  });
+
+  it("the base-only exclusions reader applies the same sweep", () => {
+    expect(() => parseCheckExclusions(at, { version: 1, round_quorom: {} })).toThrow(GatesUnknownKeyError);
+    expect(parseCheckExclusions(at, { version: 1, round_policy: { $note: 1 } })).toEqual([]);
+  });
+
+  it("a file carrying only known keys is unchanged: both fixtures load", () => {
+    expect(loadGateIdentities(BANKAI_REPO).reviewers).toHaveLength(5);
+    expect(loadGateIdentities(ALT_REPO).reviewers).toHaveLength(4);
+  });
+
+  it("THIS repository's own nen/gates.json LOADS now that zheref/nen#240 made minRounds/maxRounds nen keys", () => {
+    // The flip of the refusal #310 pinned while #240 was open: the file is
+    // unchanged and loads, which proves #240 legalised exactly these two keys.
+    const own = fileURLToPath(new URL("../../", import.meta.url));
+    const identities = loadGateIdentities(own);
+    expect(identities.minRounds).toBe(1);
+    expect(identities.maxRounds).toBe(3);
+    expect(identities.stallMinutes).toBe(30);
+  });
+
+  it("tables minRounds and maxRounds under round_policy, introduced in the next release", () => {
+    const policy = GATES_KNOWN_KEYS["round_policy"]?.object ?? {};
+    expect(Object.keys(policy)).toEqual(["stallMinutes", "minRounds", "maxRounds"]);
+    expect(policy["minRounds"]?.introducedIn).toBe("0.21.0");
+    expect(policy["maxRounds"]?.introducedIn).toBe("0.21.0");
+    // R1: checks.excluded DID ship in v0.20.0, and says so literally.
+    expect(GATES_KNOWN_KEYS["checks"]?.introducedIn).toBe("0.20.0");
+    expect(GATES_KNOWN_KEYS["checks"]?.object?.["excluded"]?.introducedIn).toBe("0.20.0");
+  });
+
+  it("still refuses a near miss of the adopted keys, naming the one meant", () => {
+    const error = refusal({ ...minimal, round_policy: { maxRound: 3, minround: 1 } });
+    expect(error.unread).toEqual([
+      { pointer: "round_policy", key: "maxRound" },
+      { pointer: "round_policy", key: "minround" },
+    ]);
+    expect(error.message).toContain("'maxRound' -> 'maxRounds'?");
+    expect(error.message).toContain("'minround' -> 'minRounds'?");
+    expect(error.message).toContain("maxRounds (nen >= 0.21.0)");
+  });
+
+  it("N6: the hint is the NEAREST key -- an exact match ignoring case, '_' and '-' wins over one two edits away", () => {
+    for (const key of ["MaxRounds", "max_rounds", "MAX-ROUNDS"]) {
+      const error = refusal({ ...minimal, round_policy: { [key]: 3 } });
+      expect(error.message, key).toContain(`'${key}' -> 'maxRounds'?`);
+      expect(error.message, key).not.toContain("-> 'minRounds'?");
+    }
+    expect(refusal({ ...minimal, round_policy: { minRound: 1 } }).message).toContain("'minRound' -> 'minRounds'?");
+  });
+
+  it("F2: an unknown key is escaped before it reaches any message -- ESC/CSI, a newline and a zero-width character are shown, never interpreted", () => {
+    const hostile = ["evil\u001b[2J\u001b[31mkey", "line\nbreak", "max\u200bRounds"];
+    const error = refusal({ ...minimal, round_policy: Object.fromEntries(hostile.map((key) => [key, 1])) });
+    expect(error.message).not.toMatch(/[\u001b\n\u200b]/);
+    expect(error.message).toContain('"evil\\u001b[2J\\u001b[31mkey"');
+    expect(error.message).toContain('"line\\nbreak"');
+    expect(error.message).toContain('"max\\u200bRounds" -> \'maxRounds\'?');
+    // The raw key stays raw in the structured list, for --json.
+    expect(error.unread.map((entry) => entry.key)).toEqual(hostile);
+    expect(visibleKey("plain_key")).toBe("'plain_key'");
+  });
+
+  it("F3: a key repeated in one object is refused by pointer, never read as the last value", () => {
+    expect(() => parseGatesText(at, '{"version":1,"round_policy":{"maxRounds":1,"maxRounds":999}}')).toThrow(GatesDuplicateKeyError);
+    let error: unknown = null;
+    try {
+      parseGatesText(at, '{"version":1,"reviewers":[{"name":"a"},{"name":"b","name":"c"}]}');
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(SchemaError);
+    expect((error as SchemaError).message).toBe(
+      `${at}: at reviewers[1], carries the key 'name' twice. JSON keeps only the last of the two, so the other value would be dropped without a word -- refused, so the file says one thing (Feitan F3). Remove one of them.`,
+    );
+    // Equal keys in DIFFERENT objects, and a key-like string VALUE, are fine.
+    expect(parseGatesText(at, '{"a":{"x":1},"b":{"x":"\\"x\\"","y":"x"}}')).toEqual({ a: { x: 1 }, b: { x: '"x"', y: "x" } });
+    expect(findDuplicateKey('{"a":1,"b":[{"a":1},{"a":2}]}')).toBeNull();
+    expect(findDuplicateKey('{"a":1,"a":2}')).toEqual({ pointer: "$", key: "a" });
+    expect(() => parseGatesText(at, "{nope")).toThrow(/is not valid JSON/);
+  });
+
+  it("R1: NEXT_RELEASE is above VERSION, and is VERSION's next minor -- a release cut without bumping it fails here", () => {
+    const [major, minor] = VERSION.split(".").map(Number);
+    expect(NEXT_RELEASE).toBe(`${major ?? 0}.${(minor ?? 0) + 1}.0`);
+  });
+
+  it("the table: no nen key starts with '$', and every introducedIn is a shipped release or exactly NEXT_RELEASE (N8, tightened by R1)", () => {
+    const rank = (version: string): number => {
+      const [major, minor, patch] = version.split(".").map(Number);
+      return (major ?? 0) * 1_000_000 + (minor ?? 0) * 1_000 + (patch ?? 0);
+    };
+    const walk = (level: GatesKeyLevel, at: string): void => {
+      for (const [key, spec] of Object.entries(level)) {
+        expect(key.startsWith("$"), `${at}${key}`).toBe(false);
+        expect(spec.introducedIn, `${at}${key}`).toMatch(/^\d+\.\d+\.\d+$/);
+        // A key is either in a release this build is at or past (<= VERSION),
+        // or tabled for the next one -- and then it is NEXT_RELEASE exactly,
+        // never a number picked by hand that a release can overtake.
+        if (rank(spec.introducedIn) > rank(VERSION)) {
+          expect(spec.introducedIn, `${at}${key}: unshipped, so NEXT_RELEASE`).toBe(NEXT_RELEASE);
+        }
+        if (spec.object !== undefined) walk(spec.object, `${at}${key}.`);
+        if (spec.items !== undefined) walk(spec.items, `${at}${key}[].`);
+      }
+    };
+    walk(GATES_KNOWN_KEYS, "");
+    expect(Object.keys(GATES_KNOWN_KEYS)).toEqual(
+      expect.arrayContaining(["round_quorum", "round_policy", "checks", "reviewers", "approval_policy", "default_approvers", "dependabot_carve_out"]),
+    );
   });
 });
