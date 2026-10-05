@@ -70,7 +70,13 @@ async function capture(argv: readonly string[], options: Options = {}): Promise<
     out: (line): void => void out.push(line),
     err: (line): void => void err.push(line),
   };
-  const seams = new ScriptedSeams(options.script ?? [], {
+  // TWO READS EVERY RUN NOW MAKES, answered by default AFTER the test's own
+  // script (so a test that states either answer wins): `--base main` names a
+  // commit, and HEAD is NOT one -- these fixtures are not git work trees, so
+  // a run records no capture sidecar into them (zheref/nen#250) and says so
+  // on stderr. ./coverage-capture.integration.test.ts proves the sidecar
+  // against a real git.
+  const seams = new ScriptedSeams([...(options.script ?? []), ...DEFAULT_GIT], {
     platform: "linux",
     env: options.env ?? {},
   });
@@ -84,6 +90,19 @@ async function capture(argv: readonly string[], options: Options = {}): Promise<
   );
   return { code, out, err, seams };
 }
+
+/** `--base <ref>`'s up-front check, as the verb spells it. */
+function baseCheck(base: string): string {
+  return `git rev-parse --verify --quiet --end-of-options ${base}^{commit}`;
+}
+
+/** The first read of a run's capture fingerprint. */
+const HEAD_READ = "git rev-parse --verify --quiet HEAD^{commit}";
+
+const DEFAULT_GIT: readonly ScriptedCall[] = [
+  { match: baseCheck("main"), result: { code: 0, stdout: `${"c".repeat(40)}\n` } },
+  { match: HEAD_READ, result: { code: 128 } },
+];
 
 function ok(match: string): ScriptedCall {
   return { match, result: { code: 0 } };
@@ -149,7 +168,7 @@ describe("a coverage run, parsed", () => {
   it("runs the declared command and reports the report's own numbers", async () => {
     const result = await capture(["coverage", "--json"], { script: [ok(WEB)] });
     expect(result.code).toBe(0);
-    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([WEB]);
+    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([HEAD_READ, WEB]);
     const parsed = document(result);
     expect(parsed.total?.lines).toEqual({ covered: 14, total: 17, percent: 82.35 });
     expect(parsed.total?.branches).toEqual({ covered: 3, total: 4, percent: 75 });
@@ -714,7 +733,7 @@ describe("the automation-policy row is unchanged", () => {
 // ── --touched --base <ref> ──────────────────────────────────────────────────
 
 describe("--touched --base <ref>", () => {
-  const diff = (base: string): string => `git diff --name-only ${base}...HEAD`;
+  const diff = (base: string): string => `git -c core.quotePath=false diff --name-only -z ${base}...HEAD`;
 
   it("--touched requires --base, refused at 2 before anything runs", async () => {
     const result = await capture(["coverage", "--touched"]);
@@ -744,18 +763,22 @@ describe("--touched --base <ref>", () => {
       script: [ok(WEB), { match: diff("main"), result: { code: 0, stdout: "" } }],
     });
     expect(result.code).toBe(0);
+    // The base is checked FIRST, then the capture fingerprint's HEAD read,
+    // then the tool, then the diff -- never the diff before the tool.
     expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      baseCheck("main"),
+      HEAD_READ,
       WEB,
       diff("main"),
     ]);
-    expect(result.seams.calls[1]?.cwd).toBe(SHU_COVERAGE_REPO);
+    expect(result.seams.calls[3]?.cwd).toBe(SHU_COVERAGE_REPO);
   });
 
   it("filters targets to the touched set, file grain, exact-path match", async () => {
     const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
       script: [
         ok(WEB),
-        { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\nREADME.md\n" } },
+        { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\0README.md\0" } },
       ],
     });
     expect(result.code).toBe(0);
@@ -803,7 +826,7 @@ describe("--touched --base <ref>", () => {
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "src/ odd .ts\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "src/ odd .ts\0" } }],
       });
       const parsed = document(result);
       expect(parsed.touched?.files).toEqual(["src/ odd .ts"]);
@@ -823,7 +846,7 @@ describe("--touched --base <ref>", () => {
           ok(WEB),
           {
             match: diff("main"),
-            result: { code: 0, stdout: "packages/core/src/index.ts\npackages/app/src/main.ts\n" },
+            result: { code: 0, stdout: "packages/core/src/index.ts\0packages/app/src/main.ts\0" },
           },
         ],
       },
@@ -840,7 +863,7 @@ describe("--touched --base <ref>", () => {
 
   it("no threshold: a row carries no 'met' key at all -- 'band' instead, from the ladder", async () => {
     const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
-      script: [ok(WEB), { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\n" } }],
+      script: [ok(WEB), { match: diff("main"), result: { code: 0, stdout: "packages/core/src/index.ts\0" } }],
     });
     const raw = JSON.parse(result.out.join("\n")) as { targets: readonly Record<string, unknown>[] };
     // 'met' answers an EXPLICIT --threshold and there was none; 'band' answers
@@ -855,7 +878,7 @@ describe("--touched --base <ref>", () => {
       {
         script: [
           ok(WEB),
-          { match: diff("main"), result: { code: 0, stdout: "packages/app/src/main.ts\n" } },
+          { match: diff("main"), result: { code: 0, stdout: "packages/app/src/main.ts\0" } },
         ],
       },
     );
@@ -865,7 +888,7 @@ describe("--touched --base <ref>", () => {
 
   it("--dry-run still computes the touched set -- nothing to match against yet", async () => {
     const result = await capture(["coverage", "--touched", "--base", "main", "--dry-run", "--json"], {
-      script: [{ match: diff("main"), result: { code: 0, stdout: "a.ts\n" } }],
+      script: [{ match: diff("main"), result: { code: 0, stdout: "a.ts\0" } }],
     });
     expect(result.code).toBe(0);
     const parsed = document(result);
@@ -885,23 +908,44 @@ describe("--touched --base <ref>", () => {
     const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
       script: [
         { match: WEB, result: { code: 3 } },
-        { match: diff("main"), result: { code: 0, stdout: "a.ts\n" } },
+        { match: diff("main"), result: { code: 0, stdout: "a.ts\0" } },
       ],
     });
     expect(result.code).toBe(1);
     expect(document(result).touched?.unmatched).toEqual(["a.ts"]);
   });
 
-  it("a base git cannot diff against surfaces as the tool's own failure, exit 1", async () => {
+  it("a base that names no commit is exit 2 BEFORE the tool runs -- not learned after a whole run", async () => {
     const result = await capture(["coverage", "--touched", "--base", "nope", "--json"], {
-      script: [
-        ok(WEB),
-        { match: diff("nope"), result: { code: 128, stderr: "fatal: bad revision 'nope...HEAD'" } },
-      ],
+      script: [{ match: baseCheck("nope"), result: { code: 1 } }],
+    });
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/--base 'nope' does not name a commit/);
+    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      baseCheck("nope"),
+    ]);
+  });
+
+  it("a diff that still fails after the base checked out surfaces as git's own failure, exit 1", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
+      script: [ok(WEB), { match: diff("main"), result: { code: 128, stderr: "fatal: no merge base" } }],
     });
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/git diff --name-only nope\.\.\.HEAD.*exited 128/);
+    expect(result.err.join("\n")).toMatch(/diff --name-only -z main\.\.\.HEAD.*exited 128/);
   });
+
+  it.each([["--base=--output=x"], ["--base=-x"]])(
+    "%s is refused at 2 before git sees it -- a base that begins with '-' is an option to git (N5)",
+    async (flag) => {
+      for (const extra of [[], ["--from-capture"]]) {
+        const result = await capture(["coverage", "--touched", flag, ...extra]);
+        expect(result.code).toBe(2);
+        expect(result.err.join("\n")).toMatch(/begins with '-'/);
+        expect(result.seams.calls).toEqual([]);
+      }
+    },
+  );
 
   it("package grain (a cobertura report naming NO file): a touched file under the package is kept, text says 'BY PACKAGE'", async () => {
     // THE ONE PACKAGE FALLBACK LEFT (zheref/nen#296): its classes state no
@@ -922,7 +966,7 @@ describe("--touched --base <ref>", () => {
         repo,
         script: [
           ok("x y"),
-          { match: diff("main"), result: { code: 0, stdout: "src/Placeholder/Core/Store.cs\n" } },
+          { match: diff("main"), result: { code: 0, stdout: "src/Placeholder/Core/Store.cs\0" } },
         ],
       });
       expect(result.code).toBe(0);
@@ -966,7 +1010,7 @@ describe("--touched --base <ref>", () => {
       );
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Store.swift\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Store.swift\0" } }],
       });
       expect(result.code).toBe(0);
       const parsed = document(result);
@@ -986,7 +1030,7 @@ describe("--touched --base <ref>", () => {
 // <source> that is this repository's own root (spelled with backslashes).
 
 describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
-  const diff = (base: string): string => `git diff --name-only ${base}...HEAD`;
+  const diff = (base: string): string => `git -c core.quotePath=false diff --name-only -z ${base}...HEAD`;
   const REPORT = "TestResults/core.cobertura.xml";
 
   function coberturaRepo(): string {
@@ -1028,7 +1072,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
           `<class name="Core.ViewModels.OrderVm" filename="Core\\View Models\\OrderVm.cs"><lines>${line(20, 1)}${line(21, 1)}${line(22, 1)}${line(23, 1)}${line(24, 0)}</lines></class>` +
           `</classes></package></packages></coverage>`,
       );
-      const touched = "Core/Models/Order.cs\nCore/Models/Status.cs\nCore/View Models/OrderVm.cs\nCore.Tests/OrderTests.cs\n";
+      const touched = "Core/Models/Order.cs\0Core/Models/Status.cs\0Core/View Models/OrderVm.cs\0Core.Tests/OrderTests.cs\0";
       const json = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
         script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: touched } }],
@@ -1076,7 +1120,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
       );
       const result = await capture(["coverage", "--touched", "--base", "main"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Store.cs\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Store.cs\0" } }],
       });
       expect(result.code).toBe(6);
       const out = result.out.join("\n");
@@ -1098,7 +1142,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--dry-run"], {
         repo,
-        script: [{ match: diff("main"), result: { code: 0, stdout: "Core/Store.cs\n" } }],
+        script: [{ match: diff("main"), result: { code: 0, stdout: "Core/Store.cs\0" } }],
       });
       expect(result.code).toBe(0);
       const out = result.out.join("\n");
@@ -1124,7 +1168,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
       );
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/A.cs\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/A.cs\0" } }],
       });
       expect(result.code).toBe(1);
       const parsed = document(result);
@@ -1154,7 +1198,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
           `<class name="other.py" filename="other.py"><lines>${line(1, 1)}${line(2, 1)}</lines></class>` +
           `</classes></package></packages></coverage>`,
       );
-      const touched = "pkgA/utils.py\npkgB/utils.py\npkgA/other.py\n";
+      const touched = "pkgA/utils.py\0pkgB/utils.py\0pkgA/other.py\0";
       const json = await capture(["coverage", "--touched", "--base", "main", "--threshold", "80", "--json"], {
         repo,
         script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: touched } }],
@@ -1201,7 +1245,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
       expect(repoRootSpellings(link)).toEqual([link, real]);
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo: link,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Order.cs\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Order.cs\0" } }],
       });
       expect(result.code).toBe(0);
       const parsed = document(result);
@@ -1223,7 +1267,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
       );
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Models/Order.cs\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "Core/Models/Order.cs\0" } }],
       });
       const parsed = document(result);
       if (existsSync(join(repo, "CORE", "MODELS", "ORDER.CS"))) {
@@ -1263,7 +1307,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
       );
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "pkgA/utils.py\npkgA/other.py\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "pkgA/utils.py\0pkgA/other.py\0" } }],
       });
       expect(result.code).toBe(0);
       const parsed = document(result);
@@ -1295,7 +1339,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
       );
       const result = await capture(["coverage", "--touched", "--base", "main"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "pkgA/utils.py\npkgA/other.py\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "pkgA/utils.py\0pkgA/other.py\0" } }],
       });
       expect(result.code).toBe(0);
       const out = result.out.join("\n");
@@ -1323,7 +1367,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
       );
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: `${nfc}\n` } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: `${nfc}\0` } }],
       });
       const parsed = document(result);
       if (existsSync(join(repo, "Core", "Café.cs"))) {
@@ -1388,7 +1432,7 @@ describe("--touched reads a Cobertura report by FILE (zheref/nen#296)", () => {
 // ── zheref/nen#236: each report against its OWN root ────────────────────────
 
 describe("--touched resolves each declared report against its own root (zheref/nen#236)", () => {
-  const diff = (base: string): string => `git diff --name-only ${base}...HEAD`;
+  const diff = (base: string): string => `git -c core.quotePath=false diff --name-only -z ${base}...HEAD`;
   const WORKSPACE_RUN = "pnpm -r test:coverage";
   const SINGLE_RUN = "npm run test:coverage";
 
@@ -1399,7 +1443,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
         ok(WORKSPACE_RUN),
         {
           match: diff("main"),
-          result: { code: 0, stdout: ".env.example\napps/web/src/page.tsx\npackages/a/src/sum.ts\n" },
+          result: { code: 0, stdout: ".env.example\0apps/web/src/page.tsx\0packages/a/src/sum.ts\0" },
         },
       ],
     });
@@ -1443,7 +1487,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
   it("the text rendering prints one 'from:' line per report, root and basis included", async () => {
     const result = await capture(["coverage", "--touched", "--base", "main"], {
       repo: SHU_COVERAGE_WORKSPACE,
-      script: [ok(WORKSPACE_RUN), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\n" } }],
+      script: [ok(WORKSPACE_RUN), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\0" } }],
     });
     expect(result.code).toBe(0);
     const text = result.out.join("\n");
@@ -1457,7 +1501,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
   it("0 matched against a NON-EMPTY touched set is exit 6, naming both path shapes -- never 0", async () => {
     const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
       repo: SHU_COVERAGE_WORKSPACE,
-      script: [ok(WORKSPACE_RUN), { match: diff("main"), result: { code: 0, stdout: ".env.example\nREADME.md\n" } }],
+      script: [ok(WORKSPACE_RUN), { match: diff("main"), result: { code: 0, stdout: ".env.example\0README.md\0" } }],
     });
     expect(result.code).toBe(6);
     const parsed = document(result);
@@ -1488,7 +1532,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
         repo,
         script: [
           ok("x y"),
-          { match: diff("main"), result: { code: 0, stdout: "packages/core/src/utils/q.ts\n" } },
+          { match: diff("main"), result: { code: 0, stdout: "packages/core/src/utils/q.ts\0" } },
         ],
       });
       expect(result.code).toBe(6);
@@ -1513,7 +1557,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
   it("a single-package repository is unchanged -- the regression fixture (acceptance 6)", async () => {
     const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
       repo: SHU_COVERAGE_SINGLE,
-      script: [ok(SINGLE_RUN), { match: diff("main"), result: { code: 0, stdout: "src/a.ts\n" } }],
+      script: [ok(SINGLE_RUN), { match: diff("main"), result: { code: 0, stdout: "src/a.ts\0" } }],
     });
     expect(result.code).toBe(0);
     const parsed = document(result);
@@ -1548,7 +1592,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\0" } }],
       });
       expect(result.code).toBe(0);
       const parsed = document(result);
@@ -1575,7 +1619,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "packages/a/src/sum.ts\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "packages/a/src/sum.ts\0" } }],
       });
       expect(result.code).toBe(0);
       const parsed = document(result);
@@ -1605,7 +1649,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "apps/web/src/page.tsx\0" } }],
       });
       expect(result.code).toBe(1);
       const parsed = document(result);
@@ -1642,7 +1686,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
         repo,
         script: [
           ok("x y"),
-          { match: diff("main"), result: { code: 0, stdout: "src/Placeholder/Core/Store.cs\nweb/src/a.ts\n" } },
+          { match: diff("main"), result: { code: 0, stdout: "src/Placeholder/Core/Store.cs\0web/src/a.ts\0" } },
         ],
       });
       expect(result.code).toBe(0);
@@ -1674,7 +1718,7 @@ describe("--touched resolves each declared report against its own root (zheref/n
     try {
       const result = await capture(["coverage", "--touched", "--base", "main", "--json"], {
         repo,
-        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "packages/a/src/sum.ts\n" } }],
+        script: [ok("x y"), { match: diff("main"), result: { code: 0, stdout: "packages/a/src/sum.ts\0" } }],
       });
       expect(result.code).toBe(1);
       const parsed = document(result);
@@ -1718,8 +1762,8 @@ describe("the coverage ladder, when --threshold is absent", () => {
     return repo;
   }
 
-  const DIFF_MAIN = "git diff --name-only main...HEAD";
-  const BOTH_TOUCHED = "packages/core/src/index.ts\npackages/app/src/main.ts\n";
+  const DIFF_MAIN = "git -c core.quotePath=false diff --name-only -z main...HEAD";
+  const BOTH_TOUCHED = "packages/core/src/index.ts\0packages/app/src/main.ts\0";
 
   it("bands each touched row against minimum/recommended/ideal -- no key besides 'met' moved", async () => {
     const repo = withLadderProject({ minimum: 80, recommended: 85, ideal: 90, scope: "touched" });
@@ -1922,3 +1966,135 @@ function shuRepoWithout(): string {
     verbs: { only: { build: { exe: "x", argv: ["y"] } } },
   });
 }
+
+// ── --touched --from-capture (zheref/nen#250) ───────────────────────────────
+// The provenance itself is proved against a real git in
+// ./coverage-capture.integration.test.ts; these are the refusals a scripted
+// seam can pin, and the argv the form is allowed to start.
+
+describe("--touched --from-capture: the flags and the refusals", () => {
+  it("no sidecar: refused at 8 with no document, having spawned only the base check", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture", "--json"]);
+    expect(result.code).toBe(8);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/no provenance sidecar at '\.nen\/coverage-capture\/web\.json'/);
+    // THE MUTANT: a reuse path that ran the declared tool. Not one argv of it.
+    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      baseCheck("main"),
+    ]);
+  });
+
+  it("a seated 'coverage' is still exit 4 in the declaration's own words", async () => {
+    const repo = withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { unsupported: "no coverage tool on this lane" } } },
+    });
+    try {
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], { repo });
+      expect(result.code).toBe(4);
+      expect(result.err.join("\n")).toContain("no coverage tool on this lane");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [["coverage", "--from-capture"], /--from-capture is read only with --touched/],
+    [["coverage", "--touched", "--base", "main", "--from-capture", "--dry-run"], /both --dry-run and --from-capture/],
+    [["coverage", "--touched", "--base", "main", "--from-capture", "--effort", "e1"], /--effort is not read with --from-capture/],
+    [["build", "--from-capture"], /--from-capture is not read by 'shu build'/],
+  ])("refuses %j at 2 before anything is spawned", async (argv, message) => {
+    const result = await capture(argv);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(message);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("certifies the --from-capture form read-only, and only that form", () => {
+    expect(
+      classifyCommand("nen shu coverage --repo /x --touched --base main --from-capture").classification,
+    ).toBe("read-only");
+    expect(classifyCommand("nen shu coverage --repo /x --touched --base main").classification).toBe("mutating");
+  });
+});
+
+// ── Copilot round 2 on zheref/nen#369 ───────────────────────────────────────
+
+describe("--from-capture: containment and operational failures", () => {
+  const SIDECAR = JSON.stringify({
+    contract: "nen.shu.coverage-capture/v0.1",
+    lane: "only",
+    verb: "coverage",
+    head: "a".repeat(40),
+    startedAt: "2026-10-04T00:00:00.000Z",
+    fingerprint: "f",
+    artifacts: [{ path: "coverage-summary.json", sha256: "0".repeat(64) }],
+  });
+
+  function laneRepo(artifacts: readonly string[]): string {
+    return withProject({
+      lanes: { only: { stack: "nextjs", cwd: "." } },
+      defaultLane: "only",
+      verbs: { only: { coverage: { exe: "x", argv: ["y"], artifacts } } },
+    });
+  }
+
+  it("a git that cannot be STARTED for the base check is exit 1, not a bad --base", async () => {
+    const result = await capture(["coverage", "--touched", "--base", "main"], {
+      script: [{ match: baseCheck("main"), result: { code: -1, spawnFailed: true, stderr: "spawn git ENOENT" } }],
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).not.toMatch(/does not name a commit/);
+  });
+
+  it("a git that cannot be STARTED for the fingerprint is exit 1, not a refused capture (8)", async () => {
+    const repo = laneRepo(["coverage-summary.json"]);
+    try {
+      mkdirSync(join(repo, ".nen", "coverage-capture"), { recursive: true });
+      writeFileSync(join(repo, ".nen", "coverage-capture", "only.json"), SIDECAR);
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], {
+        repo,
+        script: [{ match: HEAD_READ, result: { code: -1, spawnFailed: true, stderr: "spawn git ENOENT" } }],
+      });
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).not.toMatch(/--from-capture refused/);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("a sidecar reached through a symlinked .nen OUT of the tree is unreadable, never read", async () => {
+    const repo = laneRepo(["coverage-summary.json"]);
+    const outside = mkdtempSync(join(tmpdir(), "nen-outside-"));
+    try {
+      mkdirSync(join(outside, "coverage-capture"));
+      writeFileSync(join(outside, "coverage-capture", "only.json"), SIDECAR);
+      symlinkSync(outside, join(repo, ".nen"), "junction");
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], { repo });
+      expect(result.code).toBe(8);
+      expect(result.err.join("\n")).toMatch(/provenance sidecar '\.nen\/coverage-capture\/only\.json' cannot be read: .*outside the repository/);
+      // Refused before any fingerprint was taken: the external file decided nothing.
+      expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([baseCheck("main")]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("every declared artifact is contained first -- one escaping through a symlink is exit 2, never probed", async () => {
+    const repo = laneRepo(["out/outside.bin", "coverage-summary.json"]);
+    const outside = mkdtempSync(join(tmpdir(), "nen-outside-"));
+    try {
+      writeFileSync(join(outside, "outside.bin"), "x");
+      symlinkSync(outside, join(repo, "out"), "junction");
+      const result = await capture(["coverage", "--touched", "--base", "main", "--from-capture"], { repo });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/project\.verbs\.only\.coverage\.artifacts names 'out\/outside\.bin'.*outside the repository/);
+      expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([baseCheck("main")]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});

@@ -29,6 +29,7 @@ import { backlogCommand } from "../backlog/command.js";
 import { boardCommand } from "../board/command.js";
 import { canonCommand } from "../canon/command.js";
 import { changelogCommand } from "../changelog/command.js";
+import { classifyCommand } from "../classify/command.js";
 import { colorCommand } from "../color/command.js";
 import { commitCommand } from "../commit/command.js";
 import { devCommand } from "../dev/command.js";
@@ -70,6 +71,7 @@ export const COMMANDS: readonly Command[] = [
   boardCommand,
   canonCommand,
   changelogCommand,
+  classifyCommand,
   colorCommand,
   commitCommand,
   devCommand,

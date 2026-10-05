@@ -13,8 +13,8 @@ with the `nen` spelling. This document covers the **v0.13.0 line** (one new fami
 new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 41 command
-families, 120 verbs, every flag checked against the binary this repository
+arrive with them): 42 command
+families, 124 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -286,6 +286,8 @@ verb it invoked. The complete list:
 | every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
 | [`stage list`](#nen-stage-list) | `3` | the add list is empty and nothing is flagged — a tree with no stageable change, never a tree the verb failed to read (that is `1`) ([#237](https://github.com/zheref/nen/issues/237)) |
 | [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
+| [`shu coverage`](#nen-shu-coverage) | `8` | `--from-capture` refused the capture on disk as not proven this tree's: no provenance sidecar, a different tree fingerprint, lane or report list, or a report whose sha256 changed; nothing measured, no document ([#250](https://github.com/zheref/nen/issues/250)). A third use of `8`, unrelated to `pr ready`'s and `pr mark-ready`'s |
+| [`shu tools`](#nen-shu-tools) | `7` | every row passes, but nen is inside its `dependency.minimum` and **behind** `dependency.pinned_ref` (a BEHIND row): install the pinned ref the row's remedy names ([#327](https://github.com/zheref/nen/issues/327)) |
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
@@ -297,6 +299,7 @@ verb it invoked. The complete list:
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` | `gh pr merge` refused / `gh` could not be started |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
+| [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 
@@ -343,7 +346,7 @@ verb does by default:
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
-| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` carries the table's one **second** read gate, `--from-artifacts`, which never reaches the executor at all |
+| [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is its one writing form: `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself. So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
@@ -694,7 +697,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 120 verbs, grouped as the README groups them. **Reads** is what a
+All 124 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -737,10 +740,14 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `.nen/phases/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
-| [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command until its condition holds, paced and bounded | whatever --command names (typically git or gh) | yes |
+| [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command — or, with `--pr`, one pull request's readiness facts through `pr ready`'s own read — until its condition holds, paced and bounded | whatever --command names (typically git or gh); with --pr, GitHub GraphQL + REST (token from --token-env, default GH_TOKEN), as `pr ready` | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
+| [`classify`](#family-classify) | [`nen classify labels`](#nen-classify-labels) | validates a classification taxonomy file and prints the label set it defines (axis prefix + key, colour, description) | local file (--taxonomy) | yes |
+| [`classify`](#family-classify) | [`nen classify install`](#nen-classify-install) | compares the taxonomy's labels with nen/labels.json (present, drift, absent, foreign), rewrites the declaration with --write, or syncs only those labels to GitHub with --sync once the declaration is landed | local file (--taxonomy), nen/labels.json; gh only with --sync | yes |
+| [`classify`](#family-classify) | [`nen classify status`](#nen-classify-status) | which issues carry a label on every axis, which are missing one, which carry an unknown key, and whether the declaration and GitHub both hold the taxonomy's labels | local file (--taxonomy), nen/labels.json, gh (issue reads, label list) | yes |
+| [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
@@ -759,7 +766,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
-| [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about | git (rev-parse/symbolic-ref/log/diff), nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
+| [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about; then where the effort is (worktree, stage, gate, turn, local clock), derived | git (rev-parse/symbolic-ref/remote get-url/log/diff), the zoneinfo file the zone names, nen/repos.json for the gate, nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
@@ -1002,11 +1009,16 @@ commit. Three things make that visible:
   else, or GitHub answered none, the verb exits **`8`** with status
   `head-mismatch`, prints both SHAs, and prints **no verdict**. A `8` is never
   `ready` or `not-ready`, because the question was about a commit GitHub does not
-  hold as the head. The code collides with nothing else this CLI or its
-  bootstrap returns (`1`/`2` are every verb's, `3`–`5` are `shu`'s, `wc`'s,
-  `commit write`'s and `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and
-  `shu coverage`'s, `9` is `pr request-reviews`', and `3`–`7` are the
-  bootstrap script's). Under `--json` the mismatch
+  hold as the head. [`pr mark-ready`](#nen-pr-mark-ready) returns the same
+  `8` for the same fact, deliberately, so a caller that pins a head across both
+  verbs branches on one number. [`shu coverage
+  --from-capture`](#coverage-from-capture)'s `8` (a capture not proven this
+  tree's, [#250](https://github.com/zheref/nen/issues/250)) is a third,
+  unrelated use, per the [exit-code table](#exit-codes)'s rule that a code
+  above `2` is read against the verb that returned it. Otherwise (`1`/`2` are
+  every verb's, `3`–`5` are `shu`'s, `wc`'s, `commit write`'s and
+  `pr threads`', `5`/`6` are `pr merge`'s, `runner`'s and `shu coverage`'s,
+  `9` is `pr request-reviews`', and `3`–`7` are the bootstrap script's). Under `--json` the mismatch
   prints its own document with its own contract,
   `nen.pr.ready.head-mismatch/v0.1`, whose keys are `contract`, `status`, `ref`, `repo`, `pr`,
   `requiredHead`, `githubHead`, `message`, `evaluatedAt` and `generator`. It deliberately does
@@ -1021,7 +1033,7 @@ commit. Three things make that visible:
 **Usage**
 
 ```text
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 ```
 
 **Arguments**
@@ -1031,7 +1043,8 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `<ref>` | yes | `<CODE>#<N>` (the `#` optional) or a bare `<N>` with `--gh-repo` | the shorthand splits at the LONGEST trailing digit run; a code ending in a digit needs the `#` |
 | `--gh-repo <owner/name>` | no | the repository, when `<ref>` is a bare number | wins over a code if both are given |
 | `--explain` | no | print the full conjunct table plus what the gate does not decide | suppressed by `--json` (the JSON already carries the table) |
-| `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies |
+| `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies. On that flags path each name (and each `--approvers` name) matches the **whole** login, case-insensitively, with an optional `[bot]` suffix — `^<name>(\[bot\])?$`, the name taken literally — never a substring or a regex, so `sasuke` is not `Not-Sasuke-Fan` ([#264](https://github.com/zheref/nen/issues/264), Feitan F1). A repository that needs a pattern declares `login_pattern` in `nen/gates.json`. The same exact reading now applies wherever a reviewer name has no declared identity (a `--reviewers` name a gates file does not declare): the name is the login |
+| `--reviewer-login <name>=<login>` | no, repeatable | the exact login a `--reviewers` name posts under | flags path only ([#264](https://github.com/zheref/nen/issues/264)). Whole login, case-insensitive, optional `[bot]` suffix, taken literally; repeat a name for alternative logins. **Nothing is built in** — which login a bot posts under is data (§3), so without this flag the name must equal the login, e.g. `--reviewers copilot --reviewer-login copilot=copilot-pull-request-reviewer[bot]`. Split at the first `=`; an empty half is exit `2`, and so is a name `--reviewers` does not list. Beside a gates file it is ignored with a warning in `meta.warnings` — declare `login_pattern` there instead |
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
 | `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded`; see above |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
@@ -4209,6 +4222,10 @@ regardless of `--max-iterations`.
 nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                 [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                 [--error-exit-threshold <n>]
+nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
+                [--interval-ms 30000] [--max-iterations <n>]
+                [every `nen pr ready` flag: --gh-repo --reviewers --reviewer-login --approvers --round-policy
+                 --exclude-run --exclude-check --gates --token-env --require-head]
 ```
 
 **The target's `monitor` policy is the default pace (v0.11.0, zheref/nen#216).** When the checkout under
@@ -4223,17 +4240,55 @@ was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 |---|---|---|---|
 | `--command "<bin> <args...>"` | yes | The read-only observation to repeat. | Spawned directly, no shell — `<bin>` must be a real executable on PATH (a shell builtin fails at spawn). Split into arguments with a POSIX shell's *quoting* and nothing else (see [quoting](#watch-until-quoting) below). Classified before the first run; a mutating command refuses at exit 2. |
 | `--true-pattern <regex>` | no | Regex tested against the command's stdout. | Omit to treat exit code 0 as true. When given, a non-zero exit is an OBSERVATION ERROR, not a false reading. |
-| `--interval-ms <n>` | no | Pace between observations. | Default 5000. |
-| `--max-iterations <n>` | no | A safety bound, not izanagi's mandatory cap. | Omit for an unbounded watch; an error streak still stops it. |
+| `--interval-ms <n>` | no | Pace between observations. | Default 5000 (or `monitor.pollSeconds`). With `--pr`, at least **30000**: a lower typed value refuses at exit 2 naming the floor, and a `monitor.pollSeconds` under 30 is raised to 30 with a line on stderr — every poll is several GitHub API calls. |
+| `--max-iterations <n>` | no | A safety bound, not izanagi's mandatory cap. | Default `monitor.maxCycles`; omit both for an unbounded `--command` watch. A `--pr` watch is **never** unbounded: with neither, it stops after two hours' worth of polls at its pace. An error streak still stops either. |
 | `--cwd <path>` | no | Working directory for the spawned command. | Defaults to the process's own cwd. |
 | `--error-exit-threshold <n>` | no | In exit-code-as-truth mode (no `--true-pattern`), an exit code at or above this is an OBSERVATION ERROR. | Default 2; ignored when `--true-pattern` is given. |
+| `--pr <ref>` | instead of `--command` | Watch one pull request through the **same in-process read** [`nen pr ready`](#nen-pr-ready) makes ([#264](https://github.com/zheref/nen/issues/264)). | The ref grammar, token, identity resolution, exclusions and gate are all `pr ready`'s, so the watch and a `pr ready` asked of one snapshot never disagree. Every `pr ready` flag is read exactly as `pr ready` reads it, and only beside `--pr`. `--pr` beside `--command`, or `--true-pattern`/`--error-exit-threshold`/`--cwd` beside `--pr`, or `--until`/a `pr ready` flag beside `--command`, refuses at exit 2. |
+| `--until <predicate>` | with `--pr` | What `--pr` waits for. | `checks-settled` — every **reported** latest check, after the exclusions CON-32(a) applies, has a verdict, **red included**; an empty rollup is never settled. A check that registers only after the others have settled is not waited for — the rollup cannot name what has not reported yet. `review-posted` — a **configured** reviewer's round is posted at the current head: the gate's own reviewer set, resolved through the same identities and the same round rules CON-32(b) uses (a review whose author matches the reviewer's `login_pattern` — on the `--reviewers` flags path the whole login, case-insensitively, with an optional `[bot]` suffix, never a substring — or its definitive-SUCCESS round-check run at head, or, on a CON-40 delivery pull request for a `delivery_holistic_pass` reviewer, its one holistic-pass review at any commit together with a definitive-SUCCESS review check at head), current head only, and not while a review request for that reviewer is pending. A review from anyone outside the set — a stray human comment, say — wakes nothing. `ready` — `pr ready` would answer `ready`. `settled-and-reviewed` — `checks-settled` AND (`review-posted` OR `ready`). **Only `ready` is a merge signal**: the other three are wakes — look again, and ask [`nen pr ready`](#nen-pr-ready) (or watch `--until ready`) before calling anything ready. |
 
 **Output and exit codes** — human rendering is one `"[<n>] <message>"` line per observation, then a
 final line naming the outcome. `--json` prints `{ outcome, iterations }`, each iteration carrying
 `{ iteration, conditionTrue, errored, message }`. Exit 0 when the condition became true; exit 1 on an
-error streak or a bound reached; exit 2 when `--command` is missing/empty, or it classifies as
+error streak or a bound reached; exit 2 when neither `--command` nor `--pr` is given, `--command` is
+empty, or it classifies as
 mutating or unknown — which includes a metacharacter a shell would act on, an unclosed quote, a
 trailing backslash, whitespace other than a space or a tab, and a NUL byte (below).
+
+<a id="watch-until-pr"></a>
+
+**The `--pr` form — a native compound wake condition ([#264](https://github.com/zheref/nen/issues/264)).**
+"CI has settled AND (a review round has posted at head OR the pull request is ready)" is two
+independently polled facts, and `--command` takes one command and one pattern — so the wait an
+orchestrating flow most often holds before Ready was hand-rolled as a `for` + `sleep` loop over
+`gh pr checks` and `gh api …/reviews`. `--pr <ref> --until <predicate>` expresses it as one read-only
+verb, with the same pacing (`monitor.pollSeconds`), bound (`monitor.maxCycles`), three-error streak and
+exit codes as the `--command` form, and no subprocess at all. Each observation is one call of the
+function `nen pr ready` prints; the predicates read its verdict and two facts the gate's own
+evaluation computes from the same snapshot — whether the rollup has settled (with the still-running
+checks named) and which configured reviewers' rounds are posted at the current head. A read that could not see — an `unevaluated`
+verdict, a rollup or reviews array the predicate needs that could not be parsed (for `--until ready`,
+either one on a not-ready read), a `--require-head` GitHub's head does not match — is an
+**observation error**, never a "not yet". The read's `meta.warnings`, `meta.notes` and declared
+exclusions are printed to stderr on the first poll and again whenever they change, and every
+GitHub-sourced string in a human line is stripped of control characters (`--json` keeps the bytes). A usage refusal from the
+read (a malformed ref, no identity source, a bad `--round-policy`) stops the watch at exit 2 on the
+first poll. Human output is one `[<n>] <predicate> is (not yet) true -- head <sha7>: <checks>; <reviews>;
+verdict <gateLine>` line per poll; `--json` adds `until`, `pr`, `readyAtWake` (whether the final read's
+verdict was `ready`; `null` when that read was `unevaluated` or a head mismatch) and `last` — the
+final read's `{ verdict, gateLine, judgedHead, warnings, notes, declaredExclusions, settlement:
+{ checksSettled, pendingChecks, roundsAtHead: [{ reviewer, via }] } }`. `last` is an object whenever
+the read produced a report, **including an `unevaluated` one** — then `verdict` is `"unevaluated"`,
+`gateLine` says why, `judgedHead` is `null` and `settlement` is `null`; inside a decided `settlement`,
+`checksSettled` and `roundsAtHead` are each `null` when that fact could not be read. Only a
+`--require-head` mismatch, which decides no report at all, makes `last` itself `null`. **A wake is
+not a go**: `readyAtWake` reports a fact about one read, and only `--until ready` or a fresh
+`nen pr ready` is a merge signal. **It wakes the caller and rings nothing**: by the maintainer's ruling
+of 2026-10-03 notification rungs stay the host's, and `nen stop` does not ring them.
+
+```bash
+nen watch until --pr 42 --gh-repo owner/name --until settled-and-reviewed --gates nen/gates.json
+```
 
 <a id="watch-until-quoting"></a>
 
@@ -4297,10 +4352,10 @@ condition became true after 1 observation(s)
 ## Labels, issues & taxonomy
 
 The four taxonomy files and the verbs that read them: applying and migrating
-labels, validating the schema set itself, resolving a colour by the
-repository's own precedence, resolving a repository token against the
-registry, and formatting the object notation the rest of the surface cross-
-references objects with.
+labels, classifying issues on two axes as labels, validating the schema set
+itself, resolving a colour by the repository's own precedence, resolving a
+repository token against the registry, and formatting the object notation the
+rest of the surface cross-references objects with.
 
 <a id="family-label"></a>
 
@@ -4474,6 +4529,278 @@ nen labels rename --target zheref/nen --map old=new
 old -> new: renamed -- renamed 'old' -> 'new', associations preserved
 ```
 
+`--json`: an ARRAY of `{ from, to, status, message }`, one per rename attempted.
+
+<a id="family-classify"></a>
+
+**`nen classify`**
+
+The mechanical half of classifying issues on two axes — the languages and the jobs a piece of work is
+about — and applying the result as GitHub labels. Reading an issue and *deciding* its keys is a
+skill's judgement; everything deterministic around it is here. Every word of the vocabulary — each
+axis's label prefix, colour and keys, and the confidence levels — is read from the **taxonomy file**
+`--taxonomy` names (`$schema` of the form `<owner>.classify-taxonomy/v1`); this binary carries none
+of it. A label an axis defines is `prefix + key`, coloured with the axis colour and described by the
+key's description (≤ 100 characters, GitHub's own limit).
+
+Two rulings shape the family. **The declaration lands first, GitHub follows**: the labels are added
+to the consumer's `nen/labels.json` through its own pull request (`install --write`), and only then
+created on GitHub (`install --sync`), which refuses until the declaration is landed. **An axis with no
+confident answer stays empty**, and **low-confidence rows are listed, not applied**, unless
+`--include-low`. Every path flag (`--taxonomy`, `--plan`, `--ledger`) resolves against `--repo`'s
+root; an absolute path is used as-is.
+
+### `nen classify labels`
+
+Answers "is this taxonomy file valid, and what label set does it define": it validates the file and
+prints one line per label (`name  #colour  description`). A bad file is refused at exit 1 naming the
+pointer into it — a missing axis, a duplicate key, a description over 100 characters, a prefix not
+ending in `/`, a colour that is not six hex digits, a key that is not kebab-case.
+
+**Usage**
+
+```text
+nen classify labels --taxonomy <path> [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. Missing -> exit 2. |
+| `--repo <path>` | no | Anchors a relative `--taxonomy`. | Defaults to cwd. The only `classify` verb where it is optional: this one reads one file and nothing else. |
+
+**Output and exit codes** — human rendering is one line per label, then `<n> label(s): <a> lang, <b>
+job`. `--json` prints one document; top-level keys: `contract` (`nen.classify.labels/v0.1`),
+`taxonomy` (the resolved path), `axes` (per axis: `prefix`, `count`) and `labels` (an array of
+`{ name, color, description, axis, key }`). Exit 0 when the file is valid; exit 1 when it is not (the
+refusal names the pointer) or cannot be read; exit 2 when `--taxonomy` is missing.
+
+**Example**
+
+```bash
+nen classify labels --taxonomy src/classify/fixtures/mini.taxonomy.json
+```
+```text
+lang/alpha  #1d76db  Needs alpha
+lang/beta   #1d76db  Needs beta
+job/build   #5319e7  Building the thing
+job/test    #5319e7  Testing the thing
+4 label(s): 2 lang, 2 job
+```
+(from a real run against the small fixture taxonomy; the real one defines 5 + 39 labels — reads one
+file, no `gh` call)
+
+### `nen classify install`
+
+Answers "has the classification label set been installed here": it compares the taxonomy's labels with
+the consumer's `nen/labels.json`. Each label is `present` (name, colour and description identical;
+colours compare case-insensitively), `drift` (the name is declared but the colour or description
+differs) or `absent`. Labels in `nen/labels.json` that wear an axis prefix but whose key the taxonomy
+does not carry are listed as `foreign` and are **never** removed or changed — a retired key may still
+sit on issues.
+
+Three forms, and the third is the second step of a deliberate two:
+
+- **report** (no flag, or `--dry-run`) — read only. Exit 0 when every label is `present`, 1 otherwise,
+  so a skill reads "installed?" from the exit code.
+- **`--write`** — rewrites `nen/labels.json` so every taxonomy label is present: absent labels are
+  appended after the existing entries in taxonomy order, drifted ones are updated in place, and every
+  other entry and top-level key (`$comment` included) keeps its content and key order. The file is
+  re-serialised with two-space indent and a trailing newline, then re-read through the schema loader.
+  A declaration that already has everything is not rewritten at all. With `--dry-run` it prints what
+  would change and writes nothing.
+- **`--sync --target <owner/name>`** — creates or updates the taxonomy's labels on GitHub through the
+  same create-or-update as [`labels sync`](#nen-labels-sync), but only the taxonomy's labels, never the
+  rest of the declaration. It **refuses at exit 1 while the on-disk declaration lacks a taxonomy label
+  or carries a drifted one** — "the declaration is not landed: run `nen classify install --write`, land
+  it through its PR, then sync" — and then **reads the target repository's current default-branch
+  `nen/labels.json`** (`gh api repos/<o>/<n>` for `default_branch`, then the file's contents) and refuses
+  at exit 1, naming the labels absent or drifted *there*, unless the landed declaration carries every
+  taxonomy label: the local file matching is necessary, the landed one is the gate, so a `--write`
+  followed by a `--sync` in one uncommitted checkout cannot change GitHub before the merge. A read that
+  fails is exit 1, never a pass. `--dry-run` makes the same two reads and reports `would-sync` without
+  any label call.
+
+**Usage**
+
+```text
+nen classify install --taxonomy <path> --repo <path> [--write | --sync --target <owner/name>] [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` is the consumer's declaration. | Omitting it is refused by name at exit 2. |
+| `--write` | no (boolean) | Rewrite `nen/labels.json` so every taxonomy label is present. | With `--sync`: usage error, exit 2 — two steps, two landings. |
+| `--sync` | no (boolean) | Sync the taxonomy's labels to GitHub. | Needs `--target`; refuses while the declaration is not landed. |
+| `--target <owner/name>` | with `--sync` | The GitHub repository. | Only valid with `--sync` (otherwise exit 2); malformed or missing -> exit 2. |
+| `--dry-run` | no (boolean) | Report only; with `--write` or `--sync`, say what would happen and do nothing. | |
+
+**Output and exit codes** — human rendering is one line per label (`present`/`drift`/`absent`, a
+drifted label naming what differs), the `foreign` lines, and a closing line (`installed: …`, or on
+stderr `<n> of <m> label(s) not installed (<a> absent, <d> drift)`). `--write` prints `add`/`update`
+lines and `written: <n> added, <m> updated`; `--sync` prints what `labels sync` prints. `--json`
+prints one document; top-level keys, in this order: `contract` (`nen.classify.install/v0.1`), `mode`
+(`report`, `write` or `sync`), `labelsFile` (the resolved path), `dryRun`, `entries` (an array of
+`{ name, status }` — in `write` mode, what was found *before* the write), `foreign`, `written`
+(`{ added, updated }`, or `null`), `sync` (the full `labels sync` report, or `null`) and `landed` (`{ branch, missing }`, the default-branch read of a `--sync`, or `null`). Exit 0: report
+with every label present; `--write` done; `--sync` done. Exit 1: report with any label absent or
+drifted; `--sync` refused or any label failed to sync; an unreadable taxonomy or declaration. Exit 2:
+`--write` with `--sync`, `--target` without `--sync`, a missing `--sync` target, or a missing
+`--taxonomy`/`--repo`.
+
+**Example**
+
+```bash
+nen classify install --taxonomy ../mini.taxonomy.json --repo src/classify/fixtures/repo-partial
+```
+```text
+present  lang/alpha
+absent   lang/beta
+drift    job/build  (colour #ffffff -> #5319e7)
+absent   job/test
+foreign  lang/zeta  (declared, not in the taxonomy; left alone)
+nen: 3 of 4 label(s) not installed (2 absent, 1 drift) -- run 'nen classify install --write'.
+```
+(from a real run, exit 1; `--taxonomy` resolved against `--repo`. The same command with `--write
+--dry-run` prints `would add  lang/beta`, `would update  job/build`, `would add  job/test`, the foreign
+line and `would write: 2 added, 1 updated (nothing was written)` — and with `--sync --target
+zheref/nen` it refuses with the "declaration is not landed" sentence above, calling `gh` not at all)
+
+### `nen classify status`
+
+Answers "which issues still need classifying, and is the machinery in place": for each issue it sorts
+the labels already on it into the keys the taxonomy knows on each axis, `unknown` (a label wearing an
+axis prefix whose key the taxonomy lacks) and `missing` (the axes with no label at all). An issue is
+`classified` only when every axis has a label. It also reports `declared` — whether `nen/labels.json`
+carries every taxonomy label — and `github` — whether every taxonomy label exists on the repository
+(existence only; colour drift is `install`'s question).
+
+Exactly one of `--issue <n>[,<n>...]` and `--open`. `--open` reads every open issue, paginated to the
+end (pull requests, which GitHub serves from the same endpoint, are filtered out) and says so when it
+stopped at the defensive page ceiling instead of finishing; a `gh label list` that came back at its
+500 limit is flagged the same way. A number that names a **pull request** is refused at exit 1,
+naming it, rather than reported as an unlabelled issue.
+
+**Usage**
+
+```text
+nen classify status --taxonomy <path> --repo <path> --target <owner/name> (--issue <n>[,<n>...] | --open) [--with-body] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` the `declared` verdict reads. | |
+| `--target <owner/name>` | yes | The GitHub repository whose issues and labels are read. | Missing or malformed -> exit 2. |
+| `--issue <n>[,<n>...]` | one of | Comma list of positive whole numbers. | Duplicates collapse; a non-number -> exit 2. Exclusive with `--open`. |
+| `--open` | one of (boolean) | Every open issue, paginated. | |
+| `--with-body` | no (boolean) | Adds `body` and `commentCount` to each issue in the `--json` document. | Read from the same payload — the `issues/{n}` read for `--issue`, the list page for `--open` — so it costs no extra call; it spares a classifying skill a per-issue `gh issue view`. Human rendering is unchanged either way; the fields are in `--json`. Without the flag the output is unchanged. |
+
+**Output and exit codes** — human rendering is one row per issue (`#N  lang: swift,kotlin  job:
+implementation  missing: -`, with an `unknown:` column only when there is one), then the summary line
+(`<n> issue(s): <c> classified, missing lang: …, missing job: …, missing both: …`), then `declared:`
+and `github:` lines (`ok`, or `missing <n>` naming the labels). `--json` prints one document;
+top-level keys: `contract` (`nen.classify.status/v0.1`), `target`, `truncated` (whether `--open` hit
+its page ceiling), `issues` (an array of `{ number, title, labels, lang, job, unknown, missing,
+classified }`, where `lang` and `job` are the keys found on each axis; with `--with-body` each also carries `body`, the issue body as GitHub returns it (`""` when it has none), and `commentCount`, the issue's comment count — the REST count, not the comments' text), `summary` (`total`,
+`classified`, `missingLang`, `missingJob`, `missingBoth`), `declared` (`{ status, missing }`) and
+`github` (`{ status, missing, truncated }`). Exit 0 whatever the state — a status is an answer; exit 1
+when `gh` failed or a number names a pull request; exit 2 for a missing flag, neither or both of
+`--issue`/`--open`, or a malformed list.
+
+**Example** (quoted from `src/classify/status.test.ts` — this verb always reads GitHub, so it was not
+run live)
+
+```bash
+nen classify status --taxonomy tax.json --repo . --target zheref/nen --issue 12,13,14
+```
+```text
+#12  lang: alpha,beta  job: build  missing: -
+#13  lang: alpha  job: -  missing: job  unknown: job/retired
+#14  lang: -  job: -  missing: lang,job
+3 issue(s): 1 classified, missing lang: 1, missing job: 2, missing both: 1
+declared: ok
+github: ok
+```
+
+### `nen classify apply`
+
+Answers "apply this classification plan as labels, and keep a record": `--plan` is a JSON array of
+rows, `{ "issue": <n>, "lang": ["<key>", …], "job": ["<key>", …], "confidence": "<level>" (optional;
+the taxonomy's first level), "reason": "<text>" (optional) }`, whose axis fields are the taxonomy's
+axes.
+
+**The whole plan is validated before anything is read from GitHub or written**: positive whole issue
+numbers, no duplicate issue, every key in its axis, every resulting label declared in
+`nen/labels.json` (the check [`label apply`](#nen-label-apply) makes), a confidence the taxonomy
+names, no unknown field (a misspelt axis would otherwise apply nothing silently). **One invalid row
+refuses the plan whole at exit 2, every refusal named — nothing partial.** Then every issue is read
+(`gh api repos/<o>/<n>/issues/<N>`): a number that names a **pull request** is refused at exit 1,
+naming it, before the first write, and a label an issue already carries is reported `already` and not
+re-applied.
+
+Rows whose confidence the taxonomy lists as *not applied* (low) are reported `listed` and skipped
+unless `--include-low` — a sweep applies high and medium after one confirmation and lists the rest.
+Without `--run` nothing is written to GitHub (a dry run); with it each label is added through `gh
+issue edit <n> --repo <o/n> --add-label <label>`, one label per call, a failure isolated to its label.
+
+**Every application writes a ledger line — dry run or not — AFTER the mutation resolves**, through the
+same ledger [`label apply`](#nen-label-apply) writes (`outcome` `dry-run`, `applied` or `failed`; the
+object spelled `<owner/name>#<N>`; the reason is the row's, then `--reason`'s, joined by `; `).
+`listed` and `already` are not applications and write none.
+
+**Usage**
+
+```text
+nen classify apply --taxonomy <path> --repo <path> --target <owner/name> --plan <path.json> [--run] [--include-low] [--reason <text>] [--ledger <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--taxonomy <path>` | yes | The classification taxonomy file. | Relative paths resolve against `--repo`'s root. |
+| `--repo <path>` | yes | The checkout whose `nen/labels.json` the plan is checked against, and the ledger's default base. | |
+| `--target <owner/name>` | yes | The GitHub repository the labels are applied on. | |
+| `--plan <path.json>` | yes | The classification plan. | Resolved against `--repo`'s root. Unreadable or not JSON -> exit 2. |
+| `--run` | no (boolean) | Apply for real. | Without it: a dry run; the ledger still records each decision. |
+| `--include-low` | no (boolean) | Apply rows at a confidence level the taxonomy lists rather than applies. | |
+| `--reason <text>` | no | Recorded in each ledger line after the row's own reason. | Never sent to GitHub. |
+| `--ledger <path>` | no | Ledger file. | Defaults to `label-ledger.jsonl` under `--repo`'s root. Opened for append before the first edit; a directory or unwritable file is refused at exit 2. |
+
+**Output and exit codes** — human rendering is a `(dry run)` banner when there is no `--run`, one line
+per issue (`#12  applied: …  already: …  listed: …`; `would apply:` on a dry run; `failed:` on a
+failure), a totals line and `ledger: <path>`; failures are named on stderr. `--json` prints one
+document; top-level keys: `contract` (`nen.classify.apply/v0.1`), `target`, `run`, `ledger` (the
+resolved path), `issues` (an array of `{ number, applied, wouldApply, already, failed, listed }`, each
+a list of label names) and `totals` (`issues`, `applied`, `wouldApply`, `already`, `failed`,
+`listed`). Exit 0 when nothing failed; exit 1 when any application failed (its labels named), when a
+number names a pull request, or when `gh` could not read an issue; exit 2 for a plan that does not
+validate (every refusal named, nothing read or written), an unreadable plan, a ledger that cannot be appended to (a directory, an unwritable file — opened for append
+before the first edit, so nothing was applied), or a missing flag.
+
+**Example** (quoted from `src/classify/apply.test.ts` — this verb reads GitHub even as a dry run, so
+it was not run live)
+
+```bash
+nen classify apply --taxonomy tax.json --repo . --target zheref/nen --plan plan.json --run
+```
+```text
+#1  applied: lang/alpha
+#2  applied: lang/beta, job/test
+#3  listed: lang/alpha, job/build
+3 issue(s): 3 applied, 0 would apply, 0 already, 0 failed, 2 listed
+ledger: /work/nen/label-ledger.jsonl
+```
+(the plan's third row carries `"confidence": "low"`, so it is listed and no ledger line is written
+for it. The `ledger:` path prints absolute; `/work/nen` stands in for the checkout `--repo` named)
+
 <a id="family-schema"></a>
 
 **`nen schema`**
@@ -4483,8 +4810,6 @@ Loads and validates the files a target repository is expected to carry under `ne
 `nen/contract.json` — and reports each file's own verdict. `nen` has no built-in copy of any of them to
 fall back on: an absent or malformed file is reported by name, never guessed past.
 
-
-`--json`: an ARRAY of `{ from, to, status, message }`, one per rename attempted.
 ### `nen schema check`
 
 Answers "can this repository's taxonomy be read at all, and by which files": every REQUIRED file
@@ -8307,7 +8632,7 @@ classification as `test`: a coverage run writes its report tree by definition.
 **Usage**
 
 ```text
-nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref>] [--dry-run] [--json]
+nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touched --base <ref> [--from-capture]] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -8317,7 +8642,8 @@ nen shu coverage [--repo <path>] [--lane <name>] [--threshold <0-100>] [--touche
 | `--lane <name>` | no | Which lane to measure. | Defaults to `project.defaultLane`, as everywhere else in this family. |
 | `--threshold <n>` | no | A percentage, 0–100, compared against the report's **line** coverage. | **Reports `met` and never gates** — see below. A value nen cannot read is exit 2, before anything is spawned. Under `--touched`, also reported **per row**, and giving it OVERRIDES the workflow-file ladder below for that run. |
 | `--touched` | no | Narrow `targets` to the rows a change touched. | Requires `--base`; given without it, **exit 2**. Reads **every** declared report nen can parse, each resolved against its own root; **0 matched against a non-empty touched set is exit 6**. With `--threshold` absent, also loads `nen/workflow.json`'s coverage ladder (defaulting to 80/85/90 when that file is absent) and bands each row; a malformed policy is exit 1 before anything is spawned. See below. |
-| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. |
+| `--base <ref>` | only with `--touched` | The ref `--touched` diffs `HEAD` against. | Given without `--touched`, **exit 2** — it has nothing to do on its own. No default: nen never invents a base. Checked before anything runs: a value beginning with `-` (git would read it as an option — `--base=--output=<p>`) and one `git rev-parse --verify --quiet --end-of-options <base>^{commit}` cannot resolve are **exit 2**. **A deliberate exit change** ([#250](https://github.com/zheref/nen/issues/250)): a base naming no commit used to surface as exit 1 from the diff, after the whole coverage run; it is now exit 2 before anything runs. |
+| `--from-capture` | only with `--touched` | Build the touched table from the reports already on disk and **run nothing**. | nen proves the capture this tree's from its provenance sidecar first; one it cannot prove is **exit 8**, nothing reused. Given without `--touched`, with `--dry-run`, or with `--effort`: **exit 2**. See [below](#coverage-from-capture). |
 | `--dry-run` | no | Print every step, run nothing — and **parse nothing**. | The report may well be on disk from a previous run; a dry run does not read it, because reporting yesterday's numbers for a command that did not execute is the most believable wrong answer this verb can give. `--touched` still computes the touched-file set under `--dry-run`: that read is `git diff`, not the declared tool, and previewing which files would be checked costs nothing. |
 
 **Where the report comes from — the verb's own `artifacts`.** nen parses the
@@ -8408,7 +8734,9 @@ plus: **exit 1** when the run succeeded and the report is missing, unreadable, i
 no format nen reads, or not declared at all — under `--touched`, when **any**
 declared report is, each one named — and **exit 6**, under `--touched` only, when
 the run succeeded, its reports parsed, the diff named at least one file, and
-**not one** of them joined to a report row (below). A run that did **not** succeed is
+**not one** of them joined to a report row (below) — and **exit 8**, under
+`--from-capture` only, when the capture on disk is not proven this tree's
+([below](#coverage-from-capture)). A run that did **not** succeed is
 not parsed at all — the file on disk may be a previous run's, and nen cannot tell
 by looking. On **exit 5** (the tool could not be started) the executor's report
 is still printed, and under `--json` stdout still carries exactly one document,
@@ -8420,9 +8748,11 @@ per *file*, so a large repository prints a long table; `--json` carries the same
 rows. Pipe it (`| head`), or read `total` alone, until a `--top <n>` exists.
 
 **`--touched --base <ref>` narrows `targets` to the rows a change touched.**
-After the run and the parse above, nen computes `git diff --name-only
-<base>...HEAD` **in the repository root** and filters the per-target table down
-to the rows that diff names — the same *files a pull request touched* scope
+After the run and the parse above, nen computes `git -c core.quotePath=false
+diff --name-only -z <base>...HEAD` **in the repository root** — paths split on
+NUL and never C-quoted, so `src/café.ts` is matched as itself
+([#250](https://github.com/zheref/nen/issues/250)) — and filters the
+per-target table down to the rows that diff names — the same *files a pull request touched* scope
 `--threshold`'s own policy already talks about, made real. `--touched` requires
 `--base`; either flag given without the other is **exit 2**, before anything
 runs.
@@ -8584,6 +8914,96 @@ touched, so there was nothing to join. A change that touches only files no
 test measures (a README) *is* exit 6, deliberately: nen cannot tell "nothing
 to measure" from "could not join" by looking, and it reports neither as a
 pass. A dry run and a run whose tool failed are never 6.
+
+<a id="coverage-from-capture"></a>
+**`--from-capture` — the touched table from a capture already on disk**
+([#250](https://github.com/zheref/nen/issues/250)). A suite that has just run
+has already written the report; running the coverage command again to measure
+it repeats the whole suite on the same tree for the same numbers.
+`--touched --base <ref> --from-capture` runs **nothing**: it resolves the lane's
+`coverage` invocation exactly as a run does — so a seated `coverage` is still
+exit 4, an excluded host still 3, an unknown lane still 2 — and reads the
+reports its `artifacts` name. The declared argv and its preconditions are never
+spawned; it starts only nen's own fixed-argv git reads.
+
+**Whether the capture is this tree's is nen's decision, never the caller's —
+and it is decided by provenance, not by any clock.** Every nen run that produces
+the lane's declared coverage reports writes a sidecar,
+`.nen/coverage-capture/<lane>.json` (`nen.shu.coverage-capture/v0.1`): the
+lane, the producing verb, each declared report's path and sha256, `HEAD`, the
+start time (for a reader, never compared), and a **tree fingerprint taken at
+the START of the run** — sha256 over `HEAD`, the bytes of
+`git -c core.quotePath=false diff HEAD --binary --submodule=diff
+--ignore-submodules=none` (no colour, no external diff, no textconv), the
+sorted NUL list of untracked non-ignored files
+(`git ls-files -z --others --exclude-standard`) with each file's content
+sha256 read from the path's exact bytes, and — for every file `git ls-files -v`
+tags assume-unchanged (`h`) or skip-worktree (`S`), whose edits `git diff`
+does not show — `git hash-object --no-filters` of its working-tree bytes
+(read-only, no `-w`). The declared reports and `.nen/coverage-capture/` are
+left out of the fingerprint, since the run writes both. Which runs write one is read off the
+declaration:
+
+- **`nen shu coverage`** (the run form) — always, once its run exits 0 with
+  every declared report on disk;
+- **`nen shu test`** and **`nen shu test-report`** (the run form) — only when
+  the same lane's `test` row declares **every** report the `coverage` row
+  names among its own `artifacts`: the repository saying, in its own file,
+  that its test command writes the capture. A `test` row that declares none
+  of them, or only some, records nothing;
+- never a `--dry-run`, and never a run that failed. Nothing is recorded, with a
+  line on stderr saying why, when the run exited 0 but left a declared report
+  missing, or did **not rewrite** one — its sha256, size, mtime and inode all
+  as they were before the run, so it may be an earlier tree's report; an
+  existing sidecar is then left to fail on its own fingerprint. Nor when the
+  tree cannot be fingerprinted: not a git work tree or no commit yet, a path
+  whose raw bytes a strict UTF-8 decoder rejects (a real filename that merely
+  contains U+FFFD is fine), or an untracked file it cannot read. Nor when the
+  sidecar's own path resolves outside the repository (a symlinked `.nen` or
+  `coverage-capture`): it is held to the same real-path containment as every
+  declared path, and a sidecar that escapes is never written and, on reuse,
+  is refused as unreadable. Under `--from-capture` every declared artifact —
+  report or not — is contained before anything is read (exit 2 for one that
+  escapes), and a git that cannot be **started** is exit 1, never a refused
+  capture or a bad `--base`. The run's document is
+  unchanged either way.
+
+`--from-capture` reads the sidecar, recomputes the fingerprint **now** and
+hashes the reports **now**, and is **refused at exit 8**, with **no document**
+on stdout and every reason named on stderr, when there is no sidecar, the
+fingerprint differs (the message says whether `HEAD` moved), the lane or the
+declared report list differs, or any report's sha256 differs from the one
+recorded — naming that report. Nothing is reused silently, and never a subset.
+So an edit made during or after the run, a merge or pull that rewrote files the
+change does not touch, a rename, a deletion, a new untracked file, an edit to an
+assume-unchanged or skip-worktree file and a skewed clock are all caught. **A
+commit after the capture is a new `HEAD`: measure again** — the ordinary loop
+measures and then commits, and the reuse is for the step that follows the
+measurement on the same tree, not for the tree after the commit. **A capture produced outside nen — no sidecar — is refused
+by design**: nen cannot vouch for a tree it did not fingerprint. The way out is
+always to measure again — the same line without `--from-capture`.
+
+**The limits that remain, stated rather than hidden** — the same sentence
+`nen shu --help` prints. Not caught: a change to an IGNORED file; an edit made during the run and undone
+byte for byte before the reuse; the contents of a NESTED untracked repository
+(it counts only as present); a difference a clean filter or end-of-line
+normalisation hides from 'git diff'; an exec-bit change under
+core.fileMode=false; and two edits to a non-UTF-8 text file that differ only in
+bytes UTF-8 cannot decode. A run that
+leaves an **undeclared, unignored** output beside its report (an HTML tree, a
+second report nobody declared) makes its own capture unreusable — the
+fingerprint sees a new untracked file — so ignore that output or declare it.
+
+A proven capture gets exactly what a run's report gets: the same parse, the
+same per-report roots, the same ladder and `touched` shape, and exit 6 when
+nothing joined. `exitCode` is then about the **read**. In text mode the
+executor's report is replaced by two lines, `lane:` and `read: --from-capture
+-- nothing was run. Reused <path>, proven a capture of this exact tree by
+<sidecar> …` (on stderr under `--json`); a lane declaring no report says so and
+claims no proof. `--from-capture` is refused at **exit 2** without `--touched`,
+with `--dry-run` (both run nothing and answer different questions), and with
+`--effort` (the ledger records steps a run performed). izanami certifies this
+form **read-only**, beside `--dry-run`.
 
 **The ladder — `nen/workflow.json`'s `coverage.{minimum,recommended,ideal}`,
 when `--threshold` is not given.** The design's own shape for that file states
@@ -10379,9 +10799,9 @@ no coverage bar is applied, no readiness is computed, nothing is published.
 
 ### `nen report data`
 
-One document describing this branch against `--base`: the commits (`<base>..HEAD`), the changed files (`<base>...HEAD` — three dots, the merge-base set a pull request shows), the evidence rows (an empty list in this release: `nen shu evidence` owns them), the lane's coverage report **if one is already on disk**, the build proof, and the last recorded stop. **Read-only**: it runs four `git` reads, opens files, and has no write path in any flag combination.
+One document describing this branch against `--base`: the commits (`<base>..HEAD`), the changed files (`<base>...HEAD` — three dots, the merge-base set a pull request shows), the evidence rows (an empty list in this release: `nen shu evidence` owns them), the lane's coverage report **if one is already on disk**, the build proof, and the last recorded stop — then **where the effort is**, derived rather than left to prose: its worktree, its stage and gate, its turn, and the local clock ([#258](https://github.com/zheref/nen/issues/258)). **Read-only**: it runs `git` reads (`rev-parse`, `symbolic-ref`, `remote get-url`, `log`, `diff`), opens files, and has no write path in any flag combination.
 
-Every absence is `null` and no absence is a failure — a repository with no coverage report, no build proof and no recorded stop still produces the whole document, with the reason for each null on stderr. What is *not* folded into a null is a git command that FAILS: an unresolvable `--base` is refused by name at exit 2 before anything is read, and a failed `git log`/`git diff` is refused rather than reported as a branch with nothing on it. `repo` carries the checkout's directory **name**, never its absolute path — this document gets filled into a report that gets pasted into a pull request.
+Every absence is `null` and no absence is a failure — a repository with no coverage report, no build proof and no recorded stop still produces the whole document, with the reason for each null on stderr. What is *not* folded into a null is a git command that FAILS: an unresolvable `--base` is refused by name at exit 2 before anything is read, and a failed `git log`/`git diff` is refused rather than reported as a branch with nothing on it. `repo` carries the project's **`owner/name`**, read from a **hosted** `origin` remote (`user@host:path` or `scheme://host/path`; a local path or `file://` clone names a directory, not a project, and is `null`), spelled as the registry records it when listed — only the URL's **path** is read, so its userinfo, query and fragment (an `?access_token=`) never reach the document — (unlike [`repo resolve --from`](#nen-repo-resolve), an unlisted origin is not refused) — and **never** the checkout's directory name (which in a git worktree is the worktree's, not the project's) nor its path: this document gets filled into a report that gets pasted into a pull request. No readable origin is `null`, with the reason on stderr. *(Before [#258](https://github.com/zheref/nen/issues/258) it was the directory's name.)*
 
 **Usage**
 
@@ -10390,6 +10810,7 @@ nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--j
 nen report data … [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog]
 nen report data … --objects-from <file>
 nen report data … [--target … | --objects-from <file>] --register <desk>
+nen report data … [--tz <zone>] [--open-stop]
 ```
 
 **Arguments**
@@ -10406,11 +10827,31 @@ nen report data … [--target … | --objects-from <file>] --register <desk>
 | `--backlog` | no (boolean) | every **open** issue and pull request of `--target` | paginated to completion; a fetch that hits the defensive page ceiling says so on stderr rather than presenting a partial register as whole |
 | `--objects-from <file>` | no | the register, read from a file instead of GitHub | a JSON array of rows already in the published `objects` shape. **Validated at the read seam and refused BY ROW INDEX at exit 2.** Never mixed with the four flags above: a register whose rows came from two authorities says nothing about which row came from which |
 | `--register <desk>` | no | emit the **register document** a Rikugan page renders from | the judgement half only, as JSON — see *The register document* below. Validated at the read seam and refused at exit 2 naming the field; an empty value is refused too |
+| `--tz <zone>` | no | the IANA zone the local clock is read in | must be a **compiled** zone in this host's zoneinfo database — `$TZDIR`, else `/usr/share/zoneinfo`, `/var/db/timezone/zoneinfo`, `/usr/lib/zoneinfo` — i.e. a **regular file**, whose real path stays inside the database's real directory (a symlink out of it is refused), and whose first four bytes are `TZif` (`UTC`/`Etc/UTC` need none). **Where no such directory exists** (on `win32`, or a `$TZDIR` that is not a directory) the runtime's ICU zone list (`Intl.supportedValuesOf("timeZone")`) answers instead, and stderr names that authority. The zone is printed as ICU's canonical name; a misspelling, a **case mismatch** (`america/bogota`), a metadata file such as `zone.tab`, or a path is **refused at exit 2** naming it, before any GitHub read, rather than stamped in UTC as `date(1)` silently would. Without it: `$TZ`, then the **`/etc/localtime` symlink's target**, then **`/etc/timezone`**, then ICU's own guess; a zone from any of them that fails the same check is `null` with the reason |
+| `--open-stop` | no (boolean) | a G5 stop is open this turn | `effortStage` is `blocked`. The **only** way to `blocked`: a `.nen/last-stop.json` on disk records a stop, not an open one |
 | `--json` | no | the document itself | — |
+
+**The derived context** ([#258](https://github.com/zheref/nen/issues/258)) is what Hatsu's report page shows every turn (`docs/WORKFLOW.md` § *Where the effort is*, § *Report time*), derived by the verb instead of in prose. **Each field is `null`, with the reason on stderr, when it cannot be derived — none is guessed**: a stage is never read from a pull request the verb could not match to this branch, from a lookup that could have missed one, or from a verdict nobody read.
+
+| Field | Derived from |
+|---|---|
+| `worktree` | the checkout's directory name when `git rev-parse --git-dir` and `--git-common-dir` differ (a linked worktree), else `"core"`. A name, never a path |
+| `effortStage`, `gate`, `stageClass` | the table below. *On origin* is `refs/remotes/origin/<branch>` (no fetch is made); *the PR* is the **one** `objects[]` row whose `head` is `HEAD` or `origin/<branch>` — never "the only PR in scope" — so it needs `--target … --prs <n>` (or `--backlog`, or `--objects-from`); stderr warns when the matched head is `origin/<branch>` and `HEAD` has moved on; *ready* is that row's `readiness.verdict`; `G2`/`G4` is the repository's role in `--repo`'s `nen/repos.json` (`maintained_tools` → G4, `consumers`/`pending_onboarding` → G2), the 2026-09-18 ruling [`repo classify`](#nen-repo-classify) applies. **All three are `null`**, with the reason, on a detached HEAD; an `origin/<branch>` probe that **failed** (only exit 1 means absent); a branch **on origin** with no PR matched (no PR looked for — *pass `--target --prs`*; `--target` alone selects nothing and is no lookup — or `--backlog`/`--issues` scopes where no PR row matched this branch); a PR in scope whose head matches **neither** `HEAD` nor `origin/<branch>` (the reason names the PR and both heads: *fetch, or the PR's head moved*); two PRs on this head; a PR whose head could not be read; an open PR whose **readiness was not read**; and a PR closed without merging. An unregistered repository nulls only `gate`. `authoring` with no PR lookup carries a stderr caveat that none was looked for |
+| `turnNumber` | the `report` entries in the `.nen/phases/` ledger whose effort id **is this branch's name** — never another effort's, even a lone one; `null` (never `0`) with no such ledger, no `report` entry in it, or a detached HEAD |
+| `generatedAtLocal`, `generatedDateLocal`, `timeZone` | `generatedAt`'s instant in `--tz`, else `$TZ`, else the host's zone: `Tue 22 Sep 2026 · 14:05 America/Bogota (UTC-05:00)`, `2026-09-22`, `America/Bogota` |
+
+| `effortStage` | When | `gate` | `stageClass` |
+|---|---|---|---|
+| `authoring` | not on `origin`, no PR row in scope | `none — local` | `info` |
+| `published` | on `origin`, no PR — **not derived**: no lookup this verb makes proves "no PR" (`--backlog` reads open ones only), so this row is `null` instead | `none — pushed` | `info` |
+| `in review` | matched PR open, verdict read and not `ready` | `G2 — pending` / `G4 — pending` | `warn` |
+| `ready` | PR open, verdict `ready` | `G2 — yours` / `G4 — yours` | `red` |
+| `blocked` | `--open-stop` | `G5 — yours` | `red` |
+| `landed` | PR merged | `none — landed` | `ok` |
 
 **The `objects` register** is `[]` unless one of those five flags is given,
 which keeps this verb's default shape exactly what it has always been — local,
-four git reads, no network, no token. A pull-request row carries `kind`,
+git reads only, no network, no token. A pull-request row carries `kind`,
 `number`, `title`, `url`, `state`, `labels[]`, `head`, `mergeStateStatus`,
 `checks` (`total`/`green`/`red`/`pending`, counted over the **latest** run per
 check name, through the same `latestChecks` reduction [`pr
@@ -10454,13 +10895,13 @@ publishing the two as one word is the false-red twin of a false green. Under
 validated for shape (`source` must still be `check` or `computed`) and never
 re-derived, so it is only as good as whatever wrote the file.
 
-**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]` (each entry flattened with its `effort`; since v0.13.0 also its `note` and the `steps[]` a `shu` run left under it), then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), and `objects[]` — **appended at the end of the key order** in v0.12.0 and kept last, so a consumer reading the twelve keys before them reads the same document it always did. Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, or a `--lane` that escapes the tree.
+**Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]` (each entry flattened with its `effort`; since v0.13.0 also its `note` and the `steps[]` a `shu` run left under it), then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), `objects[]` — **appended at the end of the key order** in v0.12.0 — and then the derived context, `worktree`, `effortStage`, `gate`, `stageClass`, `turnNumber`, `generatedAtLocal`, `generatedDateLocal`, `timeZone`, appended after it ([#258](https://github.com/zheref/nen/issues/258)), so a consumer reading the keys before them reads the same document it always did. The human rendering is unchanged apart from the `repo:` line's value (`(no owner/name)` when there is none). Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, a `--lane` that escapes the tree, or a `--tz` that is not a compiled zone.
 
 **The register document** (`--register <desk>`, [#276](https://github.com/zheref/nen/issues/276)) is the backlog-board § 3 shape Hatsu's Rikugan page (`templates/rikugan.html`, variants `register` and `final`) is filled from, assembled by the verb instead of by a scratch builder. The work is split by **who may author what**:
 
 - **The desk file is judgement, and only judgement**: `{ variant, title, scope, gate, gates[{ gate, label, cleared?, asks[{ kind: DECIDE|DO|MERGE, rank, title, why, pr?, options[{ letter, label, command, consequence, star? }], objects?[{ label, url }] }] }], rows?{ <object reference>: { marks?, gate?, gateClass?, needs?, session?, lane?, thought? } }, legendRows?[{ mark, meaning }], efforts?[<effort>], spendNotes?{ <effort>: <line> }, generatedAtLocal?, footerNote?, architectureCaption? }`. Asks are ranked by `rank` within their gate; a gate with no asks must carry a `cleared` line and one with asks must not; an ask stars **exactly one** option and never repeats a letter; every `url` must start `https://`, `http://`, `mailto:`, `#` or `/`. **Every level of the desk refuses a key it does not read**, naming what that level does read — so a `verdict` (or a typo) on the document, a gate, an ask, an option, an ask object, a row or a legend row is refused rather than ignored.
 - **A desk names an object by its identity, not its number.** A register can span repositories, so a row key and an ask's `pr` are object references: notation (`HA-PR-#87`, its code resolved through `nen/repos.json`; a wrong IS/PR half is refused), `<owner>/<name>#87`, or bare (`pr#87`, `issue#85`, `87`, or a bare number for `pr`) **only when exactly one object in scope answers to it** — an ambiguous one is refused at exit 2 naming every candidate in notation. A reference to an object not in `objects`, two rows for one object, and an ask whose `pr` names an issue are refused too.
-- **Every fact is the verb's.** Each `objects[]` row gains `notation` (the bare `nen ref` token `<CODE>-<IS|PR>-#<N>`, its code from `--repo`'s `nen/repos.json`; without one the row reads `<owner>/<name>#<n>` and `footerNote` names the failed resolution), `marks`/`gate`/`gateClass`/`needs`/`session`/`lane`/`thought` (the desk's row, `""` where it wrote none), `verdict`, `labelsLine`, `checksLine` (`G/T green · R red · P pending`), `threadsLine` (`U/T unresolved`), `linkedLine` (each number's kind taken from the object in scope that has it; a number not in scope is written kind-free, `<CODE>#<n>`), `head` (`""` on an issue) and `notes[]` (a `url` that is not a link is blanked and named here; a pull request with no readiness always carries a line saying why its verdict is blank; the checkout's absolute path is kept out). A malformed `nen/repos.json` prints its real reason on stderr; the page's footer says only that notation fell back. After `objects` come `variant`, `title`, `scope`, `gate`, `generatedAtLocal` (the desk's, else `generatedAt`), `footerNote`, `footerCount`, the five tallies, `gates[]`, `architectureCaption`, `graphJson`/`graphMermaid`/`graphNodes`/`graphEdges` (empty — `report render --graph` injects over them), `spendEfforts[]` and `legendRows[]`.
+- **Every fact is the verb's.** Each `objects[]` row gains `notation` (the bare `nen ref` token `<CODE>-<IS|PR>-#<N>`, its code from `--repo`'s `nen/repos.json`; without one the row reads `<owner>/<name>#<n>` and `footerNote` names the failed resolution), `marks`/`gate`/`gateClass`/`needs`/`session`/`lane`/`thought` (the desk's row, `""` where it wrote none), `verdict`, `labelsLine`, `checksLine` (`G/T green · R red · P pending`), `threadsLine` (`U/T unresolved`), `linkedLine` (each number's kind taken from the object in scope that has it; a number not in scope is written kind-free, `<CODE>#<n>`), `head` (`""` on an issue) and `notes[]` (a `url` that is not a link is blanked and named here; a pull request with no readiness always carries a line saying why its verdict is blank; the checkout's absolute path is kept out). A malformed `nen/repos.json` prints its real reason on stderr; the page's footer says only that notation fell back. After `objects` come `variant`, `title`, `scope`, `gate`, `generatedAtLocal` (the desk's, else `generatedAt`), `footerNote`, `footerCount`, the five tallies, `gates[]`, `architectureCaption`, `graphJson`/`graphMermaid`/`graphNodes`/`graphEdges` (empty — `report render --graph` injects over them), `spendEfforts[]` and `legendRows[]` — and after them the derived context **except** `gate` and `generatedAtLocal`, which are the register's own above (the desk's page gate is the page's, in a register about more than one effort). When the desk sets `generatedAtLocal`, the desk owns the clock: `timeZone` and `generatedDateLocal` are `null`, stderr says so, and the derived clock's own diagnostics are not printed (a `--tz` is still validated).
 - **A verdict is quoted, never written.** Every row's and every ask's `verdict` is that row's `readiness.reason` **verbatim** — or, when the authority gave a verdict word and an empty reason, that word (`ready`, `not-ready`), still its own text — or `""` when no authority answered (an issue; a pull request whose readiness is `null`, with the reason in `notes[]`). **Which authority depends on the path.** On the live path (`--target`) it is the `nen pr ready` gate line or the head's `readiness` check run's verdict line. Under `--objects-from` it is whatever `readiness` the caller's file carried — validated for shape, never re-derived — so `footerNote` says `Verdicts read from <file name>, not from GitHub.` and every such row's `notes[]` says `verdict read from <file name>, not from GitHub` (the name only, never the path). An ask quotes a verdict only by naming `pr`. A desk carrying `verdict` **anywhere** is refused at exit 2.
 - **The tallies are counts of facts**: `tallyScope` every row; `tallyNeedsYou` every ask; `tallyBlockers` OPEN pull requests with a red check, an unresolved thread or a `DIRTY` merge state; `tallyReady` OPEN pull requests whose readiness verdict is `ready` and that are not blocked; `tallyInFlight` the OPEN pull requests that are neither.
 - **`spendEfforts[]`** is one row per effort — the desk's `efforts` in its order, else every effort the phase and usage ledgers recorded — built as Hatsu's spiritual-message § 4 builds it: `spendPhases[{ lane, percent, amount, steps }]` (percent of the effort's longest phase; `12.3 s` / `4 m 05 s`; `not ended` for an open phase), `spendUsage[]` (one row per surface + model, counters summed, `notReported` when **any** entry in the group was recorded `--not-reported`, as spiritual-message § 4 says), `actionsMinutes` (the sum of `minutes`, or `not read`), `spendNote` (the desk's line, or `""`), `hasSpendPhases`/`noSpendPhases`.
@@ -10501,7 +10942,7 @@ coverage: 93.74% lines on 'nen' (lcov, coverage/lcov.info)
 proof: none
 last stop: none
 ```
-(run for real, in this repository's own worktree while the family was being written; `tiers.json` was `{"tests": ["src/**/*.test.ts"], "source": ["src"], "docs": ["docs", "README.md", "CHANGELOG.md"]}`. The coverage line is this repository's OWN declaration answering: `nen/contract.json` names lane `nen`, whose `coverage` verb declares `coverage/lcov.info`, and that file was on disk from a previous [`shu coverage`](#nen-shu-coverage) run — this verb read it and spawned nothing. Before that run it printed `coverage: none read`, with `coverage: lane 'nen' declares 'coverage/lcov.info', which is not there. Run 'nen shu coverage --repo <path> --lane nen' to produce it; reported as null.` on stderr)
+(run for real, in this repository's own worktree while the family was being written — before [#258](https://github.com/zheref/nen/issues/258), so its `repo:` line shows the directory's name where today's prints `zheref/nen`; `tiers.json` was `{"tests": ["src/**/*.test.ts"], "source": ["src"], "docs": ["docs", "README.md", "CHANGELOG.md"]}`. The coverage line is this repository's OWN declaration answering: `nen/contract.json` names lane `nen`, whose `coverage` verb declares `coverage/lcov.info`, and that file was on disk from a previous [`shu coverage`](#nen-shu-coverage) run — this verb read it and spawned nothing. Before that run it printed `coverage: none read`, with `coverage: lane 'nen' declares 'coverage/lcov.info', which is not there. Run 'nen shu coverage --repo <path> --lane nen' to produce it; reported as null.` on stderr)
 
 ### `nen report render`
 
