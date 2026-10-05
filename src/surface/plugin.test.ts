@@ -639,7 +639,7 @@ describe("check --plugin, Copilot round 1 on NN-PR-#378: an inspection failure i
     }
   }
 
-  it("1: a reason is made inert at the human boundary, and kept as built under --json", async () => {
+  it.skipIf(process.platform === "win32")("1: a reason is made inert at the human boundary, and kept as built under --json", async () => {
     const w = world();
     const same = w.fresh("same");
     const odd = join(w.work, "odd\u001b[2Jdir");
