@@ -307,3 +307,75 @@ describe("toolPins -- the canon pin is data on the maintained_tools entry (CON-1
     ).toThrow(/maintained_tools\[0\]\.pinned/);
   });
 });
+
+describe("toolCheckouts -- where a maintained tool's checkout is found is declared, never a literal in nen (zheref/nen#294)", () => {
+  const at = "nen/repos.json";
+
+  it("reads checkout_env and checkout off a maintained_tools entry, with its index, and leaves undeclared tools out", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [],
+      maintained_tools: [
+        { repo: "owner/tool", role: "a tool" },
+        { repo: "owner/handbooks", pinned: "v0.6.0", checkout_env: "MY_CANON", checkout: "${HOME}/c" },
+        { repo: "owner/env-only", checkout_env: "ONLY_ENV" },
+      ],
+    });
+    expect(registry.toolCheckouts).toEqual({
+      "owner/handbooks": { index: 1, checkoutEnv: "MY_CANON", checkout: "${HOME}/c" },
+      "owner/env-only": { index: 2, checkoutEnv: "ONLY_ENV", checkout: null },
+    });
+    expect(parseRepoRegistry(at, { consumers: [] }).toolCheckouts).toEqual({});
+  });
+
+  it("refuses, by pointer, a checkout_env that is not a variable name and an empty checkout -- never read as undeclared", () => {
+    expect(() => parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "o/h", checkout_env: "/abs/path" }] })).toThrow(
+      /maintained_tools\[0\]\.checkout_env.*environment variable NAME/,
+    );
+    expect(() => parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "o/h", checkout_env: 3 }] })).toThrow(/maintained_tools\[0\]\.checkout_env/);
+    expect(() => parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "o/h", checkout: "  " }] })).toThrow(/maintained_tools\[0\]\.checkout.*empty string/);
+  });
+});
+
+describe("toolPins + toolCheckouts -- one row answers for a tool (Nobunaga N8)", () => {
+  it("takes the pin and the checkout from the LAST row; a last row with no checkout means none, whatever an earlier row said", () => {
+    const registry = parseRepoRegistry("nen/repos.json", {
+      consumers: [],
+      maintained_tools: [
+        { repo: "owner/handbooks", pinned: "v0.5.0", checkout_env: "OLD_CANON", checkout: "/old" },
+        { repo: "owner/handbooks", pinned: "v0.6.0" },
+        { repo: "owner/other", pinned: "v1.0.0", checkout: "/first" },
+        { repo: "owner/other", pinned: "v2.0.0", checkout: "/second" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({ "owner/handbooks": "v0.6.0", "owner/other": "v2.0.0" });
+    expect(registry.toolCheckouts).toEqual({ "owner/other": { index: 3, checkoutEnv: null, checkout: "/second" } });
+  });
+});
+
+describe("toolPins -- a later row erases an earlier pin (Nobunaga R4)", () => {
+  it("records no pin when the last row naming the tool is unpinned, though an earlier row pinned it", () => {
+    const registry = parseRepoRegistry("nen/repos.json", {
+      consumers: [],
+      maintained_tools: [
+        { repo: "owner/handbooks", pinned: "v0.6.0", checkout: "/c" },
+        { repo: "owner/handbooks", role: "re-listed, unpinned" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({});
+    expect(registry.toolCheckouts).toEqual({});
+  });
+});
+
+describe("toolPins + toolCheckouts -- one tool whatever the slug's case (Copilot round 1, F)", () => {
+  it("folds 'Owner/Handbooks' and 'owner/handbooks' into one tool; the last row answers for both, under its own spelling", () => {
+    const registry = parseRepoRegistry("nen/repos.json", {
+      consumers: [],
+      maintained_tools: [
+        { repo: "Owner/Handbooks", pinned: "v0.5.0", checkout: "/old" },
+        { repo: "owner/handbooks", pinned: "v0.6.0", checkout_env: "CANON" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({ "owner/handbooks": "v0.6.0" });
+    expect(registry.toolCheckouts).toEqual({ "owner/handbooks": { index: 1, checkoutEnv: "CANON", checkout: null } });
+  });
+});
