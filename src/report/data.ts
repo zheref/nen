@@ -28,14 +28,19 @@
 // not the report's); `nen shu coverage` is the verb that guarantees freshness by
 // producing it.
 //
-// `repo` IS THE DIRECTORY'S NAME AND NEVER ITS PATH. This document is filled
-// into a report that gets pasted into a pull request, and an absolute path
+// `repo` IS THE PROJECT'S `owner/name`, FROM `origin`, AND NEVER A PATH
+// (zheref/nen#258). It used to be the checkout's directory name -- which in a
+// git worktree is the worktree's (`quirky-chatterjee-88d5f6`), not the
+// project's, so every caller overrode it by hand with `nen repo resolve
+// --from`. It is now the hosted origin remote read as `owner/name`, spelled as
+// the registry records it when listed (`repo resolve --from` refuses an
+// unlisted origin; this field does not). No readable origin is `null` with the reason -- never the directory name
+// back again, which is the wrong answer this field used to give. And never a
+// path: this document is pasted into pull requests, and an absolute path
 // carries the developer's account name and directory layout out of the machine
-// that ran it -- the same leak ../shu/coverage.ts's `relativiseName` exists to
-// close, arriving through a different field. The name is what a report wants to
-// print anyway.
+// that ran it (the leak ../shu/coverage.ts's `relativiseName` closes).
 
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
@@ -48,6 +53,9 @@ import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
 import { GIT, normalizeEol, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 import { matchesPattern } from "./patterns.js";
+import { plainLine } from "../cli/plain.js";
+import { ownerNameFromRemote, resolveToken } from "../repo/resolve.js";
+import { loadRepoRegistry } from "../schema/repos.js";
 
 export const DATA_CONTRACT = "nen.report.data/v0.1";
 
@@ -120,7 +128,8 @@ export interface ReportPhaseStep {
 
 export interface ReportData {
   readonly contract: string;
-  readonly repo: string;
+  /** `owner/name` from the origin remote, or null (the reason is on stderr). */
+  readonly repo: string | null;
   /** null means a detached HEAD -- this checkout is not on a branch. */
   readonly branch: string | null;
   readonly base: string;
@@ -218,6 +227,61 @@ function git(seams: Seams, root: string, args: readonly string[]): { code: numbe
 export function readBranch(seams: Seams, root: string): string | null {
   const result = git(seams, root, ["symbolic-ref", "--short", "HEAD"]);
   return result.code === 0 ? result.stdout.trim() : null;
+}
+
+/**
+ * `owner/name` from a hosted origin remote, spelled as the registry records
+ * it when listed, or null with the reason.
+ *
+ * NOT A REFUSAL: a checkout with no origin (a fresh `git init`, a scratch
+ * clone) is still a branch with commits on it, and the rest of the document is
+ * true of it. The registry only SPELLS the answer -- the casing
+ * `nen/repos.json` records -- and is never required: a repository it does not
+ * list still has an owner and a name.
+ */
+export function readRepoSlug(seams: Seams, root: string, warn: (line: string) => void): string | null {
+  const result = git(seams, root, ["remote", "get-url", "origin"]);
+  if (result.code !== 0) {
+    warn(`repo: this checkout has no readable 'origin' remote (${result.stderr}), so its owner/name is not known; reported as null, never as the directory's name.`);
+    return null;
+  }
+  const url = outputLines(result.stdout)[0] ?? "";
+  if (!isHostedRemote(url)) {
+    warn("repo: this checkout's 'origin' is not a hosted remote (a 'user@host:' or 'scheme://host/' URL) -- a local path or file:// clone names a directory, not a project; reported as null.");
+    return null;
+  }
+  const slug = ownerNameFromRemote(url);
+  if (slug === null) {
+    warn("repo: this checkout's 'origin' does not read as an owner/name repository; reported as null.");
+    return null;
+  }
+  try {
+    const recorded = resolveToken(loadRepoRegistry(root), slug);
+    const only = recorded.length === 1 ? recorded[0] : undefined;
+    if (only !== undefined && only.repo.toLowerCase() === slug.toLowerCase()) return only.repo;
+  } catch {
+    // No registry, a malformed one, or one that does not list this repository:
+    // the origin's own spelling is the answer.
+  }
+  return slug;
+}
+
+/**
+ * WHETHER AN ORIGIN NAMES A HOSTED PROJECT AT ALL (Nobunaga N4).
+ * `ownerNameFromRemote` reads the last two path segments of anything, so a
+ * clone of `/Users/me/src/nen` would have been reported as `src/nen` -- a
+ * project nobody has. Only two shapes name a host: scp-style `user@host:path`
+ * and `scheme://host/path` with a non-empty host, `file://` excepted (its host
+ * is this machine's file system). Credentials in the URL are never printed.
+ */
+export function isHostedRemote(url: string): boolean {
+  const trimmed = url.trim();
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/]*)\//.exec(trimmed);
+  if (scheme !== null) {
+    const host = (scheme[2] ?? "").replace(/^[^@]*@/, "");
+    return (scheme[1] ?? "").toLowerCase() !== "file" && host !== "";
+  }
+  return /^[^@\s/:]+@[^:\s/]+:[^\s]/.test(trimmed);
 }
 
 /**
@@ -494,10 +558,11 @@ export function assembleData(
 ): ReportData {
   assertBase(seams, root, options.base);
   const lastStop = containedPath(root, ".nen/last-stop.json");
+  const branch = readBranch(seams, root);
   return {
     contract: DATA_CONTRACT,
-    repo: basename(root),
-    branch: readBranch(seams, root),
+    repo: readRepoSlug(seams, root, warn),
+    branch,
     base: options.base,
     generatedAt: seams.now().toISOString(),
     commits: readCommits(seams, root, options.base),
@@ -602,7 +667,7 @@ export function readPhaseLedgers(root: string, warn: (line: string) => void): re
 /** The compact human summary. `--json` carries the document itself. */
 export function renderData(data: ReportData): readonly string[] {
   const lines: string[] = [
-    `repo: ${data.repo}${data.branch === null ? " (detached HEAD)" : ` on '${data.branch}'`}, base '${data.base}'`,
+    `repo: ${data.repo === null ? "(no owner/name)" : plainLine(data.repo)}${data.branch === null ? " (detached HEAD)" : ` on '${data.branch}'`}, base '${data.base}'`,
     `generated: ${data.generatedAt}`,
     `commits: ${data.commits.length}`,
   ];

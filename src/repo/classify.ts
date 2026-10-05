@@ -86,7 +86,7 @@ export function readOrigin(seams: Seams, cwd: string): string {
   return slug;
 }
 
-function roleOf(registry: RepoRegistry, target: string): { role: RepoRole; source: string } {
+export function roleOf(registry: RepoRegistry, target: string): { role: RepoRole; source: string } {
   const lower = target.toLowerCase();
   if (registry.maintainedTools.some((repo): boolean => repo.toLowerCase() === lower)) {
     return { role: "canon", source: `${registry.path}: maintained_tools` };
