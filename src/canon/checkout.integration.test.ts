@@ -336,3 +336,46 @@ describe.skipIf(!HAVE_GIT)("Nobunaga round 2 -- objects and hooks that lie about
     expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty", message: expect.stringMatching(/M handbooks\/stacks\/scenario-x\/rules\/01-a\.md/) as unknown } });
   });
 });
+
+describe.skipIf(!HAVE_GIT)("Copilot round 1 -- bytes a filter hides, and text a terminal would run", () => {
+  it("A: a clean filter that answers the committed text does not hide an injected file: the raw bytes are hashed", async () => {
+    const canon = freshCanon();
+    const file = join(canon, "handbooks", "stacks", "scenario-x", "rules", "01-a.md");
+    const original = join(base, `original-${fresh}.md`);
+    writeFileSync(original, readFileSync(file));
+    writeFileSync(join(canon, ".git", "info", "attributes"), "handbooks/stacks/scenario-x/rules/01-a.md filter=hide\n");
+    git(canon, ["config", "filter.hide.clean", `cat '${original.replace(/\\/g, "/")}'`]);
+    git(canon, ["config", "filter.hide.smudge", "cat"]);
+    // The same length as the committed text, so status's size check does not
+    // already flag it and the filter is what decides.
+    writeFileSync(file, "# A\n\nHello {{EVIL}}.\n");
+    // Git itself, through the filter, calls the tree clean and the file plain H.
+    expect(git(canon, ["status", "--porcelain"])).toBe("");
+    expect(git(canon, ["ls-files", "-v", "--", "handbooks/stacks/scenario-x/rules/01-a.md"])).toMatch(/^H /);
+    expect(await verdict(canon)).toMatchObject({
+      ok: false,
+      failure: { code: "dirty", message: expect.stringMatching(/on-disk bytes differ from the tag \(line-ending conversion or a filter\) at 'handbooks\/stacks\/scenario-x\/rules\/01-a\.md'/) as unknown },
+    });
+  });
+
+  it("C: an escape sequence in the origin reaches --json raw and the terminal never", async () => {
+    const canon = freshCanon();
+    const evil = "https://evil\u001b[2J.example/owner/handbooks.git";
+    git(canon, ["remote", "set-url", "origin", evil]);
+    const text = await run(["canon", "checkout", "--canon-checkout", canon], machine({}));
+    expect(text.code).toBe(1);
+    expect(text.out + text.err).toMatch(/wrong-host/);
+    expect(text.out + text.err).not.toContain("\u001b");
+    const doc = await run(["canon", "checkout", "--canon-checkout", canon], machine({}), true);
+    expect(doc.out).toContain("\\u001b");
+  });
+
+  it("D: the mirror's checkout refusal is plain too", async () => {
+    const canon = freshCanon();
+    git(canon, ["remote", "set-url", "origin", "https://evil\u001b]0;title\u0007.example/owner/handbooks.git"]);
+    const result = await run([...MIRROR("check"), "--canon-checkout", canon], machine({}));
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/the canon checkout did not resolve \(wrong-host\)/);
+    expect(result.err).not.toMatch(/[\u0007\u001b]/);
+  });
+});

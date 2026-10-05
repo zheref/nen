@@ -43,7 +43,8 @@
 // get-url`, `status`, `ls-files`, under GIT_OPTIONAL_LOCKS=0 and with
 // `--no-optional-locks` on the status, so not even the index is refreshed.
 
-import { isAbsolute } from "node:path";
+import { lstatSync, readlinkSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { nativePaths, samePath, type PathSeam } from "./paths.js";
 import { parseRemoteUrl } from "../github/target.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
@@ -355,7 +356,17 @@ export const VERIFICATION_CONFIG: readonly string[] = [
   "-c", "core.untrackedCache=false",
   "-c", "core.trustctime=true",
   "-c", "core.checkStat=default",
+  // Copilot round 1 (A): no line-ending conversion between disk and index,
+  // so a status reads the bytes as they are. The byte check below hashes with
+  // --no-filters and does not depend on these; status still reports
+  // untracked and ignored entries under them.
+  "-c", "core.autocrlf=false",
+  "-c", "core.eol=lf",
+  "-c", "core.safecrlf=false",
 ];
+
+/** Thrown by a verification git call that could not be started at all; caught once, as `git-unavailable`. */
+class GitNotStarted extends Error {}
 
 /**
  * The environment every verification git call runs under: the redirects above
@@ -421,15 +432,37 @@ export function verifyCanonCheckout(
     return failed(path, "not-found", `'${path}' does not exist. Clone ${source} there and check out ${ref}, or point the declaration at the checkout you keep.`);
   }
 
+  try {
+    return verifyIn(seams, real, source, ref, consumerRoot, paths, failed);
+  } catch (error) {
+    // THREE OUTCOMES ON EVERY CALL, not only the first (Copilot round 1, B):
+    // ran and passed, ran and failed, or could not be started. The last is
+    // never read as the second -- "git is missing" is not "the tree is dirty".
+    if (error instanceof GitNotStarted) {
+      return failed(real, "git-unavailable", `git could not be started, so '${real}' cannot be verified as a checkout of ${source}@${ref}.`);
+    }
+    throw error;
+  }
+}
+
+function verifyIn(
+  seams: Seams,
+  real: string,
+  source: string,
+  ref: string,
+  consumerRoot: string,
+  paths: PathSeam,
+  failed: (at: string, code: CheckoutFailureCode, message: string) => Verified,
+): Verified {
   const env = verificationGitEnv(seams.env);
-  const gitIn = (dir: string, args: readonly string[]): { code: number; stdout: string; spawnFailed: boolean } => {
-    const result = seams.run(GIT, [...VERIFICATION_CONFIG, "-C", dir, ...args], { env });
-    return { code: result.code, stdout: result.stdout, spawnFailed: result.spawnFailed };
+  const gitIn = (dir: string, args: readonly string[], stdin?: string): { code: number; stdout: string } => {
+    const result = seams.run(GIT, [...VERIFICATION_CONFIG, "-C", dir, ...args], stdin === undefined ? { env } : { env, stdin });
+    if (result.spawnFailed) throw new GitNotStarted();
+    return { code: result.code, stdout: result.stdout };
   };
-  const git = (args: readonly string[]): { code: number; stdout: string; spawnFailed: boolean } => gitIn(real, args);
+  const git = (args: readonly string[], stdin?: string): { code: number; stdout: string } => gitIn(real, args, stdin);
 
   const top = git(["rev-parse", "--show-toplevel"]);
-  if (top.spawnFailed) return failed(real, "git-unavailable", `git could not be started, so '${real}' cannot be verified as a checkout of ${source}@${ref}.`);
   const topLine = outputLines(top.stdout)[0];
   if (top.code !== 0 || topLine === undefined) return failed(real, "not-a-checkout", `'${real}' is not inside a git work tree.`);
   // ONE DIRECTORY, TWO SPELLINGS: git's toplevel is forward-slashed and in
@@ -502,9 +535,85 @@ export function verifyCanonCheckout(
     return failed(real, "dirty", `'${real}' has ${hidden.length} file${hidden.length === 1 ? "" : "s"} marked assume-unchanged or skip-worktree (first: '${hidden[0] ?? ""}'), so status cannot vouch for ${ref}'s bytes. Clear the flags (git update-index --no-assume-unchanged / --no-skip-worktree).`);
   }
 
+  const bytes = differingBytes(git, real, tagCommit);
+  if (bytes !== null) {
+    return failed(
+      real,
+      "dirty",
+      `'${real}' is at ${ref} but its on-disk bytes differ from the tag (line-ending conversion or a filter) at '${bytes}'. Status runs files through the checkout's filters and cannot vouch for raw bytes; clone the canon with core.autocrlf=false and no filters.`,
+    );
+  }
+
   return { path: real, verified: { origin: redacted, originSlug: parsed.slug, host, head: headCommit, tag: ref, tagCommit, clean: true } };
 }
 
+/**
+ * The first tracked path whose RAW on-disk bytes are not the tag's blob, or
+ * null when every one matches (Copilot round 1, A).
+ *
+ * WHY STATUS IS NOT ENOUGH. `git status` compares the index with the disk
+ * through the checkout's own clean filters: a `*.md filter=hide` whose clean
+ * command prints the committed text makes an injected file read clean, and an
+ * `H` in `ls-files -v`. So every blob the tag records is hashed from disk with
+ * `--no-filters` -- no filter, no line-ending conversion -- and compared with
+ * the oid `ls-tree` names. A symlink is compared by its link text; a file the
+ * tag records that is a symlink (or anything but a regular file) on disk, or
+ * the reverse, differs. A gitlink (submodule) is status's to judge.
+ */
+function differingBytes(
+  git: (args: readonly string[], stdin?: string) => { code: number; stdout: string },
+  real: string,
+  tagCommit: string,
+): string | null {
+  const tree = git(["ls-tree", "-r", "-z", "--full-tree", tagCommit]);
+  if (tree.code !== 0) return "(the tag's tree could not be listed)";
+  const files: { readonly path: string; readonly oid: string }[] = [];
+  const links: { readonly path: string; readonly oid: string }[] = [];
+  for (const entry of tree.stdout.split("\0")) {
+    if (entry === "") continue;
+    const match = /^(\d+) (\w+) ([0-9a-f]+)\t([\s\S]*)$/.exec(entry);
+    if (match === null) return "(an unreadable ls-tree entry)";
+    const [, mode, type, oid, path] = match as unknown as [string, string, string, string, string];
+    if (type !== "blob") continue;
+    let stat;
+    try {
+      stat = lstatSync(join(real, ...path.split("/")));
+    } catch {
+      return path;
+    }
+    if (mode === "120000") {
+      if (!stat.isSymbolicLink()) return path;
+      links.push({ path, oid });
+    } else {
+      if (!stat.isFile()) return path;
+      // --stdin-paths is line-separated: a path git can carry and this list
+      // cannot is refused, never hashed as two paths.
+      if (path.includes("\n") || path.includes("\r")) return path;
+      files.push({ path, oid });
+    }
+  }
+  if (files.length > 0) {
+    const hashed = git(["hash-object", "--no-filters", "--stdin-paths"], files.map((file): string => file.path).join("\n") + "\n");
+    if (hashed.code !== 0) return "(the on-disk bytes could not be hashed)";
+    const oids = hashed.stdout.split("\n").map((line): string => line.trim()).filter((line): boolean => line !== "");
+    if (oids.length !== files.length) return "(the on-disk bytes could not be hashed)";
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      if (file !== undefined && oids[index] !== file.oid) return file.path;
+    }
+  }
+  for (const link of links) {
+    let target: string;
+    try {
+      target = readlinkSync(join(real, ...link.path.split("/")));
+    } catch {
+      return link.path;
+    }
+    const hashed = git(["hash-object", "--no-filters", "--stdin"], target.replace(/\\/g, "/"));
+    if (hashed.code !== 0 || hashed.stdout.trim() !== link.oid) return link.path;
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Rendering

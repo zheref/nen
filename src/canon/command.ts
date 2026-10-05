@@ -40,6 +40,7 @@ import { resolveScenario } from "../repo/scenario.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
 import type { ToolCheckout } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
+import { plainLine } from "../cli/plain.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
 import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, type CheckoutResolution } from "./checkout.js";
 import {
@@ -121,7 +122,14 @@ usage:
       GIT_OPTIONAL_LOCKS=0 (not even the index is rewritten) and
       GIT_NO_REPLACE_OBJECTS=1; and passes -c core.fsmonitor=false
       -c core.untrackedCache=false -c core.trustctime=true
-      -c core.checkStat=default. The host compare is literal: an ssh host
+      -c core.checkStat=default -c core.autocrlf=false -c core.eol=lf
+      -c core.safecrlf=false. Status is not trusted for tracked bytes: every
+      blob the tag records is hashed from disk with --no-filters and
+      compared with the tag's oid, so a clean filter or a line-ending
+      conversion reads dirty -- clone the canon with core.autocrlf=false.
+      A git that cannot be started on ANY call is git-unavailable. Text
+      lines are stripped of control characters; --json keeps the raw bytes.
+      The host compare is literal: an ssh host
       alias (a Host entry in ~/.ssh/config) is not the host it stands for
       and fails as wrong-host. nen fetches nothing and moves no checkout.
       Prints the path, how it was resolved (every step, the passed-over ones
@@ -334,7 +342,7 @@ function pinVerb(context: CommandContext): number {
   const slugs = Object.keys(registry.pins);
   let source: string;
   if (sourceFlag !== null) {
-    if (registry.pins[sourceFlag] === undefined) {
+    if (pinFor(registry.pins, sourceFlag) === undefined) {
       context.io.err(
         `nen: ${registry.path} records no 'pinned' tag for ${sourceFlag} under maintained_tools${slugs.length === 0 ? "" : ` (pinned there: ${slugs.join(", ")})`}. Record one (${PIN_FIELD}) so the pin is data.`,
       );
@@ -352,7 +360,7 @@ function pinVerb(context: CommandContext): number {
     context.io.err(`nen: ${registry.path} pins ${slugs.length} maintained tools (${slugs.join(", ")}); name the canonical one with --source.`);
     return 1;
   }
-  const ref = registry.pins[source] ?? "";
+  const ref = pinFor(registry.pins, source) ?? "";
   const tagShaped = TAG_RE.test(ref);
   emit(
     context.io,
@@ -367,6 +375,18 @@ function pinVerb(context: CommandContext): number {
     return 1;
   }
   return 0;
+}
+
+/**
+ * The pin recorded for `source`, its slug compared CASE-INSENSITIVELY as
+ * GitHub compares slugs (Copilot round 1, E): `--source Owner/Handbooks` reads
+ * the pin recorded for `owner/handbooks`. The registry folds duplicate rows the
+ * same way (../schema/repos.ts), so at most one key matches.
+ */
+function pinFor(pins: Readonly<Record<string, string>>, source: string): string | undefined {
+  const wanted = source.toLowerCase();
+  const key = Object.keys(pins).find((slug): boolean => slug.toLowerCase() === wanted);
+  return key === undefined ? undefined : pins[key];
 }
 
 /** `--source`/`--ref`, each from its flag or from the consumer's recorded pin; refused by name when neither has it. */
@@ -391,7 +411,7 @@ function resolvePin(context: CommandContext, root: string): { readonly source: s
   if (!looksLikeOwnerSlug(source)) {
     throw new VerbUsageError(`--source '${source}' is not an owner/name slug. It names the canonical handbooks repository the marker cites, e.g. --source owner/handbooks.`);
   }
-  const ref = refFlag ?? registry?.pins[source] ?? null;
+  const ref = refFlag ?? (registry === null ? undefined : pinFor(registry.pins, source)) ?? null;
   if (ref === null) {
     throw new VerbUsageError(
       `--ref not given and ${registry === null ? where : `${where} records no 'pinned' tag for ${source} under maintained_tools`}. Pass --ref <tag>, or record the pin (${PIN_FIELD}) so 'check' can hold the mirror to it.`,
@@ -479,9 +499,12 @@ function checkoutVerb(context: CommandContext): number {
     if (error instanceof SchemaError) throw new VerbUsageError(error.message);
     throw error;
   }
-  emit(context.io, context.json, checkoutDocument(resolution), checkoutLines(resolution));
+  // HUMAN LINES ARE PLAIN, JSON IS RAW (Copilot round 1, C): an origin URL, a
+  // status line or a path git reports can carry an escape sequence that would
+  // rewrite the terminal; --json keeps the bytes for a reader that asked.
+  emit(context.io, context.json, checkoutDocument(resolution), checkoutLines(resolution).map(plainLine));
   if (resolution.failure !== null) {
-    context.io.err(`nen: ${resolution.failure.code}: ${resolution.failure.message}`);
+    context.io.err(plainLine(`nen: ${resolution.failure.code}: ${resolution.failure.message}`));
     return 1;
   }
   return 0;
@@ -669,7 +692,9 @@ function readMirrorInputs(context: CommandContext): MirrorInputs {
       // there or not at the pin is a question that could not be asked
       // (zheref/nen#101's line between a typo and a finding).
       throw new VerbUsageError(
-        `the canon checkout did not resolve (${checkout.failure?.code ?? "unresolvable"}): ${checkout.failure?.message ?? "no path"} Run 'nen canon checkout --repo ${repoFlag}' to see every step.`,
+        // Plain, for the same reason (Copilot round 1, D): the message carries
+        // git-derived text and is printed to a terminal.
+        plainLine(`the canon checkout did not resolve (${checkout.failure?.code ?? "unresolvable"}): ${checkout.failure?.message ?? "no path"} Run 'nen canon checkout --repo ${repoFlag}' to see every step.`),
       );
     }
     const lexical = resolve(checkout.path, stackDir, scenario, leaf);
@@ -724,12 +749,12 @@ function pinLine(pin: CanonPin): string {
 
 /** The lines naming where the canon was read from: the resolved checkout and how, or the --rules-dir given. */
 function rulesLines(inputs: MirrorInputs): string[] {
-  if (inputs.checkout === null) return [`rules: ${inputs.rulesDir} (--rules-dir)`];
+  if (inputs.checkout === null) return [plainLine(`rules: ${inputs.rulesDir} (--rules-dir)`)];
   const from = inputs.checkout.resolvedFrom;
   return [
     `canon checkout: ${inputs.checkout.path ?? "(unresolved)"}${from === null ? "" : ` (resolved from ${from.kind} ${from.from}; verified at ${inputs.pin.ref})`}`,
     `rules: ${inputs.rulesDir}`,
-  ];
+  ].map(plainLine);
 }
 
 function mirror(context: CommandContext, mirrorSub: string | undefined): number {

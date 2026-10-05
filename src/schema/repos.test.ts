@@ -365,3 +365,17 @@ describe("toolPins -- a later row erases an earlier pin (Nobunaga R4)", () => {
     expect(registry.toolCheckouts).toEqual({});
   });
 });
+
+describe("toolPins + toolCheckouts -- one tool whatever the slug's case (Copilot round 1, F)", () => {
+  it("folds 'Owner/Handbooks' and 'owner/handbooks' into one tool; the last row answers for both, under its own spelling", () => {
+    const registry = parseRepoRegistry("nen/repos.json", {
+      consumers: [],
+      maintained_tools: [
+        { repo: "Owner/Handbooks", pinned: "v0.5.0", checkout: "/old" },
+        { repo: "owner/handbooks", pinned: "v0.6.0", checkout_env: "CANON" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({ "owner/handbooks": "v0.6.0" });
+    expect(registry.toolCheckouts).toEqual({ "owner/handbooks": { index: 1, checkoutEnv: "CANON", checkout: null } });
+  });
+});

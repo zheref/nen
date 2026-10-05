@@ -68,6 +68,7 @@ describe("canon path compares -- the win32 branch, on any host", () => {
       "rev-parse --verify --quiet HEAD^{commit}": { stdout: `${tag}\n` },
       "--no-optional-locks status --porcelain=v1 --untracked-files=all --ignored=matching --ignore-submodules=none": { stdout: "" },
       "ls-files -v": { stdout: "" },
+      [`ls-tree -r -z --full-tree ${tag}`]: { stdout: "" },
     };
     const seams = new ScriptedSeams(
       [

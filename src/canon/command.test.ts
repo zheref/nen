@@ -884,3 +884,16 @@ describe("Nobunaga round 2 -- canon checkout on a malformed registry (R5)", () =
     expect(result.out).toEqual([]);
   });
 });
+
+describe("Copilot round 1 -- the pin is found whatever the --source case (E)", () => {
+  it("reads the recorded ref for a --source given in another case, on mirror and on canon pin", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0" });
+    const generated = await capture([...unpinnedArgs("generate", fx, ["--surfaces", "claude-code", "--source", "Owner/Handbooks", "--dry-run"]), "--json"], fx.root);
+    expect(generated.code, generated.err.join("\n")).toBe(0);
+    expect(json(generated)).toMatchObject({ ref: "v1.2.0" });
+    const pinned = await capture(["canon", "pin", "--source", "OWNER/OTHER"], fx.root);
+    expect(pinned.code, pinned.err.join("\n")).toBe(0);
+    expect(pinned.out[1]).toBe("ref: v3.0.0");
+  });
+});

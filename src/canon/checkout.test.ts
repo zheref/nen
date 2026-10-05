@@ -38,6 +38,7 @@ function gitFor(
     "rev-parse --verify --quiet HEAD^{commit}": { stdout: `${TAG_SHA}\n` },
     [STATUS]: { stdout: "" },
     "ls-files -v": { stdout: "H handbooks/a.md\n" },
+    [`ls-tree -r -z --full-tree ${TAG_SHA}`]: { stdout: "" },
     ...over,
   };
   return [
@@ -263,10 +264,44 @@ describe("Nobunaga round 1 -- the fail-open shapes, scripted", () => {
 
 describe("Nobunaga round 2 -- the overrides every verification git call carries", () => {
   it("R2: every call carries the four -c overrides ahead of -C", () => {
-    expect(VERIFICATION_CONFIG).toEqual(["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.trustctime=true", "-c", "core.checkStat=default"]);
+    expect(VERIFICATION_CONFIG).toEqual([
+      "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.trustctime=true", "-c", "core.checkStat=default",
+      "-c", "core.autocrlf=false", "-c", "core.eol=lf", "-c", "core.safecrlf=false",
+    ]);
     const path = dir();
     const seams = new ScriptedSeams(gitFor(path));
     verifyCanonCheckout(seams, path, SOURCE, REF, CONSUMER);
     for (const call of seams.calls) expect(call.args.slice(0, VERIFICATION_CONFIG.length + 1)).toEqual([...VERIFICATION_CONFIG, "-C"]);
+  });
+});
+
+describe("Copilot round 1 -- git that cannot start, on any call (B)", () => {
+  for (const args of ["remote get-url origin", "status", "ls-files -v", "ls-tree", "hash-object"]) {
+    it(`returns git-unavailable when the '${args}' call cannot be started`, () => {
+      const path = dir();
+      writeFileSync(join(path, "a.md"), "x");
+      const tree = `100644 blob ${"c".repeat(40)}\ta.md\0`;
+      const over: Record<string, ScriptedCall["result"]> = { [`ls-tree -r -z --full-tree ${TAG_SHA}`]: { stdout: tree }, "hash-object --no-filters --stdin-paths": { stdout: `${"c".repeat(40)}\n` } };
+      const key = Object.keys({ ...over, "remote get-url origin": 0, [STATUS]: 0, "ls-files -v": 0 }).find((candidate): boolean => candidate.startsWith(args === "status" ? "--no-optional-locks status" : args)) ?? args;
+      over[key] = { spawnFailed: true, code: -1, stdout: "" };
+      const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, over)), path, SOURCE, REF, CONSUMER);
+      expect("failure" in result && result.failure.code).toBe("git-unavailable");
+    });
+  }
+
+  it("hashes every tracked blob from disk and verifies when the oids match", () => {
+    const path = dir();
+    writeFileSync(join(path, "a.md"), "x");
+    const oid = "c".repeat(40);
+    const result = verifyCanonCheckout(
+      new ScriptedSeams(gitFor(path, { [`ls-tree -r -z --full-tree ${TAG_SHA}`]: { stdout: `100644 blob ${oid}\ta.md\0` }, "hash-object --no-filters --stdin-paths": { stdout: `${oid}\n` } })),
+      path, SOURCE, REF, CONSUMER,
+    );
+    expect("verified" in result).toBe(true);
+    const differs = verifyCanonCheckout(
+      new ScriptedSeams(gitFor(path, { [`ls-tree -r -z --full-tree ${TAG_SHA}`]: { stdout: `100644 blob ${oid}\ta.md\0` }, "hash-object --no-filters --stdin-paths": { stdout: `${"d".repeat(40)}\n` } })),
+      path, SOURCE, REF, CONSUMER,
+    );
+    expect("failure" in differs && differs.failure.message).toMatch(/on-disk bytes differ from the tag \(line-ending conversion or a filter\) at 'a\.md'/);
   });
 });

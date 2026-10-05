@@ -358,14 +358,22 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
   // second would verify a checkout against a tag its own row never recorded.
   // A last row that declares no checkout means there is none, whatever an
   // earlier row said (zheref/nen#294, Nobunaga N8).
+  //
+  // THE SLUG IS COMPARED CASE-INSENSITIVELY, as GitHub compares slugs
+  // (Copilot round 1, F): `Owner/Handbooks` then `owner/handbooks` are one
+  // tool, and the last row -- keyed by its own spelling -- answers for both.
   const lastRow = new Map<string, ListedRepo>();
-  for (const tool of maintained) lastRow.set(tool.repo, tool);
+  for (const tool of maintained) {
+    const key = tool.repo.toLowerCase();
+    lastRow.delete(key);
+    lastRow.set(key, tool);
+  }
   const toolPins: Record<string, string> = {};
   const toolCheckouts: Record<string, ToolCheckout> = {};
-  for (const [repo, tool] of lastRow) {
-    if (tool.pinned !== null) toolPins[repo] = tool.pinned;
+  for (const tool of lastRow.values()) {
+    if (tool.pinned !== null) toolPins[tool.repo] = tool.pinned;
     if (tool.checkoutEnv !== null || tool.checkout !== null) {
-      toolCheckouts[repo] = { index: tool.index, checkoutEnv: tool.checkoutEnv, checkout: tool.checkout };
+      toolCheckouts[tool.repo] = { index: tool.index, checkoutEnv: tool.checkoutEnv, checkout: tool.checkout };
     }
   }
   // `listed` carries the four fields its type names and not the pin, which
