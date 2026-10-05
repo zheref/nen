@@ -305,6 +305,8 @@ describe("the section rules (round 2)", () => {
 });
 
 describe("isContained (R8)", () => {
+  // Chosen by the platform ARGUMENT, never the host's path module: this case
+  // must evaluate the same on a Windows runner (where `path.sep` is '\\').
   it("is exact on POSIX", () => {
     expect(isContained("/repo", "/repo/.github/t.md", "linux")).toBe(true);
     expect(isContained("/repo", "/Repo/.github/t.md", "linux")).toBe(false);
@@ -348,6 +350,20 @@ describe("workingTreeReader -- reads refuse as usage errors (exit 2), never 1", 
     expect(() => reader.read(".github/pull_request_template.md")).toThrow(
       expect.objectContaining({ name: "VerbUsageError", message: expect.stringMatching(/outside the repository root/) }),
     );
+  });
+
+  // Both sides are canonicalised the same way (realpathSync.native), so a
+  // root named through an alias -- a link to the checkout here, an 8.3 short
+  // name on a Windows runner (zheref/nen#294) -- still contains its own files.
+  it("reads a template when the root itself is named through an alias", (context) => {
+    const real = repo({ ".github/pull_request_template.md": "## Summary\n" });
+    const alias = join(mkdtempSync(join(tmpdir(), "nen-pr-alias-")), "checkout");
+    try {
+      symlinkSync(real, alias, "junction");
+    } catch {
+      context.skip();
+    }
+    expect(workingTreeReader(alias).read(".github/pull_request_template.md")).toBe("## Summary\n");
   });
 
   it.skipIf(process.platform === "win32")("reads a template symlinked to a file INSIDE the root", () => {

@@ -36,7 +36,7 @@
 // git reader never follows a symlink at all.
 
 import { readdirSync, realpathSync, statSync } from "node:fs";
-import { join, sep, win32 } from "node:path";
+import { join, posix, win32 } from "node:path";
 
 import { VerbUsageError } from "../cli/command.js";
 import { readTextFile } from "../cli/inputs.js";
@@ -78,7 +78,9 @@ const TEMPLATE_READ_RATIONALE =
 /**
  * Is `file` (a real path) inside `root` (a real path)? On Windows the
  * filesystem is case-insensitive and either separator may appear, so the
- * comparison folds case and separators there; elsewhere it is exact.
+ * comparison folds case and separators there; elsewhere it is exact. The
+ * rules are chosen by `platform` alone -- `path.win32` or `path.posix`, never
+ * the host's `path` -- so either case evaluates identically on any runner.
  */
 export function isContained(root: string, file: string, platform: NodeJS.Platform = process.platform): boolean {
   if (platform === "win32") {
@@ -86,7 +88,7 @@ export function isContained(root: string, file: string, platform: NodeJS.Platfor
     const base = fold(root);
     return fold(file).startsWith(base.endsWith(win32.sep) ? base : base + win32.sep);
   }
-  return file.startsWith(root.endsWith(sep) ? root : root + sep);
+  return file.startsWith(root.endsWith(posix.sep) ? root : root + posix.sep);
 }
 
 /** The working tree under `root`. */
@@ -118,8 +120,12 @@ export function workingTreeReader(root: string): TemplateReader {
       let realRoot: string;
       let realFile: string;
       try {
-        realRoot = realpathSync(root);
-        realFile = realpathSync(full);
+        // `.native`: on Windows the JS realpath can keep an 8.3 short name
+        // (`LORDZH~1`) for one side and a long name for the other, and the
+        // two never compare equal (zheref/nen#294). The native call
+        // canonicalises both the same way.
+        realRoot = realpathSync.native(root);
+        realFile = realpathSync.native(full);
       } catch {
         // Unresolvable: readTextFile names the file and the errno, at exit 2.
         return readTextFile(full, root, TEMPLATE_READ_RATIONALE);
