@@ -872,3 +872,15 @@ describe("Nobunaga round 1 -- the registry and flag findings (zheref/nen#294)", 
     expect(json(result)).toMatchObject({ failure: { code: "bad-template" } });
   });
 });
+
+describe("Nobunaga round 2 -- canon checkout on a malformed registry (R5)", () => {
+  it("exits 2 with the loader's pointer and no --json document", async () => {
+    const fx = fixture();
+    mkdirSync(join(fx.root, "nen"), { recursive: true });
+    writeFileSync(join(fx.root, "nen", "repos.json"), JSON.stringify({ consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: "v1.2.0", checkout_env: "/bad" }] }));
+    const result = await capture(["canon", "checkout", "--json"], fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/maintained_tools\[0\]\.checkout_env/);
+    expect(result.out).toEqual([]);
+  });
+});

@@ -333,13 +333,34 @@ const GIT_REDIRECTS = [
   "GIT_DISCOVERY_ACROSS_FILESYSTEM",
   "GIT_CONFIG_PARAMETERS",
   "GIT_CONFIG_COUNT",
+  // A global or system config file named by the environment could set the
+  // very keys VERIFICATION_CONFIG pins, or a hook path (Nobunaga R2).
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_NOSYSTEM",
 ] as const;
+
+/**
+ * `-c` overrides every verification git call carries (Nobunaga R2): the
+ * checkout's own config may not decide what "unchanged" means. An fsmonitor
+ * hook that answers "nothing changed" hides an edit from status, an untracked
+ * cache can serve a stale listing, and relaxed stat checks let a same-size
+ * edit pass. `-c` outranks every config file, so these hold whatever the
+ * checkout, the user or the system configured.
+ */
+export const VERIFICATION_CONFIG: readonly string[] = [
+  "-c", "core.fsmonitor=false",
+  "-c", "core.untrackedCache=false",
+  "-c", "core.trustctime=true",
+  "-c", "core.checkStat=default",
+];
 
 /**
  * The environment every verification git call runs under: the redirects above
  * and every `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` in this environment
- * dropped, and `GIT_OPTIONAL_LOCKS=0`, so a `status` never refreshes and
- * rewrites the index of a checkout this verb promises only to read (N7).
+ * dropped, `GIT_OPTIONAL_LOCKS=0`, so a `status` never refreshes and
+ * rewrites the index of a checkout this verb promises only to read (N7), and
+ * `GIT_NO_REPLACE_OBJECTS=1` (R1).
  */
 export function verificationGitEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string | undefined> {
   const out: Record<string, string | undefined> = {};
@@ -348,6 +369,9 @@ export function verificationGitEnv(env: Readonly<Record<string, string | undefin
     if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) out[name] = undefined;
   }
   out["GIT_OPTIONAL_LOCKS"] = "0";
+  // A `refs/replace/<tag-commit>` ref would make git read ANOTHER commit's
+  // tree as the tag's, so a modified tree verifies (Nobunaga R1).
+  out["GIT_NO_REPLACE_OBJECTS"] = "1";
   return out;
 }
 
@@ -387,7 +411,7 @@ export function verifyCanonCheckout(seams: Seams, path: string, source: string, 
 
   const env = verificationGitEnv(seams.env);
   const gitIn = (dir: string, args: readonly string[]): { code: number; stdout: string; spawnFailed: boolean } => {
-    const result = seams.run(GIT, ["-C", dir, ...args], { env });
+    const result = seams.run(GIT, [...VERIFICATION_CONFIG, "-C", dir, ...args], { env });
     return { code: result.code, stdout: result.stdout, spawnFailed: result.spawnFailed };
   };
   const git = (args: readonly string[]): { code: number; stdout: string; spawnFailed: boolean } => gitIn(real, args);

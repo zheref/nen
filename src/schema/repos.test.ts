@@ -351,3 +351,17 @@ describe("toolPins + toolCheckouts -- one row answers for a tool (Nobunaga N8)",
     expect(registry.toolCheckouts).toEqual({ "owner/other": { index: 3, checkoutEnv: null, checkout: "/second" } });
   });
 });
+
+describe("toolPins -- a later row erases an earlier pin (Nobunaga R4)", () => {
+  it("records no pin when the last row naming the tool is unpinned, though an earlier row pinned it", () => {
+    const registry = parseRepoRegistry("nen/repos.json", {
+      consumers: [],
+      maintained_tools: [
+        { repo: "owner/handbooks", pinned: "v0.6.0", checkout: "/c" },
+        { repo: "owner/handbooks", role: "re-listed, unpinned" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({});
+    expect(registry.toolCheckouts).toEqual({});
+  });
+});

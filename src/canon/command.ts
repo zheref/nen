@@ -111,18 +111,29 @@ usage:
       'origin' naming --source on the SAME HOST as the consumer's own
       origin; tag --ref present with HEAD at its commit; nothing modified,
       untracked or ignored (whatever status.showUntrackedFiles says) and no
-      file marked assume-unchanged or skip-worktree. Every git call drops
-      inherited GIT_DIR-style redirects and GIT_CONFIG_* injections and runs
-      with optional locks off, so not even the index is rewritten. nen
-      fetches nothing and moves no checkout.
+      file marked assume-unchanged or skip-worktree. Every git call removes
+      GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY,
+      GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR, GIT_NAMESPACE,
+      GIT_CEILING_DIRECTORIES, GIT_DISCOVERY_ACROSS_FILESYSTEM,
+      GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_CONFIG_GLOBAL,
+      GIT_CONFIG_SYSTEM, GIT_CONFIG_NOSYSTEM and every
+      GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> from its environment; sets
+      GIT_OPTIONAL_LOCKS=0 (not even the index is rewritten) and
+      GIT_NO_REPLACE_OBJECTS=1; and passes -c core.fsmonitor=false
+      -c core.untrackedCache=false -c core.trustctime=true
+      -c core.checkStat=default. The host compare is literal: an ssh host
+      alias (a Host entry in ~/.ssh/config) is not the host it stands for
+      and fails as wrong-host. nen fetches nothing and moves no checkout.
       Prints the path, how it was resolved (every step, the passed-over ones
       included) and what was verified; --json carries the same as
       { contract, ok, source, ref, path, resolvedFrom, steps, verified,
       failure }. Exit 1, with failure.code naming the reason (unresolvable,
       bad-template, env-not-absolute, not-found, not-a-checkout,
       not-checkout-root, no-origin, wrong-source, no-consumer-origin,
-      wrong-host, tag-missing, off-pin, dirty, git-unavailable); exit 2 on an omitted --repo, an empty flag, or no pin
-      to resolve source/ref from.
+      wrong-host, tag-missing, off-pin, dirty, git-unavailable); exit 2 on
+      an omitted --repo, an empty or foreign flag, no pin to resolve
+      source/ref from, or a malformed nen/repos.json. A usage error (exit 2)
+      carries no --json document: its refusal is on stderr alone.
 
   nen canon resolve --repo <path> --target <owner/name>
                     --always-load <path,path,...> --stack-dir <dir>
@@ -457,8 +468,17 @@ function checkoutVerb(context: CommandContext): number {
     "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "scenario", "surfaces", "not-mirrored", "markdown-out", "dry-run",
   ]);
   const root = assertRepoRoot({ repoFlag });
-  const { source, ref } = resolvePin(context, root);
-  const resolution = resolveCheckout(context, root, source, ref);
+  let resolution: CheckoutResolution;
+  try {
+    const { source, ref } = resolvePin(context, root);
+    resolution = resolveCheckout(context, root, source, ref);
+  } catch (error) {
+    // A malformed registry is a question never asked: exit 2 with the
+    // loader's pointer, as on 'mirror' (Nobunaga R5). A usage error carries no
+    // --json document -- there is no source or ref to fill one with.
+    if (error instanceof SchemaError) throw new VerbUsageError(error.message);
+    throw error;
+  }
   emit(context.io, context.json, checkoutDocument(resolution), checkoutLines(resolution));
   if (resolution.failure !== null) {
     context.io.err(`nen: ${resolution.failure.code}: ${resolution.failure.message}`);

@@ -8,7 +8,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { ToolCheckout } from "../schema/repos.js";
-import { checkoutLines, expandCheckoutTemplate, remoteHost, resolveCanonCheckout, verificationGitEnv, verifyCanonCheckout } from "./checkout.js";
+import { checkoutLines, expandCheckoutTemplate, remoteHost, resolveCanonCheckout, VERIFICATION_CONFIG, verificationGitEnv, verifyCanonCheckout } from "./checkout.js";
+
+/** The prefix every verification git call carries: the R2 overrides, then `-C`. */
+const PREFIX = `git ${VERIFICATION_CONFIG.join(" ")} -C`;
 
 const SOURCE = "owner/handbooks";
 const REF = "v1.2.0";
@@ -38,8 +41,8 @@ function gitFor(
     ...over,
   };
   return [
-    ...Object.entries(answers).map(([args, result]): ScriptedCall => ({ match: `git -C ${path} ${args}`, result })),
-    { match: `git -C ${consumer} remote get-url origin`, result: consumerOrigin },
+    ...Object.entries(answers).map(([args, result]): ScriptedCall => ({ match: `${PREFIX} ${path} ${args}`, result })),
+    { match: `${PREFIX} ${consumer} remote get-url origin`, result: consumerOrigin },
   ];
 }
 
@@ -243,7 +246,7 @@ describe("Nobunaga round 1 -- the fail-open shapes, scripted", () => {
 
   it("N2/N7: every git call drops the redirect variables, every GIT_CONFIG_KEY_/VALUE_ pair, and disables optional locks", () => {
     const env = verificationGitEnv({ GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: "/x", GIT_CONFIG_KEY_ZZ: "kept", PATH: "/bin" });
-    expect(env).toMatchObject({ GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_COMMON_DIR: undefined, GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: undefined, GIT_CONFIG_KEY_0: undefined, GIT_CONFIG_VALUE_0: undefined, GIT_OPTIONAL_LOCKS: "0" });
+    expect(env).toMatchObject({ GIT_NO_REPLACE_OBJECTS: "1", GIT_CONFIG_GLOBAL: undefined, GIT_CONFIG_SYSTEM: undefined, GIT_CONFIG_NOSYSTEM: undefined, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined, GIT_COMMON_DIR: undefined, GIT_CONFIG_PARAMETERS: undefined, GIT_CONFIG_COUNT: undefined, GIT_CONFIG_KEY_0: undefined, GIT_CONFIG_VALUE_0: undefined, GIT_OPTIONAL_LOCKS: "0" });
     expect(Object.keys(env)).toEqual(expect.arrayContaining(["GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM"]));
     expect("PATH" in env).toBe(false);
     expect("GIT_CONFIG_KEY_ZZ" in env).toBe(false);
@@ -255,5 +258,15 @@ describe("Nobunaga round 1 -- the fail-open shapes, scripted", () => {
       expect(call.env).toMatchObject({ GIT_DIR: undefined, GIT_OPTIONAL_LOCKS: "0" });
       expect("GIT_DIR" in (call.env ?? {})).toBe(true);
     }
+  });
+});
+
+describe("Nobunaga round 2 -- the overrides every verification git call carries", () => {
+  it("R2: every call carries the four -c overrides ahead of -C", () => {
+    expect(VERIFICATION_CONFIG).toEqual(["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.trustctime=true", "-c", "core.checkStat=default"]);
+    const path = dir();
+    const seams = new ScriptedSeams(gitFor(path));
+    verifyCanonCheckout(seams, path, SOURCE, REF, CONSUMER);
+    for (const call of seams.calls) expect(call.args.slice(0, VERIFICATION_CONFIG.length + 1)).toEqual([...VERIFICATION_CONFIG, "-C"]);
   });
 });

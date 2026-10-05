@@ -14,7 +14,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -305,5 +305,34 @@ describe.skipIf(!HAVE_GIT)("Nobunaga round 1 -- the git shapes that verified whe
     const before = statSync(index).mtimeMs;
     expect(await verdict(canon)).toMatchObject({ ok: true });
     expect(statSync(index).mtimeMs).toBe(before);
+  });
+});
+
+describe.skipIf(!HAVE_GIT)("Nobunaga round 2 -- objects and hooks that lie about the tree", () => {
+  it("R1: a replace ref swapping the tag's commit for an EVIL one does not make the modified tree verify", async () => {
+    const canon = freshCanon();
+    const tagCommit = git(canon, ["rev-parse", "v1.2.0^{commit}"]);
+    writeFileSync(join(canon, "handbooks", "stacks", "scenario-x", "rules", "99-injected.md"), "# injected\n");
+    git(canon, ["add", "-A"]);
+    const evil = git(canon, ["commit-tree", git(canon, ["write-tree"]), "-m", "EVIL"]);
+    git(canon, ["replace", tagCommit, evil]);
+    // Git itself, replace objects honoured, calls this tree clean.
+    expect(git(canon, ["status", "--porcelain"])).toBe("");
+    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty", message: expect.stringMatching(/99-injected\.md/) as unknown } });
+  });
+
+  it.skipIf(process.platform === "win32")("R2: a v2 fsmonitor hook answering 'nothing changed' does not hide a tracked edit", async () => {
+    const canon = freshCanon();
+    const hook = join(base, `fsmonitor-${fresh}.sh`);
+    writeFileSync(hook, "#!/bin/sh\nprintf 'tok\\0'\n");
+    chmodSync(hook, 0o755);
+    git(canon, ["config", "core.fsmonitor", hook]);
+    git(canon, ["config", "core.fsmonitorHookVersion", "2"]);
+    git(canon, ["status", "--porcelain"]);
+    git(canon, ["status", "--porcelain"]);
+    writeFileSync(join(canon, "handbooks", "stacks", "scenario-x", "rules", "01-a.md"), "# A\n\nHello {{EVIL}}.\n");
+    // Git itself, trusting the hook, calls this tree clean.
+    expect(git(canon, ["status", "--porcelain"])).toBe("");
+    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty", message: expect.stringMatching(/M handbooks\/stacks\/scenario-x\/rules\/01-a\.md/) as unknown } });
   });
 });
