@@ -1,0 +1,25 @@
+{
+  "$comment": "A consumer that declares one taxonomy label correctly, one with a stale colour, and one foreign key.",
+  "labels": [
+    {
+      "color": "d73a4a",
+      "description": "Something isn't working",
+      "name": "bug"
+    },
+    {
+      "color": "1d76db",
+      "description": "Needs alpha",
+      "name": "lang/alpha"
+    },
+    {
+      "color": "ffffff",
+      "description": "Building the thing",
+      "name": "job/build"
+    },
+    {
+      "color": "1d76db",
+      "description": "Not in the taxonomy",
+      "name": "lang/zeta"
+    }
+  ]
+}

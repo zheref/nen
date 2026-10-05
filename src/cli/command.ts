@@ -59,11 +59,12 @@ export interface Command {
    */
   readonly hints?: Readonly<Record<string, string>>;
   /**
-   * A `Promise<number>` is allowed because ONE subcommand of ONE family --
-   * `nen pr ready` (../verbs/pr_ready.ts) -- reads GitHub over the network and
-   * there is no synchronous way to do that. Every other family stays
-   * synchronous under the hood (spawnSync, readFileSync); ../index.ts's
-   * `runFamily` awaits either return the same way.
+   * A `Promise<number>` is allowed because a family that reads GitHub over the
+   * network -- `nen pr ready` (../verbs/pr_ready.ts), and `nen watch until
+   * --pr`, which polls that same read (zheref/nen#264) -- has no synchronous
+   * way to do that. Many families stay synchronous under the hood
+   * (spawnSync, readFileSync); ../index.ts's `runFamily` awaits either return
+   * the same way.
    */
   run(context: CommandContext): number | Promise<number>;
 }

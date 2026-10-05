@@ -816,6 +816,7 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
   const GATED_BASE: Readonly<Record<string, string>> = {
     "canon mirror check": "nen canon mirror check --rules-dir r",
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
+    "classify install": "nen classify install --taxonomy t.json --repo .",
     "epic next-wave": "nen epic next-wave --body-file b.md",
     "runner plan": "nen runner plan --target o/r --pool p --machine-code NZ --count 1",
     "shu detect": "nen shu detect",

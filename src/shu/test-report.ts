@@ -55,6 +55,7 @@ import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 // formats names a suite with the absolute path of the test file -- and a second
 // copy of that decision is a second place for it to drift.
 import { relativiseName } from "./coverage.js";
+import { recordCapture } from "./capture-provenance.js";
 import { openDeclaration } from "./declaration.js";
 import { ShuRefusal } from "./exit.js";
 import { renderInvocation } from "./render.js";
@@ -283,18 +284,28 @@ export async function runTestReport(
 
   let exitCode: number;
   try {
-    exitCode = await runVerb(context, repoRoot, {
-      verb: SOURCE_VERB,
-      lane: options.lane,
-      dryRun: options.dryRun,
-      // NEITHER FLAG BELONGS TO THIS VERB. `test` takes no destination and has
-      // no `--run` gate -- ./command.ts's per-subcommand flag table refuses
-      // both on it -- and the executor reads them only for the verbs that do.
-      target: null,
-      run: false,
-      sink,
-      effort: options.effort ?? null,
-    });
+    // The SAME `test` row `nen shu test` runs, so the same capture rule
+    // applies: a row declaring the lane's coverage reports records their
+    // provenance (zheref/nen#250, ./capture-provenance.ts).
+    exitCode = await recordCapture(
+      context,
+      repoRoot,
+      { lane: options.lane, verb: "test", recordAs: "test-report", dryRun: options.dryRun },
+      () =>
+        runVerb(context, repoRoot, {
+          verb: SOURCE_VERB,
+          lane: options.lane,
+          dryRun: options.dryRun,
+          // NEITHER FLAG BELONGS TO THIS VERB. `test` takes no destination and
+          // has no `--run` gate -- ./command.ts's per-subcommand flag table
+          // refuses both on it -- and the executor reads them only for the
+          // verbs that do.
+          target: null,
+          run: false,
+          sink,
+          effort: options.effort ?? null,
+        }),
+    );
   } catch (error) {
     // A REFUSAL THAT ALREADY HANDED OVER A REPORT STILL PRINTS IT: ./run.ts's
     // spawn-failure path (exit 5) emits the report and then throws, and with

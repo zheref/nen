@@ -76,6 +76,7 @@ import {
   type Conjunct,
   type ConjunctId,
   type ReadyEvaluation,
+  type Settlement,
 } from "../gates/ready.js";
 import {
   resolveDeclaredExclusions,
@@ -87,7 +88,7 @@ import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state
 import { assertRepoRoot } from "../repo/root.js";
 import { SchemaError } from "../schema/errors.js";
 import { GIT, spawnRunner } from "../seam/exec.js";
-import { safePattern } from "../schema/pattern.js";
+import { exactLoginPattern } from "../schema/pattern.js";
 import {
   parseGateIdentities,
   type GateIdentities,
@@ -127,7 +128,9 @@ export const PR_READY_FLAGS = {
   // `--exclude-check` REPEATS (zheref/nen#243): one occurrence per name is the
   // one spelling that can carry a check name the comma-joined form cannot --
   // see ../pr/excludecheck.ts for the whole grammar.
-  lists: ["exclude-check"],
+  // `--reviewer-login <name>=<login>` REPEATS too (zheref/nen#264): one exact
+  // login per occurrence, read only on the --reviewers identity path.
+  lists: ["exclude-check", "reviewer-login"],
   booleans: ["explain"],
 } as const;
 
@@ -811,10 +814,14 @@ export class IdentityError extends Error {}
 export function identitiesFromFlags(
   reviewers: readonly string[],
   approvers: readonly string[],
+  logins: ReadonlyMap<string, readonly string[]> = new Map(),
 ): GateIdentities {
   const list: ReviewerIdentity[] = reviewers.map((name): ReviewerIdentity => ({
     name,
-    loginPattern: safePattern(name),
+    // The WHOLE login, never a substring (Feitan F1 on zheref/nen#264): the
+    // name itself, or -- when --reviewer-login states them -- exactly those
+    // logins and nothing else. Nothing is built in.
+    loginPattern: exactLoginPattern(logins.get(name) ?? name),
     reviewCheckPattern: null,
     roundCheckPattern: null,
     enrolmentCheckPattern: null,
@@ -919,6 +926,7 @@ export function resolveIdentities(
   gatesFlag: string | undefined,
   reviewers: readonly string[],
   approvers: readonly string[],
+  logins: ReadonlyMap<string, readonly string[]> = new Map(),
 ): ResolvedIdentities {
   if (gatesFlag !== undefined) {
     // `--gates ""` FIRST, before any resolution. An empty string resolves to
@@ -1027,7 +1035,7 @@ export function resolveIdentities(
     return { identities: parseGateIdentities(path, value), source: "schema", path };
   }
   if (reviewers.length > 0) {
-    return { identities: identitiesFromFlags(reviewers, approvers), source: "flags", path: null };
+    return { identities: identitiesFromFlags(reviewers, approvers, logins), source: "flags", path: null };
   }
   throw new IdentityError(
     `no reviewer identities. This gate never falls back to a built-in reviewer set: a binary that guessed the reviewers would judge this repository against another one's and report success. Give it one of: --gates <path>, a '${GATES_FILE}' in the target repository (looked for at '${inRepo.canonical.path}'${
@@ -1084,7 +1092,7 @@ export function localHeadWarning(report: ReadyReport): string | null {
  * declared exclusion, its reason verbatim, whether it was honoured, and which
  * checks it removed -- so a verdict a declaration widened says so on the page.
  */
-function renderDeclaredExclusions(report: ReadyReport): string[] {
+export function renderDeclaredExclusions(report: ReadyReport): string[] {
   return report.meta.declaredExclusions.map((exclusion): string => {
     const named = exclusion.match === "glob" ? `glob '${exclusion.name}'` : `'${exclusion.name}'`;
     const applied = exclusion.status === "honoured";
@@ -1276,16 +1284,46 @@ export async function prReady(
 
   const json = input.booleans.has("json");
   const explain = input.booleans.has("explain");
+  const read = await readReady(typedRef, input, deps);
+  switch (read.kind) {
+    case "usage":
+      io.err(`${PROGRAM}: ${read.message}`);
+      return 2;
+    case "head-mismatch":
+      return emitHeadMismatch(io, json, read.report);
+    case "verdict":
+      return emit(io, json, explain, read.report);
+  }
+}
+
+/**
+ * What one `pr ready` read decided, before anything is printed.
+ *
+ * `usage` is exit 2 (the message carries no program prefix); `head-mismatch`
+ * is `--require-head`'s no-verdict document; `verdict` is the report, decided
+ * or unevaluated, plus -- on a decided one only -- the evaluation's
+ * `settlement` facts (../gates/ready.ts). Split out of `prReady` for
+ * `nen watch until --pr` (zheref/nen#264), which polls THIS function so a
+ * watch and a `pr ready` asked of the same snapshot can never disagree.
+ */
+export type ReadyRead =
+  | { readonly kind: "usage"; readonly message: string }
+  | { readonly kind: "head-mismatch"; readonly report: HeadMismatchReport }
+  | { readonly kind: "verdict"; readonly report: ReadyReport; readonly settlement: Settlement | null };
+
+export async function readReady(
+  typedRef: string,
+  input: PrReadyInput,
+  deps: PrReadyDeps = defaultDeps,
+): Promise<ReadyRead> {
   const policyText = input.values["round-policy"] ?? "bounded";
   if (policyText !== "strict" && policyText !== "bounded") {
-    io.err(`${PROGRAM}: --round-policy must be strict or bounded (got '${policyText}').`);
-    return 2;
+    return { kind: "usage", message: `--round-policy must be strict or bounded (got '${policyText}').` };
   }
   const policy: RoundPolicy = policyText;
   const excludeRun = input.values["exclude-run"] ?? "";
   if (excludeRun !== "" && !/^[0-9]+$/.test(excludeRun)) {
-    io.err(`${PROGRAM}: --exclude-run must be a numeric Actions run id (got '${excludeRun}').`);
-    return 2;
+    return { kind: "usage", message: `--exclude-run must be a numeric Actions run id (got '${excludeRun}').` };
   }
   // `--exclude-check <name>` (name-based exclusion, zheref/nen#216), REPEATABLE
   // and bracket-aware since zheref/nen#243: each occurrence is split on the
@@ -1310,8 +1348,7 @@ export async function prReady(
     excludeCheckNames = parseExcludeCheckNames(excludeCheckOccurrences);
   } catch (error) {
     if (error instanceof ExcludeCheckError) {
-      io.err(`${PROGRAM}: ${error.message}`);
-      return 2;
+      return { kind: "usage", message: error.message };
     }
     throw error;
   }
@@ -1330,12 +1367,19 @@ export async function prReady(
   // contract, unchanged).
   const approversFlag = input.values["approvers"];
   const approverNames = approversFlag === undefined ? reviewerNames : splitCsv(approversFlag);
+  // `--reviewer-login <name>=<login>` (zheref/nen#264): the EXACT login a
+  // `--reviewers` name posts under, since a typed name is now the whole login
+  // and nothing about which login a bot uses is built in (§3).
+  let reviewerLogins: ReadonlyMap<string, readonly string[]>;
+  try {
+    reviewerLogins = parseReviewerLogins(input.lists?.["reviewer-login"] ?? []);
+  } catch (error) {
+    if (error instanceof ReviewerLoginError) return { kind: "usage", message: error.message };
+    throw error;
+  }
   const requiredHead = input.values["require-head"];
   if (requiredHead !== undefined && !SHA_PREFIX.test(requiredHead)) {
-    io.err(
-      `${PROGRAM}: --require-head takes a commit SHA of 7 to 40 hex digits (got '${requiredHead}').`,
-    );
-    return 2;
+    return { kind: "usage", message: `--require-head takes a commit SHA of 7 to 40 hex digits (got '${requiredHead}').` };
   }
 
   let ref: ResolvedRef;
@@ -1349,13 +1393,13 @@ export async function prReady(
       input.values["gates"],
       reviewerNames,
       approverNames,
+      reviewerLogins,
     );
   } catch (error) {
     // A malformed ref, a missing registry, a missing identity source: all are
     // "you asked the wrong question", not "the answer is not-ready". Reporting
     // them as a verdict would put a readiness claim on a PR nobody looked at.
-    io.err(`${PROGRAM}: ${error instanceof Error ? error.message : String(error)}`);
-    return 2;
+    return { kind: "usage", message: `${error instanceof Error ? error.message : String(error)}` };
   }
 
   // `round_policy.stallMinutes` (zheref/nen#214 item 2): a repository-declared
@@ -1369,19 +1413,34 @@ export async function prReady(
   // `default_approvers` decides and the flag is silently unreachable code with
   // no diagnostic. Loud rather than silent: a caller who typed `--approvers` and
   // sees it ignored needs to know the identity source won, not guess.
-  const flagWarnings: string[] =
-    identities.source === "schema" && approversFlag !== undefined
+  const flagWarnings: string[] = [
+    ...(identities.source === "schema" && approversFlag !== undefined
       ? [
           `--approvers is read only when reviewer identities come from --reviewers; identities came from '${identities.path ?? "?"}' instead, so --approvers was ignored.`,
         ]
-      : [];
+      : []),
+    // The same loudness for --reviewer-login: a file's `login_pattern` decides.
+    ...(identities.source === "schema" && reviewerLogins.size > 0
+      ? [
+          `--reviewer-login is read only when reviewer identities come from --reviewers; identities came from '${identities.path ?? "?"}' instead, so --reviewer-login was ignored (declare login_pattern there).`,
+        ]
+      : []),
+  ];
+  // On the flags path a login for a name --reviewers never named is a typo,
+  // and silently ignoring it would leave that reviewer matching only its name.
+  if (identities.source === "flags") {
+    const unknown = [...reviewerLogins.keys()].filter((name): boolean => !reviewerNames.includes(name));
+    if (unknown.length > 0) {
+      return {
+        kind: "usage",
+        message: `--reviewer-login names ${unknown.map((name): string => `'${name}'`).join(", ")}, which --reviewers does not (got --reviewers '${reviewersCsv}').`,
+      };
+    }
+  }
 
   const opened = deps.openSource(input.values["token-env"] ?? DEFAULT_TOKEN_ENV);
   if (!opened.ok) {
-    return emit(
-      io,
-      json,
-      explain,
+    return verdictOf(
       unevaluatedReport(
         ref,
         deps.now(),
@@ -1412,10 +1471,7 @@ export async function prReady(
   } catch (error) {
     // A network failure, a 403 from a token without checks:read, an
     // unauthenticated read: SKILL.md § 4's list, and its classification.
-    return emit(
-      io,
-      json,
-      explain,
+    return verdictOf(
       unevaluatedReport(
         ref,
         deps.now(),
@@ -1433,10 +1489,7 @@ export async function prReady(
   }
 
   if (!fetched.ok) {
-    return emit(
-      io,
-      json,
-      explain,
+    return verdictOf(
       unevaluatedReport(
         ref,
         deps.now(),
@@ -1466,7 +1519,7 @@ export async function prReady(
     requiredHead !== undefined &&
     (githubHead === "" || !githubHead.toLowerCase().startsWith(requiredHead.toLowerCase()))
   ) {
-    return emitHeadMismatch(io, json, {
+    return { kind: "head-mismatch", report: {
       contract: HEAD_MISMATCH_CONTRACT,
       status: "head-mismatch",
       ref: ref.typed,
@@ -1480,7 +1533,7 @@ export async function prReady(
         "a commit GitHub does not hold as this pull request's head. If a push is in flight, ask again once it registers.",
       evaluatedAt: deps.now(),
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
-    });
+    } };
   }
 
   // ── the local tip, for the warning only ──────────────────────────────────
@@ -1563,12 +1616,17 @@ export async function prReady(
   // The mismatch warning rides in `meta.warnings` so it reaches EVERY output
   // mode -- `--json` included -- through the one channel each already renders.
   const mismatch = localHeadWarning(report);
-  return emit(
-    io,
-    json,
-    explain,
-    mismatch === null ? report : { ...report, meta: { ...report.meta, warnings: [...report.meta.warnings, mismatch] } },
-  );
+  return {
+    kind: "verdict",
+    report:
+      mismatch === null ? report : { ...report, meta: { ...report.meta, warnings: [...report.meta.warnings, mismatch] } },
+    settlement: evaluation.context.settlement,
+  };
+}
+
+/** An unevaluated report: GitHub was never read, so there is no settlement to carry. */
+function verdictOf(report: ReadyReport): ReadyRead {
+  return { kind: "verdict", report, settlement: null };
 }
 
 /**
@@ -1630,10 +1688,37 @@ function emitHeadMismatch(io: Io, json: boolean, report: HeadMismatchReport): nu
   if (json) {
     io.out(JSON.stringify(report, null, 2));
   } else {
-    io.out(`${report.repo}#${report.pr}: head-mismatch: required ${report.requiredHead}, GitHub's head is ${report.githubHead ?? "(unread)"}`);
-    io.err(`${PROGRAM}: ${report.message}`);
+    // GitHub's head is GitHub's string: plain at the human seam (zheref/nen#264, F2).
+    io.out(plainLine(`${report.repo}#${report.pr}: head-mismatch: required ${report.requiredHead}, GitHub's head is ${report.githubHead ?? "(unread)"}`));
+    io.err(plainLine(`${PROGRAM}: ${report.message}`));
   }
   return EXIT_HEAD_MISMATCH;
+}
+
+/** A malformed `--reviewer-login` occurrence (exit 2). */
+export class ReviewerLoginError extends Error {}
+
+/**
+ * `--reviewer-login <name>=<login>`, every occurrence, into name -> logins.
+ * Split at the FIRST `=` (a login never contains one); both halves trimmed and
+ * required. Repeating a name adds an alternative login for it.
+ */
+export function parseReviewerLogins(occurrences: readonly string[]): ReadonlyMap<string, readonly string[]> {
+  const logins = new Map<string, string[]>();
+  for (const occurrence of occurrences) {
+    const at = occurrence.indexOf("=");
+    const name = at < 0 ? "" : occurrence.slice(0, at).trim();
+    const login = at < 0 ? "" : occurrence.slice(at + 1).trim();
+    if (name === "" || login === "") {
+      throw new ReviewerLoginError(
+        `--reviewer-login takes <name>=<login>, both non-empty (got '${occurrence}'), e.g. --reviewer-login reviewer=reviewer-app[bot].`,
+      );
+    }
+    const known = logins.get(name);
+    if (known === undefined) logins.set(name, [login]);
+    else if (!known.includes(login)) known.push(login);
+  }
+  return logins;
 }
 
 function splitCsv(csv: string): string[] {
@@ -1742,7 +1827,7 @@ function emit(io: Io, json: boolean, explain: boolean, report: ReadyReport): num
     // the head-mismatch one included.
     // Plain at the boundary, as `renderExplain` is (Copilot on zheref/nen#359).
     io.out(plainLine(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`));
-    io.out(judgedHeadLine(report));
+    io.out(plainLine(judgedHeadLine(report)));
     // What a DECLARATION removed from CON-32(a), on the default output itself
     // (zheref/nen#249, Feitan F2): no widened verdict without its ruling.
     for (const notice of declarationNotices(report)) io.out(plainLine(`  ${notice}`));
