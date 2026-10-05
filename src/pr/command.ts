@@ -218,16 +218,20 @@ body-check:
   read): each of its headings becomes a required heading at the same level,
   and each must have content under it -- a heading with none is EMPTY. The
   verdict line names the template and where it was read, and --json carries
-  'source' { kind: shipped|derived, path, ref }. Two default templates, or
-  several directory templates and no default, is AMBIGUOUS; no template, an
-  unreadable one, one outside the repository, or one with no headings is a
-  refusal (exit 2) -- never a silent skip. Bootstrap: docs/USAGE.md,
-  "Bootstrapping a body-check requirements file".
+  'source' { kind: shipped|derived, path, ref, commit }. Two default
+  templates, or several directory templates and no default, is AMBIGUOUS;
+  no template, an unreadable one, one outside the repository, or one with
+  no headings is a refusal (exit 2) -- never a silent skip. Bootstrap:
+  docs/USAGE.md, "Bootstrapping a body-check requirements file".
   --base <ref>                Read the template from git at <ref>, never the
                               working tree. A PR's head can edit its own
-                              template, so a gate passes the base. An
-                              unresolvable ref, or one starting with '-',
-                              exits 2. Only with a derived set.
+                              template, so a gate passes the base. A ref
+                              that is not one commit (a range included), or
+                              one starting with '-', exits 2; so does a
+                              template that is a symlink at <ref>. The
+                              verdict names the ref and its short oid, and
+                              'source.commit' the full oid. Only with a
+                              derived set.
 
 fetch:
   One typed snapshot: head SHA, mergeability, the check rollup, reviews
@@ -606,11 +610,14 @@ function staleness(context: CommandContext): number {
 // verdict can tell a shipped file from a set nen derived, without the
 // transcript. `path` is the caller's own `--requirements-from` value when
 // shipped, and the template's repo-relative path when derived; `ref` is the
-// `--base` the template was read at, or null (the working tree, or shipped).
+// `--base` the template was read at, or null (the working tree, or shipped),
+// and `commit` the full oid that ref resolved to.
 export interface RequirementSource {
   readonly kind: "shipped" | "derived";
   readonly path: string;
   readonly ref: string | null;
+  /** The full commit oid `ref` resolved to; null for the working tree and for shipped. */
+  readonly commit: string | null;
 }
 
 const BODY_CHECK_BOOTSTRAP =
@@ -638,7 +645,7 @@ function derivedRequirements(reader: TemplateReader, root: string): { requiremen
       `no --requirements-from was given and the pull-request template '${discovery.path}' ${where} has no headings to derive requirements from. ${BODY_CHECK_BOOTSTRAP}`,
     );
   }
-  return { requirements, source: { kind: "derived", path: discovery.path, ref: reader.ref } };
+  return { requirements, source: { kind: "derived", path: discovery.path, ref: reader.ref, commit: reader.commit } };
 }
 
 function bodyCheck(context: CommandContext): number {
@@ -662,7 +669,7 @@ function bodyCheck(context: CommandContext): number {
   // A SHIPPED FILE: exactly the check it always was, plus the source field.
   if (requirementsPath !== undefined) {
     const report = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd));
-    const source: RequirementSource = { kind: "shipped", path: requirementsPath, ref: null };
+    const source: RequirementSource = { kind: "shipped", path: requirementsPath, ref: null, commit: null };
     const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
     // A VERDICT LINE ALWAYS PRINTS (review finding): zero output must never be a
     // passing result a caller's script can mistake for "nothing to report".

@@ -5,7 +5,15 @@ import { describe, expect, it } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { checkDerivedBody, deriveRequirements, discoverTemplate, readLines, stripComments, workingTreeReader } from "./template.js";
+import {
+  checkDerivedBody,
+  deriveRequirements,
+  discoverTemplate,
+  isContained,
+  readLines,
+  stripComments,
+  workingTreeReader,
+} from "./template.js";
 
 /** A throwaway repository root holding exactly `files` (repo-relative path -> contents). */
 function repo(files: Record<string, string>): string {
@@ -240,8 +248,74 @@ describe("checkDerivedBody", () => {
 });
 
 describe("readLines", () => {
-  it("classifies an empty ATX heading as blank, not as a heading", () => {
-    expect(readLines("##\n#hashtag\n")).toEqual([{ kind: "blank" }, { kind: "content", text: "#hashtag" }, { kind: "blank" }]);
+  // R9: a bare `##` is a heading with no title -- a section boundary.
+  it("classifies a bare ATX heading as an untitled heading, and '#hashtag' as content", () => {
+    expect(readLines("##\n#hashtag\n")).toEqual([
+      { kind: "heading", level: 2, text: "##", title: "", atx: true },
+      { kind: "content", text: "#hashtag" },
+      { kind: "blank" },
+    ]);
+  });
+
+  // R3.
+  it("reads thematic breaks and HTML-tag-only lines as blank, and a Setext underline as a heading boundary", () => {
+    expect(readLines("***\n- - -\n___\n<details>\n</details> <br/>\nTitle\n===\n")).toEqual([
+      { kind: "blank" },
+      { kind: "blank" },
+      { kind: "blank" },
+      { kind: "blank" },
+      { kind: "blank" },
+      { kind: "heading", level: 1, text: "Title", title: "Title", atx: false },
+      { kind: "blank" },
+      { kind: "blank" },
+    ]);
+  });
+});
+
+describe("the section rules (round 2)", () => {
+  // R9: a bare `##` ends the section above it.
+  it("a bare '##' is a section boundary, so content after it does not fill the heading above", () => {
+    expect(statuses("## A\n##\nafter the boundary\n## B\ny\n", "## A\n## B\n")).toEqual(["empty ## A", "ok ## B"]);
+  });
+
+  // R3: what a body puts under a heading that is not content.
+  it("a thematic break, an HTML-tag-only line, or a Setext title is not content", () => {
+    const template = "## Summary\n## Next\n";
+    expect(statuses("## Summary\n---\n## Next\nx\n", template)).toEqual(["empty ## Summary", "ok ## Next"]);
+    expect(statuses("## Summary\n<details></details>\n## Next\nx\n", template)).toEqual(["empty ## Summary", "ok ## Next"]);
+    expect(statuses("## Summary\nA title\n---\n## Next\nx\n", template)).toEqual(["empty ## Summary", "ok ## Next"]);
+    // A tag with words inside it is content.
+    expect(statuses("## Summary\n<summary>Why</summary>\n## Next\nx\n", template)).toEqual(["ok ## Summary", "ok ## Next"]);
+  });
+
+  it("a Setext heading in the template is not a requirement", () => {
+    expect(names("Title\n=====\n## Summary\n")).toEqual(["## Summary"]);
+  });
+
+  // R4.
+  it("a placeholder line differing only in letter case or whitespace is still the template's own -- EMPTY", () => {
+    expect(statuses("## A\ndescribe the   CHANGE.\n", "## A\nDescribe\tthe change.\n")).toEqual(["empty ## A"]);
+  });
+
+  // R5.
+  it("text after a '-->' closing a comment from an earlier line is never a heading", () => {
+    expect(names("## A\n<!--\nnote --> ## Hidden\n")).toEqual(["## A"]);
+    expect(statuses("<!--\nx --> ## A\nsteps\n", "## A\n")).toEqual(["missing ## A"]);
+  });
+});
+
+describe("isContained (R8)", () => {
+  it("is exact on POSIX", () => {
+    expect(isContained("/repo", "/repo/.github/t.md", "linux")).toBe(true);
+    expect(isContained("/repo", "/Repo/.github/t.md", "linux")).toBe(false);
+    expect(isContained("/repo", "/repository/t.md", "linux")).toBe(false);
+  });
+
+  it("folds case and separators on win32", () => {
+    expect(isContained("C:\\Users\\Me\\Repo", "c:\\users\\me\\repo\\.github\\t.md", "win32")).toBe(true);
+    expect(isContained("C:\\Users\\Me\\Repo", "C:/Users/Me/Repo/.github/t.md", "win32")).toBe(true);
+    expect(isContained("C:\\Users\\Me\\Repo", "C:\\Users\\Me\\Repository\\t.md", "win32")).toBe(false);
+    expect(isContained("C:\\Users\\Me\\Repo", "D:\\Users\\Me\\Repo\\t.md", "win32")).toBe(false);
   });
 });
 
@@ -252,6 +326,23 @@ describe("workingTreeReader -- reads refuse as usage errors (exit 2), never 1", 
     const root = repo({});
     mkdirSync(join(root, ".github"));
     symlinkSync(join(outside, "elsewhere.md"), join(root, ".github", "pull_request_template.md"));
+    const reader = workingTreeReader(root);
+    expect(discoverTemplate(reader)).toEqual({ kind: "found", path: ".github/pull_request_template.md" });
+    expect(() => reader.read(".github/pull_request_template.md")).toThrow(
+      expect.objectContaining({ name: "VerbUsageError", message: expect.stringMatching(/outside the repository root/) }),
+    );
+  });
+
+  // R8: a directory junction needs no symlink privilege on Windows; elsewhere
+  // node makes it a directory symlink. Skipped only if it cannot be created.
+  it("refuses a template reached through a directory junction pointing outside the root", (context) => {
+    const outside = repo({ "pull_request_template.md": "## Secret\n" });
+    const root = repo({});
+    try {
+      symlinkSync(outside, join(root, ".github"), "junction");
+    } catch {
+      context.skip();
+    }
     const reader = workingTreeReader(root);
     expect(discoverTemplate(reader)).toEqual({ kind: "found", path: ".github/pull_request_template.md" });
     expect(() => reader.read(".github/pull_request_template.md")).toThrow(

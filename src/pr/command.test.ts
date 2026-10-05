@@ -240,7 +240,7 @@ describe("nen pr body-check", () => {
     expect(JSON.parse(json.out.join("\n"))).toEqual({
       results: [{ name: "summary", pattern: "## Summary", satisfied: true }],
       ok: true,
-      source: { kind: "shipped", path: "req.json", ref: null },
+      source: { kind: "shipped", path: "req.json", ref: null, commit: null },
     });
   });
 
@@ -303,7 +303,7 @@ describe("nen pr body-check -- derived from the pull-request template (zheref/ne
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; source: unknown; results: unknown[] };
     expect(report.ok).toBe(true);
     expect(report.results).toHaveLength(2);
-    expect(report.source).toEqual({ kind: "derived", path: "docs/pull_request_template.txt", ref: null });
+    expect(report.source).toEqual({ kind: "derived", path: "docs/pull_request_template.txt", ref: null, commit: null });
   });
 
   it("reads the template under --repo, not the process directory", async () => {
@@ -382,11 +382,12 @@ describe("nen pr body-check -- derived from the pull-request template (zheref/ne
 // N7: --base reads the template from git at a ref, never the working tree.
 // REAL git, in a throwaway repository -- no network.
 describe("nen pr body-check --base <ref> (zheref/nen#239, against the real git)", () => {
-  function git(dir: string, ...args: string[]): void {
-    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], {
+  function git(dir: string, ...args: string[]): string {
+    return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], {
       cwd: dir,
-      stdio: "ignore",
-    });
+      encoding: "utf8",
+      env: { ...process.env, GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined },
+    }).trim();
   }
 
   function repoAtTwoRefs(): string {
@@ -406,10 +407,11 @@ describe("nen pr body-check --base <ref> (zheref/nen#239, against the real git)"
     const dir = repoAtTwoRefs();
     const tree = await capture(["pr", "body-check", "--body-from", "body.md"], dir, defaultSeams());
     expect(tree.code).toBe(0);
+    const commit = git(dir, "rev-parse", "trunk");
     const based = await capture(["pr", "body-check", "--body-from", "body.md", "--base", "trunk"], dir, defaultSeams());
     expect(based.code).toBe(1);
     expect(based.out).toEqual([
-      "1/2 requirement(s) satisfied (DERIVED from the pull-request template '.github/pull_request_template.md' at trunk; no --requirements-from given)",
+      `1/2 requirement(s) satisfied (DERIVED from the pull-request template '.github/pull_request_template.md' at trunk (${commit.slice(0, 7)}); no --requirements-from given)`,
       "ok  ## Summary",
       "MISSING  ## How to verify",
     ]);
@@ -418,6 +420,7 @@ describe("nen pr body-check --base <ref> (zheref/nen#239, against the real git)"
       kind: "derived",
       path: ".github/pull_request_template.md",
       ref: "trunk",
+      commit,
     });
   });
 
@@ -434,7 +437,8 @@ describe("nen pr body-check --base <ref> (zheref/nen#239, against the real git)"
     expect(result.err.join("\n")).toMatch(/no pull-request template was found under '.*' at trunk/);
   });
 
-  it("a symlink in the tree at the ref is never a template", async () => {
+  // R7: refused by name, never "none found".
+  it("a symlinked template at the ref is refused by name, never followed", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-pr-base-"));
     git(dir, "init", "-q", "-b", "trunk");
     writeFileSync(join(dir, "real.md"), "## Real\n");
@@ -444,14 +448,50 @@ describe("nen pr body-check --base <ref> (zheref/nen#239, against the real git)"
     writeFileSync(join(dir, "body.md"), "## Real\nx\n");
     const result = await capture(["pr", "body-check", "--body-from", "body.md", "--base", "trunk"], dir, defaultSeams());
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/no pull-request template was found/);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/the pull-request template 'pull_request_template\.md' is a symlink at trunk/);
+  });
+
+  // R1: a range is not a ref -- its tip must not be read as the base.
+  it("a range given as --base exits 2", async () => {
+    // `trunk..feat` names feat's own commit as its tip -- the head's edited
+    // template, which a range must never smuggle in as the base.
+    const dir = repoAtTwoRefs();
+    git(dir, "checkout", "-q", "-b", "feat");
+    git(dir, "commit", "-q", "-am", "head drops a section");
+    const result = await capture(["pr", "body-check", "--body-from", "body.md", "--base", "trunk..feat"], dir, defaultSeams());
+    expect(result.code).toBe(2);
+    expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/--base 'trunk\.\.feat' does not resolve to a single commit/);
+  });
+
+  // R2: an inherited GIT_DIR must not redirect the read to another repository.
+  it("an inherited GIT_DIR naming another repository is ignored", async () => {
+    const dir = repoAtTwoRefs();
+    const other = mkdtempSync(join(tmpdir(), "nen-pr-other-"));
+    git(other, "init", "-q", "-b", "trunk");
+    writeFileSync(join(other, "pull_request_template.md"), "## Summary\n");
+    git(other, "add", ".");
+    git(other, "commit", "-q", "-m", "other");
+    const saved = process.env["GIT_DIR"];
+    process.env["GIT_DIR"] = join(other, ".git");
+    try {
+      const result = await capture(["pr", "body-check", "--body-from", "body.md", "--base", "trunk"], dir, defaultSeams());
+      // Our base's template has two sections; the other repository's has one
+      // that this body fills. Reading the other one would exit 0.
+      expect(result.code).toBe(1);
+      expect(result.out[0]).toMatch(/'\.github\/pull_request_template\.md' at trunk/);
+    } finally {
+      if (saved === undefined) delete process.env["GIT_DIR"];
+      else process.env["GIT_DIR"] = saved;
+    }
   });
 
   it("an unresolvable ref exits 2", async () => {
     const dir = repoAtTwoRefs();
     const result = await capture(["pr", "body-check", "--body-from", "body.md", "--base", "no-such-ref"], dir, defaultSeams());
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/--base 'no-such-ref' does not resolve to a commit/);
+    expect(result.err.join("\n")).toMatch(/--base 'no-such-ref' does not resolve to a single commit/);
   });
 
   it("a ref beginning with '-' is refused before git sees it", async () => {
