@@ -482,6 +482,26 @@ describe("the committed-range readers (zheref/nen#337)", () => {
     ]);
   });
 
+  it("triageRange sizes and flags two colliding non-UTF-8 names apart, by raw key (Copilot on #379)", () => {
+    const record = (dst: string): Uint8Array => enc(`:100644 100644 ${Z} ${dst} A\u0000`);
+    const changes = parseRawChangesBytes(new Uint8Array([...record(oid("b")), 0x66, 0xff, 0, ...record(oid("s")), 0x66, 0xfe, 0]));
+    expect(changes.map((change) => change.entry.path)).toEqual(["f\uFFFD", "f\uFFFD"]);
+    const sizes = new Map([
+      [oid("b"), 5000],
+      [oid("s"), 10],
+    ]);
+    expect(triageRange(changes, changes, sizes, { largeBytes: 1000 }).flagged).toEqual([
+      { path: "f\uFFFD", reasons: ["large", "undecodable"] },
+      { path: "f\uFFFD", reasons: ["undecodable"] },
+    ]);
+    // And in the other order: the large one is still the one flagged large.
+    const reversed = [...changes].reverse();
+    expect(triageRange(reversed, reversed, sizes, { largeBytes: 1000 }).flagged).toEqual([
+      { path: "f\uFFFD", reasons: ["undecodable"] },
+      { path: "f\uFFFD", reasons: ["large", "undecodable"] },
+    ]);
+  });
+
   // round 2 N2: `.` does not match a line terminator, so `.*` let these pass.
   const terminated = ["n\nl.key", "cr\r.pem", "ls .pem", "ps .key", ".env.\nx", "credentials\r"];
 

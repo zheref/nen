@@ -349,6 +349,16 @@ describe.skipIf(!HAVE_GIT)("nen stage triage --range, against the real git (zher
     }
   });
 
+  it("refuses a real shallow clone at exit 2, even where a merged side branch would read clean (Copilot on #379)", async () => {
+    const shallow = join(root, "shallow");
+    mustGit(root, ["clone", "--quiet", "--depth", "2", "--no-single-branch", `file://${repo}`, shallow]);
+    expect(mustGit(shallow, ["rev-parse", "--is-shallow-repository"]).trim()).toBe("true");
+    const run = await triage(shallow, ["--range", "origin/main..origin/with-side"]);
+    expect(run.code).toBe(2);
+    expect(run.err.join("\n")).toMatch(/is a shallow clone -- fetch full history/);
+    expect(run.out).toEqual([]);
+  });
+
   it("sees an added gitlink when diff.ignoreSubmodules=all is configured (hanten N2)", async () => {
     mustGit(repo, ["config", "diff.ignoreSubmodules", "all"]);
     try {

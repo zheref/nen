@@ -3474,10 +3474,12 @@ base, `-- the range names no commits`, still exit 0 with `commits: 0` in
 `--json`. Range mode adds exit **2** for a range that is malformed (not
 `<base>..<head>`, an empty side, the three-dot form, a side beginning with `-`,
 refused before git sees it), a side that does not resolve to a commit, or two
-commits with no common ancestor — named as a **shallow clone** to fetch more
-history into when `git rev-parse --is-shallow-repository` says so — and exit
+commits with no common ancestor, or a **shallow clone** — refused when `git
+rev-parse --is-shallow-repository` says so, BEFORE the range is read, because at
+the shallow boundary git reads a commit as a root and a merged side branch's
+history would be cut off into a false clean; fetch full history first — and exit
 **1** when a git read fails (merge-base, the commit count, `git log`, `git
-diff`, `git cat-file`), naming the read. Two reasons exist only in range mode:
+diff`, `git cat-file`, or the shallow probe itself), naming the read. Two reasons exist only in range mode:
 `in-history` (the finding is not in the range's net change: added then deleted,
 renamed away, or changed and reverted) and `undecodable` (a name that is not
 UTF-8).

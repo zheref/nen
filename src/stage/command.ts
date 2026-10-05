@@ -103,9 +103,10 @@ text; read them from --json). Exits 1 only when something is flagged; an
 all-ignored tree is exit 0. With --range it also exits 2 for a range that is
 malformed (not <base>..<head>, an empty side, the three-dot form, a side
 beginning with '-'), a side that does not resolve to a commit, two commits
-with no common ancestor or a shallow clone missing the history -- never a fall
-back to the working copy -- and exits 1 when a git read fails (merge-base,
-commit count, log, diff or cat-file), naming the read.
+with no common ancestor, or a shallow clone (refused before the range is
+read, since its cut history could read clean) -- never a fall back to the
+working copy -- and exits 1 when a git read fails (merge-base,
+commit count, log, diff, cat-file, or the shallow probe), naming the read.
 
 stage list runs the SAME triage, with the same three flags, and prints its
 complement on stdout: every modified, added, renamed, deleted and untracked
@@ -234,7 +235,7 @@ function stdoutBytesOf(result: { stdout: string; stdoutBytes?: Uint8Array }): Ui
  * any commit touched, deletions and sizes over the net change (see
  * `triageRange`). NEVER FALLS BACK: a value that is not a range, a side that
  * begins with '-' or does not resolve to a commit, two commits with no common
- * ancestor and a shallow clone missing the history are each a usage error at
+ * ancestor and a shallow clone (refused up front) are each a usage error at
  * exit 2 naming what failed. `null` is a git read failure, already reported
  * with the read named.
  */
@@ -280,6 +281,20 @@ function readRangeAndTriage(
     return null;
   };
 
+  // A SHALLOW CLONE IS REFUSED BEFORE THE RANGE IS READ (Copilot round 1 on
+  // #379). At the shallow boundary git reads a commit whose parents were not
+  // fetched as a ROOT, so a merged side branch's history -- the secret added
+  // and removed there -- is silently cut off and the range reads clean. A
+  // merge base that happens to be present proves nothing about that, so the
+  // probe cannot wait for merge-base to fail.
+  const shallow = git(["rev-parse", "--is-shallow-repository"]);
+  if (shallow.code !== 0) return failed("whether the repository is shallow (git rev-parse)", shallow);
+  if (shallow.stdout.trim() === "true") {
+    throw new VerbUsageError(
+      `--range ${rawRange}: ${root} is a shallow clone -- fetch full history (git fetch --unshallow) and run again. Its history is cut at the shallow boundary, where git reads a commit as a root, so a range read here could miss commits and report clean. Nothing was triaged.`,
+    );
+  }
+
   const resolve = (side: "base" | "head", ref: string): string => {
     // `^{commit}` so a tree or blob id is refused rather than diffed.
     const result = git(["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]);
@@ -297,14 +312,7 @@ function readRangeAndTriage(
   const mb = git(["merge-base", baseSha, headSha]);
   const mergeBase = mb.stdout.trim();
   if (mb.code === 1 && mergeBase === "") {
-    // NO COMMON ANCESTOR -- or none VISIBLE (hanten N8): a shallow clone cut
-    // above the fork point answers exactly like two unrelated histories.
-    const shallow = git(["rev-parse", "--is-shallow-repository"]);
-    if (shallow.code === 0 && shallow.stdout.trim() === "true") {
-      throw new VerbUsageError(
-        `--range ${rawRange}: no common ancestor of '${range.base}' and '${range.head}' is in this repository, and it is a shallow clone -- fetch more history (git fetch --unshallow, or --deepen) and run again. Nothing was triaged.`,
-      );
-    }
+    // NO COMMON ANCESTOR. Not a shallow cut: that was refused above.
     throw new VerbUsageError(
       `--range ${rawRange}: '${range.base}' and '${range.head}' share no common ancestor, so the range names no commits. Nothing was triaged.`,
     );

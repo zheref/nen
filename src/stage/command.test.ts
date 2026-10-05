@@ -384,6 +384,7 @@ describe("nen stage triage --range -- every git read that can fail, through the 
   function script(overrides: Readonly<Record<string, ScriptedCall["result"]>> = {}): ScriptedCall[] {
     const calls: Record<string, ScriptedCall["result"]> = {
       [`${G} rev-parse --git-dir`]: { stdout: ".git\n" },
+      [`${G} rev-parse --is-shallow-repository`]: { stdout: "false\n" },
       [`${G} rev-parse --verify --quiet --end-of-options main^{commit}`]: { stdout: `${BASE}\n` },
       [`${G} rev-parse --verify --quiet --end-of-options topic^{commit}`]: { stdout: `${HEAD}\n` },
       [`${G} merge-base ${BASE} ${HEAD}`]: { stdout: `${MB}\n` },
@@ -447,26 +448,27 @@ describe("nen stage triage --range -- every git read that can fail, through the 
     expect(result.out.join("\n")).not.toContain("\r");
   });
 
-  it("names a shallow clone at exit 2 when the merge base is not in the repository (hanten N8)", async () => {
-    const result = await capture(
-      ["stage", "triage", "--range", "main..topic"],
-      [
-        ...script({ [`${G} merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
-        { match: `${G} rev-parse --is-shallow-repository`, result: { stdout: "true\n" } },
-      ],
-    );
-    expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/shallow clone -- fetch more history/);
+  it("refuses a shallow clone at exit 2 BEFORE reading the range: no ref, merge-base or log call (Copilot on #379)", async () => {
+    const seams = new ScriptedSeams(script({ [`${G} rev-parse --is-shallow-repository`]: { stdout: "true\n" } }));
+    const err: string[] = [];
+    const io: Io = { out: (): void => undefined, err: (line): void => void err.push(line) };
+    const code = await runFamily(stageCommand, ["stage", "triage", "--range", "main..topic"], BANKAI_REPO, false, io, seams);
+    expect(code).toBe(2);
+    expect(err.join("\n")).toMatch(/is a shallow clone -- fetch full history/);
+    expect(seams.calls.map((call) => call.args.slice(1, 3).join(" "))).toEqual(["rev-parse --git-dir", "rev-parse --is-shallow-repository"]);
   });
 
-  it("calls two complete histories unrelated at exit 2 when the clone is not shallow", async () => {
+  it("exits 1 naming the probe when the shallow probe itself fails", async () => {
     const result = await capture(
       ["stage", "triage", "--range", "main..topic"],
-      [
-        ...script({ [`${G} merge-base ${BASE} ${HEAD}`]: { code: 1 } }),
-        { match: `${G} rev-parse --is-shallow-repository`, result: { stdout: "false\n" } },
-      ],
+      script({ [`${G} rev-parse --is-shallow-repository`]: { code: 128, stderr: "fatal: boom" } }),
     );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not read whether the repository is shallow \(git rev-parse\)/);
+  });
+
+  it("calls two histories with no merge base unrelated at exit 2", async () => {
+    const result = await capture(["stage", "triage", "--range", "main..topic"], script({ [`${G} merge-base ${BASE} ${HEAD}`]: { code: 1 } }));
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/share no common ancestor/);
   });

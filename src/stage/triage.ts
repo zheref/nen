@@ -669,27 +669,21 @@ export function triageRange(
   const scopePrefixes = options.scopePrefixes ?? [];
   const binaryPaths = options.binaryPaths ?? new Set<string>();
 
-  const sizes = new Map<string, number>();
+  // KEYED ON RAW BYTES, NEVER ON THE DISPLAY PATH (Copilot round 1 on #379):
+  // two non-UTF-8 names can decode to the same lenient string, so a size or
+  // a reason looked up by `entry.path` could land on the wrong file. Each net
+  // change is triaged on its own, with its own size, and every extra reason
+  // is filed under `RawChange.key`; `entry.path` is only ever rendered.
   const headOid = new Map<string, string>();
-  for (const change of net) {
-    headOid.set(change.key, change.oid);
-    if (!measurableBlob(change)) continue;
-    const size = blobSizes.get(change.oid);
-    if (size !== undefined) sizes.set(change.entry.path, size);
-  }
-  const result = triageStage(
-    net.map((change): StatusEntry => change.entry),
-    { ...options, sizes },
-  );
+  for (const change of net) headOid.set(change.key, change.oid);
 
-  // Extra reasons per NET path, appended after triage's own.
   const extra = new Map<string, FlagReason[]>();
-  const add = (path: string, reason: FlagReason): void => {
-    const list = extra.get(path) ?? [];
+  const add = (key: string, reason: FlagReason): void => {
+    const list = extra.get(key) ?? [];
     if (!list.includes(reason)) list.push(reason);
-    extra.set(path, list);
+    extra.set(key, list);
   };
-  for (const change of net) if (change.entry.undecodable === true) add(change.entry.path, "undecodable");
+  for (const change of net) if (change.entry.undecodable === true) add(change.key, "undecodable");
 
   // History, per raw-byte key, first-seen order kept.
   interface Finding {
@@ -704,8 +698,8 @@ export function triageRange(
     const largeHere = size !== undefined && size >= largeBytes && change.oid !== headOid.get(change.key);
     if (inNet) {
       if (largeHere) {
-        add(change.entry.path, "large");
-        add(change.entry.path, "in-history");
+        add(change.key, "large");
+        add(change.key, "in-history");
       }
       continue;
     }
@@ -720,14 +714,17 @@ export function triageRange(
 
   const clean: string[] = [];
   const flagged: FlaggedFile[] = [];
-  for (const path of result.clean) {
-    const more = extra.get(path);
-    if (more === undefined) clean.push(path);
-    else flagged.push({ path, reasons: more });
-  }
-  for (const file of result.flagged) {
-    const more = (extra.get(file.path) ?? []).filter((reason): boolean => !file.reasons.includes(reason));
-    flagged.push(more.length === 0 ? file : { path: file.path, reasons: [...file.reasons, ...more] });
+  let ignored: readonly FlaggedFile[] = [];
+  for (const change of net) {
+    const size = measurableBlob(change) ? blobSizes.get(change.oid) : undefined;
+    const sizes = new Map<string, number>(size === undefined ? [] : [[change.entry.path, size]]);
+    const one = triageStage([change.entry], { ...options, sizes });
+    ignored = [...ignored, ...one.ignored];
+    const own = one.flagged[0]?.reasons ?? [];
+    const more = (extra.get(change.key) ?? []).filter((reason): boolean => !own.includes(reason));
+    const reasons = [...own, ...more];
+    if (reasons.length === 0) clean.push(change.entry.path);
+    else flagged.push({ path: change.entry.path, reasons });
   }
   for (const finding of historyOnly.values()) {
     const reasons = nameReasons(finding.path, scopePrefixes, binaryPaths);
@@ -735,5 +732,5 @@ export function triageRange(
     if (finding.large) reasons.push("large");
     if (reasons.length > 0) flagged.push({ path: finding.path, reasons: [...reasons, "in-history"] });
   }
-  return { clean, flagged, ignored: result.ignored };
+  return { clean, flagged, ignored };
 }
