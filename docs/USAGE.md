@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 127 verbs, every flag checked against the binary this repository
+families, 129 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -197,7 +197,8 @@ qualify today and declare one (thirty-two ids: `nen.stop.mark` and
 `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
 `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` ·
 `nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.decisions/v0.1` · `nen.phase.ledger/v0.1` · `nen.repo.classify/v0.1` · `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2` · `nen.surface.capabilities/v0.1` ·
-`nen.surface.mirror.check/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.generate/v0.1` ·
+`nen.surface.install/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.generate/v0.1` ·
+`nen.surface.status/v0.1` ·
 `nen.wc.squash/v0.1` · `nen.workflow/v0.1`
 
 Every one of them is read by a **program** that acts on it: a gate decides a
@@ -296,6 +297,8 @@ verb it invoked. The complete list:
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
+| [`surface install`](#nen-surface-install) | `3` / `4` / `5` | refused: the destination, an installed copy or a Codex marketplace is not this verb's to replace, nothing written / owed: installed and read back, and a `settings.json` declaration the caller must clear (never edited) / the surface's CLI could not be started. Its `1` is a CLI step or the read-back failing ([#298](https://github.com/zheref/nen/issues/298)) |
+| [`surface status`](#nen-surface-status) | `3` / `5` | not installed / the surface's CLI could not be started, so nothing is known to be served. Its `1` is a mismatch (served, but not `--root` at its version). With `--trees` the exit is the judgement's, [`check --plugin`](#nen-surface-mirror-check---plugin)'s table ([#298](https://github.com/zheref/nen/issues/298)) |
 | [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
@@ -337,6 +340,7 @@ verb does by default:
 | [`changelog collate`](#nen-changelog-collate) | yes | `--write` | without it, nothing is rewritten and no fragment is deleted |
 | [`tag cut`](#nen-tag-cut) | yes | `--push` | the tag is created locally; a tag is never auto-pushed |
 | [`canon mirror generate`](#nen-canon-mirror-generate) | no | `--dry-run` | writes into every declared surface's rules location under `--repo`; the dry form reports every write, deletion and foreign file and performs none. [`canon mirror check`](#nen-canon-mirror-check) writes nothing but its `--markdown-out` table (creating that table's parent directory) and refuses `--dry-run` |
+| [`surface install`](#nen-surface-install) | no | `--dry-run` | prints every directory, link and CLI step it would make and makes none; it **still runs** the read-only probes (`git rev-parse --show-toplevel`, `claude --version`, `codex plugin marketplace list`) so every refusal answers exactly as the real run would ([#298](https://github.com/zheref/nen/issues/298)) |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
@@ -697,7 +701,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 127 verbs, grouped as the README groups them. **Reads** is what a
+All 129 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -782,6 +786,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
 | [`runner`](#family-runner) | [`nen runner enable`](#nen-runner-enable) | set a pool's enable variable only after re-reading a completed, successful run of its own preflight whose jobs asked for its labels, dispatched on the default branch with the default branch's own workflow blob; read back, idempotent | nen/workflow.json (runners), github (gh api GET runs/jobs/contents, gh repo view, gh variable get; gh variable set unless --dry-run) | yes |
+| [`surface`](#family-surface) | [`nen surface install`](#nen-surface-install) | make, re-point or report a host's FIRST-PARTY install of a plugin from a checkout, per surface: the Claude Code skills-directory link with the hand-over of a prior marketplace copy, the Codex marketplace and plugin, the Antigravity global plugin link -- never replacing what it did not make, never editing a settings file, every write read back | the checkout's manifests; the surface's own directory (--config-dir) and registry files; claude / codex / agy and one `git rev-parse`; writes a link under --config-dir and runs the surface's install CLI unless --dry-run; no gh | yes |
+| [`surface`](#family-surface) | [`nen surface status`](#nen-surface-status) | the version each surface serves for a plugin, read back from `claude plugin list --json`, `codex plugin list` or the linked `plugin.json`, and whether it is a given checkout; with `--trees`, the copies Claude Code SERVES judged as `check --plugin` judges them | the surface's directory and registry files; claude / codex / agy list and validate commands; with --trees, the copies and the source; writes nothing; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
@@ -11618,6 +11624,12 @@ spelled, where a persona goes — is **a row in `src/surface/rules.ts`**, not a
 branch in the generator, and each row carries the URL every fact in it was read
 from. Adding a surface is adding a row.
 
+[`install`](#nen-surface-install) and [`status`](#nen-surface-status) are the
+other half of the family: not a mirror, but a host's **first-party install**
+of a plugin -- the Claude Code skills-directory link, the Codex marketplace and
+plugin, the Antigravity global plugin link -- made from a checkout, read back
+from the surface, and reported per surface.
+
 The three mirrored rows (read 2026-09-10, re-read 2026-09-20 for the pack
 fields; [#227](https://github.com/zheref/nen/issues/227)) and the verbatim one:
 
@@ -12366,8 +12378,9 @@ as bytes. The text form strips control characters from every reason line
 (`--json` keeps the field as built).
 
 The record is read by this binary as JSON, so a host without `jq` is no case at
-all. Not yet judged: which of several recorded copies Claude Code has
-**enabled** — every recorded copy is judged.
+all. This mode judges **every** recorded copy; to judge only the copies Claude
+Code **serves** (enabled in `settings.json`, by its precedence rule), use
+[`surface status --trees`](#nen-surface-status) ([#298](https://github.com/zheref/nen/issues/298)).
 
 **Example**
 
@@ -12388,6 +12401,204 @@ verdict: different
 ```
 (exit 1: the cache holds the previous release; after the host's plugin update
 the same command exits 0)
+
+### `nen surface install`
+
+Makes, re-points or reports a host's **first-party** install of a plugin, on
+one surface, from the checkout the caller names
+([#298](https://github.com/zheref/nen/issues/298)). It ports the deterministic
+half of zheref/hatsu's `scripts/hatsu_surface_link.sh` -- the verdicts, the
+read-backs and the ownership rule -- so that shell can be retired. Every name is
+data: the plugin, the checkout, the marketplace (read from the checkout's own
+`.claude-plugin/marketplace.json` `name`) and the Antigravity plugin directory.
+
+**Usage**
+
+```text
+nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
+                    --root <checkout> [--config-dir <dir>]
+                    [--surface-dir <dir>] [--dry-run] [--json]
+```
+
+**What each surface gets** (each fact recorded live by the first consumer,
+2026-09-29):
+
+| Surface | The install | The read-back |
+|---|---|---|
+| `claude-code` | a link at `<config>/skills/<name>`, which Claude Code loads in place as `<name>@skills-dir`. A prior `<name>@<marketplace>` install from the checkout's **own** marketplace takes precedence over that link, so it is handed over: `claude plugin uninstall <name>@<marketplace>` when the install record holds it, then `claude plugin marketplace remove <marketplace>` when `known_marketplaces.json` does -- each re-read from the file afterwards | `claude plugin list --json`: an **enabled** `<name>@skills-dir` whose `installPath` resolves to `--root`, at `--root`'s `plugin.json` version, and no other enabled `<name>@` entry |
+| `codex` | `codex plugin marketplace add <root>` (unless that marketplace is already registered **at this root**, re-read afterwards), then `codex plugin add <name>@<marketplace>` | `codex plugin list`: the row `installed, enabled`, at the version of `.codex-plugin/plugin.json` -- or of `.claude-plugin/plugin.json` where the checkout carries no Codex overlay -- the manifest used named in the report |
+| `antigravity` | a link at `<config>/config/plugins/<name>` to `<root>/<surface-dir>`, the checkout's generated Antigravity plugin (`agy plugin install` copies, so it is never used) | the link resolves to that directory; its `plugin.json` version; `agy plugin validate <link>` -- where `agy` cannot be started the validation is reported **NOT CHECKED** |
+
+**Arguments**
+
+- `--surface` -- one of the three rows above; anything else exits 2.
+- `--plugin <name>` -- the plugin's manifest name (no `@`, `/` or `\`, not `.`
+  or `..`, no control character).
+- `--root <checkout>` -- **required**: a directory whose regular
+  `.claude-plugin/plugin.json` names `--plugin`, the toplevel of its own git
+  checkout (`git rev-parse --show-toplevel`, run with `GIT_DIR`,
+  `GIT_WORK_TREE` and `GIT_INDEX_FILE` removed), and **never** under a
+  `plugins/cache/` path -- that is a copy an install made, which the next
+  update replaces out from under a link.
+- `--config-dir <dir>` -- the surface's own directory: `claude-code`
+  `$CLAUDE_CONFIG_DIR`, else `~/.claude`; `codex` `$CODEX_HOME`, else
+  `~/.codex`; `antigravity` `$GEMINI_CONFIG_DIR`, else `~/.gemini`. `$HOME` is
+  read from the invocation's environment. The surface's CLI is run with the
+  same directory (`CLAUDE_CONFIG_DIR` / `CODEX_HOME`), so what it writes is what
+  the verb reads back.
+- `--surface-dir <dir>` -- `antigravity` only, and **required** there: the
+  checkout-relative directory holding the generated plugin. A plain relative
+  path (no `..`, `.`, `:` or absolute path), a real directory with every
+  segment `lstat`ed, holding a regular `plugin.json` naming `--plugin`.
+- `--dry-run` -- prints every directory, link and CLI step as `would mkdir:`,
+  `would link:`, `would re-point:`, `would run:`, and makes none of them. The
+  read-only probes still run (`git rev-parse`, `claude --version`, `codex
+  plugin marketplace list`), so every refusal answers as the real run would.
+
+**Never replaces what it did not make.** A destination is replaced only when it
+is absent or a link to a root of the **same** plugin (for Antigravity, to that
+root's `--surface-dir`); a re-point is a fresh link renamed over the old one, so
+the destination is never absent in between and the old link is never followed.
+A real directory, a file, a dangling link or a link anywhere else is refused,
+named and left exactly as it was -- and so is a `<name>@<other>` marketplace
+install from a marketplace the checkout does not publish, and a Codex
+marketplace of the same name registered at another root.
+
+**Never edits a settings file.** A declaration in Claude Code's
+`settings.json` that would bring a marketplace copy back on the next reload --
+`enabledPlugins["<name>@<marketplace>"]: true`, `enabledPlugins["<name>@skills-dir"]:
+false`, `extraKnownMarketplaces.<marketplace>` -- is reported as an **action
+owed**, with the command that clears it, and the verb neither writes the file
+nor runs that command. Under `--dry-run` the actions are the declarations
+standing now; after a real run, the ones still standing once the hand-over
+ran.
+
+**Every precondition is read before anything is written.** An install record,
+`settings.json` or `known_marketplaces.json` that cannot be trusted (not JSON,
+not an object, not a regular file, unreadable) is a refusal at exit 2, and a
+hand-over owed while `claude` cannot be started is a refusal at exit 5 -- in
+both cases nothing is linked. Every tool's output is read **whole**, in
+TypeScript: a 12,000-row `codex plugin list` is parsed to its end, and a tool
+that exits non-zero or is killed by a signal is reported with its last line,
+never read as "not found".
+
+**Output and exit codes** -- the text form prints `surface:`, `root:`,
+`config:`, `destination:` (with the link's state), one line per step, each
+`action owed:` with its `  run:` command, `read back:` (or `NOT CHECKED`),
+`serves:`, `verdict: <verdict> -- <reason>` and `apply:` (how a running session
+picks the change up). `--json`: `{ contract: "nen.surface.install/v0.1",
+surface, plugin, root, configDir, dryRun, destination, link, previous, steps: [
+{ kind, detail, done } ], actions: [ { what, command } ], readBack: { checked,
+detail }, served: { id, version, path, enabled, status }, verdict, reason,
+apply, exit }` -- `link` is `linked`, `already linked`, `re-pointed` or `null`
+(Codex takes no link); a step's `kind` is `mkdir`, `link`, `re-point` or
+`run`; `done` is false under `--dry-run`.
+
+| Exit | Verdict | Meaning |
+|---|---|---|
+| `0` | `ok` | installed and read back -- or, under `--dry-run`, a complete plan |
+| `1` | `failed` | a CLI step failed, or the read-back did not show the install (an uninstall that did not take, a shadow still enabled, another path or version, unparseable output); the last line is quoted |
+| `2` | -- | usage or wiring, on stderr with no report: a bad flag, a `--root` or `--surface-dir` refused, a file that cannot be trusted |
+| `3` | `refused` | not ours to replace; nothing written |
+| `4` | `owed` | installed and read back, and a settings change is owed that this verb never makes |
+| `5` | `tool missing` | the surface's CLI could not be started: before anything is touched when a hand-over is owed, otherwise after the link -- an unperformed read-back is never a clean one |
+
+**Example**
+
+```bash
+nen surface install --surface claude-code --plugin myplugin --root ~/Code/myplugin
+```
+```text
+surface: claude-code (plugin myplugin)
+root: /Users/me/Code/myplugin
+config: /Users/me/.claude
+destination: /Users/me/.claude/skills/myplugin (linked)
+mkdir: /Users/me/.claude/skills
+link: /Users/me/.claude/skills/myplugin -> /Users/me/Code/myplugin
+run: claude plugin uninstall myplugin@myplugin
+run: claude plugin marketplace remove myplugin
+read back: myplugin@skills-dir enabled, version 1.4.0
+serves: myplugin@skills-dir 1.4.0 at /Users/me/.claude/skills/myplugin
+verdict: ok -- installed, and read back
+apply: type /reload-plugins in the running session, or open a new session
+```
+
+### `nen surface status`
+
+The version each surface **serves** for a plugin, read back from the surface
+itself -- and, with `--root`, whether that is this checkout at its version
+([#298](https://github.com/zheref/nen/issues/298)). Writes nothing.
+
+**Usage**
+
+```text
+nen surface status --surface <claude-code|codex|antigravity> --plugin <name>
+                   [--root <checkout>] [--config-dir <dir>]
+                   [--surface-dir <dir>] [--json]
+nen surface status --surface claude-code --plugin <name> --trees <a,b,...>
+                   [--source <plugin root>] [--root <checkout>]
+                   [--independent-source <dir>] [--config-dir <dir>]
+                   [--repo <path>] [--json]
+```
+
+**What is read**, per surface: `claude-code` -- `claude plugin list --json`
+(every `<name>@` entry; the **served** ones are those `enabled`), the
+`skills/<name>` link, the install record and `settings.json`, whose
+declarations that would bring a marketplace copy back on the next reload are
+reported as `warning:` lines; `codex` -- `codex plugin list` (served: installed
+and enabled) and `codex plugin marketplace list` for each marketplace's root;
+`antigravity` -- the `config/plugins/<name>` entry and its `plugin.json`, plus
+`agy plugin validate` (reported **NOT CHECKED** where `agy` cannot be started).
+`--root` here needs only to be a root of the plugin; it is compared against,
+never written to. With `--surface antigravity` it needs `--surface-dir`, since
+the link is compared against `<root>/<surface-dir>`.
+
+**`--trees`** (`claude-code` only) judges the copies Claude Code **serves**
+exactly as [`check --plugin`](#nen-surface-mirror-check---plugin) judges a copy --
+the same flags, independence rule and six verdicts, `--source` defaulting to
+`--root`. Served means: a marketplace copy when `settings.json`'s
+`enabledPlugins` enables it; the skills-directory copy unless `enabledPlugins`
+disables it **or** an enabled marketplace copy takes precedence over it (Claude
+Code's own rule: "the name is already taken by an installed plugin, which takes
+precedence"). Every copy set aside is listed with why. This is what
+`check --plugin --installed auto`, which judges every recorded copy, deferred
+here.
+
+**Output and exit codes** -- the text form prints `surface:`, `root:`,
+`config:`, `destination:`, one `serves:` (or `listed:`) line per entry,
+`read back:`, each `warning:`, the judgement under `--trees`, and
+`verdict: <verdict> -- <reason>`. `--json`: `{ contract:
+"nen.surface.status/v0.1", surface, plugin, root, configDir, destination, link,
+listed: [ { id, version, path, enabled, status } ], served: [ ... ], readBack: {
+checked, detail }, warnings, verdict, reason, exit }`, plus under `--trees` a
+`judgement` object: `check --plugin`'s `{ verdict, record, copies, skipped: [ {
+label, reason } ], exit }`.
+
+| Exit | Verdict | Meaning |
+|---|---|---|
+| `0` | `serving` | the surface serves the plugin -- and, with `--root`, from that checkout at its version |
+| `1` | `mismatch` | served, but from another checkout or marketplace root, at another version, shadowed by a second enabled copy, or rejected by `agy plugin validate` |
+| `2` | `wiring` | a usage refusal (stderr), or the surface's list failed or could not be parsed, or a file that cannot be trusted |
+| `3` | `not installed` | nothing enabled is served |
+| `5` | `tool missing` | the surface's CLI could not be started: nothing is known to be served |
+
+With `--trees` the exit is the **judgement's** (`check --plugin`'s `0`-`5`), and
+the status verdict is still in the report.
+
+**Example**
+
+```bash
+nen surface status --surface codex --plugin myplugin --root ~/Code/myplugin
+```
+```text
+surface: codex (plugin myplugin)
+root: /Users/me/Code/myplugin
+config: /Users/me/.codex
+serves: myplugin@myplugin 1.4.0 [installed, enabled] at /Users/me/.codex/plugins/cache/myplugin/myplugin/1.4.0
+read back: codex plugin list: 1 myplugin@ row
+warning: myplugin@myplugin: marketplace 'myplugin' at /Users/me/Code/myplugin
+verdict: serving -- serves myplugin@myplugin 1.4.0
+```
 
 ## Self-hosted runners
 

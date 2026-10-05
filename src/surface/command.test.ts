@@ -257,7 +257,7 @@ describe("the refusals, every one at exit 2", () => {
   it("refuses a subcommand this family has not got", async () => {
     expect(await refusal(["surface", "mirror"])).toContain("unknown 'surface mirror' subcommand");
     expect(await refusal(["surface", "mirror", "install"])).toContain("unknown 'surface mirror' subcommand");
-    expect(await refusal(["surface", "install"])).toContain("unknown 'surface' subcommand");
+    expect(await refusal(["surface", "uninstall"])).toContain("unknown 'surface' subcommand");
   });
 });
 

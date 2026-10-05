@@ -1,0 +1,1348 @@
+// src/surface/install.ts -- `nen surface install|status` (zheref/nen#298): a
+// host's FIRST-PARTY install of a plugin, made, re-pointed or reported on each
+// agent surface, from a checkout the caller names.
+//
+// WHAT "FIRST-PARTY" MEANS, per surface (each fact observed live and recorded
+// by the first consumer, 2026-09-29; the surface CLIs' own behaviour, never a
+// guess of this binary):
+//
+//   claude-code  a symlink at `<config>/skills/<plugin>` loads the checkout IN
+//                PLACE as `<plugin>@skills-dir`. An installed marketplace copy
+//                `<plugin>@<marketplace>` takes precedence over it, so a prior
+//                one from the checkout's OWN marketplace is handed over first
+//                (`claude plugin uninstall`, then `claude plugin marketplace
+//                remove`), and `claude plugin list --json` is the read-back.
+//   codex        `codex plugin marketplace add <checkout>` reads the checkout's
+//                `.claude-plugin/marketplace.json`; `codex plugin add
+//                <plugin>@<marketplace>` installs from it; `codex plugin list`
+//                is the read-back, its version compared against the manifest
+//                Codex keys the slot on (`.codex-plugin/plugin.json`, else
+//                `.claude-plugin/plugin.json`).
+//   antigravity  a plugin folder at `<gemini>/config/plugins/<plugin>`
+//                activates across all workspaces; a symlink into the checkout's
+//                generated Antigravity plugin keeps it live (`agy plugin
+//                install` COPIES, so it is never used), and the linked
+//                `plugin.json` plus `agy plugin validate` are the read-back.
+//
+// NAMES ARE DATA. The plugin, the checkout, the marketplace (read from the
+// checkout's own marketplace.json) and the directory holding the generated
+// Antigravity plugin (`--surface-dir`) are the caller's; nothing here names
+// any one plugin.
+//
+// THE OWNERSHIP RULE: NEVER REPLACE WHAT THIS VERB DID NOT MAKE. A destination
+// is replaced only when it is absent or a symlink to a root of the SAME plugin
+// (for Antigravity, to that root's `--surface-dir`). A real directory, a file,
+// a dangling link or a link anywhere else is refused, named, and left exactly
+// as it was. A marketplace install of the plugin from a marketplace the
+// checkout does not publish is refused the same way, and so is a Codex
+// marketplace of the same name pointed at another root.
+//
+// SETTINGS ARE NEVER EDITED. A declaration in Claude Code's `settings.json`
+// that would bring a marketplace copy back on the next reload is reported as
+// an ACTION the caller owes, with the command that clears it -- never written
+// by this binary, and never run by it either (the maintainer's ruling on
+// zheref/nen#298).
+//
+// EVERY TOOL OUTPUT IS READ WHOLE, IN TYPESCRIPT. The seam captures a child's
+// complete stdout (../seam/exec.ts), so a 12,000-row `codex plugin list` is
+// parsed to its end -- the shell this replaces died of SIGPIPE when an awk
+// reader stopped early. A tool that could not be started, exited non-zero or
+// was killed by a signal is reported as that, with its last line; nothing is
+// swallowed into "not found".
+
+import { homedir } from "node:os";
+import { dirname, join, sep } from "node:path";
+import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
+import { VerbUsageError } from "../cli/command.js";
+import { outputLines, type Seams } from "../seam/exec.js";
+import {
+  classifyError,
+  identityOf,
+  inspectManifest,
+  pluginManifest,
+  readInstallRecord,
+  resolveConfigDir,
+  safe,
+  sameIdentity,
+  skillsDirKey,
+  validateTrees,
+  PluginCheckError,
+  type CopySelector,
+} from "./plugin.js";
+
+export const INSTALL_CONTRACT = "nen.surface.install/v0.1";
+export const STATUS_CONTRACT = "nen.surface.status/v0.1";
+
+/** The surfaces a first-party install is known for. */
+export const INSTALL_SURFACES = ["claude-code", "codex", "antigravity"] as const;
+export type InstallSurface = (typeof INSTALL_SURFACES)[number];
+
+/** Each surface's own CLI: a documented fact of the surface, like its skills path in ./rules.ts. */
+export const SURFACE_CLI: Readonly<Record<InstallSurface, string>> = {
+  "claude-code": "claude",
+  codex: "codex",
+  antigravity: "agy",
+};
+
+/** How a running session picks the change up, per surface (the first consumer's live record). */
+export const APPLY_HINT: Readonly<Record<InstallSurface, string>> = {
+  "claude-code": "type /reload-plugins in the running session, or open a new session",
+  codex: "running sessions refresh after an external plugin upgrade; otherwise open a new session",
+  antigravity: "open a new conversation",
+};
+
+// ---------------------------------------------------------------------------
+// Verdicts
+// ---------------------------------------------------------------------------
+
+/** `install`'s verdicts, each its own exit. A usage or wiring refusal is exit 2, on stderr. */
+export type InstallVerdict = "ok" | "failed" | "refused" | "owed" | "tool missing";
+
+export const INSTALL_EXIT: Readonly<Record<InstallVerdict, number>> = {
+  ok: 0,
+  failed: 1,
+  refused: 3,
+  owed: 4,
+  "tool missing": 5,
+};
+
+/** `status`'s verdicts, each its own exit. */
+export type StatusVerdict = "serving" | "mismatch" | "wiring" | "not installed" | "tool missing";
+
+export const STATUS_EXIT: Readonly<Record<StatusVerdict, number>> = {
+  serving: 0,
+  mismatch: 1,
+  wiring: 2,
+  "not installed": 3,
+  "tool missing": 5,
+};
+
+/** One thing the install did, or -- under --dry-run -- would do. */
+export interface Step {
+  readonly kind: "mkdir" | "link" | "re-point" | "run";
+  readonly detail: string;
+  readonly done: boolean;
+}
+
+/** A change the caller owes, which this verb will not make (a settings declaration). */
+export interface OwedAction {
+  readonly what: string;
+  /** The command that clears it, or null when there is none to name. */
+  readonly command: string | null;
+}
+
+/** What a surface serves for the plugin, as the surface itself answered. */
+export interface Served {
+  readonly id: string;
+  readonly version: string | null;
+  readonly path: string | null;
+  readonly enabled: boolean;
+  readonly status: string | null;
+}
+
+/** Whether the read-back ran, and what it said. An unperformed read-back is never a clean one. */
+export interface ReadBack {
+  readonly checked: boolean;
+  readonly detail: string;
+}
+
+export interface InstallReport {
+  readonly surface: InstallSurface;
+  readonly plugin: string;
+  readonly root: string;
+  readonly configDir: string;
+  readonly dryRun: boolean;
+  readonly destination: string | null;
+  /** `linked`, `already linked`, `re-pointed`, or null where the surface takes no link (codex). */
+  readonly link: string | null;
+  /** The previous target of a re-pointed link. */
+  readonly previous: string | null;
+  readonly steps: readonly Step[];
+  readonly actions: readonly OwedAction[];
+  readonly readBack: ReadBack;
+  readonly served: Served | null;
+  readonly verdict: InstallVerdict;
+  readonly reason: string;
+  readonly apply: string;
+}
+
+// ---------------------------------------------------------------------------
+// Small readers
+// ---------------------------------------------------------------------------
+
+const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
+const CONTROL_ALL = /[\x00-\x1f\x7f-\x9f]/g;
+
+/** The last non-empty line of a tool's output, credentials redacted, control characters removed, capped at 200. */
+export function lastLine(text: string): string {
+  const lines = outputLines(text);
+  const last = lines[lines.length - 1] ?? "(no output)";
+  return last.replace(CONTROL_ALL, "").slice(0, 200);
+}
+
+/** A JSON object file: absent, read, or why it cannot be trusted. Only ENOENT is absence. */
+export type JsonRead =
+  | { readonly state: "absent" }
+  | { readonly state: "read"; readonly value: Readonly<Record<string, unknown>> }
+  | { readonly state: "bad"; readonly reason: string };
+
+export function readJsonObject(path: string): JsonRead {
+  const code = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? "error";
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if (classifyError(error) === "absent") return { state: "absent" };
+    return { state: "bad", reason: `${safe(path)} could not be inspected (${code(error)})` };
+  }
+  let stats;
+  try {
+    stats = statSync(path);
+  } catch (error) {
+    return { state: "bad", reason: `${safe(path)} is a link that does not resolve (${code(error)})` };
+  }
+  // Opened only when it is a regular file: a FIFO there must not hang the verb.
+  if (!stats.isFile()) return { state: "bad", reason: `${safe(path)} is not a regular file` };
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    return { state: "bad", reason: `${safe(path)} could not be read (${code(error)})` };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return { state: "bad", reason: `${safe(path)} is not JSON` };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { state: "bad", reason: `${safe(path)}'s top level is not an object` };
+  }
+  return { state: "read", value: parsed as Record<string, unknown> };
+}
+
+/** `record[key]` as an object, `{}` when absent; throws a reason when it is something else. */
+function objectField(record: Readonly<Record<string, unknown>>, key: string, where: string): Readonly<Record<string, unknown>> {
+  const value = record[key];
+  if (value === undefined) return {};
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new VerbUsageError(`${where}'s '${key}' is not an object: the verb cannot verify what it declares.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+const own = (record: Readonly<Record<string, unknown>>, key: string): boolean => Object.prototype.hasOwnProperty.call(record, key);
+
+/** A path's directory segments under `base`, each lstat'ed: a link anywhere on the way is not followed. */
+function realDirectoryUnder(base: string, relative: string): boolean {
+  let at = base;
+  for (const part of relative.split("/")) {
+    at = join(at, part);
+    try {
+      const stats = lstatSync(at);
+      if (!stats.isDirectory()) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** A regular file reached with no link on the last step, parsed as a JSON object, or null. */
+function regularJson(path: string): Readonly<Record<string, unknown>> | null {
+  try {
+    if (!lstatSync(path).isFile()) return null;
+  } catch {
+    return null;
+  }
+  const read = readJsonObject(path);
+  return read.state === "read" ? read.value : null;
+}
+
+/** The checkout's marketplace name, from its own `.claude-plugin/marketplace.json`. */
+export type MarketplaceRead =
+  | { readonly state: "absent" }
+  | { readonly state: "read"; readonly name: string; readonly listsPlugin: boolean | null }
+  | { readonly state: "bad"; readonly reason: string };
+
+export function readMarketplace(root: string, plugin: string): MarketplaceRead {
+  const folder = join(root, ".claude-plugin");
+  const path = join(folder, "marketplace.json");
+  try {
+    if (!lstatSync(folder).isDirectory()) return { state: "absent" };
+    if (!lstatSync(path).isFile()) return { state: "bad", reason: `${safe(path)} is not a regular file` };
+  } catch (error) {
+    if (classifyError(error) === "absent") return { state: "absent" };
+    return { state: "bad", reason: `${safe(path)} could not be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})` };
+  }
+  const read = readJsonObject(path);
+  if (read.state === "absent") return { state: "absent" };
+  if (read.state === "bad") return read;
+  const name = read.value["name"];
+  if (typeof name !== "string" || name === "" || CONTROL.test(name) || /[@/\\\s]/.test(name)) {
+    return { state: "bad", reason: `${safe(path)} carries no usable 'name' (a non-empty string with no '@', '/', '\\', space or control character)` };
+  }
+  const plugins = read.value["plugins"];
+  const listsPlugin = Array.isArray(plugins)
+    ? plugins.some((entry): boolean => typeof entry === "object" && entry !== null && (entry as Record<string, unknown>)["name"] === plugin)
+    : null;
+  return { state: "read", name, listsPlugin };
+}
+
+/** A flat `plugin.json` (Antigravity's, at the plugin folder's root): its name and version, or null. */
+function flatManifest(dir: string): { readonly name: string | null; readonly version: string | null } | null {
+  const value = regularJson(join(dir, "plugin.json"));
+  if (value === null) return null;
+  return {
+    name: typeof value["name"] === "string" ? value["name"] : null,
+    version: typeof value["version"] === "string" ? value["version"] : null,
+  };
+}
+
+/** The manifest Codex keys its plugin slot on: the `.codex-plugin` overlay, else the Claude manifest. */
+export function codexManifest(root: string, plugin: string): { readonly path: string; readonly version: string } {
+  const overlayDir = join(root, ".codex-plugin");
+  let overlay = false;
+  try {
+    overlay = lstatSync(overlayDir).isDirectory() && lstatSync(join(overlayDir, "plugin.json")).isFile();
+  } catch {
+    overlay = false;
+  }
+  if (overlay) {
+    const value = regularJson(join(overlayDir, "plugin.json"));
+    const version = value === null ? null : value["version"];
+    if (typeof version !== "string" || version === "") {
+      throw new VerbUsageError(`${safe(join(overlayDir, "plugin.json"))} has no readable 'version': Codex keys its slot on it, so the read-back has nothing to compare.`);
+    }
+    return { path: ".codex-plugin/plugin.json", version };
+  }
+  const version = pluginManifest(root, plugin)?.version ?? null;
+  if (version === null || version === "") {
+    throw new VerbUsageError(`${safe(join(root, ".claude-plugin", "plugin.json"))} has no readable 'version' (and there is no .codex-plugin/plugin.json): the read-back has nothing to compare.`);
+  }
+  return { path: ".claude-plugin/plugin.json", version };
+}
+
+// ---------------------------------------------------------------------------
+// Tool output, parsed whole
+// ---------------------------------------------------------------------------
+
+/** One entry of `claude plugin list --json`. */
+export interface ClaudeListEntry {
+  readonly id: string;
+  readonly version: string | null;
+  readonly enabled: boolean | null;
+  readonly installPath: string | null;
+}
+
+/** `claude plugin list --json`: an array of objects, each with a string `id`. Anything else is a reason. */
+export function parseClaudeList(stdout: string): readonly ClaudeListEntry[] | string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout) as unknown;
+  } catch {
+    return "its output is not JSON";
+  }
+  if (!Array.isArray(parsed)) return "its output is not a JSON array";
+  const entries: ClaudeListEntry[] = [];
+  for (const [index, element] of (parsed as unknown[]).entries()) {
+    if (typeof element !== "object" || element === null || Array.isArray(element)) return `element ${index} is not an object`;
+    const record = element as Record<string, unknown>;
+    if (typeof record["id"] !== "string") return `element ${index} carries no string 'id'`;
+    entries.push({
+      id: record["id"],
+      version: typeof record["version"] === "string" ? record["version"] : null,
+      enabled: typeof record["enabled"] === "boolean" ? record["enabled"] : null,
+      installPath: typeof record["installPath"] === "string" ? record["installPath"] : null,
+    });
+  }
+  return entries;
+}
+
+/** One row of `codex plugin marketplace list` (`MARKETPLACE  ROOT`). */
+export interface CodexMarketplaceRow {
+  readonly name: string;
+  readonly root: string;
+}
+
+/** Every row, read to the end of the output: never an early stop (the SIGPIPE lesson). */
+export function parseCodexMarketplaces(stdout: string): readonly CodexMarketplaceRow[] {
+  const rows: CodexMarketplaceRow[] = [];
+  stdout
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .forEach((line, index): void => {
+      if (index === 0 && /^MARKETPLACE\s/.test(line)) return;
+      const match = /^(\S+)\s+(\S.*?)\s*$/.exec(line);
+      if (match !== null) rows.push({ name: match[1] as string, root: match[2] as string });
+    });
+  return rows;
+}
+
+/** One row of `codex plugin list`: `<plugin>@<marketplace>  <status>  <version>  <path>`. */
+export interface CodexPluginRow {
+  readonly id: string;
+  readonly status: string;
+  readonly version: string | null;
+  readonly path: string | null;
+}
+
+export function parseCodexPlugins(stdout: string): readonly CodexPluginRow[] {
+  const rows: CodexPluginRow[] = [];
+  for (const line of stdout.replace(/\r\n/g, "\n").split("\n")) {
+    const match = /^(\S+@\S+)\s+(\S.*?)\s*$/.exec(line);
+    if (match === null) continue;
+    const id = match[1] as string;
+    const rest = match[2] as string;
+    // The columns are padded with two or more spaces; a status may itself
+    // carry ", " ("installed, enabled").
+    const columns = rest.split(/\s{2,}/);
+    if (columns.length >= 2) {
+      rows.push({ id, status: columns[0] as string, version: columns[1] as string, path: columns.length > 2 ? columns.slice(2).join("  ") : null });
+      continue;
+    }
+    const paired = /^([A-Za-z]+, [A-Za-z]+)(?:\s+(\S+))?(?:\s+(\S.*))?$/.exec(rest);
+    if (paired !== null) {
+      rows.push({ id, status: paired[1] as string, version: paired[2] ?? null, path: paired[3] ?? null });
+      continue;
+    }
+    const [status, version, ...path] = rest.split(/\s+/);
+    rows.push({ id, status: status as string, version: version ?? null, path: path.length > 0 ? path.join(" ") : null });
+  }
+  return rows;
+}
+
+/** True for a Codex status meaning installed and enabled. */
+export function codexEnabled(status: string): boolean {
+  const words = status.toLowerCase().split(/,\s*/);
+  return words.includes("installed") && words.includes("enabled");
+}
+
+/** `Installed plugin root: <path>` from `codex plugin add`, read to the end. */
+export function codexInstalledRoot(stdout: string): string | null {
+  let found: string | null = null;
+  for (const line of stdout.replace(/\r\n/g, "\n").split("\n")) {
+    const match = /^Installed plugin root: (.+)$/.exec(line);
+    if (match !== null && found === null) found = (match[1] as string).trim();
+  }
+  return found;
+}
+
+// ---------------------------------------------------------------------------
+// Tools, through the seam
+// ---------------------------------------------------------------------------
+
+export interface ToolResult {
+  readonly ok: boolean;
+  readonly spawnFailed: boolean;
+  readonly stdout: string;
+  /** The last line of its output (or why it stopped), for a refusal. */
+  readonly last: string;
+}
+
+function callTool(seams: Seams, cli: string, args: readonly string[], env: Readonly<Record<string, string>>): ToolResult {
+  const result = seams.run(cli, args, { env });
+  const killed = result.signal !== undefined && result.signal !== null;
+  const last = result.spawnFailed
+    ? `${cli} could not be started (${lastLine(result.stderr)})`
+    : killed
+      ? `killed by ${result.signal}: ${lastLine(`${result.stdout}\n${result.stderr}`)}`
+      : lastLine(`${result.stdout}\n${result.stderr}`);
+  return { ok: !result.spawnFailed && !killed && result.code === 0, spawnFailed: result.spawnFailed, stdout: result.stdout, last };
+}
+
+/** The one way a flow stops early: a verdict and the sentence that explains it. */
+class Stop extends Error {
+  constructor(
+    readonly verdict: InstallVerdict,
+    reason: string,
+  ) {
+    super(reason);
+    this.name = "Stop";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Directories
+// ---------------------------------------------------------------------------
+
+/** `$HOME` from the invocation's environment, else the OS's answer. */
+function homeOf(env: Readonly<Record<string, string | undefined>>): string {
+  const home = env["HOME"];
+  return home !== undefined && home !== "" ? home : homedir();
+}
+
+/** The surface's config directory: `--config-dir`, else its environment variable, else its default under `$HOME`. */
+export function surfaceConfigDir(surface: InstallSurface, flag: string | null, env: Readonly<Record<string, string | undefined>>): string {
+  if (surface === "claude-code") return resolveConfigDir(flag, env, homeOf(env));
+  if (flag !== null) return flag;
+  const variable = surface === "codex" ? "CODEX_HOME" : "GEMINI_CONFIG_DIR";
+  const fromEnv = env[variable];
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
+  return join(homeOf(env), surface === "codex" ? ".codex" : ".gemini");
+}
+
+/** The environment a surface CLI is run with, so it reads and writes the directory this verb reads. */
+function toolEnv(surface: InstallSurface, configDir: string): Readonly<Record<string, string>> {
+  if (surface === "claude-code") return { CLAUDE_CONFIG_DIR: configDir };
+  if (surface === "codex") return { CODEX_HOME: configDir };
+  return {};
+}
+
+/** A command the caller can paste: the config directory named when it is not the surface's own default. */
+function suggest(surface: InstallSurface, configDir: string, env: Readonly<Record<string, string | undefined>>, command: string): string {
+  if (surface !== "claude-code" || configDir === join(homeOf(env), ".claude")) return command;
+  return `CLAUDE_CONFIG_DIR=${shellQuote(configDir)} ${command}`;
+}
+
+function shellQuote(text: string): string {
+  return /^[A-Za-z0-9_./:@=+-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+// ---------------------------------------------------------------------------
+// The checkout
+// ---------------------------------------------------------------------------
+
+/** The git probe environment: no hook's repository answers for the checkout. */
+const GIT_PROBE_ENV: Readonly<Record<string, undefined>> = { GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined };
+
+/**
+ * `--root`, validated: a directory holding a regular `.claude-plugin/plugin.json`
+ * naming the plugin, never under a `plugins/cache/` path (a copy an install
+ * made, which the next update replaces), and the toplevel of its own git
+ * checkout. Returns the real path. Every refusal is exit 2.
+ */
+export function validateRoot(rootFlag: string, plugin: string, seams: Seams): string {
+  if (CONTROL.test(rootFlag)) throw new VerbUsageError("--root carries a control character.");
+  const id = identityOf(rootFlag);
+  let isDir = false;
+  try {
+    isDir = id !== null && statSync(id.real).isDirectory();
+  } catch {
+    isDir = false;
+  }
+  if (id === null || !isDir) throw new VerbUsageError(`--root '${safe(rootFlag)}' is not a directory.`);
+  const manifest = inspectManifest(id.real, plugin);
+  if (manifest.state === "unreadable") throw new VerbUsageError(`--root '${safe(rootFlag)}' could not be inspected: ${manifest.reason}.`);
+  if (manifest.state === "none") {
+    throw new VerbUsageError(`--root '${safe(rootFlag)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`);
+  }
+  if (/(^|\/)plugins\/cache\//.test(id.real.split(sep).join("/"))) {
+    throw new VerbUsageError(
+      `--root '${safe(id.real)}' lies under a plugins/cache/ path: that is a copy an install made, which the next update replaces out from under a link. A first-party install points at a checkout the caller controls.`,
+    );
+  }
+  const top = seams.run("git", ["rev-parse", "--show-toplevel"], { cwd: id.real, env: GIT_PROBE_ENV });
+  if (top.spawnFailed) throw new VerbUsageError(`git could not be started to prove --root '${safe(id.real)}' is a checkout.`);
+  const topPath = top.stdout.split("\n")[0]?.trim() ?? "";
+  if (top.code !== 0 || topPath === "") {
+    throw new VerbUsageError(`--root '${safe(id.real)}' is not a git checkout (git rev-parse --show-toplevel failed: ${lastLine(top.stderr)}). A first-party install points at a checkout the caller controls.`);
+  }
+  const topId = identityOf(topPath);
+  if (topId === null || !sameIdentity(topId, id)) {
+    throw new VerbUsageError(`--root '${safe(id.real)}' is not the toplevel of its git checkout (the toplevel is ${safe(topPath)}): point --root at the checkout root.`);
+  }
+  return id.real;
+}
+
+/** `--surface-dir`: one plain relative path inside the checkout, a real directory there with a plugin.json naming the plugin. */
+export function validateSurfaceDir(root: string, surfaceDir: string, plugin: string): string {
+  let relative: string;
+  try {
+    relative = validateTrees([surfaceDir], "--surface-dir")[0] as string;
+  } catch (error) {
+    if (error instanceof PluginCheckError) throw new VerbUsageError(error.message);
+    /* c8 ignore next -- validateTrees raises nothing else */
+    throw error;
+  }
+  if (!realDirectoryUnder(root, relative)) {
+    throw new VerbUsageError(`--surface-dir '${safe(relative)}' is not a real directory in ${safe(root)} (every segment is lstat'ed; a link on the way is refused).`);
+  }
+  const manifest = flatManifest(join(root, ...relative.split("/")));
+  if (manifest === null || manifest.name !== plugin) {
+    throw new VerbUsageError(`--surface-dir '${safe(relative)}' holds no regular plugin.json naming '${plugin}': the checkout carries no generated Antigravity plugin there.`);
+  }
+  return relative;
+}
+
+// ---------------------------------------------------------------------------
+// The destination link
+// ---------------------------------------------------------------------------
+
+export type LinkState =
+  | { readonly kind: "absent" }
+  | { readonly kind: "link"; readonly raw: string; readonly real: string | null; readonly owner: string | null }
+  | { readonly kind: "directory" }
+  | { readonly kind: "file" }
+  | { readonly kind: "other" }
+  | { readonly kind: "unreadable"; readonly reason: string };
+
+/** `owner(real)`: the plugin root a link target belongs to, or null when the target is not ours. */
+type Owner = (real: string) => string | null;
+
+export function inspectDestination(dest: string, owner: Owner): LinkState {
+  let stats;
+  try {
+    stats = lstatSync(dest);
+  } catch (error) {
+    if (classifyError(error) === "absent") return { kind: "absent" };
+    return { kind: "unreadable", reason: `${safe(dest)} could not be inspected (${(error as NodeJS.ErrnoException).code ?? "error"})` };
+  }
+  if (stats.isSymbolicLink()) {
+    let raw: string;
+    try {
+      raw = readlinkSync(dest);
+    } catch (error) {
+      return { kind: "unreadable", reason: `the link ${safe(dest)} could not be read (${(error as NodeJS.ErrnoException).code ?? "error"})` };
+    }
+    let real: string | null = null;
+    try {
+      real = realpathSync(dest);
+    } catch {
+      real = null;
+    }
+    return { kind: "link", raw, real, owner: real === null ? null : owner(real) };
+  }
+  if (stats.isDirectory()) return { kind: "directory" };
+  if (stats.isFile()) return { kind: "file" };
+  return { kind: "other" };
+}
+
+/** A sentence for a destination that is not ours. */
+export function describeForeign(state: LinkState, plugin: string): string {
+  switch (state.kind) {
+    case "link":
+      return state.real === null
+        ? `a symlink to '${safe(state.raw)}' that does not resolve (dangling or looping)`
+        : `a symlink to '${safe(state.raw)}' (resolving to ${safe(state.real)}), which is no root of '${plugin}'`;
+    case "directory":
+      return "a real directory";
+    case "file":
+      return "a file";
+    case "other":
+      return "neither a link, a directory nor a file";
+    /* c8 ignore next 4 -- absent, unreadable and ours never reach a refusal */
+    case "absent":
+      return "absent";
+    case "unreadable":
+      return state.reason;
+  }
+}
+
+function claudeOwner(plugin: string): Owner {
+  return (real) => (inspectManifest(real, plugin).state === "plugin" ? real : null);
+}
+
+/** Antigravity: the link is ours when it lands on `<a root of the plugin>/<surfaceDir>`. */
+function antigravityOwner(plugin: string, surfaceDir: string): Owner {
+  const suffix = `${sep}${surfaceDir.split("/").join(sep)}`;
+  return (real) => {
+    if (!real.endsWith(suffix)) return null;
+    const base = real.slice(0, real.length - suffix.length);
+    return base !== "" && inspectManifest(base, plugin).state === "plugin" ? real : null;
+  };
+}
+
+function linkType(platform: NodeJS.Platform): "junction" | "dir" {
+  return platform === "win32" ? "junction" : "dir";
+}
+
+/** Create, or atomically re-point, the link at `dest`. Throws Stop on a write that failed. */
+function placeLink(dest: string, target: string, replacing: boolean, platform: NodeJS.Platform): void {
+  const code = (error: unknown): string => (error as NodeJS.ErrnoException).code ?? "error";
+  if (!replacing) {
+    try {
+      mkdirSync(dirname(dest), { recursive: true });
+      symlinkSync(target, dest, linkType(platform));
+    } catch (error) {
+      throw new Stop("failed", `could not create the link ${safe(dest)} (${code(error)})`);
+    }
+    return;
+  }
+  // Re-pointing: a fresh link beside the old one, renamed over it -- the
+  // destination is never absent in between, and the old link is replaced as
+  // an entry, never followed.
+  const temporary = `${dest}.nen-relink`;
+  try {
+    const stale = lstatSync(temporary);
+    if (!stale.isSymbolicLink()) throw new Stop("refused", `${safe(temporary)} exists and is not a link this verb left behind; it is never removed`);
+    unlinkSync(temporary);
+  } catch (error) {
+    if (error instanceof Stop) throw error;
+    if (classifyError(error) !== "absent") throw new Stop("failed", `could not inspect ${safe(temporary)} (${code(error)})`);
+  }
+  try {
+    symlinkSync(target, temporary, linkType(platform));
+  } catch (error) {
+    throw new Stop("failed", `could not create the link ${safe(temporary)} (${code(error)})`);
+  }
+  try {
+    renameSync(temporary, dest);
+  } catch (error) {
+    /* c8 ignore start -- Windows will not rename over a junction; the old junction (a link, never a real directory: rmdir is not recursive) goes first */
+    if (platform === "win32") {
+      try {
+        rmdirSync(dest);
+        renameSync(temporary, dest);
+        return;
+      } catch (second) {
+        throw new Stop("failed", `could not re-point ${safe(dest)} (${code(second)})`);
+      }
+    }
+    /* c8 ignore stop */
+    throw new Stop("failed", `could not re-point ${safe(dest)} (${code(error)})`);
+  }
+}
+
+/** After a write: `dest` is a link and resolves to `target`. A link elsewhere is not ours (a race lost): refused. */
+function readBackLink(dest: string, target: string): void {
+  let isLink = false;
+  try {
+    isLink = lstatSync(dest).isSymbolicLink();
+  } catch {
+    isLink = false;
+  }
+  if (!isLink) throw new Stop("failed", `${safe(dest)} is not a symlink after writing it`);
+  const destId = identityOf(dest);
+  const targetId = identityOf(target);
+  if (destId === null || targetId === null || !sameIdentity(destId, targetId)) {
+    throw new Stop("refused", `${safe(dest)} is not ours after writing it: it resolves to ${destId === null ? "nothing" : safe(destId.real)}, not ${safe(target)}`);
+  }
+}
+
+/** One link to `target` at `dest`, by the ownership rule: made, already there, re-pointed -- or refused before anything is written. */
+interface LinkPlan {
+  readonly kind: "link" | "already" | "re-point";
+  readonly previous: string | null;
+}
+
+function planLink(dest: string, target: string, state: LinkState, plugin: string): LinkPlan {
+  if (state.kind === "unreadable") throw new VerbUsageError(`${state.reason}: the destination cannot be judged, so nothing is written.`);
+  if (state.kind === "absent") return { kind: "link", previous: null };
+  if (state.kind === "link" && state.owner !== null && state.real !== null) {
+    const targetId = identityOf(target);
+    const currentId = identityOf(state.real);
+    if (targetId !== null && currentId !== null && sameIdentity(targetId, currentId)) return { kind: "already", previous: null };
+    return { kind: "re-point", previous: state.real };
+  }
+  throw new Stop("refused", `${safe(dest)} is ${describeForeign(state, plugin)}: refusing to replace it -- a first-party install never discards what it did not make`);
+}
+
+/** Carry out a link plan (or record it under --dry-run), reading the result back. */
+function applyLink(dest: string, target: string, plan: LinkPlan, draft: Draft, dryRun: boolean, platform: NodeJS.Platform): void {
+  if (plan.kind === "already") {
+    draft.link = "already linked";
+    return;
+  }
+  if (plan.kind === "link") {
+    draft.steps.push({ kind: "mkdir", detail: dirname(dest), done: !dryRun });
+    draft.steps.push({ kind: "link", detail: `${dest} -> ${target}`, done: !dryRun });
+  } else {
+    draft.steps.push({ kind: "re-point", detail: `${dest} -> ${target} (was ${plan.previous ?? "?"})`, done: !dryRun });
+  }
+  draft.link = plan.kind === "link" ? "linked" : "re-pointed";
+  draft.previous = plan.previous;
+  if (dryRun) return;
+  placeLink(dest, target, plan.kind === "re-point", platform);
+  readBackLink(dest, target);
+}
+
+// ---------------------------------------------------------------------------
+// install
+// ---------------------------------------------------------------------------
+
+export interface InstallInputs {
+  readonly surface: InstallSurface;
+  readonly plugin: string;
+  /** The validated real path of --root. */
+  readonly root: string;
+  readonly configDir: string;
+  /** --surface-dir, validated (antigravity only). */
+  readonly surfaceDir: string | null;
+  readonly dryRun: boolean;
+  readonly seams: Seams;
+}
+
+interface Draft {
+  destination: string | null;
+  link: string | null;
+  previous: string | null;
+  steps: Step[];
+  actions: OwedAction[];
+  readBack: ReadBack;
+  served: Served | null;
+  problems: string[];
+  /** Set when the surface's CLI could not be started and the install went ahead without it. */
+  missing: string | null;
+}
+
+function newDraft(destination: string | null): Draft {
+  return { destination, link: null, previous: null, steps: [], actions: [], readBack: { checked: false, detail: "not reached" }, served: null, problems: [], missing: null };
+}
+
+/** Run one tool step, recording it; a step that could not run or failed stops the flow. */
+function step(draft: Draft, inputs: InstallInputs, args: readonly string[]): ToolResult {
+  const cli = SURFACE_CLI[inputs.surface];
+  draft.steps.push({ kind: "run", detail: `${cli} ${args.join(" ")}`, done: !inputs.dryRun });
+  if (inputs.dryRun) return { ok: true, spawnFailed: false, stdout: "", last: "" };
+  const result = callTool(inputs.seams, cli, args, toolEnv(inputs.surface, inputs.configDir));
+  if (result.spawnFailed) throw new Stop("tool missing", result.last);
+  if (!result.ok) throw new Stop("failed", `${cli} ${args.join(" ")} failed: ${result.last}`);
+  return result;
+}
+
+/** A read the verb needs even under --dry-run (it changes nothing): run, or stop on a tool that is missing or failed. */
+function read(inputs: InstallInputs, args: readonly string[]): ToolResult {
+  const cli = SURFACE_CLI[inputs.surface];
+  const result = callTool(inputs.seams, cli, args, toolEnv(inputs.surface, inputs.configDir));
+  if (result.spawnFailed) throw new Stop("tool missing", result.last);
+  if (!result.ok) throw new Stop("failed", `${cli} ${args.join(" ")} failed: ${result.last}`);
+  return result;
+}
+
+export function install(inputs: InstallInputs): InstallReport {
+  const destination =
+    inputs.surface === "claude-code"
+      ? join(inputs.configDir, "skills", inputs.plugin)
+      : inputs.surface === "antigravity"
+        ? join(inputs.configDir, "config", "plugins", inputs.plugin)
+        : null;
+  const draft = newDraft(destination);
+  let verdict: InstallVerdict;
+  let reason: string;
+  try {
+    if (inputs.surface === "claude-code") installClaudeCode(inputs, draft);
+    else if (inputs.surface === "codex") installCodex(inputs, draft);
+    else installAntigravity(inputs, draft);
+    if (draft.problems.length > 0) {
+      verdict = "failed";
+      reason = draft.problems.join("; ");
+    } else if (draft.actions.length > 0) {
+      verdict = "owed";
+      reason = `the install is in place, and ${draft.actions.length === 1 ? "one change is" : `${draft.actions.length} changes are`} owed that this verb never makes`;
+    } else if (draft.missing !== null) {
+      verdict = "tool missing";
+      reason = draft.missing;
+    } else {
+      verdict = "ok";
+      reason = inputs.dryRun ? "the plan is complete; nothing was changed (--dry-run)" : "installed, and read back";
+    }
+  } catch (error) {
+    if (!(error instanceof Stop)) throw error;
+    verdict = error.verdict;
+    reason = error.message;
+  }
+  return {
+    surface: inputs.surface,
+    plugin: inputs.plugin,
+    root: inputs.root,
+    configDir: inputs.configDir,
+    dryRun: inputs.dryRun,
+    destination: draft.destination,
+    link: draft.link,
+    previous: draft.previous,
+    steps: draft.steps,
+    actions: draft.actions,
+    readBack: draft.readBack,
+    served: draft.served,
+    verdict,
+    reason,
+    apply: APPLY_HINT[inputs.surface],
+  };
+}
+
+/** What Claude Code's own files say about the plugin: read in full, refused (exit 2) when a file cannot be trusted. */
+interface ClaudeState {
+  readonly recordKeys: readonly string[];
+  readonly enabled: Readonly<Record<string, unknown>>;
+  readonly extraMarketplaces: Readonly<Record<string, unknown>>;
+  readonly known: Readonly<Record<string, unknown>>;
+}
+
+function readClaudeState(configDir: string, plugin: string): ClaudeState {
+  const record = readInstallRecord(configDir);
+  if (record.state === "unreadable") {
+    throw new VerbUsageError(`${safe(join(configDir, "plugins", "installed_plugins.json"))} cannot be trusted (${record.reason}): which copies are installed cannot be verified, so nothing is changed.`);
+  }
+  const recordKeys = record.state === "read" ? Object.keys(record.plugins).filter((key): boolean => key.startsWith(`${plugin}@`)) : [];
+  const settingsPath = join(configDir, "settings.json");
+  const settings = readJsonObject(settingsPath);
+  if (settings.state === "bad") throw new VerbUsageError(`${settings.reason}: its enabledPlugins and extraKnownMarketplaces cannot be verified, so nothing is changed.`);
+  const settingsValue = settings.state === "read" ? settings.value : {};
+  const knownPath = join(configDir, "plugins", "known_marketplaces.json");
+  const known = readJsonObject(knownPath);
+  if (known.state === "bad") throw new VerbUsageError(`${known.reason}: which marketplaces are known cannot be verified, so nothing is changed.`);
+  return {
+    recordKeys,
+    enabled: objectField(settingsValue, "enabledPlugins", safe(settingsPath)),
+    extraMarketplaces: objectField(settingsValue, "extraKnownMarketplaces", safe(settingsPath)),
+    known: known.state === "read" ? known.value : {},
+  };
+}
+
+/** The settings declarations still standing, as actions the caller owes. */
+function claudeActions(state: ClaudeState, inputs: InstallInputs, marketplace: string | null): OwedAction[] {
+  const actions: OwedAction[] = [];
+  const settings = join(inputs.configDir, "settings.json");
+  const env = inputs.seams.env;
+  const skills = skillsDirKey(inputs.plugin);
+  for (const [key, value] of Object.entries(state.enabled)) {
+    if (!key.startsWith(`${inputs.plugin}@`) || key === skills || value !== true) continue;
+    actions.push({
+      what: `${settings} enables ${key} in enabledPlugins: an enabled marketplace copy takes precedence over skills/${inputs.plugin}, and one that is not cached is downloaded again on the next reload`,
+      command: suggest(inputs.surface, inputs.configDir, env, `claude plugin disable ${key} --scope user`),
+    });
+  }
+  if (state.enabled[skills] === false) {
+    actions.push({
+      what: `${settings} disables ${skills} in enabledPlugins: the link is in place and will not be loaded`,
+      command: suggest(inputs.surface, inputs.configDir, env, `claude plugin enable ${skills} --scope user`),
+    });
+  }
+  if (marketplace !== null && own(state.extraMarketplaces, marketplace)) {
+    actions.push({
+      what: `${settings} declares extraKnownMarketplaces.${marketplace}: Claude Code clones a declared marketplace again on the next reload, and with it the copy that shadows skills/${inputs.plugin}`,
+      command: suggest(inputs.surface, inputs.configDir, env, `claude plugin marketplace remove ${marketplace}`),
+    });
+  }
+  return actions;
+}
+
+/** Claude Code's files read again AFTER a change: one that cannot be trusted now is a failed step, with the report. */
+function reread(configDir: string, plugin: string): ClaudeState {
+  try {
+    return readClaudeState(configDir, plugin);
+  } catch (error) {
+    if (error instanceof VerbUsageError) throw new Stop("failed", `after the handover, ${error.message}`);
+    /* c8 ignore next -- readClaudeState raises nothing else */
+    throw error;
+  }
+}
+
+function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
+  const { plugin, root, configDir } = inputs;
+  const dest = draft.destination as string;
+  // EVERY PRECONDITION IS READ BEFORE ANYTHING IS WRITTEN: a file that cannot
+  // be trusted, a destination that is not ours, a shadow from a foreign
+  // marketplace or a handover the CLI is missing for changes nothing at all.
+  const market = readMarketplace(root, plugin);
+  if (market.state === "bad") throw new VerbUsageError(`${market.reason}: the marketplace whose copy is handed over cannot be named.`);
+  const marketplace = market.state === "read" ? market.name : null;
+  const ours = marketplace === null ? null : `${plugin}@${marketplace}`;
+  const plan = planLink(dest, root, inspectDestination(dest, claudeOwner(plugin)), plugin);
+  const state = readClaudeState(configDir, plugin);
+  const foreign = state.recordKeys.filter((key): boolean => key !== ours && key !== skillsDirKey(plugin));
+  if (foreign.length > 0) {
+    throw new Stop(
+      "refused",
+      `${foreign.join(", ")} ${foreign.length === 1 ? "is" : "are"} installed from a marketplace this checkout does not publish (${marketplace ?? "it publishes none"}); an installed copy takes precedence over skills/${plugin}, and removing it is not this verb's to do`,
+    );
+  }
+  const installed = ours !== null && state.recordKeys.includes(ours);
+  const known = marketplace !== null && own(state.known, marketplace);
+  const pending = claudeActions(state, inputs, marketplace);
+  // The CLI's presence is asked first, read-only: a handover it cannot perform
+  // must not leave a link behind for the marketplace copy to keep shadowing.
+  const probe = callTool(inputs.seams, "claude", ["--version"], toolEnv("claude-code", configDir));
+  const owed = installed || known || pending.length > 0;
+  if (probe.spawnFailed && owed) {
+    throw new Stop("tool missing", `claude could not be started, and a handover is owed (${[installed ? `${ours} is installed` : "", known ? `the ${marketplace} marketplace is known` : "", pending.length > 0 ? "settings.json declares it" : ""].filter((part): boolean => part !== "").join(", ")}); nothing was changed`);
+  }
+  if (!probe.spawnFailed && !probe.ok) throw new Stop("failed", `claude --version failed: ${probe.last}`);
+
+  applyLink(dest, root, plan, draft, inputs.dryRun, inputs.seams.platform);
+
+  if (probe.spawnFailed) {
+    draft.missing = `claude could not be started: ${inputs.dryRun ? "the link is planned, and" : "the link is in place, but"} the read-back (claude plugin list --json) cannot be performed`;
+    draft.readBack = { checked: false, detail: "claude could not be started" };
+    return;
+  }
+  if (installed && ours !== null) {
+    step(draft, inputs, ["plugin", "uninstall", ours]);
+    if (!inputs.dryRun && reread(configDir, plugin).recordKeys.includes(ours)) {
+      throw new Stop("failed", `${ours} is still recorded in installed_plugins.json after claude plugin uninstall`);
+    }
+  }
+  if (known && marketplace !== null) {
+    step(draft, inputs, ["plugin", "marketplace", "remove", marketplace]);
+    if (!inputs.dryRun && own(reread(configDir, plugin).known, marketplace)) {
+      throw new Stop("failed", `known_marketplaces.json still records ${marketplace} after claude plugin marketplace remove`);
+    }
+  }
+  if (inputs.dryRun) {
+    draft.actions.push(...pending);
+    draft.readBack = { checked: false, detail: "--dry-run: nothing to read back" };
+    return;
+  }
+  // What the handover left standing in settings.json is owed by the caller.
+  draft.actions.push(...claudeActions(reread(configDir, plugin), inputs, marketplace));
+  const listed = read(inputs, ["plugin", "list", "--json"]);
+  const entries = parseClaudeList(listed.stdout);
+  if (typeof entries === "string") throw new Stop("failed", `claude plugin list --json could not be read: ${entries}`);
+  const skills = entries.find((entry): boolean => entry.id === skillsDirKey(plugin));
+  const rootVersion = pluginManifest(root, plugin)?.version ?? null;
+  if (skills !== undefined) {
+    draft.served = { id: skills.id, version: skills.version, path: skills.installPath, enabled: skills.enabled === true, status: null };
+  }
+  const shadows = entries.filter((entry): boolean => entry.id.startsWith(`${plugin}@`) && entry.id !== skillsDirKey(plugin) && entry.enabled === true);
+  if (skills === undefined || skills.enabled !== true) {
+    draft.problems.push(`claude plugin list --json has no enabled ${skillsDirKey(plugin)} entry after linking ${dest}`);
+  } else {
+    const servedId = skills.installPath === null ? null : identityOf(skills.installPath);
+    const rootId = identityOf(root);
+    if (servedId === null || rootId === null || !sameIdentity(servedId, rootId)) {
+      draft.problems.push(`${skillsDirKey(plugin)} is served from ${safe(skills.installPath ?? "no installPath")}, which is not ${safe(root)}`);
+    }
+    if (rootVersion !== null && skills.version !== null && skills.version !== rootVersion) {
+      draft.problems.push(`${skillsDirKey(plugin)} serves version ${skills.version}, but ${safe(root)}'s plugin.json says ${rootVersion}`);
+    }
+  }
+  if (shadows.length > 0) draft.problems.push(`claude plugin list --json still shows ${shadows.map((entry): string => entry.id).join(", ")} enabled: the shadow was not cleared`);
+  draft.readBack = { checked: true, detail: skills === undefined ? "no skills-directory entry" : `${skills.id} ${skills.enabled === true ? "enabled" : "not enabled"}, version ${skills.version ?? "?"}` };
+}
+
+function installCodex(inputs: InstallInputs, draft: Draft): void {
+  const { plugin, root } = inputs;
+  const market = readMarketplace(root, plugin);
+  if (market.state === "absent") {
+    throw new VerbUsageError(`${safe(root)} carries no .claude-plugin/marketplace.json: Codex installs a plugin from the checkout's own marketplace, so there is nothing to add.`);
+  }
+  if (market.state === "bad") throw new VerbUsageError(`${market.reason}.`);
+  if (market.listsPlugin === false) {
+    throw new VerbUsageError(`${safe(join(root, ".claude-plugin", "marketplace.json"))} lists no plugin named '${plugin}': Codex would install nothing by that name.`);
+  }
+  const marketplace = market.name;
+  const id = `${plugin}@${marketplace}`;
+  const compare = codexManifest(root, plugin);
+  const rootId = identityOf(root);
+
+  const listed = read(inputs, ["plugin", "marketplace", "list"]);
+  const row = parseCodexMarketplaces(listed.stdout).find((entry): boolean => entry.name === marketplace);
+  if (row !== undefined) {
+    const rowId = identityOf(row.root);
+    if (rowId === null || rootId === null || !sameIdentity(rowId, rootId)) {
+      throw new Stop("refused", `the Codex marketplace '${marketplace}' already points at ${safe(row.root)}, not ${safe(root)}: it is not this verb's to override`);
+    }
+  } else {
+    step(draft, inputs, ["plugin", "marketplace", "add", root]);
+    if (!inputs.dryRun) {
+      const again = read(inputs, ["plugin", "marketplace", "list"]);
+      const added = parseCodexMarketplaces(again.stdout).find((entry): boolean => entry.name === marketplace);
+      const addedId = added === undefined ? null : identityOf(added.root);
+      if (addedId === null || rootId === null || !sameIdentity(addedId, rootId)) {
+        throw new Stop("failed", `codex plugin marketplace list does not show '${marketplace}' at ${safe(root)} after adding it`);
+      }
+    }
+  }
+  const added = step(draft, inputs, ["plugin", "add", id]);
+  if (inputs.dryRun) {
+    draft.readBack = { checked: false, detail: "--dry-run: nothing to read back" };
+    return;
+  }
+  const cachePath = codexInstalledRoot(added.stdout);
+  const plugins = parseCodexPlugins(read(inputs, ["plugin", "list"]).stdout);
+  const mine = plugins.find((entry): boolean => entry.id === id);
+  if (mine === undefined) {
+    draft.problems.push(`codex plugin list has no ${id} row after installing it`);
+    draft.readBack = { checked: true, detail: `no ${id} row` };
+    return;
+  }
+  draft.served = { id, version: mine.version, path: mine.path ?? cachePath, enabled: codexEnabled(mine.status), status: mine.status };
+  draft.readBack = { checked: true, detail: `${id} ${mine.status} ${mine.version ?? "?"} (compared against ${compare.path})` };
+  if (!codexEnabled(mine.status)) draft.problems.push(`codex plugin list shows ${id} '${mine.status}', expected installed and enabled`);
+  if (mine.version !== compare.version) {
+    draft.problems.push(`codex plugin list shows ${id} at ${mine.version ?? "no version"}, but ${compare.path} says ${compare.version}`);
+  }
+}
+
+function installAntigravity(inputs: InstallInputs, draft: Draft): void {
+  const { plugin, root } = inputs;
+  const surfaceDir = inputs.surfaceDir as string;
+  const dest = draft.destination as string;
+  const target = join(root, ...surfaceDir.split("/"));
+  const plan = planLink(dest, target, inspectDestination(dest, antigravityOwner(plugin, surfaceDir)), plugin);
+  applyLink(dest, target, plan, draft, inputs.dryRun, inputs.seams.platform);
+  if (inputs.dryRun) {
+    draft.readBack = { checked: false, detail: "--dry-run: nothing to read back" };
+    return;
+  }
+  const manifest = flatManifest(dest);
+  draft.served = { id: plugin, version: manifest?.version ?? null, path: dest, enabled: true, status: null };
+  const validate = callTool(inputs.seams, "agy", ["plugin", "validate", dest], {});
+  if (validate.spawnFailed) {
+    draft.readBack = { checked: true, detail: `linked plugin.json version ${manifest?.version ?? "?"}; agy could not be started, so agy plugin validate is NOT CHECKED` };
+    return;
+  }
+  if (!validate.ok) draft.problems.push(`agy plugin validate ${dest} failed: ${validate.last}`);
+  draft.readBack = { checked: true, detail: `linked plugin.json version ${manifest?.version ?? "?"}; agy plugin validate ${validate.ok ? "ok" : "failed"}` };
+}
+
+// ---------------------------------------------------------------------------
+// status
+// ---------------------------------------------------------------------------
+
+export interface StatusInputs {
+  readonly surface: InstallSurface;
+  readonly plugin: string;
+  /** The validated real path of --root, or null: then nothing is compared against a checkout. */
+  readonly root: string | null;
+  readonly configDir: string;
+  readonly surfaceDir: string | null;
+  readonly seams: Seams;
+}
+
+export interface StatusReport {
+  readonly surface: InstallSurface;
+  readonly plugin: string;
+  readonly root: string | null;
+  readonly configDir: string;
+  readonly destination: string | null;
+  /** The destination, described: `absent`, `linked to <path>`, `a real directory`, ... */
+  readonly link: string | null;
+  /** Every entry the surface lists for the plugin, enabled or not. */
+  readonly listed: readonly Served[];
+  /** The entries the surface serves: listed and enabled. */
+  readonly served: readonly Served[];
+  readonly readBack: ReadBack;
+  readonly warnings: readonly string[];
+  readonly verdict: StatusVerdict;
+  readonly reason: string;
+}
+
+function describeLink(state: LinkState, plugin: string): string {
+  if (state.kind === "absent") return "absent";
+  if (state.kind === "unreadable") return state.reason;
+  if (state.kind === "link" && state.owner !== null && state.real !== null) return `linked to ${state.real}`;
+  return describeForeign(state, plugin);
+}
+
+/**
+ * Which recorded copies Claude Code SERVES (zheref/nen#298, deferred from
+ * #339): a marketplace copy when settings.json's enabledPlugins enables it; the
+ * skills-directory copy unless enabledPlugins disables it or an enabled
+ * marketplace copy takes precedence over it (the first consumer's live record,
+ * 2026-09-29: "the name is already taken by an installed plugin, which takes
+ * precedence").
+ */
+export function servedSelector(plugin: string, recordKeys: readonly string[], enabled: Readonly<Record<string, unknown>>): CopySelector {
+  const skills = skillsDirKey(plugin);
+  const winners = recordKeys.filter((key): boolean => key !== skills && enabled[key] === true);
+  return (key) => {
+    if (key === skills) {
+      if (enabled[skills] === false) return "disabled in settings.json enabledPlugins";
+      if (winners.length > 0) return `not loaded: ${winners.join(", ")} is enabled and takes precedence over a skills-directory copy`;
+      return null;
+    }
+    return enabled[key] === true ? null : "not enabled in settings.json enabledPlugins";
+  };
+}
+
+/** Claude Code's settings, for the served selector: refused (exit 2) when they cannot be trusted. */
+export function claudeSelector(configDir: string, plugin: string): CopySelector {
+  const state = readClaudeState(configDir, plugin);
+  return servedSelector(plugin, state.recordKeys, state.enabled);
+}
+
+export function status(inputs: StatusInputs): StatusReport {
+  if (inputs.surface === "claude-code") return statusClaudeCode(inputs);
+  if (inputs.surface === "codex") return statusCodex(inputs);
+  return statusAntigravity(inputs);
+}
+
+function verdictOf(
+  problems: readonly string[],
+  readBack: ReadBack,
+  served: readonly Served[],
+  mismatch: string | null,
+  servedReason: string,
+): { verdict: StatusVerdict; reason: string } {
+  if (problems.length > 0) return { verdict: "wiring", reason: problems.join("; ") };
+  if (!readBack.checked) return { verdict: "tool missing", reason: readBack.detail };
+  if (served.length === 0) return { verdict: "not installed", reason: servedReason };
+  if (mismatch !== null) return { verdict: "mismatch", reason: mismatch };
+  return { verdict: "serving", reason: `serves ${served.map((entry): string => `${entry.id} ${entry.version ?? "?"}`).join(", ")}` };
+}
+
+function statusClaudeCode(inputs: StatusInputs): StatusReport {
+  const { plugin, root, configDir } = inputs;
+  const dest = join(configDir, "skills", plugin);
+  const link = inspectDestination(dest, claudeOwner(plugin));
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  const marketplaces = new Set<string>();
+  if (root !== null) {
+    const market = readMarketplace(root, plugin);
+    if (market.state === "read") marketplaces.add(market.name);
+  }
+  const record = readInstallRecord(configDir);
+  if (record.state === "unreadable") problems.push(`the install record cannot be trusted (${record.reason})`);
+  const recordKeys = record.state === "read" ? Object.keys(record.plugins).filter((key): boolean => key.startsWith(`${plugin}@`)) : [];
+  for (const key of recordKeys) if (key !== skillsDirKey(plugin)) marketplaces.add(key.slice(plugin.length + 1));
+  const settings = readJsonObject(join(configDir, "settings.json"));
+  if (settings.state === "bad") problems.push(`${settings.reason}: enabledPlugins cannot be verified`);
+  const settingsValue = settings.state === "read" ? settings.value : {};
+  const enabled = settingsValue["enabledPlugins"];
+  const extra = settingsValue["extraKnownMarketplaces"];
+  if (typeof enabled === "object" && enabled !== null && !Array.isArray(enabled)) {
+    for (const [key, value] of Object.entries(enabled as Record<string, unknown>)) {
+      if (key.startsWith(`${plugin}@`) && key !== skillsDirKey(plugin) && value === true) {
+        warnings.push(`settings.json enables ${key}: an enabled marketplace copy takes precedence over skills/${plugin}, and is downloaded again on the next reload when it is not cached`);
+        marketplaces.add(key.slice(plugin.length + 1));
+      }
+    }
+  }
+  if (typeof extra === "object" && extra !== null && !Array.isArray(extra)) {
+    for (const name of [...marketplaces].sort()) {
+      if (own(extra as Record<string, unknown>, name)) warnings.push(`settings.json declares extraKnownMarketplaces.${name}: Claude Code clones it again on the next reload`);
+    }
+  }
+  let readBack: ReadBack;
+  let listed: Served[] = [];
+  const result = callTool(inputs.seams, "claude", ["plugin", "list", "--json"], toolEnv("claude-code", configDir));
+  if (result.spawnFailed) {
+    readBack = { checked: false, detail: `${result.last}: claude plugin list --json was not read, so nothing is known to be served` };
+  } else if (!result.ok) {
+    readBack = { checked: true, detail: "failed" };
+    problems.push(`claude plugin list --json failed: ${result.last}`);
+  } else {
+    const entries = parseClaudeList(result.stdout);
+    if (typeof entries === "string") {
+      readBack = { checked: true, detail: "unreadable" };
+      problems.push(`claude plugin list --json could not be read: ${entries}`);
+    } else {
+      listed = entries
+        .filter((entry): boolean => entry.id.startsWith(`${plugin}@`))
+        .map((entry): Served => ({ id: entry.id, version: entry.version, path: entry.installPath, enabled: entry.enabled === true, status: null }));
+      readBack = { checked: true, detail: `claude plugin list --json: ${listed.length} ${plugin}@ ${listed.length === 1 ? "entry" : "entries"}` };
+    }
+  }
+  const served = listed.filter((entry): boolean => entry.enabled);
+  if (served.length > 1) warnings.push(`${served.length} copies are enabled (${served.map((entry): string => entry.id).join(", ")}): one shadows the other`);
+  let mismatch: string | null = null;
+  if (root !== null && served.length > 0) {
+    const rootId = identityOf(root);
+    const rootVersion = pluginManifest(root, plugin)?.version ?? null;
+    const fromRoot = served.find((entry): boolean => {
+      const id = entry.path === null ? null : identityOf(entry.path);
+      return id !== null && rootId !== null && sameIdentity(id, rootId);
+    });
+    if (fromRoot === undefined) mismatch = `serves ${served.map((entry): string => `${entry.id} from ${entry.path ?? "?"}`).join(", ")}, not ${root}`;
+    else if (served.length > 1) mismatch = `serves ${root} as ${fromRoot.id}, but another enabled copy shadows it`;
+    else if (rootVersion !== null && fromRoot.version !== rootVersion) mismatch = `serves ${fromRoot.id} at version ${fromRoot.version ?? "?"}, but ${root}'s plugin.json says ${rootVersion}`;
+  }
+  const outcome = verdictOf(problems, readBack, served, mismatch, `claude plugin list --json lists no enabled ${plugin}@ entry`);
+  return {
+    surface: "claude-code",
+    plugin,
+    root,
+    configDir,
+    destination: dest,
+    link: describeLink(link, plugin),
+    listed,
+    served,
+    readBack,
+    warnings,
+    ...outcome,
+  };
+}
+
+function statusCodex(inputs: StatusInputs): StatusReport {
+  const { plugin, root, configDir } = inputs;
+  const env = toolEnv("codex", configDir);
+  const problems: string[] = [];
+  let readBack: ReadBack;
+  let listed: Served[] = [];
+  const marketplaceRoots = new Map<string, string>();
+  const result = callTool(inputs.seams, "codex", ["plugin", "list"], env);
+  if (result.spawnFailed) {
+    readBack = { checked: false, detail: `${result.last}: codex plugin list was not read, so nothing is known to be served` };
+  } else if (!result.ok) {
+    readBack = { checked: true, detail: "failed" };
+    problems.push(`codex plugin list failed: ${result.last}`);
+  } else {
+    listed = parseCodexPlugins(result.stdout)
+      .filter((row): boolean => row.id.startsWith(`${plugin}@`))
+      .map((row): Served => ({ id: row.id, version: row.version, path: row.path, enabled: codexEnabled(row.status), status: row.status }));
+    readBack = { checked: true, detail: `codex plugin list: ${listed.length} ${plugin}@ ${listed.length === 1 ? "row" : "rows"}` };
+    const markets = callTool(inputs.seams, "codex", ["plugin", "marketplace", "list"], env);
+    if (!markets.ok) problems.push(`codex plugin marketplace list failed: ${markets.last}`);
+    else for (const row of parseCodexMarketplaces(markets.stdout)) marketplaceRoots.set(row.name, row.root);
+  }
+  const served = listed.filter((entry): boolean => entry.enabled);
+  const warnings = served
+    .map((entry): string => {
+      const name = entry.id.slice(plugin.length + 1);
+      const at = marketplaceRoots.get(name);
+      return at === undefined ? `${entry.id}: no '${name}' marketplace is registered` : `${entry.id}: marketplace '${name}' at ${at}`;
+    });
+  let mismatch: string | null = null;
+  if (root !== null && served.length > 0) {
+    const market = readMarketplace(root, plugin);
+    if (market.state !== "read") {
+      mismatch = `${root} carries no usable .claude-plugin/marketplace.json, so what Codex serves cannot be its install`;
+    } else {
+      const id = `${plugin}@${market.name}`;
+      const mine = served.find((entry): boolean => entry.id === id);
+      const at = marketplaceRoots.get(market.name);
+      const atId = at === undefined ? null : identityOf(at);
+      const rootId = identityOf(root);
+      const compare = codexManifest(root, plugin);
+      if (mine === undefined) mismatch = `serves ${served.map((entry): string => entry.id).join(", ")}, not ${id}`;
+      else if (atId === null || rootId === null || !sameIdentity(atId, rootId)) mismatch = `the '${market.name}' marketplace is at ${at ?? "nowhere"}, not ${root}`;
+      else if (mine.version !== compare.version) mismatch = `serves ${id} at ${mine.version ?? "?"}, but ${compare.path} says ${compare.version}`;
+    }
+  }
+  const outcome = verdictOf(problems, readBack, served, mismatch, `codex plugin list shows no installed, enabled ${plugin}@ row`);
+  return { surface: "codex", plugin, root, configDir, destination: null, link: null, listed, served, readBack, warnings, ...outcome };
+}
+
+function statusAntigravity(inputs: StatusInputs): StatusReport {
+  const { plugin, root, configDir, surfaceDir } = inputs;
+  const dest = join(configDir, "config", "plugins", plugin);
+  const owner: Owner = surfaceDir === null ? (real): string | null => (flatManifest(real)?.name === plugin ? real : null) : antigravityOwner(plugin, surfaceDir);
+  const link = inspectDestination(dest, owner);
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  let served: Served[] = [];
+  let notServed = `${dest} is ${describeLink(link, plugin)}`;
+  if (link.kind === "unreadable") problems.push(link.reason);
+  const folder = link.kind === "link" ? link.real : link.kind === "directory" ? dest : null;
+  if (folder !== null) {
+    const manifest = flatManifest(folder);
+    if (manifest !== null && manifest.name === plugin) {
+      served = [{ id: plugin, version: manifest.version, path: folder, enabled: true, status: null }];
+      if (link.kind === "directory") warnings.push(`${dest} is a real directory, a copy (agy plugin install copies); it is not a link to any checkout`);
+    } else {
+      notServed = `${dest} holds no plugin.json naming '${plugin}'`;
+    }
+  }
+  let readBack: ReadBack = { checked: true, detail: served.length === 0 ? "nothing linked to validate" : `plugin.json version ${served[0]?.version ?? "?"}` };
+  let mismatch: string | null = null;
+  if (served.length > 0) {
+    const validate = callTool(inputs.seams, "agy", ["plugin", "validate", dest], {});
+    if (validate.spawnFailed) readBack = { checked: true, detail: `${readBack.detail}; agy could not be started, so agy plugin validate is NOT CHECKED` };
+    else if (!validate.ok) mismatch = `agy plugin validate ${dest} failed: ${validate.last}`;
+    else readBack = { checked: true, detail: `${readBack.detail}; agy plugin validate ok` };
+  }
+  if (root !== null && surfaceDir !== null && served.length > 0 && mismatch === null) {
+    const target = identityOf(join(root, ...surfaceDir.split("/")));
+    const path = served[0]?.path ?? null;
+    const current = path === null ? null : identityOf(path);
+    if (link.kind !== "link" || target === null || current === null || !sameIdentity(target, current)) {
+      mismatch = `serves ${served[0]?.path ?? "?"}, not ${join(root, ...surfaceDir.split("/"))}`;
+    }
+  }
+  const outcome = verdictOf(problems, readBack, served, mismatch, notServed);
+  return {
+    surface: "antigravity",
+    plugin,
+    root,
+    configDir,
+    destination: dest,
+    link: describeLink(link, plugin),
+    listed: served,
+    served,
+    readBack,
+    warnings,
+    ...outcome,
+  };
+}
