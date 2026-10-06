@@ -4,7 +4,7 @@ import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { SchemaError } from "../schema/errors.js";
 import { countRoutingCells, loadDirectRegistry, parseDirectRegistry, SHARED_CELL } from "./registry.js";
-import { REAL_REGISTRY, readJson, type Json } from "./fixtures/harness.js";
+import { miniRegistryJson, REAL_REGISTRY, readJson, type Json } from "./fixtures/harness.js";
 
 function refusal(edit: (value: Json) => void): SchemaError {
   const value = readJson(REAL_REGISTRY);
@@ -343,6 +343,61 @@ describe("parseDirectRegistry -- every refusal names its pointer", () => {
         delete v["aliases"];
       }).message,
     ).toContain("/x/registry.json");
+  });
+});
+
+function lineAliases(value: Json): void {
+  for (const [name, alias] of Object.entries(value["aliases"] as Record<string, Json>)) {
+    if (alias["reviewer"] === true) continue;
+    alias["line"] = name.toLowerCase();
+  }
+}
+
+describe("picks.fallbackRule, escalation and the recommended condition", () => {
+  it("refuses an escalation that does not name an alias, whether or not the fallback rule is declared", () => {
+    const value = miniRegistryJson();
+    value["aliases"]["A_TOP"]["escalation"] = "NO_SUCH_ALIAS";
+    expect(() => parseDirectRegistry("/x/registry.json", value)).toThrow(/aliases\.A_TOP\.escalation/);
+  });
+
+  it("refuses an actionable alias with no line when picks.fallbackRule is declared", () => {
+    const value = miniRegistryJson();
+    value["picks"] = { fallbackRule: "the actionable runner-up differs in provider or surface" };
+    expect(() => parseDirectRegistry("/x/registry.json", value)).toThrow(/aliases\.A_TOP\.line/);
+  });
+
+  it("refuses a cell whose actionable runner-up shares the winner's provider and surface", () => {
+    const value = miniRegistryJson();
+    lineAliases(value);
+    value["picks"] = { fallbackRule: "the actionable runner-up differs in provider or surface" };
+    expect(() => parseDirectRegistry("/x/registry.json", value)).toThrow(/routing\.plain\.dev\.cells\.\*\.runnerUp/);
+  });
+
+  it("accepts the rule once every actionable runner-up sits in another pool, and a null escalation", () => {
+    const value = miniRegistryJson();
+    lineAliases(value);
+    value["aliases"]["A_TOP"]["escalation"] = null;
+    for (const domains of Object.values(value["routing"] as Record<string, Json>)) {
+      for (const entry of Object.values(domains)) {
+        for (const cell of Object.values((entry as Json)["cells"] as Record<string, Json>)) {
+          cell["runnerUp"] = { alias: "A_EXEC", surface: "s2", interactive: null };
+        }
+      }
+    }
+    value["picks"] = { fallbackRule: "the actionable runner-up differs in provider or surface" };
+    expect(parseDirectRegistry("/x/registry.json", value).picks.fallbackRule).toMatch(/another pool|differs/);
+  });
+
+  it("refuses a recommended condition this binary does not know", () => {
+    const value = miniRegistryJson();
+    value["picks"] = { recommended: { when: { anyOf: [{ maxJobWeight: 4 }] }, then: "the frontier", else: "primary" } };
+    expect(() => parseDirectRegistry("/x/registry.json", value)).toThrow(/picks\.recommended\.then/);
+  });
+
+  it("refuses a within set that is not the three picks once each", () => {
+    const value = miniRegistryJson();
+    value["mismatch"]["within"] = { set: ["primary", "primary", "fallback"] };
+    expect(() => parseDirectRegistry("/x/registry.json", value)).toThrow(/mismatch\.within\.set/);
   });
 });
 

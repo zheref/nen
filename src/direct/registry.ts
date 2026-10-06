@@ -43,7 +43,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolveAgainstRepo } from "../cli/inputs.js";
-import { WEIGHT_MAX } from "../classify/taxonomy.js";
+import { WEIGHT_MAX, WEIGHT_MIN } from "../classify/taxonomy.js";
 import {
   describeValue,
   isRecord,
@@ -90,6 +90,10 @@ export interface RegistryAlias {
   readonly tier: string | null;
   /** A reviewer alias is never an aggregate winner (./resolve.ts). */
   readonly reviewer: boolean;
+  /** The model line the alias belongs to, or null when the file states none (a reviewer). */
+  readonly line: string | null;
+  /** The alias this one escalates to, or null when the file states none. */
+  readonly escalation: string | null;
   readonly selection: string;
 }
 
@@ -165,9 +169,40 @@ export interface RoutingEntry {
 export const MISMATCH_COMPARES: readonly string[] = ["surface", "model", "effort"];
 export const MISMATCH_LEDGER = ".nen/direct/<effort>.json";
 
+/** The three picks a within-set compare names, and the order used when the file states none. */
+export const WITHIN_PICKS = ["primary", "recommended", "fallback"] as const;
+export type WithinPick = (typeof WITHIN_PICKS)[number];
+
+/**
+ * The only `then` / `else` `picks.recommended` may name. The condition's numbers
+ * and level come from the file; these two strings are the shape, the way
+ * `mismatch.compares` is.
+ */
+export const RECOMMENDED_THEN = "aliases.<primary>.escalation";
+export const RECOMMENDED_ELSE = "primary";
+
 export interface MismatchPolicy {
   readonly compares: readonly string[];
   readonly ledger: string;
+  /** The order the within-set compare tries, or null when the file states none. */
+  readonly withinOrder: readonly WithinPick[] | null;
+}
+
+/**
+ * `picks.recommended`'s condition, read from `when.anyOf`. A null member was not
+ * stated, so it never holds. The escalation is applied only when a stated member
+ * holds AND the primary's `escalation` names an alias.
+ */
+export interface RecommendedRule {
+  readonly maxJobWeight: number | null;
+  readonly effortLevel: string | null;
+}
+
+export interface PicksPolicy {
+  /** The declared fallback-rule prose, or null when `picks.fallbackRule` is absent. */
+  readonly fallbackRule: string | null;
+  /** Null when `picks.recommended` is absent: the recommended pick is then the primary. */
+  readonly recommended: RecommendedRule | null;
 }
 
 export interface DirectRegistry {
@@ -187,6 +222,9 @@ export interface DirectRegistry {
   /** Alias names, earliest wins a tie. */
   readonly precedence: readonly string[];
   readonly mismatch: MismatchPolicy;
+  readonly picks: PicksPolicy;
+  /** job -> the role a companion job is reported with, or null when the file states none. */
+  readonly companions: Readonly<Record<string, string>> | null;
   readonly phases: Readonly<Record<string, string>>;
   /** job -> domain -> entry. */
   readonly routing: Readonly<Record<string, Readonly<Record<string, RoutingEntry>>>>;
@@ -237,6 +275,11 @@ function parseAliases(path: string, value: unknown, surfaceNames: readonly strin
     }
     const tier = stringOrNull(path, `${pointer}.tier`, row["tier"]);
     const reviewer = row["reviewer"] === undefined ? false : requireBoolean(path, `${pointer}.reviewer`, row["reviewer"]);
+    const line = row["line"] === undefined ? null : stringOrNull(path, `${pointer}.line`, row["line"]);
+    if (line === "") {
+      throw new SchemaError(path, `${pointer}.line`, "is empty. A line is a non-empty model line, or null where the alias has none.");
+    }
+    const escalation = row["escalation"] === undefined ? null : stringOrNull(path, `${pointer}.escalation`, row["escalation"]);
     // Only a reviewer (an automated PR reviewer, not an author) may run nowhere: every
     // other alias is spelled for a surface by a tier of the consumer's workflow, so
     // one without both could never be recommended or spelled.
@@ -253,6 +296,8 @@ function parseAliases(path: string, value: unknown, surfaceNames: readonly strin
       surface,
       tier,
       reviewer,
+      line,
+      escalation,
       selection: requireString(path, `${pointer}.selection`, row["selection"]),
     };
   }
@@ -451,7 +496,136 @@ function parseMismatch(path: string, value: unknown): MismatchPolicy {
   if (ledger !== MISMATCH_LEDGER) {
     throw new SchemaError(path, "mismatch.ledger", `must be ${describeValue(MISMATCH_LEDGER)}, the one ledger this binary writes; got ${describeValue(ledger)}`);
   }
-  return { compares, ledger };
+  return { compares, ledger, withinOrder: parseWithinOrder(path, record) };
+}
+
+function parseWithinOrder(path: string, record: Record<string, unknown>): readonly WithinPick[] | null {
+  if (record["within"] === undefined) return null;
+  const within = requireRecord(path, "mismatch.within", record["within"]);
+  const set = requireStringList(path, "mismatch.within.set", within["set"]);
+  const expected = [...WITHIN_PICKS];
+  const unique = new Set(set);
+  if (set.length !== expected.length || unique.size !== set.length || expected.some((name): boolean => !unique.has(name))) {
+    throw new SchemaError(
+      path,
+      "mismatch.within.set",
+      `must list each of [${expected.join(", ")}] once, in the order the within-set compare tries them; got ${JSON.stringify(set)}`,
+    );
+  }
+  return set as WithinPick[];
+}
+
+function parseRecommended(path: string, value: unknown, levels: readonly string[]): RecommendedRule {
+  const record = requireRecord(path, "picks.recommended", value);
+  const then = requireString(path, "picks.recommended.then", record["then"]);
+  if (then !== RECOMMENDED_THEN) {
+    throw new SchemaError(path, "picks.recommended.then", `must be ${describeValue(RECOMMENDED_THEN)}; got ${describeValue(then)}`);
+  }
+  const otherwise = requireString(path, "picks.recommended.else", record["else"]);
+  if (otherwise !== RECOMMENDED_ELSE) {
+    throw new SchemaError(path, "picks.recommended.else", `must be ${describeValue(RECOMMENDED_ELSE)}; got ${describeValue(otherwise)}`);
+  }
+  const when = requireRecord(path, "picks.recommended.when", record["when"]);
+  const members = requireArray(path, "picks.recommended.when.anyOf", when["anyOf"]);
+  if (members.length === 0) {
+    throw new SchemaError(path, "picks.recommended.when.anyOf", "is empty. The recommended pick's condition names at least one member.");
+  }
+  let maxJobWeight: number | null = null;
+  let effortLevel: string | null = null;
+  members.forEach((entry, index): void => {
+    const pointer = `picks.recommended.when.anyOf[${index}]`;
+    const row = requireRecord(path, pointer, entry);
+    const keys = Object.keys(row).filter((name): boolean => !name.startsWith("$"));
+    if (keys.length !== 1 || (keys[0] !== "maxJobWeight" && keys[0] !== "effortLevel")) {
+      throw new SchemaError(path, pointer, `expected exactly one of maxJobWeight or effortLevel, got ${JSON.stringify(keys)}`);
+    }
+    if (keys[0] === "maxJobWeight") {
+      if (maxJobWeight !== null) throw new SchemaError(path, pointer, "repeats maxJobWeight; the condition names it once");
+      const weight = row["maxJobWeight"];
+      if (typeof weight !== "number" || !Number.isInteger(weight) || weight < WEIGHT_MIN || weight > WEIGHT_MAX) {
+        throw new SchemaError(path, `${pointer}.maxJobWeight`, `expected a whole number from ${WEIGHT_MIN} to ${WEIGHT_MAX}, got ${describeValue(weight)}`);
+      }
+      maxJobWeight = weight;
+      return;
+    }
+    if (effortLevel !== null) throw new SchemaError(path, pointer, "repeats effortLevel; the condition names it once");
+    const level = requireString(path, `${pointer}.effortLevel`, row["effortLevel"]);
+    if (!levels.includes(level)) {
+      throw new SchemaError(path, `${pointer}.effortLevel`, `is not one of effort.levels [${levels.join(", ")}]`);
+    }
+    effortLevel = level;
+  });
+  return { maxJobWeight, effortLevel };
+}
+
+function parsePicks(path: string, value: unknown, levels: readonly string[]): PicksPolicy {
+  if (value === undefined) return { fallbackRule: null, recommended: null };
+  const record = requireRecord(path, "picks", value);
+  const fallbackRule = record["fallbackRule"] === undefined ? null : requireString(path, "picks.fallbackRule", record["fallbackRule"]);
+  if (fallbackRule === "") {
+    throw new SchemaError(path, "picks.fallbackRule", "is empty. Declaring the rule is a non-empty statement of it, or omitting the key.");
+  }
+  const recommended = record["recommended"] === undefined ? null : parseRecommended(path, record["recommended"], levels);
+  return { fallbackRule, recommended };
+}
+
+function parseCompanions(path: string, value: unknown): Record<string, string> | null {
+  if (value === undefined) return null;
+  const record = requireRecord(path, "companions", value);
+  const role = requireRecord(path, "companions.role", record["role"]);
+  return Object.fromEntries(
+    entriesOf(role).map(([job, text]): [string, string] => [job, requireString(path, `companions.role.${job}`, text)]),
+  );
+}
+
+function checkEscalations(path: string, aliases: Readonly<Record<string, RegistryAlias>>): void {
+  const names = Object.keys(aliases);
+  for (const [name, alias] of Object.entries(aliases)) {
+    if (alias.escalation !== null && !names.includes(alias.escalation)) {
+      throw new SchemaError(
+        path,
+        `aliases.${name}.escalation`,
+        `names ${describeValue(alias.escalation)}, which is not one of aliases [${names.join(", ")}]`,
+      );
+    }
+  }
+}
+
+/** The alias a side resolves to for the pool check: a reviewer's stand-in, else itself. */
+function actionableOf(aliases: Readonly<Record<string, RegistryAlias>>, side: RoutedSide): RegistryAlias {
+  if (side.also !== null && aliases[side.alias]?.reviewer === true) return aliases[side.also] as RegistryAlias;
+  return aliases[side.alias] as RegistryAlias;
+}
+
+function checkFallbackRule(
+  path: string,
+  aliases: Readonly<Record<string, RegistryAlias>>,
+  routing: Readonly<Record<string, Readonly<Record<string, RoutingEntry>>>>,
+): void {
+  for (const [name, alias] of Object.entries(aliases)) {
+    if (!alias.reviewer && alias.line === null) {
+      throw new SchemaError(
+        path,
+        `aliases.${name}.line`,
+        "is missing. An actionable alias carries a line when picks.fallbackRule is declared; only a reviewer may have none.",
+      );
+    }
+  }
+  for (const [job, domains] of Object.entries(routing)) {
+    for (const [domain, entry] of Object.entries(domains)) {
+      for (const [lang, cell] of Object.entries(entry.cells)) {
+        const winner = actionableOf(aliases, cell.winner);
+        const runner = actionableOf(aliases, cell.runnerUp);
+        if (winner.surface !== null && winner.surface === runner.surface && winner.provider === runner.provider) {
+          throw new SchemaError(
+            path,
+            `routing.${job}.${domain}.cells.${lang}.runnerUp`,
+            `resolves to provider ${describeValue(runner.provider)} and surface ${describeValue(runner.surface)}, the same pool as the winner. picks.fallbackRule requires the actionable runner-up to differ in provider or surface.`,
+          );
+        }
+      }
+    }
+  }
 }
 
 function parseSide(
@@ -581,6 +755,12 @@ export function parseDirectRegistry(path: string, value: unknown): DirectRegistr
     ]),
   );
 
+  const effort = parseEffort(path, root["effort"], surfaceNames);
+  const picks = parsePicks(path, root["picks"], effort.levels);
+  const routing = parseRouting(path, root["routing"], phases, aliases, surfaceNames);
+  checkEscalations(path, aliases);
+  if (picks.fallbackRule !== null) checkFallbackRule(path, aliases, routing);
+
   return {
     path,
     schema,
@@ -590,11 +770,13 @@ export function parseDirectRegistry(path: string, value: unknown): DirectRegistr
     surfaces,
     nativeInteractive,
     liveLookup: parseLiveLookup(path, root["liveLookup"]),
-    effort: parseEffort(path, root["effort"], surfaceNames),
+    effort,
     precedence: parsePrecedence(path, root["aggregation"], aliasNames),
     mismatch: parseMismatch(path, root["mismatch"]),
+    picks,
+    companions: parseCompanions(path, root["companions"]),
     phases,
-    routing: parseRouting(path, root["routing"], phases, aliases, surfaceNames),
+    routing,
   };
 }
 

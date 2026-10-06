@@ -62,9 +62,11 @@ import {
   MANY_JOBS,
   MANY_LANGS,
   SHARED_CELL,
+  WITHIN_PICKS,
   type DirectRegistry,
   type RoutedSide,
   type RoutingEntry,
+  type WithinPick,
 } from "./registry.js";
 
 /** What a surface alias reads when the consumer's workflow does not spell it. */
@@ -275,6 +277,10 @@ export interface Pair {
   readonly cell: string;
   readonly winner: PairSide;
   readonly runnerUp: PairSide;
+  /** True when the taxonomy marks this job `companion`. The pair is still reported. */
+  readonly companion: boolean;
+  /** `companions.role` for a companion job, else null. */
+  readonly role: string | null;
 }
 
 function stand(registry: DirectRegistry, side: RoutedSide): PairSide {
@@ -329,6 +335,8 @@ export function collectPairs(
       if (cell === undefined) {
         throw new DirectError(`${registry.path}: at routing.${job}.${used}.cells, there is no shared cell.`);
       }
+      const companion = taxonomy.axes.job.keys.find((entry): boolean => entry.key === job)?.companion === true;
+      const roles = registry.companions;
       pairs.push({
         job,
         lang,
@@ -339,6 +347,8 @@ export function collectPairs(
         cell: specific === undefined ? SHARED_CELL : lang,
         winner: stand(registry, cell.winner),
         runnerUp: stand(registry, cell.runnerUp),
+        companion,
+        role: companion && roles !== null ? (own(roles, job) ?? null) : null,
       });
     }
   }
@@ -382,10 +392,19 @@ function rank(registry: DirectRegistry, seen: readonly string[]): string[] {
   );
 }
 
+/**
+ * The pairs that decide the tally. A companion job is left out when any
+ * non-companion pair exists; an issue of only companions is decided by them.
+ */
+function decidingPairs(pairs: readonly Pair[]): readonly Pair[] {
+  const rest = pairs.filter((pair): boolean => !pair.companion);
+  return rest.length > 0 ? rest : pairs;
+}
+
 export function aggregate(registry: DirectRegistry, pairs: readonly Pair[]): Aggregate {
   const skipped: Skipped[] = [];
   const counted: Pair[] = [];
-  for (const pair of pairs) {
+  for (const pair of decidingPairs(pairs)) {
     if (isReviewer(registry, pair.winner.alias)) {
       skipped.push({ job: pair.job, lang: pair.lang, alias: pair.winner.alias });
     } else {
@@ -539,7 +558,14 @@ export function scoreEffort(
   inputs: DirectInputs,
   domain: string,
 ): Omit<EffortVerdict, "surfaceEffort"> {
-  const jobEntries = inputs.jobs.map((job): { job: string; weight: number | null } => ({
+  const companionKeys = new Set(
+    taxonomy.axes.job.keys.filter((entry): boolean => entry.companion).map((entry): string => entry.key),
+  );
+  const marked = inputs.jobs.filter((job): boolean => companionKeys.has(job));
+  const jobs = marked.length > 0 && marked.length < inputs.jobs.length
+    ? inputs.jobs.filter((job): boolean => !companionKeys.has(job))
+    : inputs.jobs;
+  const jobEntries = jobs.map((job): { job: string; weight: number | null } => ({
     job,
     weight: taxonomy.axes.job.keys.find((entry): boolean => entry.key === job)?.weight ?? null,
   }));
@@ -556,7 +582,7 @@ export function scoreEffort(
   for (const add of registry.effort.rule.plusOne) {
     let holds: boolean;
     if (add.key === MANY_JOBS) {
-      holds = inputs.jobs.length >= (add.threshold as number);
+      holds = jobs.length >= (add.threshold as number);
     } else if (add.key === MANY_LANGS) {
       holds = codeLangs >= (add.threshold as number);
     } else {
@@ -598,11 +624,23 @@ export interface Compare {
   readonly verdict: Verdict;
 }
 
-export interface Mismatch {
+/** The primary compare, before the within-set read names which pick it was. */
+export interface SessionCompare {
   /** True when no compare is a mismatch; an unread compare never makes one. */
   readonly match: boolean;
   /** One entry per value the session gave, in the order surface, model, effort. */
   readonly compares: readonly Compare[];
+}
+
+export type Within = WithinPick | "none";
+
+export interface Mismatch extends SessionCompare {
+  /**
+   * The first pick in the registry's within order (primary, then recommended,
+   * then fallback when the file states none) that the session matches the way
+   * it matches the winner. An all-unread session matches none: unread never decides.
+   */
+  readonly within: Within;
 }
 
 /**
@@ -618,7 +656,7 @@ export function compareSession(
   session: SessionValues,
   winner: ResolvedSide,
   level: string,
-): Mismatch | null {
+): SessionCompare | null {
   const compares: Compare[] = [];
   const decide = (field: Compare["field"], given: string, recommended: string | null, same: boolean): void => {
     compares.push({ field, session: given, recommended, verdict: given === UNREAD ? "unread" : same ? "match" : "mismatch" });
@@ -643,6 +681,44 @@ export function compareSession(
   return { match: compares.every((compare): boolean => compare.verdict !== "mismatch"), compares };
 }
 
+/**
+ * The alias `picks.recommended` names. Absent rule: the primary. A stated
+ * condition that holds AND a non-null escalation: that alias. A null escalation
+ * yields the primary either way. The weight and the level are the numbers the
+ * file stated; nothing here writes them.
+ */
+function chooseRecommended(registry: DirectRegistry, primary: string, weight: number, level: string): string {
+  const rule = registry.picks.recommended;
+  if (rule === null) return primary;
+  const weightHolds = rule.maxJobWeight !== null && weight === rule.maxJobWeight;
+  const levelHolds = rule.effortLevel !== null && level === rule.effortLevel;
+  if (!weightHolds && !levelHolds) return primary;
+  const escalation = own(registry.aliases, primary)?.escalation ?? null;
+  return escalation ?? primary;
+}
+
+/** A pick matches when every readable compare matches. Unread never decides, so an all-unread session matches nothing. */
+function pickMatches(registry: DirectRegistry, session: SessionValues, side: ResolvedSide | null, level: string): boolean {
+  if (side === null) return false;
+  const compared = compareSession(registry, session, side, level);
+  if (compared === null) return false;
+  const readable = compared.compares.filter((compare): boolean => compare.verdict !== "unread");
+  return readable.length > 0 && readable.every((compare): boolean => compare.verdict === "match");
+}
+
+function withinOf(
+  registry: DirectRegistry,
+  session: SessionValues,
+  picks: Readonly<Record<WithinPick, ResolvedSide | null>>,
+  level: string,
+): Within {
+  const order = registry.mismatch.withinOrder ?? WITHIN_PICKS;
+  for (const name of order) {
+    if (pickMatches(registry, session, picks[name], level)) return name;
+  }
+  return "none";
+}
+
 // ── the whole resolution ────────────────────────────────────────────────────
 
 export interface Resolution {
@@ -656,6 +732,8 @@ export interface Resolution {
   readonly winner: ResolvedSide | null;
   /** Null when undirectable, or when no alias distinct from the winner exists. */
   readonly runnerUp: ResolvedSide | null;
+  /** The cost-agnostic pick. Null when undirectable; otherwise beside the winner. */
+  readonly recommended: ResolvedSide | null;
   readonly effort: EffortVerdict | null;
   readonly mismatch: Mismatch | null;
 }
@@ -698,7 +776,19 @@ export function resolveDirection(context: ResolveContext, inputs: DirectInputs, 
   const { registry, taxonomy, models } = context;
   checkRegistryAgainstTaxonomy(registry, taxonomy);
   if (inputs.jobs.length === 0) {
-    return { inputs, session, undirectable: UNDIRECTABLE_JOB, domain: null, pairs: [], aggregate: null, winner: null, runnerUp: null, effort: null, mismatch: null };
+    return {
+      inputs,
+      session,
+      undirectable: UNDIRECTABLE_JOB,
+      domain: null,
+      pairs: [],
+      aggregate: null,
+      winner: null,
+      runnerUp: null,
+      recommended: null,
+      effort: null,
+      mismatch: null,
+    };
   }
   const derived = deriveDomain(taxonomy, inputs);
   const { pairs, fallbacks } = collectPairs(registry, taxonomy, inputs, derived.domain);
@@ -707,6 +797,13 @@ export function resolveDirection(context: ResolveContext, inputs: DirectInputs, 
   const winner = resolveSide(registry, models, decided.winner, decided.winnerSides, inputs.langs, scored.level);
   const runnerUp =
     decided.runnerUp === null ? null : resolveSide(registry, models, decided.runnerUp, decided.runnerUpSides, inputs.langs, scored.level);
+  const recommendedAlias = chooseRecommended(registry, decided.winner, scored.weight, scored.level);
+  const recommended =
+    recommendedAlias === decided.winner
+      ? winner
+      : resolveSide(registry, models, recommendedAlias, [], inputs.langs, scored.level);
+  const compared = compareSession(registry, session, winner, scored.level);
+  const effort = { ...scored, surfaceEffort: dial(registry, winner.surface, scored.level) };
   return {
     inputs,
     session,
@@ -716,7 +813,14 @@ export function resolveDirection(context: ResolveContext, inputs: DirectInputs, 
     aggregate: { skipped: decided.skipped, tally: decided.tally },
     winner,
     runnerUp,
-    effort: { ...scored, surfaceEffort: dial(registry, winner.surface, scored.level) },
-    mismatch: compareSession(registry, session, winner, scored.level),
+    recommended,
+    effort,
+    mismatch:
+      compared === null
+        ? null
+        : {
+            ...compared,
+            within: withinOf(registry, session, { primary: winner, recommended, fallback: runnerUp }, scored.level),
+          },
   };
 }

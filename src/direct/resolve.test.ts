@@ -53,16 +53,17 @@ function context(
 }
 
 /** A resolution known to be directable, so a test reads its winner without a null check at every line. */
-type Directed = Omit<Resolution, "winner" | "runnerUp" | "effort" | "domain"> & {
+type Directed = Omit<Resolution, "winner" | "runnerUp" | "recommended" | "effort" | "domain"> & {
   readonly winner: ResolvedSide;
   readonly runnerUp: ResolvedSide | null;
+  readonly recommended: ResolvedSide;
   readonly effort: EffortVerdict;
   readonly domain: DomainVerdict;
 };
 
 function direct(c: ResolveContext, given: DirectInputs, session: SessionValues): Directed {
   const result = resolveDirection(c, given, session);
-  if (result.winner === null || result.effort === null || result.domain === null) {
+  if (result.winner === null || result.recommended === null || result.effort === null || result.domain === null) {
     throw new Error(`expected a directable resolution, got ${result.undirectable ?? "nothing"}`);
   }
   return result as Directed;
@@ -630,6 +631,148 @@ describe("compareSession -- a mismatch is an answer, compared in the session's o
     const bare = direct(context((): void => {}, (): void => {}, {}), inputs(), { surface: null, model: "opus", effort: null });
     expect(bare.mismatch?.compares).toEqual([{ field: "model", session: "opus", recommended: null, verdict: "unread" }]);
     expect(bare.mismatch?.match).toBe(true);
+  });
+});
+
+const RECOMMENDED_RULE = {
+  when: { anyOf: [{ maxJobWeight: 4 }, { effortLevel: "max" }] },
+  then: "aliases.<primary>.escalation",
+  else: "primary",
+};
+
+describe("recommended, within and companions -- read from the registry", () => {
+  it("recommends the primary when the registry states no picks.recommended", () => {
+    const result = direct(context(), inputs(), NO_SESSION);
+    expect(result.recommended.alias).toBe(result.winner.alias);
+  });
+
+  it("recommends the escalation when the highest job weight is the one the file states, and the primary when that escalation is null", () => {
+    const escalated = direct(
+      context((v): void => {
+        v["picks"] = { recommended: RECOMMENDED_RULE };
+        v["aliases"]["A_TOP"]["escalation"] = "A_MAX";
+      }),
+      inputs({ jobs: ["heavy"] }),
+      NO_SESSION,
+    );
+    expect(escalated.effort.weight).toBe(4);
+    expect(escalated.recommended).toMatchObject({ alias: "A_MAX", tier: "frontier", surface: "s1", surfaceAlias: "maxx" });
+    expect(escalated.recommended.restart).toBe("s1 --model maxx");
+
+    const nulled = direct(
+      context((v): void => {
+        v["picks"] = { recommended: RECOMMENDED_RULE };
+        v["aliases"]["A_TOP"]["escalation"] = null;
+      }),
+      inputs({ jobs: ["heavy"] }),
+      NO_SESSION,
+    );
+    expect(nulled.recommended.alias).toBe("A_TOP");
+  });
+
+  it("recommends the escalation when the effort level is the one the file states, and not when neither condition holds", () => {
+    const atMax = direct(
+      context((v): void => {
+        v["picks"] = { recommended: { ...RECOMMENDED_RULE, when: { anyOf: [{ maxJobWeight: 1 }, { effortLevel: "max" }] } } };
+        v["aliases"]["A_TOP"]["escalation"] = "A_MAX";
+      }),
+      inputs({ jobs: ["heavy"], kind: "process", role: "canon" }),
+      NO_SESSION,
+    );
+    expect(atMax.effort.level).toBe("max");
+    expect(atMax.recommended.alias).toBe("A_MAX");
+
+    const below = direct(
+      context((v): void => {
+        v["picks"] = { recommended: RECOMMENDED_RULE };
+        v["aliases"]["A_TOP"]["escalation"] = "A_MAX";
+      }),
+      inputs({ jobs: ["plain"] }),
+      NO_SESSION,
+    );
+    expect(below.effort.weight).toBe(2);
+    expect(below.effort.level).not.toBe("max");
+    expect(below.recommended.alias).toBe("A_TOP");
+  });
+
+  it("names within by the file's order: the primary first, unless the set says otherwise", () => {
+    const onPrimary = direct(context(), inputs(), { surface: "s1", model: "opus", effort: "low" });
+    expect(onPrimary.mismatch).toMatchObject({ match: true, within: "primary" });
+
+    const onFallback = direct(context(), inputs(), { surface: "s2", model: "exec", effort: "low" });
+    expect(onFallback.winner.surface).toBe("s1");
+    expect(onFallback.runnerUp?.alias).toBe("A_FAST");
+    expect(onFallback.mismatch).toMatchObject({ match: false, within: "none" });
+
+    const onRunner = direct(
+      context((v): void => {
+        v["routing"]["plain"]["dev"]["cells"]["*"]["runnerUp"] = { alias: "A_EXEC", surface: "s2", interactive: null };
+      }),
+      inputs(),
+      { surface: "s2", model: "exec", effort: null },
+    );
+    expect(onRunner.mismatch).toMatchObject({ match: false, within: "fallback" });
+
+    const reordered = direct(
+      context((v): void => {
+        v["mismatch"]["within"] = { set: ["recommended", "fallback", "primary"] };
+      }),
+      inputs(),
+      { surface: "s1", model: "opus", effort: "low" },
+    );
+    expect(reordered.recommended.alias).toBe(reordered.winner.alias);
+    expect(reordered.mismatch?.within).toBe("recommended");
+  });
+
+  it("leaves an all-unread session within none while match stays the primary compare", () => {
+    const result = direct(context(), inputs(), { surface: UNREAD, model: UNREAD, effort: UNREAD });
+    expect(result.mismatch).toMatchObject({ match: true, within: "none" });
+  });
+
+  it("strikes a companion job from the tally and the effort when another job is present, and still reports the pair", () => {
+    const result = direct(
+      context(
+        (v): void => {
+          v["companions"] = { role: { light: "watcher" } };
+          v["routing"]["light"]["dev"]["cells"]["*"] = {
+            winner: { alias: "A_EXEC", surface: "s2", interactive: null },
+            runnerUp: { alias: "A_CHEAP", surface: "s3", interactive: null },
+          };
+        },
+        (v): void => {
+          const light = (v["axes"]["job"]["keys"] as Json[]).find((entry): boolean => entry["key"] === "light");
+          if (light === undefined) throw new Error("fixture lost light");
+          light["companion"] = true;
+        },
+      ),
+      inputs({ jobs: ["plain", "light"] }),
+      NO_SESSION,
+    );
+    expect(result.aggregate?.tally).toEqual({ A_TOP: 1 });
+    expect(result.effort.weight).toBe(2);
+    const struck = result.pairs.find((pair): boolean => pair.job === "light");
+    expect(struck).toMatchObject({ companion: true, role: "watcher", winner: { alias: "A_EXEC" } });
+    expect(result.pairs.find((pair): boolean => pair.job === "plain")).toMatchObject({ companion: false, role: null });
+  });
+
+  it("lets an issue of only companion jobs decide the verdict", () => {
+    const result = direct(
+      context(
+        (v): void => {
+          v["companions"] = { role: { light: "watcher" } };
+        },
+        (v): void => {
+          const light = (v["axes"]["job"]["keys"] as Json[]).find((entry): boolean => entry["key"] === "light");
+          if (light === undefined) throw new Error("fixture lost light");
+          light["companion"] = true;
+        },
+      ),
+      inputs({ jobs: ["light"] }),
+      NO_SESSION,
+    );
+    expect(result.winner.alias).toBe("A_TOP");
+    expect(result.pairs[0]).toMatchObject({ companion: true, role: "watcher" });
+    expect(result.aggregate?.tally).toEqual({ A_TOP: 1 });
   });
 });
 

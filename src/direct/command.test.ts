@@ -213,7 +213,7 @@ describe("nen direct resolve --json", () => {
     const result = await verdict("--json");
     expect(result.code).toBe(0);
     const document = JSON.parse(result.out.join("\n")) as Json;
-    expect(Object.keys(document)).toEqual(["contract", "inputs", "undirectable", "domain", "pairs", "aggregate", "winner", "runnerUp", "effort", "mismatch", "effortId", "record"]);
+    expect(Object.keys(document)).toEqual(["contract", "inputs", "undirectable", "domain", "pairs", "aggregate", "winner", "runnerUp", "recommended", "effort", "mismatch", "effortId", "record"]);
     expect(document["contract"]).toBe("nen.direct.resolve/v0.1");
     expect(document["inputs"]).toEqual({ langs: ["swift"], jobs: ["implementation", "unit-tests"], kind: "product", role: null, labels: [], surface: null, model: null, effort: null });
     expect(document["undirectable"]).toBeNull();
@@ -229,6 +229,7 @@ describe("nen direct resolve --json", () => {
       surfaceAlias: "opus",
       effortControl: "/effort low|medium|high|max",
     });
+    expect(document["recommended"]["alias"]).toBe(document["winner"]["alias"]);
     expect(document["winner"]["snapshot"]).toMatchObject({ asOf: "2026-10-04", primary: "Claude Opus 5.5" });
     expect(document["winner"]["liveLookup"]["docs"]).toHaveLength(2);
     expect(document["effort"]).toMatchObject({ score: 2, level: "low", surfaceEffort: "low" });
@@ -246,6 +247,7 @@ describe("nen direct resolve --json", () => {
         { field: "model", session: "opus", recommended: "opus", verdict: "match" },
         { field: "effort", session: "unread", recommended: "low", verdict: "unread" },
       ],
+      within: "none",
     });
   });
 

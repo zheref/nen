@@ -55,7 +55,10 @@ resolves against --repo's root.
       live-lookup sources per provider. Exit 0 valid, 1 invalid (the refusal names the
       pointer: an alias or surface a routing cell names that is not declared, a cell
       whose surface is not its alias's, bands that do not partition the scores, a
-      precedence that does not rank every alias, a snapshot date that is not a date).
+      precedence that does not rank every alias, a snapshot date that is not a date,
+      an escalation that is not an alias). When the file declares picks.fallbackRule
+      it also refuses an actionable alias with no line, and a cell whose actionable
+      runner-up shares the winner's provider and surface.
 
   nen direct resolve
       Resolves one classification, step by step, each step reported:
@@ -86,12 +89,25 @@ resolves against --repo's root.
                    states that holds (many jobs, many CODE languages -- a language
                    counts only when its taxonomy entry's code flag is not false -- and
                    the derived domain a rule names), banded into a level and mapped to
-                   the winner surface's own control;
+                   the winner surface's own control. A job the taxonomy marks companion
+                   is left out of this score, and of the tally, when any other job is
+                   present; its pairs are still reported, with companion and the role
+                   companions.role names. An issue of only companions is scored as it stands;
+        recommended the cost-agnostic pick, beside the winner: alias, surface, tier,
+                   surfaceAlias and restart, computed from picks.recommended (its when,
+                   then and else) read from the registry. The primary's escalation when
+                   a stated condition holds and that escalation names an alias; a null
+                   escalation yields the primary. Absent picks.recommended, the
+                   recommended pick is the primary;
         mismatch   only for the flags given: --surface by name, --model by alias against
                    the winner's spelled alias, --effort in DIAL space (both levels mapped
                    through the session surface's effort map, so a collapsed top equals
                    the dial below it). The literal 'unread' on a flag marks that compare
-                   unread: reported, never a mismatch.
+                   unread: reported, never a mismatch. match stays this compare against
+                   the primary. within names the first of primary, recommended and
+                   fallback (mismatch.within.set's order when the file states one) that
+                   the session matches the same way; unread never decides, so an
+                   all-unread session is within 'none'.
       An EMPTY --job (or none) is the answer 'undirectable: job axis empty' (winner,
       runner-up, effort and mismatch null; exit 0); an empty --lang reads the shared
       cell for every job. A mismatch is an ANSWER and exits 0; it never blocks.

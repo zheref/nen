@@ -70,6 +70,11 @@ export interface AxisKey {
   readonly weight: number | null;
   /** A job key's phases per domain (domain -> phase ids, in file order), or null when the file states none. */
   readonly phases: Readonly<Record<string, readonly string[]>> | null;
+  /**
+   * A job key's `companion` flag: true when the file says this job never decides
+   * beside another job. False when absent, and always false on a language key.
+   */
+  readonly companion: boolean;
 }
 
 /**
@@ -236,12 +241,14 @@ function parseAxis(path: string, name: AxisName, value: unknown): Axis {
       title,
       description,
       // Each optional fact belongs to ONE axis and is read there only: a `code` on a
-      // job, or a `weight`/`phases` on a language, is an unrelated field this parser
-      // ignored before these facts existed and ignores still (Copilot review on
-      // zheref/nen#380) -- so a job is always code, a language never weighs.
+      // job, or a `weight`/`phases`/`companion` on a language, is an unrelated field
+      // this parser ignored before these facts existed and ignores still (Copilot
+      // review on zheref/nen#380) -- so a job is always code, a language never weighs
+      // and is never a companion.
       code: name === "lang" ? optionalBoolean(path, `${keyPointer}.code`, keyRecord["code"], true) : true,
       weight: name === "job" ? parseWeight(path, `${keyPointer}.weight`, keyRecord["weight"]) : null,
       phases: name === "job" ? parsePhases(path, `${keyPointer}.phases`, keyRecord["phases"]) : null,
+      companion: name === "job" ? optionalBoolean(path, `${keyPointer}.companion`, keyRecord["companion"], false) : false,
     };
   });
 

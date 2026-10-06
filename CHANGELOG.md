@@ -2,6 +2,12 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## Unreleased
+
+### Added
+
+- **`nen direct`** reports a recommended pick beside the winner, a within-set compare on `mismatch`, and a companion strike that leaves a companion job out of the tally and the effort when another job is present. `direct registry` refuses an escalation that is not an alias, and, when the file declares `picks.fallbackRule`, an actionable alias with no line and a cell whose actionable runner-up shares the winner's provider and surface. The recommended condition and the within order are read from the registry.
+
 ## v0.20.0 — 2026-10-05
 
 Release unit for `v0.19.0..v0.20.0`. It brings the `classify` and `direct` verb families, the round quorum that fulfils its members' rounds, declared check exclusions, the bounded delivery merge, compound PR wakes, and a committed-range triage:

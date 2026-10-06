@@ -56,7 +56,7 @@ function mismatchLine(mismatch: Mismatch): string {
     if (compare.verdict === "unread") return `${compare.field} unread`;
     return `${compare.field} ${compare.session} != ${compare.recommended ?? "-"}`;
   });
-  return `mismatch: ${mismatch.match ? "no" : "yes"} (${parts.join("; ")})`;
+  return `mismatch: ${mismatch.match ? "no" : "yes"} (${parts.join("; ")}); within ${mismatch.within}`;
 }
 
 export function renderResolution(resolution: Resolution, recorded: string | null): string[] {
@@ -70,6 +70,7 @@ export function renderResolution(resolution: Resolution, recorded: string | null
     ["", "alias", "surface/tier", "model alias", "restart"],
     sideRow("winner", winner),
     ...(runnerUp === null ? [] : [sideRow("runner-up", runnerUp)]),
+    ...(resolution.recommended === null ? [] : [sideRow("recommended", resolution.recommended)]),
   ]);
   if (runnerUp === null) lines.push("runner-up: none distinct");
   for (const side of [winner, runnerUp]) {
@@ -93,7 +94,7 @@ export function renderResolution(resolution: Resolution, recorded: string | null
   for (const pair of resolution.pairs) {
     const phase = `${pair.phase} ${pair.phaseName}`;
     lines.push(
-      `pair ${pair.job} x ${pair.lang}: ${pair.winner.alias}${pair.winner.substituted === null ? "" : ` (for ${pair.winner.substituted})`}, runner-up ${pair.runnerUp.alias}${pair.runnerUp.substituted === null ? "" : ` (for ${pair.runnerUp.substituted})`}  [${pair.domain}, ${phase}, cell ${pair.cell}]`,
+      `pair ${pair.job} x ${pair.lang}: ${pair.winner.alias}${pair.winner.substituted === null ? "" : ` (for ${pair.winner.substituted})`}, runner-up ${pair.runnerUp.alias}${pair.runnerUp.substituted === null ? "" : ` (for ${pair.runnerUp.substituted})`}${pair.companion ? `, companion ${pair.role ?? "-"}` : ""}  [${pair.domain}, ${phase}, cell ${pair.cell}]`,
     );
   }
   for (const skip of resolution.aggregate?.skipped ?? []) {
@@ -157,6 +158,7 @@ export function runResolve(context: CommandContext): number {
     aggregate: resolution.aggregate,
     winner: resolution.winner,
     runnerUp: resolution.runnerUp,
+    recommended: resolution.recommended,
     effort: resolution.effort,
     mismatch: resolution.mismatch,
     effortId: record ?? null,

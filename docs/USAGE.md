@@ -4589,7 +4589,7 @@ and the live-lookup sources per provider (the CLI that lists the served models, 
 is refused at exit 1 naming the pointer into it: a routing cell whose alias or surface is not
 declared, a cell whose surface is not its alias's surface, a reviewer runner-up with no `also`, a non-reviewer alias without a `surface` or a `tier`, a routing `phaseName` that is not its phase's name in `phases`, a surface without a string `modelsKey`, an effort block that does not have four levels or
 whose surface map misses one, effort bands that overlap, leave a score unplaced, or end below the highest reachable score (the highest job weight, 4, plus one per `plusOne` row), a precedence that
-does not rank every alias exactly once, a snapshot date that is not a calendar date.
+does not rank every alias exactly once, a snapshot date that is not a calendar date, an `escalation` that does not name an alias. When the file declares `picks.fallbackRule`, an actionable alias with no `line` and a cell whose actionable runner-up shares the winner's provider and surface are refused too.
 
 **Usage**
 
@@ -4642,7 +4642,10 @@ Answers "which model, where, at what effort" for one classification, reporting e
    **The winner is never its own runner-up**: when every candidate equals the winner (a reviewer
    runner-up whose stand-in is the winner), `runnerUp` is `null` and the human output says
    `runner-up: none distinct`. A resolved runner-up that is a stand-in carries `substituted`, the
-   reviewer product it stood in for, so the skill can name it. A frontier alias may be recommended —
+   reviewer product it stood in for, so the skill can name it. A job the taxonomy marks
+   `"companion": true` is left out of this tally when any non-companion pair exists; its pairs are
+   still reported, with `companion: true` and `role` from the registry's `companions.role`. An issue
+   of only companion jobs is tallied as it stands. A frontier alias may be recommended —
    the verdict is for the maintainer's own session.
 4. **Resolve each side.** Provider, family and tier from the alias; the surface from the alias (the
    registry parser refuses a cell whose surface is not its alias's); the surface alias from the
@@ -4655,18 +4658,27 @@ Answers "which model, where, at what effort" for one classification, reporting e
    holds — many jobs (the rule's threshold), many **code** languages (a language counts unless its
    taxonomy entry says `"code": false`; the flag is read, never the key's name), and a domain add
    (the domain named beside its key, else the first rule row's domain) — banded into a level and
-   mapped through the winner surface's own control. Reported as `weight 4 + manyJobs + <domain add> =
+   mapped through the winner surface's own control. The same companion jobs the tally leaves out are
+   left out of this score. Reported as `weight 4 + manyJobs + <domain add> =
    6 -> max`.
-6. **Mismatch** — for the session flags given: `--surface` is compared by name, `--model` by **alias**
+6. **Recommended.** Beside the winner, `picks.recommended` read from the registry: the primary's
+   `escalation` when a stated `when.anyOf` member holds (`maxJobWeight` equal to the highest job
+   weight, or `effortLevel` equal to the level) and that escalation names an alias; a null escalation
+   yields the primary. Absent `picks.recommended`, the recommended pick is the primary. It carries the
+   same resolved fields as the winner (`alias`, `surface`, `tier`, `surfaceAlias`, `restart`).
+7. **Mismatch** — for the session flags given: `--surface` is compared by name, `--model` by **alias**
    against `models.<modelsKey>.<winner tier>` (aliases, not tiers; **when the workflow does not spell
    that tier the compare is `unread` with `recommended: null`, never a mismatch on a non-fact**), and
    `--effort` in **dial space**:
    the recommended level and the session's level are both mapped through `effort.surfaceMap` for the
    session's surface (the winner's when none was given), so a collapsed top (`max` -> `high` on
    cursor and antigravity) matches a session at `high`. The literal **`unread`** on any flag marks
-   that compare `unread` — reported, never a mismatch (the harness could not read it). A mismatch is
+   that compare `unread` — reported, never a mismatch (the harness could not read it). `match` stays
+   this compare against the primary. `within` names the first of `primary`, `recommended` and
+   `fallback` — `mismatch.within.set`'s order when the file states one — that the session matches the
+   same way; unread never decides, so an all-unread session is `within: none`. A mismatch is
    an answer; the skill asks once.
-7. **Record** — with `--record <effort-id>`, the whole result plus `effortId` and `recordedAt` is
+8. **Record** — with `--record <effort-id>`, the whole result plus `effortId` and `recordedAt` is
    written to `.nen/direct/<encoded id>.json` under `--repo` (directories created; `.nen/` is
    gitignored output, never `nen/`). The record is filed before the picker runs, so the
    maintainer's answer is written into it afterwards by [`direct answer`](#nen-direct-answer). The id is the caller's string (`<CODE>-IS-#<N>` for an issue,
@@ -4696,7 +4708,7 @@ is refused when the registry loads. Likewise a predicate carrying a key that is 
 and the verbs that own it, rather than parsed and silently ignored.
 
 **Empty axes are answers, not errors.** No job (`--job ""`, or the flag omitted) is
-`undirectable: job axis empty` — one line, `winner`, `runnerUp`, `effort` and `mismatch` null, exit 0
+`undirectable: job axis empty` — one line, `winner`, `runnerUp`, `recommended`, `effort` and `mismatch` null, exit 0
 (the caller carries on on its own session); no language (`--lang ""` or omitted) reads the shared `*`
 cell for every job. Inside `hatsu:build` classification has already run, so an empty axis is reported,
 never filled.
@@ -4724,21 +4736,23 @@ nen direct resolve --registry <path> --taxonomy <path> --repo <path> --kind <kin
 | `--effort <level>` | no | The effort level the running session is at. | One of the registry's levels, or `unread`; else exit 2. Compared in dial space. |
 | `--record <effort-id>` | no | File the result under `.nen/direct/<encoded id>.json`. | A traversal is refused at exit 2. |
 
-**Output and exit codes** — human rendering is the verdict table (winner and runner-up rows: alias,
+**Output and exit codes** — human rendering is the verdict table (winner, runner-up and recommended rows: alias,
 surface/tier, the spelled model alias, the restart line), one `interactive:` line per tool, the
-winner's snapshot quote and live-lookup sources, one `pair` line per (job, language), the `domain` and
+winner's snapshot quote and live-lookup sources, one `pair` line per (job, language) (a companion pair
+adds `, companion <role>`), the `domain` and
 `effort` lines, the `mismatch` line when asked (`mismatch: yes|no (surface match; model fable != opus;
-effort unread)`), and `recorded <path>` when written; `undirectable: job axis empty` alone for an empty
+effort unread); within primary|fallback|recommended|none`), and `recorded <path>` when written; `undirectable: job axis empty` alone for an empty
 job axis. `--json` prints one document; top-level keys, in this order: `contract`
 (`nen.direct.resolve/v0.1`), `inputs` (`langs`, `jobs`, `kind`, `role`, `labels`, and the session's
 `surface`, `model`, `effort`), `undirectable` (`null`, or the reason), `domain` (`domain`, `rule` — the
 matched row's `order` — `because`, `fallbacks`), `pairs` (an array of `{ job, lang, domain,
-fallbackFrom, phase, phaseName, cell, winner, runnerUp }`), `aggregate` (`skipped`, `tally`),
-`winner` and `runnerUp` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
+fallbackFrom, phase, phaseName, cell, winner, runnerUp, companion, role }`), `aggregate` (`skipped`, `tally`),
+`winner`, `runnerUp` and `recommended` (each `{ alias, provider, family, reviewer, surface, tier, surfaceAlias,
 restart, effortControl, interactive, note, substituted, snapshot, liveLookup }`), `effort` (`score`, `weight`,
-`level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, compares: [{ field, session,
-recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread`), `effortId` and
-`record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp` and `effort` are
+`level`, `derivation`, `surfaceEffort`), `mismatch` (`null`, or `{ match, within, compares: [{ field, session,
+recommended, verdict }] }` with `verdict` one of `match`, `mismatch`, `unread` and `within` one of
+`primary`, `recommended`, `fallback`, `none`), `effortId` and
+`record` (the written path, or `null`); `domain`, `aggregate`, `winner`, `runnerUp`, `recommended` and `effort` are
 `null` when undirectable, and `runnerUp` is also `null` when no alias distinct from the winner exists. Exit 0 for every resolution, **including a mismatch and an
 undirectable one**; exit 1 for an invalid registry or taxonomy (an unknown predicate shape, a cell
 whose surface is not its alias's), an unreadable workflow, a taxonomy with no weight on a carried job,
@@ -4755,10 +4769,11 @@ nen direct resolve --registry direct.registry.json --taxonomy classify.taxonomy.
   --surface claude-code --model fable --effort unread
 ```
 ```text
-|           | alias              | surface/tier     | model alias | restart                                         |
-| --------- | ------------------ | ---------------- | ----------- | ----------------------------------------------- |
-| winner    | SEMANTIC_FRONTIER  | claude-code/deep | opus        | claude --model opus (then /effort high)         |
-| runner-up | EXECUTION_FRONTIER | codex/frontier   | unspelled   | codex -m <alias> -c model_reasoning_effort=high |
+|             | alias              | surface/tier     | model alias | restart                                         |
+| ----------- | ------------------ | ---------------- | ----------- | ----------------------------------------------- |
+| winner      | SEMANTIC_FRONTIER  | claude-code/deep | opus        | claude --model opus (then /effort high)         |
+| runner-up   | EXECUTION_FRONTIER | codex/frontier   | unspelled   | codex -m <alias> -c model_reasoning_effort=high |
+| recommended | SEMANTIC_FRONTIER  | claude-code/deep | opus        | claude --model opus (then /effort high)         |
 interactive: the Claude desktop app or claude.ai, the same model family
 interactive: the Claude desktop app or claude.ai
 snapshot 2026-10-04: Claude Opus 5.5 (claude-opus-5-5); fallback Claude Fable 5.1
@@ -4767,7 +4782,7 @@ pair prose-authoring x prose: SEMANTIC_FRONTIER, runner-up BALANCED_AUTHOR  [aig
 pair schema x prose: EXECUTION_FRONTIER, runner-up SEMANTIC_FRONTIER  [aigov, AIGOV.REPO.008 Canonical schema and metadata design, cell *]
 domain: aigov (rule 1: nen repo classify reports kind process, or role canon)
 effort: weight 3 + aigov = 4 -> high (claude-code: high)
-mismatch: yes (surface match; model fable != opus; effort unread)
+mismatch: yes (surface match; model fable != opus; effort unread); within none
 ```
 (row 1 matched on the canon role, so the domain is the first row's and its domain add fires; the two
 pairs split between the frontier author and the execution model and the tie goes to the registry's
