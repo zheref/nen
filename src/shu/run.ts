@@ -70,12 +70,14 @@ import {
   renderInvocation,
   resolveLaunch,
   resolveTarget,
+  selectInvocation,
   TARGETED_VERBS,
   type HostVerdict,
   type RenderedInvocation,
   type RenderedPrecondition,
   type RenderedStep,
   type ResolvedLaunch,
+  type ResolvedSelection,
   type ResolvedTarget,
 } from "./render.js";
 import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, findDevice, substituteSteps, tokensUsed } from "./launch.js";
@@ -241,6 +243,17 @@ export interface ShuReport {
    * is a line on stderr, never a failed build).
    */
   readonly proof: BuildProof | null;
+  /**
+   * The focused selection this run was expanded from, or null (zheref/nen#207).
+   *
+   * ON EVERY VERB'S REPORT for `target`'s and `proof`'s reason -- one family,
+   * one document shape -- and only `nen shu test --select` fills it. It is the
+   * PROVENANCE of the step's argv: the declaration it came from, the
+   * identifiers the caller named, the grammar they were held to, and exactly
+   * which arguments the expansion appended. `steps[0].argv` is still the whole
+   * argv; this says which part of it was the selection.
+   */
+  readonly selection: ResolvedSelection | null;
 }
 
 /** `nen.shu.<verb>/v0.1` -- one versioned contract string per verb. */
@@ -571,6 +584,20 @@ export function renderReport(report: ShuReport): readonly string[] {
   const lines: string[] = [];
   lines.push(labelled("lane", `${report.lane}  (${report.stack})`));
   lines.push(labelled("verb", report.verb));
+  // THE SELECTION, HIGH, for the target's reason below: it is the fact a reader
+  // checks before letting the argv run -- this is a SUBSET, and here is which.
+  if (report.selection !== null) {
+    const selection = report.selection;
+    lines.push(
+      labelled(
+        "selection",
+        `${selection.ids.join(", ")}  (${selection.ids.length} identifier${selection.ids.length === 1 ? "" : "s"}, from ${selection.pointer}; appends: ${renderArgv({
+          exe: selection.appended[0] as string,
+          argv: selection.appended.slice(1),
+        })})`,
+      ),
+    );
+  }
   // THE DESTINATION, ON THE VERB THAT HAS ONE, and printed high -- above the
   // argv, because it is the fact a reader is checking before they let the argv
   // run. `args` is what this target APPENDED, so a reader can see which part of
@@ -792,7 +819,11 @@ function artifactReports(
   repoRoot: string,
 ): readonly ShuArtifactReport[] {
   return plan.artifacts.map((value, index): ShuArtifactReport => {
-    const absolute = insideRepo(repoRoot, value, `project.verbs.${plan.lane}.${plan.verb}.artifacts[${index}]`);
+    // A FOCUSED PLAN'S ARTIFACTS ARE ITS `select` BLOCK'S, and a refusal
+    // naming the regression row's position for one would send a reader to
+    // the wrong line of their file.
+    const owner = plan.selection?.pointer ?? `project.verbs.${plan.lane}.${plan.verb}`;
+    const absolute = insideRepo(repoRoot, value, `${owner}.artifacts[${index}]`);
     return { kind: "path", value, exists: entryExists(absolute) };
   });
 }
@@ -824,6 +855,7 @@ function assemble(
     artifacts: artifactReports(plan, repoRoot),
     log: logReport(mode, stdoutTargets(steps)),
     proof,
+    selection: plan.selection ?? null,
   };
 }
 
@@ -882,6 +914,13 @@ export interface RunOptions {
    * ran `nen shu dev` yesterday.
    */
   readonly target: string | null;
+  /**
+   * `test`'s `--select`: the identifiers, already parsed by
+   * ./render.ts's `parseSelectionIds`, or absent/null for the lane's row as
+   * declared (zheref/nen#207). ./command.ts's flag table refuses the flag on
+   * every other verb.
+   */
+  readonly select?: readonly string[] | null;
   /**
    * `deploy`'s mandatory `--run`. False for every other verb, which do not
    * read it -- ./command.ts's per-subcommand flag table refuses it there.
@@ -1161,11 +1200,19 @@ export async function runVerb(
   // named, because a bare `nen shu dev` is the ordinary local iteration this
   // verb has always been and a repository declaring its first launch target
   // must not change what that line does.
+  // THE FOCUSED FORM IS EXPANDED HERE, after every refusal `renderInvocation`
+  // makes and before anything is asserted -- so a lane with no `select`, or an
+  // identifier the declared grammar refuses, is exit 2 with nothing spawned,
+  // and never a quiet run of the full regression instead (zheref/nen#207).
+  const focused =
+    options.select === undefined || options.select === null
+      ? rendered
+      : selectInvocation(project, rendered, options.select);
   const plan = TARGETED_VERBS.includes(options.verb)
-    ? resolveTarget(project, rendered, options.target)
+    ? resolveTarget(project, focused, options.target)
     : LAUNCHING_VERBS.includes(options.verb) && options.target !== null
       ? resolveLaunch(project, rendered, options.target, options.lane)
-      : rendered;
+      : focused;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
   // THE TARGET'S OWN ARTIFACT IS A PATH, SO IT IS HELD TO EVERY OTHER DECLARED
   // PATH'S RULE -- and it is checked HERE, before the dry-run report is emitted,

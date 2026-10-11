@@ -35,7 +35,15 @@
           "exe": "bunx",
           "argv": ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=lcov", "--reporter=default", "--reporter=junit", "--outputFile.junit=.nen/regression.junit.xml"],
           "artifacts": [".nen/regression.junit.xml", "coverage/lcov.info"],
-          "why": "Aka owns this full regression. Collect instrumented LCOV counts and JUnit results in the same run; touched-file measurement/gating is deferred to mukai. Focused authoring/checkpoint tests use the explicit scoped lane without coverage."
+          "why": "Aka owns this full regression. Collect instrumented LCOV counts and JUnit results in the same run; touched-file measurement/gating is deferred to mukai. Focused authoring/checkpoint tests use `nen shu test --select <file>[,<file>...]` (the `select` block below) or the static scoped lanes, without coverage.",
+          "select": {
+            "exe": "bunx",
+            "argv": ["vitest", "run", "--reporter=default", "--reporter=junit", "--outputFile.junit=.nen/focused.junit.xml"],
+            "each": ["{id}"],
+            "pattern": "src/[A-Za-z0-9_./-]+\\.test\\.ts",
+            "artifacts": [".nen/focused.junit.xml"],
+            "why": "Rasengan/kokusen's focused form (zheref/nen#207): the named test files only, no coverage instrumentation, JUnit to a path of its own -- never the aka regression capture above, and no capture sidecar."
+          }
         },
         "lint": {
           "exe": "bun",

@@ -433,6 +433,7 @@ describe("--json -- the pinned key order", () => {
       "artifacts",
       "log",
       "proof",
+      "selection",
     ]);
   });
 

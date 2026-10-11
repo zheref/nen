@@ -74,6 +74,8 @@ import {
   SchemaError,
 } from "./errors.js";
 import { matchesGlob } from "../shu/evidence/glob.js";
+import { CAPTURE_DIRECTORY } from "../shu/coverage/capture.js";
+import { catastrophicShape } from "./pattern.js";
 import { CONTRACT_FILE, readSchemaJson, type SchemaLocation } from "./source.js";
 
 // ── the closed sets ─────────────────────────────────────────────────────────
@@ -258,6 +260,43 @@ export interface InvocationStep {
   readonly stdoutTo: string | null;
 }
 
+/**
+ * `project.verbs.<lane>.test.select` -- the lane's ONE focused-test
+ * declaration, and the argv a concrete selection expands into
+ * (zheref/nen#207).
+ *
+ * IT IS A SECOND COMMAND, NOT A FILTER ON THE FIRST. The regression row is the
+ * suite aka runs -- routinely instrumented for coverage and writing the
+ * capture mukai later measures -- and a focused run that inherited its argv
+ * would inherit both. So the focused form states its OWN program and base
+ * argv, its own `stdoutTo`, `artifacts` and `env`, and nothing of the
+ * regression row reaches it: coverage is on only where this block says so, and
+ * the loader refuses a focused path that would land on the regression row's
+ * own outputs or on the capture directory.
+ *
+ * NEN KNOWS NO RUNNER'S SELECTION SYNTAX. `each` is the repository's template
+ * for ONE identifier -- `["-only-testing:{id}"]` for an xcodebuild-shaped
+ * runner, `["{id}"]` for a vitest-shaped one, `["--tests", "{id}"]` for a
+ * Gradle-shaped one -- and nen's only act is to substitute `{id}` and append
+ * the expansions after `argv`, in the order the caller named them. `pattern` is
+ * the repository's own grammar for an identifier, matched against the WHOLE
+ * identifier, because what a well-formed test id looks like is knowledge about
+ * a runner and nen carries none.
+ */
+export interface TestSelection {
+  readonly exe: string;
+  /** The focused base argv. `each`'s expansions are appended after it. */
+  readonly argv: readonly string[];
+  /** The per-identifier template; every `{id}` in it is the identifier. */
+  readonly each: readonly string[];
+  /** The repository's identifier grammar, as written (nen anchors it). */
+  readonly pattern: string;
+  /** Repo-relative file the focused run's stdout is written to, or null. */
+  readonly stdoutTo: string | null;
+  readonly why: string | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export type Invocation =
   | {
       readonly kind: "command";
@@ -267,6 +306,8 @@ export type Invocation =
       /** Repo-relative file this invocation's stdout is written to, or null. */
       readonly stdoutTo: string | null;
       readonly why: string | null;
+      /** The focused form (`test` only), or absent. */
+      readonly select?: TestSelection;
       readonly raw: Readonly<Record<string, unknown>>;
     }
   | {
@@ -275,6 +316,8 @@ export type Invocation =
       /** The guard every step of this invocation runs under, or null. */
       readonly stall: StallGuard | null;
       readonly why: string | null;
+      /** The focused form (`test` only), or absent. */
+      readonly select?: TestSelection;
       readonly raw: Readonly<Record<string, unknown>>;
     }
   | {
@@ -1118,6 +1161,182 @@ function optionalStdoutTo(path: string, pointer: string, value: unknown): string
   return requireStdoutTo(path, pointer, value);
 }
 
+/** The one verb a focused selection may be declared on (zheref/nen#207). */
+export const SELECTABLE_VERB = "test";
+
+/** The one token `select.each` is substituted with: the caller's identifier. */
+export const SELECTION_TOKEN = "{id}";
+
+/** The keys `project.verbs.<lane>.test.select` is made of. Nen's, not the repo's. */
+const SELECT_KEYS: readonly string[] = ["exe", "argv", "each", "pattern", "stdoutTo", "artifacts", "env", "why"];
+
+/**
+ * Attach `select` to the row that declares it, or refuse it where nen would
+ * never read it.
+ *
+ * THREE PLACES A `select` CANNOT HONESTLY SIT, each refused by pointer at load
+ * rather than preserved, because preserved it would be read by nobody and the
+ * repository would believe it had a focused path:
+ *
+ *   * on any verb but `test` -- `--select` exists on `nen shu test` alone;
+ *   * on a `test` SEAT -- a row that says the lane has no test cannot also say
+ *     how to run some of them;
+ *   * under a near-miss of its own name (`selct`, `Select`, `selects`) on the
+ *     `test` row -- the same rule `project.launch` and `project.evidence` are
+ *     held to.
+ */
+function withSelection(path: string, pointer: string, verb: string, invocation: Invocation): Invocation {
+  const raw = invocation.raw;
+  if (verb === SELECTABLE_VERB) {
+    refuseNearMissKey(path, pointer, raw, ["select"], `project.verbs.<lane>.${SELECTABLE_VERB}`, (): string =>
+      "`nen shu test --select` would refuse this lane as declaring no focused selection",
+    );
+  }
+  if (raw["select"] === undefined || raw["select"] === null) return invocation;
+  if (verb !== SELECTABLE_VERB) {
+    throw new SchemaError(
+      path,
+      `${pointer}.select`,
+      `declares a focused selection on '${verb}', and nen reads one on '${SELECTABLE_VERB}' only: '--select' is a 'nen shu ${SELECTABLE_VERB}' flag. Move the block to project.verbs.<lane>.${SELECTABLE_VERB}.select, or drop it`,
+    );
+  }
+  if (invocation.kind === "unsupported") {
+    throw new SchemaError(
+      path,
+      `${pointer}.select`,
+      `declares a focused selection on a '${verb}' seat. A row that says this lane has no ${verb} cannot also say how to run some of them: declare the regression row, or drop 'select'`,
+    );
+  }
+  return { ...invocation, select: parseSelection(path, `${pointer}.select`, raw["select"]) };
+}
+
+/** True when any element of `argv` names the selection token. */
+function namesSelectionToken(argv: readonly string[]): boolean {
+  return argv.some((item): boolean => item.includes(SELECTION_TOKEN));
+}
+
+function parseSelection(path: string, pointer: string, value: unknown): TestSelection {
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(path, pointer, raw, SELECT_KEYS, pointer, (meant): string =>
+    `the focused run would go ahead with '${meant}' silently unset`,
+  );
+  if (raw["stall"] !== undefined && raw["stall"] !== null) {
+    throw new SchemaError(
+      path,
+      `${pointer}.stall`,
+      `declares a stall guard on the focused '${SELECTABLE_VERB}' form, and tests are untimed (zheref/nen#227): a quiet test run is a run that is thinking. Remove the block`,
+    );
+  }
+  const exe = requireString(path, `${pointer}.exe`, raw["exe"]);
+  const argv = requireArgv(path, `${pointer}.argv`, raw["argv"]);
+  const each = requireArgv(path, `${pointer}.each`, raw["each"]);
+  if (exe.includes(SELECTION_TOKEN) || namesSelectionToken(argv)) {
+    throw new SchemaError(
+      path,
+      exe.includes(SELECTION_TOKEN) ? `${pointer}.exe` : `${pointer}.argv`,
+      `names ${SELECTION_TOKEN}, and nen substitutes ${SELECTION_TOKEN} in 'each' only -- once per identifier, appended after 'argv'. Here it would reach the runner as the literal token. Move it into 'each'`,
+    );
+  }
+  if (!namesSelectionToken(each)) {
+    throw new SchemaError(
+      path,
+      `${pointer}.each`,
+      `names no ${SELECTION_TOKEN}, so every identifier the caller selects would expand to the same arguments and select nothing. Write the runner's per-identifier form with ${SELECTION_TOKEN} where the identifier goes, e.g. ["-only-testing:${SELECTION_TOKEN}"] or ["${SELECTION_TOKEN}"]`,
+    );
+  }
+  const pattern = requireString(path, `${pointer}.pattern`, raw["pattern"]);
+  const hazard = catastrophicShape(pattern);
+  if (hazard !== null) {
+    throw new SchemaError(
+      path,
+      `${pointer}.pattern`,
+      `is refused: '${hazard.fragment}' is ${hazard.why}. The pattern is run against every identifier a caller passes to '--select', so a potentially exponential-backtracking shape is refused at load. Rewrite it as a character class or a single quantifier`,
+    );
+  }
+  try {
+    new RegExp(`^(?:${pattern})$`);
+  } catch (error) {
+    throw new SchemaError(
+      path,
+      `${pointer}.pattern`,
+      `is not a regular expression nen can compile (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  optionalStrings(path, `${pointer}.artifacts`, raw["artifacts"]);
+  return {
+    exe,
+    argv,
+    each,
+    pattern,
+    stdoutTo: optionalStdoutTo(path, `${pointer}.stdoutTo`, raw["stdoutTo"]),
+    why: optionalString(path, `${pointer}.why`, raw["why"]),
+    raw,
+  };
+}
+
+/** A repo-relative path, normalised for comparison: no `./`, no trailing `/`. */
+function comparablePath(value: string): string {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .filter((segment): boolean => segment !== "" && segment !== ".")
+    .join("/");
+}
+
+/** True when `a` and `b` are the same path, or one is a directory holding the other. */
+function pathsOverlap(a: string, b: string): boolean {
+  const left = comparablePath(a);
+  const right = comparablePath(b);
+  if (left === "" || right === "") return true;
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+/** Every path a row says it writes: its `stdoutTo`(s) and its `artifacts`. */
+function writtenPaths(invocation: Invocation | undefined): readonly string[] {
+  if (invocation === undefined || invocation.kind === "unsupported") return [];
+  const redirects =
+    invocation.kind === "command"
+      ? [invocation.stdoutTo]
+      : invocation.steps.map((step): string | null => step.stdoutTo);
+  const artifacts = Array.isArray(invocation.raw["artifacts"])
+    ? (invocation.raw["artifacts"] as unknown[]).filter((item): item is string => typeof item === "string")
+    : [];
+  return [...redirects.filter((item): item is string => item !== null), ...artifacts];
+}
+
+/**
+ * A focused run never writes where the regression run does.
+ *
+ * THE AKA REGRESSION CAPTURE IS THE `test` ROW'S OWN OUTPUTS, THE `coverage`
+ * ROW'S REPORTS AND nen's capture sidecars under CAPTURE_DIRECTORY -- the
+ * files mukai later measures and `--from-capture` vouches for. A focused run
+ * that wrote over any of them would leave a capture describing a subset of the
+ * suite, and the sidecar's digest is the only thing that would notice. So the
+ * overlap is refused at load, by pointer, for the focused block's `stdoutTo`
+ * and every one of its `artifacts`: the same path, or one a directory of the
+ * other.
+ */
+function refuseSelectionOverlap(path: string, pointer: string, rows: Readonly<Record<string, Invocation>>): void {
+  const test = rows[SELECTABLE_VERB];
+  if (test === undefined || test.kind === "unsupported" || test.select === undefined) return;
+  const select = test.select;
+  const regression = [...writtenPaths(test), ...writtenPaths(rows["coverage"]), CAPTURE_DIRECTORY];
+  const focused: { readonly value: string; readonly at: string }[] = [];
+  if (select.stdoutTo !== null) focused.push({ value: select.stdoutTo, at: `${pointer}.${SELECTABLE_VERB}.select.stdoutTo` });
+  optionalStrings(path, `${pointer}.${SELECTABLE_VERB}.select.artifacts`, select.raw["artifacts"]).forEach(
+    (value, index): void => void focused.push({ value, at: `${pointer}.${SELECTABLE_VERB}.select.artifacts[${index}]` }),
+  );
+  for (const entry of focused) {
+    const clash = regression.find((other): boolean => pathsOverlap(entry.value, other));
+    if (clash === undefined) continue;
+    throw new SchemaError(
+      path,
+      entry.at,
+      `'${entry.value}' overlaps '${clash}', which the regression run writes (the lane's '${SELECTABLE_VERB}' and 'coverage' outputs, and nen's capture sidecars under '${CAPTURE_DIRECTORY}'). A focused run writes its own results and never the aka regression capture: name a separate path`,
+    );
+  }
+}
+
 function parseVerbs(
   path: string,
   value: unknown,
@@ -1137,8 +1356,9 @@ function parseVerbs(
       // uses `analyze`, `publish`, `codegen`, `tokens`, `storybook`,
       // `resume:pdf`; a closed verb list here would make this file nen's.
       refuseStallOnTests(path, `${pointer}.${verb}`, verb, invocation);
-      parsed[verb] = parseInvocation(path, `${pointer}.${verb}`, invocation);
+      parsed[verb] = withSelection(path, `${pointer}.${verb}`, verb, parseInvocation(path, `${pointer}.${verb}`, invocation));
     }
+    refuseSelectionOverlap(path, pointer, parsed);
     // EMPTY IS REFUSED AT BOTH LEVELS, exactly as `project.lanes` refuses it,
     // and for the same reason: `$`-prefixed metadata is skipped above, so a map
     // holding only a `$comment` is empty here even though the file looks

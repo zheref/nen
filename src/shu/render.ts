@@ -29,6 +29,8 @@ import { VerbUsageError } from "../cli/command.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import {
   LAUNCH_VERBS,
+  SELECTABLE_VERB,
+  SELECTION_TOKEN,
   type DeviceExtraction,
   type DeviceReadiness,
   type Invocation,
@@ -359,6 +361,31 @@ export interface RenderedInvocation {
   readonly artifacts: readonly string[];
   /** The declaration's own reason for this shape of the verb. Never nen's. */
   readonly why: string | null;
+  /**
+   * The focused selection this plan was expanded from (`nen shu test
+   * --select`), or absent/null for the lane's declared row as it stands.
+   */
+  readonly selection?: ResolvedSelection | null;
+}
+
+/**
+ * A focused selection, resolved: what the caller named, the declaration it was
+ * expanded through, and the exact arguments the expansion appended
+ * (zheref/nen#207). The step itself carries the whole argv; this is the
+ * provenance of its tail, so a reader of `--dry-run` or `--json` can tell which
+ * arguments are the declaration's base and which are the selection's.
+ */
+export interface ResolvedSelection {
+  /** Where the focused form is declared: `project.verbs.<lane>.test.select`. */
+  readonly pointer: string;
+  /** The identifiers, in the order the caller named them. */
+  readonly ids: readonly string[];
+  /** The repository's identifier grammar, as declared. */
+  readonly pattern: string;
+  /** The per-identifier template, as declared. */
+  readonly each: readonly string[];
+  /** What the expansion appended after the focused base argv, in order. */
+  readonly appended: readonly string[];
 }
 
 export interface RenderRequest {
@@ -706,6 +733,132 @@ export function renderInvocation(
     preconditions: lanePreconditions(project, lane),
     artifacts: artifactsOf(invocation.raw, pointer),
     why: invocation.why,
+  };
+}
+
+/** A character no identifier may carry: whitespace or a control character. */
+const UNPRINTABLE = /[\s\p{Cc}]/u;
+
+/**
+ * `--select`'s value, as identifiers -- or a usage refusal naming every
+ * malformed one (zheref/nen#207).
+ *
+ * THIS IS THE COMMAND-LINE HALF OF "MALFORMED", and it is checked before the
+ * declaration is opened because none of it depends on one. One comma-separated
+ * value, the convention every list flag in this CLI follows, so an identifier
+ * containing a comma cannot be named; that is said here rather than escaped.
+ * Refused, each for the reason given beside it:
+ *
+ *   * no identifier at all (`--select ""`) -- a selection of nothing is not a
+ *     smaller run, and the full regression is never what it falls back to;
+ *   * an empty entry (`a,,b`, a trailing comma) -- a typo nen will not quietly
+ *     drop, because the identifier that was meant to be there is missing;
+ *   * whitespace or a control character -- no runner's test id is spelled with
+ *     one, and an argv element carrying a newline is a different element on
+ *     every report this family prints;
+ *   * a leading `-` -- appended to an argv it would read as the runner's own
+ *     OPTION, not as a test, which is exactly an injected flag;
+ *   * a brace -- `{` and `}` are this family's placeholder syntax, and an
+ *     identifier that spelled one would be indistinguishable on the dry run
+ *     from a token nobody substituted;
+ *   * the same identifier twice -- it selects nothing more, and is a slip.
+ *
+ * The REPOSITORY's half -- does each identifier match the lane's declared
+ * `pattern` -- is `selectInvocation`'s, below, once the declaration is read.
+ */
+export function parseSelectionIds(value: string): readonly string[] {
+  if (value.trim() === "") {
+    throw new VerbUsageError(
+      "--select names no test identifier. Name one or more, comma-separated (--select <id>[,<id>...]); a selection of nothing is refused, and nen never falls back to the lane's full regression run.",
+    );
+  }
+  const ids = value.split(",");
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  ids.forEach((id, index): void => {
+    const at = `entry ${index + 1}`;
+    if (id === "") problems.push(`${at} is empty`);
+    else if (UNPRINTABLE.test(id)) problems.push(`${at} ${JSON.stringify(id)} carries whitespace or a control character`);
+    else if (id.startsWith("-")) problems.push(`${at} '${id}' begins with '-', which the runner would read as one of its own options`);
+    else if (id.includes("{") || id.includes("}")) problems.push(`${at} '${id}' carries a brace, this family's placeholder syntax`);
+    else if (seen.has(id)) problems.push(`${at} '${id}' repeats an identifier already named`);
+    seen.add(id);
+  });
+  if (problems.length > 0) {
+    throw new VerbUsageError(
+      `--select is malformed: ${problems.join("; ")}. Nothing was run. Name each test identifier once, comma-separated, exactly as this lane's declared 'pattern' spells it.`,
+    );
+  }
+  return ids;
+}
+
+/** The block a lane with no focused form pastes, and then edits. */
+const SELECT_STUB = `"select": { "exe": "<runner>", "argv": ["<focused base argument>"], "each": ["<per-identifier argument naming ${SELECTION_TOKEN}>"], "pattern": "<the runner's identifier grammar>", "artifacts": ["<a results path of its own>"] }`;
+
+/**
+ * Expand a rendered `test` plan into its focused form, or refuse
+ * (zheref/nen#207).
+ *
+ * RUNS AFTER `renderInvocation`, SO EVERY REFUSAL THAT FUNCTION MAKES COMES
+ * FIRST -- an undeclared lane (2), no `test` row or a seat (4), the wrong host
+ * (3). Then, all at exit 2 and all before anything is asserted or spawned:
+ *
+ *   1. the row must DECLARE a focused form. A lane without `select` is never
+ *      run in full instead -- the caller asked for a subset, and the full
+ *      regression is a different command with a different cost and different
+ *      outputs;
+ *   2. every identifier must match the declared `pattern`, whole;
+ *   3. no reference-pack placeholder may survive the expansion.
+ *
+ * THE PLAN IS THE FOCUSED BLOCK'S ALONE. Its program, base argv, `stdoutTo`,
+ * `env` and `artifacts` replace the regression row's -- nothing of that row
+ * reaches the focused run, which is how a coverage flag or a capture path on
+ * the regression row stays off a focused run. The lane's `cwd`, host verdict
+ * and preconditions are kept: those are facts about the lane, not the row.
+ */
+export function selectInvocation(
+  project: ProjectBlock,
+  plan: RenderedInvocation,
+  ids: readonly string[],
+): RenderedInvocation {
+  const rowPointer = `project.verbs.${plan.lane}.${plan.verb}`;
+  const invocation = project.verbs[plan.lane]?.[plan.verb];
+  const select =
+    plan.verb === SELECTABLE_VERB && invocation !== undefined && invocation.kind !== "unsupported"
+      ? invocation.select
+      : undefined;
+  if (select === undefined) {
+    throw new VerbUsageError(
+      `'${plan.verb}' on lane '${plan.lane}' (${plan.stack}) declares no focused selection, so --select has nothing to expand. Nothing was run, and nen never falls back to the lane's full regression command. Declare one under ${rowPointer}: ${SELECT_STUB}`,
+    );
+  }
+  const pointer = `${rowPointer}.select`;
+  const grammar = new RegExp(`^(?:${select.pattern})$`);
+  const unmatched = ids.filter((id): boolean => !grammar.test(id));
+  if (unmatched.length > 0) {
+    throw new VerbUsageError(
+      `--select names ${unmatched.length === 1 ? "an identifier" : "identifiers"} lane '${plan.lane}' does not recognise: ${unmatched
+        .map((id): string => `'${id}'`)
+        .join(", ")}. ${pointer}.pattern is ${JSON.stringify(select.pattern)}, matched against the whole identifier. Nothing was run.`,
+    );
+  }
+  const appended = ids.flatMap((id): string[] =>
+    select.each.map((template): string => template.split(SELECTION_TOKEN).join(id)),
+  );
+  const step: RenderedStep = {
+    exe: select.exe,
+    argv: [...select.argv, ...appended],
+    stdoutTo: select.stdoutTo === null ? null : { path: select.stdoutTo, pointer: `${pointer}.stdoutTo` },
+    stall: null,
+  };
+  refuseUnsubstituted([step], plan.lane, plan.verb);
+  return {
+    ...plan,
+    steps: [step],
+    env: envOf(select.raw, pointer),
+    artifacts: artifactsOf(select.raw, pointer),
+    why: select.why,
+    selection: { pointer, ids, pattern: select.pattern, each: select.each, appended },
   };
 }
 
