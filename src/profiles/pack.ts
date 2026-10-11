@@ -752,6 +752,28 @@ export interface ReportDefault {
   readonly source: string;
 }
 
+/**
+ * The ONE canonical non-production destination this stack sends a build to,
+ * by the `project.targets` key a repository conventionally names it -- or the
+ * absence of one, stated with its reason (zheref/nen#300).
+ *
+ * IT IS A NAME, NEVER A DESTINATION. `nen shu detect` proposes
+ * `nen/workflow.json → deploy.defaultTarget` from it ONLY when the repository
+ * already declares a `project.targets` key of exactly this name: nen still
+ * never invents a destination, and a default naming a target nobody declared
+ * would be refused by `nen schema check` the moment it was pasted.
+ *
+ * `target` IS NULLABLE, AND FOR MOST STACKS IT IS NULL. "One canonical
+ * non-production destination" is a high bar: a stack whose observed
+ * repositories deploy nowhere, or to several equally-conventional places, has
+ * none, and `why` says which -- the same rule `reportDefault` follows.
+ */
+export interface DeployDefault {
+  readonly target: string | null;
+  readonly why: string;
+  readonly source: string;
+}
+
 export interface StackProfile {
   readonly id: string;
   readonly displayName: string;
@@ -773,6 +795,8 @@ export interface StackProfile {
   readonly toolchain: Readonly<Record<string, PackMinimum>>;
   /** The advisory coverage-report location. Never a path nen opens by itself. */
   readonly reportDefault: ReportDefault;
+  /** The canonical non-production deploy target NAME, or null with a reason. */
+  readonly deployDefault: DeployDefault;
   readonly notes: readonly string[];
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
@@ -1359,6 +1383,35 @@ function parseReportDefault(path: string, value: unknown): ReportDefault {
   };
 }
 
+/**
+ * The canonical non-production deploy target name, or its absence stated.
+ *
+ * ABSENT IS LEGAL, exactly as `reportDefault` is, and reads as a null target
+ * with a sentence saying the pack records none. A stated name is held to the
+ * shape a `project.targets` key can take in a hand-written declaration -- a
+ * non-empty string -- since a name the declaration could never carry is a
+ * proposal that could never fire.
+ */
+function parseDeployDefault(path: string, value: unknown): DeployDefault {
+  if (value === undefined || value === null) {
+    return {
+      target: null,
+      why: `${PACK_DIRECTORY}/ records no canonical non-production deploy target for this stack.`,
+      source: "not recorded",
+    };
+  }
+  const raw = requireRecord(path, "deployDefault", value);
+  const stated = raw["target"];
+  return {
+    target:
+      stated === undefined || stated === null
+        ? null
+        : requireString(path, "deployDefault.target", stated),
+    why: requireString(path, "deployDefault.why", raw["why"]),
+    source: requireString(path, "deployDefault.source", raw["source"]),
+  };
+}
+
 function parseNotes(path: string, value: unknown): readonly string[] {
   if (value === undefined || value === null) return [];
   const entries = requireArray(path, "notes", value);
@@ -1438,6 +1491,7 @@ export function parseProfile(
     verbs,
     toolchain: parseToolchain(path, raw["toolchain"]),
     reportDefault: parseReportDefault(path, raw["reportDefault"]),
+    deployDefault: parseDeployDefault(path, raw["deployDefault"]),
     notes: parseNotes(path, raw["notes"]),
     raw,
   };

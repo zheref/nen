@@ -1094,3 +1094,68 @@ describe("profileById", () => {
     for (const id of pack.ids) expect(error.message).toContain(id);
   });
 });
+
+// ── deployDefault (zheref/nen#300) ──────────────────────────────────────────
+
+describe("deployDefault -- a stack's canonical non-production target NAME", () => {
+  it("reads an absent block as no target, with a sentence saying the pack records none", () => {
+    const parsed = parseProfile(AT, "example", VERBS, profile());
+    expect(parsed.deployDefault.target).toBeNull();
+    expect(parsed.deployDefault.why).toMatch(/records no canonical non-production deploy target/);
+    expect(parsed.deployDefault.source).toBe("not recorded");
+  });
+
+  it("reads a stated name with its reason and citation, and a null name with its reason", () => {
+    const named = parseProfile(AT, "example", VERBS, profile({
+      deployDefault: { target: "beta", why: "the one beta channel", source: "a/b.md:3" },
+    }));
+    expect(named.deployDefault).toEqual({ target: "beta", why: "the one beta channel", source: "a/b.md:3" });
+    const none = parseProfile(AT, "example", VERBS, profile({
+      deployDefault: { target: null, why: "two rival channels", source: "a/b.md:4" },
+    }));
+    expect(none.deployDefault.target).toBeNull();
+  });
+
+  it("refuses a target that no project.targets key could be, by pointer", () => {
+    for (const target of [42, "", ["beta"]]) {
+      const error = refusal(() =>
+        parseProfile(AT, "example", VERBS, profile({ deployDefault: { target, why: "w", source: "s" } })),
+      );
+      expect(error.pointer, JSON.stringify(target)).toBe("deployDefault.target");
+    }
+  });
+
+  it("refuses a block with no reason or no citation -- a null with no sentence is not an answer", () => {
+    expect(refusal(() =>
+      parseProfile(AT, "example", VERBS, profile({ deployDefault: { target: null, source: "s" } })),
+    ).pointer).toBe("deployDefault.why");
+    expect(refusal(() =>
+      parseProfile(AT, "example", VERBS, profile({ deployDefault: { target: "beta", why: "w" } })),
+    ).pointer).toBe("deployDefault.source");
+  });
+
+  it("names TestFlight for xcode-ios and nothing for every other bundled stack, each with a cited reason", () => {
+    // The issue's own example, and the one stack in the pack whose observed
+    // repository DECLARES a non-production destination (KroApple's
+    // project.targets.testflight). Every other stack is null on purpose; a
+    // stack gaining a default is a data change this pin makes visible.
+    const pack = loadProfilesPack();
+    const named = Object.fromEntries(
+      pack.ids.map((id): [string, string | null] => [id, profileById(pack, id).deployDefault.target]),
+    );
+    expect(named).toEqual({
+      "compose-desktop": null,
+      "dotnet-winui": null,
+      expo: null,
+      gatsby: null,
+      "gradle-android": null,
+      nextjs: null,
+      "xcode-ios": "testflight",
+    });
+    for (const id of pack.ids) {
+      const stated = profileById(pack, id).deployDefault;
+      expect(stated.source, id).not.toBe("not recorded");
+      expect(stated.why, id).not.toBe("");
+    }
+  });
+});

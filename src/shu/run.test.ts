@@ -1184,6 +1184,84 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     expect(result.seams.calls).toEqual([]);
   });
 
+  it("still asks for the destination when nen/workflow.json DECLARES deploy.defaultTarget (zheref/nen#300)", async () => {
+    // THE KEY IS A CALLER'S, NEVER NEN'S. `deploy.defaultTarget` is validated
+    // by `nen schema check` and proposed by `nen shu detect`, and `nen shu
+    // deploy` reads none of it: a skill that wants the default passes it to
+    // --target itself. A bare `deploy` is the same exit-2 refusal, listing the
+    // same declared targets, with or without the key -- and spawns nothing.
+    const result = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { testflight: {}, staging: {} },
+      }),
+      ["deploy"],
+      {},
+      (root): void => {
+        writeFileSync(
+          join(root, "nen", "workflow.json"),
+          JSON.stringify({ deploy: { defaultTarget: "testflight" } }),
+        );
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/Declared under project\.targets: staging, testflight\./);
+    expect(result.err.join("\n")).toMatch(/there is no default -- not even when exactly one target/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("never prints a declared target key or a requested name raw (Feitan F1 on zheref/nen#300)", async () => {
+    const declaration = oneLane({
+      verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+      targets: { "stag\u001b[31m\ring\u202e": {}, prod: {} },
+    });
+    for (const argv of [["deploy"], ["deploy", "--target", "nope\u001b[2J"]]) {
+      const result = await withDeclaration(declaration, argv);
+      expect(result.code, argv.join(" ")).toBe(2);
+      const message = result.err.join("\n");
+      for (const raw of ["\u001b", "\r", "\u202e"]) expect(message, argv.join(" ")).not.toContain(raw);
+      // Escaped, and a plain key keeps the bare spelling it always had.
+      expect(message, argv.join(" ")).toContain('prod, "stag\\u001b[31m\\ring\\u202e"');
+      expect(result.seams.calls).toEqual([]);
+    }
+  });
+
+  it("escapes a hostile target name in the plan, the placeholder pointer, and the unsupported reason (#300 round 2)", async () => {
+    const hostile = "stag\u001b[31m\u202e";
+    const plan = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { [hostile]: {} },
+      }),
+      ["deploy", "--target", hostile],
+    );
+    expect(plan.code).toBe(0);
+    expect(plan.out.join("\n")).toContain('target:        "stag\\u001b[31m\\u202e"  (appends no argument)');
+    expect([...plan.out, ...plan.err].join("\n")).not.toContain("\u001b");
+
+    const placeholder = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { [hostile]: { args: ["-destination", "{destination}"] } },
+      }),
+      ["deploy", "--target", hostile],
+    );
+    expect(placeholder.code).toBe(2);
+    expect(placeholder.err.join("\n")).toContain('project.targets."stag\\u001b[31m\\u202e".args');
+    expect(placeholder.err.join("\n")).not.toContain("\u001b");
+
+    const seated = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { beta: { unsupported: "pushed by\u001b[2J the host\u202e" } },
+      }),
+      ["deploy", "--target", "beta"],
+    );
+    expect(seated.code).toBe(4);
+    expect(seated.err.join("\n")).toContain("pushed by[2J the host");
+    expect(seated.err.join("\n")).not.toContain("\u001b");
+  });
+
   it("refuses a --target that names no declared target, rather than accepting any word", async () => {
     const result = await capture(["deploy", "--lane", "pages", "--target", "anything"]);
     expect(result.code).toBe(2);

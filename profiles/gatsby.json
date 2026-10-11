@@ -130,6 +130,11 @@
     "why": "Nothing writes a coverage report: there is no test script and no test-runner dependency. If one is added, the convention in this ecosystem is `coverage/lcov.info` under the package that runs the tests -- and which package that is is the repository's fact, so the declaration states it.",
     "source": "this profile's own `coverage` row (zheref.io/package.json)"
   },
+  "deployDefault": {
+    "target": null,
+    "why": "The one observed deploy publishes the live site to the `gh-pages` branch -- a production destination, which a default must never name. No non-production destination is observed.",
+    "source": "this profile's own `deploy` row (zheref.io/package.json:14)"
+  },
   "notes": [
     "THE SECOND `deploy` PROFILE IS THE POINT. Two of the seven repositories deploy through a mechanism that has NO COMMAND LINE AT ALL -- a Pages action here, a hosting provider's git integration in the nextjs profile. `unsupported` with a sentence, or a declared-only row, is the only honest rendering, and the schema has to be able to say it."
   ]

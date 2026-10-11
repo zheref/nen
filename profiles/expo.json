@@ -133,6 +133,11 @@
     "why": "Nothing to instrument, so no report exists to locate: no jest, no `jest-expo`, no vitest, and no `coverage` hit anywhere in the repository.",
     "source": "this profile's own `coverage` row (food-diary/package.json:14-49)"
   },
+  "deployDefault": {
+    "target": null,
+    "why": "No deployment target of any kind is observed, so there is no conventional name to propose. An EAS build profile is a build configuration, not a destination.",
+    "source": "food-diary (inventory sweep); this profile's own `deploy` row"
+  },
   "notes": [
     "Expo's selected native platform reuses that platform's device declaration: the xcode-ios JSON extractor for an iOS target and the gradle-android text extractor for an Android target. Expo contributes no third discovery schema and nen chooses neither platform.",
     "PRECONDITIONS ASSERTED, NEVER PERFORMED: `pod install` for the iOS lane; a JDK plus the Android SDK AND `node` on PATH for the Gradle lane; and a booted simulator. The repository's own helper hardcodes booting an `iPhone 16 Pro` (food-diary/start-ios.sh:5, :12) -- nen asserts a simulator exists and never boots one.",

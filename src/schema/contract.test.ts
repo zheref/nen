@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
 import { SchemaError } from "./errors.js";
 import {
@@ -451,6 +454,41 @@ describe("project", () => {
       expect(error.message, key).toContain(phrase);
       // Whichever phrase it is, the way out names the key that was meant.
       expect(error.message, key).toContain("Fix the spelling");
+    }
+  });
+
+  it("reads 'nonProduction' as a boolean, false unless stated true (zheref/nen#300, Feitan F2)", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        targets: { beta: { nonProduction: true }, live: { nonProduction: false }, plain: {}, nulled: { nonProduction: null } },
+      },
+    });
+    expect(contract.project?.targets["beta"]?.nonProduction).toBe(true);
+    expect(contract.project?.targets["live"]?.nonProduction).toBe(false);
+    expect(contract.project?.targets["plain"]?.nonProduction).toBe(false);
+    expect(contract.project?.targets["nulled"]?.nonProduction).toBe(false);
+  });
+
+  it("refuses a non-boolean 'nonProduction' by pointer -- a string \"true\" is prose, not a mark", () => {
+    for (const value of ["true", 1, ["yes"], {}]) {
+      const error = refusal({ project: { ...PROJECT, targets: { beta: { nonProduction: value } } } });
+      expect(error.pointer, JSON.stringify(value)).toBe("project.targets.beta.nonProduction");
+      expect(error.message, JSON.stringify(value)).toMatch(/expected a boolean \(true or false\)/);
+    }
+  });
+
+  it("refuses near-misses of 'nonProduction' -- case, one letter, and a word separator", () => {
+    for (const [key, phrase] of [
+      ["nonproduction", "differs from 'nonProduction' only in case"],
+      ["nonProductio", "is one letter away from 'nonProduction'"],
+      ["non_production", "is 'nonProduction' spelled with a word separator"],
+      ["non-production", "is 'nonProduction' spelled with a word separator"],
+      ["Non_Production", "is 'nonProduction' spelled with a word separator"],
+    ] as const) {
+      const error = refusal({ project: { ...PROJECT, targets: { beta: { [key]: true } } } });
+      expect(error.pointer, key).toBe(`project.targets.beta.${key}`);
+      expect(error.message, key).toContain(phrase);
     }
   });
 
@@ -1626,5 +1664,83 @@ describe("a stall block on the 'test' row is refused at load: tests are untimed"
     });
     const build = contract.project?.verbs["only"]?.["build"];
     expect(build?.kind === "command" ? build.stall?.elapsedMs : null).toBe(1000);
+  });
+});
+
+// ── round 2 on zheref/nen#300 ───────────────────────────────────────────────
+
+describe("project.targets -- a repeated key is refused, never collapsed (Feitan N1 on #300)", () => {
+  /** A repository whose nen/contract.json is exactly `text`. */
+  function withContractText(text: string): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-contract-dup-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "contract.json"), text);
+    return root;
+  }
+  const head = '{"project":{"lanes":{"web":{"stack":"nextjs","cwd":"."}},"verbs":{"web":{"build":{"exe":"pnpm","argv":["run","build"]}}},';
+
+  it("refuses two nonProduction keys in one target by pointer -- JSON would keep the last", () => {
+    const root = withContractText(`${head}"targets":{"beta":{"nonProduction":false,"nonProduction":true}}}}`);
+    try {
+      let caught: unknown;
+      try {
+        loadContract(root);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SchemaError);
+      expect((caught as SchemaError).pointer).toBe("project.targets.beta");
+      expect((caught as SchemaError).message).toContain("carries the key 'nonProduction' twice");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a target NAME declared twice, and a repeated 'targets' block", () => {
+    for (const [text, pointer, key] of [
+      [`${head}"targets":{"beta":{},"beta":{"nonProduction":true}}}}`, "project.targets", "beta"],
+      [`${head}"targets":{},"targets":{"beta":{}}}}`, "project", "targets"],
+    ] as const) {
+      const root = withContractText(text);
+      try {
+        expect(() => loadContract(root), key).toThrow(`at ${pointer}, carries the key '${key}' twice`);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("is not blinded by an EARLIER repeat outside the block", () => {
+    const root = withContractText(`${head}"defaultLane":null,"defaultLane":"web","targets":{"beta":{"why":"a","why":"b"}}}}`);
+    try {
+      expect(() => loadContract(root)).toThrow("at project.targets.beta, carries the key 'why' twice");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves a repeat OUTSIDE project.targets to JSON.parse, as before", () => {
+    const root = withContractText(`${head}"targets":{"beta":{"nonProduction":true}},"defaultLane":null,"defaultLane":"web"}}`);
+    try {
+      expect(loadContract(root).project?.defaultLane).toBe("web");
+      expect(loadContract(root).project?.targets["beta"]?.nonProduction).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the word-separator near-miss is project.targets' alone (Nobunaga R3 on #300)", () => {
+  it("preserves a separator-spelled key in a launch target, where the documented rule names three shapes", () => {
+    const contract = parse({
+      project: { ...PROJECT, launch: { box: { verb: "dev", art_i_fact: "kept" } } },
+    });
+    expect(contract.project?.launch["box"]?.raw["art_i_fact"]).toBe("kept");
+  });
+
+  it("refuses the same spelling in a deploy target", () => {
+    const error = refusal({ project: { ...PROJECT, targets: { beta: { requires_env: ["X"] } } } });
+    expect(error.pointer).toBe("project.targets.beta.requires_env");
+    expect(error.message).toContain("is 'requiresEnv' spelled with a word separator");
   });
 });

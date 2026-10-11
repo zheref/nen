@@ -185,6 +185,7 @@ describe("nen schema check", () => {
       "nen/workflow.json#review.scopes",
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
+      "nen/workflow.json#deploy.defaultTarget",
       "nen/decisions.json",
     ]);
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);
@@ -847,6 +848,61 @@ describe("nen schema check -- an unknown nen/gates.json key is exit 2 (zheref/ne
       const json = await capture(["schema", "check", "--repo", root, "--json"]);
       expect(json.code).toBe(2);
       expect(JSON.parse(json.out.join("\n"))).toMatchObject({ ok: false, duplicateKeys: ["nen/gates.json: version"] });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /** The three required files, plus a contract and a policy a case writes. */
+  function withDeployDefault(workflow: unknown, targets: Readonly<Record<string, unknown>>): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-index-deploy-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify(workflow));
+    writeFileSync(
+      join(root, "nen", "contract.json"),
+      JSON.stringify({
+        $schema: "nen.contract/v0.1",
+        project: {
+          lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+          defaultLane: "only",
+          verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] } } },
+          targets,
+        },
+      }),
+    );
+    return root;
+  }
+
+  it("N1 on #300: a failed deploy.defaultTarget row never says the taxonomy could not be read", async () => {
+    const root = withDeployDefault({ deploy: { defaultTarget: "live" } }, { live: {} });
+    try {
+      const text = await capture(["schema", "check", "--repo", root]);
+      expect(text.code).toBe(1);
+      expect(text.out.join("\n")).toContain("FAIL  nen/workflow.json#deploy.defaultTarget");
+      expect(text.err.join("\n")).not.toMatch(/could not be read/);
+      expect(text.err.join("\n")).toContain(
+        "names a deploy destination nen/contract.json does not declare or mark nonProduction -- the row above says which",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("F1 on #300: a row's file and detail reach the terminal through plainLine, whatever row it is", async () => {
+    // A near-miss block key carrying ESC: the POLICY row's own pointer quotes
+    // it, and that loader is not this change's -- the render line is what
+    // keeps it off the terminal. `--json` keeps the bytes.
+    const root = withDeployDefault({ "deplo\u001b": {} }, {});
+    try {
+      const text = await capture(["schema", "check", "--repo", root]);
+      expect(text.code).toBe(1);
+      expect(text.out.join("\n")).toContain("FAIL  nen/workflow.json");
+      expect([...text.out, ...text.err].join("\n")).not.toContain("\u001b");
+      const json = await capture(["schema", "check", "--repo", root, "--json"]);
+      expect(json.out.join("\n")).toContain("\\u001b");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -475,6 +475,7 @@ a program.
   "tests": { "required": ["test"], "extra": [] },
   "coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope": "touched" },
   "launch": { "default": null, "fallback": null },
+  "deploy": { "defaultTarget": null },
   "reports": { "dir": "Reports", "retain": "final-only", "template": "rikugan", "captures": "Reports/captures" },
   "notifications": { "rungs": ["push", "os", "sound"], "sound": "Glass", "turn": "rung1" },
   "commits": { "allowedAttributionTrailers": [], "forbiddenTrailers": [], "runTrailer": null, "subjectCase": null, "bodyMaxLineLength": null },
@@ -509,8 +510,8 @@ set to the one trailer key `--agent-trailer` resolved to — its own default
 or a caller override — `commits.runTrailer` set to `--run-trailer`'s key when
 one was named, and a starting `models` matrix; it never declares
 `commits.subjectCase` or `commits.bodyMaxLineLength`, which are the
-repository's call). **Six fields have no default at all** — `models`,
-`launch.default`, `iteration.lane`, `commits.runTrailer`,
+repository's call). **Several fields have no default at all** — among them `models`,
+`launch.default`, `deploy.defaultTarget`, `iteration.lane`, `commits.runTrailer`,
 `commits.subjectCase` and `commits.bodyMaxLineLength` — because each would be
 nen inventing a name or a convention rather than a number (the last IS a
 number, but it is the repository's own width, and absent it the verbs say what
@@ -524,6 +525,7 @@ they assumed instead); they come back empty or `null`.
 | `tests.required` / `tests.extra` | which declared verbs a test pass runs | callers |
 | `coverage.minimum` / `recommended` / `ideal` / `scope` | the ladder. Whole percentages `0`–`100`, and they must **ascend** — three rungs whose order is the whole of their meaning | callers |
 | `launch.default` / `launch.fallback` | which `project.launch` target a bare launch uses. No default ever | callers |
+| `deploy.defaultTarget` | the `project.targets` key a caller's **own** tooling sends to when it is told no target ([#300](https://github.com/zheref/nen/issues/300); Hatsu's `kagutsuchi`). `null` or absent means *ask*. **No default ever**, and **nen never reads it to choose anything**: [`shu deploy`](#nen-shu-deploy) still requires `--target`. A non-string, an empty string or a near-miss key (`defaultTaget`) is refused **by pointer** at load; a name that is no key of `nen/contract.json` → `project.targets`, or names one not marked `"nonProduction": true`, FAILs its own [`schema check`](#nen-schema-check) row | callers; [`schema check`](#nen-schema-check) validates it, [`shu detect`](#nen-shu-detect) proposes it |
 | `reports.sections` | which blocks each report VARIANT renders, and with which template. No default ever | [`report render --variant`](#nen-report-render) |
 | `review.scopes` | which reviewer, at which tier, within which budget, over which paths. No default ever | [`review scopes`](#nen-review-scopes) |
 | `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
@@ -6082,7 +6084,7 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 nen schema check --repo <path> [--json]
 ```
 
-**Exit codes.** `0` every required file loaded; `1` one did not; `2` from v0.21.0 when
+**Exit codes.** `0` every required file loaded and every required row passed; `1` one did not, or a required row failed; `2` from v0.21.0 when
 `nen/gates.json` carries a key this build does not read (zheref/nen#310). The gates row FAILs naming
 every such key, the keys its object takes with the release that introduced each, and the running
 version; `--json` adds `unknownKeys: ["nen/gates.json: <pointer>.<key>", ...]`, empty when every key is
@@ -6110,6 +6112,43 @@ fails the policy row by pointer. A repository that declares neither of the
 first two has not adopted the two verbs, which reads `none declared`; the
 `profile` row reads the defaults when the key is absent, e.g.
 `nen/workflow.json#profile  default standard; allowed fast, standard, thorough`.
+
+**A fifth pointer row that CAN fail, from the release that carries
+[#300](https://github.com/zheref/nen/issues/300):
+`nen/workflow.json#deploy.defaultTarget`**, immediately under `#runners`. It is
+the one row that reads **two** files — the name lives in `nen/workflow.json`,
+and what it must name lives in `nen/contract.json` → `project.targets` — so it
+holds the half no single loader can see. `null`, an absent key or no policy
+file at all is `ok` (`none declared …`); a name that is a declared target
+marked `"nonProduction": true` is `ok` and says so (`'testflight' (a
+nonProduction key of nen/contract.json → project.targets)`). Two findings are
+a **required FAIL by pointer**, and the report exits 1:
+
+- a **dangling** name — against a contract that declares other targets, none,
+  or is absent (`… at deploy.defaultTarget, names 'testflght', which is not a
+  key of project.targets -- nen/contract.json declares project.targets:
+  'staging', 'testflight'. It is one edit from 'testflight'. …`);
+- a declared target **not marked** `"nonProduction": true` (`… declares
+  without "nonProduction": true -- a default deploy destination must be
+  declared nonProduction …`).
+
+A marked target with **no command line** (`unsupported`) is a `warn`, not a
+FAIL: the default is honest, and `shu deploy --target` answers it at exit 4.
+Every name in the row is shown through the same escaping the gates rows use —
+a default or a declared key carrying ESC, CR or a bidi override is printed
+JSON-escaped, never raw. The closing line for this FAIL says the policy
+**loaded** and names a destination the contract does not declare or mark —
+never that the taxonomy could not be read.
+
+The two *could-not-check* cases differ on purpose. A **policy** that did not
+load — a malformed value (a number, `""`) or a near-miss key (`defaultTaget`),
+refused by the policy row's own loader by pointer — leaves this row `ok`,
+reading `not read -- … see that row`: there is no name to judge, and saying it
+twice would make one defect read as two. A **contract** that is present and
+did not load, under a policy that **does** name a target, gives `ok: false`,
+not required, reading `not checked -- …`: there is a name, a check that was not
+performed is not one that passed, and the contract row already fails the
+report.
 
 **Two optional rows from v0.11.0 (zheref/nen#216).** `nen/colors.yml` is **optional**: an absent file is an
 `ok` row reading `absent (optional)` and no longer fails the aggregate -- the verbs that resolve a colour
@@ -6158,7 +6197,10 @@ sentence when `legacy` is `true` AND the row itself is `ok` (`null` otherwise �
 `note` in row order (empty for a fully migrated repository, and for one carrying no legacy copy at all).
 Exit 0 when every REQUIRED file loaded and validated — a `warn` row never trips this, leftover or
 absent-and-optional alike; exit 1 when any required file failed to load, whether it is missing outright
-or present only under the legacy `schemas/` location.
+or present only under the legacy `schemas/` location, or a required row failed (the
+`#deploy.defaultTarget` row, against the contract). The human line passes each row's `file` and
+`detail` through `plainLine`, so a control or bidi character in either never reaches the terminal;
+`--json` keeps the bytes.
 
 **Example**
 
@@ -9284,7 +9326,7 @@ by a server's log lines is not a document.
 | `stdoutTo` | On an invocation, or on one entry of its `steps`: the **repo-relative file** that step's stdout is written to. There is still no shell and no redirection **operator** — nen already captures a child's stdout, and this says to write those bytes to a file rather than relay them. It is the answer for a tool that **prints** the thing nen then parses (`xccov view --report --json` is the bundled example: `nen shu coverage` reads a *file*). Refused **at load** for a path that is absolute, carries a `..` segment, or carries a glob character (`*`, `?`, `[…]`) — nen expands nothing, so a glob would create a file with that character in its name; refused **at the run**, before anything spawns, when a directory is already at the path or a symlink would land the write outside the tree. Refused outright on `dev` and `run`: those hand the terminal to the child, so nen never sees their output. The file is written whatever the tool exited (a half report is what a redirect leaves), and **not** written for a step that could not start. That step's stdout does not also go to the terminal; its **stderr** still does. `--dry-run` prints `stdout -> <path>` on the step, the report lists every such file beside `artifacts`, and `--json` carries `steps[].stdoutTo`. It works on a step that also carries a `stall` guard: that step's output arrives from the streaming seam as chunks rather than as one buffer, so the chunks are held and joined rather than relayed. |
 | `project.preconditions` | `{ "<lane>": [ { kind, value, why } ] }`. Nen **asserts** these and **never performs** them. |
 | `project.hosts` | `{ "<verb>\|*": ["darwin","linux","win32"] }`, compared against this host. An exact verb key wins over `*`, and a declaration with no `hosts` block constrains no verb — a repository that said nothing about platforms has not said `darwin`. |
-| `project.targets` | `{ "<name>": { args, requiresEnv, unsupported, why } }` — the deploy destinations, and a **project-level** map rather than a per-lane one. `--target` must name a key of it, and there is no default — not even when there is exactly one. The **command** stays in `project.verbs.<lane>.deploy`, where every other verb's command is; a target says where that command sends it. `args` are appended to that argv, in order — refused on a multi-step row (which step reaches the destination is a guess), and refused, like any other argv, when they carry one of the reference pack's own placeholder tokens. `requiresEnv` names variables that must be **set**, asserted exactly as a precondition of kind `env` is — the value is never read, compared, logged or printed, so a credential belongs in the environment and never in this file; each entry is held to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) at load, because a name no environment could carry is a row that could only ever report `FAIL`. Repeats are collapsed, and a variable the lane's own preconditions already declare is asserted **once**. `unsupported` is the destination that has **no command line at all** (a hosting provider's own push integration, a CI action): exit 4 in the repository's own words, and the sentence is required rather than just the key. All four keys are optional; `{}` is a legal name-only target, and naming it is still mandatory. **Unknown keys are preserved** here as everywhere in this schema — with one exception: a key that misspells one of the four is **refused by pointer, naming the key it meant and which misspelling it is** — one letter out (`arg`, `requireEnv`), the same word in a different case (`Args`, `WHY`), or that key with an English plural on it — because preserving it means the flag was accepted, nothing was appended, and a different command deployed at exit 0. **Target names are the repository's own** and nen constrains them no more than it constrains a lane name: a name carrying a space or a leading `-` is legal, is listed verbatim in every refusal, and a leading `-` reaches `--target` only through the `--target=<name>` spelling. See [`nen shu deploy`](#nen-shu-deploy). |
+| `project.targets` | `{ "<name>": { args, requiresEnv, unsupported, why, nonProduction } }` — the deploy destinations, and a **project-level** map rather than a per-lane one. `--target` must name a key of it, and there is no default — not even when there is exactly one. The **command** stays in `project.verbs.<lane>.deploy`, where every other verb's command is; a target says where that command sends it. `args` are appended to that argv, in order — refused on a multi-step row (which step reaches the destination is a guess), and refused, like any other argv, when they carry one of the reference pack's own placeholder tokens. `requiresEnv` names variables that must be **set**, asserted exactly as a precondition of kind `env` is — the value is never read, compared, logged or printed, so a credential belongs in the environment and never in this file; each entry is held to a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`) at load, because a name no environment could carry is a row that could only ever report `FAIL`. Repeats are collapsed, and a variable the lane's own preconditions already declare is asserted **once**. `unsupported` is the destination that has **no command line at all** (a hosting provider's own push integration, a CI action): exit 4 in the repository's own words, and the sentence is required rather than just the key. `nonProduction` (from the release that carries [#300](https://github.com/zheref/nen/issues/300)) is the repository's **machine-readable** word that this destination reaches no production user — a boolean, `false` unless stated `true`, and a non-boolean (`"true"` included) is refused by pointer. `nen shu deploy` never reads it; [`schema check`](#nen-schema-check) FAILs a `deploy.defaultTarget` naming a target without it, and [`shu detect`](#nen-shu-detect) proposes a default only for a target that carries it — a `why` that *reads* non-production is prose, not a mark. All five keys are optional; `{}` is a legal name-only target, and naming it is still mandatory. **Unknown keys are preserved** here as everywhere in this schema — with one exception: a key that misspells one of the five is **refused by pointer, naming the key it meant and which misspelling it is** — one letter out (`arg`, `requireEnv`), the same word in a different case (`Args`, `WHY`, `nonproduction`), that key with an English plural on it, or that key spelled with a word separator (`non_production`, `non-production`) — because preserving it means the flag was accepted, nothing was appended, and a different command deployed at exit 0. **Target names are the repository's own** and nen constrains them no more than it constrains a lane name: a name carrying a space or a leading `-` is legal, is listed verbatim in every refusal (a name carrying a control or bidi character is listed JSON-escaped, never raw), and a leading `-` reaches `--target` only through the `--target=<name>` spelling. See [`nen shu deploy`](#nen-shu-deploy). |
 | `project.launch` | `{ "<name>": { verb, lane, args, artifact, device, after, unsupported, why } }` — the **launch** targets `nen shu dev` and `nen shu run` take, and a project-level map like `targets`. A different block and a different vocabulary: `targets` says where a build is **sent**, `launch` says which **device** a local run lands on. `--target` is **optional** here — a bare `dev` runs the lane's declared `dev`, as it always has — and a name this block does not carry is exit 2 listing the ones it does. `verb` is `dev` or `run`, required, out of a closed set: the two are different builds, so naming a `dev` target on `run` is exit 2 rather than a silent cross-over. `args` are appended to that verb's argv, refused on a multi-step row exactly as a deploy target's are, and refused at exit 2 when they name `{device.id}` or `{artifact}`: substitution reaches the target's `after` steps and nowhere else, so a token here is not unfillable but simply unfilled, and would reach the child process as itself. `device` is `{ name, kind, resolve, extract?, readyWhen }`: `name` is matched **exactly** against what the probe printed (never a prefix, never a case fold, never "the only one connected" — nen does not pick a device); `resolve` is a declared `{ exe, argv }` probe whose output nen searches, as JSON (a `name` property, with `identifier`/`id`/`udid`/`serial` from the same object, one of its direct children, or up to two enclosing objects) or as plain lines (the line carrying the name, and its first token of six-plus characters that carries a digit); `kind: "simulator"` with no probe resolves the id to the **name itself** and spawns nothing, while any other device with no probe is exit 2. A device the probe did not name is **exit 5 listing what it did offer**, and a name two id-bearing candidates carry is exit 5 naming both rather than a guess. `readyWhen` is **which of the probe's own states count as ready**, optional, and absent leaves the behaviour exactly as it was — a row that carries the name is taken as the device. It is `{ "field": <n>, "in": […] }` for a probe that prints lines (`field` is a whitespace-separated position on the device's own row, **counting the first token as 1**, the way a reader counts columns on their screen) or `{ "path": "<key>", "in": […] }` for one that prints JSON (a dotted key read off the object whose `name` matched, or — exactly as the id is — off an enclosing object up to two levels out). **Exactly one** of `field`/`path`, `in` non-empty beside it, `field` a whole number ≥ 1, and the rule refused on a device with **no `resolve` probe** (nothing is spawned there, so the rule would never be read) — all four at load, by pointer. States are compared as whole strings, verbatim; a JSON `true` or `3` at the named path is compared as `"true"` and `"3"`. A device whose row is present but whose state is not in the set is **exit 5 naming the device, the state seen and the states accepted**, and listing what the probe offered — the same discipline the absence refusal follows. `lane` is which lane that verb is read from, **optional**, and absent means the lane `--lane` named or, with no flag, `project.defaultLane` — it exists because a device build is routinely a different declared row from the one a developer iterates in, and a target that could not say so would install whatever the default lane produced; it must name a **declared** lane (refused by pointer at load, listing the ones that are) and an explicit `--lane` that disagrees with it is exit 2 naming both, because nen picks between two stated facts nowhere. It is read **before anything is rendered**, so a target whose own lane is the only one declaring the verb is reachable without retyping `--lane` — a lane the declaration overrode does not get to refuse the run first. `artifact` is the repo-relative path `{artifact}` stands for **instead of** the verb's first artifact, also optional: "the first artifact" is the right answer for the thing a lane *builds* and the wrong one for the thing a device *installs*, and a build routinely produces both. It is refused **outside the tree** (pointer `project.launch.<name>.artifact`, the same containment rule every declared path gets), refused as an empty string, and refused when **no after-step names `{artifact}`** — the key has one effect and a target that never writes the token has stated a path nothing reads. `after` is `[{ exe, argv }]` run once the verb exits 0, with `{device.id}` and `{artifact}` substituted — `{artifact}` is the **first** entry of the verb's own `artifacts` unless the target overrides it, and naming either token with nothing to fill it is exit 2 before anything spawns. `unsupported` is the target with **no command line at all** (a device farm's web console): exit 4 in the repository's own words, and it may not be declared beside anything that would be run. **Unknown keys are preserved** here as everywhere — except a key one spelling away from one nen reads (`arg`, `devices`, `resolver`, `verbs`, `lanes`, `artifacts`, `readywhen`, a readiness rule's own `fields`/`paths`, and the block key itself as `launches` or `Launch`), which is **refused by pointer naming the key it meant and which misspelling it is** — one letter out, a case slip, or an English plural. See [`nen shu dev`](#nen-shu-dev). |
 | `project.evidence` | `{ globs, mechanism, scene, suiteSuffix }` — what [`shu evidence`](#nen-shu-evidence) matches a changed file against, **project-level** like `targets` rather than per-lane. `globs` (required, at least one) is a list of `*`/`**`/`?` patterns; `mechanism` (required) is one of `public-mirror` \| `files-changed` \| `embedded`, the repository's own answer to "how does a survivor reach a human" — `evidence` never mirrors, embeds or lists files itself, it only reports which mechanism a later step should use. `scene` (default `"{suite}-{scene}"`) and `suiteSuffix` (default `"SnapshotTests"`) are read by a later mirroring step, not by this release of `evidence` itself, which reports `suite` and `scene` as separate row fields. Refused by pointer, exactly as `targets` is and saying which misspelling it is, for a key that misspells one of the four — **and for a misspelling of the block key itself** (`evidences`, `Evidence`, `evidenc`), which no per-entry guard could catch: preserved as an unknown key it would be read by nobody, and this verb would refuse saying the repository declares no evidence block, about a file that plainly declares one. `launch`'s block key is guarded the same way; the older optional blocks (`targets`, `hosts`, `toolchain`, `profiles`) are deliberately **not**, because a declaration written against 0.3.0 may already park a near-miss key there. Absent block: exit 2 naming it. |
 
@@ -9599,6 +9641,33 @@ reference pack's own word on `deploy` for that stack, the shape to write
 while you are writing it: `requiresEnv` names **variables**, never their values,
 because this file is committed.
 
+**`deploy.defaultTarget` — a name from the pack, proposed only for a destination
+you declared** ([#300](https://github.com/zheref/nen/issues/300)). A stack's
+profile may name **one** canonical non-production deploy target
+(`deployDefault` in `profiles/<id>.json`; today only `xcode-ios` names one,
+`testflight` — every other stack records `null` with its reason, and
+[STACK-MATRIX](STACK-MATRIX.md) prints each). When a lane's stack names one
+**and** the repository's existing `nen/contract.json` already declares a
+`project.targets` key of exactly that name, marked `"nonProduction": true` and
+not `unsupported`, `detect` proposes the
+`nen/workflow.json` fragment `{ "deploy": { "defaultTarget": "<name>" } }`,
+printed after the contract block and carried in `--json` as `workflow`, with a
+note. Where the name is **not** declared — no declaration, a declaration
+without that key, or one that does not load — or is declared without the
+`nonProduction` mark, or as `unsupported`, nothing is proposed and a note says
+what would make it so. Two lanes naming two different proposable defaults get
+no proposal and a note naming both. A `nen/workflow.json` that already states a
+`deploy.defaultTarget` **name** is the repository's decision: the note says
+*already declares it as …* and nothing is proposed. A stated `null` is not —
+it is the seat [`scaffold init`](#nen-scaffold-init) writes — so the fragment
+is still proposed, with a note that it would replace that `null`. A key
+repeated inside `deploy` (two `defaultTarget`s) or inside `project.targets`
+(two `nonProduction`s, a target name twice) is refused by pointer at load:
+JSON would keep the last, and a reviewer reads the first. `targets` in the contract proposal
+stays the empty seat either way, `--write` **never** writes `nen/workflow.json`,
+and [`nen shu deploy`](#nen-shu-deploy) reads no default: the key is for a
+caller's own tooling, which passes it to `--target` itself.
+
 **`{gw}`, the one token `detect` answers from the HOST.** Every other
 placeholder is a fact only your repository knows, and `detect` withholds the row
 rather than guess one. `{gw}` is the exception the pack documents: it is your
@@ -9764,7 +9833,8 @@ used to produce the same silence.
 
 **Output and exit codes** — the proposal on stdout (as text with the block to
 paste, or as `--json` `{ contract, repo, declaration, declarationPresent, lanes,
-proposal, notes, written, exitCode }`). Exit 0 when at least one lane was
+proposal, workflow, notes, written, exitCode }`, where `workflow` is the
+`nen/workflow.json` fragment to merge by hand, or `null`). Exit 0 when at least one lane was
 detected; exit **1**, with the reason, when nothing was — never a silent empty
 proposal. Exit 2 when `--write` would overwrite, or when `--write` was given and
 nothing was detected.
@@ -10394,7 +10464,7 @@ asserted, nothing sent -- and `--run` is what acts.
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--target <name>` | yes | Which declared destination. | **No default, ever** — not even when `project.targets` has exactly one key — and it must name a key of that map; anything else is exit 2 listing what is declared. Nen never picks where a build goes. |
+| `--target <name>` | yes | Which declared destination. | **No default, ever** — not even when `project.targets` has exactly one key — and it must name a key of that map; anything else is exit 2 listing what is declared. Nen never picks where a build goes — and that includes `nen/workflow.json` → `deploy.defaultTarget`, which this verb does **not** read: a bare `nen shu deploy` is the same exit 2 with or without it, and a caller that wants the default passes it here itself. |
 | `--run` | yes, to act | Send it. | Without it the verb prints the **fully resolved plan** — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0, with one line on stderr saying nothing was sent. |
 | `--dry-run` | no | The explicit spelling of that same report. | Identical output. `--run --dry-run` together is **exit 2**: one says send it and the other says send nothing, and nen will not pick between two contradicting instructions on this verb. |
 

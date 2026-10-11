@@ -77,7 +77,8 @@ import { matchesGlob } from "../shu/evidence/glob.js";
 import { CAPTURE_DIRECTORY } from "../shu/coverage/capture.js";
 import { catastrophicShape } from "./pattern.js";
 import { posix } from "node:path";
-import { CONTRACT_FILE, readSchemaJson, type SchemaLocation } from "./source.js";
+import { CONTRACT_FILE, readSchemaFile, type SchemaLocation } from "./source.js";
+import { refuseDuplicateKeyWithin } from "./gates.js";
 
 // ── the closed sets ─────────────────────────────────────────────────────────
 
@@ -426,6 +427,16 @@ export interface DeployTarget {
   /** This destination has no command line at all, in the repo's own words. */
   readonly unsupported: string | null;
   readonly why: string | null;
+  /**
+   * `nonProduction` -- the repository's own MACHINE-READABLE word that this
+   * destination reaches no production user (zheref/nen#300, Feitan F2).
+   * `false` unless stated `true`: absent is "not marked", never "probably
+   * fine". Nothing in `nen shu deploy` reads it; `nen schema check` refuses a
+   * `deploy.defaultTarget` naming a target without it, and `nen shu detect`
+   * proposes a default only for a target that carries it. A `why` that READS
+   * non-production is prose, and prose is not a gate.
+   */
+  readonly nonProduction: boolean;
   /** The entry exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -1832,8 +1843,8 @@ function optionalStrings(path: string, pointer: string, value: unknown): readonl
   );
 }
 
-/** The four keys `project.targets.<name>` is made of. Nen's, not the repo's. */
-const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "why"];
+/** The five keys `project.targets.<name>` is made of. Nen's, not the repo's. */
+const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "why", "nonProduction"];
 
 /**
  * The eight keys `project.launch.<name>` is made of.
@@ -1930,13 +1941,23 @@ export function withinOneEdit(a: string, b: string): boolean {
  *     and `--target` would answer "this repository declares no launch targets"
  *     about a file that plainly declares four.
  */
-function nearMissOf(key: string, known: string): string | null {
+function nearMissOf(key: string, known: string, separatorSlips = false): string | null {
   const lower = key.toLowerCase();
   const target = known.toLowerCase();
   if (lower === target) return `differs from '${known}' only in case`;
   if (withinOneEdit(key, known)) return `is one letter away from '${known}'`;
   if (lower.replace(/(?:es|s)$/, "") === target.replace(/(?:es|s)$/, "")) {
     return `is '${known}' with an English plural on it`;
+  }
+  // A FOURTH SHAPE, AND IT HAS ITS OWN WORDS: a word-separator slip --
+  // `non_production`, `non-production`, `requires_env` -- which is the same
+  // name spelled in another file format's convention. Two or more edits out,
+  // so the distance rule alone let it through (zheref/nen#300). OPT-IN, and
+  // today only `project.targets` opts in (Nobunaga R3): the other blocks'
+  // documented misspelling rules name three shapes, and stay true.
+  const unseparated = lower.replace(/[_-]/g, "");
+  if (separatorSlips && unseparated !== lower && unseparated === target.replace(/[_-]/g, "")) {
+    return `is '${known}' spelled with a word separator`;
   }
   return null;
 }
@@ -1980,19 +2001,33 @@ function refuseNearMissKey(
   subject: string,
   describeConsequence: (meant: string) => string = (meant): string =>
     `this entry would run with '${meant}' silently unset`,
+  separatorSlips = false,
 ): void {
   for (const key of Object.keys(raw)) {
     if (key.startsWith("$") || knownKeys.includes(key)) continue;
-    const meant = knownKeys.find((known): boolean => nearMissOf(key, known) !== null);
+    const meant = knownKeys.find((known): boolean => nearMissOf(key, known, separatorSlips) !== null);
     if (meant === undefined) continue;
     throw new SchemaError(
       path,
       `${pointer}.${key}`,
-      `${nearMissOf(key, meant) ?? ""}, which IS a key nen reads, and is not itself one. ${subject}'s keys are ${knownKeys.join(
+      `${nearMissOf(key, meant, separatorSlips) ?? ""}, which IS a key nen reads, and is not itself one. ${subject}'s keys are ${knownKeys.join(
         ", ",
       )}; every OTHER key is preserved verbatim for a later release, and that is exactly why this one cannot be: '${key}' would be kept, read by nobody, and ${describeConsequence(meant)}. Fix the spelling, or rename the key to something that is not a near-miss of one of ${subject}'s keys`,
     );
   }
+}
+
+/**
+ * `nonProduction` -- a boolean or nothing. A string `"true"` is refused rather
+ * than read as true: the key exists to be a machine-readable fact, and a value
+ * that has to be interpreted is the prose it replaces.
+ */
+function parseNonProduction(path: string, pointer: string, value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value !== "boolean") {
+    throw new SchemaError(path, pointer, `expected a boolean (true or false), got ${describeValue(value)}`);
+  }
+  return value;
 }
 
 /**
@@ -2013,7 +2048,7 @@ function refuseNearMissKey(
  *     -- `refuseNearMissKey` above, which names the key it was one edit from.
  *
  * `$`-prefixed keys are metadata and are skipped, as everywhere in this schema;
- * every other key -- every key that is not one of the four and not a near-miss
+ * every other key -- every key that is not one of the five and not a near-miss
  * of one -- preserves its whole entry on `raw`.
  */
 function parseTargets(path: string, value: unknown): Record<string, DeployTarget> {
@@ -2039,6 +2074,9 @@ function parseTargets(path: string, value: unknown): Record<string, DeployTarget
       TARGET_KEYS,
       "A target",
       (meant): string => `this destination would deploy with '${meant}' silently unset`,
+      // The word-separator shape (`non_production`) is refused here and only
+      // here -- see `nearMissOf`.
+      true,
     );
     const unsupported =
       raw["unsupported"] === undefined || raw["unsupported"] === null
@@ -2071,6 +2109,7 @@ function parseTargets(path: string, value: unknown): Record<string, DeployTarget
       ),
       unsupported,
       why: optionalString(path, `${pointer}.why`, raw["why"]),
+      nonProduction: parseNonProduction(path, `${pointer}.nonProduction`, raw["nonProduction"]),
       raw,
     };
   }
@@ -2754,7 +2793,19 @@ export function parseContract(
  * `checkTaxonomy` branches on, so it is passed through untouched.
  */
 export function loadContract(repoRoot: string): RepositoryContract {
-  const { path, value, location } = readSchemaJson(repoRoot, CONTRACT_FILE);
+  const { path, text, location } = readSchemaFile(repoRoot, CONTRACT_FILE);
+  // A REPEATED KEY UNDER `project.targets` IS REFUSED BEFORE PARSING
+  // (zheref/nen#300, Feitan N1): `{"nonProduction": false, "nonProduction":
+  // true}` reads as `true` to `JSON.parse` and as `false` to a reviewer. The
+  // scan is the one gates.json goes through; the rest of this file has not
+  // adopted the rule, so a repeat elsewhere is left to `JSON.parse` as before.
+  refuseDuplicateKeyWithin(path, text, "project.targets");
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch (error) {
+    throw new SchemaError(path, null, `is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+  }
   return parseContract(path, location, value);
 }
 

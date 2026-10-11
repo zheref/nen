@@ -806,9 +806,9 @@ describe("futon.advanceGo -- duplicate names after namespace normalization are r
   });
 });
 
-describe("a workflow's FIFTEEN blocks", () => {
-  it("says fifteen, now that runners is one of them", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's fifteen blocks are/);
+describe("a workflow's SIXTEEN blocks", () => {
+  it("says sixteen, now that deploy is one of them", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's sixteen blocks are/);
   });
 });
 
@@ -1143,5 +1143,88 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
       ["self-hosted", "Windows", "X64", "pool-windows-x64"],
       ["self-hosted", "macOS", "ARM64", "pool-macos-arm64"],
     ]);
+  });
+});
+
+// ── deploy (zheref/nen#300) ─────────────────────────────────────────────────
+
+describe("deploy -- the default target a caller's own tooling sends to", () => {
+  /** The SchemaError a document raises, or a failed expectation. */
+  function refusedAt(document: unknown): SchemaError {
+    try {
+      parseWorkflow("<doc>", document);
+    } catch (error) {
+      if (error instanceof SchemaError) return error;
+      throw error;
+    }
+    throw new Error("expected a SchemaError, got a successful parse");
+  }
+
+  it("has NO default name -- absent, an empty block and an explicit null all read as null", () => {
+    expect(defaultWorkflow().deploy).toEqual({ defaultTarget: null, raw: {} });
+    expect(parseWorkflow("<doc>", {}).deploy.defaultTarget).toBeNull();
+    expect(parseWorkflow("<doc>", { deploy: {} }).deploy.defaultTarget).toBeNull();
+    expect(parseWorkflow("<doc>", { deploy: { defaultTarget: null } }).deploy.defaultTarget).toBeNull();
+  });
+
+  it("reads a stated name, and keeps the block exactly as the file states it", () => {
+    const workflow = parseWorkflow("<doc>", {
+      deploy: { $comment: "the beta channel", defaultTarget: "testflight", laterKey: true },
+    });
+    expect(workflow.deploy.defaultTarget).toBe("testflight");
+    expect(workflow.deploy.raw).toEqual({ $comment: "the beta channel", defaultTarget: "testflight", laterKey: true });
+  });
+
+  it("refuses a non-string or an empty name BY POINTER", () => {
+    for (const value of [42, true, ["testflight"], { name: "testflight" }, ""]) {
+      const error = refusedAt({ deploy: { defaultTarget: value } });
+      expect(error.pointer, JSON.stringify(value)).toBe("deploy.defaultTarget");
+      expect(error.message, JSON.stringify(value)).toMatch(/at deploy\.defaultTarget, expected a non-empty string/);
+    }
+  });
+
+  it("refuses a block that is not an object, by its own pointer", () => {
+    expect(refusedAt({ deploy: "testflight" }).pointer).toBe("deploy");
+  });
+
+  it("refuses a NEAR-MISS of defaultTarget by pointer, naming the key it meant", () => {
+    for (const typo of ["defaultTaget", "defaultTargets", "DefaultTarget"]) {
+      const error = refusedAt({ deploy: { [typo]: "testflight" } });
+      expect(error.pointer, typo).toBe(`deploy.${typo}`);
+      expect(error.message, typo).toMatch(/one letter away from 'defaultTarget'/);
+    }
+  });
+
+  it("refuses a near-miss of the BLOCK name at the root, now that deploy is one nen reads", () => {
+    const error = refusedAt({ deploi: { defaultTarget: "testflight" } });
+    expect(error.pointer).toBe("deploi");
+    expect(error.message).toMatch(/one letter away from 'deploy'/);
+  });
+});
+
+describe("deploy -- a repeated key is refused, never collapsed (Feitan N1 on #300)", () => {
+  function withPolicyText(text: string): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-workflow-dup-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "workflow.json"), text);
+    return root;
+  }
+
+  it("refuses two defaultTarget keys by pointer -- JSON would keep the last", () => {
+    const root = withPolicyText('{"deploy":{"defaultTarget":"staging","defaultTarget":"production"}}');
+    expect(() => loadWorkflow(root)).toThrow(SchemaError);
+    expect(() => loadWorkflow(root)).toThrow("at deploy, carries the key 'defaultTarget' twice");
+  });
+
+  it("refuses the deploy block declared twice at the root", () => {
+    const root = withPolicyText('{"deploy":{"defaultTarget":null},"deploy":{"defaultTarget":"production"}}');
+    expect(() => loadWorkflow(root)).toThrow("at deploy, carries the key 'deploy' twice");
+  });
+
+  it("leaves a repeat in another block to JSON.parse, as before", () => {
+    const root = withPolicyText('{"monitor":{"maxCycles":3,"maxCycles":4},"deploy":{"defaultTarget":"staging"}}');
+    const loaded = loadWorkflow(root);
+    expect(loaded.workflow.monitor.maxCycles).toBe(4);
+    expect(loaded.workflow.deploy.defaultTarget).toBe("staging");
   });
 });

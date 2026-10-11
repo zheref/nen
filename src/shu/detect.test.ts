@@ -50,6 +50,7 @@ import {
 // sweeps that forbid it (./purity.test.ts, ../profiles/inertness.test.ts) are
 // about the EXECUTION path and exclude `*.test.ts` by name.
 import { GITIGNORE_ENTRY } from "../scaffold/init.js";
+import { defaultWorkflowDocument } from "../scaffold/templates.js";
 import {
   EMPTY_TREE,
   EXPO_BARE,
@@ -7555,6 +7556,201 @@ describe("nen shu detect -- the targets stub", () => {
       expect(deploy.code).toBe(2);
       expect(deploy.err.join("\n")).toMatch(/declares no targets at all/);
       expect(deploy.err.join("\n")).toContain('"targets": { "<name>"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── deploy.defaultTarget (zheref/nen#300) ───────────────────────────────────
+
+describe("detect proposes deploy.defaultTarget only for a DECLARED canonical target", () => {
+  /** XCODE_PROJECT copied somewhere writable, with whatever targets a case declares. */
+  function xcodeTree(targets?: Readonly<Record<string, unknown>>): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-default-target-"));
+    cpSync(XCODE_PROJECT, dir, { recursive: true });
+    if (targets !== undefined) {
+      // THE DECLARATION IS THIS VERB'S OWN PROPOSAL plus the targets a human
+      // wrote -- the order a real repository arrives at the state in.
+      const proposal = detect(dir).proposal as { project: Record<string, unknown> };
+      mkdirSync(join(dir, "nen"), { recursive: true });
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({ ...proposal, project: { ...proposal.project, targets } }),
+      );
+    }
+    return dir;
+  }
+
+  it("proposes the xcode-ios pack's 'testflight' when the declaration declares that target", () => {
+    const dir = xcodeTree({ testflight: { nonProduction: true, why: "the internal beta channel" }, staging: {} });
+    try {
+      const report = detect(dir);
+      expect(report.declarationPresent).toBe(true);
+      expect(report.workflow).toEqual({ deploy: { defaultTarget: "testflight" } });
+      const note = report.notes.find((line): boolean => line.startsWith("proposed nen/workflow.json"));
+      expect(note).toContain("deploy.defaultTarget 'testflight'");
+      expect(note).toContain('already declares project.targets.testflight with "nonProduction": true');
+      expect(note).toContain("'nen shu deploy' still requires --target");
+      // The CONTRACT proposal is untouched: `targets` stays the empty seat, and
+      // nen proposes no destination of its own.
+      expect((report.proposal as { project: { targets: unknown } }).project.targets).toEqual({});
+      // Rendered after the contract, under a heading that says it is never written.
+      const rendered = renderDetect(report).join("\n");
+      expect(rendered).toContain("proposed nen/workflow.json fragment (never written, not even by --write -- merge it by hand):");
+      expect(rendered).toContain('"defaultTarget": "testflight"');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes NOTHING for a declared target NOT marked nonProduction, naming the marker (Feitan F2)", () => {
+    // Prose that READS non-production is not the mark: only the boolean is.
+    for (const testflight of [{ why: "the internal beta channel -- non-production" }, { nonProduction: false }]) {
+      const dir = xcodeTree({ testflight });
+      try {
+        const report = detect(dir);
+        expect(report.workflow, JSON.stringify(testflight)).toBeNull();
+        expect(report.notes.join("\n")).toContain(
+          'nen/contract.json declares project.targets.testflight without "nonProduction": true. A default deploy destination must be declared nonProduction -- add "nonProduction": true',
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("proposes NOTHING for a marked target with no command line (unsupported) -- N4", () => {
+    const dir = xcodeTree({ testflight: { nonProduction: true, unsupported: "Xcode Cloud uploads it" } });
+    try {
+      const report = detect(dir);
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain("declares project.targets.testflight as unsupported (no command line)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("notes, rather than proposes, when nen/workflow.json already states a NAME (N7)", () => {
+    const dir = xcodeTree({ testflight: { nonProduction: true }, staging: { nonProduction: true } });
+    try {
+      writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ deploy: { defaultTarget: "staging" } }));
+      const report = detect(dir);
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain(
+        "no deploy.defaultTarget is proposed: nen/workflow.json already declares it as 'staging', which is this repository's decision.",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still PROPOSES over the scaffolded null, saying it would replace it (Nobunaga R1)", () => {
+    // `nen scaffold init` writes this exact document, `"defaultTarget": null`
+    // included -- reading that null as a decision withheld the proposal from
+    // every scaffolded repository and told it something false.
+    const dir = xcodeTree({ testflight: { nonProduction: true } });
+    try {
+      const scaffolded = defaultWorkflowDocument({ lane: "app", allowedAttributionTrailers: [], runTrailer: null });
+      expect((scaffolded["deploy"] as Record<string, unknown>)["defaultTarget"]).toBeNull();
+      writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify(scaffolded));
+      const report = detect(dir);
+      expect(report.workflow).toEqual({ deploy: { defaultTarget: "testflight" } });
+      const notes = report.notes.join("\n");
+      expect(notes).toContain("would REPLACE that file's \"defaultTarget\": null");
+      expect(notes).not.toContain("already declares it as");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes NOTHING when two lanes' stacks name two different declared defaults -- N5", () => {
+    // A PACK THE BUNDLE DOES NOT CARRY: the bundled one names a default for
+    // xcode-ios only, so a second stack's default is written into a copy.
+    const packDir = mkdtempSync(join(tmpdir(), "nen-detect-pack-"));
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-two-defaults-"));
+    try {
+      cpSync(join(process.cwd(), "profiles"), packDir, { recursive: true });
+      const androidPath = join(packDir, "gradle-android.json");
+      const android = JSON.parse(readFileSync(androidPath, "utf8")) as Record<string, unknown>;
+      android["deployDefault"] = { target: "internal", why: "a test pack's word", source: "this test" };
+      writeFileSync(androidPath, JSON.stringify(android));
+      const pack = loadProfilesPack(packDir);
+
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      const proposal = detectOn(dir, "linux", pack).proposal as { project: Record<string, unknown> };
+      mkdirSync(join(dir, "nen"), { recursive: true });
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({
+          ...proposal,
+          project: { ...proposal.project, targets: { testflight: { nonProduction: true }, internal: { nonProduction: true } } },
+        }),
+      );
+      const report = detectOn(dir, "linux", pack);
+      expect(report.lanes.map((lane): string => lane.stack)).toEqual(expect.arrayContaining(["gradle-android", "xcode-ios"]));
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain(
+        "the lanes' stacks name 2 different canonical non-production targets, all declared nonProduction ('internal' for gradle-android; 'testflight' for xcode-ios)",
+      );
+    } finally {
+      rmSync(packDir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes NOTHING when the declaration does not declare that target, and says what would", () => {
+    const dir = xcodeTree({ staging: {} });
+    try {
+      const report = detect(dir);
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain(
+        "no deploy.defaultTarget is proposed: the reference pack names 'testflight' the canonical non-production deploy target for xcode-ios, but nen/contract.json declares no project.targets.testflight.",
+      );
+      expect(renderDetect(report).join("\n")).not.toContain("fragment");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes NOTHING when there is no declaration at all -- nen never proposes a destination", () => {
+    const report = detect(XCODE_PROJECT);
+    expect(report.declarationPresent).toBe(false);
+    expect(report.workflow).toBeNull();
+    expect(report.notes.join("\n")).toContain("nen/contract.json is absent, so it declares no project.targets.testflight");
+  });
+
+  it("proposes NOTHING when the declaration does not load", () => {
+    const dir = xcodeTree();
+    try {
+      mkdirSync(join(dir, "nen"), { recursive: true });
+      writeFileSync(join(dir, "nen", "contract.json"), "{ not json");
+      const report = detect(dir);
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain("nen/contract.json did not load, so nen cannot tell whether it declares one");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes nothing, and says nothing, for a stack whose pack names no default", () => {
+    const report = detect(NEXTJS_SINGLE);
+    expect(report.workflow).toBeNull();
+    expect(report.notes.join("\n")).not.toContain("deploy.defaultTarget");
+  });
+
+  it("answers null for an empty tree, where no lane was found", () => {
+    expect(detect(EMPTY_TREE).workflow).toBeNull();
+  });
+
+  it("--write writes the contract only -- the workflow fragment is never a file", async () => {
+    // A tree with no declaration gets no fragment, so --write's one file is the
+    // whole of what it ever writes; nen/workflow.json must not appear.
+    const dir = xcodeTree();
+    try {
+      const result = await capture(["detect", "--write"], dir);
+      expect(result.code).toBe(0);
+      expect(() => readFileSync(join(dir, "nen", "workflow.json"), "utf8")).toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

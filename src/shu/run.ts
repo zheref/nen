@@ -56,6 +56,7 @@ import {
   type WatchVerdict,
 } from "../seam/exec.js";
 import { regressionOutputs, type DeviceExtraction, type DeviceReadiness, type ProjectBlock, type StallGuard } from "../schema/contract.js";
+import { pointerSegment } from "../schema/gates.js";
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_SELECTION_EMPTY, EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { readSelectionResults } from "./select-results.js";
@@ -671,7 +672,7 @@ export function renderReport(report: ShuReport): readonly string[] {
     lines.push(
       labelled(
         "target",
-        `${target.name}${
+        `${pointerSegment(target.name)}${
           firstArg === undefined
             ? "  (appends no argument)"
             : `  (appends: ${renderArgv({ exe: firstArg, argv: restArgs })})`
