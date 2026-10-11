@@ -744,7 +744,7 @@ function createLink(dest: string, target: string, platform: NodeJS.Platform, ops
  * replaced as an entry, never followed. A stale temporary is removed only when
  * it is a link to a root of the same plugin (`owner`) -- never anything else.
  */
-function repointLink(dest: string, target: string, platform: NodeJS.Platform, ops: LinkOps, owner: Owner): void {
+function repointLink(dest: string, target: string, previous: string, platform: NodeJS.Platform, ops: LinkOps, owner: Owner): void {
   const temporary = join(dirname(dest), `.${basename(dest)}.nen-relink`);
   let stale;
   try {
@@ -769,17 +769,46 @@ function repointLink(dest: string, target: string, platform: NodeJS.Platform, op
     }
   }
   createLink(temporary, target, platform, ops);
+  /** The temporary is ours: removed on every failure, so none is left behind. */
+  const dropTemporary = (): void => {
+    try {
+      removeLink(temporary, platform, ops);
+    } catch {
+      /* already gone, or not removable: the next run's stale check names it */
+    }
+  };
   try {
     ops.rename(temporary, dest);
   } catch (error) {
+    if (platform !== "win32") {
+      dropTemporary();
+      throw new Stop("failed", `could not re-point ${safe(dest)} (${code(error)}); the previous link is left in place`);
+    }
     // Windows will not rename over a junction: the old junction -- a link,
     // never data (rmdir is not recursive) -- goes first, then the rename.
-    if (platform !== "win32") throw new Stop("failed", `could not re-point ${safe(dest)} (${code(error)})`);
     try {
       ops.rmdir(dest);
-      ops.rename(temporary, dest);
     } catch (second) {
-      throw new Stop("failed", `could not re-point ${safe(dest)} (${code(second)})`);
+      dropTemporary();
+      throw new Stop("failed", `could not re-point ${safe(dest)} (${code(second)}); the previous link is left in place`);
+    }
+    try {
+      ops.rename(temporary, dest);
+    } catch (third) {
+      // The old junction is gone and the new one did not land: put the
+      // previous link back, so a failed re-point never leaves the
+      // destination absent.
+      dropTemporary();
+      let restored = true;
+      try {
+        ops.symlink(previous, dest, linkType(platform));
+      } catch {
+        restored = false;
+      }
+      throw new Stop(
+        "failed",
+        `could not re-point ${safe(dest)} (${code(third)}); ${restored ? `the previous link to ${safe(previous)} was restored` : `the previous link to ${safe(previous)} could NOT be restored -- ${safe(dest)} is absent`}`,
+      );
     }
   }
 }
@@ -860,7 +889,7 @@ function applyLink(dest: string, target: string, plan: LinkPlan, draft: Draft, i
   }
   try {
     if (plan.kind === "link") createLink(dest, target, platform, ops);
-    else repointLink(dest, target, platform, ops, owner);
+    else repointLink(dest, target, plan.previous ?? target, platform, ops, owner);
     readBackLink(dest, target);
   } catch (error) {
     settle(link, false);

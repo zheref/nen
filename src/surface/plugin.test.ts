@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, mkdirSync, readdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { run, type Io } from "../index.js";
 import { CHECK_PLUGIN_CONTRACT } from "./command.js";
 import { overallVerdict, resolveConfigDir, safe, sameIdentity, validateTrees, type CopyJudgement } from "./plugin.js";
@@ -80,8 +80,10 @@ function world(): World {
     fresh(name: string): string {
       const target = join(work, name);
       rmSync(target, { recursive: true, force: true });
-      cpSync(src, target, { recursive: true, verbatimSymlinks: true });
-      rmSync(join(target, ".git"), { recursive: true, force: true });
+      // `.git` is never copied: a checkout's git may still be repacking its
+      // objects in the background after a commit, and copying a live
+      // `.git/objects` raced it on CI (ENOENT mid-copy). A copy is no checkout.
+      cpSync(src, target, { recursive: true, verbatimSymlinks: true, filter: (path): boolean => basename(path) !== ".git" });
       return target;
     },
   };

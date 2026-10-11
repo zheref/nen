@@ -43,6 +43,12 @@ const SKILLS_ID = `${PLUGIN}@skills-dir`;
 const MARKET_ID = `${PLUGIN}@${MARKET}`;
 const POSIX = process.platform !== "win32";
 
+/** Remove a directory link on the REAL host: a junction goes by rmdir, a symlink by unlink. */
+function hostRemoveLink(path: string): void {
+  if (POSIX) unlinkSync(path);
+  else rmdirSync(path);
+}
+
 /** A directory link: a junction on Windows (no admin rights needed), a symlink elsewhere. */
 function link(target: string, path: string): void {
   symlinkSync(target, path, POSIX ? undefined : "junction");
@@ -339,7 +345,7 @@ describe("surface install --surface claude-code", () => {
     expect(existsSync(join(w.cfg, "skills"))).toBe(false);
     expect(commandsOf(s)).toEqual(["git rev-parse --show-toplevel", "claude --version"]);
     const text = result.out.join("\n");
-    expect(text).toMatch(/would link: .*skills\/zephyr -> /);
+    expect(text).toMatch(/would link: .*skills[\\/]zephyr -> /);
     expect(text).toMatch(/would run: claude plugin uninstall zephyr@zephyr-market/);
     expect(text).toMatch(/would run: claude plugin marketplace remove zephyr-market/);
     expect(text).toMatch(/read back: NOT CHECKED/);
@@ -456,10 +462,12 @@ describe("surface install --surface claude-code", () => {
     const doc = result.doc();
     expect(doc["verdict"]).toBe("owed");
     const actions = doc["actions"] as Array<{ what: string; command: string | null }>;
+    // The directory is shell-quoted as any token is: a Windows path carries '\\'.
+    const dir = shellQuote(w.cfg);
     expect(actions.map((action): string | null => action.command)).toEqual([
-      `CLAUDE_CONFIG_DIR=${w.cfg} claude plugin disable ${MARKET_ID} --scope user`,
-      `CLAUDE_CONFIG_DIR=${w.cfg} claude plugin enable ${SKILLS_ID} --scope user`,
-      `CLAUDE_CONFIG_DIR=${w.cfg} claude plugin marketplace remove ${MARKET}`,
+      `CLAUDE_CONFIG_DIR=${dir} claude plugin disable ${MARKET_ID} --scope user`,
+      `CLAUDE_CONFIG_DIR=${dir} claude plugin enable ${SKILLS_ID} --scope user`,
+      `CLAUDE_CONFIG_DIR=${dir} claude plugin marketplace remove ${MARKET}`,
     ]);
     const text = await capture(installArgs(w, "claude-code"), seams(w, [git(w.root), ok("claude --version"), claudeList([servedLink(w)])]));
     expect(text.out.join("\n")).toMatch(/action owed: .*enables zephyr@zephyr-market[\s\S]*run: CLAUDE_CONFIG_DIR=/);
@@ -1105,17 +1113,51 @@ describe("surface install: Nobunaga round 1", () => {
     const dest = join(w.cfg, "skills", PLUGIN);
     mkdirSync(join(w.cfg, "skills"));
     link(w.other, dest);
-    const report = direct(w, seams(w, [ok("claude --version")]), {
+    // The PLATFORM SEAM says linux on every host -- the real host would take
+    // the Windows fallback on a Windows runner -- and the one removal this
+    // path makes (the temporary) is a link removal on every host.
+    const s = new ScriptedSeams([ok("claude --version")], { env: { HOME: w.home }, platform: "linux" });
+    const report = direct(w, s, {
       linkOps: {
+        symlink: (target, path): void => link(target, path),
+        unlink: hostRemoveLink,
         rename: (): void => {
           throw Object.assign(new Error("EXDEV"), { code: "EXDEV" });
         },
       },
     });
     expect(report.verdict).toBe("failed");
-    expect(report.reason).toMatch(/could not re-point .*EXDEV/);
+    expect(report.reason).toMatch(/could not re-point .*EXDEV.*left in place/);
     expect(report.steps.map((step) => step.outcome)).toEqual(["failed"]);
     expect(realpathSync.native(dest)).toBe(w.other);
+    expect(existsSync(join(w.cfg, "skills", `.${PLUGIN}.nen-relink`))).toBe(false);
+  });
+
+  it("N13: on Windows a rename that fails after the old junction is removed restores the previous link", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    const removed: string[] = [];
+    const s = new ScriptedSeams([ok("claude --version")], { env: { HOME: w.home }, platform: "win32" });
+    const report = direct(w, s, {
+      linkOps: {
+        symlink: (target, path): void => link(target, path),
+        rmdir: (path): void => {
+          removed.push(path);
+          hostRemoveLink(path);
+        },
+        rename: (): void => {
+          throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+        },
+      },
+    });
+    expect(report.verdict).toBe("failed");
+    expect(report.reason).toMatch(/the previous link to .* was restored/);
+    // the old junction went, then the temporary was dropped -- both as links
+    expect(removed).toEqual([dest, join(w.cfg, "skills", `.${PLUGIN}.nen-relink`)]);
+    expect(realpathSync.native(dest)).toBe(w.other);
+    expect(existsSync(join(w.cfg, "skills", `.${PLUGIN}.nen-relink`))).toBe(false);
   });
 
   it("N16: a write whose read-back resolves elsewhere is failed (1), not refused", () => {

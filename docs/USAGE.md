@@ -13027,7 +13027,9 @@ device and inode) with the same target, the write is refused at exit 3. A
 re-point is a fresh link, `.<name>.nen-relink`, renamed over the old one, so the
 destination is never absent in between and the old link is never followed; on
 Windows, where a rename will not replace a junction, the old junction is removed
-with `rmdir` (never recursive) first. A stale `.<name>.nen-relink` is removed
+with `rmdir` (never recursive) first, and put back if the rename then fails --
+a failed re-point never leaves the destination absent, and never leaves its
+temporary behind. A stale `.<name>.nen-relink` is removed
 only when it is itself a link to a root of the plugin. A real directory, a
 file, a dangling link or a link anywhere else is refused, named and left exactly
 as it was -- and so is a `<name>@<other>` install from a marketplace the
