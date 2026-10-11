@@ -12,65 +12,70 @@
 //   absent                                -> `git worktree add --detach`     created
 //   present, clean, detached at the tip   -> nothing                          reused
 //   present, clean, anywhere else         -> `git checkout --detach <tip>`   moved
+//     ...unless the move would overwrite an IGNORED, untracked file the tip
+//     tracks (git overwrites those silently) -> refused, every path listed
 //   present, DIRTY                        -> exit 2, every path listed; never reset,
 //                                            cleaned, stashed or discarded
 //   present, not this project's worktree  -> exit 2: a stray directory, a symlink, or a
 //                                            directory beside a SIBLING registration
 //                                            (`<name>2`) is somebody's, not ours
 //   registered, directory gone            -> that ONE registration dropped
-//                                            (`git worktree remove --force -- <path>`),
-//                                            then created                  recreated
+//                                            (`git worktree remove --force` on its own
+//                                            path), then created           recreated
+//     ...unless it is LOCKED, which is somebody's statement that it is coming
+//     back (a removable disk, a network share) -> refused
 // A repository-wide `git worktree prune` is never run: it would drop OTHER
-// sessions' vanished registrations, which are not this verb's to decide.
+// sessions' vanished registrations, which are not this verb's to decide. A
+// --name differing from a registration under .nen/worktrees only by case or
+// Unicode normalisation is refused: on a folding filesystem the two are one
+// directory, and on any other they are two names a reader cannot tell apart.
 //
 // CORE is the checkout whose `.git` is the common git directory, resolved from
 // ANY checkout through `git rev-parse --git-common-dir` -- the same derivation
 // ./swap.ts's `resolveCore` makes. The parents of the fixed path are proven
 // first: a symlinked `.nen` or `.nen/worktrees` would carry the worktree, and
-// every credential copied into it, wherever the link points, reported as if it
-// stood under core.
+// every credential copied into it, wherever the link points.
 //
 // THE COPY. `--copy-from-core <path>` (repeatable) names a repo-relative path
 // copied FROM CORE, never synthesised and never from any other checkout. A
 // contract-declared list (`nen/contract.json -> project.fromCore[]`) is a
-// follow-up: that file's schema is owned by another open change. Before a byte
-// moves, each path is proven twice:
-//   the SOURCE, in core: a literal repo-relative path inside the tree; not
-//     tracked (a tracked file is already in every worktree); gitignored (an
-//     unignored copy would dirty the worktree and the next run would refuse
-//     it); a regular file, not a symlink, whose directory resolves inside core.
-//   the DESTINATION, at the tip: the worktree stands at origin/<base>, so a
-//     TRUNK commit decides what sits at the destination. Not tracked at the tip
-//     (a regular file would be overwritten with a credential and shown by `git
-//     diff`; a leaf symlink would carry it outside the tree); no ancestor
-//     tracked at the tip as a symlink, a submodule or a file (a parent symlink
-//     carries it outside the tree). Those are proven against the tip's TREE
-//     (`git ls-tree`), so they hold before anything is created or moved, and
-//     under --dry-run too. Then, in the worktree on disk: gitignored there; no
-//     ancestor directory and no leaf a symlink (an UNTRACKED symlink at the
-//     destination is refused as firmly as a tracked one); the leaf, when
-//     present, a regular file; and the destination directory resolving inside
-//     the worktree.
-//   The bytes travel through a temp file in the destination directory and a
-//   rename, which replaces the path and never follows a link. The source is
-//   opened with O_NOFOLLOW where the platform has it and re-checked as a
-//   regular file on the open descriptor.
+// follow-up: that file's schema is owned by another open change.
+//   the SOURCE, in core: a literal path, every ancestor a real directory (a
+//     symlinked segment is refused); a regular file, not a symlink; not
+//     tracked under any spelling; gitignored.
+//   the DESTINATION, at the tip, from its TREE and before anything moves: not
+//     tracked, and no ancestor tracked as a symlink, a submodule or a file.
+//   the DESTINATION, in the worktree on disk: no ancestor and no leaf a
+//     symlink; nothing tracked there under any spelling (`git ls-files`, read
+//     whole); gitignored; the directory resolving inside the worktree.
+// NAMES ARE COMPARED FOLDED: NFC on every platform, and case-folded on darwin
+// and win32. A trunk tracking the NFD spelling `café/app.env` is the same
+// file on APFS as an untracked NFC `café/app.env`, and an exact-spelling proof
+// would let the credential overwrite it (Feitan F1).
 //
-// GIT'S ENVIRONMENT IS SCRUBBED on every call. A `GIT_DIR`, `GIT_WORK_TREE` or
-// `GIT_INDEX_FILE` inherited from a hook (zheref/nen#294 hit exactly this)
-// would point `git -C <path>` at another repository, index or config, and a
-// verb that ADDS and MOVES worktrees would do it there.
+// THE BYTES are staged in the WORKTREE'S OWN GIT DIRECTORY
+// (`core/.git/worktrees/<n>`, outside the tree, on core's filesystem) and
+// renamed into place, so a crash never leaves a partial credential in the work
+// tree. After the rename the destination's directory is resolved again and the
+// file there must be the one written (device and inode): one that landed
+// outside the tree is unlinked, and either way the run fails at exit 1.
 //
-// PATHS ARE COMPARED AS THE PLATFORM DOES (zheref/nen#294's Windows lesson):
-// through `realpathSync.native`, by ../canon/paths.ts's `samePath` and
-// `containedOn`, so an 8.3 short name and git's long forward-slash spelling
-// are one directory.
+// RETENTION. Each copy is recorded -- its path and its sha256 -- in
+// `<worktree git dir>/nen-wc-worktree-copies.json`, outside the tree. A later
+// run that no longer names a recorded copy removes it, but ONLY when its bytes
+// still hash as recorded; an edited one is listed as kept and never deleted. A
+// copy whose core source was deleted is no longer nameable, and goes the same
+// way.
+//
+// GIT'S ENVIRONMENT IS SCRUBBED on every call (zheref/nen#294): the variables
+// that point `git -C <path>` at another repository, index, object store,
+// configuration, exec path or pathspec mode.
 //
 // EXIT CODES: 0 the worktree stands at the tip with every named file copied
-// (or, under --dry-run, the plan); 2 a refusal, its reason on stderr -- before
-// the state step nothing was changed (a fetch aside); 1 a git step or a write
-// that FAILED part-way, the message saying where.
+// (or, under --dry-run, the plan); 2 a refusal, its reason on stderr; 1 a git
+// step or a write that FAILED part-way, the message saying where.
 
+import { createHash, randomBytes } from "node:crypto";
 import {
   closeSync,
   constants as fsConstants,
@@ -79,6 +84,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
@@ -86,21 +92,25 @@ import {
   writeSync,
   type Stats,
 } from "node:fs";
-import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { containedOn, samePath } from "../canon/paths.js";
-import { GIT, outputLines, type Seams } from "../seam/exec.js";
+import { plainLine } from "../cli/plain.js";
+import { GIT, outputLines, redactRemoteCredentials, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
 
 export const WORKTREE_CONTRACT = "nen.wc.worktree/v0.1";
+export const MANIFEST_CONTRACT = "nen.wc.worktree.copies/v0.1";
 
 /** Where every managed worktree lives, relative to core. */
 export const WORKTREES_DIR = ".nen/worktrees";
 
+/** The copy record, in the worktree's own git directory. */
+export const MANIFEST_FILE = "nen-wc-worktree-copies.json";
+
 /** The remote whose branch is the tip. */
 const REMOTE = "origin";
 
-/** The git variables that would point a `git -C <path>` call at another repository, index, object store or config. */
+/** The git variables that would point a `git -C <path>` call somewhere else, or change how it reads a path. */
 const GIT_REDIRECTS: readonly string[] = [
   "GIT_DIR",
   "GIT_WORK_TREE",
@@ -113,11 +123,19 @@ const GIT_REDIRECTS: readonly string[] = [
   "GIT_DISCOVERY_ACROSS_FILESYSTEM",
   "GIT_CONFIG_PARAMETERS",
   "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_NOSYSTEM",
+  "GIT_EXEC_PATH",
   "GIT_PREFIX",
+  "GIT_LITERAL_PATHSPECS",
+  "GIT_GLOB_PATHSPECS",
+  "GIT_NOGLOB_PATHSPECS",
+  "GIT_ICASE_PATHSPECS",
 ];
 
 /**
- * The environment every git call here runs under: each redirect above, and
+ * The environment every git call here runs under: each variable above, and
  * every `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` the process carries,
  * passed as `undefined` -- which the runner drops from the child's
  * environment -- no terminal prompt for the fetch's credentials, and no
@@ -130,24 +148,35 @@ export function scrubbedGitEnv(env: Readonly<Record<string, string | undefined>>
     if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) out[name] = undefined;
   }
   out["GIT_TERMINAL_PROMPT"] = "0";
-  // A status in a dry run must not refresh and rewrite the worktree's index.
   out["GIT_OPTIONAL_LOCKS"] = "0";
   return out;
 }
 
-/** Why the verb refused. `usage` is never emitted here -- that is a VerbUsageError before core resolves. */
+/**
+ * A name as the platform's filesystem compares it: NFC everywhere, and
+ * case-folded on darwin and win32, whose default filesystems fold case.
+ */
+export function foldName(name: string, platform: NodeJS.Platform): string {
+  const nfc = name.normalize("NFC");
+  return platform === "darwin" || platform === "win32" ? nfc.toLowerCase() : nfc;
+}
+
+/** Why the verb refused. A bad argument is a VerbUsageError before any of these. */
 export type RefusalKind =
   | "not-a-checkout"
   | "base"
+  | "name-alias"
   | "parent-symlink"
   | "symlink"
   | "stray"
+  | "locked"
   | "not-root"
   | "dirty"
+  | "would-overwrite-ignored"
   | "copy-source"
   | "copy-destination";
 
-/** Refused: exit 2, the reason on stderr; `paths` lists the dirty entries. */
+/** Refused: exit 2, the reason on stderr; `paths` lists the entries the reason is about. */
 export class WorktreeRefusal extends Error {
   constructor(
     readonly kind: RefusalKind,
@@ -159,22 +188,37 @@ export class WorktreeRefusal extends Error {
   }
 }
 
-/** A git step or a write that failed part-way: exit 1. */
+/**
+ * A git step or a write that failed part-way: exit 1. The message is made
+ * safe to print HERE, because ../index.ts's runFamily prints it as it stands:
+ * remote credentials redacted, control characters stripped (Feitan F7).
+ */
 export class WorktreeStepError extends Error {
   constructor(message: string) {
-    super(message);
+    super(plainLine(redactRemoteCredentials(message)));
     this.name = "WorktreeStepError";
   }
 }
 
 export type WorktreeState = "created" | "reused" | "moved" | "recreated" | "refused";
+export type ReachedState = Exclude<WorktreeState, "refused">;
 
 export interface CopyRow {
   readonly path: string;
   readonly action: "copied" | "would-copy";
 }
 
-/** What `wc worktree` reports. KEY ORDER IS THE CONTRACT; ./worktree.test.ts pins it. */
+export interface RemovedRow {
+  readonly path: string;
+  readonly action: "removed" | "would-remove";
+}
+
+export interface KeptRow {
+  readonly path: string;
+  readonly reason: "edited since copy" | "not a regular file";
+}
+
+/** What `wc worktree` reports. KEY ORDER IS THE CONTRACT; the tests pin it. */
 export interface WorktreeReport {
   readonly contract: string;
   readonly core: string | null;
@@ -188,6 +232,8 @@ export interface WorktreeReport {
   readonly fetched: boolean;
   /** What happened, or under --dry-run what would; `refused` on exit 2. */
   readonly state: WorktreeState;
+  /** The state the worktree REACHED before any refusal; null when it was refused before the state step. */
+  readonly reached: ReachedState | null;
   readonly dryRun: boolean;
   /** The worktree's HEAD before this run; null when there was none. */
   readonly headBefore: string | null;
@@ -198,6 +244,10 @@ export interface WorktreeReport {
   /** Whether core's own ignore rules cover the worktree's path; null when not asked. */
   readonly coreIgnored: boolean | null;
   readonly copies: readonly CopyRow[];
+  /** Recorded copies no longer named, removed because their bytes were still as copied. */
+  readonly removed: readonly RemovedRow[];
+  /** Recorded copies no longer named and NOT removed. */
+  readonly kept: readonly KeptRow[];
   /** Null unless refused. */
   readonly refusal: { readonly kind: RefusalKind; readonly reason: string; readonly paths: readonly string[] } | null;
 }
@@ -213,14 +263,25 @@ export type WorktreeOutcome =
   | { readonly kind: "done"; readonly report: WorktreeReport; readonly lines: readonly string[] }
   | { readonly kind: "refused"; readonly report: WorktreeReport; readonly message: string };
 
-/** The filesystem calls the copy and the path proofs make -- injectable so a unit test drives every branch. */
+/** The filesystem calls the verb makes -- injectable so a unit test drives every branch. */
 export interface WorktreeFs {
   /** `lstat`, or null when nothing is there. */
   readonly lstat: (path: string) => Stats | null;
   readonly realpath: (path: string) => string;
   readonly mkdirp: (path: string) => void;
-  /** Copy `source` to `destination` through a temp file in `dirname(destination)` and a rename. */
-  readonly copyFile: (source: string, destination: string) => void;
+  /**
+   * Copy `source` to `destination`, staging the bytes in `stagingDir` and
+   * renaming them into place; `inside` says whether a resolved directory is
+   * inside the worktree. Returns the sha256 of the bytes written.
+   */
+  readonly copyFile: (source: string, destination: string, stagingDir: string, inside: (directory: string) => boolean) => string;
+  /** The sha256 of a regular file's bytes, read without following a final link; null when it is not a regular file. */
+  readonly hashFile: (path: string) => string | null;
+  readonly unlink: (path: string) => void;
+  /** A file's text, or null when it does not exist. */
+  readonly readText: (path: string) => string | null;
+  /** Write a file through a temp file beside it and a rename. */
+  readonly writeTextAtomic: (path: string, text: string) => void;
 }
 
 // ── git through the seam ────────────────────────────────────────────────────
@@ -260,6 +321,11 @@ class Git {
     if (result.code === 1) return false;
     throw new WorktreeStepError(`${what} ('git ${args.join(" ")}' failed: ${result.error})`);
   }
+
+  /** NUL-separated output as entries, the empty tail dropped. */
+  entries(cwd: string, args: readonly string[], what: string): string[] {
+    return this.must(cwd, args, what).split("\0").filter((entry): boolean => entry !== "");
+  }
 }
 
 function firstLine(text: string): string {
@@ -269,27 +335,44 @@ function firstLine(text: string): string {
 // ── argument shapes, lexical and before any git call ────────────────────────
 
 const NAME_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const RESERVED_DEVICE = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
-/** A worktree name is ONE path segment: no separator, no `..`, no leading dot or dash. Returns the refusal or null. */
-export function nameRefusal(name: string): string | null {
-  if (!NAME_SHAPE.test(name) || name.includes("..") || name.endsWith(".lock")) {
-    return `--name '${name}' is not one plain path segment (letters, digits, '.', '_' and '-'; starting with a letter or digit; no '..'; not ending in '.lock'; at most 100 characters). It becomes the directory ${WORKTREES_DIR}/<name> under core, and nothing in it may move that directory elsewhere.`;
-  }
+/**
+ * A segment no platform this verb runs on can hold faithfully (Feitan F5):
+ * Windows drops a trailing '.' or space, reads ':' as a stream separator,
+ * '~<digit>' as a short-name alias, and CON/PRN/AUX/NUL/COM1-9/LPT1-9 (with
+ * or without an extension) as devices. Refused on EVERY platform, so a name
+ * means the same file wherever it is run.
+ */
+export function segmentProblem(segment: string): string | null {
+  if (/[. ]$/.test(segment)) return `the segment '${segment}' ends in '.' or a space`;
+  if (segment.includes(":")) return `the segment '${segment}' carries ':'`;
+  if (/~\d/.test(segment)) return `the segment '${segment}' carries '~<digit>', a Windows short-name form`;
+  if (RESERVED_DEVICE.test(segment)) return `the segment '${segment}' is a reserved device name`;
   return null;
 }
 
-/** A character a copy path may not carry: a glob or pathspec-magic character, a backslash, or a control character. */
-const COPY_PATH_FORBIDDEN = /[*?[\]\\\u0000-\u001F\u007F]/;
+/** A worktree name is ONE path segment. Returns the refusal (safe to print) or null. */
+export function nameRefusal(name: string): string | null {
+  const problem = NAME_SHAPE.test(name) && !name.includes("..") && !name.endsWith(".lock") ? segmentProblem(name) : "it is not one plain path segment";
+  if (problem === null) return null;
+  return plainLine(
+    `--name '${name}' is refused: ${problem}. A name is letters, digits, '.', '_' and '-', starts with a letter or digit, has no '..', does not end in '.lock' or a '.', is not a reserved device name, and is at most 100 characters. It becomes the directory ${WORKTREES_DIR}/<name> under core, and nothing in it may move that directory elsewhere.`,
+  );
+}
 
-/** A --copy-from-core path, refused lexically, or null. */
+/** A character a copy path may not carry: a glob or pathspec-magic character, a backslash, ':' or a control character. */
+const COPY_PATH_FORBIDDEN = /[*?[\]\\:\u0000-\u001F\u007F]/;
+
+/** A --copy-from-core path, refused lexically (safe to print), or null. */
 export function copyPathRefusal(path: string): string | null {
-  const why = (text: string): string => `--copy-from-core '${path}' ${text}. Nothing was fetched, created or copied.`;
+  const why = (text: string): string => plainLine(`--copy-from-core '${path}' ${text}. Nothing was fetched, created or copied.`);
   if (path === "") return why("is empty");
-  if (COPY_PATH_FORBIDDEN.test(path)) {
-    return why("is not one literal path: it carries a glob or pathspec character ('*', '?', '[', ']'), a backslash or a control character, and git would read it as a pattern");
-  }
-  if (path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.startsWith(":")) {
+  if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) {
     return why("is not repo-relative: name it from the repository's root, with forward slashes");
+  }
+  if (COPY_PATH_FORBIDDEN.test(path)) {
+    return why("is not one literal path: it carries a glob or pathspec character ('*', '?', '[', ']'), a backslash, a ':' or a control character, and git would read it as a pattern");
   }
   const segments = path.split("/");
   if (segments.some((segment): boolean => segment === "" || segment === "." || segment === "..")) {
@@ -298,32 +381,39 @@ export function copyPathRefusal(path: string): string | null {
   if (segments.some((segment): boolean => segment.toLowerCase() === ".git")) {
     return why("names a path inside a '.git' directory, which is git's, never a file to copy");
   }
+  for (const segment of segments) {
+    const problem = segmentProblem(segment);
+    if (problem !== null) return why(`is refused: ${problem}`);
+  }
   return null;
 }
 
-// ── the worktree list ───────────────────────────────────────────────────────
+// ── parsers ─────────────────────────────────────────────────────────────────
 
-interface Registration {
+export interface Registration {
   /** As git printed it. */
   readonly path: string;
   readonly head: string | null;
   readonly detached: boolean;
   readonly prunable: boolean;
+  readonly locked: boolean;
 }
 
-/** Every record of `git worktree list --porcelain`, the bare one included, nothing skipped. */
+/** Every record of `git worktree list --porcelain`, nothing skipped. */
 export function parseRegistrations(porcelain: string): Registration[] {
   const rows: Registration[] = [];
   let path: string | null = null;
   let head: string | null = null;
   let detached = false;
   let prunable = false;
+  let locked = false;
   const flush = (): void => {
-    if (path !== null) rows.push({ path, head, detached, prunable });
+    if (path !== null) rows.push({ path, head, detached, prunable, locked });
     path = null;
     head = null;
     detached = false;
     prunable = false;
+    locked = false;
   };
   for (const line of porcelain.replace(/\r\n/g, "\n").split("\n")) {
     if (line === "") {
@@ -336,6 +426,7 @@ export function parseRegistrations(porcelain: string): Registration[] {
     } else if (line.startsWith("HEAD ")) head = line.slice("HEAD ".length);
     else if (line === "detached") detached = true;
     else if (line === "prunable" || line.startsWith("prunable ")) prunable = true;
+    else if (line === "locked" || line.startsWith("locked ")) locked = true;
   }
   flush();
   return rows;
@@ -361,58 +452,185 @@ export function parseStatusZ(text: string): string[] {
   return entries;
 }
 
+/** A path and every one of its ancestors, folded: `a/b/c` -> `a`, `a/b`, `a/b/c`. */
+function foldedPrefixes(path: string, platform: NodeJS.Platform): string[] {
+  const segments = path.split("/");
+  return segments.map((_, index): string => foldName(segments.slice(0, index + 1).join("/"), platform));
+}
+
+interface Manifest {
+  readonly copies: ReadonlyArray<{ readonly path: string; readonly sha256: string }>;
+}
+
+/** The copy record, or a step error when it is not the contract's shape. */
+export function parseManifest(text: string, where: string): Manifest {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch (error) {
+    throw new WorktreeStepError(`the copy record '${where}' is not JSON (${(error as Error).message}); nen will not decide what to remove from a record it cannot read`);
+  }
+  const record = doc as { contract?: unknown; copies?: unknown };
+  if (typeof doc !== "object" || doc === null || record.contract !== MANIFEST_CONTRACT || !Array.isArray(record.copies)) {
+    throw new WorktreeStepError(`the copy record '${where}' is not a ${MANIFEST_CONTRACT} document`);
+  }
+  const copies: Array<{ path: string; sha256: string }> = [];
+  for (const entry of record.copies as unknown[]) {
+    const row = entry as { path?: unknown; sha256?: unknown };
+    if (typeof row.path !== "string" || copyPathRefusal(row.path) !== null || typeof row.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(row.sha256)) {
+      throw new WorktreeStepError(`the copy record '${where}' holds an entry that is not { path, sha256 }`);
+    }
+    copies.push({ path: row.path, sha256: row.sha256 });
+  }
+  return { copies };
+}
+
+function renderManifest(copies: ReadonlyArray<{ readonly path: string; readonly sha256: string }>): string {
+  return `${JSON.stringify({ contract: MANIFEST_CONTRACT, copies }, null, 2)}\n`;
+}
+
 // ── the default filesystem ──────────────────────────────────────────────────
 
 function lstatOrNull(path: string): Stats | null {
   try {
     return lstatSync(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error as NodeJS.ErrnoException).code === "ENOTDIR") return null;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
     throw error;
   }
 }
 
+const NO_FOLLOW = (fsConstants as Record<string, number | undefined>)["O_NOFOLLOW"] ?? 0;
+
+/** The rename the copy uses -- a parameter only so a test can play a swap at the destination. */
+export interface CopyOps {
+  readonly rename: (from: string, to: string) => void;
+}
+
 /**
- * The bytes through a temp file and a rename. The source is opened without
- * following a final symlink where the platform can say so (O_NOFOLLOW; Windows
- * has none, and the lstat proof before this is then the guard), and the open
- * descriptor is checked to be a regular file -- so a source swapped for a link
- * or a directory between the proof and the read is refused, not followed. The
- * temp file is created exclusively (`wx`), carries the source's permission
- * bits and times, and is removed on every failure path.
+ * The bytes from `source`, staged in `stagingDir` and renamed to
+ * `destination`. The source is opened without following a final link where
+ * the platform can say so (O_NOFOLLOW; on Windows the lstat proof before this
+ * is the guard) and must be a regular file on the open descriptor. The staged
+ * file is created exclusively, carries the source's permission bits and times,
+ * and is removed on every failure path.
+ *
+ * AFTER THE RENAME (Feitan F8) the destination's directory is resolved again
+ * and the file there must be the one written, by device and inode. When it is
+ * ours but the directory now resolves outside the worktree, our file is
+ * unlinked from where it landed; when it is not ours, the foreign file is left
+ * alone (it is not ours to delete) and the staged file, if the rename left it,
+ * is removed. Either way: exit 1.
  */
-function copyThroughRename(source: string, destination: string): void {
-  const noFollow = (fsConstants as Record<string, number | undefined>)["O_NOFOLLOW"] ?? 0;
-  const input = openSync(source, fsConstants.O_RDONLY | noFollow);
-  let temp: string | null = null;
+export function copyThroughStaging(
+  source: string,
+  destination: string,
+  stagingDir: string,
+  inside: (directory: string) => boolean,
+  ops: CopyOps = { rename: renameSync },
+): string {
+  const input = openSync(source, fsConstants.O_RDONLY | NO_FOLLOW);
+  let staged: string | null = null;
   try {
     const stat = fstatSync(input);
     if (!stat.isFile()) throw new WorktreeStepError(`'${source}' stopped being a regular file between the proof and the read; nothing was copied`);
-    temp = join(dirname(destination), `.nen-copy-${basename(destination)}.${randomBytes(6).toString("hex")}`);
-    const output = openSync(temp, "wx", stat.mode & 0o777);
+    staged = join(stagingDir, `nen-wc-worktree-copy.${randomBytes(8).toString("hex")}`);
+    const output = openSync(staged, "wx", stat.mode & 0o777);
+    const hash = createHash("sha256");
+    let written: { readonly dev: bigint; readonly ino: bigint };
     try {
       const buffer = Buffer.alloc(64 * 1024);
       for (;;) {
         const read = readSync(input, buffer, 0, buffer.length, null);
         if (read === 0) break;
-        let written = 0;
-        while (written < read) written += writeSync(output, buffer, written, read - written);
+        hash.update(buffer.subarray(0, read));
+        let done = 0;
+        while (done < read) done += writeSync(output, buffer, done, read - done);
       }
       futimesSync(output, stat.atime, stat.mtime);
+      const own = fstatSync(output, { bigint: true });
+      written = { dev: own.dev, ino: own.ino };
     } finally {
       closeSync(output);
     }
-    renameSync(temp, destination);
-    temp = null;
+    ops.rename(staged, destination);
+    const directory = dirname(destination);
+    let resolved: string | null;
+    try {
+      resolved = realpathSync.native(directory);
+    } catch {
+      resolved = null;
+    }
+    let landed: { readonly dev: bigint; readonly ino: bigint } | null;
+    try {
+      const at = lstatSync(destination, { bigint: true });
+      landed = { dev: at.dev, ino: at.ino };
+    } catch {
+      landed = null;
+    }
+    const ours = landed !== null && landed.dev === written.dev && landed.ino === written.ino;
+    if (resolved === null || !inside(resolved) || !ours) {
+      if (ours) unlinkSync(destination);
+      throw new WorktreeStepError(
+        ours
+          ? `the copy to '${destination}' landed in '${resolved ?? directory}', outside the worktree, after the rename; it was unlinked from there`
+          : `the file at '${destination}' after the rename is not the one written (another process replaced it); it was left alone`,
+      );
+    }
+    staged = null;
+    return hash.digest("hex");
   } finally {
     closeSync(input);
-    if (temp !== null) {
+    if (staged !== null) {
       try {
-        unlinkSync(temp);
+        unlinkSync(staged);
       } catch {
-        // already gone; the failure that brought us here is the one reported
+        // renamed away or already gone; the failure that brought us here is the one reported
       }
     }
+  }
+}
+
+function hashRegularFile(path: string): string | null {
+  let fd: number;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | NO_FOLLOW);
+  } catch {
+    return null;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return null;
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(64 * 1024);
+    for (;;) {
+      const read = readSync(fd, buffer, 0, buffer.length, null);
+      if (read === 0) break;
+      hash.update(buffer.subarray(0, read));
+    }
+    return hash.digest("hex");
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function writeTextAtomic(path: string, text: string): void {
+  const staged = `${path}.${randomBytes(6).toString("hex")}.tmp`;
+  const fd = openSync(staged, "wx", 0o600);
+  try {
+    writeSync(fd, text);
+  } finally {
+    closeSync(fd);
+  }
+  try {
+    renameSync(staged, path);
+  } catch (error) {
+    try {
+      unlinkSync(staged);
+    } catch {
+      // already gone
+    }
+    throw error;
   }
 }
 
@@ -422,7 +640,20 @@ export const nativeWorktreeFs: WorktreeFs = {
   mkdirp: (path: string): void => {
     mkdirSync(path, { recursive: true });
   },
-  copyFile: copyThroughRename,
+  copyFile: (source, destination, stagingDir, inside): string => copyThroughStaging(source, destination, stagingDir, inside),
+  hashFile: hashRegularFile,
+  unlink: (path: string): void => {
+    unlinkSync(path);
+  },
+  readText: (path: string): string | null => {
+    try {
+      return readFileSync(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  },
+  writeTextAtomic,
 };
 
 // ── the verb ────────────────────────────────────────────────────────────────
@@ -437,12 +668,15 @@ function emptyReport(options: WorktreeOptions): WorktreeReport {
     tip: null,
     fetched: false,
     state: "refused",
+    reached: null,
     dryRun: options.dryRun,
     headBefore: null,
     head: null,
     dropped: false,
     coreIgnored: null,
     copies: [],
+    removed: [],
+    kept: [],
     refusal: null,
   };
 }
@@ -483,75 +717,98 @@ function proveBase(git: Git, core: string, base: string): void {
   }
 }
 
+/** Every tracked path of the checkout at `cwd`, folded -- one read, so no spelling of a tracked name slips past. */
+function trackedFolded(git: Git, cwd: string, platform: NodeJS.Platform, where: string): Set<string> {
+  return new Set(git.entries(cwd, ["ls-files", "-z", "--full-name"], `listing the files tracked in ${where}`).map((entry): string => foldName(entry, platform)));
+}
+
+/** The first tracked spelling a path or one of its ancestors matches, folded, or null. */
+function trackedHit(tracked: ReadonlySet<string>, path: string, platform: NodeJS.Platform): string | null {
+  const prefixes = foldedPrefixes(path, platform);
+  const segments = path.split("/");
+  for (let index = 0; index < prefixes.length; index += 1) {
+    if (tracked.has(prefixes[index] ?? "")) return segments.slice(0, index + 1).join("/");
+  }
+  return null;
+}
+
+/** Walk a path's ancestors under `root` with lstat: each must be a real directory or absent. Returns the failing segment and why, or null. */
+function ancestorProblem(fs: WorktreeFs, root: string, path: string): { readonly at: string; readonly why: "symlink" | "not-a-directory" | "absent" } | null {
+  const segments = path.split("/");
+  for (let depth = 1; depth < segments.length; depth += 1) {
+    const at = segments.slice(0, depth).join("/");
+    const stat = fs.lstat(join(root, ...segments.slice(0, depth)));
+    if (stat === null) return { at, why: "absent" };
+    if (stat.isSymbolicLink()) return { at, why: "symlink" };
+    if (!stat.isDirectory()) return { at, why: "not-a-directory" };
+  }
+  return null;
+}
+
 /** Each copy source, proven in core. */
 function proveSources(git: Git, fs: WorktreeFs, core: string, paths: readonly string[], platform: NodeJS.Platform): void {
+  if (paths.length === 0) return;
+  const tracked = trackedFolded(git, core, platform, "core");
   for (const path of paths) {
-    const refusal = (text: string): WorktreeRefusal =>
-      new WorktreeRefusal("copy-source", `--copy-from-core '${path}' ${text}; refused.`);
-    const absolute = join(core, ...path.split("/"));
-    // The directory first: a symlinked parent in core would make every check
-    // below answer about somebody else's file.
-    let sourceDir: string;
-    try {
-      sourceDir = fs.realpath(dirname(absolute));
-    } catch {
-      throw refusal("is absent in core -- its directory does not exist, and nothing is synthesised");
-    }
-    if (!containedOn(core, sourceDir, platform) || !samePath(sourceDir, dirname(absolute), platform)) {
-      throw refusal(`does not stand inside core: its directory resolves to '${sourceDir}' through a symlink`);
-    }
-    const stat = fs.lstat(absolute);
+    const refusal = (text: string): WorktreeRefusal => new WorktreeRefusal("copy-source", `--copy-from-core '${path}' ${text}; refused.`);
+    // Every ancestor first, by lstat (Feitan F4): a symlinked segment in core
+    // would make every check below answer about somebody else's file.
+    const ancestor = ancestorProblem(fs, core, path);
+    if (ancestor?.why === "symlink") throw refusal(`lies beneath '${ancestor.at}', a symlink in core -- only a file under real directories is copied`);
+    if (ancestor?.why === "not-a-directory") throw refusal(`lies beneath '${ancestor.at}', which is not a directory in core`);
+    if (ancestor?.why === "absent") throw refusal("is absent in core -- its directory does not exist, and nothing is synthesised");
+    const stat = fs.lstat(join(core, ...path.split("/")));
     if (stat === null) throw refusal("is absent in core -- the maintainer's own checkout is where it comes from, and nothing is synthesised");
     if (stat.isSymbolicLink()) throw refusal("is a symlink in core -- only a regular file is copied, never what a link points at");
     if (!stat.isFile()) throw refusal("is not a regular file in core");
-    if (git.yesNo(core, ["ls-files", "--error-unmatch", "--", path], `checking whether '${path}' is tracked in core`)) {
-      throw refusal("is tracked in core -- a tracked file is already in every worktree");
-    }
+    const hit = trackedHit(tracked, path, platform);
+    if (hit !== null) throw refusal(`is tracked in core${hit === path ? "" : ` (as '${hit}')`} -- a tracked file is already in every worktree`);
     if (!git.yesNo(core, ["check-ignore", "-q", "--", path], `checking whether '${path}' is gitignored in core`)) {
       throw refusal("is not gitignored in core -- a copy would dirty the worktree, and the next run would refuse it as dirty");
     }
   }
 }
 
-/** One level of the tip's tree: each child's name, as git spells it, and its mode. */
-function tipChildren(git: Git, core: string, tip: string, directory: string): Array<{ readonly name: string; readonly mode: string }> {
-  const args = directory === ""
-    ? ["ls-tree", "-z", "--full-tree", "--end-of-options", tip]
-    : ["ls-tree", "-z", "--full-tree", "--end-of-options", tip, "--", `${directory}/`];
-  const out = git.must(core, args, `reading '${directory === "" ? "." : directory}' at the tip`);
-  const children: Array<{ readonly name: string; readonly mode: string }> = [];
-  for (const record of out.split("\0")) {
+/**
+ * One level of a tree: each child's name, as git spells it, its mode and its
+ * object id. The walk descends by OBJECT ID, never by a pathspec: on macOS git
+ * precomposes both its output and its argv (core.precomposeunicode), so an
+ * NFC pathspec would find nothing under an NFD directory the tree records.
+ */
+function treeChildren(git: Git, core: string, tree: string): Array<{ readonly name: string; readonly mode: string; readonly object: string }> {
+  const children: Array<{ readonly name: string; readonly mode: string; readonly object: string }> = [];
+  for (const record of git.entries(core, ["ls-tree", "-z", "--full-tree", "--end-of-options", tree], `reading ${tree} at the tip`)) {
     const tab = record.indexOf("\t");
     if (tab < 0) continue;
-    const full = record.slice(tab + 1);
-    children.push({ name: directory === "" ? full : full.slice(directory.length + 1), mode: record.slice(0, record.indexOf(" ")) });
+    const [mode = "", , object = ""] = record.slice(0, tab).split(" ");
+    children.push({ name: record.slice(tab + 1), mode, object });
   }
   return children;
 }
 
 /**
  * Each destination, proven against the tip's TREE -- before anything is
- * created or moved. The walk goes one level at a time and descends by the
- * name AS THE TIP SPELLS IT. On darwin and win32, whose default filesystems
- * fold case, a name is matched case-insensitively: a trunk that tracks
- * `kro/config.xcconfig` would otherwise slip past a proof about
- * `Kro/Config.xcconfig` and be overwritten on disk.
+ * created or moved. The walk goes one level at a time, matches each name
+ * FOLDED (NFC, and case on darwin and win32), and descends by the object id of
+ * the entry it matched, so a tracked NFD parent symlink is found under an NFC
+ * request and the refusal names the tip's own spelling.
  */
 function proveDestinationsAtTip(git: Git, core: string, tip: string, base: string, paths: readonly string[], platform: NodeJS.Platform): void {
-  const fold = platform === "darwin" || platform === "win32" ? (name: string): string => name.toLowerCase() : (name: string): string => name;
   for (const path of paths) {
     const refusal = (text: string): WorktreeRefusal =>
       new WorktreeRefusal("copy-destination", `--copy-from-core '${path}' ${text} at ${REMOTE}/${base} (${tip}); refused, and nothing was created, moved or copied.`);
     const segments = path.split("/");
     let directory = "";
+    let tree = tip;
     for (let depth = 0; depth < segments.length; depth += 1) {
-      const wanted = fold(segments[depth] ?? "");
-      const entry = tipChildren(git, core, tip, directory).find((child): boolean => fold(child.name) === wanted);
+      const wanted = foldName(segments[depth] ?? "", platform);
+      const entry = treeChildren(git, core, tree).find((child): boolean => foldName(child.name, platform) === wanted);
       if (entry === undefined) break;
       const spelled = directory === "" ? entry.name : `${directory}/${entry.name}`;
       const leaf = depth === segments.length - 1;
       if (entry.mode === "040000" && !leaf) {
         directory = spelled;
+        tree = entry.object;
         continue;
       }
       if (leaf) {
@@ -566,38 +823,110 @@ function proveDestinationsAtTip(git: Git, core: string, tip: string, base: strin
   }
 }
 
-/** Each destination, proven in the worktree on disk, then copied. */
+/**
+ * The paths a move to `tip` would write over that are IGNORED and untracked in
+ * the worktree now -- git overwrites those silently (Nobunaga N9). A changed
+ * path matches an ignored entry when either is the other or its ancestor.
+ */
+function wouldOverwriteIgnored(git: Git, worktree: string, tip: string, platform: NodeJS.Platform): string[] {
+  const ignored = git
+    .entries(worktree, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], `listing '${worktree}''s ignored files`)
+    .map((entry): string => entry.replace(/\/$/, ""));
+  if (ignored.length === 0) return [];
+  const exact = new Set(ignored.map((entry): string => foldName(entry, platform)));
+  const ancestors = new Set(ignored.flatMap((entry): string[] => foldedPrefixes(entry, platform).slice(0, -1)));
+  const changed = git.entries(worktree, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", "--end-of-options", "HEAD", tip], `diffing '${worktree}' against ${tip}`);
+  return changed.filter((path): boolean => {
+    const prefixes = foldedPrefixes(path, platform);
+    return prefixes.some((prefix): boolean => exact.has(prefix)) || ancestors.has(prefixes[prefixes.length - 1] ?? "");
+  });
+}
+
+/** The fetch, and on failure the one question that tells "no such branch" (exit 2) from "could not reach it" (exit 1). */
+function fetchTip(git: Git, core: string, base: string): void {
+  const args = ["fetch", "--quiet", "--end-of-options", REMOTE, `refs/heads/${base}:refs/remotes/${REMOTE}/${base}`];
+  const fetch = git.run(core, args);
+  if (fetch.code === 0) return;
+  if (fetch.spawnFailed) throw new WorktreeStepError(fetch.error);
+  const probe = git.run(core, ["ls-remote", "--exit-code", "--end-of-options", REMOTE, `refs/heads/${base}`]);
+  if (probe.code === 2) {
+    throw new WorktreeRefusal("base", `${REMOTE} has no branch '${base}' ('git ls-remote --exit-code' found no refs/heads/${base}); nothing was created.`);
+  }
+  throw new WorktreeStepError(`fetching ${REMOTE}/${base} failed, so the tip is unknown ('git ${args.join(" ")}' failed: ${fetch.error})`);
+}
+
+interface Retention {
+  readonly removed: RemovedRow[];
+  readonly kept: KeptRow[];
+  /** The record entries that survive this step (kept ones), before this run's copies are added. */
+  readonly survivors: Array<{ readonly path: string; readonly sha256: string }>;
+}
+
+/** Recorded copies no longer named: removed when their bytes are as copied, kept otherwise. */
+function retain(
+  fs: WorktreeFs,
+  worktree: string,
+  manifest: Manifest,
+  named: readonly string[],
+  dryRun: boolean,
+  platform: NodeJS.Platform,
+): Retention {
+  const still = new Set(named.map((path): string => foldName(path, platform)));
+  const removed: RemovedRow[] = [];
+  const kept: KeptRow[] = [];
+  const survivors: Array<{ readonly path: string; readonly sha256: string }> = [];
+  for (const entry of manifest.copies) {
+    if (still.has(foldName(entry.path, platform))) continue;
+    const ancestor = ancestorProblem(fs, worktree, entry.path);
+    if (ancestor?.why === "absent") continue;
+    const destination = join(worktree, ...entry.path.split("/"));
+    const stat = ancestor === null ? fs.lstat(destination) : null;
+    if (ancestor === null && stat === null) continue;
+    const hash = ancestor === null && stat !== null && stat.isFile() ? fs.hashFile(destination) : null;
+    if (hash === null) {
+      kept.push({ path: entry.path, reason: "not a regular file" });
+      survivors.push(entry);
+    } else if (hash !== entry.sha256) {
+      kept.push({ path: entry.path, reason: "edited since copy" });
+      survivors.push(entry);
+    } else {
+      if (!dryRun) fs.unlink(destination);
+      removed.push({ path: entry.path, action: dryRun ? "would-remove" : "removed" });
+    }
+  }
+  return { removed, kept, survivors };
+}
+
+/** Each destination, proven in the worktree on disk, then copied through the git dir. */
 function copyInto(
   git: Git,
   fs: WorktreeFs,
   core: string,
   worktree: string,
+  gitDir: string,
   base: string,
   tip: string,
   paths: readonly string[],
   platform: NodeJS.Platform,
+  record: (path: string, sha256: string) => void,
 ): CopyRow[] {
   const rows: CopyRow[] = [];
+  if (paths.length === 0) return rows;
+  // Every tracked path, read WHOLE and folded (Feitan F1): an exact-spelling
+  // `ls-files --error-unmatch` misses the NFD twin of an NFC request.
+  const tracked = trackedFolded(git, worktree, platform, "the worktree");
   for (const path of paths) {
     const refusal = (text: string): WorktreeRefusal =>
       new WorktreeRefusal("copy-destination", `--copy-from-core '${path}' ${text}; refused. The worktree stands at ${REMOTE}/${base} (${tip}).`);
-    const segments = path.split("/");
-    for (let depth = 1; depth < segments.length; depth += 1) {
-      const ancestor = join(worktree, ...segments.slice(0, depth));
-      const stat = fs.lstat(ancestor);
-      if (stat === null) break;
-      if (stat.isSymbolicLink()) throw refusal(`lies beneath '${segments.slice(0, depth).join("/")}', a symlink in the worktree`);
-      if (!stat.isDirectory()) throw refusal(`lies beneath '${segments.slice(0, depth).join("/")}', which is not a directory in the worktree`);
-    }
-    const destination = join(worktree, ...segments);
+    const ancestor = ancestorProblem(fs, worktree, path);
+    if (ancestor?.why === "symlink") throw refusal(`lies beneath '${ancestor.at}', a symlink in the worktree`);
+    if (ancestor?.why === "not-a-directory") throw refusal(`lies beneath '${ancestor.at}', which is not a directory in the worktree`);
+    const destination = join(worktree, ...path.split("/"));
     const leaf = fs.lstat(destination);
     if (leaf !== null && leaf.isSymbolicLink()) throw refusal("is a symlink in the worktree -- an untracked link at the destination is refused like a tracked one");
     if (leaf !== null && !leaf.isFile()) throw refusal("exists in the worktree and is not a regular file");
-    // git is asked only once the path on disk is proven free of links: a path
-    // beyond a symlink is a refusal above, never a git failure here.
-    if (git.yesNo(worktree, ["ls-files", "--error-unmatch", "--", path], `checking whether '${path}' is tracked in the worktree`)) {
-      throw refusal("is tracked in the worktree");
-    }
+    const hit = trackedHit(tracked, path, platform);
+    if (hit !== null) throw refusal(`is tracked in the worktree${hit === path ? "" : ` (as '${hit}')`}`);
     if (!git.yesNo(worktree, ["check-ignore", "-q", "--", path], `checking whether '${path}' is gitignored in the worktree`)) {
       throw refusal(`is not gitignored at ${REMOTE}/${base} -- a copy would dirty the worktree`);
     }
@@ -613,22 +942,41 @@ function copyInto(
     } catch (error) {
       throw new WorktreeStepError(`'${destinationDir}' does not resolve after it was created (${(error as Error).message})`);
     }
-    if (!containedOn(worktree, resolvedDir, platform)) throw refusal(`resolves outside the worktree (its directory is '${resolvedDir}')`);
+    const inside = (directory: string): boolean => containedOn(worktree, directory, platform);
+    if (!inside(resolvedDir)) throw refusal(`resolves outside the worktree (its directory is '${resolvedDir}')`);
+    let sha256: string;
     try {
-      fs.copyFile(join(core, ...segments), destination);
+      sha256 = fs.copyFile(join(core, ...path.split("/")), destination, gitDir, inside);
     } catch (error) {
       if (error instanceof WorktreeStepError) throw error;
       throw new WorktreeStepError(`copying '${path}' from core failed (${(error as Error).message}); the destination was not replaced`);
     }
+    record(path, sha256);
     rows.push({ path, action: "copied" });
   }
   return rows;
 }
 
+/** The worktree's own git directory, proven to sit inside core's common one. */
+function worktreeGitDir(git: Git, fs: WorktreeFs, core: string, worktree: string, platform: NodeJS.Platform): string {
+  const gitDir = firstLine(git.must(worktree, ["rev-parse", "--path-format=absolute", "--git-dir"], `reading '${worktree}''s git directory`));
+  let resolved: string;
+  try {
+    resolved = fs.realpath(gitDir);
+  } catch (error) {
+    throw new WorktreeStepError(`'${worktree}''s git directory '${gitDir}' does not resolve (${(error as Error).message})`);
+  }
+  if (!containedOn(join(core, ".git", "worktrees"), resolved, platform)) {
+    throw new WorktreeStepError(`'${worktree}''s git directory '${resolved}' is not under core's .git/worktrees; nothing is staged or recorded there`);
+  }
+  return resolved;
+}
+
 /**
- * Bring `<core>/.nen/worktrees/<name>` to origin/<base>'s tip and copy the
- * named files into it. A refusal comes back as an outcome; a git step that
- * failed part-way throws WorktreeStepError.
+ * Bring `<core>/.nen/worktrees/<name>` to origin/<base>'s tip, retire the
+ * recorded copies no longer named, and copy the named files into it. A
+ * refusal comes back as an outcome; a git step that failed part-way throws
+ * WorktreeStepError.
  */
 export function manageWorktree(
   seams: Seams,
@@ -641,7 +989,8 @@ export function manageWorktree(
   let report = emptyReport(options);
   try {
     const core = resolveCore(git, fs, repo);
-    const path = join(core, ".nen", "worktrees", options.name);
+    const parent = join(core, ".nen", "worktrees");
+    const path = join(parent, options.name);
     report = { ...report, core, path };
     proveBase(git, core, options.base);
     // THE COPY SOURCES, before anything moves, so a bad list costs nothing.
@@ -650,13 +999,7 @@ export function manageWorktree(
     // THE TIP. Fetched for real -- with no '+', so a rewound trunk fails
     // closed rather than silently moving the worktree backwards -- or read as
     // last fetched under --dry-run.
-    if (!options.dryRun) {
-      git.must(
-        core,
-        ["fetch", "--quiet", "--end-of-options", REMOTE, `refs/heads/${options.base}:refs/remotes/${REMOTE}/${options.base}`],
-        `fetching ${REMOTE}/${options.base} -- the tip is unknown`,
-      );
-    }
+    if (!options.dryRun) fetchTip(git, core, options.base);
     const tipCall = git.run(core, ["rev-parse", "--verify", "--quiet", "--end-of-options", `refs/remotes/${REMOTE}/${options.base}^{commit}`]);
     if (tipCall.spawnFailed) throw new WorktreeStepError(tipCall.error);
     if (tipCall.code !== 0) {
@@ -667,27 +1010,35 @@ export function manageWorktree(
 
     proveDestinationsAtTip(git, core, tip, options.base, options.copyFromCore, platform);
 
-    // THE PATH'S PARENTS.
-    for (const parent of [join(core, ".nen"), join(core, ".nen", "worktrees")]) {
-      const stat = fs.lstat(parent);
+    // THE PATH'S PARENTS, by lstat: a symlinked .nen or .nen/worktrees is refused.
+    for (const dir of [join(core, ".nen"), parent]) {
+      const stat = fs.lstat(dir);
       if (stat === null) continue;
-      if (stat.isSymbolicLink()) throw new WorktreeRefusal("parent-symlink", `'${parent}' is a symlink -- the worktree, and every file copied into it, would land wherever it points.`);
-      if (!stat.isDirectory()) throw new WorktreeRefusal("parent-symlink", `'${parent}' is not a directory.`);
-      if (!samePath(fs.realpath(parent), parent, platform)) {
-        throw new WorktreeRefusal("parent-symlink", `'${parent}' does not resolve to itself.`);
-      }
+      if (stat.isSymbolicLink()) throw new WorktreeRefusal("parent-symlink", `'${dir}' is a symlink -- the worktree, and every file copied into it, would land wherever it points.`);
+      if (!stat.isDirectory()) throw new WorktreeRefusal("parent-symlink", `'${dir}' is not a directory.`);
     }
 
     // THE REGISTRATION -- an exact path match, never a prefix: a sibling
     // registration such as '<name>2' must never read as ours.
     const porcelain = git.must(core, ["worktree", "list", "--porcelain"], "listing the worktrees");
     const registrations = parseRegistrations(porcelain);
+    // A NAME THAT IS ANOTHER REGISTRATION'S UNDER CASE OR NFC (Nobunaga N12).
+    const aliasFold = (name: string): string => name.normalize("NFC").toLowerCase();
+    const alias = registrations.find(
+      (row): boolean => samePath(dirname(row.path), parent, platform) && basename(row.path) !== options.name && aliasFold(basename(row.path)) === aliasFold(options.name),
+    );
+    if (alias !== undefined) {
+      throw new WorktreeRefusal("name-alias", `--name '${options.name}' differs from the registered worktree '${alias.path}' only by case or Unicode normalisation; use '${basename(alias.path)}', or remove that registration yourself.`, [alias.path]);
+    }
     const ours = registrations.find((row): boolean => samePath(row.path, path, platform)) ?? null;
     const present = fs.lstat(path);
     let dropped = false;
     let registered = ours !== null;
 
     if (ours !== null && present === null) {
+      if (ours.locked) {
+        throw new WorktreeRefusal("locked", `'${path}' is registered and LOCKED, and its directory is gone -- a lock says it is coming back (a removable disk, a network share). Refused; 'git worktree unlock' it yourself if it is not.`, [ours.path]);
+      }
       // Only OUR registration is dropped; never a repository-wide prune.
       if (!options.dryRun) git.must(core, ["worktree", "remove", "--force", "--end-of-options", ours.path], `dropping the vanished registration of '${path}'`);
       dropped = true;
@@ -706,17 +1057,17 @@ export function manageWorktree(
       throw new WorktreeRefusal("stray", `'${path}' exists and is not a worktree of this project${near} -- somebody's directory; refused, and nothing in it was touched.`);
     }
 
-    let state: WorktreeState;
+    let state: ReachedState;
     let headBefore: string | null = null;
     if (registered && present !== null) {
       if (!present.isDirectory()) throw new WorktreeRefusal("stray", `'${path}' is registered but is not a directory.`);
-      if (!samePath(fs.realpath(path), path, platform)) throw new WorktreeRefusal("not-root", `'${path}' does not resolve to itself.`);
-      const top = git.must(path, ["rev-parse", "--path-format=absolute", "--show-toplevel"], `reading '${path}''s top level`);
-      if (!samePath(firstLine(top), path, platform)) {
-        throw new WorktreeRefusal("not-root", `'${path}' is not the worktree's own root (git answers '${firstLine(top)}').`);
+      const top = git.run(path, ["rev-parse", "--path-format=absolute", "--show-toplevel"]);
+      if (top.spawnFailed) throw new WorktreeStepError(top.error);
+      if (top.code !== 0) throw new WorktreeRefusal("not-root", `'${path}' is registered but git cannot read it as a work tree (${top.error}).`);
+      if (!samePath(firstLine(top.stdout), path, platform)) {
+        throw new WorktreeRefusal("not-root", `'${path}' is not the worktree's own root (git answers '${firstLine(top.stdout)}').`);
       }
-      const status = git.must(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], `reading '${path}''s status`);
-      const dirty = parseStatusZ(status);
+      const dirty = parseStatusZ(git.must(path, ["status", "--porcelain=v1", "-z", "--untracked-files=all"], `reading '${path}''s status`));
       if (dirty.length > 0) {
         throw new WorktreeRefusal("dirty", `the worktree at '${path}' is dirty -- refused, and never reset, cleaned or discarded. Commit, move or remove these yourself:`, dirty);
       }
@@ -725,16 +1076,19 @@ export function manageWorktree(
       if (headBefore === tip && !attached) {
         state = "reused";
       } else {
+        const overwritten = headBefore === tip ? [] : wouldOverwriteIgnored(git, path, tip, platform);
+        if (overwritten.length > 0) {
+          throw new WorktreeRefusal("would-overwrite-ignored", `moving '${path}' to ${tip} would overwrite ignored, untracked files that the tip tracks -- git would do it silently. Refused; move or remove these yourself:`, overwritten);
+        }
         if (!options.dryRun) git.must(path, ["checkout", "--quiet", "--detach", "--end-of-options", tip], `moving '${path}' to ${tip}`);
         state = "moved";
       }
     } else {
       if (!options.dryRun) {
-        fs.mkdirp(join(core, ".nen", "worktrees"));
-        const parent = join(core, ".nen", "worktrees");
+        fs.mkdirp(parent);
         const stat = fs.lstat(parent);
-        if (stat === null || stat.isSymbolicLink() || !samePath(fs.realpath(parent), parent, platform)) {
-          throw new WorktreeRefusal("parent-symlink", `'${parent}' does not resolve to itself after it was created.`);
+        if (stat === null || stat.isSymbolicLink() || !stat.isDirectory()) {
+          throw new WorktreeRefusal("parent-symlink", `'${parent}' is not a real directory after it was created.`);
         }
         git.must(core, ["worktree", "add", "--quiet", "--detach", "--end-of-options", path, tip], `adding the worktree at '${path}'`);
       }
@@ -742,13 +1096,40 @@ export function manageWorktree(
     }
 
     const coreIgnored = git.yesNo(core, ["check-ignore", "-q", "--", `${WORKTREES_DIR}/${options.name}`], "checking whether core ignores the worktree");
-    report = { ...report, state, headBefore, head: tip, coreIgnored };
+    report = { ...report, state, reached: state, headBefore, head: tip, coreIgnored };
 
-    // THE COPY. Under --dry-run the tip proofs above already ran; the on-disk
-    // ones need the worktree at the tip, which only a real run has.
-    const copies = options.dryRun
-      ? options.copyFromCore.map((copy): CopyRow => ({ path: copy, action: "would-copy" }))
-      : copyInto(git, fs, core, path, options.base, tip, options.copyFromCore, platform);
+    // RETENTION AND THE COPY need the worktree on disk; a dry run that would
+    // create it has neither a record nor a tree to read.
+    const exists = !(options.dryRun && (state === "created" || state === "recreated"));
+    if (!exists) {
+      report = { ...report, copies: options.copyFromCore.map((copy): CopyRow => ({ path: copy, action: "would-copy" })) };
+      return { kind: "done", report, lines: renderLines(report) };
+    }
+    const gitDir = worktreeGitDir(git, fs, core, path, platform);
+    const manifestPath = join(gitDir, MANIFEST_FILE);
+    const manifestText = fs.readText(manifestPath);
+    const manifest = manifestText === null ? { copies: [] } : parseManifest(manifestText, manifestPath);
+    const retention = retain(fs, path, manifest, options.copyFromCore, options.dryRun, platform);
+    report = { ...report, removed: retention.removed, kept: retention.kept };
+    if (options.dryRun) {
+      report = { ...report, copies: options.copyFromCore.map((copy): CopyRow => ({ path: copy, action: "would-copy" })) };
+      return { kind: "done", report, lines: renderLines(report) };
+    }
+
+    // The record is rewritten whatever happens below: a copy refused after an
+    // earlier one landed must not leave that one unrecorded.
+    const recorded = [...retention.survivors];
+    const changed = retention.removed.length > 0;
+    let copies: CopyRow[] = [];
+    try {
+      copies = copyInto(git, fs, core, path, gitDir, options.base, tip, options.copyFromCore, platform, (copyPath, sha256): void => {
+        recorded.push({ path: copyPath, sha256 });
+      });
+    } finally {
+      if (changed || recorded.length !== retention.survivors.length || manifestText !== null) {
+        fs.writeTextAtomic(manifestPath, renderManifest(recorded));
+      }
+    }
     report = { ...report, copies };
     return { kind: "done", report, lines: renderLines(report) };
   } catch (error) {
@@ -763,14 +1144,14 @@ export function manageWorktree(
   }
 }
 
-const VERB: Readonly<Record<Exclude<WorktreeState, "refused">, string>> = {
+const VERB: Readonly<Record<ReachedState, string>> = {
   created: "created",
   reused: "reused",
   moved: "moved",
   recreated: "recreated (its vanished registration dropped)",
 };
 
-const WOULD: Readonly<Record<Exclude<WorktreeState, "refused">, string>> = {
+const WOULD: Readonly<Record<ReachedState, string>> = {
   created: "would create",
   reused: "reused",
   moved: "would move",
@@ -786,12 +1167,16 @@ export function renderLines(report: WorktreeReport): string[] {
     lines.push(`core-ignore:     WARNING ${WORKTREES_DIR}/${report.name} is NOT gitignored in core -- core will show it as untracked; add .nen/ to the repository's .gitignore in its own change`);
   }
   lines.push(`${REMOTE}/${report.base}:   ${report.tip ?? "(unresolved)"}${report.fetched ? "" : " (as last fetched; --dry-run fetches nothing)"}`);
-  if (report.state !== "refused") {
-    const words = report.dryRun ? WOULD[report.state] : VERB[report.state];
+  if (report.reached !== null) {
+    const words = report.dryRun ? WOULD[report.reached] : VERB[report.reached];
     lines.push(`worktree:        ${report.path ?? ""} (${words})`);
     if (report.headBefore !== null && report.headBefore !== report.head) lines.push(`head before:     ${report.headBefore}`);
     lines.push(`head:            ${report.head ?? ""}`);
   }
+  for (const row of report.removed) {
+    lines.push(`removed:         ${row.path} (${row.action === "removed" ? "no longer named; bytes as copied" : "would remove: no longer named; bytes as copied"})`);
+  }
+  for (const row of report.kept) lines.push(`kept:            ${row.path} (${row.reason})`);
   if (report.copies.length === 0) lines.push("copied:          none named (--copy-from-core)");
   for (const copy of report.copies) {
     lines.push(`copied:          ${copy.path} (${copy.action === "copied" ? "from core, gitignored" : "would copy from core"})`);

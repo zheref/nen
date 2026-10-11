@@ -730,7 +730,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
-| [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir, check-ref-format, fetch, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, checkout --detach), the files named by --copy-from-core in core | yes |
+| [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
 | [`stage`](#family-stage) | [`nen stage triage`](#nen-stage-triage) | flag secret-shaped, binary, out-of-scope and unmentioned-deletion files before staging; report git-ignored paths separately, never counted toward the exit code; `--range <base>..<head>` triages a committed range instead of the working copy — names and blob sizes over every change any commit made (`in-history` for a finding not in the net change), deletions and mentions over the net diff from the merge base — an unresolved, malformed or unrelated range exit 2 and never a fall back | git status --porcelain; with --range: git rev-parse, merge-base, rev-list --count, log --raw, diff --raw, cat-file --batch-check | yes |
 | [`stage`](#family-stage) | [`nen stage list`](#nen-stage-list) | the exact add list — every modified, added, renamed, deleted and untracked path triage called clean, minus flagged and git-ignored ones, each exclusion named with its reasons, unmerged paths, embedded repositories and undecodable names held off with the list withheld, a worktree rename's original included; `--repo` must be the top; newline (C-quoted where needed) or `--nul` form to feed `git add --pathspec-from-file=-` verbatim, withheld on a flag (exit 1), exit 3 when empty | git status --porcelain | yes |
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
@@ -3072,8 +3072,10 @@ sits — on the trunk, on a dirty branch, or on a clean branch — so tensho
 knows whether to move it before opening a PR (`classify`, read-only); and
 folds a branch's own commits into one before it is pushed (`squash`, aka's
 own residue); catches it up with its base (`catch-up`) and publishes it
-(`publish`); and lists every checkout of the project (`worktrees`) and swaps
-one worktree's committed tree into the core checkout and back (`swap`).
+(`publish`); lists every checkout of the project (`worktrees`) and swaps
+one worktree's committed tree into the core checkout and back (`swap`); and
+keeps one detached worktree at a fixed path at the trunk's fetched tip, with
+the maintainer's gitignored files copied in from core (`worktree`).
 
 
 `--json`: the full `VerifyResult` — `{ ok, error, missing[], duplicated[], altered[], extra[], filesInOriginal, filesInBranches }`, where each entry of the four arrays carries `{ path, header }` and `duplicated` adds `branches[]`, `altered` adds `branch` and `diff`.
@@ -3809,73 +3811,129 @@ nen wc worktree --repo <path> --name <name> --base <branch>
 | `--name <name>` | **yes** | one plain path segment (letters, digits, `.`, `_`, `-`; no `..`; not ending in `.lock`); the worktree is `<core>/.nen/worktrees/<name>` |
 | `--base <branch>` | **yes** | the branch whose fetched tip the worktree stands at, as `origin/<base>`; a short name `git check-ref-format --branch` returns unchanged, never shaped like an option, a refspec or a force |
 | `--copy-from-core <path>` | no, repeatable | a repo-relative path copied from core into the worktree. Only this flag names the list today; reading `nen/contract.json` → `project.fromCore[]` is a follow-up |
-| `--dry-run` | no | fetch nothing (the tip is read as last fetched) and write nothing; print the state and every planned action |
+| `--dry-run` | no | fetch nothing (the tip is read as last fetched) and write nothing; print the state and every planned action, retention included |
 | `--json` | no | `nen.wc.worktree/v0.1`, described below |
+
+`--onto`, `--message-file`, `--strategy`, `--abort` and `--set-upstream` are
+refused here, and `--name` and `--copy-from-core` are refused on every other
+`wc` subcommand.
+
+**Names every platform can hold.** The `--name` and every `--copy-from-core`
+segment are refused, on every platform, when they:
+
+- end in `.` or a space;
+- carry `:`;
+- carry `~<digit>` (a Windows short-name form);
+- are a reserved device name: `CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9` or
+  `LPT1`–`LPT9`, case-insensitive, with or without an extension.
+
+A copy path also refuses glob and pathspec characters, a backslash, `..`, and
+an absolute or drive-letter form.
 
 **The state table.** The tip is fetched with `git fetch --end-of-options
 origin refs/heads/<base>:refs/remotes/origin/<base>`, with no `+`, so a rewound
-trunk fails the fetch rather than moving the worktree backwards.
+trunk fails the fetch rather than moving the worktree backwards. When the
+fetch fails, `git ls-remote --exit-code` is asked whether the branch exists:
+an absent branch is a refusal (exit `2`), and any other failure, such as the
+network or authentication, is exit `1`.
 
 | At the path | Action | `state` |
 |---|---|---|
 | nothing | `git worktree add --detach <path> <tip>` | `created` |
 | this project's worktree, clean, detached at the tip | nothing | `reused` |
 | this project's worktree, clean, anywhere else (a branch at the tip included) | `git checkout --detach <tip>` inside it | `moved` |
+| the same, when the move would overwrite an **ignored, untracked** file the tip tracks (git does that silently) | refused, every path listed | `refused` (`would-overwrite-ignored`) |
 | this project's worktree, **dirty** | refused, every path listed; **never** reset, cleaned, stashed or discarded | `refused` (`dirty`) |
 | a stray directory, a symlink, a directory beside a **sibling** registration (`<name>2` never matches `<name>`), or a symlinked `.nen` / `.nen/worktrees` | refused | `refused` |
 | a registration whose directory is gone | **that one** registration dropped (`git worktree remove --force` on its own path), then created | `recreated` |
+| the same, when the registration is **locked** | refused: a lock says the directory is coming back | `refused` (`locked`) |
 
-A repository-wide `git worktree prune` is never run: it would drop other
-sessions' vanished registrations. Whether core's own ignore rules cover the
-worktree's path is printed as `core-ignore:` and carried as `coreIgnored`.
-Nothing assumes it.
+A repository-wide `git worktree prune` is never run, because it would drop
+other sessions' vanished registrations. A `--name` that differs from a
+registration under `.nen/worktrees` only by case or Unicode normalisation is
+refused (`name-alias`), and the refusal names the existing spelling. Whether
+core's own ignore rules cover the worktree's path is printed as `core-ignore:`
+and carried as `coreIgnored`. Nothing assumes it.
 
-**The copy.** Each `--copy-from-core` path is proven before a byte moves:
+**The copy.** Names are compared **folded**: NFC on every platform, and
+case-folded on darwin and win32. A trunk that tracks the NFD spelling of a
+path core holds in NFC names the same file on APFS. Each `--copy-from-core`
+path is proven before a byte moves:
 
-- **in core**: a literal path (no glob or pathspec character, no backslash,
-  no `..`, not absolute) whose directory resolves inside core; a regular
-  file, not a symlink; not tracked; gitignored (an unignored copy would dirty
-  the worktree, and the next run would refuse it);
-- **at the tip, from its tree** (`git ls-tree`), before anything is created
-  or moved, so under `--dry-run` too: not tracked as a regular file, a symlink
-  leaf or a directory; no ancestor tracked as a symlink, a submodule or a file.
-  The walk descends by the tip's own spelling and, on darwin and win32,
-  matches names case-insensitively, as those filesystems do;
-- **in the worktree, on a real run**: gitignored there; no ancestor directory
-  and no leaf a symlink (an **untracked** symlink at the destination is refused
-  like a tracked one); the leaf, when present, a regular file; the destination
-  directory resolving inside the worktree.
+- **in core**: every ancestor is a real directory (a symlinked segment, even
+  one pointing inside core, is refused); the file is a regular file, not a
+  symlink; it is tracked under no spelling; it is gitignored (an unignored
+  copy would dirty the worktree, and the next run would refuse it);
+- **at the tip, from its tree** (`git ls-tree`, walked by object id), before
+  anything is created or moved, so under `--dry-run` too: it is not tracked as
+  a regular file, a symlink leaf or a directory, and no ancestor is tracked as
+  a symlink, a submodule or a file;
+- **in the worktree, on a real run**: no ancestor directory and no leaf is a
+  symlink (an **untracked** symlink at the destination is refused like a
+  tracked one); the leaf, when present, is a regular file; nothing is tracked
+  there under any spelling (`git ls-files`, read whole and folded); it is
+  gitignored; the destination directory resolves inside the worktree.
 
-The bytes go through a temp file beside the destination and a rename, which
-never follows a link.
+The bytes are staged in the **worktree's own git directory**
+(`core/.git/worktrees/<n>`, outside the tree) and renamed into place, so a
+crash never leaves a partial credential in the work tree. After the rename,
+the destination's directory is resolved again, and the file there must be the
+one written, by device and inode. If a copy landed outside the tree, it is
+unlinked. If the file is not the one written, the foreign file is left alone.
+Either way the run exits `1`.
+
+**Retention.** Each copy is recorded (its path and sha256) in
+`<worktree git dir>/nen-wc-worktree-copies.json`
+(`nen.wc.worktree.copies/v0.1`), outside the tree. A later run handles a
+recorded copy it no longer names like this:
+
+- If its bytes still hash as recorded, it is **removed** (`removed[]`).
+- If it was edited, or is no longer a regular file, it is **kept**, listed as
+  `kept (edited since copy)` (`kept[]`), and never deleted. It stays recorded
+  until it is gone.
+- A copy whose core source was deleted can no longer be named (the source
+  proof refuses it), so it goes the same way.
+
+`--dry-run` lists both and removes nothing. A record nen cannot read is exit
+`1`.
 
 **Isolation.** Every git call runs with `GIT_DIR`, `GIT_WORK_TREE`,
 `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
 `GIT_COMMON_DIR`, `GIT_NAMESPACE`, `GIT_CEILING_DIRECTORIES`,
 `GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`,
-`GIT_PREFIX` and every `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` removed from
-its environment, so a hook's inherited variables cannot point it at another
-repository. Paths are compared through `realpathSync.native`, so a Windows 8.3
-short name and git's long spelling name one directory.
+`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`,
+`GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_LITERAL_PATHSPECS`, `GIT_GLOB_PATHSPECS`,
+`GIT_NOGLOB_PATHSPECS`, `GIT_ICASE_PATHSPECS` and every
+`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` removed from its environment, so a
+hook's inherited variables cannot point it at another repository. Paths are
+compared through `realpathSync.native`, so a Windows 8.3 short name and git's
+long spelling name one directory.
 
 **Exit codes**
 
 | Code | Meaning |
 |---|---|
 | `0` | the worktree stands at the tip with every named file copied, or the dry-run plan was printed |
-| `2` | a refusal or a bad argument, with the reason on stderr and dirty paths one per line after it. A refusal before the state step has changed nothing but the fetched ref. A copy refusal after that step leaves the worktree at the tip, and the next run reads it as `reused` |
-| `1` | a git step or a write failed part-way, and the message says which |
+| `2` | a refusal or a bad argument, with the reason on stderr and the paths it concerns one per line after it. A refusal before the state step has changed nothing but the fetched ref. A copy refusal after that step leaves the worktree where it got to, reported as `reached` |
+| `1` | a git step or a write failed part-way (the fetch on the network, `worktree add`, the copy, an unreadable copy record), and the message says which. **No `--json` document is printed** |
 
 **`--json`**: `nen.wc.worktree/v0.1` is `{ contract, core, name, path, base,
-tip, fetched, state, dryRun, headBefore, head, dropped, coreIgnored, copies:
-[{ path, action }], refusal }`. The fields:
+tip, fetched, state, reached, dryRun, headBefore, head, dropped, coreIgnored,
+copies: [{ path, action }], removed: [{ path, action }], kept: [{ path, reason
+}], refusal }`. The fields:
 
 - `state` is one of `created`, `reused`, `moved`, `recreated` or `refused`.
   Under `--dry-run` it is what **would** happen, and `fetched` is `false`.
-- `action` is `copied` or `would-copy`.
+- `reached` is the state the worktree got to before any refusal, or `null`
+  when the run was refused before the state step. On success it equals
+  `state`.
+- `copies[].action` is `copied` or `would-copy`; `removed[].action` is
+  `removed` or `would-remove`; `kept[].reason` is `edited since copy` or
+  `not a regular file`.
 - `refusal` is `null`, or `{ kind, reason, paths }`. `kind` is one of
-  `not-a-checkout`, `base`, `parent-symlink`, `symlink`, `stray`, `not-root`,
-  `dirty`, `copy-source` or `copy-destination`.
+  `not-a-checkout`, `base`, `name-alias`, `parent-symlink`, `symlink`,
+  `stray`, `locked`, `not-root`, `dirty`, `would-overwrite-ignored`,
+  `copy-source` or `copy-destination`.
 - On a refusal the document is still printed, with `head: null`.
 
 **Example**

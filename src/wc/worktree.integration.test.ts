@@ -20,14 +20,14 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
-import { WORKTREE_CONTRACT } from "./worktree.js";
+import { MANIFEST_CONTRACT, MANIFEST_FILE, WORKTREE_CONTRACT } from "./worktree.js";
 
 const PINNED = ["-c", "core.autocrlf=false", "-c", "protocol.file.allow=always"];
 
@@ -38,6 +38,16 @@ function git(cwd: string, args: readonly string[]): { code: number; stdout: stri
   delete env["GIT_WORK_TREE"];
   const result = spawnSync("git", [...args], { cwd, encoding: "utf8", env });
   return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+function gitIn(cwd: string, args: readonly string[], input: string): string {
+  const env: Record<string, string | undefined> = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+  delete env["GIT_DIR"];
+  delete env["GIT_INDEX_FILE"];
+  delete env["GIT_WORK_TREE"];
+  const result = spawnSync("git", [...args], { cwd, encoding: "utf8", env, input });
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")} in ${cwd} exited ${result.status}: ${result.stderr}`);
+  return (result.stdout ?? "").trim();
 }
 
 function mustGit(cwd: string, args: readonly string[]): string {
@@ -95,6 +105,33 @@ const KG = ["--name", "kagutsuchi", "--base", "main"];
 const COPY = ["--copy-from-core", SECRET];
 
 const headOf = (repo: string): string => mustGit(repo, ["rev-parse", "HEAD"]);
+
+/** Every path under `dir`, relative, directories descended. */
+function walk(dir: string, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const rel = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+    if (entry.name === ".git") continue;
+    out.push(rel);
+    if (entry.isDirectory()) out.push(...walk(join(dir, entry.name), rel));
+  }
+  return out;
+}
+
+/** Push a commit built with PLUMBING on top of `newTip`: the tip's own entries plus one more, spelled exactly. */
+function pushPlumbed(extra: string, message: string): string {
+  const entries = mustGit(O, ["ls-tree", newTip]);
+  const tree = gitIn(O, ["mktree"], `${entries}\n${extra}\n`);
+  const commit = mustGit(O, ["commit-tree", tree, "-p", newTip, "-m", message]);
+  mustGit(O, [...PINNED, "push", "--quiet", "origin", `${commit}:refs/heads/main`]);
+  return commit;
+}
+
+/** Put the trunk back at `newTip` on both sides, so the next fetch is a fast-forward again. */
+function rewind(): void {
+  mustGit(join(root, "origin.git"), ["update-ref", "refs/heads/main", newTip]);
+  mustGit(C, ["update-ref", "refs/remotes/origin/main", newTip]);
+}
 
 function commitIn(repo: string, message: string): void {
   mustGit(repo, ["add", "-A"]);
@@ -170,6 +207,20 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- the reference self-test, ported",
     expect(headOf(W)).toBe(firstTip);
     expect(git(W, ["symbolic-ref", "-q", "HEAD"]).code).not.toBe(0);
     expect(mustGit(W, ["status", "--porcelain"])).toBe("");
+    // F2: the bytes were staged in the worktree's git dir; nothing staged is left in the tree.
+    expect(walk(W).filter((path) => path.includes("nen-wc-worktree-copy"))).toEqual([]);
+    expect(mustGit(W, ["status", "--porcelain", "--ignored"])).toBe(`!! ${SECRET}`);
+    // F3: the copy is recorded, path and sha256, outside the tree.
+    const record = JSON.parse(readFileSync(join(C, ".git", "worktrees", "kagutsuchi", MANIFEST_FILE), "utf8")) as { contract: string; copies: Array<{ path: string }> };
+    expect(record.contract).toBe(MANIFEST_CONTRACT);
+    expect(record.copies.map((copy) => copy.path)).toEqual([SECRET]);
+  });
+
+  it("an --base origin does not have is a refusal at exit 2, not a git failure (N1)", async () => {
+    const run = await wc(["--name", "kagutsuchi", "--base", "no-such-branch"], C, true);
+    expect(run.code).toBe(2);
+    expect(run.err).toMatch(/origin has no branch 'no-such-branch'/);
+    expect((run.doc["refusal"] as { kind: string }).kind).toBe("base");
   });
 
   it("a second run at the same tip reuses it: still exactly one managed worktree beside core", async () => {
@@ -275,8 +326,19 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- the reference self-test, ported",
     writeFileSync(join(C, ".git", "info", "exclude"), "/Linked\n");
     const parent = await wc([...KG, "--copy-from-core", "Linked/Config.xcconfig"], C);
     expect(parent.code).toBe(2);
-    expect(parent.err).toMatch(/does not stand inside core/);
+    expect(parent.err).toMatch(/a symlink in core/);
     rmSync(join(C, "Linked"));
+    writeFileSync(join(C, ".git", "info", "exclude"), "");
+  });
+
+  it.skipIf(!LINKS)("a source reached through an IN-CORE symlinked segment ('ln -s Kro Alias') is refused as copy-source (F4)", async () => {
+    symlinkSync("Kro", join(C, "Alias"));
+    writeFileSync(join(C, ".git", "info", "exclude"), "/Alias\n/Alias/\n");
+    const run = await wc([...KG, "--copy-from-core", "Alias/Config.xcconfig"], C, true);
+    expect(run.code).toBe(2);
+    expect((run.doc["refusal"] as { kind: string }).kind).toBe("copy-source");
+    expect(run.err).toMatch(/beneath 'Alias', a symlink in core/);
+    rmSync(join(C, "Alias"));
     writeFileSync(join(C, ".git", "info", "exclude"), "");
   });
 
@@ -342,6 +404,60 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- the reference self-test, ported",
     expect(run.err).toMatch(/is a symlink in the worktree/);
     expect(readFileSync(join(root, "outside", "Config.xcconfig"), "utf8")).toBe("victim\n");
     rmSync(join(W, SECRET));
+  });
+
+  // F1: the trunk tracks the NFD spelling of a path core holds in NFC. The
+  // commits are built with plumbing, so the NFD bytes are exactly what the tree
+  // records whatever core.precomposeunicode says.
+  it("a tip tracking the NFD spelling of an NFC copy path is refused before anything moves, and nothing is overwritten (F1)", async () => {
+    const nfc = "caf\u00e9/app.env";
+    mkdirSync(join(C, "caf\u00e9"), { recursive: true });
+    writeFileSync(join(C, "caf\u00e9", "app.env"), "CREDENTIAL=1\n");
+    writeFileSync(join(C, ".git", "info", "exclude"), `${nfc}\n`);
+    const blob = gitIn(O, ["hash-object", "-w", "--stdin"], "tracked placeholder\n");
+    const sub = gitIn(O, ["mktree"], `100644 blob ${blob}\tapp.env\n`);
+    pushPlumbed(`040000 tree ${sub}\tcafe\u0301`, "nfd-tracked");
+    const run = await wc([...KG, "--copy-from-core", nfc], C, true);
+    expect(run.code, run.err).toBe(2);
+    expect(run.doc).toMatchObject({ state: "refused", reached: null });
+    expect((run.doc["refusal"] as { kind: string; reason: string }).kind).toBe("copy-destination");
+    expect(run.err).toMatch(/is TRACKED \(as 'cafe\u0301\/app.env'\)/);
+    expect(headOf(W)).toBe(newTip);
+    expect(mustGit(W, ["status", "--porcelain"])).toBe("");
+    rewind();
+  });
+
+  it("a tip tracking an NFD PARENT as a symlink is refused before anything is created (F1)", async () => {
+    const nfc = "caf\u00e9/app.env";
+    const link = gitIn(O, ["hash-object", "-w", "--stdin"], join(root, "outside"));
+    pushPlumbed(`120000 blob ${link}\tcafe\u0301`, "nfd-symlink-parent");
+    const run = await wc([...KG, "--copy-from-core", nfc], C, true);
+    expect(run.code, run.err).toBe(2);
+    expect(run.err).toMatch(/lies beneath 'cafe\u0301', which is TRACKED as a symlink/);
+    expect(headOf(W)).toBe(newTip);
+    expect(readFileSync(join(root, "outside", "Config.xcconfig"), "utf8")).toBe("victim\n");
+    expect(existsSync(join(root, "outside", "app.env"))).toBe(false);
+    rewind();
+    rmSync(join(C, "caf\u00e9"), { recursive: true, force: true });
+    writeFileSync(join(C, ".git", "info", "exclude"), "");
+  });
+
+  it("a move that would overwrite an IGNORED, untracked file the tip now tracks is refused, the file kept (N9)", async () => {
+    writeFileSync(join(W, "Kro", "Other.xcconfig"), "mine\n");
+    const blob = gitIn(O, ["hash-object", "-w", "--stdin"], "theirs\n");
+    const kro = mustGit(O, ["ls-tree", `${newTip}:Kro`]);
+    const sub = gitIn(O, ["mktree"], `${kro}\n100644 blob ${blob}\tOther.xcconfig\n`);
+    const entries = mustGit(O, ["ls-tree", newTip]).split("\n").filter((line) => !line.endsWith("\tKro")).join("\n");
+    const tree = gitIn(O, ["mktree"], `${entries}\n040000 tree ${sub}\tKro\n`);
+    const commit = mustGit(O, ["commit-tree", tree, "-p", newTip, "-m", "track-other"]);
+    mustGit(O, [...PINNED, "push", "--quiet", "origin", `${commit}:refs/heads/main`]);
+    const run = await wc(KG, C, true);
+    expect(run.code, run.err).toBe(2);
+    expect(run.doc["refusal"]).toMatchObject({ kind: "would-overwrite-ignored", paths: ["Kro/Other.xcconfig"] });
+    expect(readFileSync(join(W, "Kro", "Other.xcconfig"), "utf8")).toBe("mine\n");
+    expect(headOf(W)).toBe(newTip);
+    rewind();
+    rmSync(join(W, "Kro", "Other.xcconfig"));
   });
 
   it("a stray directory beside a SIBLING registration ('kagutsuchi2') is refused, and core does not move", async () => {
@@ -418,6 +534,21 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- the reference self-test, ported",
     mustGit(C, ["worktree", "remove", "--force", other]);
   });
 
+  it("a LOCKED registration whose directory is gone is refused, dry and real, and kept (N3)", async () => {
+    mustGit(C, ["worktree", "lock", W]);
+    rmSync(W, { recursive: true, force: true });
+    for (const flags of [["--dry-run"], []]) {
+      const run = await wc([...KG, ...flags], C, true);
+      expect(run.code, run.err).toBe(2);
+      expect((run.doc["refusal"] as { kind: string }).kind).toBe("locked");
+    }
+    expect(mustGit(C, ["worktree", "list", "--porcelain"])).toContain(`worktree ${W}`);
+    mustGit(C, ["worktree", "unlock", W]);
+    const back = await wc([...KG, ...COPY], C);
+    expect(back.code, back.err).toBe(0);
+    expect(back.out).toContain("recreated");
+  });
+
   it("--json is the nen.wc.worktree/v0.1 contract, in its key order", async () => {
     const run = await wc([...KG, ...COPY], C, true);
     expect(run.code, run.err).toBe(0);
@@ -430,12 +561,15 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- the reference self-test, ported",
       "tip",
       "fetched",
       "state",
+      "reached",
       "dryRun",
       "headBefore",
       "head",
       "dropped",
       "coreIgnored",
       "copies",
+      "removed",
+      "kept",
       "refusal",
     ]);
     expect(run.doc).toMatchObject({
@@ -447,13 +581,53 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- the reference self-test, ported",
       tip: newTip,
       fetched: true,
       state: "reused",
+      reached: "reused",
       dryRun: false,
       headBefore: newTip,
       head: newTip,
       dropped: false,
       coreIgnored: true,
       copies: [{ path: SECRET, action: "copied" }],
+      removed: [],
+      kept: [],
       refusal: null,
     });
+  });
+
+  // F3: RETENTION, over the same fixture.
+  it("a copy no longer named is removed when its bytes are as copied; --dry-run only says so", async () => {
+    const dry = await wc([...KG, "--dry-run"], C, true);
+    expect(dry.code, dry.err).toBe(0);
+    expect(dry.doc["removed"]).toEqual([{ path: SECRET, action: "would-remove" }]);
+    expect(existsSync(join(W, SECRET))).toBe(true);
+    const run = await wc(KG, C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(run.doc["removed"]).toEqual([{ path: SECRET, action: "removed" }]);
+    expect(existsSync(join(W, SECRET))).toBe(false);
+  });
+
+  it("an EDITED copy no longer named is kept, listed, and never deleted", async () => {
+    expect((await wc([...KG, ...COPY], C)).code).toBe(0);
+    writeFileSync(join(W, SECRET), "SUPABASE_URL = edited by hand\n");
+    const run = await wc(KG, C);
+    expect(run.code, run.err).toBe(0);
+    expect(run.out).toContain(`kept:            ${SECRET} (edited since copy)`);
+    expect(readFileSync(join(W, SECRET), "utf8")).toBe("SUPABASE_URL = edited by hand\n");
+    rmSync(join(W, SECRET));
+    const after = await wc(KG, C, true);
+    expect(after.doc["kept"]).toEqual([]);
+  });
+
+  it("a copy whose core source was deleted is no longer nameable, and goes the same way", async () => {
+    writeFileSync(join(C, "Kro", "Other.xcconfig"), "OTHER=1\n");
+    expect((await wc([...KG, "--copy-from-core", "Kro/Other.xcconfig"], C)).code).toBe(0);
+    rmSync(join(C, "Kro", "Other.xcconfig"));
+    const named = await wc([...KG, "--copy-from-core", "Kro/Other.xcconfig"], C);
+    expect(named.code).toBe(2);
+    expect(named.err).toMatch(/absent in core/);
+    const run = await wc(KG, C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(run.doc["removed"]).toEqual([{ path: "Kro/Other.xcconfig", action: "removed" }]);
+    expect(existsSync(join(W, "Kro", "Other.xcconfig"))).toBe(false);
   });
 });
