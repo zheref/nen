@@ -46,10 +46,11 @@
 // come back `isResolved: true` for the thread it was sent for) are the ones
 // those verbs already prove.
 
-import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
+import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
+import { redactRemoteCredentials } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import {
@@ -123,8 +124,34 @@ const ENTRY_KEYS = new Set(["thread", "body", "bodyFile"]);
  */
 export const MAX_BODY_CHARS = 65536;
 
-/** The most bytes a `bodyFile` may hold before it is read at all: 4 per character, UTF-8's ceiling. */
+/**
+ * The most bytes a `bodyFile` may hold before it is read at all. A body within
+ * the limit is at most 3 UTF-8 bytes per UTF-16 code unit -- 196608 bytes --
+ * so this cap (4 per unit) is looser than it needs to be, never tighter: the
+ * character count after the read is the limit that binds.
+ */
 const MAX_BODY_FILE_BYTES = MAX_BODY_CHARS * 4;
+
+/** `realpath`, injectable so a test can swap a file for a symlink between the check and the open. */
+export type Realpath = (path: string) => string;
+
+/** The `open` flags every file this verb reads is opened with: never blocking, never following a final symlink. */
+function readFlags(): number {
+  return process.platform === "win32" ? fsConstants.O_RDONLY : fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW;
+}
+
+/**
+ * Whether a body carries a credential's shape, by CONTENT. This is the one
+ * content-based shape nen already has -- ../seam/exec.ts's
+ * `redactRemoteCredentials` (a GitHub token, a fine-grained PAT, a URL's
+ * `user:secret@`) -- reused rather than duplicated: a body it would redact is
+ * a body that would publish a credential. It is NOT a general secret scanner
+ * (no cloud keys, no private-key blocks); that is a separate tool nen does
+ * not have.
+ */
+function carriesCredential(body: string): boolean {
+  return redactRemoteCredentials(body) !== body;
+}
 
 /** A character a terminal or a GraphQL id has no business carrying. */
 const CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
@@ -133,6 +160,11 @@ const CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
 export interface SettleBatch {
   readonly entries: readonly SettleEntry[];
   readonly baseDir: string;
+}
+
+/** Whether any segment of a relative path starts with `.` (a lone `.` excepted). */
+function hidden(path: string): boolean {
+  return path.split(/[\\/]/).some((segment): boolean => segment.startsWith(".") && segment !== ".");
 }
 
 /**
@@ -149,9 +181,29 @@ export interface SettleBatch {
  * refused by where it LANDS, not what it is called); the file is opened
  * non-blocking (a FIFO must not hang the verb), `fstat`ed THROUGH THE
  * DESCRIPTOR it is read from, and must be a regular file no larger than the
- * body limit allows -- so what was checked is what is read.
+ * body limit allows.
+ *
+ * NOR A FILE IN THE DIRECTORY NOBODY MEANT TO NAME (Feitan F4). A path segment
+ * starting with `.` -- `.env`, `.git/config`, `.npmrc` -- is refused, in the
+ * name given AND in the real path it resolves to (a plain-named symlink to
+ * `.env` is refused too); a lone `.` segment names nothing hidden and is let
+ * through. A file with more than one hard link is refused: a hard link to a
+ * file outside the directory is indistinguishable from it by path.
+ *
+ * WHAT IS GUARANTEED, AND THE WINDOW THAT REMAINS (Feitan F5, Nobunaga R2-1).
+ * Between `realpath` and `open` the path can be swapped. So the open refuses
+ * to follow a FINAL symlink (`O_NOFOLLOW`), and after `fstat` the descriptor's
+ * `dev`/`ino` must equal `lstat(real)`'s, `lstat(real)` must not be a symlink,
+ * and `realpath(real)` must still be `real`. That guarantees the bytes read
+ * are those of a regular, singly-linked file that sat at `real` -- inside the
+ * directory -- when those checks ran. It does NOT guarantee against an
+ * attacker who can rewrite the DIRECTORY components above `real` between the
+ * open and the re-checks and restore them after: Node has no `openat`, so no
+ * component-by-component open is available here. Whoever can do that already
+ * writes into the batch's directory, and could edit the batch itself. On
+ * win32 the open follows links and the re-checks are the guard.
  */
-function readBodyFile(value: string, realBase: string): { readonly body: string; readonly real: string } | { readonly problem: string } {
+function readBodyFile(value: string, realBase: string, realpath: Realpath): { readonly body: string; readonly real: string } | { readonly problem: string } {
   const shown = plainLine(value);
   if (isAbsolute(value) || /^[\\/]/.test(value) || /^[A-Za-z]:/.test(value)) {
     return { problem: `'bodyFile' '${shown}' is absolute; a bodyFile is a path RELATIVE to the batch file's own directory, and may not leave it.` };
@@ -159,9 +211,12 @@ function readBodyFile(value: string, realBase: string): { readonly body: string;
   if (value.split(/[\\/]/).includes("..")) {
     return { problem: `'bodyFile' '${shown}' carries a '..' segment; a bodyFile may not leave the batch file's own directory.` };
   }
+  if (hidden(value)) {
+    return { problem: `'bodyFile' '${shown}' names a dot-file or dot-directory (.env, .git/config, .npmrc ...); those are never read as a reply.` };
+  }
   let real: string;
   try {
-    real = realpathSync(resolvePath(realBase, value));
+    real = realpath(resolvePath(realBase, value));
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return { problem: `could not read bodyFile '${shown}'${code === undefined ? "" : ` (${code})`}.` };
@@ -169,9 +224,12 @@ function readBodyFile(value: string, realBase: string): { readonly body: string;
   if (real !== realBase && !real.startsWith(realBase.endsWith(sep) ? realBase : `${realBase}${sep}`)) {
     return { problem: `'bodyFile' '${shown}' resolves to '${plainLine(real)}', outside the batch file's directory '${plainLine(realBase)}' (a symlink that escapes it is refused by where it lands).` };
   }
+  if (hidden(relative(realBase, real))) {
+    return { problem: `'bodyFile' '${shown}' resolves to a dot-file or dot-directory ('${plainLine(relative(realBase, real))}'); those are never read as a reply.` };
+  }
   let fd: number;
   try {
-    fd = openSync(real, fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NONBLOCK));
+    fd = openSync(real, readFlags());
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return { problem: `could not open bodyFile '${shown}'${code === undefined ? "" : ` (${code})`}.` };
@@ -180,6 +238,13 @@ function readBodyFile(value: string, realBase: string): { readonly body: string;
     const stat = fstatSync(fd);
     if (!stat.isFile()) {
       return { problem: `'bodyFile' '${shown}' is not a regular file (a directory, a device, a FIFO or a socket is never read as a reply).` };
+    }
+    if (stat.nlink > 1) {
+      return { problem: `'bodyFile' '${shown}' has ${stat.nlink} hard links; a hard-linked file may be a file outside the directory under another name, and is never read as a reply.` };
+    }
+    const there = lstatSync(real);
+    if (there.isSymbolicLink() || there.dev !== stat.dev || there.ino !== stat.ino || realpath(real) !== real) {
+      return { problem: `'bodyFile' '${shown}' changed between its check and its open ('${plainLine(real)}' is no longer the file that was opened); it was not read.` };
     }
     if (stat.size > MAX_BODY_FILE_BYTES) {
       return { problem: `'bodyFile' '${shown}' is ${stat.size} bytes, more than a ${MAX_BODY_CHARS}-character body can be; it was not read.` };
@@ -212,7 +277,7 @@ function readBatchFile(fullPath: string, shownPath: string): string {
   };
   let fd: number;
   try {
-    fd = openSync(fullPath, fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NONBLOCK));
+    fd = openSync(fullPath, process.platform === "win32" ? fsConstants.O_RDONLY : fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     return refuse(code === undefined ? "it could not be opened" : `it could not be opened (${code})`);
@@ -243,7 +308,7 @@ function readBatchFile(fullPath: string, shownPath: string): string {
  * fragment of the file echoed into a refusal goes through `plainLine`
  * (Feitan F3): the file is text somebody else may have written.
  */
-export function readSettleFile(fullPath: string): SettleBatch {
+export function readSettleFile(fullPath: string, realpath: Realpath = realpathSync): SettleBatch {
   const shownPath = plainLine(fullPath);
   const text = readBatchFile(fullPath, shownPath);
   let parsed: unknown;
@@ -263,7 +328,15 @@ export function readSettleFile(fullPath: string): SettleBatch {
     throw new VerbUsageError(`--from '${shownPath}' is an empty array: there is nothing to settle, and an empty batch is never assumed to be what was meant.`);
   }
 
-  const realBase = realpathSync(dirname(fullPath));
+  let realBase: string;
+  try {
+    realBase = realpath(dirname(fullPath));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new VerbUsageError(
+      `could not resolve the directory of --from '${shownPath}'${code === undefined ? "" : ` (${code})`}; every bodyFile is confined to it, so nothing was sent.`,
+    );
+  }
   const problems: string[] = [];
   const entries: SettleEntry[] = [];
   const firstSeen = new Map<string, number>();
@@ -312,7 +385,7 @@ export function readSettleFile(fullPath: string): SettleBatch {
       if (typeof value !== "string" || value.trim() === "") {
         problems.push(`${at}: 'bodyFile' must be a non-empty path string.`);
       } else {
-        const read = readBodyFile(value, realBase);
+        const read = readBodyFile(value, realBase, realpath);
         if ("problem" in read) {
           problems.push(`${at}: ${read.problem}`);
         } else {
@@ -327,6 +400,11 @@ export function readSettleFile(fullPath: string): SettleBatch {
       body = null;
     } else if (body !== null && body.length > MAX_BODY_CHARS) {
       problems.push(`${at}: the body${where} is ${body.length} characters, over the ${MAX_BODY_CHARS}-character limit GitHub puts on a comment.`);
+      body = null;
+    } else if (body !== null && carriesCredential(body)) {
+      // THE MATCH IS NEVER ECHOED: naming the entry is enough, and printing it
+      // would put the credential in a terminal and a log.
+      problems.push(`${at}: the body${where} carries a credential's shape (a GitHub token, a fine-grained PAT, or a URL's user:secret@); it would be posted publicly, so it is refused.`);
       body = null;
     }
     if (threadOk && body !== null) entries.push({ thread: thread as string, body, bodyFrom });

@@ -448,12 +448,15 @@ threads:
   file order -- 2N + P calls (P = pages of 100 threads) where the single
   verbs cost 4N. The file is a JSON array of { "thread": "<id>", "body":
   "<text>" } or { "thread": "<id>", "bodyFile": "<path>" }. A bodyFile is
-  CONFINED to the batch file's own directory: relative, no '..' segment, its
-  real path (after symlinks) inside that directory's real path, and a
-  regular file, checked on the descriptor it is read from -- an absolute
-  path, a symlink that escapes, a device or a FIFO is refused. Its real path
-  is reported in bodyFrom and on each entry line. Every body, inline or
-  read, is at most 65536 characters.
+  CONFINED to the batch file's own directory: relative, no '..' segment and
+  no segment starting with '.' (.env, .git/config), its real path (after
+  symlinks) inside that directory's real path, and a regular file with one
+  hard link, opened without following a final symlink and checked on the
+  descriptor it is read from -- an absolute path, a symlink that escapes, a
+  dot-file, a hard link, a device or a FIFO is refused. Its real path is
+  reported in bodyFrom and on each entry line. Every body, inline or read,
+  is at most 65536 characters and is refused if it carries a credential's
+  shape (a GitHub token or PAT, a URL's user:secret@).
   --from <file.json>  Required by 'settle'; relative to --repo. Read like a
                   bodyFile: a regular file, checked on its descriptor, at
                   most 4 MiB -- a FIFO, a device or a directory is refused.

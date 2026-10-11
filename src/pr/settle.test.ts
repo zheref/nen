@@ -6,7 +6,7 @@
 // throws -- so "sent nothing" is proved by the recorded calls, not asserted.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,7 @@ import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { parseTarget } from "../github/target.js";
 import { prCommand } from "./command.js";
-import { MAX_BATCH_FILE_BYTES, MAX_BODY_CHARS, SETTLE_CONTRACT } from "./settle.js";
+import { MAX_BATCH_FILE_BYTES, MAX_BODY_CHARS, readSettleFile, SETTLE_CONTRACT } from "./settle.js";
 import { listArgv, listPageArgv, replyArgv, resolveArgv } from "./threads.js";
 
 const TARGET = parseTarget("zheref/nen");
@@ -312,7 +312,7 @@ describe("nen pr threads settle -- a bodyFile is confined to the batch's directo
     });
   });
 
-  it("refuses a symlink that escapes the directory, by where it lands", async () => {
+  it.skipIf(process.platform === "win32")("refuses a symlink that escapes the directory, by where it lands", async () => {
     const outside = join(mkdtempSync(join(tmpdir(), "nen-settle-outside-")), "secret.txt");
     writeFileSync(outside, "a secret", "utf8");
     await refused({ thread: "T1", bodyFile: "link.md" }, /'bodyFile' 'link\.md' resolves to '.*secret\.txt', outside the batch file's directory/, (dir) => {
@@ -339,7 +339,7 @@ describe("nen pr threads settle -- a bodyFile is confined to the batch's directo
     });
   });
 
-  it("reports the REAL path of an in-directory symlink in bodyFrom and on the live line, relative to the batch", async () => {
+  it.skipIf(process.platform === "win32")("reports the REAL path of an in-directory symlink in bodyFrom and on the live line, relative to the batch", async () => {
     const from = batch([{ thread: "T1", bodyFile: "alias.md" }], { "replies/real.md": "ok" });
     const dir = join(from, "..");
     symlinkSync(join(dir, "replies", "real.md"), join(dir, "alias.md"));
@@ -425,5 +425,103 @@ describe("nen pr threads settle -- --from is read with bodyFile's discipline", (
     expect(captured.code).toBe(2);
     expect(captured.err.join("\n")).not.toContain("\u001b");
     expect(captured.err.join("\n")).toMatch(/nope\[2K\.json': it could not be opened \(ENOENT\)/);
+  });
+});
+
+describe("nen pr threads settle -- files in the directory nobody meant to name (Feitan F4)", () => {
+  async function refused(entries: readonly Record<string, unknown>[], extra: Readonly<Record<string, string>>, patterns: readonly RegExp[], setup?: (dir: string) => void): Promise<string> {
+    const from = batch(entries, extra);
+    setup?.(join(from, ".."));
+    const captured = await capture(args(from), []);
+    expect(captured.code).toBe(2);
+    const err = captured.err.join("\n");
+    for (const pattern of patterns) expect(err).toMatch(pattern);
+    expect(captured.seams.calls).toEqual([]);
+    return err;
+  }
+
+  it("refuses a dot-file or dot-directory segment, all in the one refusal", async () => {
+    await refused(
+      [{ thread: "T1", bodyFile: ".env" }, { thread: "T2", bodyFile: ".git/config" }, { thread: "T3", bodyFile: "sub/.npmrc" }],
+      { ".env": "TOKEN=x", ".git/config": "[core]", "sub/.npmrc": "//registry:_authToken=x" },
+      [/entry 0: 'bodyFile' '\.env' names a dot-file/, /entry 1: 'bodyFile' '\.git\/config' names a dot-file/, /entry 2: 'bodyFile' 'sub\/\.npmrc' names a dot-file/],
+    );
+  });
+
+  it("lets a lone '.' segment through", async () => {
+    const from = batch([{ thread: "T1", bodyFile: "./reply.md" }], { "reply.md": "ok" });
+    const captured = await capture(args(from, ["--dry-run"]), [listCall(pageBody([node("T1", false)]))]);
+    expect(captured.code).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a plain-named symlink that lands on a dot-file", async () => {
+    await refused([{ thread: "T1", bodyFile: "alias.md" }], { ".env": "TOKEN=x" }, [/'alias\.md' resolves to a dot-file or dot-directory \('\.env'\)/], (dir) => {
+      symlinkSync(join(dir, ".env"), join(dir, "alias.md"));
+    });
+  });
+
+  it("refuses a file with more than one hard link", async () => {
+    const outside = join(mkdtempSync(join(tmpdir(), "nen-settle-outside-")), "secret.txt");
+    writeFileSync(outside, "a secret", "utf8");
+    await refused([{ thread: "T1", bodyFile: "reply.md" }], {}, [/'reply\.md' has 2 hard links/], (dir) => {
+      linkSync(outside, join(dir, "reply.md"));
+    });
+  });
+
+  it("refuses a body carrying a credential's shape, inline or from a file, without echoing it", async () => {
+    const token = `ghp_${"A".repeat(36)}`;
+    const err = await refused(
+      [{ thread: "T1", body: `here: ${token}` }, { thread: "T2", bodyFile: "r.md" }, { thread: "T3", body: "see https://user:hunter2@example.com/x" }],
+      { "r.md": `github_pat_${"b".repeat(40)}` },
+      [/entry 0: the body carries a credential's shape/, /entry 1: the body in 'r\.md' carries a credential's shape/, /entry 2: the body carries a credential's shape/],
+    );
+    expect(err).not.toContain(token);
+    expect(err).not.toContain("hunter2");
+  });
+});
+
+describe("nen pr threads settle -- the realpath/open race (Feitan F5)", () => {
+  it.skipIf(process.platform === "win32")("refuses a bodyFile swapped for a symlink between its realpath and its open", () => {
+    const outside = join(mkdtempSync(join(tmpdir(), "nen-settle-outside-")), "secret.txt");
+    writeFileSync(outside, "a secret", "utf8");
+    const from = batch([{ thread: "T1", bodyFile: "reply.md" }], { "reply.md": "ok" });
+    const target = join(realpathSync(join(from, "..")), "reply.md");
+    let swapped = false;
+    // The seam answers the check truthfully, then swaps the file for a symlink
+    // to a file outside before the open -- the window an attacker would use.
+    const racing = (path: string): string => {
+      const real = realpathSync(path);
+      if (!swapped && real === target) {
+        swapped = true;
+        rmSync(target);
+        symlinkSync(outside, target);
+      }
+      return real;
+    };
+    expect(() => readSettleFile(from, racing)).toThrow(/entry 0: could not open bodyFile 'reply\.md' \((ELOOP|EMLINK)\)|changed between its check and its open/);
+    expect(swapped).toBe(true);
+  });
+
+  it("refuses a bodyFile whose real path moved between the check and the read", () => {
+    const from = batch([{ thread: "T1", bodyFile: "reply.md" }], { "reply.md": "ok" });
+    const target = join(realpathSync(join(from, "..")), "reply.md");
+    let calls = 0;
+    // The second resolution of the same real path answers differently: the
+    // re-check after fstat must notice.
+    const drifting = (path: string): string => {
+      const real = realpathSync(path);
+      if (real === target) calls += 1;
+      return real === target && calls > 1 ? `${target}.moved` : real;
+    };
+    expect(() => readSettleFile(from, drifting)).toThrow(/changed between its check and its open/);
+  });
+
+  it("names a --from directory that cannot be resolved, at exit 2", () => {
+    const from = batch([{ thread: "T1", body: "a" }]);
+    const failing = (path: string): string => {
+      if (path === join(from, "..")) throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      return realpathSync(path);
+    };
+    expect(() => readSettleFile(from, failing)).toThrow(/could not resolve the directory of --from '.*batch\.json' \(ENOENT\)/);
   });
 });

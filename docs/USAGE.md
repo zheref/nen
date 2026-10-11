@@ -2743,13 +2743,27 @@ publicly under your identity, so a batch file must not be able to publish an
 arbitrary local file. An absolute `bodyFile` and any `..` segment are refused;
 the path is resolved to its **real** path (after symlinks) and must sit inside
 the batch file's own real directory, so a symlink that escapes is refused by
-where it lands; the file is opened non-blocking and `fstat`ed through the
-descriptor it is then read from, and must be a regular file — a directory, a
-device, a FIFO or a socket is refused. The real path is what `bodyFrom`
+where it lands; any path segment starting with `.` — `.env`, `.git/config`,
+`.npmrc` — is refused, in the name given and in the real path (a lone `.` is
+allowed); the file is opened non-blocking and without following a final
+symlink (`O_NOFOLLOW`; not on Windows), `fstat`ed through the descriptor it is
+then read from, and must be a regular file with exactly one hard link — a
+directory, a device, a FIFO, a socket or a hard link to a file elsewhere is
+refused. After the open, the descriptor's device and inode must still match
+what sits at the real path, which must not be a symlink and must still
+resolve to itself; that guarantees the bytes read are those of a regular file
+that sat inside the directory when those checks ran. It does **not** guard
+against a writer who swaps a directory component above the file between the
+open and the re-checks and restores it after (Node has no `openat`); such a
+writer can already edit the batch file itself. The real path is what `bodyFrom`
 reports, and every human entry line names it relative to the batch
 (`[body: replies/declined.md]`). Every body, inline or read, is at most
 **65536 characters** (GitHub's comment limit; a file too large to fit is
-refused without being read).
+refused without being read). Every body is also checked, by content, for a
+credential's shape — the one content detector nen has, the redactor its own
+stderr echoes go through: a GitHub token (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`),
+a fine-grained `github_pat_`, or a URL's `user:secret@` — and refused without
+echoing the match. It is not a general secret scanner.
 
 The `--from` file itself is read the same way: opened non-blocking,
 `fstat`ed through the descriptor it is read from, required to be a regular
@@ -2762,7 +2776,8 @@ file that cannot be read, is not a regular file, is over 4 MiB, is not JSON, is 
 that is not an object, carries a key other than those three, has no non-empty
 `thread` or one carrying a control character, has both or neither of
 `body`/`bodyFile`, names a `bodyFile` refused as above or unreadable, or whose
-body is empty, whitespace-only or over the limit; a thread id named
+body is empty, whitespace-only, over the limit or carrying a credential's
+shape; a `--from` whose directory cannot be resolved; a thread id named
 twice; and — after the one walk — an id this pull request does not carry
 (each named, with the thread count). An unknown id is `2` here where `reply`
 and `resolve` answer `4`: in a batch it is a defect in the file, refused before

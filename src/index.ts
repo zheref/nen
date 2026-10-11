@@ -53,6 +53,7 @@
 
 import { parseArgs, UsageError } from "./cli/args.js";
 import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
+import { plainLine } from "./cli/plain.js";
 import { COMMANDS, findCommand } from "./cli/registry.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
@@ -411,7 +412,12 @@ export async function runFamily(
       seams,
     });
   } catch (error) {
-    io.err(`${PROGRAM} ${family.name}: ${error instanceof Error ? error.message : String(error)}`);
+    // EVERY LINE THROUGH `plainLine` (Feitan F3): a thrown message routinely
+    // quotes gh's or git's stderr, a branch name or a file's contents -- text
+    // nen did not write -- and a terminal executes a control character in it.
+    // Line breaks the message itself carries are kept; each line is cleaned.
+    const message = error instanceof Error ? error.message : String(error);
+    io.err(`${PROGRAM} ${family.name}: ${message.split(/\r?\n/).map((line): string => plainLine(line)).join("\n")}`);
     if (error instanceof VerbUsageError) {
       io.err(`Run '${PROGRAM} ${family.name} --help'.`);
       return 2;
