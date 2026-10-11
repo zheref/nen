@@ -22,7 +22,7 @@
 // do the reading and hand the outcome here.
 
 import { SchemaError } from "../schema/errors.js";
-import { parseCheckExclusions, type DeclaredCheckExclusion } from "../schema/gates.js";
+import { parseCheckExclusions, parseGatesText, type DeclaredCheckExclusion } from "../schema/gates.js";
 
 /** What reading `nen/gates.json` at the base produced. */
 export type BaseGatesRead =
@@ -113,14 +113,9 @@ export function exclusionsAtBase(
   let exclusions: DeclaredCheckExclusion[] = [];
   if (read.kind === "failed") return refused(`the base could not be read (${read.message})`);
   if (read.kind === "read") {
-    let value: unknown;
     try {
-      value = JSON.parse(read.text);
-    } catch (error) {
-      return refused(`${source} is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
-    }
-    try {
-      exclusions = parseCheckExclusions(source, value);
+      // Duplicate keys and invalid JSON are refused here too (Feitan F3).
+      exclusions = parseCheckExclusions(source, parseGatesText(source, read.text));
     } catch (error) {
       if (error instanceof SchemaError) return refused(error.message);
       throw error;

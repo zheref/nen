@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { BANKAI_REPO } from "../schema/fixtures/paths.js";
-import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import type { PrSnapshot } from "./fetch.js";
 import type { CheckRun, Review } from "../github/types.js";
 import { nextBlocker } from "./blocker.js";
