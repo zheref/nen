@@ -280,6 +280,9 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr next-blocker --target o/r --pr 1 --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen backlog fetch --target o/r").classification).toBe("read-only");
     expect(classifyCommand("nen wc classify").classification).toBe("read-only");
+    // zheref/nen#299: wc worktree fetches, adds, moves and copies unless --dry-run.
+    expect(classifyCommand("nen wc worktree --repo . --name kg --base main").classification).toBe("mutating");
+    expect(classifyCommand("nen wc worktree --repo . --name kg --base main --dry-run --json").classification).toBe("read-only");
     expect(classifyCommand("nen loop slots --report r.json").classification).toBe("read-only");
     expect(classifyCommand("nen stop --gate G4").classification).toBe("read-only");
     expect(classifyCommand("nen schema check").classification).toBe("read-only");
