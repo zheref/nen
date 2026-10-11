@@ -24,8 +24,15 @@
 // THE WRITE IS ATOMIC: a temporary file in the SAME directory (so the rename
 // never crosses a filesystem), flushed, then renamed over the target. A reader
 // sees the old file or the new one, never half of either.
+//
+// WHAT THE RE-CHECKS RELY ON, PER PLATFORM. On POSIX they compare device and
+// inode numbers (of the target and of the temporary file) and the
+// `realpath.native` of each path. On win32 there is no O_NOFOLLOW and inode
+// identity is not reliable, so the re-checks there rely on the
+// `realpath.native` comparisons -- the directory and the file still resolve to
+// themselves -- and on size and timestamps; they claim nothing more.
 
-import { closeSync, fchmodSync, fsyncSync, lstatSync, openSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, openSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { containedOn } from "./paths.js";
@@ -237,6 +244,12 @@ export interface CheckedTarget {
   readonly ino: number;
   readonly size: number;
   readonly mtimeMs: number;
+  /**
+   * The status-change time as read (Feitan N3): no call can set it, so a
+   * same-size edit with the modification time restored -- or a chmod -- is
+   * still seen.
+   */
+  readonly ctimeMs: number;
   /** The permission bits to give the new file. */
   readonly mode: number;
 }
@@ -248,6 +261,7 @@ export class TargetChangedError extends Error {}
 export interface AtomicHooks {
   readonly afterOpen?: (temp: string) => void;
   readonly beforeRename?: (temp: string) => void;
+  readonly afterRename?: (temp: string) => void;
 }
 
 /** The signals during which a temporary file is guarded. */
@@ -301,6 +315,33 @@ function assertUnchanged(target: CheckedTarget): void {
   const now = lstatSync(target.path);
   if (!now.isFile() || now.dev !== target.dev || now.ino !== target.ino) fail("it is another file now");
   if (now.size !== target.size || now.mtimeMs !== target.mtimeMs) fail("it was modified since it was read -- a lost update");
+  if (now.ctimeMs !== target.ctimeMs) fail("its status changed since it was read (ctime) -- an edit with its modification time restored, or a chmod");
+}
+
+/**
+ * The temporary file is still the one this run opened, where it was opened
+ * (Feitan N1): its directory still resolves to the target's, and the path
+ * still names the file behind `fd`. A directory swapped at the open would
+ * otherwise put the temporary file -- and the new text -- outside the
+ * repository while the path checks looked at the inside one.
+ */
+function assertTempInPlace(temp: string, where: string, opened: { readonly dev: number; readonly ino: number }): void {
+  let realDir: string;
+  try {
+    realDir = realpathSync.native(dirname(temp));
+  } catch (error) {
+    throw new TargetChangedError(`the temporary file's directory no longer resolves (${error instanceof Error ? ((error as NodeJS.ErrnoException).code ?? error.message) : String(error)}); refusing to write`);
+  }
+  if (realDir !== where) throw new TargetChangedError(`the temporary file's directory now resolves to ${realDir}, not ${where}; refusing to write`);
+  let now;
+  try {
+    now = lstatSync(temp);
+  } catch {
+    throw new TargetChangedError(`the temporary file ${temp} is gone; refusing to write`);
+  }
+  if (!now.isFile() || now.dev !== opened.dev || now.ino !== opened.ino) {
+    throw new TargetChangedError(`${temp} is no longer the temporary file this run opened; refusing to write`);
+  }
 }
 
 /**
@@ -312,45 +353,76 @@ function assertUnchanged(target: CheckedTarget): void {
  * containment and recorded the identity of the file it read; this function
  * re-asserts all of that -- the directory and the file still resolve to
  * themselves, the file is still contained, and it is still the same file,
- * unmodified -- right after the temporary file is opened and again right
- * before the rename. Any mismatch removes the temporary file and throws
- * `TargetChangedError`; nothing is replaced.
+ * unmodified -- and that the temporary file is still the one it opened, in
+ * that directory (Feitan N1): once BEFORE any content is written, so a refused
+ * run leaves no orphan holding the text, and again right before the rename.
+ * The descriptor stays open through the second check, and every failure path
+ * truncates it before unlinking, so wherever the file really is, it holds
+ * nothing. After the rename the target must be the temporary file's inode, or
+ * the write is reported as having landed elsewhere.
  *
  * THE WINDOW THAT REMAINS. Between the last check and `rename(2)` a few
- * microseconds remain in which a path component could be swapped: Node has no
- * `renameat`/`openat`, so the rename cannot be pinned to the directory the
- * check saw. A process able to win that race can already write the repository
- * it is racing.
+ * microseconds remain in which a path component could be swapped, and a
+ * process that wins that race COULD make the rename write outside the
+ * repository. Closing it needs `renameat(2)` against a directory descriptor,
+ * which Node does not offer. The post-rename identity check reports such a
+ * landing; it cannot undo it.
  */
 export function writeFileAtomic(target: CheckedTarget, text: string, hooks: AtomicHooks = {}): void {
-  const temp = join(dirname(target.path), `.${basename(target.path)}.nen-${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
+  const where = dirname(target.path);
+  const temp = join(where, `.${basename(target.path)}.nen-${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
   const fd = openSync(temp, "wx", target.mode);
+  const opened = fstatSync(fd);
   const dispose = guardTempFile(temp);
+  // ON WIN32 an open file cannot be renamed, so the descriptor is closed just
+  // before the rename there; on POSIX it stays open until the rename is done.
+  const closeBeforeRename = target.platform === "win32";
+  let open = true;
   let renamed = false;
   try {
-    try {
-      // THE MODE IS SET, NOT REQUESTED (Nobunaga N1): open()'s mode is masked
-      // by the umask, so a 0664 file would come back 0644.
-      fchmodSync(fd, target.mode);
-      hooks.afterOpen?.(temp);
-      assertUnchanged(target);
-      writeFileSync(fd, text, "utf8");
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    hooks.beforeRename?.(temp);
+    // THE MODE IS SET, NOT REQUESTED (Nobunaga N1): open()'s mode is masked
+    // by the umask, so a 0664 file would come back 0644.
+    fchmodSync(fd, target.mode);
+    hooks.afterOpen?.(temp);
+    assertTempInPlace(temp, where, opened);
     assertUnchanged(target);
+    writeFileSync(fd, text, "utf8");
+    fsyncSync(fd);
+    hooks.beforeRename?.(temp);
+    assertTempInPlace(temp, where, opened);
+    assertUnchanged(target);
+    if (closeBeforeRename) {
+      closeSync(fd);
+      open = false;
+    }
     renameSync(temp, target.path);
     renamed = true;
+    hooks.afterRename?.(temp);
+    const landed = lstatSync(target.path);
+    if (landed.dev !== opened.dev || landed.ino !== opened.ino) {
+      throw new TargetChangedError(`the new text landed elsewhere: ${target.path} is not the file this run wrote after the rename`);
+    }
   } finally {
     if (!renamed) {
+      if (open) {
+        try {
+          ftruncateSync(fd, 0);
+        } catch {
+          // Nothing more can be done through the descriptor.
+        }
+      }
       try {
         unlinkSync(temp);
       } catch {
         // Already gone; the original is untouched either way.
       }
     }
-    dispose();
+    if (open) closeSync(fd);
+    // DISPOSED ON THE NEXT TURN, NOT HERE (Feitan N2): this write is
+    // synchronous, so a signal that arrived during it is still pending. Were
+    // the listener removed now, the pending signal would find none and the
+    // process would exit 0; on the next turn it runs the guard's handler,
+    // which re-raises it, and the process dies of the signal.
+    setImmediate(dispose);
   }
 }

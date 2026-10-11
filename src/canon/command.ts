@@ -105,9 +105,14 @@ usage:
       checked for containment and re-read from that checked path only AFTER
       the tag resolution's git calls; the write is atomic (a temporary file
       beside it, renamed over it) and re-asserts, after opening the temporary
-      file and before the rename, that the checked file is still itself,
-      still inside --repo and unmodified -- a window of microseconds before
-      rename(2) remains, as Node has no renameat. Every refusal comes before
+      file (before any content) and before the rename, that the checked file
+      is still itself, still inside --repo and unmodified (size, mtime and
+      ctime), and that the temporary file is still the one opened, in that
+      directory; a failure truncates it before unlinking, and a rename that
+      landed elsewhere is reported. A window of microseconds before rename(2)
+      remains, in which a winner of the race could write outside the
+      repository: Node has no renameat. On win32 the re-checks rely on the
+      realpath comparisons, size and timestamps only. Every refusal comes before
       any write:
         exit 2  <tag> is not tag-shaped (v<major>.<minor>[.<patch>][-pre]);
                 an empty or foreign flag (--ref, --rules-dir, ...); a
@@ -588,7 +593,7 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
   if (changed && !dryRun) {
     try {
       writeFileAtomic(
-        { path: realRegistry, root: realRoot, platform, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, mode: stat.mode & 0o777 },
+        { path: realRegistry, root: realRoot, platform, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, mode: stat.mode & 0o777 },
         edit.text,
       );
     } catch (error) {

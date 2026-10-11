@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { guardTempFile, JsonSpanError, locateJsonValue, memberCount, rewritePin, TargetChangedError, writeFileAtomic, type CheckedTarget } from "./pin-write.js";
@@ -125,7 +126,7 @@ describe("rewritePin -- one value changes, and nothing else", () => {
 function checked(path: string, over: Partial<CheckedTarget> = {}): CheckedTarget {
   const real = realpathSync.native(path);
   const stat = lstatSync(real);
-  return { path: real, root: realpathSync.native(dirname(real)), platform: process.platform, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, mode: stat.mode & 0o777, ...over };
+  return { path: real, root: realpathSync.native(dirname(real)), platform: process.platform, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, mode: stat.mode & 0o777, ...over };
 }
 
 describe("writeFileAtomic -- a temporary file beside the CHECKED target, renamed over it", () => {
@@ -182,6 +183,91 @@ describe("writeFileAtomic -- a temporary file beside the CHECKED target, renamed
     rmSync(path);
   }, "beforeRename", /it no longer resolves: ENOENT/);
 
+  // Feitan N3: no call can set ctime, so it sees what size and mtime cannot.
+  it.skipIf(process.platform === "win32")("refuses a same-size edit whose modification time was restored, and a chmod, by ctime", () => {
+    for (const change of ["edit", "chmod"] as const) {
+      const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-ctime-")));
+      const path = join(dir, "repos.json");
+      writeFileSync(path, "old\n");
+      // A whole-second mtime, so restoring it is exact.
+      utimesSync(path, 1_000_000_000, 1_000_000_000);
+      const target = checked(path);
+      const hook = (): void => {
+        if (change === "edit") {
+          writeFileSync(path, "odd\n");
+          utimesSync(path, 1_000_000_000, 1_000_000_000);
+          expect(lstatSync(path).mtimeMs).toBe(target.mtimeMs);
+          expect(lstatSync(path).size).toBe(target.size);
+        } else {
+          chmodSync(path, 0o600);
+        }
+      };
+      expect(() => writeFileAtomic(target, "new\n", { beforeRename: hook }), change).toThrow(/its status changed since it was read \(ctime\)/);
+      expect(readdirSync(dir)).toEqual(["repos.json"]);
+    }
+  });
+
+  // Feitan N1: the temporary file must stay the one opened, where it was opened.
+  it.skipIf(process.platform === "win32")("refuses before writing any content when the temporary file is swapped out at the open, leaving the moved file empty", () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-temp-open-")));
+    mkdirSync(join(dir, "repo"));
+    const path = join(dir, "repo", "repos.json");
+    writeFileSync(path, "old\n");
+    const outside = join(dir, "outside.tmp");
+    const swap = (temp: string): void => {
+      renameSync(temp, outside);
+      writeFileSync(temp, "");
+    };
+    // Refused BEFORE the content: the write never reaches its second check
+    // with the text sitting in the moved file.
+    let contentWritten = false;
+    const reached = (): void => {
+      contentWritten = readFileSync(outside, "utf8") !== "";
+    };
+    expect(() => writeFileAtomic(checked(path, { root: join(dir, "repo") }), "new\n", { afterOpen: swap, beforeRename: reached })).toThrow(/is no longer the temporary file this run opened/);
+    expect(contentWritten).toBe(false);
+    expect(readFileSync(outside, "utf8")).toBe("");
+    expect(readFileSync(path, "utf8")).toBe("old\n");
+  });
+
+  it.skipIf(process.platform === "win32")("truncates the opened file before unlinking when it is swapped out after the write, so no copy of the text survives", () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-temp-rename-")));
+    mkdirSync(join(dir, "repo"));
+    const path = join(dir, "repo", "repos.json");
+    writeFileSync(path, "old\n");
+    const outside = join(dir, "outside.tmp");
+    expect(() =>
+      writeFileAtomic(checked(path, { root: join(dir, "repo") }), "new\n", { beforeRename: (temp): void => renameSync(temp, outside) }),
+    ).toThrow(/temporary file .* is gone/);
+    expect(readFileSync(outside, "utf8")).toBe("");
+    expect(readFileSync(path, "utf8")).toBe("old\n");
+  });
+
+  it.skipIf(process.platform === "win32")("refuses when the temporary file's directory resolves elsewhere", () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-temp-dir-")));
+    mkdirSync(join(dir, "repo"));
+    const path = join(dir, "repo", "repos.json");
+    writeFileSync(path, "old\n");
+    const swap = (): void => {
+      renameSync(join(dir, "repo"), join(dir, "moved"));
+      symlinkSync(join(dir, "moved"), join(dir, "repo"));
+    };
+    expect(() => writeFileAtomic(checked(path, { root: join(dir, "repo") }), "new\n", { afterOpen: swap })).toThrow(/directory now resolves to .*moved/);
+    expect(readFileSync(join(dir, "moved", "repos.json"), "utf8")).toBe("old\n");
+    expect(readdirSync(join(dir, "moved"))).toEqual(["repos.json"]);
+  });
+
+  it.skipIf(process.platform === "win32")("reports a rename that landed elsewhere", () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-landed-")));
+    const path = join(dir, "repos.json");
+    writeFileSync(path, "old\n");
+    const swap = (): void => {
+      renameSync(path, join(dir, "kept"));
+      writeFileSync(path, "another\n");
+    };
+    expect(() => writeFileAtomic(checked(path), "new\n", { afterRename: swap })).toThrow(/landed elsewhere/);
+  });
+
   it.skipIf(process.platform === "win32")("refuses a target outside the root it was checked against", () => {
     const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-root-")));
     const path = join(dir, "repos.json");
@@ -203,15 +289,48 @@ describe("writeFileAtomic -- a temporary file beside the CHECKED target, renamed
 });
 
 describe("guardTempFile -- an interrupt never leaves the temporary file behind (Feitan F6)", () => {
-  it("is installed for the write's window and removed after it", () => {
+  it("is installed for the write's window and removed on the NEXT turn, not before it (Feitan N2)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-pin-guard-window-"));
     const path = join(dir, "repos.json");
     writeFileSync(path, "old\n");
+    // The earlier tests' guards are disposed on their own next turn; drain it.
+    await new Promise((done): void => void setImmediate(done));
     const before = process.listenerCount("SIGINT");
     let during = -1;
     writeFileAtomic(checked(path), "new\n", { beforeRename: (): void => void (during = process.listenerCount("SIGINT")) });
     expect(during).toBe(before + 1);
+    // Still there when the write returns, so a pending signal finds it.
+    expect(process.listenerCount("SIGINT")).toBe(before + 1);
+    await new Promise((done): void => void setImmediate(done));
     expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  // THE REAL SIGNAL, in a child process: raised during the write, it must
+  // still kill the process -- not be swallowed into an exit 0 -- and leave
+  // no temporary file.
+  const BUN = spawnSync("bun", ["--version"]).status === 0;
+  it.skipIf(process.platform === "win32" || !BUN)("dies of a SIGINT raised during the write, leaving no temporary file (Feitan N2)", () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-guard-child-")));
+    const path = join(dir, "repos.json");
+    writeFileSync(path, "old\n");
+    const module = join(process.cwd(), "src", "canon", "pin-write.ts");
+    const script = [
+      `import { lstatSync } from "node:fs";`,
+      `import { writeFileAtomic } from ${JSON.stringify(module)};`,
+      `const path = ${JSON.stringify(path)};`,
+      `const s = lstatSync(path);`,
+      `const target = { path, root: ${JSON.stringify(dir)}, platform: process.platform, dev: s.dev, ino: s.ino, size: s.size, mtimeMs: s.mtimeMs, ctimeMs: s.ctimeMs, mode: s.mode & 0o777 };`,
+      `writeFileAtomic(target, "new\\n", { beforeRename: () => process.kill(process.pid, "SIGINT") });`,
+      `console.log("returned");`,
+      `setTimeout(() => console.log("survived"), 200);`,
+    ].join("\n");
+    const scriptPath = join(dir, "child.ts");
+    writeFileSync(scriptPath, script);
+    const result = spawnSync("bun", [scriptPath], { encoding: "utf8", cwd: process.cwd() });
+    expect(result.stdout, result.stderr).toContain("returned");
+    expect(result.stdout).not.toContain("survived");
+    expect(result.signal === "SIGINT" || result.status === 130, `status ${String(result.status)} signal ${String(result.signal)}`).toBe(true);
+    expect(readdirSync(dir).filter((name): boolean => name.endsWith(".tmp"))).toEqual([]);
   });
 
   it("removes the temporary file on SIGINT and re-raises the signal", () => {
