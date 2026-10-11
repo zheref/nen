@@ -52,7 +52,6 @@
 // not work" want different reactions from a caller.
 
 import { parseArgs, UsageError } from "./cli/args.js";
-import { plainLine } from "./cli/plain.js";
 import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
 import { plainLine } from "./cli/plain.js";
 import { COMMANDS, findCommand } from "./cli/registry.js";
