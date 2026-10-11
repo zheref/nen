@@ -547,8 +547,10 @@ describe("manageWorktree over scripted git", () => {
       { match: `git ls-tree -z --full-tree --end-of-options ${TIP}`, result: { stdout: "" } },
       ...registeredAt(TIP),
     ];
+    // The HOST's platform: the record's containment check compares real
+    // temp paths, which only the host's own rules spell (zheref/nen#397).
     const outcome = manageWorktree(
-      new ScriptedSeams(script, { platform: "linux" }),
+      new ScriptedSeams(script),
       CORE,
       { ...OPTIONS, copyFromCore: [nfc] },
       fakeFs({ [join(CORE, "café")]: "dir", [join(CORE, "café", "app.env")]: "file", [PARENT]: "dir", [PATH]: "dir", [join(PATH, "café")]: "dir" }),
@@ -573,6 +575,102 @@ describe("manageWorktree over scripted git", () => {
     expect(outcome.kind).toBe("refused");
     expect(outcome.report).toMatchObject({ state: "refused", reached: "moved", head: null });
     expect(outcome.report.refusal?.kind).toBe("copy-destination");
+  });
+});
+
+describe("win32 path identity, on any host: git's C:/ spelling against the native C:\\ one (zheref/nen#397)", () => {
+  // git prints every worktree path with forward slashes on Windows; node's
+  // join and realpathSync.native spell the same directory with backslashes.
+  // A registration must always match its own worktree, so every comparison
+  // goes through samePath/containedOn with the win32 rules.
+  const GIT_CORE = "C:/Users/nen/core";
+  const NATIVE_CORE = "C:\\Users\\nen\\core";
+  const W_PARENT = join(NATIVE_CORE, ".nen", "worktrees");
+  const W_PATH = join(W_PARENT, "kg");
+  const gitPath = (...parts: string[]): string => [GIT_CORE, ...parts].join("/");
+
+  /** The native filesystem's answer: forward slashes become backslashes, as realpathSync.native spells them. */
+  function winFs(entries: Readonly<Record<string, Kind>>): FakeFs {
+    const fs = fakeFs(entries);
+    return { ...fs, realpath: (path: string): string => path.replace(/\//g, "\\") };
+  }
+
+  function winBase(): ScriptedCall[] {
+    return [
+      { match: "git rev-parse --path-format=absolute --git-common-dir", result: { stdout: `${gitPath(".git")}\n` } },
+      { match: "git rev-parse --is-bare-repository", result: { stdout: "false\n" } },
+      { match: "git check-ref-format --branch main", result: { stdout: "main\n" } },
+      { match: "git remote get-url origin", result: { stdout: "https://example.invalid/x.git\n" } },
+      { match: FETCH, result: {} },
+      { match: "git rev-parse --verify --quiet --end-of-options refs/remotes/origin/main^{commit}", result: { stdout: `${TIP}\n` } },
+      { match: "git check-ignore -q -- .nen/worktrees/kg", result: { code: 0 } },
+    ];
+  }
+  const porcelain = (...records: string[][]): string =>
+    [[`worktree ${GIT_CORE}`, `HEAD ${OLD}`, "branch refs/heads/main"], ...records].map((record) => [...record, ""].join("\n")).join("\n");
+  const seams = (script: readonly ScriptedCall[]): ScriptedSeams => new ScriptedSeams(script, { platform: "win32" });
+
+  it("a registration printed as c:/... (lower-case drive, forward slashes) matches its own worktree and is reused", () => {
+    const outcome = manageWorktree(
+      seams([
+        ...winBase(),
+        { match: "git worktree list --porcelain", result: { stdout: porcelain([`worktree c:/Users/nen/core/.nen/worktrees/kg`, `HEAD ${TIP}`, "detached"]) } },
+        { match: "git rev-parse --path-format=absolute --show-toplevel", result: { stdout: `${gitPath(".nen", "worktrees", "kg")}\n` } },
+        { match: "git status --porcelain=v1 -z --untracked-files=all", result: { stdout: "" } },
+        { match: "git rev-parse --verify HEAD", result: { stdout: `${TIP}\n` } },
+        { match: "git symbolic-ref -q HEAD", result: { code: 1 } },
+        { match: "git rev-parse --path-format=absolute --git-dir", result: { stdout: `${gitPath(".git", "worktrees", "kg")}\n` } },
+      ]),
+      "C:\\Users\\nen\\core",
+      OPTIONS,
+      winFs({ [W_PARENT]: "dir", [W_PATH]: "dir" }),
+    );
+    expect(outcome.kind, JSON.stringify(outcome.report.refusal)).toBe("done");
+    expect(outcome.report).toMatchObject({ state: "reused", core: NATIVE_CORE });
+  });
+
+  it("a vanished registration printed as C:/... is dropped by git's own spelling and recreated -- never read as stray or locked", () => {
+    const script = seams([
+      ...winBase(),
+      { match: "git worktree list --porcelain", result: { stdout: porcelain([`worktree ${gitPath(".nen", "worktrees", "kg")}`, `HEAD ${TIP}`, "detached", "prunable gitdir file points to non-existent location"]) } },
+      { match: `git worktree remove --force --end-of-options ${gitPath(".nen", "worktrees", "kg")}`, result: {} },
+      { match: `git worktree add --quiet --detach --end-of-options ${W_PATH} ${TIP}`, result: {} },
+      { match: "git rev-parse --path-format=absolute --git-dir", result: { stdout: `${gitPath(".git", "worktrees", "kg")}\n` } },
+    ]);
+    const outcome = manageWorktree(script, NATIVE_CORE, OPTIONS, winFs({ [W_PARENT]: "dir" }));
+    expect(outcome.kind, JSON.stringify(outcome.report.refusal)).toBe("done");
+    expect(outcome.report).toMatchObject({ state: "recreated", dropped: true });
+  });
+
+  it("a LOCKED vanished registration printed as C:/... is matched, and refused as locked", () => {
+    const outcome = manageWorktree(
+      seams([...winBase(), { match: "git worktree list --porcelain", result: { stdout: porcelain([`worktree ${gitPath(".nen", "worktrees", "kg")}`, `HEAD ${TIP}`, "detached", "locked"]) } }]),
+      NATIVE_CORE,
+      OPTIONS,
+      winFs({ [W_PARENT]: "dir" }),
+    );
+    expect(outcome.report.refusal?.kind).toBe("locked");
+  });
+
+  it("a C:/... registration 'KG' is the name alias of --name kg", () => {
+    const outcome = manageWorktree(
+      seams([...winBase(), { match: "git worktree list --porcelain", result: { stdout: porcelain([`worktree ${gitPath(".nen", "worktrees", "KG")}`, `HEAD ${TIP}`, "detached"]) } }]),
+      NATIVE_CORE,
+      OPTIONS,
+      winFs({ [W_PARENT]: "dir" }),
+    );
+    expect(outcome.report.refusal?.kind).toBe("name-alias");
+  });
+
+  it("a C:/... sibling 'kg2' never matches 'kg': a stray directory at kg is refused, naming the sibling", () => {
+    const outcome = manageWorktree(
+      seams([...winBase(), { match: "git worktree list --porcelain", result: { stdout: porcelain([`worktree ${gitPath(".nen", "worktrees", "kg2")}`, `HEAD ${TIP}`, "detached"]) } }]),
+      NATIVE_CORE,
+      OPTIONS,
+      winFs({ [W_PARENT]: "dir", [W_PATH]: "dir" }),
+    );
+    expect(outcome.report.refusal?.kind).toBe("stray");
+    expect(outcome.report.refusal?.reason).toContain("kg2");
   });
 });
 
