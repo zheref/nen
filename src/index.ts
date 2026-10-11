@@ -58,6 +58,7 @@ import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
 import { WORKFLOW_FILE } from "./schema/workflow.js";
 import { GATES_FILE } from "./schema/source.js";
+import { runSchemaSet, SCHEMA_SET_FLAGS } from "./schema/set.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
@@ -90,6 +91,8 @@ commands:
 
   schema check              Load and validate the target repository's taxonomy
                             files and report each one's verdict.
+  schema set                Write one value into a nen/ JSON declaration, by
+                            JSON pointer, validated by its loader first.
 
 ${COMMANDS.map((command): string => `  ${command.name.padEnd(24)}${command.summary}`).join("\n")}
 
@@ -142,6 +145,20 @@ them does not have to discover any of these empirically:
      facts, and only the first says anything about the release you asked for.`;
 
 const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
+${PROGRAM} schema set --repo <path> --file <nen/...json> --pointer <JSON pointer> --value <JSON> [--dry-run] [--json]
+
+'$'-PREFIXED KEYS ARE METADATA, in every declaration file nen reads
+(nen/labels.json, nen/repos.json, nen/colors.yml, nen/gates.json,
+nen/contract.json, nen/workflow.json, nen/decisions.json) and at every level:
+a '$' key never fails validation, whatever its value, and no loader reads one
+as data -- one inside a map a loader walks key by key is never an entry of it.
+Where a loader keeps a block verbatim and reads none of it (contract.json's
+project.profiles, a decision row's surfaces overrides, the raw form) the '$'
+keys inside are kept with it; a string '$schema' at the root of contract.json
+or workflow.json is echoed as the document's declared schema. This is a
+published contract (zheref/nen#338), held by a test per file.
+
+schema check
 
 Load and validate the target repository's nen/ files -- nen/labels.json,
 nen/repos.json, the optional nen/colors.yml, nen/gates.json, the optional
@@ -174,7 +191,45 @@ key this build does not read.
                    current directory.
   --json           Machine-readable output:
                    { root, ok, checks: [...], deprecations: [...],
-                     unknownKeys: [...] }.`;
+                     unknownKeys: [...] }.
+
+schema set
+
+Write ONE value into a JSON declaration under nen/ (labels, repos, gates,
+contract, workflow or decisions -- never colors.yml, which is YAML), touching
+no other byte: formatting, key order, every other member and every '$' note
+stay as they are. Two edits only: an existing scalar (string, number, boolean,
+null) is replaced in place, or a member an existing object lacks is added as
+its last member, in that object's own style. Replacing an object or an array,
+appending to an array, and creating an object on the way are refused; so is a
+pointer through a '$'-prefixed segment, and a path through an object that
+repeats the member it names. The file must exist (scaffold init writes them).
+
+The edited text is validated by that file's own loader BEFORE anything is
+written: a result the loader refuses is exit 1, with the loader's message,
+and the file untouched. A write goes to a temporary file beside the target,
+given its mode, renamed over it after the target's identity and containment
+are re-checked; a file that resolves outside --repo or changed after it was
+read is refused. After the write the file is read back through the loader.
+
+  --file <nen/...json>  The declaration, repo-relative, as listed above.
+  --pointer <pointer>   An RFC 6901 JSON pointer: /coverage/minimum,
+                        /reviewers/0/name; '~1' is '/', '~0' is '~'.
+  --value <JSON>        The value, as JSON: --value 85, --value true,
+                        --value '"main"', --value null. A negative number is
+                        --value=-1. An object or array is accepted only where
+                        a member is added.
+  --dry-run             Validate and print before -> after; write nothing.
+  --json                { contract: "nen.schema.set/v0.1", ok, file, pointer,
+                          op: "replace"|"add", before (null for an add),
+                          after, changed, dryRun, written, target, line,
+                          failure: null|{ code, message } }
+
+Exit: 0 set, already that value, or a dry run; 1 refused (no-file,
+outside-repo, file-changed, not-json, refused-edit, invalid, write-failed,
+read-back-mismatch -- nothing written unless the code is read-back-mismatch);
+2 usage (a missing flag, a file that is not a JSON declaration, a malformed
+pointer, a '$' segment, a value that is not JSON).`;
 
 // The flags the TWO pre-registry commands share. Left as one spec because
 // those two are parsed together, exactly as they always were; a registry
@@ -233,6 +288,14 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
   const family = findCommand(head.rest[0] ?? "");
   if (family !== undefined) {
     return runFamily(family, head.rest, head.values["repo"] ?? null, head.booleans.has("json"), io, seams);
+  }
+  // `schema set` READS ITS OWN FLAGS (zheref/nen#338). `schema` is
+  // pre-registry, and its `check` shares the GLOBAL_FLAGS spec below with
+  // `bootstrap`; widening that spec for set's --file/--pointer/--value would
+  // let `schema check --file x` parse and be silently ignored. So `set` is
+  // parsed against its own spec here, before that one.
+  if (head.rest[0] === "schema" && head.rest[1] === "set") {
+    return schemaSet(head.rest, head.values["repo"] ?? null, head.booleans.has("json"), io, seams);
   }
 
   let parsed;
@@ -316,7 +379,7 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
 
       case "schema":
         if (subcommand !== "check") {
-          io.err(`${PROGRAM}: unknown 'schema' subcommand '${subcommand ?? "(none)"}'. Try 'schema check'.`);
+          io.err(`${PROGRAM}: unknown 'schema' subcommand '${subcommand ?? "(none)"}'. Try 'schema check' or 'schema set'.`);
           return 2;
         }
         return schemaCheck(repoFlag, json, io);
@@ -446,6 +509,30 @@ function bootstrap(
   }
   if (result.code === BootstrapExit.OK && result.path !== "") io.out(result.path);
   return result.code;
+}
+
+function schemaSet(argv: readonly string[], headRepo: string | null, headJson: boolean, io: Io, seams: Seams): number {
+  let args;
+  try {
+    args = parseArgs(argv, SCHEMA_SET_FLAGS);
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.err(`${PROGRAM} schema set: ${error.message}`);
+      io.err(`Run '${PROGRAM} schema --help'.`);
+      return 2;
+    }
+    throw error;
+  }
+  if (args.booleans.has("help")) {
+    io.out(SCHEMA_USAGE);
+    return 0;
+  }
+  try {
+    return runSchemaSet(args, args.values["repo"] ?? headRepo, args.booleans.has("json") || headJson, io, seams.platform);
+  } catch (error) {
+    io.err(`${PROGRAM} schema set: ${error instanceof Error ? error.message : String(error)}`);
+    return error instanceof RepoRootError ? 2 : 1;
+  }
 }
 
 function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {

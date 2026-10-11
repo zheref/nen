@@ -26,7 +26,7 @@
 // pin a reader of the marker can reason about, and "cut the tag before
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, type Stats } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
@@ -45,6 +45,7 @@ import { plainLine } from "../cli/plain.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
 import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, resolveCanonTag, type CheckoutFailureCode, type CheckoutResolution, type TagResolution } from "./checkout.js";
 import { JsonSpanError, rewritePin, TargetChangedError, TEMP_PATTERN, writeFileAtomic, type PinEdit } from "./pin-write.js";
+import { checkedTarget, errnoOf, readChecked } from "../edit/atomic.js";
 import {
   CanonMirrorError,
   checkSurface,
@@ -592,10 +593,7 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
   let written = false;
   if (changed && !dryRun) {
     try {
-      writeFileAtomic(
-        { path: realRegistry, root: realRoot, platform, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, mode: stat.mode & 0o777 },
-        edit.text,
-      );
+      writeFileAtomic(checkedTarget(realRegistry, realRoot, platform, stat), edit.text);
     } catch (error) {
       // A FAILED REPLACE IS NAMED (Nobunaga N6): the temporary file is already
       // removed, and the original is untouched. A target that changed after
@@ -668,11 +666,6 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
   return 0;
 }
 
-/** The errno of a filesystem failure, or its message. */
-function errnoOf(error: unknown): string {
-  return error instanceof Error ? ((error as NodeJS.ErrnoException).code ?? error.message) : String(error);
-}
-
 /** `nen/repos.json`'s path and text, through the shared reader (its refusals are SchemaErrors). */
 function readRegistryText(root: string): { readonly path: string; readonly text: string } {
   const read = readSchemaFile(root, REPOS_FILE);
@@ -685,37 +678,6 @@ function parseRegistryJson(path: string, text: string): unknown {
   } catch (error) {
     throw new SchemaError(path, null, `is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
   }
-}
-
-/**
- * Read the CHECKED real path, recording the identity of the file read
- * (Feitan F1): opened without following a final symbolic link, and the path
- * re-resolved after the read must still be itself and still that file. A
- * string is the reason it is not.
- */
-function readChecked(real: string): { readonly text: string; readonly stat: Stats } | string {
-  let fd: number;
-  try {
-    fd = openSync(real, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-  } catch (error) {
-    return `could not be opened as the file that was checked (${errnoOf(error)})`;
-  }
-  let stat: Stats;
-  let text: string;
-  try {
-    stat = fstatSync(fd);
-    text = readFileSync(fd, "utf8");
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    if (realpathSync.native(real) !== real) return "no longer resolves to itself";
-    const now = lstatSync(real);
-    if (now.dev !== stat.dev || now.ino !== stat.ino) return "is another file than the one read";
-  } catch (error) {
-    return `no longer resolves (${errnoOf(error)})`;
-  }
-  return { text, stat };
 }
 
 type Picked = { readonly key: string; readonly index: number; readonly pin: string } | { readonly code: PinWriteFailureCode; readonly message: string };

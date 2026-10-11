@@ -1,0 +1,114 @@
+{
+  "$comment": "TEST FIXTURE (zheref/nen#338) -- the $-metadata guarantee. Every object in this file carries a $-prefixed key named after its own first key and a $note of a different JSON type, so each loader is proved to ignore them as data; declarations.test.ts loads it beside a copy with every $ key stripped and requires the same model. Derived from bankai-repo/nen/labels.json.",
+  "$labels": "metadata named after 'labels'",
+  "labels": [
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:stage/idea",
+      "color": "ededed",
+      "description": "Raw idea awaiting research",
+      "$note": "an annotation, read by no loader"
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:stage/researched",
+      "color": "1d76db",
+      "description": "Epic drafted, awaiting G1 approval",
+      "$note": 7
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:stage/building",
+      "color": "fbca04",
+      "description": "Released to a builder",
+      "$note": true
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:stage/in-review",
+      "color": "d93f0b",
+      "description": "Reviewers reviewing",
+      "$note": null
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:stage/human-review",
+      "color": "b60205",
+      "description": "Waiting on you -- any gate",
+      "$note": {
+        "nested": [
+          "x"
+        ],
+        "$deeper": 1
+      }
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:stage/fulfilled",
+      "color": "006b75",
+      "description": "Closing PR merged. Terminal.",
+      "$note": [
+        "a",
+        2
+      ]
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:severity/critical",
+      "color": "b60205",
+      "description": "Blocks and pages the human immediately",
+      "$note": "an annotation, read by no loader"
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:severity/high",
+      "color": "d93f0b",
+      "description": "Must fix before merge/release",
+      "$note": 7
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:severity/medium",
+      "color": "fbca04",
+      "description": "Fix soon",
+      "$note": true
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:severity/low",
+      "color": "0e8a16",
+      "description": "Nice to fix",
+      "$note": null
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:agent/sasuke",
+      "color": "4527a0",
+      "description": "Owned by Sasuke (Ninja)",
+      "$note": {
+        "nested": [
+          "x"
+        ],
+        "$deeper": 1
+      }
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:agent/tenma",
+      "color": "1565c0",
+      "description": "Owned by Tenma (Knight)",
+      "$note": [
+        "a",
+        2
+      ]
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "bankai:epic",
+      "color": "5319e7",
+      "description": "An epic, delivered on an integration branch",
+      "$note": "an annotation, read by no loader"
+    }
+  ],
+  "$note": 7
+}

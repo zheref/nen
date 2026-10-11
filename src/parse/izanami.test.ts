@@ -290,6 +290,15 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen --version").classification).toBe("read-only");
   });
 
+  it("classifies schema per subcommand: check reads, set is dry-run-gated, anything else is unknown (#338)", () => {
+    expect(classifyCommand("nen schema check --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen schema set --repo . --file nen/workflow.json --pointer /coverage/minimum --value 85 --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen schema set --repo . --file nen/workflow.json --pointer /coverage/minimum --value 85").classification).toBe("mutating");
+    expect(classifyCommand("nen schema set --file nen/workflow.json --pointer /a --value 1 --dry-run=no").classification).toBe("mutating");
+    expect(classifyCommand("nen schema").classification).toBe("unknown");
+    expect(classifyCommand("nen schema list").classification).toBe("unknown");
+  });
+
   it("refuses the always-mutating verbs by name", () => {
     expect(classifyCommand("nen pr cascade-main --repo .").classification).toBe("mutating");
     // --no-push skips only the push step; the fetch+merge it still performs

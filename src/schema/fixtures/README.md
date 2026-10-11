@@ -136,3 +136,12 @@ proved against at `src/shu/fixtures/test-report/`. Both have a README too.
 Nothing under this directory is linted (`eslint.config.js` ignores
 `**/fixtures/**`) or type-checked, and the taxonomy-purity sweep in
 `src/taxonomy-purity.test.ts` excludes it by name.
+
+- `metadata-repo/nen/` — the **`$`-metadata guarantee** ([zheref/nen#338](https://github.com/zheref/nen/issues/338)):
+  every declaration file a loader reads (`labels`, `repos`, `colors.yml`, `gates`, `contract`,
+  `workflow`, `decisions`), each derived from `bankai-repo` (and `workflow.json` from nen's own),
+  with a `$`-prefixed key in **every** object — one named after the object's own first key, so a
+  near-miss guard is exercised, and a `$note` of a different JSON type each time. `colors.yml`
+  carries one at each of its five levels. `src/schema/declarations.test.ts` loads each beside a copy
+  stripped of every `$` key and requires the same model; `src/schema/set.test.ts` edits it and
+  requires every note to survive.

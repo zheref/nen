@@ -1,0 +1,83 @@
+{
+  "$comment": "TEST FIXTURE (zheref/nen#338) -- the $-metadata guarantee. Every object in this file carries a $-prefixed key named after its own first key and a $note of a different JSON type, so each loader is proved to ignore them as data; declarations.test.ts loads it beside a copy with every $ key stripped and requires the same model. Derived from bankai-repo/nen/decisions.json.",
+  "$contract": "metadata named after 'contract'",
+  "contract": "nen.decisions/v0.1",
+  "rows": [
+    {
+      "$id": "metadata named after 'id'",
+      "id": "dirty-tree",
+      "class": "autonomous",
+      "default": "nen shu warmup --carry --branch <branch>",
+      "why": "uncommitted work rides onto the new branch; nothing is discarded",
+      "$note": "an annotation, read by no loader"
+    },
+    {
+      "$id": "metadata named after 'id'",
+      "id": "mode-unknown",
+      "class": "ask-once-per-run",
+      "preferred": [
+        {
+          "$key": "metadata named after 'key'",
+          "key": "A",
+          "label": "Transmuter",
+          "command": "nen label apply <ref> --label machinery --run",
+          "consequence": "built under the machinery lane",
+          "recommended": true,
+          "$note": 7
+        },
+        {
+          "$key": "metadata named after 'key'",
+          "key": "B",
+          "label": "Conjurer",
+          "command": "nen label apply <ref> --label canon --run",
+          "consequence": "built under the canon lane",
+          "$note": true
+        }
+      ],
+      "proposeIssue": true,
+      "surfaces": {
+        "$codex": "metadata named after 'codex'",
+        "codex": {
+          "$picker": "metadata named after 'picker'",
+          "picker": "request_user_input",
+          "$note": null
+        },
+        "$note": {
+          "nested": [
+            "x"
+          ],
+          "$deeper": 1
+        }
+      },
+      "$note": [
+        "a",
+        2
+      ]
+    },
+    {
+      "$id": "metadata named after 'id'",
+      "id": "semantic-conflict",
+      "class": "human-gate",
+      "gate": "G5",
+      "preferred": [
+        {
+          "$key": "metadata named after 'key'",
+          "key": "A",
+          "label": "take ours",
+          "command": "git checkout --ours -- <path>",
+          "$note": "an annotation, read by no loader"
+        },
+        {
+          "$key": "metadata named after 'key'",
+          "key": "B",
+          "label": "take theirs",
+          "command": "git checkout --theirs -- <path>",
+          "$note": 7
+        }
+      ],
+      "proposeIssue": false,
+      "$note": true
+    }
+  ],
+  "$note": null
+}

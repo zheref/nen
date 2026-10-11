@@ -38,6 +38,12 @@
 // defect, it does not prevent one. `grep -rn 'startsWith("$")' src` is the
 // honest answer to "where", and it is a grep rather than a paragraph because
 // only one of those can be right by construction.
+//
+// AND IT IS A PUBLISHED CONTRACT FROM zheref/nen#338: ./declarations.ts states
+// it for every declaration file a loader reads, docs/USAGE.md publishes it, and
+// ./declarations.test.ts holds every loader to it against
+// ./fixtures/metadata-repo/ -- a loader that starts reading or refusing a `$`
+// key fails there, whichever walk it is.
 
 import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -344,8 +350,18 @@ export function readSchemaJson(
   relative: string,
 ): { path: string; value: unknown; location: SchemaLocation; legacy: boolean } {
   const { path, text, location, legacy } = readSchemaFile(repoRoot, relative);
+  return { path, value: parseSchemaJsonText(path, text), location, legacy };
+}
+
+/**
+ * A declaration's TEXT to a value, its failure a path-bearing `SchemaError`.
+ * The one JSON door `readSchemaJson` goes through, exported so a verb that
+ * validates text BEFORE it is on disk (`nen schema set`, ./declarations.ts)
+ * refuses it in the same words a loader would.
+ */
+export function parseSchemaJsonText(path: string, text: string): unknown {
   try {
-    return { path, value: JSON.parse(text) as unknown, location, legacy };
+    return JSON.parse(text) as unknown;
   } catch (error) {
     throw new SchemaError(
       path,

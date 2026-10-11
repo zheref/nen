@@ -1,0 +1,336 @@
+{
+  "$comment": "TEST FIXTURE (zheref/nen#338) -- the $-metadata guarantee. Every object in this file carries a $-prefixed key named after its own first key and a $note of a different JSON type, so each loader is proved to ignore them as data; declarations.test.ts loads it beside a copy with every $ key stripped and requires the same model. Derived from bankai-repo/nen/contract.json.",
+  "$dependency": "metadata named after 'dependency'",
+  "$schema": "nen.contract/v0.1",
+  "dependency": {
+    "$name": "metadata named after 'name'",
+    "name": "nen",
+    "source": "zheref/nen",
+    "repository": "https://github.com/zheref/nen",
+    "minimum": "0.3",
+    "minimum_semantics": "MAJOR.MINOR. While nen's line is 0.x this means >=0.3.0 <0.4.0 EXACTLY -- at major zero the MINOR is the breaking-change vehicle, so a higher minor is out of range in both directions.",
+    "zero_major_caveat": {
+      "$applies_while": "metadata named after 'applies_while'",
+      "$comment": "An unknown key, preserved verbatim and read by nothing in nen. Its presence in this fixture is the proof of that rule.",
+      "applies_while": "the installed and pinned majors are both 0",
+      "rule": "minimum '0.3' resolves to the range >=0.3.0 <0.4.0.",
+      "$note": "an annotation, read by no loader"
+    },
+    "pinned_ref": "v0.3.0",
+    "version_probe": [
+      "nen",
+      "--version"
+    ],
+    "version_probe_output": "a bare semver on stdout, e.g. '0.3.0' -- no 'v' prefix, no other text",
+    "bootstrap": {
+      "$vendored": "metadata named after 'vendored'",
+      "vendored": false,
+      "script_path_in_source": "bootstrap/nen.sh",
+      "url": "https://raw.githubusercontent.com/zheref/nen/v0.3.0/bootstrap/nen.sh",
+      "fetch_must_be_two_step": true,
+      "published_binaries": [
+        "nen-linux-x64",
+        "nen-darwin-arm64",
+        "nen-windows-x64.exe"
+      ],
+      "manifest_asset": "SHA256SUMS",
+      "$note": 7
+    },
+    "no_improvised_fallback": "Unsatisfied means re-pin to pinned_ref and halt. There is no third path.",
+    "$note": true
+  },
+  "project": {
+    "$scenario": "metadata named after 'scenario'",
+    "scenario": "compose-uzf-v2",
+    "lanes": {
+      "$web": "metadata named after 'web'",
+      "web": {
+        "$stack": "metadata named after 'stack'",
+        "stack": "nextjs",
+        "cwd": ".",
+        "$note": null
+      },
+      "android": {
+        "$stack": "metadata named after 'stack'",
+        "stack": "gradle-android",
+        "cwd": "android",
+        "$note": {
+          "nested": [
+            "x"
+          ],
+          "$deeper": 1
+        }
+      },
+      "$note": [
+        "a",
+        2
+      ]
+    },
+    "defaultLane": "web",
+    "toolchain": {
+      "$node": "metadata named after 'node'",
+      "node": {
+        "$version": "metadata named after 'version'",
+        "version": ">=20.19.0",
+        "probe": [
+          "node",
+          "--version"
+        ],
+        "versionFrom": "first-semver-on-stdout",
+        "installer": "verify-only",
+        "why": "A Node install is a system-wide decision with five common answers; nen probes and reports the pin.",
+        "$note": "an annotation, read by no loader"
+      },
+      "pnpm": {
+        "$version": "metadata named after 'version'",
+        "version": "9.15.9",
+        "probe": [
+          "pnpm",
+          "--version"
+        ],
+        "versionFrom": "first-semver-on-stdout",
+        "installer": "corepack",
+        "why": "The packageManager field states it, and corepack is the one install nen performs without reservation.",
+        "$note": 7
+      },
+      "java": {
+        "$version": "metadata named after 'version'",
+        "version": "21",
+        "probe": [
+          "java",
+          "-version"
+        ],
+        "versionFrom": "first-semver-on-stderr",
+        "installer": "verify-only",
+        "why": "java -version writes to stderr. Two JDKs in one tree is the android lane's own problem to order.",
+        "$note": true
+      },
+      "$note": null
+    },
+    "preconditions": {
+      "$web": "metadata named after 'web'",
+      "web": [
+        {
+          "$kind": "metadata named after 'kind'",
+          "kind": "command",
+          "value": [
+            "corepack",
+            "--version"
+          ],
+          "why": "pnpm is activated through corepack as its own step BEFORE the cached install.",
+          "$note": {
+            "nested": [
+              "x"
+            ],
+            "$deeper": 1
+          }
+        },
+        {
+          "$kind": "metadata named after 'kind'",
+          "kind": "path",
+          "value": "node_modules",
+          "why": "nen ASSERTS the install has been run; nen never runs it, because a dependency install executes this project's own postinstall scripts.",
+          "$note": [
+            "a",
+            2
+          ]
+        }
+      ],
+      "android": [
+        {
+          "$kind": "metadata named after 'kind'",
+          "kind": "path",
+          "value": "android/gradlew",
+          "why": "The wrapper is the repository's own Gradle. A repo without one is a finding, not something nen installs around.",
+          "$note": "an annotation, read by no loader"
+        }
+      ],
+      "$note": 7
+    },
+    "verbs": {
+      "$web": "metadata named after 'web'",
+      "web": {
+        "$build": "metadata named after 'build'",
+        "build": {
+          "$exe": "metadata named after 'exe'",
+          "exe": "pnpm",
+          "argv": [
+            "turbo",
+            "run",
+            "build"
+          ],
+          "$note": true
+        },
+        "test": {
+          "$exe": "metadata named after 'exe'",
+          "exe": "pnpm",
+          "argv": [
+            "turbo",
+            "run",
+            "test"
+          ],
+          "$note": null
+        },
+        "lint": {
+          "$steps": "metadata named after 'steps'",
+          "steps": [
+            {
+              "$exe": "metadata named after 'exe'",
+              "exe": "pnpm",
+              "argv": [
+                "exec",
+                "biome",
+                "check",
+                "."
+              ],
+              "$note": {
+                "nested": [
+                  "x"
+                ],
+                "$deeper": 1
+              }
+            },
+            {
+              "$exe": "metadata named after 'exe'",
+              "exe": "pnpm",
+              "argv": [
+                "turbo",
+                "run",
+                "lint"
+              ],
+              "$note": [
+                "a",
+                2
+              ]
+            }
+          ],
+          "why": "Two commands, in order. The second alone misses the repo-wide format check.",
+          "$note": "an annotation, read by no loader"
+        },
+        "dev": {
+          "$exe": "metadata named after 'exe'",
+          "exe": "pnpm",
+          "argv": [
+            "turbo",
+            "run",
+            "dev"
+          ],
+          "$note": 7
+        },
+        "archive": {
+          "$unsupported": "metadata named after 'unsupported'",
+          "unsupported": "no packaging step exists; this lane is a PWA.",
+          "$note": true
+        },
+        "deploy": {
+          "$unsupported": "metadata named after 'unsupported'",
+          "unsupported": "no target is wired; declare one under `targets` first.",
+          "$note": null
+        },
+        "storybook": {
+          "$exe": "metadata named after 'exe'",
+          "exe": "pnpm",
+          "argv": [
+            "run",
+            "storybook"
+          ],
+          "why": "An UNKNOWN verb name, preserved rather than rejected -- the ecosystem's verbs are the repository's to name.",
+          "$note": {
+            "nested": [
+              "x"
+            ],
+            "$deeper": 1
+          }
+        },
+        "$note": [
+          "a",
+          2
+        ]
+      },
+      "android": {
+        "$build": "metadata named after 'build'",
+        "build": {
+          "$exe": "metadata named after 'exe'",
+          "exe": "{gw}",
+          "argv": [
+            "assembleDebug"
+          ],
+          "$note": "an annotation, read by no loader"
+        },
+        "test": {
+          "$exe": "metadata named after 'exe'",
+          "exe": "{gw}",
+          "argv": [
+            "testDebugUnitTest"
+          ],
+          "$note": 7
+        },
+        "release": {
+          "$unsupported": "metadata named after 'unsupported'",
+          "unsupported": "store publication is a human's, behind credentials nen never holds.",
+          "$note": true
+        },
+        "$note": null
+      },
+      "$note": {
+        "nested": [
+          "x"
+        ],
+        "$deeper": 1
+      }
+    },
+    "profiles": {
+      "$ci": "metadata named after 'ci'",
+      "ci": {
+        "$web": "metadata named after 'web'",
+        "$comment": "Preserved verbatim; no verb reads profiles yet.",
+        "web": {
+          "$build": "metadata named after 'build'",
+          "build": {
+            "$exe": "metadata named after 'exe'",
+            "exe": "pnpm",
+            "argv": [
+              "turbo",
+              "run",
+              "build",
+              "--filter=...[origin/main]"
+            ],
+            "$note": [
+              "a",
+              2
+            ]
+          },
+          "$note": "an annotation, read by no loader"
+        },
+        "$note": 7
+      },
+      "$note": true
+    },
+    "targets": {
+      "$note": null
+    },
+    "hosts": {
+      "$*": "metadata named after '*'",
+      "*": [
+        "darwin",
+        "linux",
+        "win32"
+      ],
+      "build": [
+        "darwin",
+        "linux"
+      ],
+      "$note": {
+        "nested": [
+          "x"
+        ],
+        "$deeper": 1
+      }
+    },
+    "$note": [
+      "a",
+      2
+    ]
+  },
+  "$note": "an annotation, read by no loader"
+}

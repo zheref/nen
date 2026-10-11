@@ -343,6 +343,7 @@ verb does by default:
 | [`canon mirror generate`](#nen-canon-mirror-generate) | no | `--dry-run` | writes into every declared surface's rules location under `--repo`; the dry form reports every write, deletion and foreign file and performs none. [`canon mirror check`](#nen-canon-mirror-check) writes nothing but its `--markdown-out` table (creating that table's parent directory) and refuses `--dry-run` |
 | [`surface install`](#nen-surface-install) | no | `--dry-run` | prints every directory, link and CLI step it would make and makes none; it **still runs** the read-only probes (`git rev-parse --show-toplevel`, `claude --version`, `codex plugin list`, `codex plugin marketplace list`) so every refusal answers exactly as the real run would ([#298](https://github.com/zheref/nen/issues/298)) |
 | [`canon pin --write`](#nen-canon-pin) | no | `--dry-run` | moves `maintained_tools[].pinned` in the consumer's `nen/repos.json`, one value and no other byte; the dry form prints the pin before → after and writes nothing, after the same tag resolution in the canon checkout (read-only git, no fetch). The bare `canon pin` reads and writes nothing, so it classifies **read-only** in izanami's table; `--write` classifies **mutating** and `--write --dry-run` **read-only** again ([#291](https://github.com/zheref/nen/issues/291)) |
+| [`schema set`](#nen-schema-set) | no | `--dry-run` | writes one value into a `nen/` JSON declaration, no other byte; the dry form reads the file, validates the edited text through its loader and prints before → after, writing nothing. In izanami's table `schema` is keyed by subcommand from [#338](https://github.com/zheref/nen/issues/338): `schema check` **read-only**, `schema set` **mutating** and `schema set --dry-run` **read-only**; a bare `nen schema` or another subcommand classifies **unknown** |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
@@ -376,6 +377,39 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, read at the pull request's base) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
+
+<a id="metadata-keys"></a>
+
+#### `$`-prefixed keys are metadata
+
+**A published contract, from [#338](https://github.com/zheref/nen/issues/338).**
+In every declaration file nen reads — `nen/labels.json`, `nen/repos.json`,
+`nen/colors.yml`, `nen/gates.json`, `nen/contract.json`, `nen/workflow.json`
+and `nen/decisions.json` — every key whose name starts with `$`, at **any**
+level, is metadata: a note for a person or another tool (`$comment`,
+`$schema`, an option list beside a value). Two things hold for it, whatever
+its value and whatever follows the `$`:
+
+- **Validation never fails because of it.** A `$` key is never an unknown
+  key (`nen/gates.json` refuses unknown keys, and admits these), never a
+  near-miss of a known one (`$base` is not a misspelling of `base`), and
+  never type-checked.
+- **No loader reads it as data.** A `$` key inside a map a loader walks key
+  by key — `product_codes`, a contract's `lanes` or `targets`, a colour
+  category's `values` — is never an entry of that map, and one inside a
+  colour value is never an `extra` field.
+
+Two uses are not data and are stated rather than hidden: where a loader keeps
+a block **verbatim** and reads none of it (`nen/contract.json`'s
+`project.profiles`, a decision row's `surfaces.<name>` override, and the raw
+form a loader carries for round-tripping), the `$` keys inside travel with
+it; and a **string** `$schema` at the root of `nen/contract.json` or
+`nen/workflow.json` is echoed as the document's declared schema.
+`src/schema/declarations.test.ts` holds each file to this against
+`src/schema/fixtures/metadata-repo/` — a `$` key in every object, compared
+with the same file stripped of them — and fails if a loader changes its mind.
+[`schema set`](#nen-schema-set) refuses a pointer through a `$` segment: the
+notes are the author's.
 
 `nen/` holds committed configuration only. Generated output goes to a
 dot-prefixed, gitignored `.nen/`; the two have opposite lifetimes, and the
@@ -760,6 +794,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
 | [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
+| [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
@@ -5857,7 +5892,9 @@ for it. The `ledger:` path prints absolute; `/work/nen` stands in for the checko
 Loads and validates the files a target repository is expected to carry under `nen/` —
 `nen/labels.json`, `nen/repos.json`, `nen/colors.yml`, `nen/gates.json` and the optional
 `nen/contract.json` — and reports each file's own verdict. `nen` has no built-in copy of any of them to
-fall back on: an absent or malformed file is reported by name, never guessed past.
+fall back on: an absent or malformed file is reported by name, never guessed past. `schema set` writes
+one value into one of them, validated by the same loader before the write. In all of them a
+`$`-prefixed key is [metadata](#metadata-keys).
 
 ### `nen schema check`
 
@@ -6042,6 +6079,102 @@ repository: /tmp/site
 exit 0 — the leftover never fails the report.
 (from a real run against a scratch copy of the bundled fixture, with `schemas/labels.json` left in
 place after `nen/labels.json` was copied in; the absolute path is elided to `/tmp/site`)
+
+### `nen schema set`
+
+Writes **one** value into one of this repository's JSON declarations — `nen/labels.json`,
+`nen/repos.json`, `nen/gates.json`, `nen/contract.json`, `nen/workflow.json` or `nen/decisions.json`
+— addressed by an [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901) JSON pointer, and touches no
+other byte: the file's indentation, key order, other members, [`$`-prefixed
+notes](#metadata-keys) and trailing newline stay exactly as they were. It is the verb
+form of a hand edit followed by [`schema check`](#nen-schema-check), with the check moved **before**
+the write ([#338](https://github.com/zheref/nen/issues/338)).
+
+**Two edits, and only two.** An existing **scalar** (a string, a number, a boolean or `null`) is
+replaced in place; a member an existing **object** does not carry is added as its **last** member,
+written in that object's own style (the whitespace before its last member and its own `key: value`
+separator; an empty object is expanded one indentation unit past its line in a multi-line file).
+Refused, each at exit `1` naming why: replacing an object or an array, appending to an array
+(`-` or an index past the end), a missing member before the last step (no object is created on the
+way), and a path through an object that **repeats** the member it names — `JSON.parse` keeps only the
+last of two equal keys, so the value a reader sees and the one a reviewer reads could differ. A
+pointer through a `$`-prefixed segment is refused at exit `2`: those keys are metadata, and the
+author's. `nen/colors.yml` is refused at exit `2` too — it is YAML, and this is a JSON text edit.
+The file must exist; `schema set` never creates one ([`scaffold init`](#nen-scaffold-init) does).
+
+**Validated by the loader before the write.** The edited text is passed to the same parse that
+file's loader applies — the function every other verb reads the file through — before the disk is
+touched. A result it refuses is exit `1` with the loader's own message, pointer and all, and the
+file is not written. The edit itself is proved first: the new text must parse to the old document
+with that one value set, and any other difference refuses it.
+
+**The write is the one [`canon pin --write`](#nen-canon-pin) uses** (`src/edit/atomic.ts`). The
+declaration is resolved to its real path, which must be inside `--repo` (a link out of the repository
+is refused, a link inside is written through); it is read without following a final link, recording
+its identity; and it is replaced through a temporary file beside it (`.<name>.nen-<pid>-<hex>.tmp`),
+given the original's permission bits, after the directory and file are checked again to still be
+themselves, still contained, and unmodified since the read. A file that changed in between is
+refused, never overwritten. After the write the file is read back **through its loader** and the
+pointer must read the value asked for.
+
+**Usage**
+
+```text
+nen schema set --repo <path> --file <nen/...json> --pointer <JSON pointer> --value <JSON> [--dry-run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
+| `--file <nen/…json>` | yes | The declaration, repo-relative, spelled as listed above. | Anything else, including `nen/colors.yml`, is exit `2` naming the list. |
+| `--pointer <pointer>` | yes | An RFC 6901 pointer: `/coverage/minimum`, `/reviewers/0/name`. | `~1` is `/` and `~0` is `~` in a segment. `''` (the whole document), a segment starting with `$`, and a stray `~` are exit `2`. |
+| `--value <JSON>` | yes | The value, as JSON. | `--value 85`, `--value true`, `--value null`, `--value '"main"'`; a negative number is `--value=-1`. Not JSON, a number JSON cannot write back, or an integer past 2^53 is exit `2`. An object or array is accepted, and is refused by the edit unless it is being added as a new member. |
+| `--dry-run` | no (boolean) | Validate and print `before -> after`; write nothing. | The file is still read, and the result still validated. |
+| `--json` | no (boolean) | Machine-readable output. | Below. |
+
+**Output and exit codes** — human rendering, five lines through `plainLine`: `file: <file> (<real
+path>)`, `pointer: <pointer> (line <n>)`, `change: <before> -> <after>` (`(absent) -> …  (added)` for a
+new member, `(unchanged)` when the value is already that), `validated: <file>'s loader accepts the
+result`, and `written: <real path>, read back: <pointer> is <after>` — or `written: nothing (--dry-run)`
+/ `written: nothing (<pointer> is already <after>)`. `--json` (`nen.schema.set/v0.1`):
+
+```json
+{ "contract": "nen.schema.set/v0.1", "ok": true, "file": "nen/workflow.json",
+  "pointer": "/coverage/minimum", "op": "replace", "before": 80, "after": 85,
+  "changed": true, "dryRun": false, "written": true,
+  "target": "/path/to/repo/nen/workflow.json", "line": 8, "failure": null }
+```
+
+`op` is `replace` or `add`; `before` is `null` for an `add` (the member was absent — `op` says so).
+`line` is where the replaced literal sat, or where the added member now sits. A refusal at exit `1`
+prints `{ contract, ok: false, file, pointer, written: false, failure: { code, message } }` under
+`--json` and the message on stderr. Exit `0` set, already that value, or a dry run; `1` refused —
+`failure.code` one of `no-file`, `outside-repo`, `file-changed`, `not-json`, `refused-edit`, `invalid`
+(the loader refused the result), `write-failed`, `read-back-mismatch` — with nothing written except on
+`read-back-mismatch`, which says so; `2` usage, nothing read.
+
+**Example**
+
+```bash
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /coverage/minimum --value 85 --dry-run
+```
+```text
+file: nen/workflow.json (/tmp/site/nen/workflow.json)
+pointer: /coverage/minimum (line 8)
+change: 80 -> 85
+validated: nen/workflow.json's loader accepts the result
+written: nothing (--dry-run); would write /tmp/site/nen/workflow.json
+```
+```bash
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /coverage/minimum --value '"high"'
+```
+```text
+nen schema set: /tmp/site/nen/workflow.json: at coverage.minimum, expected a number, got "high" -- that is nen/workflow.json with /coverage/minimum set to "high", as its loader reads it; nothing was written.
+```
+exit 1. (both from real runs against a scratch copy of this repository's own `nen/workflow.json`; the
+absolute path is elided to `/tmp/site`)
 
 <a id="family-color"></a>
 

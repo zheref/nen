@@ -466,7 +466,8 @@ they compose into. The families group roughly as:
   `install`, `status`, `apply`: classifying issues on two axes as labels),
   `direct` (`registry`, `resolve`, `answer`: which model, surface and effort an issue's
   classification calls for),
-  `schema check`, `color`, `repo`, `ref`
+  `schema` (`check`, `set`: validate the declarations, or write one value
+  into one by JSON pointer), `color`, `repo`, `ref`
 - **Release mechanics** — `release`, `changelog`, `tag`, `fanout`, `run`
 - **Issue & idea filing** — `issue`, `idea`
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`

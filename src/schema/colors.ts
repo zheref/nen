@@ -84,6 +84,11 @@ export function parseColorVocabulary(path: string, parsed: YamlValue): ColorVoca
   const categories: ColorCategory[] = [];
 
   for (const [categoryName, rawCategory] of Object.entries(rawCategories)) {
+    // A `$`-PREFIXED KEY IS METADATA (zheref/nen#338, ./declarations.ts): a
+    // note inside the map of categories is not a category, one inside a
+    // `values` map is not a value, and one inside a value is not an `extra`
+    // field a renderer could pick up.
+    if (categoryName.startsWith("$")) continue;
     const categoryPointer = `categories.${categoryName}`;
     const category = requireRecord(path, categoryPointer, rawCategory);
     const scope = readOptionalText(path, `${categoryPointer}.scope`, category["scope"]);
@@ -113,6 +118,7 @@ export function parseColorVocabulary(path: string, parsed: YamlValue): ColorVoca
     const rawValues = requireRecord(path, `${categoryPointer}.values`, category["values"]);
     const values: ColorValue[] = [];
     for (const [valueName, rawValue] of Object.entries(rawValues)) {
+      if (valueName.startsWith("$")) continue;
       const valuePointer = `${categoryPointer}.values.${valueName}`;
       if (!isRecord(rawValue)) {
         throw new SchemaError(
@@ -131,7 +137,7 @@ export function parseColorVocabulary(path: string, parsed: YamlValue): ColorVoca
       }
       const extra: Record<string, YamlValue> = {};
       for (const [key, item] of Object.entries(rawValue)) {
-        if (!KNOWN_VALUE_FIELDS.has(key)) extra[key] = item as YamlValue;
+        if (!KNOWN_VALUE_FIELDS.has(key) && !key.startsWith("$")) extra[key] = item as YamlValue;
       }
       values.push({
         name: valueName,
@@ -193,6 +199,11 @@ export function parseColorVocabulary(path: string, parsed: YamlValue): ColorVoca
 
 export function loadColorVocabulary(repoRoot: string): ColorVocabulary {
   const { path, text } = readSchemaFile(repoRoot, COLORS_FILE);
+  return parseColorsText(path, text);
+}
+
+/** `nen/colors.yml` text to a vocabulary: the loader's own parse, for text not (yet) on disk. */
+export function parseColorsText(path: string, text: string): ColorVocabulary {
   let parsed: YamlValue;
   try {
     parsed = parseYaml(text);

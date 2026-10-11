@@ -1522,9 +1522,20 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
 // exhaustiveness test can require NEN_VERB_TABLE's keys to equal the registry
 // EXACTLY -- folding these in would let a stale registry entry hide behind a
 // pre-registry name.
-export const NEN_PRE_REGISTRY_TABLE: Readonly<Record<string, NenVerbPolicy>> = {
+//
+// `schema` IS KEYED BY SUBCOMMAND FROM zheref/nen#338, the one pre-registry
+// row that is: `check` reads, and `set` writes a declaration unless
+// `--dry-run` is given -- whose form validates and prints, writing nothing.
+// A bare `nen schema` (or another subcommand) classifies unknown, as any
+// subcommand this table has not classified does.
+export const NEN_PRE_REGISTRY_TABLE: Readonly<Record<string, NenVerbPolicy | NenFamilyEntry>> = {
   bootstrap: MUT("downloads and writes a verified binary into the cache"),
-  schema: RO("loads and validates the taxonomy files -- reads only"),
+  schema: {
+    subcommands: {
+      check: RO("loads and validates the taxonomy files -- reads only"),
+      set: DRY("writes one value into a nen/ declaration unless --dry-run is given, which validates and prints before -> after and writes nothing"),
+    },
+  },
   version: RO("prints the version"),
 };
 
@@ -1743,10 +1754,10 @@ function classifyNenInvocation(raw: string): ClassifyResult {
 
   const family = tokens[index] ?? "";
   const pre = NEN_PRE_REGISTRY_TABLE[family];
-  if (pre !== undefined) {
+  if (pre !== undefined && "kind" in pre) {
     return unprovableVerbPath(tokens, index) ?? evaluateNenPolicy(pre, `nen ${family}`, tokens, lineFaithful);
   }
-  const entry = NEN_VERB_TABLE[family];
+  const entry = pre ?? NEN_VERB_TABLE[family];
   if (entry === undefined) {
     return nenUnknown(
       `'nen ${family}' is not a verb family this table classifies -- an unclassified verb is never assumed safe`,
