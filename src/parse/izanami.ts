@@ -1011,6 +1011,11 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // all, or a caller that classifies before running (the limbo path) refuses
       // it as unclassified rather than reading the pin it exists to read.
       pin: RO("reads the canon pin from the consumer's registry; writes nothing"),
+      // Resolves where the canon checkout is from the consumer's declaration
+      // and the environment, then verifies it with read-only git calls
+      // (rev-parse, remote get-url, status --porcelain). It fetches nothing
+      // and moves no checkout (zheref/nen#294).
+      checkout: RO("resolves and verifies the canon checkout with read-only git; fetches and writes nothing"),
       // DRY, not MUT: --dry-run reports every write and performs none, so the
       // dry form is a read and belongs inside a watch. The old row also named
       // --out-dir, a flag this verb no longer takes -- it writes into the

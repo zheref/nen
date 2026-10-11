@@ -766,3 +766,134 @@ describe("nen canon mirror -- the scenario is held to the plain-token rule the m
     expect(result.code, result.err.join("\n")).toBe(0);
   });
 });
+
+describe("nen canon checkout + mirror's checkout form -- the refusals that come before any git call (zheref/nen#294)", () => {
+  it("refuses --rules-dir beside the checkout form, and neither form, at exit 2 by name", async () => {
+    const fx = fixture();
+    const both = await capture(mirrorArgs("check", fx, ["--stack-dir", "handbooks/stacks", "--leaf", "rules"]), fx.root);
+    expect(both.code).toBe(2);
+    expect(both.err.join("\n")).toMatch(/give one or the other, never both/);
+    const withCheckout = await capture(mirrorArgs("check", fx, ["--canon-checkout", "/x"]), fx.root);
+    expect(withCheckout.code).toBe(2);
+    const neither = mirrorArgs("check", fx).filter((arg, index, all): boolean => arg !== "--rules-dir" && all[index - 1] !== "--rules-dir");
+    const none = await capture(neither, fx.root);
+    expect(none.code).toBe(2);
+    expect(none.err.join("\n")).toMatch(/--rules-dir is required, or --stack-dir <dir> and --leaf <name> together/);
+    const half = await capture([...neither, "--stack-dir", "handbooks/stacks"], fx.root);
+    expect(half.code).toBe(2);
+    expect(half.err.join("\n")).toMatch(/Missing: --leaf\./);
+  });
+
+  it("refuses an unresolvable checkout at exit 2 on check -- never drift's 1 -- naming the code and the verb that shows every step", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const argv = unpinnedArgs("check", fx).filter((arg, index, all): boolean => arg !== "--rules-dir" && all[index - 1] !== "--rules-dir");
+    const result = await capture([...argv, "--stack-dir", "handbooks/stacks", "--leaf", "rules"], fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/the canon checkout did not resolve \(unresolvable\): no canon checkout for owner\/handbooks@v1\.2\.0.*Run 'nen canon checkout --repo /);
+  });
+
+  it("canon checkout: exit 1 with a JSON failure document when nothing resolves; exit 2 on a missing --repo, a foreign flag or an empty --canon-checkout", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const result = await capture(["canon", "checkout", "--json"], fx.root);
+    expect(result.code).toBe(1);
+    expect(json(result)).toMatchObject({ contract: "nen.canon.checkout/v0.1", ok: false, source: "owner/handbooks", ref: "v1.2.0", path: null, resolvedFrom: null, verified: null, failure: { code: "unresolvable" } });
+    expect(result.err.join("\n")).toMatch(/^nen: unresolvable: /);
+    const text = await capture(["canon", "checkout"], fx.root);
+    expect(text.out).toEqual(expect.arrayContaining(["source: owner/handbooks@v1.2.0", "checkout: (unresolved)", "  passed over: flag --canon-checkout (not given)"]));
+    expect((await capture(["canon", "checkout"], null)).code).toBe(2);
+    const foreign = await capture(["canon", "checkout", "--rules-dir", "x"], fx.root);
+    expect(foreign.code).toBe(2);
+    expect(foreign.err.join("\n")).toMatch(/--rules-dir is not read by 'canon checkout'/);
+    expect((await capture(["canon", "checkout", "--canon-checkout", ""], fx.root)).code).toBe(2);
+  });
+
+  it("canon checkout: exit 2 when there is no pin to resolve a source and ref from", async () => {
+    const fx = fixture();
+    const result = await capture(["canon", "checkout"], fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/--source not given/);
+  });
+});
+
+describe("Nobunaga round 1 -- the registry and flag findings (zheref/nen#294)", () => {
+  /** The mirror args in the checkout form, --source/--ref and --rules-dir dropped. */
+  function checkoutFormArgs(sub: "generate" | "check", fx: Fixture, extra: readonly string[] = []): string[] {
+    const argv = unpinnedArgs(sub, fx).filter((arg, index, all): boolean => arg !== "--rules-dir" && all[index - 1] !== "--rules-dir");
+    return [...argv, "--stack-dir", "handbooks/stacks", "--leaf", "rules", ...extra];
+  }
+  function writeRaw(root: string, registry: unknown): void {
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "repos.json"), JSON.stringify(registry));
+  }
+
+  it("N5: a malformed registry is exit 2 on generate and check -- never drift's 1 -- through the pin and through the checkout declaration", async () => {
+    const fx = fixture();
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: 3 }] });
+    for (const sub of ["generate", "check"] as const) {
+      const viaPin = await capture(checkoutFormArgs(sub, fx), fx.root);
+      expect(viaPin.code, viaPin.err.join("\n")).toBe(2);
+      expect(viaPin.err.join("\n")).toMatch(/maintained_tools\[0\]\.pinned/);
+    }
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", checkout_env: "/not/a/name" }] });
+    for (const sub of ["generate", "check"] as const) {
+      const viaDeclaration = await capture(checkoutFormArgs(sub, fx, ["--source", "owner/handbooks", "--ref", "v1.2.0"]), fx.root);
+      expect(viaDeclaration.code, viaDeclaration.err.join("\n")).toBe(2);
+      expect(viaDeclaration.err.join("\n")).toMatch(/maintained_tools\[0\]\.checkout_env/);
+    }
+  });
+
+  it("N6: --canon-checkout is refused on 'canon pin' and 'canon resolve'", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const pin = await capture(["canon", "pin", "--canon-checkout", "/x"], fx.root);
+    expect(pin.code).toBe(2);
+    expect(pin.err.join("\n")).toMatch(/--canon-checkout is not read by 'canon pin'/);
+    const resolved = await capture([...resolveArgs({ target: "zheref/KroApple", "always-load": "a.md", "stack-dir": "s" }), "--canon-checkout", "/x"]);
+    expect(resolved.code).toBe(2);
+    expect(resolved.err.join("\n")).toMatch(/--canon-checkout is not read by 'canon resolve'/);
+  });
+
+  it("N11: an absolute --stack-dir is refused before any git call (this harness throws on one)", async () => {
+    const fx = fixture();
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: "v1.2.0", checkout: fx.root }] });
+    const argv = unpinnedArgs("check", fx).filter((arg, index, all): boolean => arg !== "--rules-dir" && all[index - 1] !== "--rules-dir");
+    const result = await capture([...argv, "--stack-dir", "/etc", "--leaf", "rules"], fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/neither may be absolute/);
+  });
+
+  it("N11: --source in another case still finds the declaration recorded for the slug", async () => {
+    const fx = fixture();
+    writeRaw(fx.root, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: "v1.2.0", checkout: "${NEN_TEST_UNSET_VARIABLE}/x" }] });
+    const result = await capture(["canon", "checkout", "--source", "Owner/Handbooks", "--ref", "v1.2.0", "--json"], fx.root);
+    expect(result.code).toBe(1);
+    expect(json(result)).toMatchObject({ failure: { code: "bad-template" } });
+  });
+});
+
+describe("Nobunaga round 2 -- canon checkout on a malformed registry (R5)", () => {
+  it("exits 2 with the loader's pointer and no --json document", async () => {
+    const fx = fixture();
+    mkdirSync(join(fx.root, "nen"), { recursive: true });
+    writeFileSync(join(fx.root, "nen", "repos.json"), JSON.stringify({ consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: "v1.2.0", checkout_env: "/bad" }] }));
+    const result = await capture(["canon", "checkout", "--json"], fx.root);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/maintained_tools\[0\]\.checkout_env/);
+    expect(result.out).toEqual([]);
+  });
+});
+
+describe("Copilot round 1 -- the pin is found whatever the --source case (E)", () => {
+  it("reads the recorded ref for a --source given in another case, on mirror and on canon pin", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0" });
+    const generated = await capture([...unpinnedArgs("generate", fx, ["--surfaces", "claude-code", "--source", "Owner/Handbooks", "--dry-run"]), "--json"], fx.root);
+    expect(generated.code, generated.err.join("\n")).toBe(0);
+    expect(json(generated)).toMatchObject({ ref: "v1.2.0" });
+    const pinned = await capture(["canon", "pin", "--source", "OWNER/OTHER"], fx.root);
+    expect(pinned.code, pinned.err.join("\n")).toBe(0);
+    expect(pinned.out[1]).toBe("ref: v3.0.0");
+  });
+});
