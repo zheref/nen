@@ -96,6 +96,16 @@ export interface CheckRun {
   // excludeCheckRun() can match on (CON-36 self-run carve-out,
   // bankai-core#708).
   readonly detailsUrl: string | null;
+  // The check run's REST id (GraphQL `databaseId`) and the slug of the app
+  // that created its suite (`checkSuite.app.slug`). Read ONLY by `nen pr
+  // ready`'s runner diagnosis (zheref/nen#224, Feitan round-3 R1) to bind an
+  // Actions job to THIS entry: an Actions check run's id IS its job's id and
+  // its app is `github-actions`, so a third-party check whose `detailsUrl`
+  // merely names some Actions job is not that job. OPTIONAL: absent (or null)
+  // when unread -- never part of a verdict, so an unreadable value never fails
+  // the rollup parse.
+  readonly databaseId?: number | null;
+  readonly appSlug?: string | null;
 }
 
 // A legacy commit status ("StatusContext") in the same rollup.

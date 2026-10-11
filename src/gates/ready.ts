@@ -342,6 +342,7 @@ import {
   unapprovedApprovers,
   uncheckedChecks,
   unmatchedExcludeCheckNames,
+  waitingCheckEntries,
   type DeclaredExclusionOutcome,
   type EarlierHeadCheck,
   type OwedRound,
@@ -361,6 +362,7 @@ import {
 } from "../github/parse.js";
 import { untilText, type GateIdentities } from "../schema/gates.js";
 import { exactLoginPattern } from "../schema/pattern.js";
+import type { RollupEntry } from "../github/types.js";
 
 // ── tiny jq equivalents ──────────────────────────────────────────────────────
 //
@@ -693,6 +695,15 @@ export interface EvaluationContext {
    * declares neither gets the evaluation it got before. Never a conjunct.
    */
   readonly roundCounts?: RoundCounts;
+  /**
+   * The latest checks CON-32(a) still weighs (after every exclusion it
+   * applies) that are WAITING FOR A RUNNER -- ./predicates.ts's
+   * `waitingCheckEntries` -- for `nen pr ready`'s runner-availability
+   * diagnosis (zheref/nen#224). ABSENT when none waits or the rollup could
+   * not be parsed.
+   * Never a conjunct and never part of the verdict.
+   */
+  readonly waitingChecks?: readonly RollupEntry[];
 }
 
 /**
@@ -1673,8 +1684,17 @@ export function evaluateReady(
       declaredExclusions: declared.outcomes,
       settlement: settlementOf(),
       ...(roundCounts === undefined ? {} : { roundCounts }),
+      ...waitingOf(),
     },
   };
+
+  // ABSENT rather than `[]` when nothing waits, so a context with no waiting
+  // check is exactly the context it was before zheref/nen#224.
+  function waitingOf(): { waitingChecks?: readonly RollupEntry[] } {
+    if (!parsedChecks.ok) return {};
+    const waiting = waitingCheckEntries(excludeCheckNames(checksExcludedByRun, excludedNames));
+    return waiting.length === 0 ? {} : { waitingChecks: waiting };
+  }
 
   function settlementOf(): Settlement {
     const settledSet = parsedChecks.ok ? excludeCheckNames(checksExcludedByRun, excludedNames) : null;

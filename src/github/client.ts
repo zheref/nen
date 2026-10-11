@@ -339,6 +339,74 @@ export class GitHubClient {
     });
   }
 
+  // ONE Actions job, raw (`GET actions/jobs/{job_id}`) -- its `labels` are the
+  // `runs-on` labels a runner must carry, its `status` whether a runner has
+  // picked it up. A check run's id IS its job's id, read off `detailsUrl`.
+  // Read by `nen pr ready`'s runner-availability diagnosis only
+  // (zheref/nen#224); every failure throws, and the caller says why. Needs
+  // `actions:read`, the grant the rollup already needs.
+  async actionsJob(repo: RepoRef, jobId: number): Promise<unknown> {
+    const response = await this.octokit.request("GET /repos/{owner}/{repo}/actions/jobs/{job_id}", {
+      owner: repo.owner,
+      repo: repo.repo,
+      job_id: jobId,
+    });
+    return response.data;
+  }
+
+  // ONE page of the repository's self-hosted runners, raw
+  // (`{ total_count, runners }`), page numbers from 1. The walk -- and what a
+  // short or unreadable page means -- is ../pr/runner_stall.ts's, so a
+  // truncated list fails CLOSED there rather than reading as "no runner".
+  // Needs the repository ADMINISTRATION read permission (classic: `repo` on an
+  // admin's token); a 403 is the caller's to name (zheref/nen#224).
+  async repoRunnersPage(repo: RepoRef, page: number): Promise<unknown> {
+    const response = await this.octokit.request("GET /repos/{owner}/{repo}/actions/runners", {
+      owner: repo.owner,
+      repo: repo.repo,
+      per_page: 100,
+      page,
+    });
+    return response.data;
+  }
+
+  // The same page of an ORGANIZATION's self-hosted runners, for a repository
+  // whose owner is an organization (zheref/nen#224). Needs the organization
+  // "Self-hosted runners" read permission (classic: `admin:org`).
+  async orgRunnersPage(org: string, page: number): Promise<unknown> {
+    const response = await this.octokit.request("GET /orgs/{org}/actions/runners", {
+      org,
+      per_page: 100,
+      page,
+    });
+    return response.data;
+  }
+
+  // An account's `type` -- `User` or `Organization` (`GET /users/{username}`,
+  // public) -- so the diagnosis reads organization runners only where an
+  // organization pool can exist, and never reads a 404 from the org endpoint
+  // as "the pool is empty" (zheref/nen#224).
+  async accountType(login: string): Promise<string> {
+    const response = await this.octokit.request("GET /users/{username}", { username: login });
+    const type = (response.data as { type?: unknown }).type;
+    if (typeof type !== "string" || type === "") throw new Error(`GET /users/${login} answered no type`);
+    return type;
+  }
+
+  // The pull request's CHANGED FILES, paginated, raw (`pulls/{n}/files`;
+  // GitHub serves at most 3000). Read by `nen pr ready`'s runner diagnosis
+  // only, to tell whether the PR edits its own workflows (zheref/nen#224,
+  // Feitan F2); the cap and what an unreadable list means are the caller's.
+  // Needs `pull_requests:read`.
+  async pullRequestFiles(repo: RepoRef, prNumber: number): Promise<unknown[]> {
+    return await this.octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+      owner: repo.owner,
+      repo: repo.repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+  }
+
   // The login of the identity this token authenticates as (`GET /user`) --
   // the identity RUNNING the gate, which `pr ready`'s own-request reading
   // compares a pending request's requester against (zheref/nen#240). An App

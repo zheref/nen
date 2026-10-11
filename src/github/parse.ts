@@ -312,6 +312,17 @@ function pendingConclusionUnset(
   return { ...record, conclusion: null };
 }
 
+function checkRunIdentity(record: Record<string, unknown>): { databaseId?: number; appSlug?: string } {
+  const id = record["databaseId"];
+  const suite = record["checkSuite"];
+  const app = typeof suite === "object" && suite !== null ? (suite as Record<string, unknown>)["app"] : undefined;
+  const slug = typeof app === "object" && app !== null ? (app as Record<string, unknown>)["slug"] : undefined;
+  return {
+    ...(typeof id === "number" && Number.isSafeInteger(id) ? { databaseId: id } : {}),
+    ...(typeof slug === "string" && slug !== "" ? { appSlug: slug } : {}),
+  };
+}
+
 function parseCheckRun(
   record: Record<string, unknown>,
   path: string,
@@ -342,6 +353,10 @@ function parseCheckRun(
     startedAt: startedAt.value,
     completedAt: completedAt.value,
     detailsUrl: detailsUrl.value,
+    // Diagnosis-only identity (zheref/nen#224): read leniently and carried
+    // only when readable -- absent means unread -- because nothing a verdict
+    // reads depends on it, and an entry without it is byte-identical to before.
+    ...checkRunIdentity(record),
   });
 }
 
