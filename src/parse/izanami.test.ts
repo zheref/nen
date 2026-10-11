@@ -433,6 +433,28 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen epic next-wave --body-file b.md").classification).toBe("read-only");
   });
 
+  // zheref/nen#291: the bare form reads the pin; --write moves it, and its
+  // write form is dry-run-gated -- the exact --dry-run token, on a faithful
+  // line, or no gate at all.
+  it("canon pin: the read stays a read, --write is a write, and --write --dry-run is a read again", () => {
+    expect(classifyCommand("nen canon pin --repo . --json").classification).toBe("read-only");
+    expect(classifyCommand("nen canon pin --repo . --write v1.3.0").classification).toBe("mutating");
+    expect(classifyCommand("nen canon pin --repo . --write=v1.3.0 --source o/h").classification).toBe("mutating");
+    expect(classifyCommand("nen canon pin --repo . -write v1.3.0").classification).toBe("mutating");
+    expect(classifyCommand("nen canon pin --repo . --write v1.3.0 --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen canon pin --repo . --dry-run --write v1.3.0 --json").classification).toBe("read-only");
+    // A spelling the scan does not match as the gate falls back to mutating,
+    // the dry-run-gated rule.
+    expect(classifyCommand("nen canon pin --repo . --write v1.3.0 -dry-run").classification).toBe("mutating");
+    expect(classifyCommand("nen canon pin --repo . --write v1.3.0 --dry-run=true").classification).toBe("mutating");
+    // An unfaithful line cannot prove its --dry-run is an argument of its own.
+    const quoted = classifyCommand('nen canon pin --repo "." --write v1.3.0 --dry-run');
+    expect(quoted.classification).toBe("mutating");
+    expect(quoted.reason).toMatch(/an unprovable gate on a write is no gate/);
+    // And no other write-flag-gated row reads its write form under --dry-run.
+    expect(classifyCommand("nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d --write --dry-run").classification).toBe("mutating");
+  });
+
   // zheref/nen#286 (N10/F6): both merge forms are mutating in every
   // spelling -- the plan form is not certified watchable either.
   it("classifies 'pr merge --delivery' as mutating with and without --run, --dry-run or a pre-verb --json", () => {
@@ -827,6 +849,7 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
   // spellings being driven through the real parser too.
   const GATED_BASE: Readonly<Record<string, string>> = {
     "canon mirror check": "nen canon mirror check --rules-dir r",
+    "canon pin": "nen canon pin --repo .",
     "changelog collate": "nen changelog collate --version v1 --theme t --changelog C.md --fragment-dir d",
     "classify install": "nen classify install --taxonomy t.json --repo .",
     "direct resolve": "nen direct resolve --registry r.json --taxonomy t.json --repo . --lang a --job b --kind product",

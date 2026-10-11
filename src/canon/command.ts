@@ -26,7 +26,7 @@
 // pin a reader of the marker can reason about, and "cut the tag before
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
@@ -42,7 +42,8 @@ import type { ToolCheckout } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
 import { plainLine } from "../cli/plain.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
-import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, type CheckoutResolution } from "./checkout.js";
+import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, resolveCanonTag, type CheckoutResolution, type TagResolution } from "./checkout.js";
+import { JsonSpanError, rewritePin, writeFileAtomic, type PinEdit } from "./pin-write.js";
 import {
   CanonMirrorError,
   checkSurface,
@@ -61,6 +62,7 @@ import {
 export const GENERATE_CONTRACT = "nen.canon.mirror.generate/v0.1";
 export const CHECK_CONTRACT = "nen.canon.mirror.check/v0.1";
 export const PIN_CONTRACT = "nen.canon.pin/v0.1";
+export const PIN_WRITE_CONTRACT = "nen.canon.pin.write/v0.1";
 
 /** Where a consumer records its canon pin: the `pinned` tag on the canonical repository's `maintained_tools` entry. */
 const PIN_FIELD = "maintained_tools[].pinned";
@@ -90,6 +92,42 @@ usage:
       to hold the mirror to. Exit 1 when no pin is recorded (naming the field
       to record it in), when several maintained tools are pinned and --source
       does not say which, or when the recorded pin is not tag-shaped.
+
+  nen canon pin --repo <consumer> --write <tag> [--source <owner/name>]
+                [--canon-checkout <path>] [--dry-run] [--json]
+      MOVES the pin: writes <tag> into maintained_tools[].pinned of the SAME
+      row the read form answers from -- the last row naming the source,
+      compared case-insensitively -- and changes no other byte of the file:
+      formatting, key order, the other rows and a trailing newline are kept,
+      and the new text is proved to parse to the old document with that one
+      value changed before anything is written. The write is atomic (a
+      temporary file beside it, renamed over it). Every refusal comes before
+      any write:
+        exit 2  <tag> is not tag-shaped (v<major>.<minor>[.<patch>][-pre]);
+                an empty or foreign flag (--ref, --rules-dir, ...); a
+                malformed nen/repos.json (the loader's pointer).
+        exit 1  --repo has no nen/repos.json; no maintained tool is pinned;
+                several are and --source does not say which; --source names
+                a tool with no pin to move; or <tag> does not resolve as
+                refs/tags/<tag> in the canon checkout.
+      THE TAG IS RESOLVED IN THE CANON CHECKOUT, read-only and without a
+      fetch: the checkout is found exactly as 'nen canon checkout' finds it
+      (--canon-checkout, then checkout_env, then checkout), and verified as
+      the top of a work tree whose origin names the source on the consumer's
+      own host, holding refs/tags/<tag>. HEAD need not be on <tag> yet and
+      the tree need not be clean -- that is the regenerate's to verify. A
+      checkout that does not resolve is a refusal too, with its code
+      (unresolvable, tag-missing, wrong-source, ...), never a pin written on
+      trust. Fetch the tag first: nen fetches nothing.
+      --dry-run prints the pin before -> after and writes nothing. A tag
+      equal to the current pin writes nothing and exits 0. After a write the
+      file is read back through the registry loader and the new pin checked;
+      then the CANON MIRROR IS STALE: regenerate it in the same commit with
+      'nen canon mirror generate --repo <consumer> --canon-values <path>
+      (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)', which now
+      defaults to the new pin. --json: { contract: "nen.canon.pin.write/v0.1",
+      source, before, after, changed, dryRun, written, recordedIn, row, line,
+      tag: { commit, checkout, resolvedFrom }, mirror: { stale, regenerate } }.
 
   nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
                      [--canon-checkout <path>] [--json]
@@ -263,6 +301,7 @@ export const canonCommand: Command = {
       "not-mirrored",
       "markdown-out",
       "canon-checkout",
+      "write",
     ],
     booleans: ["dry-run"],
   },
@@ -329,7 +368,9 @@ function pinVerb(context: CommandContext): number {
     context,
     `It is the consumer whose ${REPOS_FILE} records the canonical repository it mirrors and the tag it is pinned to.`,
   );
-  refuseForeignFlags(context, "pin", ["canon-checkout"]);
+  const write = optionalValue(context, "write");
+  if (write !== null) return pinWriteVerb(context, repoFlag, write);
+  refuseForeignFlags(context, "pin", ["canon-checkout", "dry-run"]);
   const root = assertRepoRoot({ repoFlag });
   const sourceFlag = optionalValue(context, "source");
   const registry = readRegistryPins(root);
@@ -378,14 +419,181 @@ function pinVerb(context: CommandContext): number {
 }
 
 /**
+ * `nen canon pin --write <tag>` (zheref/nen#291): move the pin, in the row the
+ * read form answers from, touching nothing else -- every refusal before the
+ * first byte is written.
+ */
+function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): number {
+  // THE FLAGS ANOTHER VERB READS, refused by name. `--ref` above all: the tag
+  // is --write's value, and a second place to say it is a place to disagree.
+  refuseForeignFlags(context, "pin --write", [
+    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "ref", "scenario", "surfaces", "not-mirrored", "markdown-out",
+  ]);
+  const root = assertRepoRoot({ repoFlag });
+  // THE GRAMMAR FIRST: a tag that is not tag-shaped is refused without a read.
+  if (!TAG_RE.test(tag)) {
+    throw new VerbUsageError(
+      plainLine(
+        `--write '${tag}' is not tag-shaped (v<major>.<minor>[.<patch>][-pre]). A canon pin is a TAG of the canonical repository, never a branch or a bare commit (CON-13): cut the tag, then pin the consumer to it.`,
+      ),
+    );
+  }
+  const sourceFlag = optionalValue(context, "source");
+  if (sourceFlag !== null && !looksLikeOwnerSlug(sourceFlag)) {
+    throw new VerbUsageError(plainLine(`--source '${sourceFlag}' is not an owner/name slug.`));
+  }
+  const canonCheckoutFlag = optionalValue(context, "canon-checkout");
+  const dryRun = context.args.booleans.has("dry-run");
+
+  if (!existsSync(join(root, ...REPOS_FILE.split("/")))) {
+    context.io.err(
+      plainLine(`nen: ${root} has no ${REPOS_FILE}, so there is no canon pin to move. Record the canonical handbooks repository under maintained_tools with a 'pinned' tag (${PIN_FIELD}) first; nothing was written.`),
+    );
+    return 1;
+  }
+  let registry;
+  try {
+    registry = loadRepoRegistry(root);
+  } catch (error) {
+    // A MALFORMED REGISTRY IS A QUESTION NEVER ASKED (exit 2, as on 'checkout'
+    // and 'mirror'): there is no row to edit, and no edit is safe to make in
+    // a file the loader cannot read.
+    if (error instanceof SchemaError) throw new VerbUsageError(`${error.message} Nothing was written.`);
+    throw error;
+  }
+  const pins = registry.toolPins;
+  const slugs = Object.keys(pins);
+  let key: string;
+  if (sourceFlag !== null) {
+    const found = pinKey(pins, sourceFlag);
+    if (found === undefined) {
+      context.io.err(
+        plainLine(
+          `nen: ${registry.path} records no 'pinned' tag for ${sourceFlag} under maintained_tools${slugs.length === 0 ? "" : ` (pinned there: ${slugs.join(", ")})`}, so there is no pin to move. --write moves a recorded pin; record the first one (${PIN_FIELD}) by hand. Nothing was written.`,
+        ),
+      );
+      return 1;
+    }
+    key = found;
+  } else if (slugs.length === 1) {
+    key = slugs[0] ?? "";
+  } else if (slugs.length === 0) {
+    context.io.err(
+      plainLine(`nen: ${registry.path} pins no maintained tool, so there is no pin to move. Record the canonical handbooks repository under maintained_tools with a 'pinned' tag (${PIN_FIELD}) first. Nothing was written.`),
+    );
+    return 1;
+  } else {
+    context.io.err(plainLine(`nen: ${registry.path} pins ${slugs.length} maintained tools (${slugs.join(", ")}); name the canonical one with --source. Nothing was written.`));
+    return 1;
+  }
+  const index = registry.toolPinIndexes?.[key];
+  /* c8 ignore next 3 -- the loader sets an index beside every pin */
+  if (index === undefined) {
+    throw new Error(`the registry loader recorded a pin for ${key} without its row`);
+  }
+
+  // THE TAG MUST RESOLVE ON THE CANON, in the checkout nen can find for it.
+  const resolution = resolveCanonTag({ root, source: key, ref: tag, flag: canonCheckoutFlag, declaration: declarationFor(root, key), seams: context.seams });
+  if (resolution.failure !== null || resolution.verified === null) {
+    for (const line of tagLines(resolution)) context.io.err(plainLine(`nen: ${line}`));
+    context.io.err(
+      plainLine(
+        `nen: refusing to pin ${key} to ${tag}: ${resolution.failure?.code ?? "unresolvable"}: ${resolution.failure?.message ?? "no checkout"} A pin is moved only to a tag the canon is seen to carry (refs/tags/${tag}); nothing was written.`,
+      ),
+    );
+    return 1;
+  }
+
+  let edit: PinEdit;
+  try {
+    edit = rewritePin(readFileSync(registry.path, "utf8"), index, tag);
+  } catch (error) {
+    /* c8 ignore next -- rewritePin throws only JsonSpanError on a file the loader just read */
+    if (!(error instanceof JsonSpanError)) throw error;
+    context.io.err(plainLine(`nen: ${registry.path}: ${error.message}. The pin could not be moved as a one-value edit, so nothing was written.`));
+    return 1;
+  }
+  const changed = edit.before !== edit.after;
+  const regenerate = `nen canon mirror generate --repo ${root} --canon-values <path> (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)`;
+
+  let written = false;
+  if (changed && !dryRun) {
+    writeFileAtomic(registry.path, edit.text);
+    written = true;
+    // READ BACK THROUGH THE LOADER: the pin is what the read path now says.
+    const back = loadRepoRegistry(root);
+    if (back.toolPins[key] !== tag || back.toolPinIndexes?.[key] !== index) {
+      /* c8 ignore next 4 -- rewritePin proved the parse before the write */
+      context.io.err(
+        plainLine(`nen: ${registry.path} was written, but the registry now reads ${key}'s pin as '${back.toolPins[key] ?? "(none)"}', not '${tag}'. Inspect the file before committing it.`),
+      );
+      return 1;
+    }
+  }
+
+  const where = `${registry.path} (maintained_tools[${index}].pinned, line ${edit.line})`;
+  const verified = resolution.verified;
+  const lines = [
+    `source: ${key}`,
+    `pin: ${edit.before} -> ${edit.after}${changed ? "" : " (unchanged)"}`,
+    `recorded in: ${where}`,
+    `tag: ${tag} is ${verified.tagCommit.slice(0, 12)} in ${resolution.path ?? "(unresolved)"}${resolution.resolvedFrom === null ? "" : ` (resolved from ${resolution.resolvedFrom.kind} ${resolution.resolvedFrom.from})`}`,
+    !changed ? "written: nothing (the pin is already that tag)" : dryRun ? "written: nothing (--dry-run)" : `written: ${registry.path}, read back: ${key} pinned to ${tag}`,
+  ];
+  if (changed) {
+    lines.push(
+      `mirror: ${written ? "now STALE" : "would be STALE"} -- regenerate it in the same commit: ${regenerate}`,
+    );
+  }
+  emit(
+    context.io,
+    context.json,
+    {
+      contract: PIN_WRITE_CONTRACT,
+      source: key,
+      before: edit.before,
+      after: edit.after,
+      changed,
+      dryRun,
+      written,
+      recordedIn: `${REPOS_FILE} (maintained_tools[${index}].pinned)`,
+      row: index,
+      line: edit.line,
+      tag: { commit: verified.tagCommit, checkout: resolution.path, resolvedFrom: resolution.resolvedFrom },
+      mirror: { stale: changed, regenerate: changed ? regenerate : null },
+    },
+    lines.map(plainLine),
+  );
+  if (written) {
+    context.io.err(plainLine(`nen: note: the canon mirror now names ${edit.before}, not ${tag}: it is STALE. Regenerate it and commit it WITH this pin: ${regenerate}`));
+  }
+  return 0;
+}
+
+/** A tag resolution in text, for a refusal: where the checkout came from, and every step passed over. */
+function tagLines(resolution: TagResolution): string[] {
+  const lines = [`checkout: ${resolution.path ?? "(unresolved)"}`];
+  if (resolution.resolvedFrom !== null) lines.push(`resolved from: ${resolution.resolvedFrom.kind} ${resolution.resolvedFrom.from}`);
+  for (const step of resolution.steps) {
+    if (step.status === "absent") lines.push(`  passed over: ${step.kind} ${step.from} (${step.note ?? "absent"})`);
+  }
+  return lines;
+}
+
+/** The recorded spelling of the slug `source` names, compared case-insensitively; see `pinFor`. */
+function pinKey(pins: Readonly<Record<string, string>>, source: string): string | undefined {
+  const wanted = source.toLowerCase();
+  return Object.keys(pins).find((slug): boolean => slug.toLowerCase() === wanted);
+}
+
+/**
  * The pin recorded for `source`, its slug compared CASE-INSENSITIVELY as
  * GitHub compares slugs (Copilot round 1, E): `--source Owner/Handbooks` reads
  * the pin recorded for `owner/handbooks`. The registry folds duplicate rows the
  * same way (../schema/repos.ts), so at most one key matches.
  */
 function pinFor(pins: Readonly<Record<string, string>>, source: string): string | undefined {
-  const wanted = source.toLowerCase();
-  const key = Object.keys(pins).find((slug): boolean => slug.toLowerCase() === wanted);
+  const key = pinKey(pins, source);
   return key === undefined ? undefined : pins[key];
 }
 
@@ -485,7 +693,7 @@ function checkoutVerb(context: CommandContext): number {
     `It is the consumer whose ${REPOS_FILE} records the canon pin and declares where a checkout of the canon is found.`,
   );
   refuseForeignFlags(context, "checkout", [
-    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "scenario", "surfaces", "not-mirrored", "markdown-out", "dry-run",
+    "target", "always-load", "stack-dir", "leaf", "rules-dir", "canon-values", "scenario", "surfaces", "not-mirrored", "markdown-out", "dry-run", "write",
   ]);
   const root = assertRepoRoot({ repoFlag });
   let resolution: CheckoutResolution;
@@ -518,7 +726,7 @@ function resolveVerb(context: CommandContext): number {
     context,
     "It is the checkout whose nen/repos.json maps --target to the scenario this handbook set derives from; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
   );
-  refuseForeignFlags(context, "resolve", ["canon-checkout"]);
+  refuseForeignFlags(context, "resolve", ["canon-checkout", "write"]);
   const targetRaw = context.args.values["target"];
   if (targetRaw === undefined) throw new VerbUsageError("--target owner/name is required.");
   const stackDir = context.args.values["stack-dir"];
@@ -761,6 +969,7 @@ function mirror(context: CommandContext, mirrorSub: string | undefined): number 
   if (mirrorSub !== "generate" && mirrorSub !== "check") {
     throw new VerbUsageError(`unknown 'canon mirror' subcommand '${mirrorSub ?? "(none)"}'. Try 'generate' or 'check'.`);
   }
+  refuseForeignFlags(context, `mirror ${mirrorSub}`, ["write"]);
   if (mirrorSub === "check" && context.args.booleans.has("dry-run")) {
     throw new VerbUsageError("--dry-run is not read by 'canon mirror check': check writes nothing to begin with. A flag accepted and ignored is worse than one refused.");
   }
