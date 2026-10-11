@@ -28,6 +28,11 @@
     },
     "roles": { "reviewer": "deep", "worker": "fast", "measurer": "fast", "orchestrator": "frontier" }
   },
+  "direct": {
+    "publish": "label",
+    "$publish": "one of: none | label | label+comment",
+    "$comment": "Maintainer's ruling of 2026-10-11 (the hatsu:direct backlog sweep of this repository): hatsu:direct writes its verdict to the issue as the primary pick's model LINE, one model/<line> label through nen label apply (the five model/ labels are declared in nen/labels.json). label+comment would add one marker-keyed comment with the three picks; none writes only the local ledger .nen/direct/<effort>.json. It applies under build or standalone, never under ren; an inline effort publishes nothing; a backlog sweep still asks once, its option A publishing at this value. Read by Hatsu's direct skill (zheref/hatsu's contracts/direct.registry.json -> publish); nen validates this file and hands no value out."
+  },
   "review": {
     "$comment": "Maintainer's ruling of 2026-09-26 (set up at mukai under missing-configuration): nen review scopes classifies the branch diff by these rows for hanten. code is Nobunaga's and claims every path; security is Feitan's on the merge, bootstrap, workflow and credential-shaped paths, and (zheref/nen#311) on the command-classification seams src/parse/** and src/watch/**, where a misread command line is a fail-open (NN-PR-#303: 'gh api -q= -XDELETE' classified read-only). Maintainer's ruling of 2026-10-04: security also covers src/release/**, src/report/patterns.ts, src/schema/workflow.ts and src/verbs/pr_ready.ts, because they decide the bounded merge (release.unitPaths' loader, its path grammar, the unit check and the ref resolution 'nen pr merge --release-unit' trusts).",
     "scopes": {
