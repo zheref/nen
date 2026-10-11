@@ -2,7 +2,7 @@
 # rendered by nen 0.0.0-test runner script -- do not edit; re-run nen runner script
 #
 # target:   zheref/nen
-# pool:     windows-x64-desktop (self-hosted,Windows,X64,desktop)
+# pool:     windows-x64-desktop (self-hosted,Windows,X64,desktop,pool-windows-x64-desktop)
 # runners:  NZ-NNR1
 # identity: .\kwidesktop
 # root:     C:\GithubRunners
@@ -39,7 +39,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $Target = 'zheref/nen'
 $RepoUrl = 'https://github.com/zheref/nen'
-$Labels = 'self-hosted,Windows,X64,desktop'
+$Labels = 'self-hosted,Windows,X64,desktop,pool-windows-x64-desktop'
 $Root = 'C:\GithubRunners'
 $ProjectDir = 'C:\GithubRunners\nen-runners'
 $Identity = '.\kwidesktop'

@@ -45,7 +45,7 @@ jobs:
     if: github.repository == 'zheref/nen'
     # Exactly the pool's labels. A job queues until a runner carrying all of
     # them is free; it never falls back to another pool.
-    runs-on: [self-hosted, Windows, X64, desktop]
+    runs-on: [self-hosted, Windows, X64, desktop, pool-windows-x64-desktop]
     # Bounds the RUN, not the wait: a job queues indefinitely when every slot
     # is busy or offline, and a preflight that never starts is itself the
     # answer ('nen runner preflight' names it).

@@ -401,8 +401,8 @@ describe("ci runs the same three commands a developer runs", () => {
     expect(include.map((entry) => entry["os"])).toEqual(["ubuntu", "macOS", "Windows"]);
     expect(include.map((entry) => entry["runner"])).toEqual([
       '"ubuntu-latest"',
-      '["self-hosted","macOS","ARM64"]',
-      '["self-hosted","Windows","X64"]',
+      '["self-hosted","macOS","ARM64","pool-macos-arm64"]',
+      '["self-hosted","Windows","X64","pool-windows-x64"]',
     ]);
     const windows = jobs["check-windows"] as Record<string, YamlValue>;
     expect(windows["name"]).toBe("check");

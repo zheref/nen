@@ -35,6 +35,32 @@ describe("plainLine", () => {
   });
 });
 
+describe("plainLine -- invisible characters (zheref/nen#340)", () => {
+  const BIDI = [0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
+  const ZERO_WIDTH = [0x200b, 0x200c, 0x200d, 0xfeff];
+
+  it("removes every Unicode bidi control, so a name cannot be reordered on screen", () => {
+    for (const code of BIDI) {
+      expect(plainLine(`a${String.fromCharCode(code)}b`), `U+${code.toString(16)} survived`).toBe("ab");
+    }
+    // The classic: an RLO makes `NZ-NNR1<RLO>gpj.exe` read as `NZ-NNR1exe.jpg`.
+    expect(plainLine(`NZ-NNR1${String.fromCharCode(0x202e)}gpj.exe`)).toBe("NZ-NNR1gpj.exe");
+  });
+
+  it("removes every zero-width character, so two names cannot look alike", () => {
+    for (const code of ZERO_WIDTH) {
+      expect(plainLine(`pool${String.fromCharCode(code)}-a`), `U+${code.toString(16)} survived`).toBe("pool-a");
+    }
+  });
+
+  it("keeps the neighbours of those ranges, which are ordinary text", () => {
+    for (const code of [0x200a, 0x2010, 0x2029, 0x202f, 0x2065, 0x206a, 0xfefe]) {
+      const text = `a${String.fromCharCode(code)}b`;
+      expect(plainLine(text), `U+${code.toString(16)} was stripped`).toBe(text);
+    }
+  });
+});
+
 describe("plainBlock", () => {
   it("keeps the newline and the tab a block is made of, and strips every other control byte", () => {
     expect(plainBlock(`a${ESC}[2K\tb\nc`)).toBe("a[2K\tb\nc");

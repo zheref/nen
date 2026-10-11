@@ -855,6 +855,8 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     "direct resolve": "nen direct resolve --registry r.json --taxonomy t.json --repo . --lang a --job b --kind product",
     "epic next-wave": "nen epic next-wave --body-file b.md",
     "runner plan": "nen runner plan --target o/r --pool p --machine-code NZ --count 1",
+    // #340: `--target` is mandatory (a write verb never falls back to a remote).
+    "runner relabel": "nen runner relabel --target o/r --pool p",
     "shu detect": "nen shu detect",
     // `--target` is mandatory on this verb, so the base line carries it: a
     // base that could never run would prove the coupling against a command
@@ -2009,5 +2011,12 @@ describe("shu's launch targets do not move the dev/run rows", () => {
     expect(classifyCommand("nen shu run --target bench").classification).toBe("mutating");
     expect(classifyCommand("nen shu dev --target sim --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen shu run --target bench --dry-run").classification).toBe("read-only");
+  });
+});
+
+describe("runner relabel (#340) -- read-only bare, mutating only with --run", () => {
+  it("certifies the dry form and refuses to certify the writing one", () => {
+    expect(classifyCommand("nen runner relabel --target o/r --pool windows-x64").classification).toBe("read-only");
+    expect(classifyCommand("nen runner relabel --target o/r --pool windows-x64 --runner NZ-NNR1 --run").classification).toBe("mutating");
   });
 });

@@ -26,7 +26,7 @@ function greenRun(overrides: Record<string, unknown> = {}, job: Record<string, u
     },
     {
       match: at(jobsArgv(TARGET, 901)),
-      result: { stdout: JSON.stringify({ jobs: [{ name: "preflight", status: "completed", conclusion: "success", runner_name: "NZ-NNR1", labels: ["self-hosted", "Windows", "X64"], ...job }] }) },
+      result: { stdout: JSON.stringify({ jobs: [{ name: "preflight", status: "completed", conclusion: "success", runner_name: "NZ-NNR1", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"], ...job }] }) },
     },
     ...provenance(blobs),
   ];
@@ -66,7 +66,13 @@ describe("enablePool -- the variable is written only after a green preflight of 
     ["another workflow file", greenRun({ path: ".github/workflows/ci.yml" }), /not \.github\/workflows\/runner-preflight-windows-x64\.yml/],
     ["a run still in progress", greenRun({ status: "in_progress", conclusion: null }), /not completed/],
     ["a failed run", greenRun({ conclusion: "failure" }), /concluded 'failure'/],
-    ["a green run on ANOTHER pool's labels", greenRun({}, { labels: ["self-hosted", "macOS", "ARM64"] }), /did not ask for pool windows-x64's labels \(missing Windows, X64\)/],
+    ["a green run on ANOTHER pool's labels", greenRun({}, { labels: ["self-hosted", "macOS", "ARM64", "pool-macos-arm64"] }), /did not ask for pool windows-x64's labels \(missing Windows, X64, pool-windows-x64\)/],
+    [
+      "a green run of a preflight rendered before the pool label (#340)",
+      greenRun({}, { labels: ["self-hosted", "Windows", "X64"] }),
+      /did not ask for pool windows-x64's labels \(missing pool-windows-x64\) -- a preflight rendered before the pool label \(#340\): re-render it with 'nen runner workflow'/,
+    ],
+    ["a green run on a pool of the same os and arch (#340)", greenRun({}, { labels: ["self-hosted", "Windows", "X64", "pool-windows-x64-desktop", "desktop"] }), /missing pool-windows-x64\)(?! -- a preflight rendered)/],
     ["a skipped job", greenRun({}, { conclusion: "skipped" }), /job 'preflight' concluded 'skipped'/],
     ["a push run (#319)", greenRun({ event: "push" }), /triggered by 'push', not workflow_dispatch/],
     ["a dispatch on another branch (#319)", greenRun({ head_branch: "feature/x" }), /ran on 'feature\/x', not the default branch 'main'/],

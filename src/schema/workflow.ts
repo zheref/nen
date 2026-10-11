@@ -1324,14 +1324,55 @@ export const DEFAULT_RUNNER_MODE: Readonly<Record<RunnerOs, RunnerMode>> = {
 /**
  * The fourth label an interactive Windows pool carries, and only that pool. A
  * job that needs a desktop asks for it, so only this pool's runners take that
- * job. The converse does not hold: a runner carrying it also matches every job
- * aimed at the plain [self-hosted, Windows, arch] set, the way GitHub matches.
+ * job. It no longer decides which pool a runner is in: the pool's own label
+ * (POOL_LABEL_PREFIX, below) does that, so a desktop runner -- which carries
+ * `pool-<its pool>` and not the plain pool's -- takes none of the plain pool's
+ * jobs once every runner carries its pool label (#340).
  */
 export const DESKTOP_LABEL = "desktop";
 
-/** A pool's exact label set: self-hosted, its os, its arch -- then `desktop` for an interactive Windows pool. */
-export function poolLabels(os: RunnerOs, arch: RunnerArch, mode: RunnerMode): string[] {
+/**
+ * The label a pool carries of its OWN (#340): `pool-<id>`, appended LAST.
+ *
+ * DERIVED, NEVER DECLARED. GitHub gives `self-hosted`, the OS and the arch to
+ * every runner of that OS and arch at registration, so with the defaults alone
+ * any later registration on the repository silently joins the pool -- and
+ * takes its preflight and its gated jobs -- without having been proven. A
+ * label only runners registered or relabelled into this pool carry closes that
+ * ACCIDENTAL join. It is not an authorization boundary: anyone who can
+ * register a runner on the repository can register it with this label too.
+ * Deriving it from the
+ * pool's id means a declaration written before it still parses unchanged, and
+ * Hatsu's guard and tenkai compute the same string from the same id.
+ *
+ * NO DUPLICATE-LABEL REFUSAL EXISTS, because none is needed: pool ids are
+ * unique (parseRunners refuses a repeated one), so two pools can never derive
+ * one pool label, and a pool's full label set can never equal another's.
+ */
+export const POOL_LABEL_PREFIX = "pool-";
+
+/** The one label a pool carries of its own: `pool-<id>`. */
+export function poolOwnLabel(id: string): string {
+  return `${POOL_LABEL_PREFIX}${id}`;
+}
+
+/**
+ * The labels a pool may DECLARE: self-hosted, its os, its arch -- then
+ * `desktop` for an interactive Windows pool. GitHub's defaults plus the one
+ * mode label; the pool's own label is appended by `poolLabels`.
+ */
+export function declaredPoolLabels(os: RunnerOs, arch: RunnerArch, mode: RunnerMode): string[] {
   return os === "Windows" && mode === "interactive" ? ["self-hosted", os, arch, DESKTOP_LABEL] : ["self-hosted", os, arch];
+}
+
+/**
+ * A pool's exact, full label set: `declaredPoolLabels`, then `pool-<id>`
+ * last. It is what a runner registers with, what a generated workflow's
+ * `runs-on` targets, what `runner verify` and `runner enable` require, and
+ * what `runner relabel` completes on a runner registered before #340.
+ */
+export function poolLabels(os: RunnerOs, arch: RunnerArch, mode: RunnerMode, id: string): string[] {
+  return [...declaredPoolLabels(os, arch, mode), poolOwnLabel(id)];
 }
 
 /**
@@ -1402,7 +1443,11 @@ export interface RunnerPool {
   readonly arch: RunnerArch;
   /** `service` or `interactive`; a pool that declares none takes its OS's DEFAULT_RUNNER_MODE. */
   readonly mode: RunnerMode;
-  /** Always exactly `poolLabels(os, arch, mode)`: the policy refuses anything else. */
+  /**
+   * Always exactly `poolLabels(os, arch, mode, id)` -- the declared defaults
+   * (plus `desktop`), then the derived `pool-<id>` LAST (#340). The policy
+   * refuses any other declaration.
+   */
   readonly labels: readonly string[];
   /** Absent when this pool's jobs are not variable-gated; `runner enable` then has nothing to set. */
   readonly enableVariable: string | null;
@@ -1515,6 +1560,61 @@ function parseRunnerMode(path: string, pointer: string, value: unknown, os: Runn
   return text as RunnerMode;
 }
 
+/**
+ * Why a pool's declared `labels` are refused, naming each way they are wrong
+ * (#340): a bare `self-hosted`, a missing os or arch, a label foreign to the
+ * pool's set, another pool's own label, or more than one label of its own.
+ * Every reason found is named, then the two spellings the pool admits.
+ */
+function poolLabelsRefusal(
+  labels: readonly string[],
+  declared: readonly string[],
+  own: string,
+  os: RunnerOs,
+  arch: RunnerArch,
+): string {
+  const reasons: string[] = [];
+  if (labels.length === 1 && labels[0] === "self-hosted") {
+    reasons.push("a bare 'self-hosted' would match every runner the repository has");
+  } else {
+    if (!labels.includes("self-hosted")) reasons.push("'self-hosted' is missing");
+    if (!labels.includes(os)) reasons.push(`its os '${os}' is missing`);
+    if (!labels.includes(arch)) reasons.push(`its arch '${arch}' is missing`);
+    if (declared.includes(DESKTOP_LABEL) && !labels.includes(DESKTOP_LABEL)) reasons.push(`'${DESKTOP_LABEL}' is missing`);
+  }
+  const extras = labels.filter((label): boolean => !declared.includes(label));
+  // CASE-INSENSITIVE, as GitHub matches labels: `Pool-windows-x64` is this
+  // pool's own label in the wrong case, not another pool's.
+  const isPoolLabel = (label: string): boolean => label.toLowerCase().startsWith(POOL_LABEL_PREFIX);
+  const wrongCase = extras.filter((label): boolean => label !== own && label.toLowerCase() === own.toLowerCase());
+  for (const label of wrongCase) reasons.push(`'${label}' is the pool label, in the wrong case: write '${own}'`);
+  const foreignPool = extras.filter((label): boolean => isPoolLabel(label) && label.toLowerCase() !== own.toLowerCase());
+  if (foreignPool.length > 0) {
+    reasons.push(
+      `${foreignPool.map((label): string => `'${label}'`).join(", ")} is not this pool's own label: a pool's own label is derived from its id, '${own}', so it is never another pool's -- and since ids are unique, no two pools can carry one`,
+    );
+  }
+  const others = extras.filter((label): boolean => !isPoolLabel(label));
+  if (extras.length > 1) {
+    reasons.push(`it carries ${extras.length} labels beyond the defaults, and a pool carries exactly one of its own, '${own}'`);
+  }
+  if (others.length > 0) {
+    reasons.push(
+      `${others.map((label): string => `'${label}'`).join(", ")} is an extra label: nen's own runner-policy guard (src/ci/runner-policy.test.ts), and a consumer's guard of the same shape, admits a job only on a canonical label set plus its pool's own label, so a pool carrying another is a pool no guarded workflow can target`,
+    );
+  }
+  if (labels.join(",") !== declared.join(",") && reasons.length === 0) reasons.push("its labels are out of order");
+  const desktopHint =
+    os === "Windows" && !declared.includes(DESKTOP_LABEL) && labels.includes(DESKTOP_LABEL)
+      ? `. '${DESKTOP_LABEL}' is an interactive pool's fourth label: declare "mode": "interactive"`
+      : "";
+  const shape =
+    declared.length === 4
+      ? `an interactive Windows pool's labels are exactly ${JSON.stringify(declared)} -- 'self-hosted', its os, its arch, then '${DESKTOP_LABEL}', in GitHub's case ('${DESKTOP_LABEL}' is what a job that needs a signed-in desktop asks for)`
+      : `a pool's labels are exactly ${JSON.stringify(declared)} -- 'self-hosted', then its os, then its arch, in GitHub's case`;
+  return `is ${JSON.stringify(labels)}: ${reasons.join("; ")}. ${shape[0]?.toUpperCase()}${shape.slice(1)}, and nen appends the pool's own label '${own}' last -- declare them without it, or with it written last (${JSON.stringify([...declared, own])})${desktopHint}`;
+}
+
 function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerPool {
   const raw = block(path, pointer, value, RUNNER_POOL_KEYS, "A runner pool's keys are");
   if (raw["id"] === undefined) {
@@ -1525,20 +1625,19 @@ function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerP
   const os = requireCanonical(path, `${pointer}.os`, raw["os"], RUNNER_OSES, OS_ALIASES, "an operating system");
   const arch = requireCanonical(path, `${pointer}.arch`, raw["arch"], RUNNER_ARCHES, ARCH_ALIASES, "an architecture");
   const mode = parseRunnerMode(path, `${pointer}.mode`, raw["mode"], os);
-  const expected = poolLabels(os, arch, mode);
+  const declared = declaredPoolLabels(os, arch, mode);
+  const own = poolOwnLabel(id);
   const labels = requireArray(path, `${pointer}.labels`, raw["labels"]).map((item, index): string =>
     requireString(path, `${pointer}.labels[${index}]`, item),
   );
-  if (labels.length !== expected.length || labels.some((label, index): boolean => label !== expected[index])) {
-    throw new SchemaError(
-      path,
-      `${pointer}.labels`,
-      expected.length === 4
-        ? `is ${JSON.stringify(labels)}, and an interactive Windows pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', its os, its arch, then '${DESKTOP_LABEL}', in GitHub's case. '${DESKTOP_LABEL}' is what a job that needs a signed-in desktop asks for, so only this pool's runners take it`
-        : `is ${JSON.stringify(labels)}, and a pool's labels are exactly ${JSON.stringify(expected)} -- 'self-hosted', then its os, then its arch, in GitHub's case. An extra label is refused: the runner-policy guard in this repository family admits a job only on one of the canonical label sets, so a pool carrying another is a pool no guarded workflow can target, and a bare 'self-hosted' would match every runner the repository has${
-            os === "Windows" && labels.includes(DESKTOP_LABEL) ? `. '${DESKTOP_LABEL}' is an interactive pool's fourth label: declare "mode": "interactive"` : ""
-          }`,
-    );
+  // TWO SPELLINGS, ONE SET (#340): the declared defaults alone -- every
+  // declaration written before the pool label existed -- or those with this
+  // pool's own label written out last. Either way the parsed set is the full
+  // one, `pool-<id>` appended from the id.
+  const same = (expected: readonly string[]): boolean =>
+    labels.length === expected.length && labels.every((label, index): boolean => label === expected[index]);
+  if (!same(declared) && !same([...declared, own])) {
+    throw new SchemaError(path, `${pointer}.labels`, poolLabelsRefusal(labels, declared, own, os, arch));
   }
   const variableRaw = raw["enableVariable"];
   let enableVariable: string | null = null;
@@ -1595,7 +1694,7 @@ function parseRunnerPool(path: string, pointer: string, value: unknown): RunnerP
     os,
     arch,
     mode,
-    labels,
+    labels: poolLabels(os, arch, mode, id),
     enableVariable,
     tools,
     preflightWorkflow,
@@ -1642,17 +1741,10 @@ export function parseRunners(path: string, value: unknown): RunnersPolicy | null
       );
     }
     seen.set(pool.id, index);
-    // TWO POOLS WITH ONE LABEL SET ARE ONE POOL WITH TWO NAMES: a runner
-    // matches both, a job targets both, and `runner inventory` would count
-    // every runner twice. Refused rather than resolved by order.
-    const twin = pools.findIndex((other): boolean => other.labels.join(",") === pool.labels.join(","));
-    if (twin !== index) {
-      throw new SchemaError(
-        path,
-        `runners.pools[${index}].labels`,
-        `are the same label set as runners.pools[${twin}] ('${pools[twin]?.id ?? "?"}'). A pool IS its label set -- a runner and a job both match it by labels alone -- so two ids for one set would count every runner twice`,
-      );
-    }
+    // NO SEPARATE LABEL-COLLISION REFUSAL (#340). A pool IS its label set, and
+    // that set ends in `pool-<id>`: the repeated-id refusal above is therefore
+    // also the refusal of two pools sharing a pool label or a label set. Two
+    // pools of one os and arch are two pools now, told apart by that label.
     // ONE PREFLIGHT FILE PER POOL, because the file is RENDERED per pool
     // (`nen runner workflow` substitutes this pool's runs-on) and `nen runner
     // enable` reads a green run of it as proof of THIS pool. Two pools sharing

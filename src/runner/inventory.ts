@@ -18,15 +18,27 @@
 // POOL MATCHING IS A SUPERSET TEST. A runner belongs to a pool when it carries
 // every one of the pool's labels (case-insensitively, the way GitHub's
 // scheduler compares them). A runner with an extra label still matches: that is
-// exactly how GitHub would schedule a job onto it -- so an interactive pool's
-// `desktop` runner is counted in the plain pool of its os and arch as well,
-// because it takes that pool's jobs too (#333). A runner that matches no
+// exactly how GitHub would schedule a job onto it. Every pool's set ends in its
+// own `pool-<id>` (#340), so an interactive pool's `desktop` runner, which
+// carries `pool-<its pool>`, is no longer counted in the plain pool of its os
+// and arch: it takes none of that pool's jobs. A runner that matches no
 // declared pool is `unpooled`, listed by name.
+//
+// A RUNNER REGISTERED BEFORE #340 carries the defaults and no pool label, so
+// it matches no pool and takes none of the jobs a pool-labelled workflow
+// sends. It is listed under the pool it would join -- `unlabelled` -- so the
+// upgrade step (`nen runner relabel`) has its list. Which pool that is comes
+// from `awaitingPools`: the pools whose declared labels it carries EXACTLY --
+// every one of them, and no label outside them. `desktop` is reserved: a
+// runner carrying it never fits a pool that does not declare it, so with only
+// a plain pool declared, a desktop runner awaits nothing (#340, Nobunaga N1).
 
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import { renderPipeTable } from "../cli/table.js";
-import type { RunnerPool, RunnersPolicy } from "../schema/workflow.js";
+import { plainLine } from "../cli/plain.js";
+import { shellWord } from "./shellword.js";
+import { DESKTOP_LABEL, POOL_LABEL_PREFIX, poolOwnLabel, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
 import { asRecord, ghJson, RunnerFailure } from "./github.js";
 
 /** `<MachineCode>-<ConsumerCode>R<N>`, the spec's own pattern. */
@@ -81,6 +93,14 @@ export interface PoolRow {
   readonly online: number;
   /** Online and not busy: what a job queued right now could land on. */
   readonly free: number;
+  /** Runners that carry this pool's declared labels and no pool label yet: what `runner relabel` would add `pool-<id>` to (#340). */
+  readonly unlabelled: readonly string[];
+  /**
+   * Present only when some `unlabelled` runner ALSO fits other pools -- two
+   * pools declaring one label set: runner name -> the other pools' ids. Such a
+   * runner is left out of the relabel hint (`runner relabel` refuses it).
+   */
+  readonly alsoFit?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface InventoryReport {
@@ -161,10 +181,75 @@ export function fetchDownloads(seams: Seams, target: Target): DownloadRow[] {
   });
 }
 
-/** Whether a runner carries every one of a pool's labels, compared as GitHub compares them. */
-export function inPool(runner: RunnerRow, pool: Pick<RunnerPool, "labels">): boolean {
+/** Whether a runner carries every one of `labels`, compared as GitHub compares them. */
+function carriesAll(runner: Pick<RunnerRow, "labels">, labels: readonly string[]): boolean {
   const carried = new Set(runner.labels.map((label): string => label.toLowerCase()));
-  return pool.labels.every((label): boolean => carried.has(label.toLowerCase()));
+  return labels.every((label): boolean => carried.has(label.toLowerCase()));
+}
+
+/** Whether a runner carries every one of a pool's labels, its own `pool-<id>` included. */
+export function inPool(runner: Pick<RunnerRow, "labels">, pool: Pick<RunnerPool, "labels">): boolean {
+  return carriesAll(runner, pool.labels);
+}
+
+/** A pool's DECLARED labels: its full set without its own `pool-<id>` (#340). */
+export function declaredOf(pool: Pick<RunnerPool, "id" | "labels">): readonly string[] {
+  const own = poolOwnLabel(pool.id).toLowerCase();
+  return pool.labels.filter((label): boolean => label.toLowerCase() !== own);
+}
+
+/** Every `pool-*` label a runner carries, as it carries them. */
+export function poolLabelsOf(runner: Pick<RunnerRow, "labels">): string[] {
+  return runner.labels.filter((label): boolean => label.toLowerCase().startsWith(POOL_LABEL_PREFIX));
+}
+
+/**
+ * Why a runner cannot be relabelled into `pool`, or null when it fits it
+ * EXACTLY: it carries every one of the pool's declared labels and nothing
+ * outside them but the pool's own label (#340). `desktop` is reserved for an
+ * interactive pool and named as such. Names and labels are GitHub's, so the
+ * sentence is made terminal-safe here: it is only ever printed.
+ */
+export function misfit(runner: Pick<RunnerRow, "name" | "labels">, pool: Pick<RunnerPool, "id" | "labels">): string | null {
+  const declared = declaredOf(pool);
+  const declaredLower = declared.map((label): string => label.toLowerCase());
+  const own = poolOwnLabel(pool.id).toLowerCase();
+  const carried = runner.labels.map((label): string => label.toLowerCase());
+  const name = plainLine(runner.name);
+  const missing = declared.filter((label): boolean => !carried.includes(label.toLowerCase()));
+  if (missing.length > 0) {
+    return `${name} lacks ${missing.join(", ")} of pool ${pool.id}'s labels [${declared.join(", ")}], so it is not a runner of that pool`;
+  }
+  const extra = runner.labels.filter((label): boolean => !declaredLower.includes(label.toLowerCase()) && label.toLowerCase() !== own);
+  if (extra.some((label): boolean => label.toLowerCase() === DESKTOP_LABEL)) {
+    return `${name} carries '${DESKTOP_LABEL}', which is reserved for an interactive pool, and pool ${pool.id} does not declare it: declare the interactive pool ("mode": "interactive") and relabel it into that one`;
+  }
+  if (extra.length > 0) {
+    return `${name} carries ${extra.map((label): string => `'${plainLine(label)}'`).join(", ")}, which pool ${pool.id} does not declare: a pool's runners carry its declared labels and its own label, nothing else`;
+  }
+  return null;
+}
+
+/**
+ * The pools a runner WOULD join if it carried their own label (#340): none for
+ * a runner that already carries any `pool-*` label; otherwise every pool it
+ * fits EXACTLY (`misfit` is null). Two pools that declare one set are both
+ * returned: which one the runner belongs to is the maintainer's to say.
+ */
+export function awaitingPools<P extends Pick<RunnerPool, "id" | "labels">>(runner: Pick<RunnerRow, "name" | "labels">, pools: readonly P[]): P[] {
+  if (poolLabelsOf(runner).length > 0) return [];
+  return pools.filter((pool): boolean => misfit(runner, pool) === null);
+}
+
+/** The unlabelled runners of `pool` that also fit other pools, as PoolRow's optional `alsoFit`. */
+function alsoFitOf(runners: readonly RunnerRow[], pools: readonly RunnerPool[], pool: RunnerPool): { alsoFit?: Record<string, string[]> } {
+  const shared: Record<string, string[]> = {};
+  for (const runner of runners) {
+    const fits = awaitingPools(runner, pools);
+    if (!fits.includes(pool) || fits.length < 2) continue;
+    shared[runner.name] = fits.filter((other): boolean => other !== pool).map((other): string => other.id);
+  }
+  return Object.keys(shared).length === 0 ? {} : { alsoFit: shared };
 }
 
 export function assembleInventory(
@@ -186,15 +271,47 @@ export function assembleInventory(
       runners: members.map((runner): string => runner.name),
       online: members.filter((runner): boolean => runner.status === "online").length,
       free: members.filter((runner): boolean => runner.status === "online" && !runner.busy).length,
+      unlabelled: runners.filter((runner): boolean => awaitingPools(runner, policy.pools).includes(pool)).map((runner): string => runner.name),
+      ...alsoFitOf(runners, policy.pools, pool),
     };
   });
   // UNPOOLED IS MEASURED AGAINST EVERY DECLARED POOL, not only the one --pool
   // asked about: a runner is unpooled when the repository's policy has no
-  // place for it, which a filter on the output does not change.
+  // place for it, which a filter on the output does not change. A runner that
+  // only lacks its pool label HAS a place -- it is listed as `unlabelled` under
+  // the pool it awaits (#340) -- so it is not unpooled.
   const unpooled = runners
-    .filter((runner): boolean => !policy.pools.some((pool): boolean => inPool(runner, pool)))
+    .filter((runner): boolean => !policy.pools.some((pool): boolean => inPool(runner, pool)) && awaitingPools(runner, policy.pools).length === 0)
     .map((runner): string => runner.name);
   return { target: target.slug, runners, downloads, pools: rows, unpooled };
+}
+
+/**
+ * The pool line's tail naming the runners that await its own label, and the
+ * exact relabel line -- target, pool and every runner named (#340: `--run`
+ * acts only on runners named). Runner names are GitHub's: plain here, raw in
+ * `--json`.
+ */
+function unlabelledHint(target: string, pool: PoolRow): string {
+  if (pool.unlabelled.length === 0) return "";
+  const shared = pool.alsoFit ?? {};
+  // A runner two pools fit is never put on the command (Nobunaga N2): relabel
+  // refuses to name it. It is listed, with the fix, and the command is
+  // omitted when no runner is left for it.
+  const nameable = pool.unlabelled.filter((name): boolean => shared[name] === undefined).map(plainLine);
+  const byOthers = new Map<string, string[]>();
+  for (const name of pool.unlabelled) {
+    const others = shared[name];
+    if (others === undefined) continue;
+    const key = others.join(", ");
+    byOthers.set(key, [...(byOthers.get(key) ?? []), plainLine(name)]);
+  }
+  const notes = [...byOthers].map(([others, names]): string => `; ${names.join(", ")} also fit ${others}: make the declarations differ`);
+  const command =
+    nameable.length === 0
+      ? ""
+      : ` (nen runner relabel --target ${shellWord(target)} --pool ${shellWord(pool.id)} --runner ${shellWord(nameable.join(","))} --run)`;
+  return `; without ${poolOwnLabel(pool.id)}: ${pool.unlabelled.map(plainLine).join(", ")}${command}${notes.join("")}`;
 }
 
 export function renderInventory(report: InventoryReport): string[] {
@@ -204,11 +321,11 @@ export function renderInventory(report: InventoryReport): string[] {
       ...renderPipeTable([
         ["name", "status", "busy", "os", "labels", "machine", "consumer", "slot"],
         ...report.runners.map((runner): string[] => [
-          runner.name,
-          runner.status,
+          plainLine(runner.name),
+          plainLine(runner.status),
           runner.busy ? "busy" : "idle",
-          runner.os,
-          runner.labels.join(","),
+          plainLine(runner.os),
+          runner.labels.map(plainLine).join(","),
           runner.machine ?? "(runner 0)",
           runner.consumer ?? "",
           runner.slot === null ? "" : String(runner.slot),
@@ -220,11 +337,11 @@ export function renderInventory(report: InventoryReport): string[] {
     for (const pool of report.pools) {
       lines.push(
         `pool ${pool.id} [${pool.labels.join(", ")}]: ${pool.runners.length} runner(s), ${pool.online} online, ${pool.free} free${
-          pool.runners.length === 0 ? "" : ` -- ${pool.runners.join(", ")}`
-        }`,
+          pool.runners.length === 0 ? "" : ` -- ${pool.runners.map(plainLine).join(", ")}`
+        }${unlabelledHint(report.target, pool)}`,
       );
     }
-    lines.push(`unpooled: ${report.unpooled === null || report.unpooled.length === 0 ? "(none)" : report.unpooled.join(", ")}`);
+    lines.push(`unpooled: ${report.unpooled === null || report.unpooled.length === 0 ? "(none)" : report.unpooled.map(plainLine).join(", ")}`);
   }
   return lines;
 }

@@ -2,7 +2,7 @@
 # rendered by nen 0.0.0-test runner script -- do not edit; re-run nen runner script
 #
 # target:   zheref/nen
-# pool:     windows-x64 (self-hosted,Windows,X64)
+# pool:     windows-x64 (self-hosted,Windows,X64,pool-windows-x64)
 # runners:  NZ-NNR1, NZ-NNR2, NZ-NNR3
 # identity: .\lordzheref
 # root:     C:\GithubRunners
@@ -31,7 +31,7 @@ $ProgressPreference = 'SilentlyContinue'
 
 $Target = 'zheref/nen'
 $RepoUrl = 'https://github.com/zheref/nen'
-$Labels = 'self-hosted,Windows,X64'
+$Labels = 'self-hosted,Windows,X64,pool-windows-x64'
 $Root = 'C:\GithubRunners'
 $ProjectDir = 'C:\GithubRunners\nen-runners'
 $Identity = '.\lordzheref'
