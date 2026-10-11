@@ -15,7 +15,9 @@ import { join } from "node:path";
 import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
-import { parseProjectBlock } from "../schema/contract.js";
+import { fileURLToPath } from "node:url";
+import { loadContract, parseProjectBlock, SELECT_RESULT_FORMATS } from "../schema/contract.js";
+import { FORMATS } from "./test-report/parse.js";
 import { SchemaError } from "../schema/errors.js";
 import { shuCommand } from "./command.js";
 import { parseSelectionIds } from "./render.js";
@@ -33,11 +35,13 @@ async function shu(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
   platform: NodeJS.Platform = "darwin",
+  seed?: (root: string) => void,
 ): Promise<Captured> {
   const dir = mkdtempSync(join(tmpdir(), "nen-shu-select-"));
   try {
     mkdirSync(join(dir, "nen"));
     writeFileSync(join(dir, "nen", "contract.json"), JSON.stringify({ $schema: "nen.contract/v0.1", project }));
+    seed?.(dir);
     const out: string[] = [];
     const err: string[] = [];
     const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
@@ -82,6 +86,23 @@ const APPLE_FOCUSED = [
   "test",
 ];
 const APPLE_PATTERN = "[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*){0,2}";
+const APPLE_RESULTS = ".nen/focused/summary.json";
+
+/** An xcresult test summary stating `executed` passing tests. */
+function appleSummary(executed: number, skipped = 0): string {
+  return JSON.stringify({
+    totalTestCount: executed + skipped,
+    passedTests: executed,
+    failedTests: 0,
+    skippedTests: skipped,
+  });
+}
+
+/** A JUnit document with `cases` passing test cases. */
+function junit(cases: number): string {
+  const rows = Array.from({ length: cases }, (_, index): string => `<testcase classname="s" name="t${index}" time="0.01"/>`);
+  return `<?xml version="1.0"?>\n<testsuites tests="${cases}"><testsuite name="s" tests="${cases}">${rows.join("")}</testsuite></testsuites>\n`;
+}
 
 function appleProject(select: unknown = undefined): Record<string, unknown> {
   return {
@@ -102,6 +123,11 @@ function appleProject(select: unknown = undefined): Record<string, unknown> {
                   argv: APPLE_FOCUSED,
                   each: ["-only-testing:{id}"],
                   pattern: APPLE_PATTERN,
+                  // THE SUMMARY, NOT THE BUNDLE: nen reads no .xcresult, so an
+                  // Apple lane's focused form hands nen the test summary JSON
+                  // (here on stdout, written by nen through stdoutTo).
+                  stdoutTo: APPLE_RESULTS,
+                  results: { path: APPLE_RESULTS, format: "xcresult-summary" },
                   artifacts: [".nen/focused/apple.xcresult"],
                   why: "Focused authored tests: no coverage, a result bundle of their own.",
                 },
@@ -128,10 +154,11 @@ function vitestProject(): Record<string, unknown> {
           artifacts: [".nen/regression.junit.xml", "coverage/lcov.info"],
           select: {
             exe: "bunx",
-            argv: ["vitest", "run", "--reporter=junit", "--outputFile.junit=.nen/focused.junit.xml"],
+            argv: ["vitest", "run", "--reporter=junit"],
             each: ["{id}"],
-            pattern: "src/[A-Za-z0-9_./-]+\\.test\\.ts",
-            artifacts: [".nen/focused.junit.xml"],
+            pattern: "src/[A-Za-z0-9_/-]*[A-Za-z0-9_.-]+\\.test\\.ts",
+            stdoutTo: ".nen/focused.junit.xml",
+            results: { path: ".nen/focused.junit.xml", format: "junit" },
           },
         },
         coverage: {
@@ -176,13 +203,16 @@ describe("--select expands the declared focused form, per identifier, in order",
       pattern: APPLE_PATTERN,
       each: ["-only-testing:{id}"],
       appended: ids.map((id): string => `-only-testing:${id}`),
+      results: { path: APPLE_RESULTS, format: "xcresult-summary" },
+      executed: null,
+      zeroMatch: null,
     });
   });
 
   it("the same, run for real: the seam takes exactly that argv and nothing else", async () => {
     const argv = [...APPLE_FOCUSED, "-only-testing:KroTests/A", "-only-testing:KroTests/B"];
     const result = await shu(appleProject(), ["test", "--select", "KroTests/A,KroTests/B"], [
-      { match: ["xcodebuild", ...argv].join(" "), result: { code: 0 } },
+      { match: ["xcodebuild", ...argv].join(" "), result: { code: 0, stdout: appleSummary(2) } },
     ]);
     expect(result.code).toBe(0);
     expect(result.seams.calls).toHaveLength(1);
@@ -191,10 +221,10 @@ describe("--select expands the declared focused form, per identifier, in order",
   });
 
   it("a vitest-shaped lane: identifiers appended as positionals; no capture sidecar is recorded", async () => {
-    const focused = ["vitest", "run", "--reporter=junit", "--outputFile.junit=.nen/focused.junit.xml"];
+    const focused = ["vitest", "run", "--reporter=junit"];
     const ids = ["src/shu/run.test.ts", "src/schema/contract.test.ts"];
     const result = await shu(vitestProject(), ["test", "--select", ids.join(",")], [
-      { match: ["bunx", ...focused, ...ids].join(" "), result: { code: 0 } },
+      { match: ["bunx", ...focused, ...ids].join(" "), result: { code: 0, stdout: junit(3) } },
     ]);
     expect(result.code).toBe(0);
     // THE REGRESSION ROW HERE DECLARES THE COVERAGE CAPTURE, so a bare `test`
@@ -209,6 +239,7 @@ describe("--select expands the declared focused form, per identifier, in order",
       argv: ["test"],
       each: ["--tests", "{id}"],
       pattern: "[A-Za-z0-9_.*]+",
+      results: { path: "build/focused-results", format: "junit" },
     });
     const result = await shu(project, ["test", "--select", "a.B,c.D", "--dry-run"]);
     expect(result.code).toBe(0);
@@ -234,11 +265,16 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
     ["only whitespace", "  ", /names no test identifier/],
     ["an empty entry", "KroTests,,KroTests/B", /entry 2 is empty/],
     ["a trailing comma", "KroTests,", /entry 2 is empty/],
-    ["whitespace inside", "Kro Tests", /whitespace or a control character/],
-    ["a control character", "KroTests\u0007", /whitespace or a control character/],
+    ["whitespace inside", "Kro Tests", /whitespace, a control character/],
+    ["a control character", "KroTests\u0007", /whitespace, a control character/],
     ["a leading dash", "-only-testing:KroTests", /begins with '-'/],
     ["a brace", "KroTests/{id}", /brace/],
     ["a repeat", "KroTests,KroTests", /repeats an identifier/],
+    ["a zero-width format character", "Kro\u200bTests", /invisible format character/],
+    ["a bidi override", "Kro\u202eTests", /invisible format character/],
+    ...['"', "%", "^", "&", "|", "<", ">", "!", "`"].map(
+      (char): readonly [string, string, RegExp] => [`the metacharacter ${char}`, `Kro${char}Tests`, /shell metacharacter/],
+    ),
   ];
   for (const [name, value, message] of malformed) {
     it(`refuses ${name}`, async () => {
@@ -303,6 +339,97 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
   });
 });
 
+// ── (c) the executed count -- zero is never a pass (the 2026-09-27 AC) ──────
+
+describe("a focused run's declared results decide whether it executed anything", () => {
+  const argv = [...APPLE_FOCUSED, "-only-testing:KroUITests/TimelineDraftUITests/test_fastSwipe"];
+  const line = ["xcodebuild", ...argv].join(" ");
+  const select = ["test", "--select", "KroUITests/TimelineDraftUITests/test_fastSwipe"];
+
+  it("an xcodebuild-shaped run that exits 0 having executed 0 tests is exit 6, flagged in --json", async () => {
+    const result = await shu(appleProject(), [...select, "--json"], [
+      { match: line, result: { code: 0, stdout: appleSummary(0), stderr: "Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.001) seconds" } },
+    ]);
+    expect(result.code).toBe(6);
+    expect(result.err.join("\n")).toContain("selection resolved to zero executed tests");
+    const report = JSON.parse(result.out.join("\n")) as {
+      exitCode: number;
+      selection: { executed: number; zeroMatch: boolean; results: { path: string; format: string } };
+    };
+    expect(report.exitCode).toBe(6);
+    expect(report.selection.executed).toBe(0);
+    expect(report.selection.zeroMatch).toBe(true);
+    expect(report.selection.results).toEqual({ path: APPLE_RESULTS, format: "xcresult-summary" });
+  });
+
+  it("skipped tests are not executed ones: all-skipped is still zero, exit 6", async () => {
+    const result = await shu(appleProject(), select, [{ match: line, result: { code: 0, stdout: appleSummary(0, 3) } }]);
+    expect(result.code).toBe(6);
+    expect(result.out.some((row): boolean => row.startsWith("results:") && row.includes("ZERO executed"))).toBe(true);
+  });
+
+  it("a non-zero count passes, with the count in --json", async () => {
+    const result = await shu(appleProject(), [...select, "--json"], [{ match: line, result: { code: 0, stdout: appleSummary(1) } }]);
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n")) as { exitCode: number; selection: { executed: number; zeroMatch: boolean } };
+    expect(report.exitCode).toBe(0);
+    expect(report.selection.executed).toBe(1);
+    expect(report.selection.zeroMatch).toBe(false);
+  });
+
+  it("a missing results file is exit 1, never a pass", async () => {
+    const project = appleProject({
+      exe: "xcodebuild",
+      argv: APPLE_FOCUSED,
+      each: ["-only-testing:{id}"],
+      pattern: APPLE_PATTERN,
+      results: { path: APPLE_RESULTS, format: "xcresult-summary" },
+    });
+    const result = await shu(project, [...select, "--json"], [{ match: line, result: { code: 0 } }]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/left no results at '\.nen\/focused\/summary\.json'/);
+    const report = JSON.parse(result.out.join("\n")) as { exitCode: number; selection: { executed: unknown; zeroMatch: unknown } };
+    expect(report.exitCode).toBe(1);
+    expect(report.selection.executed).toBeNull();
+    expect(report.selection.zeroMatch).toBeNull();
+  });
+
+  it("an unparseable results file is exit 1", async () => {
+    const result = await shu(appleProject(), select, [{ match: line, result: { code: 0, stdout: "Executed 0 tests" } }]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/could not be read/);
+  });
+
+  it("results in a format other than the declared one are exit 1", async () => {
+    const result = await shu(appleProject(), select, [{ match: line, result: { code: 0, stdout: junit(2) } }]);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/is junit, and the declaration says xcresult-summary/);
+  });
+
+  it("an earlier run's results, not rewritten by this one, are exit 1", async () => {
+    const project = appleProject({
+      exe: "xcodebuild",
+      argv: APPLE_FOCUSED,
+      each: ["-only-testing:{id}"],
+      pattern: APPLE_PATTERN,
+      results: { path: APPLE_RESULTS, format: "xcresult-summary" },
+    });
+    const result = await shu(project, select, [{ match: line, result: { code: 0 } }], "darwin", (root): void => {
+      mkdirSync(join(root, ".nen", "focused"), { recursive: true });
+      writeFileSync(join(root, APPLE_RESULTS), appleSummary(5));
+    });
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/did not rewrite/);
+  });
+
+  it("a red run keeps the tool's exit 1 and reads nothing", async () => {
+    const result = await shu(appleProject(), [...select, "--json"], [{ match: line, result: { code: 65, stdout: appleSummary(0) } }]);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out.join("\n")) as { selection: { executed: unknown } };
+    expect(report.selection.executed).toBeNull();
+  });
+});
+
 describe("parseSelectionIds", () => {
   it("keeps the caller's order and spelling exactly", () => {
     expect(parseSelectionIds("b,a,KroTests/X/testY")).toEqual(["b", "a", "KroTests/X/testY"]);
@@ -322,7 +449,13 @@ function load(select: unknown, verb = "test", extra: Record<string, unknown> = {
   });
 }
 
-const GOOD = { exe: "runner", argv: ["some"], each: ["--only={id}"], pattern: "[a-z]+" };
+const GOOD = {
+  exe: "runner",
+  argv: ["some"],
+  each: ["--only={id}"],
+  pattern: "[a-z]+",
+  results: { path: "focused/results.xml", format: "junit" },
+};
 
 describe("project.verbs.<lane>.test.select -- the schema", () => {
   it("loads a well-formed block onto the test row", () => {
@@ -345,6 +478,17 @@ describe("project.verbs.<lane>.test.select -- the schema", () => {
     ["a stdoutTo outside the tree", (): unknown => load({ ...GOOD, stdoutTo: "../out.txt" }), "project.verbs.only.test.select.stdoutTo", /\.\./],
     ["an artifact on the regression row's own output", (): unknown => load({ ...GOOD, artifacts: ["out/./results.xml"] }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.artifacts[0]", /overlaps 'out\/results\.xml'/],
     ["a stdoutTo inside the regression's output directory", (): unknown => load({ ...GOOD, stdoutTo: "coverage/focused.txt" }, "test", { artifacts: ["coverage"] }), "project.verbs.only.test.select.stdoutTo", /overlaps 'coverage'/],
+    ["a select with no results", (): unknown => load({ ...GOOD, results: undefined }), "project.verbs.only.test.select.results", /is required/],
+    ["a results format nen does not read", (): unknown => load({ ...GOOD, results: { path: "r.xml", format: "tap" } }), "project.verbs.only.test.select.results.format", /CLOSED set: junit, assertion-results, xcresult-summary/],
+    ["a results path outside the tree", (): unknown => load({ ...GOOD, results: { path: "../r.xml", format: "junit" } }), "project.verbs.only.test.select.results.path", /\.\./],
+    ["a results path on the regression output", (): unknown => load({ ...GOOD, results: { path: "Out/Results.XML", format: "junit" } }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.results.path", /overlaps 'out\/results\.xml'/],
+    ["a near-miss key inside results", (): unknown => load({ ...GOOD, results: { path: "r.xml", format: "junit", formats: "x" } }), "project.verbs.only.test.select.results.formats", /'format'/],
+    ["a pattern that only compiles inside the anchors (N2)", (): unknown => load({ ...GOOD, pattern: "a)|(?:.*" }), "project.verbs.only.test.select.pattern", /on its own/],
+    ["an argv element naming the regression output (N3)", (): unknown => load({ ...GOOD, argv: ["run", "--outputFile.junit=./out/results.xml"] }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.argv[1]", /names 'out\/results\.xml'/],
+    ["an each element writing into the coverage directory (N3)", (): unknown => load({ ...GOOD, each: ["--only={id}", "-report:Coverage/focused.info"] }, "test", { artifacts: ["coverage"] }), "project.verbs.only.test.select.each[1]", /names 'coverage'/],
+    ["an artifact that only normalises onto the regression output (N4)", (): unknown => load({ ...GOOD, artifacts: ["out/x/../results.xml"] }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.artifacts[0]", /overlaps 'out\/results\.xml'/],
+    ["an artifact that climbs out after normalising (N4)", (): unknown => load({ ...GOOD, artifacts: ["out/../../x.xml"] }), "project.verbs.only.test.select.artifacts[0]", /outside the repository/],
+    ["an artifact differing only in case (N4)", (): unknown => load({ ...GOOD, artifacts: ["OUT/RESULTS.xml"] }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.artifacts[0]", /overlaps/],
     ["an artifact under the capture sidecar directory", (): unknown => load({ ...GOOD, artifacts: [".nen/coverage-capture/x.json"] }), "project.verbs.only.test.select.artifacts[0]", /overlaps '\.nen\/coverage-capture'/],
   ];
   for (const [name, attempt, pointer, message] of refusals) {
@@ -360,6 +504,38 @@ describe("project.verbs.<lane>.test.select -- the schema", () => {
       expect((caught as SchemaError).message).toMatch(message);
     });
   }
+
+  it("refuses an output another LANE's regression writes (N4)", () => {
+    expect(() =>
+      parseProjectBlock("c", {
+        lanes: { a: { stack: "s", cwd: "." }, b: { stack: "s", cwd: "." } },
+        verbs: {
+          a: { test: { exe: "r", argv: ["a"], select: { ...GOOD, results: { path: "b/report.xml", format: "junit" } } } },
+          b: { coverage: { exe: "r", argv: ["c"], artifacts: ["b/report.xml"] } },
+        },
+      }),
+    ).toThrow(/project\.verbs\.a\.test\.select\.results\.path.*overlaps 'b\/report\.xml'/);
+  });
+
+  it("does not read a bare word in argv as a path (--coverage is not the coverage directory)", () => {
+    expect(() => load({ ...GOOD, argv: ["run", "--coverage", "--no-coverage=false"] }, "test", { artifacts: ["coverage"] })).not.toThrow();
+  });
+
+  it("the results formats are exactly test-report's", () => {
+    expect([...SELECT_RESULT_FORMATS]).toEqual(FORMATS.map((format): string => format.id));
+  });
+
+  it("nen's own declared pattern refuses a climbing path and keeps nested files (N8)", () => {
+    const contract = loadContract(fileURLToPath(new URL("../..", import.meta.url)));
+    const select = contract.project?.verbs["nen"]?.["test"];
+    const pattern = select !== undefined && select.kind !== "unsupported" ? select.select?.pattern : undefined;
+    expect(pattern).toBeDefined();
+    const own = new RegExp(`^(?:${pattern ?? ""})$`);
+    expect(own.test("src/shu/select.test.ts")).toBe(true);
+    expect(own.test("src/a/b/c.test.ts")).toBe(true);
+    expect(own.test("src/../etc/x.test.ts")).toBe(false);
+    expect(own.test("src/a/../b.test.ts")).toBe(false);
+  });
 
   it("refuses an artifact that overlaps the lane's coverage row output", () => {
     expect(() =>

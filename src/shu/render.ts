@@ -386,6 +386,19 @@ export interface ResolvedSelection {
   readonly each: readonly string[];
   /** What the expansion appended after the focused base argv, in order. */
   readonly appended: readonly string[];
+  /** The declared results file and format nen reads after the run. */
+  readonly results: { readonly path: string; readonly format: string };
+  /**
+   * Tests the results file says were EXECUTED (passed + failed; a skipped test
+   * did not run). Null until a run that exited 0 has had its results read --
+   * a dry run, an unmet precondition, a red run, or unreadable results.
+   */
+  readonly executed: number | null;
+  /**
+   * True when the run exited 0 and executed no test: "selection resolved to
+   * zero executed tests", exit 6. Null whenever `executed` is.
+   */
+  readonly zeroMatch: boolean | null;
 }
 
 export interface RenderRequest {
@@ -736,8 +749,22 @@ export function renderInvocation(
   };
 }
 
-/** A character no identifier may carry: whitespace or a control character. */
-const UNPRINTABLE = /[\s\p{Cc}]/u;
+/**
+ * A character no identifier may carry: whitespace, a control character, or a
+ * FORMAT character (zero-width joiners, bidi overrides -- invisible on every
+ * report this family prints, so an identifier carrying one is not the one the
+ * reader sees).
+ */
+const UNPRINTABLE = /[\s\p{Cc}\p{Cf}]/u;
+
+/**
+ * Shell and batch metacharacters, refused whatever the lane's `pattern` admits
+ * (Nobunaga N6). nen spawns no shell, so none of these is dangerous HERE; but
+ * a runner that hands its filter to one (a wrapper script, a `.cmd` shim on
+ * Windows, where `%`, `^`, `!` and `"` are live) would read them, and no test
+ * identifier is spelled with one.
+ */
+const METACHARACTERS = /["%^&|<>!`]/;
 
 /**
  * `--select`'s value, as identifiers -- or a usage refusal naming every
@@ -778,7 +805,8 @@ export function parseSelectionIds(value: string): readonly string[] {
   ids.forEach((id, index): void => {
     const at = `entry ${index + 1}`;
     if (id === "") problems.push(`${at} is empty`);
-    else if (UNPRINTABLE.test(id)) problems.push(`${at} ${JSON.stringify(id)} carries whitespace or a control character`);
+    else if (UNPRINTABLE.test(id)) problems.push(`${at} ${JSON.stringify(id)} carries whitespace, a control character or an invisible format character`);
+    else if (METACHARACTERS.test(id)) problems.push(`${at} ${JSON.stringify(id)} carries a shell metacharacter (one of " % ^ & | < > ! and backtick)`);
     else if (id.startsWith("-")) problems.push(`${at} '${id}' begins with '-', which the runner would read as one of its own options`);
     else if (id.includes("{") || id.includes("}")) problems.push(`${at} '${id}' carries a brace, this family's placeholder syntax`);
     else if (seen.has(id)) problems.push(`${at} '${id}' repeats an identifier already named`);
@@ -793,7 +821,7 @@ export function parseSelectionIds(value: string): readonly string[] {
 }
 
 /** The block a lane with no focused form pastes, and then edits. */
-const SELECT_STUB = `"select": { "exe": "<runner>", "argv": ["<focused base argument>"], "each": ["<per-identifier argument naming ${SELECTION_TOKEN}>"], "pattern": "<the runner's identifier grammar>", "artifacts": ["<a results path of its own>"] }`;
+const SELECT_STUB = `"select": { "exe": "<runner>", "argv": ["<focused base argument>"], "each": ["<per-identifier argument naming ${SELECTION_TOKEN}>"], "pattern": "<the runner's identifier grammar>", "results": { "path": "<a results path of its own>", "format": "<junit | assertion-results | xcresult-summary>" } }`;
 
 /**
  * Expand a rendered `test` plan into its focused form, or refuse
@@ -858,7 +886,16 @@ export function selectInvocation(
     env: envOf(select.raw, pointer),
     artifacts: artifactsOf(select.raw, pointer),
     why: select.why,
-    selection: { pointer, ids, pattern: select.pattern, each: select.each, appended },
+    selection: {
+      pointer,
+      ids,
+      pattern: select.pattern,
+      each: select.each,
+      appended,
+      results: { path: select.results.path, format: select.results.format },
+      executed: null,
+      zeroMatch: null,
+    },
   };
 }
 

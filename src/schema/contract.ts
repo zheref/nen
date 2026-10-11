@@ -76,6 +76,7 @@ import {
 import { matchesGlob } from "../shu/evidence/glob.js";
 import { CAPTURE_DIRECTORY } from "../shu/coverage/capture.js";
 import { catastrophicShape } from "./pattern.js";
+import { posix } from "node:path";
 import { CONTRACT_FILE, readSchemaJson, type SchemaLocation } from "./source.js";
 
 // ── the closed sets ─────────────────────────────────────────────────────────
@@ -293,9 +294,35 @@ export interface TestSelection {
   readonly pattern: string;
   /** Repo-relative file the focused run's stdout is written to, or null. */
   readonly stdoutTo: string | null;
+  /**
+   * The focused run's results file and its format -- REQUIRED (zheref/nen#207,
+   * the maintainer's ruling on the 2026-09-27 acceptance criterion). A runner
+   * that matched nothing exits 0 and prints "Executed 0 tests"; nen reads this
+   * file after the run and refuses a selection that executed no test, so a
+   * typed-from-memory identifier can never read as a pass.
+   */
+  readonly results: SelectionResults;
   readonly why: string | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
+
+/** `select.results`: where the focused run's results land, in which format. */
+export interface SelectionResults {
+  /** Repo-relative file (or, for `junit`, a directory of XML). */
+  readonly path: string;
+  /** One of SELECT_RESULT_FORMATS -- the formats `nen shu test-report` reads. */
+  readonly format: SelectResultFormat;
+}
+
+/**
+ * The results formats a focused selection may declare: EXACTLY the ids
+ * ../shu/test-report/parse.ts's FORMATS carry. Stated here rather than imported
+ * so this loader does not pull every parser in; ../shu/select.test.ts pins the
+ * two lists equal, so they cannot drift apart silently.
+ */
+export const SELECT_RESULT_FORMATS = ["junit", "assertion-results", "xcresult-summary"] as const;
+
+export type SelectResultFormat = (typeof SELECT_RESULT_FORMATS)[number];
 
 export type Invocation =
   | {
@@ -1168,7 +1195,10 @@ export const SELECTABLE_VERB = "test";
 export const SELECTION_TOKEN = "{id}";
 
 /** The keys `project.verbs.<lane>.test.select` is made of. Nen's, not the repo's. */
-const SELECT_KEYS: readonly string[] = ["exe", "argv", "each", "pattern", "stdoutTo", "artifacts", "env", "why"];
+const SELECT_KEYS: readonly string[] = ["exe", "argv", "each", "pattern", "results", "stdoutTo", "artifacts", "env", "why"];
+
+/** The two keys `select.results` is made of. */
+const SELECT_RESULTS_KEYS: readonly string[] = ["path", "format"];
 
 /**
  * Attach `select` to the row that declares it, or refuse it where nen would
@@ -1245,6 +1275,19 @@ function parseSelection(path: string, pointer: string, value: unknown): TestSele
     );
   }
   const pattern = requireString(path, `${pointer}.pattern`, raw["pattern"]);
+  // THE PATTERN MUST COMPILE ON ITS OWN, NOT ONLY INSIDE nen's ANCHORS
+  // (Nobunaga N2). `a)|(?:.*` is no regular expression by itself, yet
+  // `^(?:a)|(?:.*)$` compiles -- and matches everything, because the author's
+  // own `)` closed nen's group and turned the anchors into two alternatives.
+  try {
+    new RegExp(pattern);
+  } catch (error) {
+    throw new SchemaError(
+      path,
+      `${pointer}.pattern`,
+      `is not a regular expression nen can compile on its own (${error instanceof Error ? error.message : String(error)}). nen anchors the pattern as ^(?:<pattern>)$, so a pattern that only compiles once wrapped is one whose parentheses close nen's anchoring group and match far more than it says`,
+    );
+  }
   const hazard = catastrophicShape(pattern);
   if (hazard !== null) {
     throw new SchemaError(
@@ -1262,25 +1305,65 @@ function parseSelection(path: string, pointer: string, value: unknown): TestSele
       `is not a regular expression nen can compile (${error instanceof Error ? error.message : String(error)})`,
     );
   }
-  optionalStrings(path, `${pointer}.artifacts`, raw["artifacts"]);
+  optionalStrings(path, `${pointer}.artifacts`, raw["artifacts"]).forEach((value, index): void =>
+    void requireRelativeOutput(path, `${pointer}.artifacts[${index}]`, value),
+  );
   return {
     exe,
     argv,
     each,
     pattern,
+    results: parseSelectionResults(path, `${pointer}.results`, raw["results"]),
     stdoutTo: optionalStdoutTo(path, `${pointer}.stdoutTo`, raw["stdoutTo"]),
     why: optionalString(path, `${pointer}.why`, raw["why"]),
     raw,
   };
 }
 
-/** A repo-relative path, normalised for comparison: no `./`, no trailing `/`. */
+/**
+ * `select.results`, required: a focused block that names no results file is a
+ * focused run whose "0 tests executed" nen could not see.
+ */
+function parseSelectionResults(path: string, pointer: string, value: unknown): SelectionResults {
+  if (value === undefined || value === null) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `is required. A focused run must name its results file so nen can count the tests it EXECUTED: a runner that matched none of the identifiers exits 0, and without the file that reads exactly like a pass. Declare {"path": "<repo-relative results path>", "format": "<one of ${SELECT_RESULT_FORMATS.join(", ")}>"}`,
+    );
+  }
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(path, pointer, raw, SELECT_RESULTS_KEYS, pointer, (meant): string =>
+    `the focused run's results would be read with '${meant}' unset`,
+  );
+  const resultsPath = requireStdoutTo(path, `${pointer}.path`, raw["path"]);
+  requireRelativeOutput(path, `${pointer}.path`, resultsPath);
+  return { path: resultsPath, format: requireEnum(path, `${pointer}.format`, raw["format"], SELECT_RESULT_FORMATS) };
+}
+
+/**
+ * A repo-relative path normalised for comparison (Nobunaga N4): separators
+ * folded to `/`, `posix.normalize`d (so `a/./b`, `a//b` and `a/x/../b` are one
+ * path), no leading `./` or trailing `/`, and CASE-FOLDED -- a case-insensitive
+ * filesystem (the default on macOS and Windows) writes `Coverage/LCOV.info`
+ * and `coverage/lcov.info` to one file. Lexical only: a symlink cannot be
+ * judged at load, and ../shu/run.ts's real containment is the run-time half.
+ */
 function comparablePath(value: string): string {
-  return value
-    .replace(/\\/g, "/")
-    .split("/")
-    .filter((segment): boolean => segment !== "" && segment !== ".")
-    .join("/");
+  const normalised = posix.normalize(value.replace(/\\/g, "/"));
+  return normalised.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "").replace(/^\.$/, "").toLowerCase();
+}
+
+/** A focused output path that climbs out of the tree, refused by pointer. */
+function requireRelativeOutput(path: string, pointer: string, value: string): void {
+  const normalised = posix.normalize(value.replace(/\\/g, "/"));
+  if (normalised === ".." || normalised.startsWith("../") || normalised.startsWith("/") || /^[A-Za-z]:\//.test(normalised)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${value}' normalises to '${normalised}', which is outside the repository. A focused run's outputs are repo-relative paths inside the tree`,
+    );
+  }
 }
 
 /** True when `a` and `b` are the same path, or one is a directory holding the other. */
@@ -1289,6 +1372,23 @@ function pathsOverlap(a: string, b: string): boolean {
   const right = comparablePath(b);
   if (left === "" || right === "") return true;
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+/** True when `token` IS `written`, or a path inside it. Never the other way. */
+function namesWrittenPath(token: string, written: string): boolean {
+  const left = comparablePath(token);
+  const right = comparablePath(written);
+  if (left === "" || right === "") return false;
+  return left === right || left.startsWith(`${right}/`);
+}
+
+/**
+ * The path-shaped pieces of one argv element: the element itself, and what is
+ * left of it after cutting at `=`, `:`, `,`, `@` and quotes -- the places a
+ * runner's `--flag=value` or `-flag:value` puts a path.
+ */
+function argvTokens(element: string): readonly string[] {
+  return [element, ...element.split(/[=:,@"'\s]/)].filter((token): boolean => token !== "");
 }
 
 /** Every path a row says it writes: its `stdoutTo`(s) and its `artifacts`. */
@@ -1307,33 +1407,68 @@ function writtenPaths(invocation: Invocation | undefined): readonly string[] {
 /**
  * A focused run never writes where the regression run does.
  *
- * THE AKA REGRESSION CAPTURE IS THE `test` ROW'S OWN OUTPUTS, THE `coverage`
- * ROW'S REPORTS AND nen's capture sidecars under CAPTURE_DIRECTORY -- the
- * files mukai later measures and `--from-capture` vouches for. A focused run
- * that wrote over any of them would leave a capture describing a subset of the
- * suite, and the sidecar's digest is the only thing that would notice. So the
- * overlap is refused at load, by pointer, for the focused block's `stdoutTo`
- * and every one of its `artifacts`: the same path, or one a directory of the
- * other.
+ * THE AKA REGRESSION CAPTURE IS EVERY LANE'S `test` ROW OUTPUTS, EVERY LANE'S
+ * `coverage` ROW REPORTS AND nen's capture sidecars under CAPTURE_DIRECTORY --
+ * the files mukai later measures and `--from-capture` vouches for. Gathered
+ * across EVERY lane (Nobunaga N4), because two lanes routinely share one tree.
+ * A focused run that wrote over any of them would leave a capture describing a
+ * subset of the suite. So, at load and by pointer:
+ *
+ *   * the focused block's `results.path`, `stdoutTo` and every `artifacts`
+ *     entry may not be, sit inside, or contain such a path;
+ *   * no `argv` or `each` element may NAME one, whole or as the value of a
+ *     `--flag=` / `-flag:` (Nobunaga N3) -- `--outputFile.junit=<the regression
+ *     file>` is the regression capture overwritten by a flag.
+ *
+ * WHAT THIS DOES NOT CLAIM: nen does not interpret argv beyond that. A runner
+ * that derives an output path from something else (a config file, an
+ * environment variable, a default) is not seen, and a symlink cannot be judged
+ * here -- both are said in USAGE rather than implied away.
  */
-function refuseSelectionOverlap(path: string, pointer: string, rows: Readonly<Record<string, Invocation>>): void {
-  const test = rows[SELECTABLE_VERB];
-  if (test === undefined || test.kind === "unsupported" || test.select === undefined) return;
-  const select = test.select;
-  const regression = [...writtenPaths(test), ...writtenPaths(rows["coverage"]), CAPTURE_DIRECTORY];
-  const focused: { readonly value: string; readonly at: string }[] = [];
-  if (select.stdoutTo !== null) focused.push({ value: select.stdoutTo, at: `${pointer}.${SELECTABLE_VERB}.select.stdoutTo` });
-  optionalStrings(path, `${pointer}.${SELECTABLE_VERB}.select.artifacts`, select.raw["artifacts"]).forEach(
-    (value, index): void => void focused.push({ value, at: `${pointer}.${SELECTABLE_VERB}.select.artifacts[${index}]` }),
-  );
-  for (const entry of focused) {
-    const clash = regression.find((other): boolean => pathsOverlap(entry.value, other));
-    if (clash === undefined) continue;
-    throw new SchemaError(
-      path,
-      entry.at,
-      `'${entry.value}' overlaps '${clash}', which the regression run writes (the lane's '${SELECTABLE_VERB}' and 'coverage' outputs, and nen's capture sidecars under '${CAPTURE_DIRECTORY}'). A focused run writes its own results and never the aka regression capture: name a separate path`,
+function refuseSelectionOverlap(path: string, verbs: Readonly<Record<string, Readonly<Record<string, Invocation>>>>): void {
+  const regression = [
+    ...Object.values(verbs).flatMap((rows): readonly string[] => [
+      ...writtenPaths(rows[SELECTABLE_VERB]),
+      ...writtenPaths(rows["coverage"]),
+    ]),
+    CAPTURE_DIRECTORY,
+  ];
+  for (const [lane, rows] of Object.entries(verbs)) {
+    const test = rows[SELECTABLE_VERB];
+    if (test === undefined || test.kind === "unsupported" || test.select === undefined) continue;
+    const select = test.select;
+    const at = `project.verbs.${lane}.${SELECTABLE_VERB}.select`;
+    const focused: { readonly value: string; readonly at: string }[] = [
+      { value: select.results.path, at: `${at}.results.path` },
+    ];
+    if (select.stdoutTo !== null) focused.push({ value: select.stdoutTo, at: `${at}.stdoutTo` });
+    optionalStrings(path, `${at}.artifacts`, select.raw["artifacts"]).forEach(
+      (value, index): void => void focused.push({ value, at: `${at}.artifacts[${index}]` }),
     );
+    for (const entry of focused) {
+      const clash = regression.find((other): boolean => pathsOverlap(entry.value, other));
+      if (clash === undefined) continue;
+      throw new SchemaError(
+        path,
+        entry.at,
+        `'${entry.value}' overlaps '${clash}', which the regression run writes (every lane's '${SELECTABLE_VERB}' and 'coverage' outputs, and nen's capture sidecars under '${CAPTURE_DIRECTORY}'; compared normalised and case-folded). A focused run writes its own results and never the aka regression capture: name a separate path`,
+      );
+    }
+    const elements: { readonly value: string; readonly at: string }[] = [
+      ...select.argv.map((value, index): { value: string; at: string } => ({ value, at: `${at}.argv[${index}]` })),
+      ...select.each.map((value, index): { value: string; at: string } => ({ value, at: `${at}.each[${index}]` })),
+    ];
+    for (const element of elements) {
+      for (const token of argvTokens(element.value)) {
+        const clash = regression.find((other): boolean => namesWrittenPath(token, other));
+        if (clash === undefined) continue;
+        throw new SchemaError(
+          path,
+          element.at,
+          `'${element.value}' names '${clash}', which the regression run writes. A focused run must not be pointed at the aka regression capture through an argument either: give the runner a separate path, and declare it under 'results', 'stdoutTo' or 'artifacts'`,
+        );
+      }
+    }
   }
 }
 
@@ -1358,7 +1493,6 @@ function parseVerbs(
       refuseStallOnTests(path, `${pointer}.${verb}`, verb, invocation);
       parsed[verb] = withSelection(path, `${pointer}.${verb}`, verb, parseInvocation(path, `${pointer}.${verb}`, invocation));
     }
-    refuseSelectionOverlap(path, pointer, parsed);
     // EMPTY IS REFUSED AT BOTH LEVELS, exactly as `project.lanes` refuses it,
     // and for the same reason: `$`-prefixed metadata is skipped above, so a map
     // holding only a `$comment` is empty here even though the file looks
@@ -1375,6 +1509,7 @@ function parseVerbs(
     }
     verbs[lane] = parsed;
   }
+  refuseSelectionOverlap(path, verbs);
   if (Object.keys(verbs).length === 0) {
     throw new SchemaError(
       path,

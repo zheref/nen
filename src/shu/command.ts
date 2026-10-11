@@ -436,12 +436,20 @@ flags:
                    the regression row reaches it: not its argv (so no coverage
                    flag it carries), not its env, not its outputs, and no
                    capture sidecar is recorded. Exit 2, NOTHING SPAWNED, for no
-                   identifier, an empty entry, whitespace or a control
-                   character, a leading '-', a brace, a repeat, an identifier
-                   the declared 'pattern' does not match whole, or a lane whose
-                   test row declares no 'select' -- never a fallback to the full
-                   regression. --dry-run and --json show the expanded argv and
-                   a 'selection' block naming what was appended.
+                   identifier, an empty entry, whitespace, a control or
+                   invisible format character, a shell metacharacter
+                   (" % ^ & | < > ! or a backtick), a leading '-', a brace, a
+                   repeat, an identifier the declared 'pattern' does not match
+                   whole, or a lane whose test row declares no 'select' --
+                   never a fallback to the full regression. After a run that
+                   exited 0, nen reads the block's REQUIRED 'results' file
+                   with test-report's parser and counts the tests EXECUTED:
+                   zero is exit 6 ("selection resolved to zero executed
+                   tests"); results missing, unreadable, in another format or
+                   not rewritten by this run are exit 1 -- never a pass.
+                   --dry-run and --json show the expanded argv and a
+                   'selection' block naming what was appended, the results,
+                   'executed' and 'zeroMatch'.
   --base <ref>     'evidence' only, and REQUIRED. The other end of
                    'git diff --name-status <base>...HEAD' -- HEAD is always
                    the checkout's own current commit, never a flag.
@@ -1039,6 +1047,11 @@ exit codes:
      install form is permanently red on a machine nen can never fix, and the
      question "is this host ready" is what the CHECK and its 5 are for
 
+  6  'test --select' (zheref/nen#207): the focused run exited 0, its declared
+     results parsed, and they record ZERO executed tests -- "selection
+     resolved to zero executed tests", usually an identifier that names no
+     test. --json carries selection.executed 0 and selection.zeroMatch true.
+     Not 0, which a runner's own "Executed 0 tests" exit would have been.
   6  'coverage --touched' only: the run succeeded and its reports parsed, the
      diff named at least one file, and NOT ONE of them joined to a report row
      -- nothing was measured. Not 0, which read as "measured and fine" to a

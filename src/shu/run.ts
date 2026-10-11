@@ -57,7 +57,8 @@ import {
 } from "../seam/exec.js";
 import type { DeviceExtraction, DeviceReadiness, StallGuard } from "../schema/contract.js";
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
-import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
+import { EXIT_SELECTION_EMPTY, EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
+import { readSelectionResults, resultsState } from "./select-results.js";
 import { openDeclaration } from "./declaration.js";
 import { appendStepsToOpenPhase, EFFORT_ID, type PhaseStep } from "../phase/ledger.js";
 import {
@@ -595,6 +596,17 @@ export function renderReport(report: ShuReport): readonly string[] {
           exe: selection.appended[0] as string,
           argv: selection.appended.slice(1),
         })})`,
+      ),
+    );    lines.push(
+      labelled(
+        "results",
+        `${selection.results.path} (${selection.results.format})${
+          selection.executed === null
+            ? "  -- not read"
+            : selection.zeroMatch === true
+              ? "  -- ZERO executed tests: the selection resolved to nothing"
+              : `  -- ${selection.executed} executed`
+        }`,
       ),
     );
   }
@@ -1297,11 +1309,77 @@ export async function runVerb(
   if (INTERACTIVE_VERBS.includes(plan.verb)) {
     return runInteractively(context, plan, cwd, repoRoot, preconditions, sink);
   }
-  return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink, {
+  const liveness: Liveness = {
     stream: options.stream === true,
     heartbeatMs: options.heartbeatMs === undefined ? DEFAULT_HEARTBEAT_MS : options.heartbeatMs,
     holdLimitBytes: options.holdLimitBytes ?? CAPTURE_MAX_BUFFER,
+  };
+  const selection = plan.selection ?? null;
+  if (selection === null) {
+    return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink, liveness);
+  }
+  return await runSelected(context, plan, selection, cwd, repoRoot, preconditions, sink, liveness);
+}
+
+/**
+ * A focused run: the same captured executor, then its declared results read
+ * and its executed tests counted (zheref/nen#207).
+ *
+ * THE REPORT IS HELD, NOT PRINTED, until the count is in -- so `--json` is
+ * still exactly one document, and it carries `selection.executed` and
+ * `selection.zeroMatch` rather than a second object saying them. The verdict:
+ *
+ *   * the tool failed                            -> its 1, unchanged, nothing read;
+ *   * results missing, unreadable, another format,
+ *     or not rewritten by this run               -> 1, the reason on stderr;
+ *   * results record zero executed tests          -> 6 (EXIT_SELECTION_EMPTY);
+ *   * otherwise                                   -> 0.
+ */
+async function runSelected(
+  context: CommandContext,
+  plan: RenderedInvocation,
+  selection: ResolvedSelection,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+  sink: ReportSink | undefined,
+  liveness: Liveness,
+): Promise<number> {
+  const resultsPointer = `${selection.pointer}.results.path`;
+  const absolute = insideRepo(repoRoot, selection.results.path, resultsPointer);
+  const before = resultsState(absolute);
+  const held: { report: ShuReport | null } = { report: null };
+  const code = await runCaptured(context, plan, cwd, repoRoot, preconditions, (report): void => {
+    held.report = report;
+  }, liveness);
+  let verdict = code;
+  let executed: number | null = null;
+  if (code === 0) {
+    const read = readSelectionResults(absolute, selection.results.path, selection.results.format, before);
+    if (!read.ok) {
+      verdict = 1;
+      context.io.err(`nen shu test --select: ${read.why}.`);
+    } else {
+      executed = read.executed;
+      if (executed === 0) {
+        verdict = EXIT_SELECTION_EMPTY;
+        context.io.err(
+          `nen shu test --select: selection resolved to zero executed tests. The run exited 0, and '${selection.results.path}' records no test that ran for ${selection.ids
+            .map((id): string => `'${id}'`)
+            .join(", ")} -- most often an identifier that names no test. Nothing was certified; exit ${EXIT_SELECTION_EMPTY}.`,
+        );
+      }
+    }
+  }
+  const report = held.report;
+  /* c8 ignore next -- runCaptured always hands its report to the sink */
+  if (report === null) return verdict;
+  emitReport(context, sink, {
+    ...report,
+    exitCode: verdict,
+    selection: { ...selection, executed, zeroMatch: executed === null ? null : executed === 0 },
   });
+  return verdict;
 }
 
 /** How a run relays its steps' output and says it is still alive (zheref/nen#244). */

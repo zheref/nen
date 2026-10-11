@@ -62,7 +62,7 @@
         "-skipMacroValidation",
         "test"
       ],
-      "why": "CI runs this against a per-runner simulator created and booted BY UDID (`SCHEME: Kro`, tests.yml:58). The local snapshot-subset form is the same command with `-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'` and `-only-testing:{testTarget}/{name}` (KroApple/.claude/rules/07-testing.md:194-196). From nen 0.21.0 that subset form is declarable once, as this row's `select` block (`each: [\"-only-testing:<identifier token>\"]`), and `nen shu test --select` passes the identifiers; the pack proposes no `select`, because the identifier grammar is the repository's.",
+      "why": "CI runs this against a per-runner simulator created and booted BY UDID (`SCHEME: Kro`, tests.yml:58). The local snapshot-subset form is the same command with `-destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5'` and `-only-testing:{testTarget}/{name}` (KroApple/.claude/rules/07-testing.md:194-196). From the nen release that carries zheref/nen#207 (expected 0.21.0, to be confirmed by the release proposal) that subset form is declarable once, as this row's `select` block (`each: [\"-only-testing:<identifier token>\"]`, plus a required `results` test summary nen counts executed tests from -- nen reads no .xcresult bundle), and `nen shu test --select` passes the identifiers; the pack proposes no `select`, because the identifier grammar is the repository's.",
       "source": "KroApple/.github/workflows/tests.yml:194-209"
     },
     "ui-test": {
