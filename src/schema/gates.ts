@@ -508,9 +508,9 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 // holds.
 //
 // `introducedIn` for a key not yet in a release is NEXT_RELEASE, the next
-// minor after this build's VERSION -- today `round_policy.minRounds` and
-// `.maxRounds` (zheref/nen#240), which missed v0.20.0. A key that HAS
-// shipped carries that release's literal number (`checks.*`, v0.20.0). The
+// minor after this build's VERSION -- today none. A key that HAS shipped
+// carries that release's literal number (`checks.*`, v0.20.0;
+// `round_policy.minRounds` and `.maxRounds`, zheref/nen#240, v0.21.0). The
 // release proposal corrects NEXT_RELEASE if the release is cut under another
 // number, and `gates.test.ts` fails the build while NEXT_RELEASE is not
 // above VERSION, so a release that ships without bumping it cannot pass.
@@ -527,7 +527,7 @@ export interface GatesKeySpec {
 export type GatesKeyLevel = Readonly<Record<string, GatesKeySpec>>;
 
 /** The release a key tabled in this change ships in: the next minor after VERSION (R1). */
-export const NEXT_RELEASE = "0.21.0";
+export const NEXT_RELEASE = "0.22.0";
 
 const pattern = (introducedIn: string): GatesKeySpec => ({
   introducedIn,
@@ -578,8 +578,8 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
       // Adopted under the consumer's own names (zheref/nen#240; ruling of
       // 2026-10-04, "Retire 2, adopt 2") -- see "THE ONE RULED EXCEPTION" in
       // the section header above.
-      minRounds: { introducedIn: NEXT_RELEASE },
-      maxRounds: { introducedIn: NEXT_RELEASE },
+      minRounds: { introducedIn: "0.21.0" },
+      maxRounds: { introducedIn: "0.21.0" },
     },
   },
   round_quorum: {
