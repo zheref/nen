@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { JsonSpanError, locateJsonValue, rewritePin, writeFileAtomic } from "./pin-write.js";
@@ -74,7 +74,7 @@ describe("locateJsonValue -- the byte span the loader reads", () => {
 
 describe("rewritePin -- one value changes, and nothing else", () => {
   it("replaces exactly the one literal: the diff is that value on that line, every other byte preserved", () => {
-    const edit = rewritePin(MESSY, 2, "v1.3.0");
+    const edit = rewritePin(MESSY, 2, "v1.3.0", "owner/handbooks");
     expect(edit.before).toBe("v1.2.0");
     expect(edit.after).toBe("v1.3.0");
     expect(changedLines(MESSY, edit.text)).toEqual([['        "pinned"   :   "v1.2.0",', '        "pinned"   :   "v1.3.0",']]);
@@ -86,28 +86,35 @@ describe("rewritePin -- one value changes, and nothing else", () => {
   });
 
   it("leaves the same tag in another row (a consumer pin, an earlier row) alone", () => {
-    const edit = rewritePin(MESSY, 2, "v2.0.0");
+    const edit = rewritePin(MESSY, 2, "v2.0.0", "owner/handbooks");
     expect(edit.text).toContain('"consumers": [ { "repo": "owner/app", "pinned": "v1.2.0" } ]');
     expect(edit.text).toContain('{ "role": "first", "repo": "owner/handbooks", "pinned": "v1.0.0" }');
   });
 
   it("keeps CRLF line endings and a missing trailing newline as they are", () => {
     const crlf = '{\r\n  "maintained_tools": [\r\n    { "repo": "o/h", "pinned": "v1.0" }\r\n  ]\r\n}';
-    const edit = rewritePin(crlf, 0, "v1.1");
+    const edit = rewritePin(crlf, 0, "v1.1", "o/h");
     expect(edit.text).toBe(crlf.replace('"v1.0"', '"v1.1"'));
     expect(edit.text.endsWith("}")).toBe(true);
   });
 
   it("edits the pinned member JSON.parse reads when a row repeats the key", () => {
     const text = '{"maintained_tools":[{"repo":"o/h","pinned":"v0.1","pinned":"v0.2"}]}';
-    const edit = rewritePin(text, 0, "v0.3");
+    const edit = rewritePin(text, 0, "v0.3", "o/h");
     expect(edit.before).toBe("v0.2");
     expect(edit.text).toBe('{"maintained_tools":[{"repo":"o/h","pinned":"v0.1","pinned":"v0.3"}]}');
   });
 
+  it("refuses an index whose row names another source, whatever its pin (Nobunaga N3)", () => {
+    expect(() => rewritePin(MESSY, 1, "v1.3.0", "owner/handbooks")).toThrow(/maintained_tools\[1\] is 'owner\/tool', not owner\/handbooks/);
+    expect(() => rewritePin('{"maintained_tools":[{"pinned":"v1.0"}]}', 0, "v1.1", "o/h")).toThrow(/a row with no repo/);
+    // The slug is compared case-insensitively, as everywhere in the family.
+    expect(rewritePin(MESSY, 2, "v1.3.0", "OWNER/HANDBOOKS").after).toBe("v1.3.0");
+  });
+
   it("refuses a pinned value that is not a string, and a row with no pinned key", () => {
-    expect(() => rewritePin('{"maintained_tools":[{"repo":"o/h","pinned":3}]}', 0, "v1.0")).toThrow(/is not a string/);
-    expect(() => rewritePin('{"maintained_tools":[{"repo":"o/h"}]}', 0, "v1.0")).toThrow(/has no member 'pinned'/);
+    expect(() => rewritePin('{"maintained_tools":[{"repo":"o/h","pinned":3}]}', 0, "v1.0", "o/h")).toThrow(/is not a string/);
+    expect(() => rewritePin('{"maintained_tools":[{"repo":"o/h"}]}', 0, "v1.0", "o/h")).toThrow(/has no member 'pinned'/);
   });
 });
 
@@ -120,6 +127,20 @@ describe("writeFileAtomic -- a temporary file beside the target, renamed over it
     expect(readFileSync(path, "utf8")).toBe("new\n");
     if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o640);
     expect(readdirSync(dir)).toEqual(["repos.json"]);
+  });
+
+  it.skipIf(process.platform === "win32")("keeps a group-writable 0664 under a 022 umask: the mode is set, not masked (Nobunaga N1)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pin-atomic-mode-"));
+    const path = join(dir, "repos.json");
+    writeFileSync(path, "old\n");
+    chmodSync(path, 0o664);
+    const previous = process.umask(0o022);
+    try {
+      writeFileAtomic(path, "new\n");
+    } finally {
+      process.umask(previous);
+    }
+    expect(statSync(path).mode & 0o777).toBe(0o664);
   });
 
   it.skipIf(process.platform === "win32")("writes through a symbolic link, keeping the link", () => {

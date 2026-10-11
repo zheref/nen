@@ -10,7 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -117,7 +117,7 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
     expect(result.out).toContain("recorded in: " + join(root, "nen", "repos.json") + " (maintained_tools[2].pinned, line 9)");
     expect(result.out).toContain("read back: owner/handbooks pinned to v1.3.0");
     // The stale mirror is said out loud, naming the regenerate.
-    expect(result.out).toMatch(/mirror: now STALE -- regenerate it in the same commit: nen canon mirror generate --repo /);
+    expect(result.out).toContain(`mirror: now STALE -- regenerate it in the same commit: nen canon mirror generate --repo '${root}' --canon-values <path>`);
     expect(result.err).toMatch(/nen: note: the canon mirror now names v1\.2\.0, not v1\.3\.0: it is STALE\. Regenerate it and commit it WITH this pin: nen canon mirror generate/);
     // The read path now answers with the new pin.
     const read = await run(root, ["canon", "pin"]);
@@ -160,6 +160,7 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
       changed: true,
       dryRun: true,
       written: false,
+      ok: true,
       recordedIn: "nen/repos.json (maintained_tools[2].pinned)",
       row: 2,
       line: 9,
@@ -173,6 +174,78 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
     const result = await run(root, ["canon", "pin", "--write", "v1.4.0"]);
     expect(result.code).toBe(1);
     expect(result.err).toMatch(/refusing to pin owner\/handbooks to v1\.4\.0: tag-missing: '.*' has no tag v1\.4\.0\..*refs\/tags\/v1\.4\.0.*nothing was written/s);
+    // Nobunaga N7: at tag depth the advice is the fetch, never a checkout.
+    expect(result.err).toContain("fetch --tags origin); nen fetches nothing.");
+    expect(result.err).not.toMatch(/check v1\.4\.0 out/);
+    expect(registryOf(root)).toBe(REGISTRY);
+  });
+
+  it("emits a failure document under --json on an exit-1 refusal, as canon checkout does (Nobunaga N5)", async () => {
+    const root = consumer();
+    const result = await run(root, ["canon", "pin", "--write", "v1.4.0"], true);
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out) as Record<string, unknown>;
+    expect(doc).toEqual({
+      contract: PIN_WRITE_CONTRACT,
+      ok: false,
+      failure: { code: "tag-missing", message: expect.stringMatching(/^refusing to pin owner\/handbooks to v1\.4\.0: tag-missing: /) as unknown },
+    });
+  });
+
+  it("quotes the root in the regenerate command and carries it as argv in --json (Nobunaga N4)", async () => {
+    const spaced = mkdtempSync(join(base, "it's a consumer "));
+    const root = join(spaced, "repo");
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "repos.json"), REGISTRY);
+    git(root, ["init", "--quiet"]);
+    git(root, ["remote", "add", "origin", "git@github.com:owner/consumer.git"]);
+    const text = await run(root, ["canon", "pin", "--write", "v1.3.0", "--dry-run"]);
+    expect(text.code, text.err).toBe(0);
+    expect(text.out).toContain(`--repo '${root.replace(/'/g, "'\\''")}' --canon-values`);
+    const doc = JSON.parse((await run(root, ["canon", "pin", "--write", "v1.3.0", "--dry-run"], true)).out) as { mirror: { regenerateArgv: string[] } };
+    expect(doc.mirror.regenerateArgv.slice(0, 6)).toEqual(["nen", "canon", "mirror", "generate", "--repo", root]);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a nen/repos.json that links OUT of the repository, naming both paths, and leaves both files alone (Nobunaga N2)", async () => {
+    const root = consumer();
+    const outside = join(mkdtempSync(join(base, "elsewhere-")), "repos.json");
+    writeFileSync(outside, REGISTRY);
+    rmSync(join(root, "nen", "repos.json"));
+    symlinkSync(outside, join(root, "nen", "repos.json"));
+    const result = await run(root, ["canon", "pin", "--write", "v1.3.0"], true);
+    expect(result.code).toBe(1);
+    const realOutside = realpathSync.native(outside);
+    expect(result.err).toContain(`${join(root, "nen", "repos.json")} resolves to ${realOutside}, which is outside the consumer`);
+    expect((JSON.parse(result.out) as { failure: { code: string } }).failure.code).toBe("registry-outside-repo");
+    expect(readFileSync(outside, "utf8")).toBe(REGISTRY);
+    expect(lstatSync(join(root, "nen", "repos.json")).isSymbolicLink()).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32")("writes through a link that stays inside the repository, naming the real file written", async () => {
+    const root = consumer();
+    mkdirSync(join(root, "registry"));
+    const real = join(root, "registry", "repos.json");
+    writeFileSync(real, REGISTRY);
+    rmSync(join(root, "nen", "repos.json"));
+    symlinkSync(real, join(root, "nen", "repos.json"));
+    const result = await run(root, ["canon", "pin", "--write", "v1.3.0"]);
+    expect(result.code, result.err).toBe(0);
+    expect(result.out).toContain(`written: ${realpathSync.native(real)} (through the link ${join(root, "nen", "repos.json")}), read back`);
+    expect(lstatSync(join(root, "nen", "repos.json")).isSymbolicLink()).toBe(true);
+    expect(readFileSync(real, "utf8")).toContain('"pinned": "v1.3.0",\n        "repo": "owner/handbooks"');
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("names a failed replace at exit 1: the pin was not moved, and no temporary file is left (Nobunaga N6)", async () => {
+    const root = consumer();
+    chmodSync(join(root, "nen"), 0o555);
+    try {
+      const result = await run(root, ["canon", "pin", "--write", "v1.3.0"]);
+      expect(result.code).toBe(1);
+      expect(result.err).toContain(`the pin was not moved; ${realpathSync.native(join(root, "nen", "repos.json"))} could not be replaced: EACCES.`);
+      expect(readdirSync(join(root, "nen")).sort()).toEqual(["labels.json", "repos.json"]);
+    } finally {
+      chmodSync(join(root, "nen"), 0o755);
+    }
     expect(registryOf(root)).toBe(REGISTRY);
   });
 

@@ -478,7 +478,7 @@ export function verifyCanonTag(
   paths: PathSeam = nativePaths,
 ): Verified<TagVerification> {
   return verifyAt(seams, path, source, ref, (real, failed): Verified<TagVerification> => {
-    const facts = verifyIdentityAndTag(gitRunner(seams, real), real, source, ref, consumerRoot, paths, seams.platform, failed);
+    const facts = verifyIdentityAndTag(gitRunner(seams, real), real, source, ref, consumerRoot, paths, seams.platform, failed, "tag");
     if ("failure" in facts) return facts;
     return { path: real, verified: { origin: facts.origin, originSlug: facts.originSlug, host: facts.host, tag: ref, tagCommit: facts.tagCommit } };
   }, paths);
@@ -552,6 +552,7 @@ function verifyIdentityAndTag(
   paths: PathSeam,
   platform: Seams["platform"],
   failed: Failed,
+  depth: "pin" | "tag",
 ): IdentityFacts | { readonly path: string; readonly failure: CheckoutFailure } {
   const { git, gitIn } = runner;
   const top = git(["rev-parse", "--show-toplevel"]);
@@ -595,7 +596,11 @@ function verifyIdentityAndTag(
   const tag = git(["rev-parse", "--verify", "--quiet", `refs/tags/${ref}^{commit}`]);
   const tagCommit = outputLines(tag.stdout)[0];
   if (tag.code !== 0 || tagCommit === undefined) {
-    return failed(real, "tag-missing", `'${real}' has no tag ${ref}. Fetch the tags (git -C '${real}' fetch --tags origin) and check ${ref} out; nen fetches nothing.`);
+    // AT TAG DEPTH THE ADVICE STOPS AT THE FETCH (Nobunaga N7): HEAD is not
+    // that verification's to move, so "check it out" would be a step it never
+    // asked for.
+    const after = depth === "pin" ? ` and check ${ref} out` : "";
+    return failed(real, "tag-missing", `'${real}' has no tag ${ref}. Fetch the tags (git -C '${real}' fetch --tags origin)${after}; nen fetches nothing.`);
   }
   return { origin: redacted, originSlug: parsed.slug, host, tagCommit };
 }
@@ -611,7 +616,7 @@ function verifyIn(
 ): Verified {
   const runner = gitRunner(seams, real);
   const { git } = runner;
-  const facts = verifyIdentityAndTag(runner, real, source, ref, consumerRoot, paths, seams.platform, failed);
+  const facts = verifyIdentityAndTag(runner, real, source, ref, consumerRoot, paths, seams.platform, failed, "pin");
   if ("failure" in facts) return facts;
   const { origin: redacted, originSlug, host, tagCommit } = facts;
   const head = git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);

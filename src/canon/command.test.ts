@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
-import { canonCommand, CHECK_CONTRACT, describeWriteFailure, GENERATE_CONTRACT, PIN_CONTRACT } from "./command.js";
+import { canonCommand, CHECK_CONTRACT, describeWriteFailure, GENERATE_CONTRACT, PIN_CONTRACT, PIN_WRITE_CONTRACT } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { fileMarker } from "./mirror.js";
 
@@ -961,6 +961,21 @@ describe("nen canon pin --write -- the refusals before any git call and any writ
     const none = await capture(["canon", "pin", "--write", "v1.3.0"], fx.root);
     expect(none.code).toBe(1);
     expect(none.err.join("\n")).toMatch(/pins no maintained tool, so there is no pin to move/);
+  });
+
+  it("emits { contract, ok: false, failure } under --json on an exit-1 refusal (Nobunaga N5)", async () => {
+    const fx = fixture();
+    const none = await capture(["canon", "pin", "--write", "v1.3.0", "--json"], fx.root);
+    expect(none.code).toBe(1);
+    expect(json(none)).toEqual({ contract: PIN_WRITE_CONTRACT, ok: false, failure: { code: "no-registry", message: expect.stringMatching(/has no nen\/repos\.json/) as unknown } });
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0" });
+    const ambiguous = await capture(["canon", "pin", "--write", "v1.3.0", "--json"], fx.root);
+    expect(ambiguous.code).toBe(1);
+    expect(json(ambiguous)).toMatchObject({ contract: PIN_WRITE_CONTRACT, ok: false, failure: { code: "ambiguous-source" } });
+    // An exit-2 usage error carries no document.
+    const usage = await capture(["canon", "pin", "--write", "main", "--json"], fx.root);
+    expect(usage.code).toBe(2);
+    expect(usage.out).toEqual([]);
   });
 
   it("refuses an unresolvable canon checkout at exit 1 -- never a pin written on trust -- when nothing declares one", async () => {

@@ -25,7 +25,7 @@
 // never crosses a filesystem), flushed, then renamed over the target. A reader
 // sees the old file or the new one, never half of either.
 
-import { closeSync, fsyncSync, openSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fsyncSync, openSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 
@@ -155,7 +155,7 @@ export interface PinEdit {
  * other byte, and prove it: the new text must parse to the old document with
  * that one value changed. Throws `JsonSpanError` on any disagreement.
  */
-export function rewritePin(text: string, index: number, tag: string): PinEdit {
+export function rewritePin(text: string, index: number, tag: string, source: string): PinEdit {
   const path: readonly JsonStep[] = ["maintained_tools", index, "pinned"];
   const span = locateJsonValue(text, path);
   const literal = text.slice(span.start, span.end);
@@ -168,6 +168,12 @@ export function rewritePin(text: string, index: number, tag: string): PinEdit {
   if (!Array.isArray(rows)) throw new JsonSpanError("maintained_tools is not an array");
   const row: unknown = rows[index];
   if (row === null || typeof row !== "object" || Array.isArray(row)) throw new JsonSpanError(`maintained_tools[${index}] is not an object`);
+  // THE ROW IS THE SOURCE'S (Nobunaga N3): an index that names another tool's
+  // row is refused, never edited.
+  const repo = (row as Record<string, unknown>)["repo"];
+  if (typeof repo !== "string" || repo.toLowerCase() !== source.toLowerCase()) {
+    throw new JsonSpanError(`maintained_tools[${index}] is ${typeof repo === "string" ? `'${repo}'` : "a row with no repo"}, not ${source}`);
+  }
   if ((row as Record<string, unknown>)["pinned"] !== current) {
     throw new JsonSpanError(`the scanned maintained_tools[${index}].pinned ('${current}') is not the value the parser reads`);
   }
@@ -194,6 +200,9 @@ export function writeFileAtomic(path: string, text: string): void {
   let renamed = false;
   try {
     try {
+      // THE MODE IS SET, NOT REQUESTED (Nobunaga N1): open()'s mode is masked
+      // by the umask, so a 0664 file would come back 0644.
+      fchmodSync(fd, mode);
       writeFileSync(fd, text, "utf8");
       fsyncSync(fd);
     } finally {
