@@ -45,6 +45,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { containedPath, realContainment } from "../repo/contain.js";
 import {
+  GIT,
   CAPTURE_MAX_BUFFER,
   DEFAULT_POLL_MS,
   PORT_PROBE_TIMEOUT_MS,
@@ -1323,6 +1324,59 @@ export async function runVerb(
 }
 
 /**
+ * The run-time half of "a results path is generated output", asked before
+ * anything is removed. Every refusal is exit 2 and removes nothing.
+ *
+ *   * NOT THE REAL ROOT, NOT IN OR ABOVE THE REAL GIT DIRECTORY. The loader
+ *     refused `.`, `.git` and `nen/` lexically; a symlink or a worktree (whose
+ *     git directory is somewhere else entirely) is why this is asked again of
+ *     REAL paths, with git's own answer for where its directory is.
+ *   * NOTHING TRACKED. `git ls-files -z -- <path>` must answer nothing: a
+ *     results path is output a run writes, and one holding a single tracked
+ *     file is a declaration that deletes source.
+ *
+ * A DIRECTORY THAT IS NOT A GIT REPOSITORY has neither a git directory nor a
+ * tracked file, and git says so in its own words; that is the one git failure
+ * read as an answer. Every other one -- git missing, a refusal nen cannot read
+ * -- is a question nen could not settle, and it refuses rather than delete.
+ */
+function refuseProtectedResults(
+  context: CommandContext,
+  repoRoot: string,
+  display: string,
+  pointer: string,
+  realResults: string,
+): void {
+  const refuse = (why: string): never => {
+    throw new VerbUsageError(
+      `${pointer} names '${display}', ${why}. A results path must be GENERATED output -- nen clears it before every focused run -- so it is never the repository root, never inside .git, never nen/, and never holds a file git tracks. Nothing was removed or run.`,
+    );
+  };
+  const realRoot = realContainment(repoRoot, resolve(repoRoot)).real;
+  if (realResults === realRoot) refuse(`which really resolves to the repository root '${realRoot}'`);
+  const within = (child: string, parent: string): boolean => child === parent || child.startsWith(`${parent}${sep}`);
+  const gitDir = context.seams.run(GIT, ["rev-parse", "--git-dir"], { cwd: repoRoot });
+  if (gitDir.spawnFailed) refuse("and git could not be started to prove it holds nothing git owns");
+  if (gitDir.code !== 0) {
+    if (/not a git repository/i.test(gitDir.stderr)) return;
+    refuse(`and 'git rev-parse --git-dir' failed (exit ${gitDir.code}), so nen cannot prove it holds nothing git owns`);
+  }
+  const realGit = realContainment(repoRoot, resolve(repoRoot, gitDir.stdout.trim())).real;
+  if (within(realResults, realGit) || within(realGit, realResults)) {
+    refuse(`which really resolves to '${realResults}', overlapping git's own directory '${realGit}'`);
+  }
+  const lsArgs = ["-c", "core.quotePath=false", "ls-files", "-z", "--", display];
+  const tracked = context.seams.run(GIT, lsArgs, { cwd: repoRoot });
+  if (tracked.spawnFailed || tracked.code !== 0) {
+    refuse(`and 'git ls-files' failed (exit ${tracked.code}), so nen cannot prove it holds no tracked file`);
+  }
+  const files = tracked.stdout.split("\0").filter((entry): boolean => entry !== "");
+  if (files.length > 0) {
+    refuse(`which holds ${files.length} file${files.length === 1 ? "" : "s"} git tracks (${files.slice(0, 3).map((file): string => `'${file}'`).join(", ")}${files.length > 3 ? ", ..." : ""})`);
+  }
+}
+
+/**
  * A focused run: the same captured executor, then its declared results read
  * and its executed tests counted (zheref/nen#207).
  *
@@ -1370,6 +1424,7 @@ async function runSelected(
       );
     }
   }
+  refuseProtectedResults(context, repoRoot, selection.results.path, resultsPointer, realResults);
   clearResults(absolute);
   const held: { report: ShuReport | null } = { report: null };
   const code = await runCaptured(context, plan, cwd, repoRoot, preconditions, (report): void => {

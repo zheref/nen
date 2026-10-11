@@ -46,7 +46,10 @@ async function shu(
     const out: string[] = [];
     const err: string[] = [];
     const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
-    const seams = new ScriptedSeams(script, {
+    // THE GUARD's TWO GIT READS, answered as an ordinary repository with
+    // nothing tracked under each declared results path -- AFTER the test's own
+    // script, so a test that scripts a different answer is the one taken.
+    const seams = new ScriptedSeams([...script, ...guardCalls(project)], {
       env: {},
       platform,
       now: (): Date => new Date(Date.UTC(2026, 0, 1)),
@@ -59,9 +62,29 @@ async function shu(
   }
 }
 
-/** Every argv the seam took, joined. */
+/** Every argv the seam took, joined -- nen's own git reads excepted. */
 function spawned(seams: ScriptedSeams): readonly string[] {
-  return seams.calls.map((call): string => [call.command, ...call.args].join(" "));
+  return seams.calls
+    .filter((call): boolean => call.command !== "git")
+    .map((call): string => [call.command, ...call.args].join(" "));
+}
+
+/** The `git ls-files` read the guard makes for one results path. */
+function lsFiles(path: string): string {
+  return ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", path].join(" ");
+}
+
+/** `git rev-parse --git-dir`, answered as a top-level checkout's `.git`. */
+const REV_PARSE: ScriptedCall = { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".git\n" } };
+
+/** The guard's answers for every select block in `project`: a repository, nothing tracked. */
+function guardCalls(project: unknown): readonly ScriptedCall[] {
+  const verbs = (project as { verbs?: Record<string, Record<string, { select?: { results?: { path?: string } } }>> }).verbs ?? {};
+  const paths = Object.values(verbs).flatMap((rows): string[] => {
+    const path = rows["test"]?.select?.results?.path;
+    return path === undefined ? [] : [path];
+  });
+  return [REV_PARSE, ...paths.map((path): ScriptedCall => ({ match: lsFiles(path), result: { code: 0, stdout: "" } }))];
 }
 
 // ── two runner shapes, both pure data ───────────────────────────────────────
@@ -217,9 +240,7 @@ describe("--select expands the declared focused form, per identifier, in order",
       { match: ["xcodebuild", ...argv].join(" "), result: { code: 0, stdout: appleSummary(2) } },
     ]);
     expect(result.code).toBe(0);
-    expect(result.seams.calls).toHaveLength(1);
-    expect(result.seams.calls[0]?.command).toBe("xcodebuild");
-    expect(result.seams.calls[0]?.args).toEqual(argv);
+    expect(spawned(result.seams)).toEqual([["xcodebuild", ...argv].join(" ")]);
   });
 
   it("a vitest-shaped lane: identifiers appended as positionals; no capture sidecar is recorded", async () => {
@@ -540,6 +561,161 @@ describe("the results path is this run's alone", () => {
     );
     expect(result.code).toBe(0);
     expect(result.seams.calls).toEqual([]);
+  });
+});
+
+// ── (e) a results path is generated output, never the tree's own content ────
+
+describe("a results path that names something nen must never delete is refused, nothing removed", () => {
+  const ids = ["src/a.test.ts"];
+  const line = ["runner", "focused", ...ids].join(" ");
+
+  function project(resultsPath: string): Record<string, unknown> {
+    return {
+      lanes: { web: { stack: "s", cwd: "." } },
+      defaultLane: "web",
+      verbs: {
+        web: {
+          test: {
+            exe: "runner",
+            argv: ["all"],
+            select: {
+              exe: "runner",
+              argv: ["focused"],
+              each: ["{id}"],
+              pattern: "src/[a-z]+\\.test\\.ts",
+              results: { path: resultsPath, format: "junit" },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  const sentinels = (root: string): void => {
+    mkdirSync(join(root, ".git", "x"), { recursive: true });
+    writeFileSync(join(root, ".git", "x", "keep"), "history");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "keep.ts"), "source");
+  };
+  const intact = (root: string): void => {
+    expect(existsSync(join(root, ".git", "x", "keep"))).toBe(true);
+    expect(existsSync(join(root, "src", "keep.ts"))).toBe(true);
+    expect(existsSync(join(root, "nen", "contract.json"))).toBe(true);
+  };
+
+  for (const [path, message] of [
+    [".", /repository root/],
+    ["./", /repository root/],
+    [".git", /git's own directory/],
+    [".git/x", /git's own directory/],
+    ["nen", /nen\//],
+    ["NEN/out.xml", /nen\//],
+  ] as const) {
+    it(`refuses '${path}' at load`, async () => {
+      const result = await shu(project(path), ["test", "--select", ids.join(",")], [{ match: line, result: { code: 0, stdout: junit(1) } }], "darwin", sentinels, intact);
+      // A MALFORMED DECLARATION IS THE FAMILY's EXIT 1 ("nen/contract.json is
+      // present and malformed"), refused before the lane is even read.
+      expect(result.code).toBe(1);
+      expect(result.err.join("\n")).toMatch(message);
+      expect(result.seams.calls).toEqual([]);
+    });
+  }
+
+  it("refuses a focused stdoutTo or artifact under nen/ or .git too", () => {
+    expect(() => load({ ...GOOD, stdoutTo: "nen/out.txt" })).toThrow(/project\.verbs\.only\.test\.select\.stdoutTo.*nen\//);
+    expect(() => load({ ...GOOD, artifacts: [".git/out"] })).toThrow(/project\.verbs\.only\.test\.select\.artifacts\[0\].*git's own directory/);
+  });
+
+  it("refuses a directory holding a file git tracks, and the tracked file survives", async () => {
+    const result = await shu(
+      project("out"),
+      ["test", "--select", ids.join(",")],
+      [
+        { match: lsFiles("out"), result: { code: 0, stdout: "out/tracked.txt\0" } },
+        { match: line, result: { code: 0, stdout: junit(1) } },
+      ],
+      "darwin",
+      (root): void => {
+        mkdirSync(join(root, "out"), { recursive: true });
+        writeFileSync(join(root, "out", "tracked.txt"), "tracked");
+      },
+      (root): void => {
+        expect(existsSync(join(root, "out", "tracked.txt"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/holds 1 file git tracks \('out\/tracked\.txt'\)/);
+    expect(spawned(result.seams)).toEqual([]);
+  });
+
+  it("refuses a results path holding git's REAL directory (a worktree's git dir under it)", async () => {
+    const result = await shu(
+      project(".nen/gd"),
+      ["test", "--select", ids.join(",")],
+      [
+        { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".nen/gd/worktree-git\n" } },
+        { match: line, result: { code: 0, stdout: junit(1) } },
+      ],
+      "darwin",
+      (root): void => {
+        mkdirSync(join(root, ".nen", "gd", "worktree-git"), { recursive: true });
+      },
+      (root): void => {
+        expect(existsSync(join(root, ".nen", "gd", "worktree-git"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/overlapping git's own directory/);
+    expect(spawned(result.seams)).toEqual([]);
+  });
+
+  it("refuses when git cannot be started to prove the path holds nothing it owns", async () => {
+    const result = await shu(project(".nen/focused.junit.xml"), ["test", "--select", ids.join(",")], [
+      { match: "git rev-parse --git-dir", result: { code: 1, spawnFailed: true } },
+      { match: line, result: { code: 0, stdout: junit(1) } },
+    ]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/git could not be started/);
+    expect(spawned(result.seams)).toEqual([]);
+  });
+
+  it("still clears an ordinary untracked results file before the run", async () => {
+    const result = await shu(
+      project(".nen/focused.junit.xml"),
+      ["test", "--select", ids.join(",")],
+      [{ match: line, result: { code: 0 } }],
+      "darwin",
+      (root): void => {
+        mkdirSync(join(root, ".nen"), { recursive: true });
+        writeFileSync(join(root, ".nen", "focused.junit.xml"), junit(4));
+      },
+      (root): void => {
+        expect(existsSync(join(root, ".nen", "focused.junit.xml"))).toBe(false);
+      },
+    );
+    // CLEARED, AND THE RUN WROTE NOTHING: so there is nothing to count -- exit 1,
+    // never the earlier run's four tests.
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/left no results/);
+  });
+
+  it("outside a git repository there is nothing git owns, and the path is cleared", async () => {
+    const result = await shu(
+      project(".nen/focused.junit.xml"),
+      ["test", "--select", ids.join(",")],
+      [
+        { match: "git rev-parse --git-dir", result: { code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git" } },
+        { match: line, result: { code: 0 } },
+      ],
+      "darwin",
+      (root): void => {
+        mkdirSync(join(root, ".nen"), { recursive: true });
+        writeFileSync(join(root, ".nen", "focused.junit.xml"), junit(4));
+      },
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/left no results/);
   });
 });
 

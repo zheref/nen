@@ -450,7 +450,10 @@ flags:
                    CLEARED (file or directory) before every focused run, so
                    what is there afterwards is this run's; a results path
                    that is a symlink, or whose real path lands on a regression
-                   output, is exit 2 with nothing removed or run.
+                   output, the repository root or git's own directory, or
+                   that holds any file git tracks, is exit 2 with nothing
+                   removed or run. It must be GENERATED output: never the
+                   root, .git, nen/, or anything git tracks.
                    --dry-run and --json show the expanded argv and a
                    'selection' block naming what was appended, the results,
                    'executed' and 'zeroMatch'.

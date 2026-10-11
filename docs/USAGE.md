@@ -9353,6 +9353,18 @@ the tree and disjoint from the real path of every regression output, and
 refuses a `results.path` that is itself a symlink; either refusal is exit `2`
 with nothing removed and nothing run. A dry run removes nothing.
 
+**A results path must be generated output — never the repository root, never
+`.git` or anything under it, never `nen/` or anything under it, and never
+anything git tracks.** The loader refuses the first three lexically and
+case-folded, for `results.path` and for the focused `stdoutTo` and `artifacts`
+alike (a malformed declaration: exit `1`). Before clearing, the run asks again
+of real paths: not the real root, not overlapping git's own directory as
+`git rev-parse --git-dir` reports it (a worktree's lives elsewhere), and
+`git ls-files -z -- <path>` must list nothing — one tracked file under it is
+exit `2`, nothing removed. Outside a git repository there is nothing git owns
+and those two reads are skipped; if git cannot be started, or answers anything
+else nen cannot read, the run refuses rather than delete.
+
 | Outcome | nen exits | `--json` `selection` |
 |---|---|---|
 | ≥ 1 executed | `0` | `executed: <n>, zeroMatch: false` |

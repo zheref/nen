@@ -1314,10 +1314,17 @@ function parseSelection(path: string, pointer: string, value: unknown): TestSele
     each,
     pattern,
     results: parseSelectionResults(path, `${pointer}.results`, raw["results"]),
-    stdoutTo: optionalStdoutTo(path, `${pointer}.stdoutTo`, raw["stdoutTo"]),
+    stdoutTo: focusedStdoutTo(path, `${pointer}.stdoutTo`, raw["stdoutTo"]),
     why: optionalString(path, `${pointer}.why`, raw["why"]),
     raw,
   };
+}
+
+/** The focused block's `stdoutTo`, held to every other focused output's rules. */
+function focusedStdoutTo(path: string, pointer: string, value: unknown): string | null {
+  const stdoutTo = optionalStdoutTo(path, pointer, value);
+  if (stdoutTo !== null) requireRelativeOutput(path, pointer, stdoutTo);
+  return stdoutTo;
 }
 
 /**
@@ -1362,6 +1369,29 @@ function requireRelativeOutput(path: string, pointer: string, value: string): vo
       path,
       pointer,
       `'${value}' normalises to '${normalised}', which is outside the repository. A focused run's outputs are repo-relative paths inside the tree`,
+    );
+  }
+  // GENERATED OUTPUT ONLY. `results.path` is REMOVED, recursively, before every
+  // focused run (../shu/run.ts), so a focused output naming the repository
+  // root, git's own directory or this contract's directory is a declaration
+  // that deletes the repository, its history or its own policy on first use.
+  // Refused for every focused output, not only `results.path`, so the three
+  // can never be told apart by what nen does to them. Compared case-folded
+  // (`.GIT` is `.git` on the default macOS and Windows filesystems).
+  const folded = comparablePath(value);
+  const protectedAs =
+    folded === ""
+      ? "the repository root"
+      : folded === ".git" || folded.startsWith(".git/")
+        ? "git's own directory"
+        : folded === "nen" || folded.startsWith("nen/")
+          ? "nen/, the directory this contract lives in"
+          : null;
+  if (protectedAs !== null) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${value}' is ${protectedAs === "the repository root" ? "" : "or is inside "}${protectedAs}. A focused output must be GENERATED output -- nen clears the declared results path, file or directory, before every focused run -- so it is never the root, never under .git, never under nen/, and never anything git tracks. Name a path of its own, e.g. '.nen/focused/results.xml'`,
     );
   }
 }
