@@ -1197,6 +1197,42 @@ export const SELECTION_TOKEN = "{id}";
 /** The keys `project.verbs.<lane>.test.select` is made of. Nen's, not the repo's. */
 const SELECT_KEYS: readonly string[] = ["exe", "argv", "each", "pattern", "results", "stdoutTo", "artifacts", "env", "why"];
 
+/**
+ * The one directory a focused `results.path` may name something inside
+ * (zheref/nen#207, the maintainer's structural ruling on PR #393). nen moves
+ * the declared results path aside before every focused run; an ALLOWLIST is
+ * what makes that safe by construction, where a denylist of things never to
+ * touch (the root, `.git`, `nen/`, tracked files) was reproduced failing open
+ * four ways -- a case variant, a symlinked ancestor, untracked work and a
+ * submodule.
+ */
+export const FOCUSED_RESULTS_DIR = ".nen/focused";
+
+/** Where moved-aside results live, inside FOCUSED_RESULTS_DIR. Never a results path. */
+export const FOCUSED_PREVIOUS = ".previous";
+
+/**
+ * The declared results path, normalised for the filesystem -- separators to
+ * `/`, NFC, `posix.normalize`d, no leading `./` or trailing `/` -- when it sits
+ * STRICTLY inside FOCUSED_RESULTS_DIR (case-folded) and outside its
+ * FOCUSED_PREVIOUS area; null otherwise. The case is KEPT in the answer: the
+ * run proves the real path, and a case variant fails that proof rather than
+ * being silently folded onto somebody else's directory.
+ */
+export function focusedResultsRelative(value: string): string | null {
+  const normalised = posix
+    .normalize(value.normalize("NFC").replace(/\\/g, "/"))
+    .replace(/^(?:\.\/)+/, "")
+    .replace(/\/+$/, "");
+  const folded = normalised.toLowerCase();
+  const prefix = `${FOCUSED_RESULTS_DIR}/`;
+  if (!folded.startsWith(prefix) || folded.length === prefix.length) return null;
+  const inside = folded.slice(prefix.length);
+  if (inside === FOCUSED_PREVIOUS || inside.startsWith(`${FOCUSED_PREVIOUS}/`)) return null;
+  if (inside.split("/").some((segment): boolean => segment === "" || segment === "." || segment === "..")) return null;
+  return normalised;
+}
+
 /** The two keys `select.results` is made of. */
 const SELECT_RESULTS_KEYS: readonly string[] = ["path", "format"];
 
@@ -1345,6 +1381,13 @@ function parseSelectionResults(path: string, pointer: string, value: unknown): S
   );
   const resultsPath = requireStdoutTo(path, `${pointer}.path`, raw["path"]);
   requireRelativeOutput(path, `${pointer}.path`, resultsPath);
+  if (focusedResultsRelative(resultsPath) === null) {
+    throw new SchemaError(
+      path,
+      `${pointer}.path`,
+      `'${resultsPath}' is not strictly inside '${FOCUSED_RESULTS_DIR}/'. nen moves the declared results path aside before every focused run, so it may only name something inside the directory nen owns for exactly this -- '${FOCUSED_RESULTS_DIR}/<name>', never the directory itself and never its '${FOCUSED_PREVIOUS}' area. Compared after posix.normalize, NFC-normalised and case-folded. Name e.g. '${FOCUSED_RESULTS_DIR}/results.xml'`,
+    );
+  }
   return { path: resultsPath, format: requireEnum(path, `${pointer}.format`, raw["format"], SELECT_RESULT_FORMATS) };
 }
 

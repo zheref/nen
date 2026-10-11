@@ -446,14 +446,16 @@ flags:
                    with test-report's parser and counts the tests EXECUTED:
                    zero is exit 6 ("selection resolved to zero executed
                    tests"); results missing, unreadable or in another format
-                   are exit 1 -- never a pass. The declared results path is
-                   CLEARED (file or directory) before every focused run, so
-                   what is there afterwards is this run's; a results path
-                   that is a symlink, or whose real path lands on a regression
-                   output, the repository root or git's own directory, or
-                   that holds any file git tracks, is exit 2 with nothing
-                   removed or run. It must be GENERATED output: never the
-                   root, .git, nen/, or anything git tracks.
+                   are exit 1 -- never a pass. The results path must sit
+                   strictly inside .nen/focused/ (refused at load otherwise);
+                   before every focused run nen MOVES what is there aside
+                   into .nen/focused/.previous/<run-id>/ (keeping the last 2
+                   runs), never deleting, and only after proving every
+                   segment is a real entry (no symlink, junction or case
+                   variant), its real path is inside the real .nen/focused,
+                   no .git entry is at or below it, and git tracks nothing
+                   there -- else exit 2, nothing moved or run. --dry-run makes
+                   the same proofs, refuses the same way, and moves nothing.
                    --dry-run and --json show the expanded argv and a
                    'selection' block naming what was appended, the results,
                    'executed' and 'zeroMatch'.

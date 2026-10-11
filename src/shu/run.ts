@@ -41,11 +41,10 @@
 // rather than resolved in either direction.
 
 import { lstatSync, mkdirSync, writeFileSync, type Stats } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, relative, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { containedPath, realContainment } from "../repo/contain.js";
 import {
-  GIT,
   CAPTURE_MAX_BUFFER,
   DEFAULT_POLL_MS,
   PORT_PROBE_TIMEOUT_MS,
@@ -59,7 +58,8 @@ import {
 import { regressionOutputs, type DeviceExtraction, type DeviceReadiness, type ProjectBlock, type StallGuard } from "../schema/contract.js";
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_SELECTION_EMPTY, EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
-import { clearResults, isSymlink, readSelectionResults } from "./select-results.js";
+import { readSelectionResults } from "./select-results.js";
+import { moveResultsAside, proveResultsClearable } from "./focused-guard.js";
 import { openDeclaration } from "./declaration.js";
 import { appendStepsToOpenPhase, EFFORT_ID, type PhaseStep } from "../phase/ledger.js";
 import {
@@ -1274,6 +1274,19 @@ export async function runVerb(
   // A refusal instead would make the safe form of this verb the one that
   // fails, so a caller checking the plan reads a non-zero code for having done
   // the careful thing -- and every wrapper script would learn to ignore it.
+  // A FOCUSED RUN's RESULTS PATH IS PROVED HERE, ON `--dry-run` TOO (the
+  // ruling on PR #393): every read-only proof the real run makes before it
+  // moves anything, refused with the same exit 2, so a dry run that exits 0
+  // is one the real run will not refuse for its results path. Moves nothing.
+  if (plan.selection !== undefined && plan.selection !== null) {
+    proveResultsClearable(
+      context,
+      repoRoot,
+      plan.selection.results.path,
+      `${plan.selection.pointer}.results.path`,
+      regressionOutputs(project.verbs),
+    );
+  }
   const gated = TARGETED_VERBS.includes(options.verb) && !options.run;
   if (options.dryRun || gated) {
     const steps = plannedSteps(plan).map(
@@ -1324,59 +1337,6 @@ export async function runVerb(
 }
 
 /**
- * The run-time half of "a results path is generated output", asked before
- * anything is removed. Every refusal is exit 2 and removes nothing.
- *
- *   * NOT THE REAL ROOT, NOT IN OR ABOVE THE REAL GIT DIRECTORY. The loader
- *     refused `.`, `.git` and `nen/` lexically; a symlink or a worktree (whose
- *     git directory is somewhere else entirely) is why this is asked again of
- *     REAL paths, with git's own answer for where its directory is.
- *   * NOTHING TRACKED. `git ls-files -z -- <path>` must answer nothing: a
- *     results path is output a run writes, and one holding a single tracked
- *     file is a declaration that deletes source.
- *
- * A DIRECTORY THAT IS NOT A GIT REPOSITORY has neither a git directory nor a
- * tracked file, and git says so in its own words; that is the one git failure
- * read as an answer. Every other one -- git missing, a refusal nen cannot read
- * -- is a question nen could not settle, and it refuses rather than delete.
- */
-function refuseProtectedResults(
-  context: CommandContext,
-  repoRoot: string,
-  display: string,
-  pointer: string,
-  realResults: string,
-): void {
-  const refuse = (why: string): never => {
-    throw new VerbUsageError(
-      `${pointer} names '${display}', ${why}. A results path must be GENERATED output -- nen clears it before every focused run -- so it is never the repository root, never inside .git, never nen/, and never holds a file git tracks. Nothing was removed or run.`,
-    );
-  };
-  const realRoot = realContainment(repoRoot, resolve(repoRoot)).real;
-  if (realResults === realRoot) refuse(`which really resolves to the repository root '${realRoot}'`);
-  const within = (child: string, parent: string): boolean => child === parent || child.startsWith(`${parent}${sep}`);
-  const gitDir = context.seams.run(GIT, ["rev-parse", "--git-dir"], { cwd: repoRoot });
-  if (gitDir.spawnFailed) refuse("and git could not be started to prove it holds nothing git owns");
-  if (gitDir.code !== 0) {
-    if (/not a git repository/i.test(gitDir.stderr)) return;
-    refuse(`and 'git rev-parse --git-dir' failed (exit ${gitDir.code}), so nen cannot prove it holds nothing git owns`);
-  }
-  const realGit = realContainment(repoRoot, resolve(repoRoot, gitDir.stdout.trim())).real;
-  if (within(realResults, realGit) || within(realGit, realResults)) {
-    refuse(`which really resolves to '${realResults}', overlapping git's own directory '${realGit}'`);
-  }
-  const lsArgs = ["-c", "core.quotePath=false", "ls-files", "-z", "--", display];
-  const tracked = context.seams.run(GIT, lsArgs, { cwd: repoRoot });
-  if (tracked.spawnFailed || tracked.code !== 0) {
-    refuse(`and 'git ls-files' failed (exit ${tracked.code}), so nen cannot prove it holds no tracked file`);
-  }
-  const files = tracked.stdout.split("\0").filter((entry): boolean => entry !== "");
-  if (files.length > 0) {
-    refuse(`which holds ${files.length} file${files.length === 1 ? "" : "s"} git tracks (${files.slice(0, 3).map((file): string => `'${file}'`).join(", ")}${files.length > 3 ? ", ..." : ""})`);
-  }
-}
-
-/**
  * A focused run: the same captured executor, then its declared results read
  * and its executed tests counted (zheref/nen#207).
  *
@@ -1401,31 +1361,18 @@ async function runSelected(
   sink: ReportSink | undefined,
   liveness: Liveness,
 ): Promise<number> {
-  const resultsPointer = `${selection.pointer}.results.path`;
-  // CLEARED BEFORE THE SPAWN, AND ONLY ONCE THREE THINGS HOLD (Nobunaga N10):
-  // the real path is inside the tree (`insideRepo`, symlinked ancestors
-  // resolved), the path itself is not a symlink (never followed, never
-  // removed), and its REAL path is disjoint from the real path of every
-  // regression output -- the loader proved that lexically, and a symlinked
-  // directory inside the tree is how a lexically separate path lands on the
-  // aka capture anyway. Every refusal is exit 2 with nothing removed or run.
-  const absolute = insideRepo(repoRoot, selection.results.path, resultsPointer);
-  if (isSymlink(absolute)) {
-    throw new VerbUsageError(
-      `${resultsPointer} names '${selection.results.path}', which is a symlink. nen clears the declared results path before every focused run and never follows or removes a link to do it: declare the real path.`,
-    );
-  }
-  const realResults = realContainment(repoRoot, absolute).real;
-  for (const output of regressionOutputs(project.verbs)) {
-    const realOutput = realContainment(repoRoot, resolve(repoRoot, output)).real;
-    if (realResults === realOutput || realResults.startsWith(`${realOutput}${sep}`) || realOutput.startsWith(`${realResults}${sep}`)) {
-      throw new VerbUsageError(
-        `${resultsPointer} names '${selection.results.path}', which really resolves to '${realResults}' -- overlapping '${output}', which the regression run writes (it really resolves to '${realOutput}'). nen clears the results path before a focused run and will not clear the aka regression capture: declare a separate path.`,
-      );
-    }
-  }
-  refuseProtectedResults(context, repoRoot, selection.results.path, resultsPointer, realResults);
-  clearResults(absolute);
+  // PROVED AGAIN IMMEDIATELY BEFORE THE MOVE -- `runVerb` proved it before
+  // the dry-run gate too, but the time between is the caller's, and a proof
+  // is about the moment it is acted on. Then MOVED ASIDE, never deleted.
+  const proof = proveResultsClearable(
+    context,
+    repoRoot,
+    selection.results.path,
+    `${selection.pointer}.results.path`,
+    regressionOutputs(project.verbs),
+  );
+  moveResultsAside(context, proof);
+  const absolute = proof.absolute;
   const held: { report: ShuReport | null } = { report: null };
   const code = await runCaptured(context, plan, cwd, repoRoot, preconditions, (report): void => {
     held.report = report;

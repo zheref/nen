@@ -9,7 +9,7 @@
 // would be: nen's own code names none of them.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -71,7 +71,7 @@ function spawned(seams: ScriptedSeams): readonly string[] {
 
 /** The `git ls-files` read the guard makes for one results path. */
 function lsFiles(path: string): string {
-  return ["git", "-c", "core.quotePath=false", "ls-files", "-z", "--", path].join(" ");
+  return ["git", "--literal-pathspecs", "-c", "core.quotePath=false", "ls-files", "--recurse-submodules", "-z", "--", path].join(" ");
 }
 
 /** `git rev-parse --git-dir`, answered as a top-level checkout's `.git`. */
@@ -182,8 +182,8 @@ function vitestProject(): Record<string, unknown> {
             argv: ["vitest", "run", "--reporter=junit"],
             each: ["{id}"],
             pattern: "src/[A-Za-z0-9_/-]*[A-Za-z0-9_.-]+\\.test\\.ts",
-            stdoutTo: ".nen/focused.junit.xml",
-            results: { path: ".nen/focused.junit.xml", format: "junit" },
+            stdoutTo: ".nen/focused/web.junit.xml",
+            results: { path: ".nen/focused/web.junit.xml", format: "junit" },
           },
         },
         coverage: {
@@ -203,7 +203,7 @@ describe("--select expands the declared focused form, per identifier, in order",
     const ids = ["KroTests/CaptureTests/testInlinePills", "KroTests/InboxTests", "KroTests"];
     const result = await shu(appleProject(), ["test", "--select", ids.join(","), "--dry-run", "--json"]);
     expect(result.code).toBe(0);
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
     const report = JSON.parse(result.out.join("\n")) as {
       steps: { exe: string; argv: string[]; stdoutTo: string | null }[];
       env: string[];
@@ -262,7 +262,7 @@ describe("--select expands the declared focused form, per identifier, in order",
       argv: ["test"],
       each: ["--tests", "{id}"],
       pattern: "[A-Za-z0-9_.*]+",
-      results: { path: "build/focused-results", format: "junit" },
+      results: { path: ".nen/focused/gradle", format: "junit" },
     });
     const result = await shu(project, ["test", "--select", "a.B,c.D", "--dry-run"]);
     expect(result.code).toBe(0);
@@ -304,7 +304,7 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
       const result = await shu(appleProject(), ["test", `--select=${value}`]);
       expect(result.code).toBe(2);
       expect(result.err.join("\n")).toMatch(message);
-      expect(result.seams.calls).toEqual([]);
+      expect(spawned(result.seams)).toEqual([]);
     });
   }
 
@@ -312,7 +312,7 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
     const result = await shu(appleProject(), ["test", "--select"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/--select requires a value/);
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
   });
 
   it("refuses an identifier the declared pattern does not match whole, naming it", async () => {
@@ -321,7 +321,7 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
     const err = result.err.join("\n");
     expect(err).toMatch(/'Kro\.Tests', 'A\/B\/C\/D'/);
     expect(err).toContain("project.verbs.apple.test.select.pattern");
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
   });
 
   it("refuses a lane whose test row declares no select -- never the full regression instead", async () => {
@@ -330,7 +330,7 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
     ]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/declares no focused selection.*never falls back/);
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
   });
 
   it("refuses on --dry-run too, before any plan is printed", async () => {
@@ -342,7 +342,7 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
   it("keeps the host rule: a darwin-only lane on linux is exit 3, nothing spawned", async () => {
     const result = await shu(appleProject(), ["test", "--select", "KroTests"], [], "linux");
     expect(result.code).toBe(3);
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
   });
 
   it("keeps preconditions: an unmet one is exit 2 with the focused plan reported, nothing spawned", async () => {
@@ -351,14 +351,14 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
     expect(result.code).toBe(2);
     const report = JSON.parse(result.out.join("\n")) as { steps: { argv: string[] }[] };
     expect(report.steps[0]?.argv.at(-1)).toBe("-only-testing:KroTests");
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
   });
 
   it("is refused on every verb but test, as a flag that verb does not read", async () => {
     const result = await shu(appleProject(), ["build", "--select", "KroTests"]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/--select is not read by 'shu build'/);
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
   });
 });
 
@@ -444,14 +444,15 @@ describe("a focused run's declared results decide whether it executed anything",
   });
 });
 
-// ── (d) the declared results path is cleared before every focused run (N10) ─
+// ── (d) the results path: proved, then MOVED ASIDE, never deleted ───────────
 
-describe("the results path is this run's alone", () => {
+describe("the results path is this run's alone, and nothing is ever deleted to make it so", () => {
   const ids = ["src/a.test.ts"];
   const focusedLine = ["runner", "focused", ...ids].join(" ");
+  const FJ = ".nen/focused/fj";
 
   /** A junit-DIRECTORY lane whose runner's stdout lands at `stdoutTo`, inside it. */
-  function directoryProject(stdoutTo: string, resultsPath = ".nen/fj"): Record<string, unknown> {
+  function directoryProject(stdoutTo: string, resultsPath = FJ, coverage: readonly string[] = ["coverage"]): Record<string, unknown> {
     return {
       lanes: { web: { stack: "s", cwd: "." } },
       defaultLane: "web",
@@ -460,7 +461,7 @@ describe("the results path is this run's alone", () => {
           test: {
             exe: "runner",
             argv: ["all"],
-            artifacts: ["coverage"],
+            artifacts: coverage,
             select: {
               exe: "runner",
               argv: ["focused"],
@@ -476,20 +477,29 @@ describe("the results path is this run's alone", () => {
   }
 
   const seedOld = (root: string): void => {
-    mkdirSync(join(root, ".nen", "fj"), { recursive: true });
-    writeFileSync(join(root, ".nen", "fj", "old.xml"), junit(3));
+    mkdirSync(join(root, ".nen", "focused", "fj"), { recursive: true });
+    writeFileSync(join(root, ".nen", "focused", "fj", "old.xml"), junit(3));
   };
 
-  it("an earlier run's file in a results DIRECTORY is not counted: a zero-test run is exit 6", async () => {
+  /** Every moved-aside run, sorted. */
+  const previousRuns = (root: string): string[] => {
+    const previous = join(root, ".nen", "focused", ".previous");
+    return existsSync(previous) ? readdirSync(previous).sort() : [];
+  };
+
+  it("an earlier run's file in a results DIRECTORY is moved aside, not counted: a zero-test run is exit 6", async () => {
     const result = await shu(
-      directoryProject(".nen/fj/new.xml"),
+      directoryProject(`${FJ}/new.xml`),
       ["test", "--select", ids.join(","), "--json"],
       [{ match: focusedLine, result: { code: 0, stdout: junit(0) } }],
       "darwin",
       seedOld,
       (root): void => {
-        expect(existsSync(join(root, ".nen", "fj", "old.xml"))).toBe(false);
-        expect(existsSync(join(root, ".nen", "fj", "new.xml"))).toBe(true);
+        expect(existsSync(join(root, ".nen", "focused", "fj", "old.xml"))).toBe(false);
+        expect(existsSync(join(root, ".nen", "focused", "fj", "new.xml"))).toBe(true);
+        const runs = previousRuns(root);
+        expect(runs).toHaveLength(1);
+        expect(existsSync(join(root, ".nen", "focused", ".previous", runs[0] as string, "fj", "old.xml"))).toBe(true);
       },
     );
     expect(result.code).toBe(6);
@@ -498,7 +508,7 @@ describe("the results path is this run's alone", () => {
 
   it("a run that writes only a NESTED file is counted as exactly that file", async () => {
     const result = await shu(
-      directoryProject(".nen/fj/sub/new.xml"),
+      directoryProject(`${FJ}/sub/new.xml`),
       ["test", "--select", ids.join(","), "--json"],
       [{ match: focusedLine, result: { code: 0, stdout: junit(2) } }],
       "darwin",
@@ -508,65 +518,94 @@ describe("the results path is this run's alone", () => {
     expect((JSON.parse(result.out.join("\n")) as { selection: { executed: number } }).selection.executed).toBe(2);
   });
 
-  it("a results path that is a symlink is refused at exit 2: nothing removed, nothing run", async () => {
+  it("keeps at most the last two moved-aside runs", async () => {
+    const result = await shu(
+      directoryProject(`${FJ}/new.xml`),
+      ["test", "--select", ids.join(",")],
+      [
+        { match: focusedLine, result: { code: 0, stdout: junit(1) } },
+        // THE PRUNE RE-PROVES EACH RUN IT REMOVES, git read and all.
+        ...["2020-01-01T00-00-00-000Z", "2021-01-01T00-00-00-000Z"].map(
+          (run): ScriptedCall => ({ match: lsFiles(`.nen/focused/.previous/${run}`), result: { code: 0, stdout: "" } }),
+        ),
+      ],
+      "darwin",
+      (root): void => {
+        seedOld(root);
+        for (const run of ["2020-01-01T00-00-00-000Z", "2021-01-01T00-00-00-000Z", "2022-01-01T00-00-00-000Z"]) {
+          mkdirSync(join(root, ".nen", "focused", ".previous", run, "fj"), { recursive: true });
+          writeFileSync(join(root, ".nen", "focused", ".previous", run, "fj", "x.xml"), junit(1));
+        }
+      },
+      (root): void => {
+        expect(previousRuns(root)).toEqual(["2022-01-01T00-00-00-000Z", "2026-01-01T00-00-00-000Z"]);
+      },
+    );
+    expect(result.code).toBe(0);
+  });
+
+  it("a results path that is a symlink is refused at exit 2: nothing moved, nothing run", async () => {
     const result = await shu(
       directoryProject(".nen/out.xml"),
       ["test", "--select", ids.join(",")],
       [{ match: focusedLine, result: { code: 0, stdout: junit(1) } }],
       "darwin",
       (root): void => {
+        mkdirSync(join(root, ".nen", "focused"), { recursive: true });
         mkdirSync(join(root, ".nen", "real"), { recursive: true });
         writeFileSync(join(root, ".nen", "real", "keep.xml"), junit(1));
-        symlinkSync(join(root, ".nen", "real"), join(root, ".nen", "fj"), "dir");
+        symlinkSync(join(root, ".nen", "real"), join(root, ".nen", "focused", "fj"), "dir");
       },
       (root): void => {
         expect(existsSync(join(root, ".nen", "real", "keep.xml"))).toBe(true);
+        expect(previousRuns(root)).toEqual([]);
       },
     );
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/is a symlink/);
-    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/symlink or junction/);
+    expect(spawned(result.seams)).toEqual([]);
   });
 
-  it("a results path whose REAL path lands on a regression output is refused at exit 2, nothing removed", async () => {
+  it("a regression output that is a LINK into the results path is refused at exit 2, nothing moved", async () => {
     const result = await shu(
-      directoryProject("focused/new.xml", "focused/new.xml"),
+      directoryProject(".nen/out.xml", FJ, ["cov"]),
       ["test", "--select", ids.join(",")],
       [{ match: focusedLine, result: { code: 0, stdout: junit(1) } }],
       "darwin",
       (root): void => {
-        mkdirSync(join(root, "coverage"), { recursive: true });
-        writeFileSync(join(root, "coverage", "new.xml"), "the regression's own");
-        symlinkSync(join(root, "coverage"), join(root, "focused"), "dir");
+        seedOld(root);
+        symlinkSync(join(root, ".nen", "focused", "fj"), join(root, "cov"), "dir");
       },
       (root): void => {
-        expect(existsSync(join(root, "coverage", "new.xml"))).toBe(true);
+        expect(existsSync(join(root, ".nen", "focused", "fj", "old.xml"))).toBe(true);
       },
     );
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/overlapping 'coverage'/);
-    expect(result.seams.calls).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/overlaps 'cov', a regression output/);
+    expect(spawned(result.seams)).toEqual([]);
   });
 
-  it("a dry run removes nothing", async () => {
+  it("a dry run proves and moves nothing", async () => {
     const result = await shu(
-      directoryProject(".nen/fj/new.xml"),
+      directoryProject(`${FJ}/new.xml`),
       ["test", "--select", ids.join(","), "--dry-run"],
       [],
       "darwin",
       seedOld,
       (root): void => {
-        expect(existsSync(join(root, ".nen", "fj", "old.xml"))).toBe(true);
+        expect(existsSync(join(root, ".nen", "focused", "fj", "old.xml"))).toBe(true);
+        expect(previousRuns(root)).toEqual([]);
       },
     );
     expect(result.code).toBe(0);
-    expect(result.seams.calls).toEqual([]);
+    expect(spawned(result.seams)).toEqual([]);
+    expect(result.seams.calls.map((call): string => call.args[0] ?? "")).toContain("rev-parse");
   });
 });
 
-// ── (e) a results path is generated output, never the tree's own content ────
+// ── (e) the allowlist and the run-time proofs, scripted git ───────────────────
 
-describe("a results path that names something nen must never delete is refused, nothing removed", () => {
+describe("a results path outside .nen/focused/, or one the proofs refuse, is refused with nothing moved", () => {
   const ids = ["src/a.test.ts"];
   const line = ["runner", "focused", ...ids].join(" ");
 
@@ -604,20 +643,11 @@ describe("a results path that names something nen must never delete is refused, 
     expect(existsSync(join(root, "nen", "contract.json"))).toBe(true);
   };
 
-  for (const [path, message] of [
-    [".", /repository root/],
-    ["./", /repository root/],
-    [".git", /git's own directory/],
-    [".git/x", /git's own directory/],
-    ["nen", /nen\//],
-    ["NEN/out.xml", /nen\//],
-  ] as const) {
-    it(`refuses '${path}' at load`, async () => {
+  for (const path of [".", "./", ".git", ".git/x", "nen", "SRC", "src", ".nen", ".nen/focused", ".nen/focused/", ".NEN/FOCUSED", ".nen/focused/.previous/x", ":(exclude)x"]) {
+    it(`refuses '${path}' at load (exit 1, the family's malformed-declaration code)`, async () => {
       const result = await shu(project(path), ["test", "--select", ids.join(",")], [{ match: line, result: { code: 0, stdout: junit(1) } }], "darwin", sentinels, intact);
-      // A MALFORMED DECLARATION IS THE FAMILY's EXIT 1 ("nen/contract.json is
-      // present and malformed"), refused before the lane is even read.
       expect(result.code).toBe(1);
-      expect(result.err.join("\n")).toMatch(message);
+      expect(result.err.join("\n")).toMatch(/strictly inside|outside the repository|repository root|git's own directory|nen\//);
       expect(result.seams.calls).toEqual([]);
     });
   }
@@ -627,51 +657,70 @@ describe("a results path that names something nen must never delete is refused, 
     expect(() => load({ ...GOOD, artifacts: [".git/out"] })).toThrow(/project\.verbs\.only\.test\.select\.artifacts\[0\].*git's own directory/);
   });
 
-  it("refuses a directory holding a file git tracks, and the tracked file survives", async () => {
+  it("refuses a path git says it tracks (belt and braces), and the file survives", async () => {
     const result = await shu(
-      project("out"),
+      project(".nen/focused/out"),
       ["test", "--select", ids.join(",")],
       [
-        { match: lsFiles("out"), result: { code: 0, stdout: "out/tracked.txt\0" } },
+        { match: lsFiles(".nen/focused/out"), result: { code: 0, stdout: ".nen/focused/out/tracked.txt\0" } },
         { match: line, result: { code: 0, stdout: junit(1) } },
       ],
       "darwin",
       (root): void => {
-        mkdirSync(join(root, "out"), { recursive: true });
-        writeFileSync(join(root, "out", "tracked.txt"), "tracked");
+        mkdirSync(join(root, ".nen", "focused", "out"), { recursive: true });
+        writeFileSync(join(root, ".nen", "focused", "out", "tracked.txt"), "tracked");
       },
       (root): void => {
-        expect(existsSync(join(root, "out", "tracked.txt"))).toBe(true);
+        expect(existsSync(join(root, ".nen", "focused", "out", "tracked.txt"))).toBe(true);
       },
     );
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/holds 1 file git tracks \('out\/tracked\.txt'\)/);
+    expect(result.err.join("\n")).toMatch(/holds 1 file git tracks/);
     expect(spawned(result.seams)).toEqual([]);
   });
 
-  it("refuses a results path holding git's REAL directory (a worktree's git dir under it)", async () => {
+  it("refuses a results path holding a .git entry (a nested repository or worktree)", async () => {
     const result = await shu(
-      project(".nen/gd"),
+      project(".nen/focused/gd"),
+      ["test", "--select", ids.join(",")],
+      [{ match: line, result: { code: 0, stdout: junit(1) } }],
+      "darwin",
+      (root): void => {
+        mkdirSync(join(root, ".nen", "focused", "gd", "nested"), { recursive: true });
+        writeFileSync(join(root, ".nen", "focused", "gd", "nested", ".git"), "gitdir: elsewhere");
+      },
+      (root): void => {
+        expect(existsSync(join(root, ".nen", "focused", "gd", "nested", ".git"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is a git entry/);
+    expect(spawned(result.seams)).toEqual([]);
+  });
+
+  it("refuses a results path overlapping git's REAL directory", async () => {
+    const result = await shu(
+      project(".nen/focused/gd"),
       ["test", "--select", ids.join(",")],
       [
-        { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".nen/gd/worktree-git\n" } },
+        { match: "git rev-parse --git-dir", result: { code: 0, stdout: ".nen/focused/gd/worktree-git\n" } },
         { match: line, result: { code: 0, stdout: junit(1) } },
       ],
       "darwin",
       (root): void => {
-        mkdirSync(join(root, ".nen", "gd", "worktree-git"), { recursive: true });
+        mkdirSync(join(root, ".nen", "focused", "gd", "worktree-git"), { recursive: true });
       },
       (root): void => {
-        expect(existsSync(join(root, ".nen", "gd", "worktree-git"))).toBe(true);
+        expect(existsSync(join(root, ".nen", "focused", "gd", "worktree-git"))).toBe(true);
       },
     );
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/overlapping git's own directory/);
+    expect(result.err.join("\n")).toMatch(/overlaps git's own directory/);
     expect(spawned(result.seams)).toEqual([]);
   });
 
-  it("refuses when git cannot be started to prove the path holds nothing it owns", async () => {
-    const result = await shu(project(".nen/focused.junit.xml"), ["test", "--select", ids.join(",")], [
+  it("refuses when git cannot be started", async () => {
+    const result = await shu(project(".nen/focused/r.xml"), ["test", "--select", ids.join(",")], [
       { match: "git rev-parse --git-dir", result: { code: 1, spawnFailed: true } },
       { match: line, result: { code: 0, stdout: junit(1) } },
     ]);
@@ -680,29 +729,9 @@ describe("a results path that names something nen must never delete is refused, 
     expect(spawned(result.seams)).toEqual([]);
   });
 
-  it("still clears an ordinary untracked results file before the run", async () => {
+  it("outside a git repository there is nothing git owns: the path is moved aside", async () => {
     const result = await shu(
-      project(".nen/focused.junit.xml"),
-      ["test", "--select", ids.join(",")],
-      [{ match: line, result: { code: 0 } }],
-      "darwin",
-      (root): void => {
-        mkdirSync(join(root, ".nen"), { recursive: true });
-        writeFileSync(join(root, ".nen", "focused.junit.xml"), junit(4));
-      },
-      (root): void => {
-        expect(existsSync(join(root, ".nen", "focused.junit.xml"))).toBe(false);
-      },
-    );
-    // CLEARED, AND THE RUN WROTE NOTHING: so there is nothing to count -- exit 1,
-    // never the earlier run's four tests.
-    expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/left no results/);
-  });
-
-  it("outside a git repository there is nothing git owns, and the path is cleared", async () => {
-    const result = await shu(
-      project(".nen/focused.junit.xml"),
+      project(".nen/focused/r.xml"),
       ["test", "--select", ids.join(",")],
       [
         { match: "git rev-parse --git-dir", result: { code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git" } },
@@ -710,8 +739,11 @@ describe("a results path that names something nen must never delete is refused, 
       ],
       "darwin",
       (root): void => {
-        mkdirSync(join(root, ".nen"), { recursive: true });
-        writeFileSync(join(root, ".nen", "focused.junit.xml"), junit(4));
+        mkdirSync(join(root, ".nen", "focused"), { recursive: true });
+        writeFileSync(join(root, ".nen", "focused", "r.xml"), junit(4));
+      },
+      (root): void => {
+        expect(existsSync(join(root, ".nen", "focused", "r.xml"))).toBe(false);
       },
     );
     expect(result.code).toBe(1);
@@ -743,7 +775,7 @@ const GOOD = {
   argv: ["some"],
   each: ["--only={id}"],
   pattern: "[a-z]+",
-  results: { path: "focused/results.xml", format: "junit" },
+  results: { path: ".nen/focused/results.xml", format: "junit" },
 };
 
 describe("project.verbs.<lane>.test.select -- the schema", () => {
@@ -768,9 +800,9 @@ describe("project.verbs.<lane>.test.select -- the schema", () => {
     ["an artifact on the regression row's own output", (): unknown => load({ ...GOOD, artifacts: ["out/./results.xml"] }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.artifacts[0]", /overlaps 'out\/results\.xml'/],
     ["a stdoutTo inside the regression's output directory", (): unknown => load({ ...GOOD, stdoutTo: "coverage/focused.txt" }, "test", { artifacts: ["coverage"] }), "project.verbs.only.test.select.stdoutTo", /overlaps 'coverage'/],
     ["a select with no results", (): unknown => load({ ...GOOD, results: undefined }), "project.verbs.only.test.select.results", /is required/],
-    ["a results format nen does not read", (): unknown => load({ ...GOOD, results: { path: "r.xml", format: "tap" } }), "project.verbs.only.test.select.results.format", /CLOSED set: junit, assertion-results, xcresult-summary/],
+    ["a results format nen does not read", (): unknown => load({ ...GOOD, results: { path: ".nen/focused/r.xml", format: "tap" } }), "project.verbs.only.test.select.results.format", /CLOSED set: junit, assertion-results, xcresult-summary/],
     ["a results path outside the tree", (): unknown => load({ ...GOOD, results: { path: "../r.xml", format: "junit" } }), "project.verbs.only.test.select.results.path", /\.\./],
-    ["a results path on the regression output", (): unknown => load({ ...GOOD, results: { path: "Out/Results.XML", format: "junit" } }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.results.path", /overlaps 'out\/results\.xml'/],
+    ["a results path on the regression output", (): unknown => load({ ...GOOD, results: { path: ".NEN/Focused/Results.XML", format: "junit" } }, "test", { artifacts: [".nen/focused/results.xml"] }), "project.verbs.only.test.select.results.path", /overlaps '\.nen\/focused\/results\.xml'/],
     ["a near-miss key inside results", (): unknown => load({ ...GOOD, results: { path: "r.xml", format: "junit", formats: "x" } }), "project.verbs.only.test.select.results.formats", /'format'/],
     ["a pattern that only compiles inside the anchors (N2)", (): unknown => load({ ...GOOD, pattern: "a)|(?:.*" }), "project.verbs.only.test.select.pattern", /on its own/],
     ["an argv element naming the regression output (N3)", (): unknown => load({ ...GOOD, argv: ["run", "--outputFile.junit=./out/results.xml"] }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.argv[1]", /names 'out\/results\.xml'/],
@@ -799,11 +831,11 @@ describe("project.verbs.<lane>.test.select -- the schema", () => {
       parseProjectBlock("c", {
         lanes: { a: { stack: "s", cwd: "." }, b: { stack: "s", cwd: "." } },
         verbs: {
-          a: { test: { exe: "r", argv: ["a"], select: { ...GOOD, results: { path: "b/report.xml", format: "junit" } } } },
-          b: { coverage: { exe: "r", argv: ["c"], artifacts: ["b/report.xml"] } },
+          a: { test: { exe: "r", argv: ["a"], select: { ...GOOD, results: { path: ".nen/focused/b.xml", format: "junit" } } } },
+          b: { coverage: { exe: "r", argv: ["c"], artifacts: [".nen/focused/b.xml"] } },
         },
       }),
-    ).toThrow(/project\.verbs\.a\.test\.select\.results\.path.*overlaps 'b\/report\.xml'/);
+    ).toThrow(/project\.verbs\.a\.test\.select\.results\.path.*overlaps '\.nen\/focused\/b\.xml'/);
   });
 
   it("loads --reporter=junit beside a regression artifact named junit (N11)", () => {

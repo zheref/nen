@@ -11,7 +11,8 @@
 // results path that is missing, unreadable or in another format is exit 1 --
 // never a pass.
 //
-// WHY THE PATH IS CLEARED RATHER THAN FINGERPRINTED (Nobunaga N10). A JUnit
+// WHY THE PATH IS CLEARED RATHER THAN FINGERPRINTED (Nobunaga N10; the
+// clearing is a MOVE ASIDE, proved first -- ./focused-guard.ts). A JUnit
 // results DIRECTORY is read whole, one file per suite: a run that matched
 // nothing and wrote one empty `new.xml` beside an earlier run's `old.xml` was
 // counted as the earlier run's three tests. A digest of the directory can say
@@ -24,19 +25,9 @@
 // THE PARSERS ARE `nen shu test-report`'s, unchanged: one reader per format,
 // so a focused run and a full report can never count the same file two ways.
 
-import { lstatSync, rmSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import { readTestReport } from "./test-report/parse.js";
 import { TestReportError } from "./test-report/shape.js";
-
-/** Is the declared results path itself a symlink? (Never followed, never removed.) */
-export function isSymlink(absolute: string): boolean {
-  return lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink() === true;
-}
-
-/** Remove the declared results path -- a file, or a directory recursively. */
-export function clearResults(absolute: string): void {
-  rmSync(absolute, { recursive: true, force: true });
-}
 
 /** The verdict on one focused run's results. */
 export type ResultsVerdict =
@@ -58,7 +49,7 @@ export function readSelectionResults(absolute: string, display: string, format: 
   if (lstatSync(absolute, { throwIfNoEntry: false }) === undefined) {
     return {
       ok: false,
-      why: `the run exited 0 and left no results at '${display}' (nen cleared that path before the run). nen cannot tell how many tests it executed, so this is not a pass: check that the focused argv writes its results there`,
+      why: `the run exited 0 and left no results at '${display}' (nen moved whatever was there aside before the run). nen cannot tell how many tests it executed, so this is not a pass: check that the focused argv writes its results there`,
     };
   }
   let parsed;
