@@ -7,6 +7,11 @@
 // first. `--wait` polls the inventory every 10 s until all pass or the budget
 // is spent; `--wait 0` (the default) asks once.
 //
+// THE POOL'S OWN LABEL IS CHECKED LIKE ANY OTHER (#340). `--pool <id>` adds the
+// pool's full set -- `pool-<id>` included -- to `--labels`, and a runner that
+// lacks only that label is named with the step that gives it one: a runner
+// registered before #340, which no pool-labelled workflow will schedule onto.
+//
 // ONLINE IS NOT CAPABLE. A runner that passes here has a live runner process
 // talking to GitHub -- bankai's rule W3: registration is not capability. The
 // pool is proved by `runner preflight`, a job running AS the service, and
@@ -15,6 +20,7 @@
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import { renderPipeTable } from "../cli/table.js";
+import { POOL_LABEL_PREFIX } from "../schema/workflow.js";
 import { POLL_INTERVAL_MS, type Sleep } from "./github.js";
 import { fetchRunners, type RunnerRow } from "./inventory.js";
 
@@ -47,7 +53,9 @@ export function judge(runners: readonly RunnerRow[], expect: readonly string[], 
     const carried = new Set(runner.labels.map((label): string => label.toLowerCase()));
     const missingLabels = labels.filter((label): boolean => !carried.has(label.toLowerCase()));
     if (missingLabels.length > 0) {
-      return { name, verdict: "labels", status: runner.status, missingLabels, detail: `labels: missing ${missingLabels.join(", ")}` };
+      const own = missingLabels.find((label): boolean => label.toLowerCase().startsWith(POOL_LABEL_PREFIX));
+      const remedy = own === undefined ? "" : ` -- registered without its pool label: nen runner relabel --pool ${own.slice(POOL_LABEL_PREFIX.length)} --runner ${runner.name} --run`;
+      return { name, verdict: "labels", status: runner.status, missingLabels, detail: `labels: missing ${missingLabels.join(", ")}${remedy}` };
     }
     return { name, verdict: "ok", status: runner.status, missingLabels: [], detail: "ok" };
   });

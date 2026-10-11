@@ -58,3 +58,34 @@ describe("verifyRunners -- every expected runner present, online, labelled; neve
     expect(judge([{ ...runner, status: "" }], ["A"], [])[0]?.detail).toBe("offline");
   });
 });
+
+describe("verify -- the pool's own label (#340)", () => {
+  const POOL_LABELS = ["self-hosted", "Windows", "X64", "pool-windows-x64"];
+
+  it("catches a runner registered without its pool label, and names the relabel step", () => {
+    const seams = new ScriptedSeams([
+      {
+        match: LIST,
+        result: { stdout: runnersAnswer([{ name: "NZ-NNR1", labels: POOL_LABELS }, { name: "NZ-NNR2" }]) },
+      },
+    ]);
+    const report = verifyRunners(seams, TARGET, ["NZ-NNR1", "NZ-NNR2"], POOL_LABELS, 0, () => undefined);
+    expect(report.ok).toBe(false);
+    expect(report.runners.map((row) => [row.name, row.verdict, row.missingLabels])).toEqual([
+      ["NZ-NNR1", "ok", []],
+      ["NZ-NNR2", "labels", ["pool-windows-x64"]],
+    ]);
+    expect(report.runners[1]?.detail).toBe(
+      "labels: missing pool-windows-x64 -- registered without its pool label: nen runner relabel --pool windows-x64 --runner NZ-NNR2 --run",
+    );
+  });
+
+  it("does not offer relabel when what is missing is a default label", () => {
+    const [row] = judge(
+      [{ name: "A", id: 1, os: "", status: "online", busy: false, labels: ["self-hosted", "pool-windows-x64"], convention: "runner-0", machine: null, consumer: null, slot: null }],
+      ["A"],
+      POOL_LABELS,
+    );
+    expect(row?.detail).toBe("labels: missing Windows, X64");
+  });
+});

@@ -38,8 +38,10 @@ import type { Target } from "../github/target.js";
 import { renderPipeTable } from "../cli/table.js";
 import { VerbUsageError } from "../cli/command.js";
 import {
+  declaredPoolLabels,
   DEFAULT_RUNNER_MODE,
   poolLabels,
+  poolOwnLabel,
   RUNNER_ARCHES,
   RUNNER_MODES,
   RUNNER_OSES,
@@ -374,7 +376,7 @@ export function interactiveNotes(plan: RunnerPlan): string[] {
   return [
     `note: an interactive runner is online only while ${who} is signed in to the desktop (or auto-logged on); nen never configures auto-logon.`,
     `note: a UI job needs that session active and unlocked, and the run.cmd console window open; a locked screen or a disconnected session still reports a non-zero session id.`,
-    `note: every job it takes runs in ${who}'s desktop session, with that account's profile and credentials -- not only the jobs asking for 'desktop': a runner carrying [self-hosted, ${plan.os}, ${plan.arch}, desktop] also matches every job aimed at [self-hosted, ${plan.os}, ${plan.arch}] on ${plan.target}.`,
+    `note: every job it takes runs in ${who}'s desktop session, with that account's profile and credentials -- not only the jobs asking for 'desktop': GitHub gives a runner carrying [${plan.labels.join(", ")}] every job on ${plan.target} whose runs-on is a subset of those labels.`,
     plan.dailyAccount
       ? `warning: ${plan.identity} is the account computing this plan -- your own daily account. Its jobs would run with your profile and your credentials. Prefer a dedicated local account; 'nen runner script' renders this plan only with --accept-daily-account.`
       : "note: use a dedicated local account, never your daily one. nen can only tell them apart when the plan is computed on Windows (it compares USERNAME).",
@@ -433,10 +435,18 @@ export function validatePlan(value: unknown, source: string): RunnerPlan {
   if (!(RUNNER_MODES as readonly unknown[]).includes(modeRaw)) bad(`'mode' is ${JSON.stringify(modeRaw)}`);
   const mode = modeRaw as RunnerMode;
   if (mode !== DEFAULT_RUNNER_MODE[runnerOs] && runnerOs !== "Windows") bad(`'mode' is '${mode}' for a ${runnerOs} pool`);
-  const expectedLabels = poolLabels(runnerOs, runnerArch, mode);
+  // THE POOL'S OWN LABEL IS PART OF THE CONTRACT (#340): a plan written
+  // before it registers runners that join the pool by GitHub's defaults alone,
+  // so it is refused, named, rather than rendered into a script.
+  const expectedLabels = poolLabels(runnerOs, runnerArch, mode, pool);
   const labels = plan["labels"];
   if (!Array.isArray(labels) || labels.join(",") !== expectedLabels.join(",")) {
-    bad(`'labels' is ${JSON.stringify(labels)}, expected ${JSON.stringify(expectedLabels)}`);
+    const predates = Array.isArray(labels) && labels.join(",") === declaredPoolLabels(runnerOs, runnerArch, mode).join(",");
+    bad(
+      `'labels' is ${JSON.stringify(labels)}, expected ${JSON.stringify(expectedLabels)}${
+        predates ? ` -- the plan predates the pool's own label '${poolOwnLabel(pool)}' (#340), and a runner registered from it would join the pool unlabelled` : ""
+      }`,
+    );
   }
   const dailyRaw = v01 ? false : plan["dailyAccount"];
   if (typeof dailyRaw !== "boolean" || (dailyRaw && !isLogonTask({ os: runnerOs, mode }))) {

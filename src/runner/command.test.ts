@@ -14,6 +14,7 @@ import { isUnder, makeRunnerCommand, RUNNER_SUBCOMMANDS, RUNNER_SUBCOMMAND_FLAGS
 import { defaultBranchArgv } from "./preflight.js";
 import { DESKTOP_POOL_BODY, FIXTURES, inventoryCalls, POLICY_BODY, runnersAnswer, TARGET, windowsServicesCall } from "./testkit.js";
 import { runnersArgv } from "./inventory.js";
+import { addLabelArgv, runnerLabelsArgv } from "./relabel.js";
 
 const COMMAND = makeRunnerCommand({ sleep: () => {}, version: "0.0.0-test" });
 
@@ -76,10 +77,13 @@ describe("nen runner inventory", () => {
     expect(Object.keys(report)).toEqual(["target", "runners", "downloads", "pools", "unpooled"]);
     expect(report.pools.find((pool: { id: string }) => pool.id === "macos-arm64")).toEqual({
       id: "macos-arm64",
-      labels: ["self-hosted", "macOS", "ARM64"],
-      runners: ["RJ2-NNR1", "RJ2-NNR2", "RJ2-NNR3"],
-      online: 3,
-      free: 3,
+      labels: ["self-hosted", "macOS", "ARM64", "pool-macos-arm64"],
+      // Recorded before #340: the runners carry the defaults alone, so they
+      // await the pool's own label rather than belonging to the pool.
+      runners: [],
+      online: 0,
+      free: 0,
+      unlabelled: ["RJ2-NNR1", "RJ2-NNR2", "RJ2-NNR3"],
     });
   });
 
@@ -317,7 +321,7 @@ describe("nen runner workflow", () => {
     expect(first.code, first.err).toBe(0);
     const out = join(root, ".github", "workflows", "runner-preflight-windows-x64.yml");
     expect(JSON.parse(first.out)).toMatchObject({ out, pool: "windows-x64", written: true, unchanged: false });
-    expect(readFileSync(out, "utf8")).toMatch(/runs-on: \[self-hosted, Windows, X64\]/);
+    expect(readFileSync(out, "utf8")).toMatch(/runs-on: \[self-hosted, Windows, X64, pool-windows-x64\]/);
 
     const again = await run(["workflow", "--repo", root, "--target", "zheref/nen", "--pool", "windows-x64", "--template", template]);
     expect(again.code).toBe(0);
@@ -391,7 +395,7 @@ describe("nen runner preflight and enable -- the two writes", () => {
       },
       {
         match: "gh api --method GET repos/zheref/nen/actions/runs/901/jobs?per_page=100",
-        result: { stdout: JSON.stringify({ jobs: [{ name: "preflight", status: "completed", conclusion: "success", runner_name: "NZ-NNR4", labels: ["self-hosted", "Windows", "X64"] }] }) },
+        result: { stdout: JSON.stringify({ jobs: [{ name: "preflight", status: "completed", conclusion: "success", runner_name: "NZ-NNR4", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] }] }) },
       },
       { match: `gh ${defaultBranchArgv(TARGET).join(" ")}`, result: { stdout: '{"defaultBranchRef":{"name":"main"}}' } },
       { match: `gh api --method GET repos/zheref/nen/contents/${file}?ref=${"b".repeat(40)}`, result: { stdout: '{"sha":"1111"}' } },
@@ -406,5 +410,86 @@ describe("nen runner preflight and enable -- the two writes", () => {
     expect(report).toMatchObject({ target: "zheref/nen", pool: "windows-x64", runId: 901, refused: true });
     expect(report.problems.map((problem: { check: string }) => problem.check)).toEqual(["event", "branch"]);
     expect(result.seams.calls.some((call) => call.args[0] === "variable" && call.args[1] === "set")).toBe(false);
+  });
+});
+
+describe("nen runner verify --pool (#340)", () => {
+  it("requires the pool's full set, its own label included, and names the relabel step", async () => {
+    const root = consumer();
+    const list = `gh ${runnersArgv(TARGET, 1).join(" ")}`;
+    const result = await run(["verify", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--expect", "NZ-NNR1,NZ-NNR2", "--json"], [
+      { match: list, result: { stdout: runnersAnswer([{ name: "NZ-NNR1", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] }, { name: "NZ-NNR2" }]) } },
+    ]);
+    expect(result.code).toBe(1);
+    const report = JSON.parse(result.out);
+    expect(report.runners.map((row: { name: string; detail: string }) => [row.name, row.detail])).toEqual([
+      ["NZ-NNR1", "ok"],
+      ["NZ-NNR2", "labels: missing pool-windows-x64 -- registered without its pool label: nen runner relabel --pool windows-x64 --runner NZ-NNR2 --run"],
+    ]);
+  });
+
+  it("merges --labels with the pool's, once each, and refuses an unknown pool at exit 2", async () => {
+    const root = consumer();
+    const list = `gh ${runnersArgv(TARGET, 1).join(" ")}`;
+    const ok = await run(["verify", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--labels", "x64,gpu", "--expect", "NZ-NNR1"], [
+      { match: list, result: { stdout: runnersAnswer([{ name: "NZ-NNR1", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64", "gpu"] }]) } },
+    ]);
+    expect(ok.code).toBe(0);
+    const unknown = await run(["verify", "--target", "zheref/nen", "--repo", root, "--pool", "nope", "--expect", "NZ-NNR1"]);
+    expect(unknown.code).toBe(2);
+    expect(unknown.err).toMatch(/no pool 'nope' in the runners block/);
+  });
+});
+
+describe("nen runner relabel (#340)", () => {
+  const list = `gh ${runnersArgv(TARGET, 1).join(" ")}`;
+
+  it("requires --target and --pool, and refuses an empty --runner, at exit 2", async () => {
+    const root = consumer();
+    const noTarget = await run(["relabel", "--repo", root, "--pool", "windows-x64"]);
+    expect(noTarget.code).toBe(2);
+    expect(noTarget.err).toMatch(/--target owner\/name is required: this verb writes to GitHub/);
+    expect((await run(["relabel", "--target", "zheref/nen", "--repo", root])).code).toBe(2);
+    expect((await run(["relabel", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--runner", " , "])).code).toBe(2);
+    expect((await run(["relabel", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--dry-run"])).err).toMatch(/--dry-run is not a 'runner relabel' flag/);
+  });
+
+  it("is a dry run without --run: one read, no write, the would-run lines printed", async () => {
+    const result = await run(["relabel", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64"], [
+      { match: list, result: { stdout: runnersAnswer([{ name: "NZ-NNR1" }]) } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out).toMatch(/^\(dry run\) would add pool-windows-x64 to 1 runner\(s\) on zheref\/nen \(pool windows-x64\); pass --run to write\./);
+    expect(result.out).toMatch(/would run: gh api --method POST repos\/zheref\/nen\/actions\/runners\/100\/labels -f labels\[\]=pool-windows-x64/);
+    expect(result.seams.calls).toHaveLength(1);
+  });
+
+  it("writes and reads back with --run, under --json", async () => {
+    const labelled = JSON.stringify({ total_count: 4, labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"].map((name) => ({ id: 0, name, type: "custom" })) });
+    const result = await run(["relabel", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64", "--runner", "NZ-NNR1", "--run", "--json"], [
+      { match: list, result: { stdout: runnersAnswer([{ name: "NZ-NNR1" }]) } },
+      { match: `gh ${addLabelArgv(TARGET, 100, "pool-windows-x64").join(" ")}`, result: { stdout: labelled } },
+      { match: `gh ${runnerLabelsArgv(TARGET, 100).join(" ")}`, result: { stdout: labelled } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out)).toEqual({
+      target: "zheref/nen",
+      pool: "windows-x64",
+      label: "pool-windows-x64",
+      selection: "named",
+      run: true,
+      runners: [{ name: "NZ-NNR1", id: 100, verdict: "added" }],
+      changed: 1,
+    });
+  });
+
+  it("is exit 1 on a refused named runner, and exit 5 without gh", async () => {
+    const refused = await run(["relabel", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64", "--runner", "NZ-NNR9", "--run"], [
+      { match: list, result: { stdout: runnersAnswer([{ name: "NZ-NNR1" }]) } },
+    ]);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toMatch(/nen runner relabel: no runner was relabelled for pool windows-x64: NZ-NNR9 is not registered on zheref\/nen/);
+    const noGh = await run(["relabel", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64"], [{ match: list, result: { spawnFailed: true, stderr: "ENOENT" } }]);
+    expect(noGh.code).toBe(5);
   });
 });

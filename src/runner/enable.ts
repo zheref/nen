@@ -7,7 +7,9 @@
 // round trip exactly that way). So the variable is written only after the run
 // named by `--after-run` reads, from GitHub, as ALL of: this pool's own
 // preflight workflow (the run's `path`), completed, concluded `success`, every
-// job in it requested THIS pool's labels, dispatched (`workflow_dispatch`) on
+// job in it requested THIS pool's labels -- its own `pool-<id>` included
+// (#340), so a run rendered before the pool label existed, which any runner of
+// that os and arch could have taken, does not certify -- dispatched (`workflow_dispatch`) on
 // the default branch, and running the default branch's own blob of the
 // workflow (#319). A green run of another file, of the same file rendered for
 // another pool, or of an edited copy on a branch, is refused by name.
@@ -20,7 +22,7 @@
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import { outputLines } from "../seam/exec.js";
-import type { RunnerPool } from "../schema/workflow.js";
+import { POOL_LABEL_PREFIX, poolOwnLabel, type RunnerPool } from "../schema/workflow.js";
 import { apiRefusal, asRecord, gh, RunnerFailure } from "./github.js";
 import { contentsArgv, defaultBranch, readRun } from "./preflight.js";
 
@@ -108,7 +110,12 @@ export function certifyRun(seams: Seams, target: Target, pool: RunnerPool, runId
   for (const job of run.jobs) {
     const carried = new Set(job.labels.map((label): string => label.toLowerCase()));
     const missing = pool.labels.filter((label): boolean => !carried.has(label.toLowerCase()));
-    if (missing.length > 0) problems.push({ check: "labels", detail: `job '${job.name}' did not ask for pool ${pool.id}'s labels (missing ${missing.join(", ")})` });
+    if (missing.length > 0) {
+      const own = poolOwnLabel(pool.id);
+      const unlabelled = !job.labels.some((label): boolean => label.toLowerCase().startsWith(POOL_LABEL_PREFIX));
+      const predates = unlabelled && missing.length === 1 && missing[0] === own ? ` -- a preflight rendered before the pool label (#340): re-render it with 'nen runner workflow', land it, relabel the pool's runners ('nen runner relabel'), and dispatch it again` : "";
+      problems.push({ check: "labels", detail: `job '${job.name}' did not ask for pool ${pool.id}'s labels (missing ${missing.join(", ")})${predates}` });
+    }
     if (job.conclusion !== "success") problems.push({ check: "job-conclusion", detail: `job '${job.name}' concluded '${job.conclusion ?? "(none)"}'` });
   }
   if (run.event !== "workflow_dispatch") problems.push({ check: "event", detail: `it was triggered by '${run.event || "(no event)"}', not workflow_dispatch` });

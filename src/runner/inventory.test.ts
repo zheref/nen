@@ -3,11 +3,14 @@ import { ScriptedSeams } from "../seam/scripted.js";
 import { RunnerFailure } from "./github.js";
 import {
   assembleInventory,
+  awaitingPools,
+  declaredOf,
   downloadsArgv,
   fetchDownloads,
   fetchRunners,
   inPool,
   parseRunnerName,
+  poolLabelsOf,
   renderInventory,
   runnersArgv,
 } from "./inventory.js";
@@ -91,49 +94,85 @@ describe("fetchRunners / fetchDownloads -- gh api GET, every page", () => {
 describe("assembleInventory -- runners grouped by the declared pools", () => {
   const seams = (): ScriptedSeams => new ScriptedSeams(inventoryCalls());
 
-  it("groups the recorded macOS runners into macos-arm64, none unpooled", () => {
+  it("lists the recorded macOS runners, registered before #340, as awaiting macos-arm64's label -- in no pool, and not unpooled", () => {
     const s = seams();
     const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), POLICY, null);
     expect(report.pools).toEqual([
-      { id: "windows-x64", labels: ["self-hosted", "Windows", "X64"], runners: [], online: 0, free: 0 },
-      { id: "macos-arm64", labels: ["self-hosted", "macOS", "ARM64"], runners: ["RJ2-NNR1", "RJ2-NNR2", "RJ2-NNR3"], online: 3, free: 3 },
-      { id: "linux-x64", labels: ["self-hosted", "Linux", "X64"], runners: [], online: 0, free: 0 },
+      { id: "windows-x64", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"], runners: [], online: 0, free: 0, unlabelled: [] },
+      { id: "macos-arm64", labels: ["self-hosted", "macOS", "ARM64", "pool-macos-arm64"], runners: [], online: 0, free: 0, unlabelled: ["RJ2-NNR1", "RJ2-NNR2", "RJ2-NNR3"] },
+      { id: "linux-x64", labels: ["self-hosted", "Linux", "X64", "pool-linux-x64"], runners: [], online: 0, free: 0, unlabelled: [] },
     ]);
     expect(report.unpooled).toEqual([]);
     expect(report.downloads.find((row) => row.os === "win" && row.architecture === "x64")?.filename).toBe("actions-runner-win-x64-2.337.0.zip");
-    expect(renderInventory(report).join("\n")).toMatch(/pool macos-arm64 \[self-hosted, macOS, ARM64\]: 3 runner\(s\), 3 online, 3 free -- RJ2-NNR1, RJ2-NNR2, RJ2-NNR3/);
+    expect(renderInventory(report).join("\n")).toMatch(
+      /pool macos-arm64 \[self-hosted, macOS, ARM64, pool-macos-arm64\]: 0 runner\(s\), 0 online, 0 free; without pool-macos-arm64: RJ2-NNR1, RJ2-NNR2, RJ2-NNR3 \(nen runner relabel --pool macos-arm64\)/,
+    );
+  });
+
+  it("groups relabelled runners into their pool, and no longer lists them as awaiting (#340)", () => {
+    const answer = runnersAnswer(["RJ2-NNR1", "RJ2-NNR2"].map((name) => ({ name, labels: ["self-hosted", "macOS", "ARM64", "pool-macos-arm64"] })));
+    const s = new ScriptedSeams(inventoryCalls(answer));
+    const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), POLICY, "macos-arm64");
+    expect(report.pools).toEqual([
+      { id: "macos-arm64", labels: ["self-hosted", "macOS", "ARM64", "pool-macos-arm64"], runners: ["RJ2-NNR1", "RJ2-NNR2"], online: 2, free: 2, unlabelled: [] },
+    ]);
   });
 
   it("counts busy and offline apart, allows extra labels, and lists a runner no pool claims", () => {
     const rows = JSON.parse(
       runnersAnswer([
-        { name: "NZ-NNR1" },
-        { name: "NZ-NNR2", busy: true },
-        { name: "NZ-NNR3", status: "offline" },
-        { name: "NZ-NNR4", labels: ["self-hosted", "windows", "x64", "gpu"] },
+        { name: "NZ-NNR1", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] },
+        { name: "NZ-NNR2", busy: true, labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] },
+        { name: "NZ-NNR3", status: "offline", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] },
+        { name: "NZ-NNR4", labels: ["self-hosted", "windows", "x64", "gpu", "POOL-windows-x64"] },
         { name: "Runner0", labels: ["self-hosted", "Windows", "ARM64"] },
       ]),
     );
     const s = new ScriptedSeams(inventoryCalls(JSON.stringify(rows)));
     const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), POLICY, "windows-x64");
     expect(report.pools).toEqual([
-      { id: "windows-x64", labels: ["self-hosted", "Windows", "X64"], runners: ["NZ-NNR1", "NZ-NNR2", "NZ-NNR3", "NZ-NNR4"], online: 3, free: 2 },
+      { id: "windows-x64", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"], runners: ["NZ-NNR1", "NZ-NNR2", "NZ-NNR3", "NZ-NNR4"], online: 3, free: 2, unlabelled: [] },
     ]);
     expect(report.unpooled).toEqual(["Runner0"]);
     expect(report.runners.find((row) => row.name === "Runner0")?.convention).toBe("runner-0");
     expect(renderInventory(report).join("\n")).toMatch(/\(runner 0\)/);
   });
 
-  it("counts a desktop runner in its interactive pool AND in the plain pool, as GitHub schedules it (#333)", () => {
+  it("counts a desktop runner only in its interactive pool once both carry their own label (#333, #340)", () => {
+    const policy = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0], DESKTOP_POOL_BODY] });
+    const answer = runnersAnswer([
+      { name: "NZ-NNR1", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] },
+      { name: "NZ-KWIR2", labels: ["self-hosted", "Windows", "X64", "desktop", "pool-windows-x64-desktop"] },
+    ]);
+    const s = new ScriptedSeams(inventoryCalls(answer));
+    const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), policy, null);
+    expect(report.pools?.map((row) => [row.id, row.runners])).toEqual([
+      ["windows-x64", ["NZ-NNR1"]],
+      ["windows-x64-desktop", ["NZ-KWIR2"]],
+    ]);
+    expect(report.unpooled).toEqual([]);
+  });
+
+  it("lists an unlabelled desktop runner as awaiting only the interactive pool, never the plain one (#340)", () => {
     const policy = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0], DESKTOP_POOL_BODY] });
     const answer = runnersAnswer([{ name: "NZ-NNR1" }, { name: "NZ-KWIR2", labels: ["self-hosted", "Windows", "X64", "desktop"] }]);
     const s = new ScriptedSeams(inventoryCalls(answer));
     const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), policy, null);
-    expect(report.pools?.map((row) => [row.id, row.runners])).toEqual([
-      ["windows-x64", ["NZ-NNR1", "NZ-KWIR2"]],
-      ["windows-x64-desktop", ["NZ-KWIR2"]],
+    expect(report.pools?.map((row) => [row.id, row.runners, row.unlabelled])).toEqual([
+      ["windows-x64", [], ["NZ-NNR1"]],
+      ["windows-x64-desktop", [], ["NZ-KWIR2"]],
     ]);
     expect(report.unpooled).toEqual([]);
+  });
+
+  it("awaits nothing for a runner that already carries any pool label, and both pools when two declare one set (#340)", () => {
+    const policy = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0], { ...POLICY_BODY.pools[0], id: "windows-two", preflightWorkflow: "two.yml" }] });
+    const pools = policy?.pools ?? [];
+    expect(awaitingPools({ labels: ["self-hosted", "Windows", "X64", "pool-elsewhere"] }, pools)).toEqual([]);
+    expect(awaitingPools({ labels: ["self-hosted", "Windows", "X64"] }, pools).map((p) => p.id)).toEqual(["windows-x64", "windows-two"]);
+    expect(awaitingPools({ labels: ["self-hosted", "Linux", "X64"] }, pools)).toEqual([]);
+    expect(declaredOf(pools[1]!)).toEqual(["self-hosted", "Windows", "X64"]);
+    expect(poolLabelsOf({ labels: ["self-hosted", "Pool-A", "pool-b"] })).toEqual(["Pool-A", "pool-b"]);
   });
 
   it("carries no pools at all without a policy", () => {
@@ -145,9 +184,11 @@ describe("assembleInventory -- runners grouped by the declared pools", () => {
   });
 
   it("matches a pool by a superset of its labels, case-insensitively", () => {
-    const [row] = fetchRunners(new ScriptedSeams(inventoryCalls(runnersAnswer([{ name: "X", labels: ["SELF-HOSTED", "macos", "arm64", "extra"] }]))), TARGET);
+    const [row] = fetchRunners(new ScriptedSeams(inventoryCalls(runnersAnswer([{ name: "X", labels: ["SELF-HOSTED", "macos", "arm64", "extra", "Pool-MacOS-ARM64"] }]))), TARGET);
     expect(inPool(row!, pool("macos-arm64"))).toBe(true);
     expect(inPool(row!, pool("windows-x64"))).toBe(false);
+    // The defaults alone are not membership any more (#340).
+    expect(inPool({ labels: ["self-hosted", "macOS", "ARM64"] }, pool("macos-arm64"))).toBe(false);
   });
 
   it("renders an empty repository as one line and no table", () => {

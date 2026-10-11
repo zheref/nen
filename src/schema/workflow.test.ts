@@ -11,9 +11,11 @@ import {
   ATTRIBUTION_TRAILERS,
   DEFAULT_BASE,
   DEFAULT_BRANCH_TEMPLATE,
+  POOL_LABEL_PREFIX,
   PROFILE_NAMES,
   RUNNER_NAMING,
   WORKFLOW_FILE,
+  declaredPoolLabels,
   defaultWorkflow,
   describeProfile,
   describeReviewScopes,
@@ -22,6 +24,8 @@ import {
   describeWorkflow,
   loadWorkflow,
   parseWorkflow,
+  poolLabels,
+  poolOwnLabel,
   refusedTrailerKeys,
   trailerAdmitted,
   trailerRefusal,
@@ -958,14 +962,14 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
       id: "windows-x64",
       os: "Windows",
       arch: "X64",
-      labels: ["self-hosted", "Windows", "X64"],
+      labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"],
       enableVariable: "NEN_WINDOWS_RUNNER",
       tools: ["git", "bash", "gh"],
       preflightWorkflow: "runner-preflight-windows-x64.yml",
       root: { windows: "C:\\GithubRunners", linux: "/opt/actions-runners", darwin: "~/actions-runners" },
     });
     expect((workflow.raw["runners"] as Record<string, unknown>)["$comment"]).toBe("why");
-    expect(describeRunners(workflow)).toBe("1 pool(s): windows-x64 [self-hosted, Windows, X64] via NEN_WINDOWS_RUNNER");
+    expect(describeRunners(workflow)).toBe("1 pool(s): windows-x64 [self-hosted, Windows, X64, pool-windows-x64] via NEN_WINDOWS_RUNNER");
   });
 
   it("takes enableVariable and root as optional, and naming as defaulting to the one template", () => {
@@ -974,7 +978,7 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
     expect(workflow.runners?.naming).toBe(RUNNER_NAMING);
     expect(workflow.runners?.pools[0]?.enableVariable).toBeNull();
     expect(workflow.runners?.pools[0]?.root).toEqual({ windows: null, linux: null, darwin: null });
-    expect(describeRunners(workflow)).toBe("1 pool(s): windows-x64 [self-hosted, Windows, X64]");
+    expect(describeRunners(workflow)).toBe("1 pool(s): windows-x64 [self-hosted, Windows, X64, pool-windows-x64]");
   });
 
   it("accepts the one naming template and refuses every other, naming it", () => {
@@ -1003,9 +1007,41 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
       ["self-hosted", "Linux", "X64"],
     ]) {
       expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, labels }))).toThrow(
-        /runners\.pools\[0\]\.labels.*a pool's labels are exactly \["self-hosted","Windows","X64"\]/,
+        /runners\.pools\[0\]\.labels.*A pool's labels are exactly \["self-hosted","Windows","X64"\].*nen appends the pool's own label 'pool-windows-x64' last/,
       );
     }
+  });
+
+  it("derives the pool's own label from its id and appends it LAST; a declaration may write it out, and nothing else (#340)", () => {
+    const declared = parseWorkflow("<doc>", runnersWith(WINDOWS_POOL)).runners?.pools[0];
+    const written = parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] })).runners?.pools[0];
+    expect(declared?.labels).toEqual(["self-hosted", "Windows", "X64", "pool-windows-x64"]);
+    expect(written?.labels).toEqual(declared?.labels);
+    expect(POOL_LABEL_PREFIX).toBe("pool-");
+    expect(poolOwnLabel("windows-x64")).toBe("pool-windows-x64");
+    expect(declaredPoolLabels("Windows", "X64", "interactive")).toEqual(["self-hosted", "Windows", "X64", "desktop"]);
+    expect(poolLabels("Windows", "X64", "interactive", "kwi-desktop")).toEqual(["self-hosted", "Windows", "X64", "desktop", "pool-kwi-desktop"]);
+    expect(poolLabels("macOS", "ARM64", "interactive", "macos-arm64")).toEqual(["self-hosted", "macOS", "ARM64", "pool-macos-arm64"]);
+  });
+
+  it.each([
+    ["a bare self-hosted", ["self-hosted"], /a bare 'self-hosted' would match every runner the repository has/],
+    ["a set missing the os", ["self-hosted", "X64", "pool-windows-x64"], /its os 'Windows' is missing/],
+    ["a set missing the arch", ["self-hosted", "Windows", "pool-windows-x64"], /its arch 'X64' is missing/],
+    ["a second extra label", ["self-hosted", "Windows", "X64", "pool-windows-x64", "gpu"], /it carries 2 labels beyond the defaults, and a pool carries exactly one of its own, 'pool-windows-x64'.*'gpu' is an extra label/],
+    ["a free-form own label", ["self-hosted", "Windows", "X64", "nz-windows"], /'nz-windows' is an extra label/],
+    ["another pool's label", ["self-hosted", "Windows", "X64", "pool-macos-arm64"], /'pool-macos-arm64' is not this pool's own label: a pool's own label is derived from its id, 'pool-windows-x64', so it is never another pool's -- and since ids are unique, no two pools can carry one/],
+    ["the own label out of place", ["pool-windows-x64", "self-hosted", "Windows", "X64"], /its labels are out of order/],
+    ["an interactive pool without desktop", ["self-hosted", "Windows", "X64", "pool-windows-x64"], /'desktop' is missing\..*'pool-windows-x64' last/, { mode: "interactive" }],
+  ])("refuses %s, naming it (#340)", (_case, labels, pattern, extra: Record<string, unknown> = {}) => {
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, ...extra, labels }))).toThrow(pattern);
+    expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, ...extra, labels }))).toThrow(/runners\.pools\[0\]\.labels/);
+  });
+
+  it("needs no duplicate-pool-label refusal: ids are unique, so a repeated id is the only collision (#340)", () => {
+    const a = { ...WINDOWS_POOL, labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] };
+    const b = { ...WINDOWS_POOL, preflightWorkflow: "b.yml", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] };
+    expect(() => parseWorkflow("<doc>", { runners: { pools: [a, b] } })).toThrow(/pools\[1\]\.id.*repeats 'windows-x64'/);
   });
 
   it("refuses a malformed enableVariable, tool, preflightWorkflow or root by pointer", () => {
@@ -1030,9 +1066,10 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
     expect(() => parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, mac] } })).toThrow(/pools\[1\]\.id.*repeats 'windows-x64'/);
   });
 
-  it("refuses two pools with one label set, and two pools sharing a preflight file", () => {
+  it("admits two pools of one os and arch -- each carries its own label (#340) -- and refuses two sharing a preflight file", () => {
     const twin = { ...WINDOWS_POOL, id: "windows-two", preflightWorkflow: "other.yml" };
-    expect(() => parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, twin] } })).toThrow(/pools\[1\]\.labels.*same label set as runners\.pools\[0\]/);
+    const pools = parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, twin] } }).runners?.pools ?? [];
+    expect(pools.map((pool) => pool.labels.join(","))).toEqual(["self-hosted,Windows,X64,pool-windows-x64", "self-hosted,Windows,X64,pool-windows-two"]);
     const mac = { ...WINDOWS_POOL, id: "macos-arm64", os: "macOS", arch: "ARM64", labels: ["self-hosted", "macOS", "ARM64"] };
     expect(() => parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, mac] } })).toThrow(
       /pools\[1\]\.preflightWorkflow.*already runners\.pools\[0\]'s preflight workflow.*runner-preflight-macos-arm64\.yml/,
@@ -1056,7 +1093,7 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
     expect(parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, mode: "service" })).runners?.pools[0]?.mode).toBe("service");
   });
 
-  it("gives an interactive Windows pool exactly the four labels, desktop last, beside a service pool on one host (#333)", () => {
+  it("gives an interactive Windows pool the four declared labels, desktop then its own label last, beside a service pool on one host (#333, #340)", () => {
     const desktop = {
       ...WINDOWS_POOL,
       id: "windows-x64-desktop",
@@ -1065,13 +1102,13 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
       preflightWorkflow: "runner-preflight-windows-x64-desktop.yml",
     };
     const workflow = parseWorkflow("<doc>", { runners: { pools: [WINDOWS_POOL, desktop] } });
-    expect(workflow.runners?.pools[1]).toMatchObject({ mode: "interactive", labels: ["self-hosted", "Windows", "X64", "desktop"] });
+    expect(workflow.runners?.pools[1]).toMatchObject({ mode: "interactive", labels: ["self-hosted", "Windows", "X64", "desktop", "pool-windows-x64-desktop"] });
     expect(describeRunners(workflow)).toBe(
-      "2 pool(s): windows-x64 [self-hosted, Windows, X64] via NEN_WINDOWS_RUNNER; windows-x64-desktop [self-hosted, Windows, X64, desktop] via NEN_WINDOWS_RUNNER",
+      "2 pool(s): windows-x64 [self-hosted, Windows, X64, pool-windows-x64] via NEN_WINDOWS_RUNNER; windows-x64-desktop [self-hosted, Windows, X64, desktop, pool-windows-x64-desktop] via NEN_WINDOWS_RUNNER",
     );
     for (const labels of [["self-hosted", "Windows", "X64"], ["self-hosted", "Windows", "X64", "gui"], ["self-hosted", "Windows", "desktop", "X64"]]) {
       expect(() => parseWorkflow("<doc>", runnersWith({ ...desktop, labels }))).toThrow(
-        /pools\[0\]\.labels.*an interactive Windows pool's labels are exactly \["self-hosted","Windows","X64","desktop"\]/,
+        /pools\[0\]\.labels.*An interactive Windows pool's labels are exactly \["self-hosted","Windows","X64","desktop"\]/,
       );
     }
   });
@@ -1099,5 +1136,10 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
     expect(loaded.workflow.runners?.pools.map((pool): string => pool.id)).toEqual(["windows-x64", "macos-arm64"]);
     expect(loaded.workflow.runners?.pools[0]?.enableVariable).toBe("NEN_WINDOWS_RUNNER");
     expect(loaded.workflow.runners?.pools[1]?.enableVariable).toBeNull();
+    // Declared without the pool label, as before #340, and parsed with it.
+    expect(loaded.workflow.runners?.pools.map((pool) => pool.labels)).toEqual([
+      ["self-hosted", "Windows", "X64", "pool-windows-x64"],
+      ["self-hosted", "macOS", "ARM64", "pool-macos-arm64"],
+    ]);
   });
 });

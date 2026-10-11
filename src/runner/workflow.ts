@@ -25,6 +25,9 @@ const PLACEHOLDER = /@@([A-Za-z0-9_]+)@@/g;
 export function workflowValues(pool: RunnerPool, target: Target, version: string): Readonly<Record<string, string>> {
   return {
     REPO_SLUG: target.slug,
+    // The FULL set, the pool's own `pool-<id>` last (#340): a job of this
+    // workflow lands only on a runner proven into this pool, never on one that
+    // merely shares its os and arch.
     RUNS_ON: `[${pool.labels.join(", ")}]`,
     OS: pool.os,
     MODE: pool.mode,

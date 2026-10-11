@@ -1,15 +1,17 @@
 // src/runner/command.ts -- `nen runner inventory | plan | script | verify |
-// workflow | preflight | enable`: the self-hosted runner family hatsu:jusshin
-// executes, one deterministic step per verb.
+// workflow | preflight | enable | relabel`: the self-hosted runner family
+// hatsu:jusshin executes, one deterministic step per verb.
 //
 // THE HOST ACT IS NEVER NEN'S. Registering a service, granting a folder right
 // and typing a service account's password happen on the maintainer's machine,
 // with the maintainer's consent (a UAC prompt, their own sudo). So the family
 // stops at RENDERING that act (`script`) and at the one line that launches it;
-// every verb before it reads, every verb after it proves, and the only two
-// that write to GitHub -- `preflight` (a workflow dispatch) and `enable` (a
-// repository variable) -- each carry a `--dry-run`, and `enable` refuses to
-// write without a green preflight run it re-reads itself.
+// every verb before it reads, every verb after it proves, and the three that
+// write to GitHub -- `preflight` (a workflow dispatch) and `enable` (a
+// repository variable), each with a `--dry-run`, and `relabel` (a runner's
+// pool label, #340), which writes only with `--run` -- each act on proof:
+// `enable` refuses to write without a green preflight run it re-reads itself,
+// and `relabel` reads every label it adds back.
 //
 // NO TOKEN, NO PASSWORD, EVER. Nen never mints the registration token (the
 // host script does, inside the elevated process), never sees the password
@@ -29,8 +31,8 @@
 // the way the issue family does, rather than accepted and ignored.
 //
 // `--target` DEFAULTS TO THE CHECKOUT'S ORIGIN for the four verbs that only
-// read or render (inventory, plan, verify, workflow); the two that WRITE to
-// GitHub (preflight, enable) require it by name. ../github/target.ts's header
+// read or render (inventory, plan, verify, workflow); the three that WRITE to
+// GitHub (preflight, enable, relabel) require it by name. ../github/target.ts's header
 // is the reason for the split: a write that silently took the working
 // directory's remote is how a mutating run lands on the wrong repository.
 
@@ -61,10 +63,11 @@ import { checkNeighbours, renderNeighbours } from "./neighbours.js";
 import { computePlan, isDailyAccount, normalizeMachineCode, renderPlan, resolveConsumerCode, validatePlan, type RunnerPlan } from "./plan.js";
 import { renderPreflight, runPreflight } from "./preflight.js";
 import { launchLine, renderScript, summaryGlob } from "./script.js";
+import { relabelPool, renderRelabel } from "./relabel.js";
 import { renderVerify, verifyRunners } from "./verify.js";
 import { differingLines, renderWorkflow, workflowValues } from "./workflow.js";
 
-export const RUNNER_SUBCOMMANDS = ["inventory", "plan", "script", "verify", "workflow", "preflight", "enable"] as const;
+export const RUNNER_SUBCOMMANDS = ["inventory", "plan", "script", "verify", "workflow", "preflight", "enable", "relabel"] as const;
 type Subcommand = (typeof RUNNER_SUBCOMMANDS)[number];
 
 /** Each verb's own flags, on top of the globals (`--repo`, `--json`, `--help`). */
@@ -72,10 +75,11 @@ export const RUNNER_SUBCOMMAND_FLAGS: Readonly<Record<Subcommand, readonly strin
   inventory: ["target", "pool"],
   plan: ["target", "pool", "machine-code", "count", "root", "service-account", "consumer-code", "out"],
   script: ["plan", "out", "dry-run", "accept-daily-account"],
-  verify: ["target", "expect", "labels", "wait"],
+  verify: ["target", "expect", "labels", "pool", "wait"],
   workflow: ["target", "pool", "template", "out", "force", "dry-run"],
   preflight: ["target", "workflow", "ref", "wait", "dry-run"],
   enable: ["target", "pool", "after-run", "value", "dry-run"],
+  relabel: ["target", "pool", "runner", "run"],
 };
 
 const VALUE_FLAGS = [
@@ -96,16 +100,18 @@ const VALUE_FLAGS = [
   "ref",
   "after-run",
   "value",
+  "runner",
 ];
-const BOOLEAN_FLAGS = ["dry-run", "force", "accept-daily-account"];
+const BOOLEAN_FLAGS = ["dry-run", "force", "accept-daily-account", "run"];
 
 const USAGE = `nen runner inventory [--target <owner/name>] [--repo <path>] [--pool <id>] [--json]
 nen runner plan --pool <id> --machine-code <CODE> --count <n> [--target <owner/name>] [--repo <path>] [--root <dir>] [--service-account <name>] [--consumer-code <CODE>] [--out <file>] [--json]
 nen runner script --plan <plan.json> --out <file> [--repo <path>] [--accept-daily-account] [--dry-run] [--json]
-nen runner verify --expect <name>[,<name>...] [--target <owner/name>] [--labels <a,b,c>] [--wait <seconds>] [--json]
+nen runner verify --expect <name>[,<name>...] [--target <owner/name>] [--repo <path>] [--pool <id>] [--labels <a,b,c>] [--wait <seconds>] [--json]
 nen runner workflow --pool <id> --template <path> [--target <owner/name>] [--repo <path>] [--out <path>] [--force] [--dry-run] [--json]
 nen runner preflight --target <owner/name> --workflow <basename> [--ref <branch>] [--wait <seconds>] [--dry-run] [--json]
 nen runner enable --target <owner/name> --pool <id> --after-run <run-id> [--repo <path>] [--value online] [--dry-run] [--json]
+nen runner relabel --target <owner/name> --pool <id> [--runner <name>[,<name>...]] [--repo <path>] [--run] [--json]
 
 The self-hosted runner family a provisioning skill executes: read what a repository
 has, plan what to add, render the host script that adds it (the maintainer
@@ -114,13 +120,22 @@ preflight workflow, and -- only on a green preflight -- switch the pool on.
 Pools come from the 'runners' block of --repo's ${WORKFLOW_FILE}. Nen never
 mints a registration token, never sees a password and never runs the host
 script. --target defaults to --repo's origin for inventory, plan, verify and
-workflow; preflight and enable write to GitHub and require it.
+workflow; preflight, enable and relabel write to GitHub and require it.
+
+Every pool's labels end in its own 'pool-<id>' (#340), derived from its id and
+never declared: GitHub's defaults (self-hosted, the OS, the arch) go to every
+runner of that OS and arch, so without it any later registration joins the
+pool unproven. Generated workflows target the full set; a runner registered
+before it carries no pool label and takes none of those jobs until 'runner
+relabel --run' adds it -- the upgrade step.
 
 inventory  GET .../actions/runners (every page) and .../runners/downloads.
            Each runner with its parsed <machine>-<consumer>R<slot> name (or
            'runner 0'); with --repo or --pool, grouped into the declared pools
            (online, free) plus the unpooled ones. Exit 0 when GitHub answered;
-           1 when it refused (403: needs admin on the target).
+           1 when it refused (403: needs admin on the target). A runner
+           carrying a pool's declared labels but no pool label is listed
+           under that pool as 'without pool-<id>'.
 plan       Which runners to add: the lowest free slots for --machine-code and
            the consumer code (--consumer-code, else nen/repos.json's
            product_codes key naming the target), the install dirs under the
@@ -148,7 +163,9 @@ script     Render the plan's host script: PowerShell 5.1 (Windows), bash
            or ~/.local/state/nen/jusshin/ (Linux, macOS).
 verify     Poll the runners list every 10s for up to --wait seconds (default
            0: once) until every --expect name is present, online and carries
-           every --labels label. Never exits 0 on a partial pass.
+           every --labels label, and with --pool every label of that pool --
+           its pool-<id> included; a runner missing only that is named with
+           the relabel step. Never exits 0 on a partial pass.
 workflow   Render the pool's preflight workflow from --template's @@NAME@@
            placeholders into --out (default .github/workflows/<the pool's
            preflightWorkflow>). An @@X@@ left over is exit 1; an existing file
@@ -167,6 +184,16 @@ enable     Re-read --after-run and require it to be a completed, successful run
            online> and read it back. A run that fails any check is exit 1, and
            --json names each check that refused it (event, branch, blob, ...).
            A pool with no enableVariable is exit 2: nothing to enable.
+relabel    Add the pool's own label, pool-<id>, to runners registered without
+           it (POST .../actions/runners/<id>/labels; admin-only, a 403 is
+           named). --runner names them; without it, the runners carrying the
+           pool's declared labels and no pool label are taken (exit 2 when two
+           pools declare one set: name them). A named runner that is not
+           registered, lacks the pool's labels, carries another pool's label,
+           or belongs to a more specific pool refuses the whole call, exit 1,
+           before any write. Dry run by default: --run writes, and reads each
+           runner's labels back (exit 1 when the label is not there).
+           Idempotent: a runner already carrying it is 'already'.
 
 Exit codes: 0 success; 1 the verb's own failure (GitHub refused or answered
 something unreadable, a planned name taken, a leftover placeholder, a run that
@@ -387,8 +414,12 @@ function script(context: CommandContext, deps: RunnerDeps): number {
 function verify(context: CommandContext, deps: RunnerDeps): number {
   const expect = commaValues(requireValue(context.args, "expect", "It lists the runner names that must be online."));
   if (expect.length === 0) throw new VerbUsageError("--expect names no runner.");
+  // --pool adds the pool's FULL set to --labels, its own pool-<id> included (#340).
+  const poolId = context.args.values["pool"];
+  const poolLabels = poolId === undefined ? [] : requirePool(loadRunners(assertRepoRoot({ repoFlag: context.repoFlag })), poolId).labels;
+  const labels = [...new Map([...commaValues(context.args.values["labels"]), ...poolLabels].map((label): [string, string] => [label.toLowerCase(), label])).values()];
   const target = resolveTarget(context, false);
-  const report = verifyRunners(context.seams, target, expect, commaValues(context.args.values["labels"]), readSeconds(context, "wait", 0), deps.sleep);
+  const report = verifyRunners(context.seams, target, expect, labels, readSeconds(context, "wait", 0), deps.sleep);
   emit(context.io, context.json, report, renderVerify(report));
   return report.ok ? 0 : 1;
 }
@@ -472,12 +503,25 @@ function enable(context: CommandContext): number {
   return 0;
 }
 
+function relabel(context: CommandContext): number {
+  const target = resolveTarget(context, true);
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const policy = loadRunners(root);
+  const pool = requirePool(policy, requireValue(context.args, "pool", "It names the pool whose own label, pool-<id>, the runners gain."));
+  const raw = context.args.values["runner"];
+  const names = raw === undefined ? null : commaValues(raw);
+  if (names !== null && names.length === 0) throw new VerbUsageError("--runner names no runner. Drop it to take every runner awaiting the pool's label, or name them.");
+  const report = relabelPool(context.seams, target, policy, pool, names, context.args.booleans.has("run"));
+  emit(context.io, context.json, report, renderRelabel(report, target));
+  return 0;
+}
+
 /** The family, with its wait and version injectable so no test sleeps or pins a release. */
 export function makeRunnerCommand(deps: RunnerDeps): Command {
   return {
     name: "runner",
     subcommands: RUNNER_SUBCOMMANDS,
-    summary: "Self-hosted runners: inventory, plan, host script, verify, preflight workflow, enable.",
+    summary: "Self-hosted runners: inventory, plan, host script, verify, preflight workflow, enable, relabel.",
     usage: USAGE,
     flags: { values: VALUE_FLAGS, booleans: BOOLEAN_FLAGS },
     run(context: CommandContext): number {
@@ -499,6 +543,8 @@ export function makeRunnerCommand(deps: RunnerDeps): Command {
             return preflight(context, deps);
           case "enable":
             return enable(context);
+          case "relabel":
+            return relabel(context);
         }
       } catch (error) {
         if (error instanceof RunnerFailure) {

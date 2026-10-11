@@ -46,7 +46,8 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     expect(Object.keys(jobs)).toEqual(["preflight"]);
     const job = jobs["preflight"] as Row;
     expect(job["if"]).toBe("github.repository == 'zheref/nen'");
-    expect(job["runs-on"]).toEqual(["self-hosted", "Windows", "X64"]);
+    // The full set, the pool's own label last (#340): the policy guard admits nothing else.
+    expect(job["runs-on"]).toEqual(["self-hosted", "Windows", "X64", "pool-windows-x64"]);
     expect(job["timeout-minutes"]).toBe(5);
     const steps = job["steps"] as Row[];
     const checkout = steps.find((step) => typeof step["uses"] === "string" && (step["uses"] as string).startsWith("actions/checkout@"));
@@ -62,19 +63,19 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
   it("renders a macOS pool with its own labels and file, and keeps the Windows-only step gated", () => {
     const mac = renderWorkflow(TEMPLATE, workflowValues(pool("macos-arm64"), TARGET, "0.0.0-test"));
     const job = ((parse(mac.text) as Row)["jobs"] as Row)["preflight"] as Row;
-    expect(job["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64"]);
+    expect(job["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64", "pool-macos-arm64"]);
     expect(mac.text).toContain("'.github/workflows/runner-preflight-macos-arm64.yml'");
     const gated = (job["steps"] as Row[]).filter((step) => step["if"] !== undefined).map((step) => step["if"]);
     expect(gated).toEqual(["runner.os == 'Windows'", "runner.os == 'Windows' && 'interactive' == 'interactive'", "runner.os != 'Windows'"]);
   });
 
-  it("renders an interactive Windows pool's four labels and switches its desktop-session probe on (#333)", () => {
+  it("renders an interactive Windows pool's five labels and switches its desktop-session probe on (#333, #340)", () => {
     const desktop = renderWorkflow(TEMPLATE, workflowValues(pool("windows-x64-desktop"), TARGET, "0.0.0-test"));
     expect(desktop.leftovers).toEqual([]);
     expect(desktop.yamlError).toBeNull();
     golden("runner-preflight-windows-x64-desktop.golden.yml", desktop.text);
     const job = ((parse(desktop.text) as Row)["jobs"] as Row)["preflight"] as Row;
-    expect(job["runs-on"]).toEqual(["self-hosted", "Windows", "X64", "desktop"]);
+    expect(job["runs-on"]).toEqual(["self-hosted", "Windows", "X64", "desktop", "pool-windows-x64-desktop"]);
     const probe = (job["steps"] as Row[]).find((step) => step["name"] === "Desktop session present (interactive Windows pool)");
     expect(probe?.["if"]).toBe("runner.os == 'Windows' && 'interactive' == 'interactive'");
     expect(probe?.["shell"]).toBe("bash");
@@ -88,6 +89,12 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     expect(toolchain?.["run"]).toMatch(/sign the runner's account \(\$acct\) out and back in, which restarts its logon task/);
     const appdata = steps.find((step) => step["name"] === "Resolution must be machine-wide (Windows)");
     expect(appdata?.["run"]).toMatch(/if \[ "\$MODE" = interactive \]; then\n\s+echo "::warning::/);
+  });
+
+  it("targets each pool's own label in @@RUNS_ON@@, so two pools of one os and arch never share a job (#340)", () => {
+    expect(workflowValues(pool("windows-x64"), TARGET, "v")["RUNS_ON"]).toBe("[self-hosted, Windows, X64, pool-windows-x64]");
+    expect(workflowValues(pool("windows-x64-desktop"), TARGET, "v")["RUNS_ON"]).toBe("[self-hosted, Windows, X64, desktop, pool-windows-x64-desktop]");
+    expect(workflowValues(pool("linux-x64"), TARGET, "v")["RUNS_ON"]).toBe("[self-hosted, Linux, X64, pool-linux-x64]");
   });
 
   it("keeps the probe off for a service pool: its condition is false once rendered", () => {

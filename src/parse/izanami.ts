@@ -1242,7 +1242,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // that line (elevated) is the maintainer's. `verify` polls reads only.
   // `preflight` dispatches a workflow run and `enable` sets a repository
   // variable, each unless `--dry-run` -- whose forms still READ GitHub (the
-  // default branch; the run `enable` certifies) and write nothing.
+  // default branch; the run `enable` certifies) and write nothing. `relabel`
+  // (#340) is the other way round: it writes a runner's labels only with
+  // `--run`, and its bare form reads the runners list and nothing more.
   runner: {
     subcommands: {
       inventory: RO("lists a repository's self-hosted runners and runner downloads -- gh api GET reads only"),
@@ -1252,6 +1254,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       workflow: DRY("writes the rendered preflight workflow into the checkout unless --dry-run is given"),
       preflight: DRY("dispatches a workflow run (gh workflow run) unless --dry-run is given"),
       enable: DRY("sets a repository variable (gh variable set) unless --dry-run is given"),
+      relabel: GATED(["--run"], "adds a pool's own label to registered runners (gh api POST .../runners/<id>/labels) once --run is given; reads the runners list otherwise"),
     },
   },
   // BOTH ROWS MOVED FROM `MUT` TO `DRY` WHEN THE FLAG ARRIVED, and the move is

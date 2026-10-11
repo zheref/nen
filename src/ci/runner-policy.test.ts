@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { declaredPoolLabels, loadWorkflow } from "../schema/workflow.js";
 
 const WORKFLOWS = join(process.cwd(), ".github", "workflows");
 const CANONICAL_GUARD = "github.repository == 'zheref/nen'";
@@ -11,10 +12,14 @@ const CANONICAL_GUARD = "github.repository == 'zheref/nen'";
 const POOL_GATED_GUARD = /^github\.repository == 'zheref\/nen' && vars\.[A-Z][A-Z0-9_]* == 'online'$/;
 const MATRIX_RUNNER = "${{ fromJSON(matrix.runner) }}";
 const ALLOWED_HOSTED = "ubuntu-latest";
-const ALLOWED_SELF_HOSTED = new Set([
-  JSON.stringify(["self-hosted", "macOS", "ARM64"]),
-  JSON.stringify(["self-hosted", "Windows", "X64"]),
-]);
+// THE SELF-HOSTED SETS ARE READ, NOT LISTED (#340): exactly each pool's full
+// label set as this repository's own nen/workflow.json declares it -- the
+// canonical defaults, then the pool's own `pool-<id>` the schema derives from
+// its id. Nothing wider, and not the defaults alone: a job aimed at
+// [self-hosted, <os>, <arch>] would land on ANY runner of that os and arch,
+// including one registered later and never proven into the pool.
+const POOLS = loadWorkflow(process.cwd()).workflow.runners?.pools ?? [];
+const ALLOWED_SELF_HOSTED = new Set(POOLS.map((pool) => JSON.stringify(pool.labels)));
 const ALLOWED_EVENTS = new Set(["push", "release", "workflow_dispatch"]);
 
 type Row = Record<string, unknown>;
@@ -87,7 +92,7 @@ function violations(workflows: Record<string, string>): string[] {
       } else if (job["runs-on"] === ALLOWED_HOSTED) {
         // The only hosted exception is an actual Ubuntu job.
       } else if (Array.isArray(job["runs-on"]) && ALLOWED_SELF_HOSTED.has(JSON.stringify(job["runs-on"]))) {
-        // Exact standard labels make an offline pool queue without fallback.
+        // A pool's exact labels make an offline pool queue without fallback.
       } else {
         found.push(`${name}:${jobName}: forbidden or dynamic runner ${String(job["runs-on"])}`);
       }
@@ -108,7 +113,7 @@ describe("GitHub Actions runner policy", () => {
       ((((ci.jobs as Row)[job] as Row).strategy as Row).matrix as Row).include as Row[];
     expect(rows("check").map((row) => (row as Row).runner)).toEqual([
       '"ubuntu-latest"',
-      '["self-hosted","macOS","ARM64"]',
+      '["self-hosted","macOS","ARM64","pool-macos-arm64"]',
     ]);
     // The Windows pool is gated on a declared-online variable, so an empty pool
     // skips instead of holding every PR's check rollup pending.
@@ -120,7 +125,7 @@ describe("GitHub Actions runner policy", () => {
   // scripts is disabled on this system"). The pool's declared toolchain is git, bash, gh.
   expect(windows.defaults).toEqual({ run: { shell: "bash" } });
     expect(windows.name).toBe("check");
-    expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64"]']);
+    expect(rows("check-windows").map((row) => (row as Row).runner)).toEqual(['["self-hosted","Windows","X64","pool-windows-x64"]']);
   });
 
   it("signs, verifies and executes the darwin binary before the manifest, and executes the linux one on Ubuntu before anything is attached (zheref/nen#233)", () => {
@@ -129,7 +134,7 @@ describe("GitHub Actions runner policy", () => {
     expect(Object.keys(jobs)).toEqual(["build", "publish"]);
     const build = jobs.build as Row;
     const publish = jobs.publish as Row;
-    expect(build["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64"]);
+    expect(build["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64", "pool-macos-arm64"]);
     expect(publish["runs-on"]).toBe("ubuntu-latest");
     expect(publish.needs).toBe("build");
     // Only the job that attaches assets holds the elevation and the token.
@@ -189,8 +194,43 @@ describe("GitHub Actions runner policy", () => {
 
   it("accepts the canonical binding narrowed by a pool-online variable, and nothing wider", () => {
     const gated =
-      "on:\n  push:\njobs:\n  ok:\n    if: github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online'\n    runs-on: [self-hosted, Windows, X64]\n";
+      "on:\n  push:\njobs:\n  ok:\n    if: github.repository == 'zheref/nen' && vars.NEN_WINDOWS_RUNNER == 'online'\n    runs-on: [self-hosted, Windows, X64, pool-windows-x64]\n";
     expect(violations({ "gated.yml": gated })).toEqual([]);
+  });
+
+  it("admits each declared pool's canonical set plus its own pool label, and reads them from nen/workflow.json (#340)", () => {
+    expect([...ALLOWED_SELF_HOSTED]).toEqual([
+      JSON.stringify(["self-hosted", "Windows", "X64", "pool-windows-x64"]),
+      JSON.stringify(["self-hosted", "macOS", "ARM64", "pool-macos-arm64"]),
+    ]);
+    for (const pool of POOLS) {
+      expect(pool.labels).toEqual([...declaredPoolLabels(pool.os, pool.arch, pool.mode), `pool-${pool.id}`]);
+      const job = `on:\n  push:\njobs:\n  ok:\n    if: github.repository == 'zheref/nen'\n    runs-on: [${pool.labels.join(", ")}]\n`;
+      expect(violations({ "pool.yml": job }), pool.id).toEqual([]);
+      const matrix = `on:\n  push:\njobs:\n  ok:\n    if: github.repository == 'zheref/nen'\n    runs-on: \${{ fromJSON(matrix.runner) }}\n    strategy:\n      matrix:\n        include:\n          - runner: '${JSON.stringify(pool.labels)}'\n`;
+      expect(violations({ "matrix.yml": matrix }), pool.id).toEqual([]);
+    }
+  });
+
+  it.each([
+    ["defaults only, for a pool that carries its own label", "[self-hosted, Windows, X64]"],
+    ["defaults only, macOS", "[self-hosted, macOS, ARM64]"],
+    ["another pool's label", "[self-hosted, Windows, X64, pool-macos-arm64]"],
+    ["an undeclared pool's label", "[self-hosted, Windows, X64, pool-windows-arm64]"],
+    ["a second extra label", "[self-hosted, Windows, X64, pool-windows-x64, gpu]"],
+    ["the pool label out of place", "[pool-windows-x64, self-hosted, Windows, X64]"],
+    ["a bare self-hosted", "[self-hosted]"],
+    ["the pool label alone", "[pool-windows-x64]"],
+  ])("refuses a self-hosted runs-on that is %s (#340)", (_case, runsOn) => {
+    const job = `on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ${runsOn}\n`;
+    const found = violations({ "regression.yml": job });
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatch(/^regression\.yml:bad: forbidden or dynamic runner /);
+  });
+
+  it("refuses a defaults-only matrix row (#340)", () => {
+    const matrix = "on:\n  push:\njobs:\n  bad:\n    if: github.repository == 'zheref/nen'\n    runs-on: ${{ fromJSON(matrix.runner) }}\n    strategy:\n      matrix:\n        include:\n          - runner: '[\"self-hosted\",\"macOS\",\"ARM64\"]'\n";
+    expect(violations({ "matrix.yml": matrix })).toEqual(['matrix.yml:bad: forbidden matrix runner ["self-hosted","macOS","ARM64"]']);
   });
 
   it.each([
