@@ -1258,7 +1258,7 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     const s = seams(w, [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n")]);
     const result = await capture([...installArgs(w, "claude-code"), "--dry-run", "--json"], s);
     expect(result.code).toBe(3);
-    expect(String(result.doc()["reason"])).toMatch(/'shared-market' comes from the git source https:\/\/github.com\/someone-else\/other-repo, not this checkout/);
+    expect(String(result.doc()["reason"])).toMatch(/'shared-market' comes from the git source github.com\/someone-else\/other-repo, not this checkout/);
     expect(commandsOf(s)).not.toContain("claude plugin marketplace remove shared-market");
     // A directory source elsewhere, or none recorded, is not ours either.
     for (const known of [{ source: { source: "directory", path: w.other } }, {}]) {
@@ -1272,7 +1272,7 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     const w = world();
     const record = join(w.cfg, "plugins", "installed_plugins.json");
     writeJson(record, { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }], [`other@${MARKET}`]: [{ installPath: "/o" }] } });
-    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: { source: { source: "git", url: "https://GitHub.com/Me/Zephyr.git/" } } });
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: { source: { source: "git", url: "https://GitHub.com/me/zephyr.git/" } } });
     const s = seams(
       w,
       [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n"), ok("claude --version"), ok(`claude plugin uninstall ${MARKET_ID}`), claudeList([servedLink(w)])],
@@ -1302,11 +1302,24 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     expect(none.out.join("\n")).not.toMatch(/marketplace remove/);
   });
 
-  it("F1: normalises a remote to host/owner/repo", () => {
-    for (const url of ["git@github.com:Me/Zephyr.git", "https://github.com/me/zephyr", "https://user:tok@github.com/me/zephyr.git/", "ssh://git@github.com:22/me/zephyr.git", "git+https://github.com/me/zephyr"]) {
+  it("F-C: normalises a remote to host/path -- absolute URLs and scp syntax only, the host alone lower-cased", () => {
+    for (const url of [
+      "git@GitHub.com:me/zephyr.git",
+      "https://github.com/me/zephyr",
+      "https://user:tok@GITHUB.com/me/zephyr.git/",
+      "ssh://git@github.com:22/me/zephyr.git",
+      "git+https://github.com/me/zephyr",
+    ]) {
       expect(normalizeRemote(url), url).toBe("github.com/me/zephyr");
     }
-    expect(normalizeRemote("https://github.com/me/other")).not.toBe(normalizeRemote("https://github.com/me/zephyr"));
+    // the path keeps its case
+    expect(normalizeRemote("https://github.com/Me/Zephyr")).toBe("github.com/Me/Zephyr");
+    // ':NN' is a port only after scheme:// -- in scp syntax it is part of the path
+    expect(normalizeRemote("git@host:22/me/zephyr.git")).toBe("host/22/me/zephyr");
+    // neither an absolute URL nor user@host:path -- never a remote, never a match
+    for (const url of ["../zephyr", "/srv/git/zephyr.git", "zephyr", "host:me/zephyr", "file:relative", "", "https://github.com/"]) {
+      expect(normalizeRemote(url), url).toBeNull();
+    }
   });
 
   it("F2: refuses a root inside a surface's own directory, by real path, or equal to a marketplace's installLocation (exit 2)", async () => {
@@ -1448,5 +1461,112 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     expect(lost.verdict).toBe("failed");
     expect(lost.reason).toMatch(/putting the previous link to .* back also failed -- .* is absent/);
     expect(existsSync(dest)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Feitan's confirmation pass on NN-PR-#392 at aacdb81.
+// ---------------------------------------------------------------------------
+
+describe("surface install: Feitan's confirmation pass", () => {
+  it("F-A: a recorded source URL carrying user:token@ never reaches the text or --json output", async () => {
+    const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    const w = world();
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: { source: { source: "git", url: `https://someone:${secret}@github.com/someone/else.git` } } });
+    const script = (): ScriptedCall[] => [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n")];
+    const json = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, script()));
+    const text = await capture(installArgs(w, "claude-code"), seams(w, script()));
+    expect(json.code).toBe(3);
+    expect(String(json.doc()["reason"])).toMatch(/the git source github.com\/someone\/else, not this checkout/);
+    for (const out of [json.out.join("\n"), json.err.join("\n"), text.out.join("\n"), text.err.join("\n")]) {
+      expect(out).not.toContain(secret);
+      expect(out).not.toContain("someone:");
+    }
+  });
+
+  it("F-A: a Codex marketplace root carrying credentials is redacted in a refusal and in status", async () => {
+    const w = world();
+    const root = "https://me:hunter2@example.invalid/market.git";
+    const refused = await capture([...installArgs(w, "codex"), "--json"], seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${root}\n`)]));
+    expect(refused.code).toBe(3);
+    expect(refused.out.join("\n")).not.toContain("hunter2");
+    const status = await capture(
+      [...statusArgs(w, "codex"), "--json"],
+      seams(w, [ok("codex plugin list", `${MARKET_ID}  installed, enabled  1.0.0  ${root}\n`), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${root}\n`)]),
+    );
+    expect(status.out.join("\n")).not.toContain("hunter2");
+  });
+
+  it("F-B: a plugin installed from the marketplace during the uninstall leaves it known -- owed (exit 4), no remove", async () => {
+    const w = world();
+    const record = join(w.cfg, "plugins", "installed_plugins.json");
+    writeJson(record, { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }] } });
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: { source: { source: "directory", path: w.root } } });
+    const s = seams(w, [git(w.root), ok("claude --version"), ok(`claude plugin uninstall ${MARKET_ID}`), claudeList([servedLink(w)])], {
+      [`claude plugin uninstall ${MARKET_ID}`]: (): void => writeJson(record, { version: 2, plugins: { [`other@${MARKET}`]: [{ installPath: "/o" }] } }),
+    });
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], s);
+    expect(result.code).toBe(4);
+    expect(commandsOf(s)).not.toContain(`claude plugin marketplace remove ${MARKET}`);
+    expect((result.doc()["actions"] as Array<{ what: string }>)[0]?.what).toMatch(/became the source of other@zephyr-market during the hand-over/);
+  });
+
+  it("F-B: a source that changed during the uninstall leaves it known -- owed (exit 4), no remove", async () => {
+    const w = world();
+    const record = join(w.cfg, "plugins", "installed_plugins.json");
+    const known = join(w.cfg, "plugins", "known_marketplaces.json");
+    writeJson(record, { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }] } });
+    writeJson(known, { [MARKET]: { source: { source: "directory", path: w.root } } });
+    const s = seams(w, [git(w.root), ok("claude --version"), ok(`claude plugin uninstall ${MARKET_ID}`), claudeList([servedLink(w)])], {
+      [`claude plugin uninstall ${MARKET_ID}`]: (): void => {
+        writeJson(record, { version: 2, plugins: {} });
+        writeJson(known, { [MARKET]: { source: { source: "directory", path: w.other } } });
+      },
+    });
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], s);
+    expect(result.code).toBe(4);
+    expect(commandsOf(s)).not.toContain(`claude plugin marketplace remove ${MARKET}`);
+    expect((result.doc()["actions"] as Array<{ what: string }>)[0]?.what).toMatch(/recorded source changed during the hand-over/);
+  });
+
+  it("F-D: a surface directory from the ENVIRONMENT carrying a control character is refused too (exit 2)", async () => {
+    const w = world();
+    for (const [surface, variable] of [["claude-code", "CLAUDE_CONFIG_DIR"], ["codex", "CODEX_HOME"], ["antigravity", "GEMINI_CONFIG_DIR"]] as const) {
+      const s = new ScriptedSeams([], { env: { HOME: w.home, [variable]: `${w.cfg}\u001b[2J` } });
+      for (const argv of [
+        ["surface", "install", "--surface", surface, "--plugin", PLUGIN, "--root", w.root, ...(surface === "antigravity" ? ["--surface-dir", "gen/ag"] : [])],
+        ["surface", "status", "--surface", surface, "--plugin", PLUGIN],
+      ]) {
+        const result = await capture(argv, s);
+        expect(result.code, `${variable} ${argv[1]}`).toBe(2);
+        expect(result.err.join("\n")).toMatch(/taken from the environment carries a control character/);
+      }
+    }
+  });
+
+  it("F2 corrected: a root equal to a DIRECTORY-source marketplace's installLocation is the hand-over, not refused; a clone's is", async () => {
+    const w = world();
+    const record = join(w.cfg, "plugins", "installed_plugins.json");
+    const known = join(w.cfg, "plugins", "known_marketplaces.json");
+    writeJson(record, { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }] } });
+    writeJson(known, { [MARKET]: { source: { source: "directory", path: w.root }, installLocation: w.root } });
+    const dry = await capture([...installArgs(w, "claude-code"), "--dry-run"], seams(w, [git(w.root), ok("claude --version")]));
+    expect(dry.code).toBe(0);
+    expect(dry.out.join("\n")).toMatch(/would run: claude plugin marketplace remove zephyr-market/);
+    const v = world();
+    writeJson(join(v.cfg, "plugins", "known_marketplaces.json"), { m: { source: { source: "github", repo: "a/b" }, installLocation: v.root } });
+    expect((await capture(installArgs(v, "claude-code"), seams(v, [git(v.root)]))).code).toBe(2);
+  });
+
+  it("ruling: a codex run with its own --config-dir never reads the default Claude known_marketplaces.json", async () => {
+    const w = world();
+    // The DEFAULT Claude directory (under HOME) records the root as a clone's installLocation.
+    writeJson(join(w.home, ".claude", "plugins", "known_marketplaces.json"), { m: { source: { source: "git", url: "https://x.invalid/m.git" }, installLocation: w.root } });
+    const sandboxed = await capture([...installArgs(w, "codex"), "--dry-run"], seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", HEADER)]));
+    expect(sandboxed.code).toBe(0);
+    // With no directory of its own, the default is consulted, and the clone's location refused.
+    const unsandboxed = await capture(["surface", "install", "--surface", "codex", "--plugin", PLUGIN, "--root", w.root, "--dry-run"], seams(w, [git(w.root)]));
+    expect(unsandboxed.code).toBe(2);
+    expect(unsandboxed.err.join("\n")).toMatch(/installLocation/);
   });
 });

@@ -62,7 +62,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
-import { outputLines, type Seams } from "../seam/exec.js";
+import { outputLines, redactRemoteCredentials, type Seams } from "../seam/exec.js";
 import {
   classifyError,
   identityOf,
@@ -635,14 +635,28 @@ function contains(parent: string, child: string): boolean {
  * default from the environment), and every `installLocation` Claude Code's
  * known_marketplaces.json records: the places a --root may not be (F2).
  */
-export function forbiddenRoots(surface: InstallSurface, configDir: string, env: Readonly<Record<string, string | undefined>>): ForbiddenRoots {
+export function forbiddenRoots(
+  surface: InstallSurface,
+  configDir: string,
+  explicit: boolean,
+  env: Readonly<Record<string, string | undefined>>,
+): ForbiddenRoots {
   const dirs = new Set<string>([configDir, ...INSTALL_SURFACES.map((each): string => surfaceConfigDir(each, null, env))]);
-  const claudeDir = surface === "claude-code" ? configDir : surfaceConfigDir("claude-code", null, env);
-  const known = readJsonObject(join(claudeDir, "plugins", "known_marketplaces.json"));
+  // Which known_marketplaces.json to consult: this run's own for Claude Code;
+  // for the other surfaces, Claude Code's DEFAULT only when this run named no
+  // directory of its own -- a sandboxed run (--config-dir, or the surface's
+  // variable) never reads the real home.
+  const claudeDir = surface === "claude-code" ? configDir : explicit ? null : surfaceConfigDir("claude-code", null, env);
+  const known = claudeDir === null ? ({ state: "absent" } as const) : readJsonObject(join(claudeDir, "plugins", "known_marketplaces.json"));
   const locations: string[] = [];
   if (known.state === "read") {
     for (const entry of Object.values(known.value)) {
-      const location = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["installLocation"] : undefined;
+      if (typeof entry !== "object" || entry === null) continue;
+      // A DIRECTORY-source marketplace is a checkout the caller controls --
+      // Claude Code may record it as its own installLocation, and that is the
+      // hand-over case, never a managed clone. Only a clone is refused.
+      if (knownSource(entry).kind === "directory") continue;
+      const location = (entry as Record<string, unknown>)["installLocation"];
       if (typeof location === "string" && location !== "") locations.push(location);
     }
   }
@@ -1239,23 +1253,52 @@ function knownSource(entry: unknown): KnownSource {
   return { kind: "unknown", shape: `a '${safe(String(kind))}' source` };
 }
 
+/**
+ * A recorded source, for a human or a --json reason. A git source is shown
+ * ONLY as its normalised `host/path` -- which carries no user info, so a
+ * `user:token@` in the recorded URL never reaches any output (F-A).
+ */
 function describeSource(source: KnownSource): string {
-  if (source.kind === "directory") return `the directory ${safe(source.path)}`;
-  if (source.kind === "git") return `the git source ${safe(source.url)}`;
+  if (source.kind === "directory") return `the directory ${safe(redactRemoteCredentials(source.path))}`;
+  if (source.kind === "git") {
+    const shown = normalizeRemote(source.url);
+    return shown === null ? "a git source that is not a remote URL" : `the git source ${safe(shown)}`;
+  }
   return source.shape;
 }
 
 /**
- * A git remote as `host/owner/repo`, lower-cased: scheme, user info, port, a
- * trailing `.git` and `/` dropped; `git@host:owner/repo` read as scp syntax.
+ * A git remote as `host/path`, or null when it is not a remote at all (F-C).
+ * Two shapes are read: an absolute URL `scheme://[user[:secret]@]host[:port]/path`
+ * -- user info dropped, and `:NN` a port only here -- and scp syntax
+ * `user@host:path`. Anything else (a relative or local path) is null and never
+ * matches. Only the HOST is lower-cased; a trailing `/` and `.git` are dropped.
  */
-export function normalizeRemote(url: string): string {
-  let text = url.trim();
-  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(text);
-  if (scp !== null && !text.includes("://")) text = `${scp[1] as string}/${scp[2] as string}`;
-  else text = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/^[^@/]*@/, "");
-  text = text.replace(/^([^/:]+):\d+\//, "$1/");
-  return text.replace(/\/+$/, "").replace(/\.git$/i, "").replace(/\/+$/, "").toLowerCase();
+export function normalizeRemote(url: string): string | null {
+  const text = url.trim();
+  let host: string;
+  let path: string;
+  const absolute = /^[a-z][a-z0-9+.-]*:\/\/([^/]*)(\/.*)?$/i.exec(text);
+  const scp = /^[^@/\s:]+@([^:/\s]+):(.+)$/.exec(text);
+  if (absolute !== null) {
+    const authority = absolute[1] as string;
+    const at = authority.lastIndexOf("@");
+    host = (at === -1 ? authority : authority.slice(at + 1)).replace(/:\d+$/, "");
+    path = absolute[2] ?? "";
+  } else if (scp !== null) {
+    host = scp[1] as string;
+    path = scp[2] as string;
+  } else {
+    return null;
+  }
+  path = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "").replace(/\/+$/, "");
+  if (host === "" || path === "") return null;
+  return `${host.toLowerCase()}/${path}`;
+}
+
+/** A root or path a surface CLI reported, for output: credentials in a URL redacted (F-A), control characters made safe. */
+function shownRoot(text: string): string {
+  return safe(redactRemoteCredentials(text));
 }
 
 /** True when a known marketplace's source IS this checkout: its directory, or its remote. */
@@ -1267,8 +1310,9 @@ function sourceIsCheckout(source: KnownSource, root: string, seams: Seams): bool
   if (source.kind === "git") {
     const remote = seams.run("git", ["remote", "get-url", "origin"], { cwd: root, env: GIT_PROBE_ENV });
     if (remote.spawnFailed || remote.code !== 0) return false;
-    const url = remote.stdout.split("\n")[0]?.trim() ?? "";
-    return url !== "" && normalizeRemote(url) === normalizeRemote(source.url);
+    const mine = normalizeRemote(remote.stdout.split("\n")[0]?.trim() ?? "");
+    const recorded = normalizeRemote(source.url);
+    return mine !== null && recorded !== null && mine === recorded;
   }
   return false;
 }
@@ -1348,8 +1392,29 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
   }
   if (installed && ours !== null) {
     step(draft, inputs, ["plugin", "uninstall", ours]);
-    if (!inputs.dryRun && reread(configDir, plugin).recordKeys.includes(ours)) {
-      throw new Stop("failed", `${ours} is still recorded in installed_plugins.json after claude plugin uninstall`);
+    if (!inputs.dryRun) {
+      const after = reread(configDir, plugin);
+      if (after.recordKeys.includes(ours)) throw new Stop("failed", `${ours} is still recorded in installed_plugins.json after claude plugin uninstall`);
+      // F-B: judged AGAIN from the re-read, immediately before the remove --
+      // a plugin installed from the marketplace meanwhile, or a source that
+      // changed, leaves it known and the removal owed.
+      if (removeMarketplace && marketplace !== null) {
+        const nowDependents = after.allRecordKeys.filter((key): boolean => key.endsWith(`@${marketplace}`) && key !== ours);
+        const stillOurs = own(after.known, marketplace) && sourceIsCheckout(knownSource(after.known[marketplace]), root, inputs.seams);
+        if (nowDependents.length > 0 || !stillOurs) {
+          removeMarketplace = false;
+          handover.push({
+            key: null,
+            action: {
+              what:
+                nowDependents.length > 0
+                  ? `the '${marketplace}' marketplace became the source of ${nowDependents.join(", ")} during the hand-over: removing it would uninstall ${nowDependents.length === 1 ? "that plugin" : "those plugins"}, so it is left known`
+                  : `the '${marketplace}' marketplace's recorded source changed during the hand-over (or it is no longer known): it is not removed`,
+              command: suggest(inputs.surface, configDir, inputs.configExplicit, ["claude", "plugin", "marketplace", "remove", marketplace]),
+            },
+          });
+        }
+      }
     }
   }
   // ONE remove, for the KNOWN entry: that is the hand-over. A settings.json
@@ -1424,7 +1489,7 @@ function installCodex(inputs: InstallInputs, draft: Draft): void {
   if (row !== undefined) {
     const rowId = identityOf(row.root);
     if (rowId === null || rootId === null || !sameIdentity(rowId, rootId)) {
-      throw new Stop("refused", `the Codex marketplace '${marketplace}' already points at ${safe(row.root)}, not ${safe(root)}: it is not this verb's to override`);
+      throw new Stop("refused", `the Codex marketplace '${marketplace}' already points at ${shownRoot(row.root)}, not ${safe(root)}: it is not this verb's to override`);
     }
   } else {
     step(draft, inputs, ["plugin", "marketplace", "add", root]);
@@ -1620,7 +1685,7 @@ function statusClaudeCode(inputs: StatusInputs): StatusReport {
     } else {
       listed = entries
         .filter((entry): boolean => entry.id.startsWith(`${plugin}@`))
-        .map((entry): Served => ({ id: entry.id, version: entry.version, path: entry.installPath, enabled: entry.enabled === true, status: null }));
+        .map((entry): Served => ({ id: entry.id, version: entry.version, path: entry.installPath === null ? null : redactRemoteCredentials(entry.installPath), enabled: entry.enabled === true, status: null }));
       readBack = { checked: true, detail: `claude plugin list --json: ${listed.length} ${plugin}@ ${listed.length === 1 ? "entry" : "entries"}` };
     }
   }
@@ -1671,7 +1736,7 @@ function statusCodex(inputs: StatusInputs): StatusReport {
   } else {
     listed = parseCodexPlugins(result.stdout)
       .filter((row): boolean => row.id.startsWith(`${plugin}@`))
-      .map((row): Served => ({ id: row.id, version: row.version, path: row.path, enabled: codexEnabled(row.status), status: row.status }));
+      .map((row): Served => ({ id: row.id, version: row.version, path: row.path === null ? null : redactRemoteCredentials(row.path), enabled: codexEnabled(row.status), status: row.status }));
     readBack = { checked: true, detail: `codex plugin list: ${listed.length} ${plugin}@ ${listed.length === 1 ? "row" : "rows"}` };
     const markets = callTool(inputs.seams, "codex", ["plugin", "marketplace", "list"], env);
     if (!markets.ok) problems.push(`codex plugin marketplace list failed: ${markets.last}`);
@@ -1682,7 +1747,7 @@ function statusCodex(inputs: StatusInputs): StatusReport {
     .map((entry): string => {
       const name = entry.id.slice(plugin.length + 1);
       const at = marketplaceRoots.get(name);
-      return at === undefined ? `${entry.id}: no '${name}' marketplace is registered` : `${entry.id}: marketplace '${name}' at ${at}`;
+      return at === undefined ? `${entry.id}: no '${name}' marketplace is registered` : `${entry.id}: marketplace '${name}' at ${shownRoot(at)}`;
     });
   let mismatch: string | null =
     served.length > 1 ? `${served.length} rows are enabled (${served.map((entry): string => entry.id).join(", ")}): one plugin is installed from more than one marketplace` : null;
@@ -1698,7 +1763,7 @@ function statusCodex(inputs: StatusInputs): StatusReport {
       const rootId = identityOf(root);
       const compare = codexManifest(root, plugin);
       if (mine === undefined) mismatch = `serves ${served.map((entry): string => entry.id).join(", ")}, not ${id}`;
-      else if (atId === null || rootId === null || !sameIdentity(atId, rootId)) mismatch = `the '${market.name}' marketplace is at ${at ?? "nowhere"}, not ${root}`;
+      else if (atId === null || rootId === null || !sameIdentity(atId, rootId)) mismatch = `the '${market.name}' marketplace is at ${at === undefined ? "nowhere" : shownRoot(at)}, not ${root}`;
       else if (mine.version !== compare.version) mismatch = `serves ${id} at ${mine.version ?? "?"}, but ${compare.path} says ${compare.version}`;
     }
   }

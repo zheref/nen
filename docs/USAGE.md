@@ -13005,9 +13005,14 @@ nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
   update replaces out from under a link. It is also refused **inside any
   surface's own directory** -- this run's `--config-dir` and each surface's
   default, compared as real paths (a link into one is still inside) -- and
-  when it **equals** an `installLocation` recorded in Claude Code's
-  `known_marketplaces.json`: those are copies a surface manages, never a
-  checkout the caller controls.
+  when it **equals** the `installLocation` of a marketplace Claude Code
+  **cloned** (any source but `directory`) in `known_marketplaces.json`: those
+  are copies a surface manages, never a checkout the caller controls. A
+  `directory`-source entry whose location is `--root` is the hand-over case and
+  is not refused. Claude Code's own file is read for `claude-code`; for `codex`
+  and `antigravity`, Claude Code's **default** file is read only when the run
+  named no directory of its own (`--config-dir` or the surface's variable), so
+  a sandboxed run never reads the real home.
 - `--config-dir <dir>` -- the surface's own directory: `claude-code`
   `$CLAUDE_CONFIG_DIR`, else `~/.claude`; `codex` `$CODEX_HOME`, else
   `~/.codex`; `antigravity` `$GEMINI_CONFIG_DIR`, else `~/.gemini`. `$HOME` is
@@ -13015,8 +13020,9 @@ nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
   variable named the directory, the CLI is run with it (`CLAUDE_CONFIG_DIR` /
   `CODEX_HOME`), so what it writes is what the verb reads back; the default is
   the CLI's own and is **never** passed, and a suggested command names the
-  directory exactly when the CLI was run with it. A value carrying a control
-  character is refused (exit 2).
+  directory exactly when the CLI was run with it. A directory carrying a
+  control character is refused (exit 2), whether `--config-dir` or the
+  environment supplied it.
 - `--surface-dir <dir>` -- `antigravity` only, and **required** there: the
   checkout-relative directory holding the generated plugin. A plain relative
   path (no `..`, `.`, `:` or absolute path), a real directory with every
@@ -13060,8 +13066,15 @@ installed from that marketplace, so the hand-over runs it only when **all
 three** hold: `<name>@<marketplace>` is recorded as installed; the known
 entry's recorded source **is this checkout** -- a `directory` source whose real
 path is `--root`, or a `git`/`github` source equal to the checkout's `origin`
-remote, both normalised to `host/owner/repo`; and no other `*@<marketplace>`
-key is in `installed_plugins.json`. A known marketplace of the same name whose
+remote, both normalised to `host/path` (an absolute `scheme://` URL, user info
+dropped and `:NN` read as a port only there, or scp syntax `user@host:path`;
+only the host is lower-cased; anything else, a relative remote included, never
+matches); and no other `*@<marketplace>` key is in `installed_plugins.json`.
+The last two are checked **again** from a fresh read right after the
+uninstall: a plugin installed from the marketplace meanwhile, or a source that
+changed, leaves it known as an action owed. A recorded source URL is shown only
+in that normalised form, so a `user:token@` in it never reaches any output; any
+other root or path a surface reports is printed with credentials redacted. A known marketplace of the same name whose
 source is anything else is **refused** (exit 3: installing beside it is not
 safe either). One that other plugins depend on is left known, and its removal is
 an **action owed** (exit 4) naming them.

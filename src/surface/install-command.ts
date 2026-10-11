@@ -141,6 +141,19 @@ function refuseOthers(verb: string, context: CommandContext, spec: { readonly va
   );
 }
 
+/**
+ * The surface's directory, refused when it carries a control character --
+ * whether --config-dir or the environment (CLAUDE_CONFIG_DIR, CODEX_HOME,
+ * GEMINI_CONFIG_DIR, HOME) supplied it (F6, F-D).
+ */
+function checkedConfigDir(surface: InstallSurface, flag: string | null, context: CommandContext): string {
+  const dir = surfaceConfigDir(surface, flag, context.seams.env);
+  if (/[\x00-\x1f\x7f-\x9f]/.test(dir)) {
+    throw new VerbUsageError(`the ${surface} directory ${flag === null ? "taken from the environment" : "given by --config-dir"} carries a control character.`);
+  }
+  return dir;
+}
+
 function readSurface(context: CommandContext): InstallSurface {
   const name = requiredValue(context, "surface", `It names the surface: ${INSTALL_SURFACES.join(", ")}.`);
   if (!(INSTALL_SURFACES as readonly string[]).includes(name)) {
@@ -166,10 +179,10 @@ export function runInstall(context: CommandContext): number {
     throw new VerbUsageError(`--surface-dir is read only with --surface antigravity; ${surface} links the checkout root itself.`);
   }
   const configFlag = value(context, "config-dir");
-  const configDir = surfaceConfigDir(surface, configFlag, context.seams.env);
-  const root = validateRoot(rootFlag, plugin, context.seams, forbiddenRoots(surface, configDir, context.seams.env));
-  const surfaceDir = surfaceDirFlag === null ? null : validateSurfaceDir(root, surfaceDirFlag, plugin);
+  const configDir = checkedConfigDir(surface, configFlag, context);
   const configExplicit = configDirIsExplicit(surface, configFlag, context.seams.env);
+  const root = validateRoot(rootFlag, plugin, context.seams, forbiddenRoots(surface, configDir, configExplicit, context.seams.env));
+  const surfaceDir = surfaceDirFlag === null ? null : validateSurfaceDir(root, surfaceDirFlag, plugin);
   const report = install({ surface, plugin, root, configDir, configExplicit, surfaceDir, dryRun: context.args.booleans.has("dry-run"), seams: context.seams });
   const exit = INSTALL_EXIT[report.verdict];
   emit(context.io, context.json, { contract: INSTALL_CONTRACT, ...report, exit }, installLines(report));
@@ -224,7 +237,7 @@ export function runStatus(context: CommandContext): number {
     throw new VerbUsageError(`--trees judges a Claude Code plugin copy in its own layout; --surface ${surface} has none. Drop --trees.`);
   }
   const configFlag = value(context, "config-dir");
-  const configDir = surfaceConfigDir(surface, configFlag, context.seams.env);
+  const configDir = checkedConfigDir(surface, configFlag, context);
   const configExplicit = configDirIsExplicit(surface, configFlag, context.seams.env);
   let judgement: PluginCheckReport | null = null;
   if (judging) {
