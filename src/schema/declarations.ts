@@ -119,3 +119,55 @@ export const DECLARATIONS: readonly Declaration[] = [
 export function declarationFor(file: string): Declaration | undefined {
   return DECLARATIONS.find((row): boolean => row.file === file);
 }
+
+/** The JSON value with every `$`-prefixed key removed, at every level. */
+export function stripMetadata(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripMetadata);
+  if (value === null || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (!isMetadataKey(key)) out[key] = stripMetadata(item);
+  }
+  return out;
+}
+
+/** The roots whose string `$schema` a loader echoes as the model's `schema`. */
+const ECHOES_SCHEMA: readonly string[] = [CONTRACT_FILE, WORKFLOW_FILE];
+
+/** The unread blocks a loader keeps verbatim, as `<file>` + a path whose `*` matches any one step. */
+const VERBATIM: readonly (readonly [string, readonly string[]])[] = [
+  [CONTRACT_FILE, ["project", "profiles"]],
+  [DECISIONS_FILE, ["rows", "*", "surfaces", "*"]],
+];
+
+function verbatimAt([file, pattern]: readonly [string, readonly string[]], actual: string, at: readonly string[]): boolean {
+  return file === actual && pattern.length === at.length && pattern.every((step, index): boolean => step === "*" || step === at[index]);
+}
+
+/**
+ * A loader's model as plain data, for comparing two models of one file:
+ * functions dropped; RegExp, Map and Set spelled out; every `raw` (the file's
+ * own preserved form) dropped, and the root's `path`; the documented
+ * `$schema` echo dropped; and a verbatim block compared with its `$` keys
+ * stripped. Two texts whose models agree here are two texts no verb reads
+ * differently -- `nen schema set` reports such an edit as kept verbatim, and
+ * declarations.test.ts holds the `$` guarantee with it.
+ */
+export function canonicalModel(value: unknown, file: string, at: readonly string[] = []): unknown {
+  const down = (key: string, item: unknown): unknown => canonicalModel(item, file, [...at, key]);
+  if (value instanceof RegExp) return `/${value.source}/${value.flags}`;
+  if (value instanceof Map) return [...value.entries()].map(([key, item]): unknown => [key, down(String(key), item)]);
+  if (value instanceof Set) return [...value].map((item): unknown => down("*", item));
+  if (Array.isArray(value)) return value.map((item, index): unknown => down(String(index), item));
+  if (typeof value === "function") return undefined;
+  if (value === null || typeof value !== "object") return value;
+  if (VERBATIM.some((pattern): boolean => verbatimAt(pattern, file, at))) return stripMetadata(value);
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "raw") continue;
+    if (at.length === 0 && key === "path") continue;
+    if (at.length === 0 && key === "schema" && ECHOES_SCHEMA.includes(file)) continue;
+    out[key] = down(key, item);
+  }
+  return out;
+}

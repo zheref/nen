@@ -45,7 +45,7 @@ import { plainLine } from "../cli/plain.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
 import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, resolveCanonTag, type CheckoutFailureCode, type CheckoutResolution, type TagResolution } from "./checkout.js";
 import { JsonSpanError, rewritePin, TargetChangedError, TEMP_PATTERN, writeFileAtomic, type PinEdit } from "./pin-write.js";
-import { checkedTarget, errnoOf, readChecked } from "../edit/atomic.js";
+import { checkedTarget, errnoOf, readChecked, WrittenButUnverifiedError } from "../edit/atomic.js";
 import {
   CanonMirrorError,
   checkSurface,
@@ -153,7 +153,9 @@ usage:
       regenerate, regenerateArgv }, failure: null }; on an exit-1 refusal,
       { contract, ok: false, failure: { code, message } } (an exit-2 usage
       error carries no document). A failed replace is exit 1, write-failed:
-      the pin was not moved. The temporary file is '${TEMP_PATTERN}' beside
+      the pin was not moved. A failure AFTER the rename (the file landed
+      elsewhere, or does not read back) is exit 1, read-back-mismatch, and
+      its document adds written: true -- the pin may have moved. The temporary file is '${TEMP_PATTERN}' beside
       nen/repos.json, removed on any failure and on SIGINT/SIGTERM/SIGHUP.
 
   nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
@@ -488,8 +490,11 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
 
   // EVERY EXIT-1 REFUSAL CARRIES A --json DOCUMENT, as 'canon checkout' does
   // (Nobunaga N5): a machine reader gets { contract, ok: false, failure }.
-  const refuse = (code: PinWriteFailureCode, message: string, detail: readonly string[] = []): number => {
-    if (context.json) emit(context.io, true, { contract: PIN_WRITE_CONTRACT, ok: false, failure: { code, message } }, []);
+  // `written: true` is carried only by a refusal raised AFTER the rename
+  // (Nobunaga N3, zheref/nen#338): the new text is on disk and the caller must
+  // not read the refusal as "nothing was written".
+  const refuse = (code: PinWriteFailureCode, message: string, detail: readonly string[] = [], written = false): number => {
+    if (context.json) emit(context.io, true, { contract: PIN_WRITE_CONTRACT, ok: false, ...(written ? { written: true } : {}), failure: { code, message } }, []);
     for (const line of detail) context.io.err(plainLine(`nen: ${line}`));
     context.io.err(plainLine(`nen: ${message}`));
     return 1;
@@ -595,6 +600,9 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
     try {
       writeFileAtomic(checkedTarget(realRegistry, realRoot, platform, stat), edit.text);
     } catch (error) {
+      if (error instanceof WrittenButUnverifiedError) {
+        return refuse("read-back-mismatch", plainLine(`the pin WAS written, but ${error.message}. Inspect ${realRegistry} before committing it.`), [], true);
+      }
       // A FAILED REPLACE IS NAMED (Nobunaga N6): the temporary file is already
       // removed, and the original is untouched. A target that changed after
       // it was checked is the same refusal, saying what changed (Feitan F1).
@@ -603,12 +611,19 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
     }
     written = true;
     // READ BACK THROUGH THE LOADER: the pin is what the read path now says.
-    const back = loadRepoRegistry(root);
-    /* c8 ignore next 6 -- rewritePin proved the parse before the write */
+    let back;
+    try {
+      back = loadRepoRegistry(root);
+    } catch (error) {
+      return refuse("read-back-mismatch", `${realRegistry} was written, but it could not be read back: ${error instanceof Error ? error.message : String(error)}. Inspect the file before committing it.`, [], true);
+    }
+    /* c8 ignore next 7 -- rewritePin proved the parse before the write */
     if (back.toolPins[key] !== tag || back.toolPinIndexes?.[key] !== index) {
       return refuse(
         "read-back-mismatch",
         `${realRegistry} was written, but the registry now reads ${key}'s pin as '${back.toolPins[key] ?? "(none)"}', not '${tag}'. Inspect the file before committing it.`,
+        [],
+        true,
       );
     }
   }

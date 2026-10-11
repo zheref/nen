@@ -9,9 +9,14 @@
 // edit whose formatting this module would have to invent.
 //
 // EACH MEMBER ON THE PATH ONCE. `JSON.parse` keeps the last of two equal keys;
-// a path through an object that repeats the member it names -- or an added
-// member the object already repeats -- is refused, because there the value a
-// reader sees and the value a reviewer reads can differ.
+// a path through an object that repeats the member it names is refused,
+// because there the value a reader sees and the value a reviewer reads can
+// differ. (A member that is added is, by definition, carried by its object
+// zero times, so the rule has nothing to say about it.)
+//
+// A REPLACE WRITES A SCALAR. Replacing a scalar with an object or an array is
+// refused in this version, as replacing an object or an array is: the new
+// structure's formatting would be this module's invention.
 //
 // THE RESULT IS PROVED, NOT ASSUMED. The new text is parsed and compared with
 // the old parse with that one value set: any other difference refuses the
@@ -139,6 +144,9 @@ export function setJsonPointer(text: string, segments: readonly string[], value:
   } else {
     if (!isScalar(node)) {
       throw new JsonSpanError(`${formatPointer(segments)} holds ${Array.isArray(node) ? "an array" : "an object"}; this verb replaces a scalar (a string, a number, a boolean or null) or adds a member, never a whole structure`);
+    }
+    if (!isScalar(value)) {
+      throw new JsonSpanError(`${formatPointer(segments)} holds a scalar, and replacing it with ${Array.isArray(value) ? "an array" : "an object"} is not supported in v1; a new member may take one`);
     }
     op = "replace";
     before = node;

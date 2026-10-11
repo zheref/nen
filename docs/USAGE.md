@@ -794,7 +794,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
 | [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
-| [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
+| [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
@@ -6091,37 +6091,69 @@ form of a hand edit followed by [`schema check`](#nen-schema-check), with the ch
 the write ([#338](https://github.com/zheref/nen/issues/338)).
 
 **Two edits, and only two.** An existing **scalar** (a string, a number, a boolean or `null`) is
-replaced in place; a member an existing **object** does not carry is added as its **last** member,
-written in that object's own style (the whitespace before its last member and its own `key: value`
-separator; an empty object is expanded one indentation unit past its line in a multi-line file).
-Refused, each at exit `1` naming why: replacing an object or an array, appending to an array
+replaced in place by a scalar; a member an existing **object** does not carry is added as its **last**
+member, written in that object's own style (the whitespace around the comma before its last member,
+its own `key: value` separator, and a `{ }`'s inner space on both sides; an empty `{}` is expanded one
+indentation unit past its line in a multi-line file). Refused, each at exit `1` naming why: replacing
+an object or an array, replacing a scalar **with** an object or an array (not supported in v1),
+appending to an array
 (`-` or an index past the end), a missing member before the last step (no object is created on the
 way), and a path through an object that **repeats** the member it names — `JSON.parse` keeps only the
 last of two equal keys, so the value a reader sees and the one a reviewer reads could differ. A
-pointer through a `$`-prefixed segment is refused at exit `2`: those keys are metadata, and the
-author's. `nen/colors.yml` is refused at exit `2` too — it is YAML, and this is a JSON text edit.
+pointer through a `$`-prefixed segment, or through an **empty** one (`//`, a trailing `/`), is refused
+at exit `2`: `$` keys are metadata, and the author's, and no declaration has a key called `""`. `nen/colors.yml` is refused at exit `2` too — it is YAML, and this is a JSON text edit.
 The file must exist; `schema set` never creates one ([`scaffold init`](#nen-scaffold-init) does).
 
-**Validated by the loader before the write.** The edited text is passed to the same parse that
-file's loader applies — the function every other verb reads the file through — before the disk is
-touched. A result it refuses is exit `1` with the loader's own message, pointer and all, and the
-file is not written. The edit itself is proved first: the new text must parse to the old document
-with that one value set, and any other difference refuses it.
+**Validated by the loader before the write.** The original text, then the edited text, is passed to
+the same parse that file's loader applies — the function every other verb reads the file through —
+before the disk is touched. A result it refuses is exit `1` (`invalid`) with the loader's own message,
+pointer and all, and the file is not written. A failure that was **already there** is named as such —
+*the file already fails its loader: …* — and an edit that **repairs** it is allowed (`repaired: true`,
+and a `repaired:` line naming the old failure). The edit itself is proved first: the new text must
+parse to the old document with that one value set, and any other difference refuses it.
+
+**Read, or kept verbatim.** The loader's model before and after the edit is compared, ignoring the raw
+form it keeps (`canonicalModel`, `src/schema/declarations.ts`). When it does not change — a key nen
+keeps verbatim and reads nowhere, like a note Hatsu writes beside a value — the edit is **still made**
+and reported as `kept verbatim -- no loader reads <pointer>` in place of the `validated:` line, with
+`read: false` under `--json` (`true` otherwise). Nothing is refused for being unread.
+
+<a id="gate-changes"></a>
+
+**Gate changes need `--gate-change`** (Feitan F1). A validated one-liner can widen who approves a
+pull request or change what nen executes. These pointers — the one table is `GATE_CHANGE_RULES` in
+`src/schema/set.ts` — are refused at exit `2` without the flag, naming the pointer and the reason:
+
+| File | Pointer | Why |
+|---|---|---|
+| `nen/gates.json` | `/reviewers/*/<…>_pattern` (and anything under it) | whose review counts toward readiness |
+| `nen/gates.json` | `/round_quorum`, `/round_policy`, `/approval_policy`, `/default_approvers`, `/base_reviewers`, `/delivery`, `/checks` (and anything under each) | which rounds and approvals readiness owes, which PRs take the delivery path, which failing checks it excuses |
+| `nen/contract.json` | any pointer with an `exe`, `argv`, `env`, `onStall`, `preconditions` or `targets` segment | what nen runs, in what environment, when, and where it deploys |
+| `nen/workflow.json` | `/branch/base` | the trunk every branch is cut from and every merge lands on |
+
+With `--gate-change` the edit proceeds, the human output adds `security-relevant: <pointer> is a
+gate change -- <why>`, and `--json` carries `gateChange: true` (`false` on every other pointer).
 
 **The write is the one [`canon pin --write`](#nen-canon-pin) uses** (`src/edit/atomic.ts`). The
-declaration is resolved to its real path, which must be inside `--repo` (a link out of the repository
-is refused, a link inside is written through); it is read without following a final link, recording
+declaration must be a **regular file directly in a real `nen/`**: a symbolic link — at the file or at
+`nen/` itself, wherever it points, inside the repository or into `.git` — is exit `2` (Feitan F2). It
+is resolved to its real path, which must be inside `--repo` and directly in the real `nen/`; it is read without following a final link, recording
 its identity; and it is replaced through a temporary file beside it (`.<name>.nen-<pid>-<hex>.tmp`),
 given the original's permission bits, after the directory and file are checked again to still be
 themselves, still contained, and unmodified since the read. A file that changed in between is
 refused, never overwritten. After the write the file is read back **through its loader** and the
-pointer must read the value asked for.
+pointer must read the value asked for. A failure **after the rename** — the new text landed
+elsewhere, or the file does not read back — is `read-back-mismatch` with `written: true`, never
+`write-failed`: the text is on disk.
 
 **Usage**
 
 ```text
-nen schema set --repo <path> --file <nen/...json> --pointer <JSON pointer> --value <JSON> [--dry-run] [--json]
+nen schema set --repo <path> --file <nen/...json> --pointer <JSON pointer> --value <JSON> [--gate-change] [--dry-run] [--json]
 ```
+
+The subcommand is the first positional after `schema`, so `nen schema --repo <path> set …` and
+`nen schema --json set …` are the same invocation.
 
 **Arguments**
 
@@ -6129,28 +6161,31 @@ nen schema set --repo <path> --file <nen/...json> --pointer <JSON pointer> --val
 |---|---|---|---|
 | `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
 | `--file <nen/…json>` | yes | The declaration, repo-relative, spelled as listed above. | Anything else, including `nen/colors.yml`, is exit `2` naming the list. |
-| `--pointer <pointer>` | yes | An RFC 6901 pointer: `/coverage/minimum`, `/reviewers/0/name`. | `~1` is `/` and `~0` is `~` in a segment. `''` (the whole document), a segment starting with `$`, and a stray `~` are exit `2`. |
-| `--value <JSON>` | yes | The value, as JSON. | `--value 85`, `--value true`, `--value null`, `--value '"main"'`; a negative number is `--value=-1`. Not JSON, a number JSON cannot write back, or an integer past 2^53 is exit `2`. An object or array is accepted, and is refused by the edit unless it is being added as a new member. |
+| `--pointer <pointer>` | yes | An RFC 6901 pointer: `/coverage/minimum`, `/reviewers/0/name`. | `~1` is `/` and `~0` is `~` in a segment. `''` (the whole document), an empty segment, a segment starting with `$`, and a stray `~` are exit `2`. |
+| `--value <JSON>` | yes | The value, as JSON. | `--value 85`, `--value true`, `--value null`, `--value '"main"'`; a negative number is `--value=-1`. A number is written in JSON's normalised spelling (`1.0` is written `1`, `1e2` is `100`). Not JSON, a number JSON cannot write back, or an integer past 2^53 is exit `2`. An object or array is accepted, and is refused by the edit unless it is being added as a new member. |
+| `--gate-change` | for a [gate change](#gate-changes) | The edit is meant to change a gate. | Without it a gate-change pointer is exit `2`. |
 | `--dry-run` | no (boolean) | Validate and print `before -> after`; write nothing. | The file is still read, and the result still validated. |
 | `--json` | no (boolean) | Machine-readable output. | Below. |
 
 **Output and exit codes** — human rendering, five lines through `plainLine`: `file: <file> (<real
 path>)`, `pointer: <pointer> (line <n>)`, `change: <before> -> <after>` (`(absent) -> …  (added)` for a
-new member, `(unchanged)` when the value is already that), `validated: <file>'s loader accepts the
-result`, and `written: <real path>, read back: <pointer> is <after>` — or `written: nothing (--dry-run)`
+new member, `(unchanged)` when the value is already that), `security-relevant: …` for a gate change,
+`repaired: …` when the file failed its loader before the edit, `validated: <file>'s loader accepts the
+result` — or `kept verbatim -- no loader reads <pointer>` — and `written: <real path>, read back: <pointer> is <after>` — or `written: nothing (--dry-run)`
 / `written: nothing (<pointer> is already <after>)`. `--json` (`nen.schema.set/v0.1`):
 
 ```json
 { "contract": "nen.schema.set/v0.1", "ok": true, "file": "nen/workflow.json",
   "pointer": "/coverage/minimum", "op": "replace", "before": 80, "after": 85,
-  "changed": true, "dryRun": false, "written": true,
+  "changed": true, "read": true, "gateChange": false, "repaired": false,
+  "dryRun": false, "written": true,
   "target": "/path/to/repo/nen/workflow.json", "line": 8, "failure": null }
 ```
 
 `op` is `replace` or `add`; `before` is `null` for an `add` (the member was absent — `op` says so).
 `line` is where the replaced literal sat, or where the added member now sits. A refusal at exit `1`
 prints `{ contract, ok: false, file, pointer, written: false, failure: { code, message } }` under
-`--json` and the message on stderr. Exit `0` set, already that value, or a dry run; `1` refused —
+`--json` and the message on stderr; `written` is `true` only on a `read-back-mismatch`. Exit `0` set, already that value, or a dry run; `1` refused —
 `failure.code` one of `no-file`, `outside-repo`, `file-changed`, `not-json`, `refused-edit`, `invalid`
 (the loader refused the result), `write-failed`, `read-back-mismatch` — with nothing written except on
 `read-back-mismatch`, which says so; `2` usage, nothing read.
@@ -8199,7 +8234,7 @@ A repin used to be a hand-edit of one JSON key followed by [`schema check`](#nen
 - **The tag must resolve on the canon, as `refs/tags/<tag>`.** The canon checkout is found exactly as [`canon checkout`](#nen-canon-checkout) finds it -- `--canon-checkout`, then `checkout_env`, then `checkout` -- and verified with the same read-only, isolated git calls as far as the tag: the top of a work tree whose `origin` names the source on the consumer's own host, holding `refs/tags/<tag>` (a branch of the same name does not count) **as a ref of its own**: `git rev-parse --symbolic-full-name refs/tags/<tag>` must print exactly `refs/tags/<tag>`, so a symbolic ref under `refs/tags/` that follows a branch is `tag-missing` too. The **recorded** pin must itself be tag-shaped, as the read form requires: a row pinned to `main` is refused (`pin-not-tag-shaped`) rather than moved -- fix it by hand. A missing tag's advice is the fetch alone (`git -C <checkout> fetch --tags origin`): checking the tag out is the regenerate's step, not this one's. **HEAD need not be on the tag yet and the tree need not be clean**: the pin moves first, and the regenerate that must follow verifies the checkout at the new pin. nen fetches nothing: fetch the tag into the checkout first. A checkout that does not resolve is a refusal with its code (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...), never a pin written on trust.
 - **Checked after the tag, read from what was checked.** The row is picked from a first read, but nothing is edited from it. Only after every git call of the tag resolution is the registry's path resolved, its containment checked (below), and the text read again **from that checked real path** -- opened without following a final link, its device, inode, size, modification time and status-change time (ctime) recorded. That text must still pick the same source, row and pin, or the run is refused (`registry-changed`): a file swapped or edited while git ran is never the one edited.
 - **Inside the repository only.** The registry's real path (`realpath`, links resolved) must lie inside `--repo`'s own real root: a `nen/repos.json` that links **out** of the repository is refused at exit 1 (`registry-outside-repo`), naming both paths, and neither file is touched. A link that stays inside is written **through** -- the link is kept, its target replaced -- and the output names the real file written (`written: <real> (through the link <path>)`) -- only when `nen/repos.json` itself is a symbolic link; a symlinked consumer root or a case-variant `--repo` names the real file with no link. In `--json`, `target` is that real file on every run, `--dry-run` included, and `writtenTo` is the same path when a write happened and `null` otherwise.
-- **Atomic.** A temporary file beside that real file -- named `.repos.json.nen-<pid>-<hex>.tmp`, so an ignore rule can name it -- is written, given the file's permission bits explicitly (`fchmod`, so the umask cannot narrow a `0664` to `0644`), flushed and renamed over it. The checked path is **not resolved again**: right after the temporary file is opened, and again right before the rename, the write re-asserts that the directory and the file still resolve to themselves, that the file is still inside `--repo`, and that it is still the same file, unmodified (device, inode, size, modification time, and **ctime**, which no call can set -- so a same-size edit with its modification time restored, or a `chmod`, is caught too, as is a lost update by another writer). It also re-asserts that the **temporary file** is still the one it opened -- its directory still resolves to the target's, and the path still names the descriptor's device and inode -- the first time **before any content is written**, so a refused run leaves no orphan holding the text. The descriptor stays open through the second check, and every failure path truncates it before unlinking, so wherever the file really is, it holds nothing. After the rename the target must be the temporary file's inode, or the run is `write-failed` with *landed elsewhere*. Any mismatch removes the temporary file and refuses (`write-failed`, saying what changed). **A window of microseconds remains** between the last check and `rename(2)`, and a process that wins that race **could make the rename write outside the repository**: closing it needs `renameat(2)` against a directory descriptor, which Node does not offer; the post-rename check reports such a landing but cannot undo it. **On win32** there is no `O_NOFOLLOW` and inode identity is not reliable, so the re-checks there rely on the `realpath.native` comparisons, size and timestamps, and claim no more. While the temporary file exists, SIGINT, SIGTERM and SIGHUP are held; the guard is removed only on the **next turn** of the event loop, so a signal that arrived during the synchronous write still finds it: the handler removes the temporary file if still present and re-raises the signal, and the process dies of it (exit 130 for SIGINT) rather than exiting 0. A replace that fails is exit 1 (`write-failed`): *the pin was not moved; `<file>` could not be replaced: `<errno>`*, with the temporary file removed and the original untouched.
+- **Atomic.** A temporary file beside that real file -- named `.repos.json.nen-<pid>-<hex>.tmp`, so an ignore rule can name it -- is written, given the file's permission bits explicitly (`fchmod`, so the umask cannot narrow a `0664` to `0644`), flushed and renamed over it. The checked path is **not resolved again**: right after the temporary file is opened, and again right before the rename, the write re-asserts that the directory and the file still resolve to themselves, that the file is still inside `--repo`, and that it is still the same file, unmodified (device, inode, size, modification time, and **ctime**, which no call can set -- so a same-size edit with its modification time restored, or a `chmod`, is caught too, as is a lost update by another writer). It also re-asserts that the **temporary file** is still the one it opened -- its directory still resolves to the target's, and the path still names the descriptor's device and inode -- the first time **before any content is written**, so a refused run leaves no orphan holding the text. The descriptor stays open through the second check, and every failure path truncates it before unlinking, so wherever the file really is, it holds nothing. After the rename the target must be the temporary file's inode, or the run is `read-back-mismatch` with *landed elsewhere* and `written: true` in its document -- from [#338](https://github.com/zheref/nen/issues/338) a failure after the rename is never reported as `write-failed`, because the new text is on disk; a registry that does not read back after the write is the same refusal. Any mismatch removes the temporary file and refuses (`write-failed`, saying what changed). **A window of microseconds remains** between the last check and `rename(2)`, and a process that wins that race **could make the rename write outside the repository**: closing it needs `renameat(2)` against a directory descriptor, which Node does not offer; the post-rename check reports such a landing but cannot undo it. **On win32** there is no `O_NOFOLLOW` and inode identity is not reliable, so the re-checks there rely on the `realpath.native` comparisons, size and timestamps, and claim no more. While the temporary file exists, SIGINT, SIGTERM and SIGHUP are held; the guard is removed only on the **next turn** of the event loop, so a signal that arrived during the synchronous write still finds it: the handler removes the temporary file if still present and re-raises the signal, and the process dies of it (exit 130 for SIGINT) rather than exiting 0. A replace that fails is exit 1 (`write-failed`): *the pin was not moved; `<file>` could not be replaced: `<errno>`*, with the temporary file removed and the original untouched.
 - **Read once for the edit.** The text the registry loader validates on the checked path is the text the edit is made in, and the row at the loader's index must name the source (case-insensitively) or the edit is refused.
 - **Read back.** After the write the file is reloaded through the registry loader and the new pin checked in the same row; [`schema check`](#nen-schema-check)'s `nen/repos.json` row reads the result exactly as it read the old one, with the new pin in its `pinned tools`.
 - **The mirror is now stale, and it is said.** A moved pin leaves every mirrored file naming the old tag -- which [`canon mirror check`](#nen-canon-mirror-check) reports as `stale` on every surface -- so the output and a `nen: note:` on stderr name the regenerate that must land **in the same commit**: `nen canon mirror generate --repo '<consumer>' --canon-values <path> (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)` -- a **POSIX shell** command, labelled so, with the root printed as one single-quoted word -- which now defaults to the new pin. `--json` carries the same command as `mirror.regenerate` and as an argv array, `mirror.regenerateArgv`.

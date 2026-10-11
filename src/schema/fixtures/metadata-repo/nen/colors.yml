@@ -10,6 +10,12 @@ $comment: a root-level annotation, read by no loader
 
 categories:
   $categories: a $ key inside the map of categories is not a category
+  $category_map:
+    note: a mapping-valued $ key beside the categories is not a category either
+    nested: { kind: mapping }
+  $category_list:
+    - a list-valued $ key
+    - never a category
 
   status:
     $scope: metadata named after 'scope'
@@ -19,6 +25,10 @@ categories:
     precedence: [on_hold, blocked, ready_g2_g4, ready_g1, in_progress]
     values:
       $note: a $ key inside a values map is not a value
+      $value_map:
+        emoji: "🛑"
+        hex: "#000000"
+      $value_list: [never, a, value]
       on_hold:
         $emoji: metadata named after 'emoji', never an extra field
         emoji: "🔵"

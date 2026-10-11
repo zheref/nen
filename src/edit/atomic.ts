@@ -1,6 +1,9 @@
 // src/edit/atomic.ts -- replacing a file the caller CHECKED, atomically
-// (lifted from ../canon/pin-write.ts and ../canon/command.ts for
-// zheref/nen#338, unchanged; `canon pin --write` and `schema set` share it).
+// (moved from ../canon/pin-write.ts and ../canon/command.ts for zheref/nen#338
+// and shared by `canon pin --write` and `schema set`). The checks are those
+// #291 shipped; two things are new here: `checkedTarget`, and a failure after
+// the rename raising `WrittenButUnverifiedError` instead of
+// `TargetChangedError`, so no caller can report it as "nothing was written".
 //
 // THE READ IS CHECKED: `readChecked` opens the real path without following a
 // final symbolic link and records the identity of the file it read. THE WRITE
@@ -47,6 +50,14 @@ export interface CheckedTarget {
 
 /** Thrown when the checked target is no longer what the caller checked. */
 export class TargetChangedError extends Error {}
+
+/**
+ * Thrown when a check fails AFTER the rename (Nobunaga N3, zheref/nen#338):
+ * the new text is on disk -- or somewhere -- so this is never "nothing was
+ * written". A caller reports it as written, `read-back-mismatch`, distinct
+ * from a `TargetChangedError`, which is always raised before the rename.
+ */
+export class WrittenButUnverifiedError extends Error {}
 
 /** Test seams: called with the temporary file's path at the two re-check points. */
 export interface AtomicHooks {
@@ -189,9 +200,16 @@ export function writeFileAtomic(target: CheckedTarget, text: string, hooks: Atom
     renameSync(temp, target.path);
     renamed = true;
     hooks.afterRename?.(temp);
-    const landed = lstatSync(target.path);
+    // EVERY FAILURE FROM HERE ON IS AFTER THE RENAME, so it is never "nothing
+    // was written" (Nobunaga N3): a target gone by now is the same report.
+    let landed;
+    try {
+      landed = lstatSync(target.path);
+    } catch (error) {
+      throw new WrittenButUnverifiedError(`${target.path} does not resolve after the rename (${errnoOf(error)})`);
+    }
     if (landed.dev !== opened.dev || landed.ino !== opened.ino) {
-      throw new TargetChangedError(`the new text landed elsewhere: ${target.path} is not the file this run wrote after the rename`);
+      throw new WrittenButUnverifiedError(`the new text landed elsewhere: ${target.path} is not the file this run wrote after the rename`);
     }
   } finally {
     if (!renamed) {

@@ -59,6 +59,7 @@ import { checkTaxonomy } from "./schema/taxonomy.js";
 import { WORKFLOW_FILE } from "./schema/workflow.js";
 import { GATES_FILE } from "./schema/source.js";
 import { runSchemaSet, SCHEMA_SET_FLAGS } from "./schema/set.js";
+import { plainLine } from "./cli/plain.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
@@ -199,37 +200,57 @@ Write ONE value into a JSON declaration under nen/ (labels, repos, gates,
 contract, workflow or decisions -- never colors.yml, which is YAML), touching
 no other byte: formatting, key order, every other member and every '$' note
 stay as they are. Two edits only: an existing scalar (string, number, boolean,
-null) is replaced in place, or a member an existing object lacks is added as
-its last member, in that object's own style. Replacing an object or an array,
-appending to an array, and creating an object on the way are refused; so is a
-pointer through a '$'-prefixed segment, and a path through an object that
-repeats the member it names. The file must exist (scaffold init writes them).
+null) is replaced in place by a scalar, or a member an existing object lacks
+is added as its last member, in that object's own style. Replacing an object
+or an array, replacing a scalar with one, appending to an array, and creating
+an object on the way are refused; so is a pointer through a '$'-prefixed or
+an empty segment, and a path through an object that repeats the member it
+names. The file must exist (scaffold init writes them).
 
-The edited text is validated by that file's own loader BEFORE anything is
-written: a result the loader refuses is exit 1, with the loader's message,
-and the file untouched. A write goes to a temporary file beside the target,
-given its mode, renamed over it after the target's identity and containment
-are re-checked; a file that resolves outside --repo or changed after it was
-read is refused. After the write the file is read back through the loader.
+The original text and then the edited text go through that file's own loader
+BEFORE anything is written. A result the loader refuses is exit 1, with the
+loader's message, and the file untouched; a failure that was already there is
+named as such ('the file already fails its loader: ...'), and an edit that
+repairs it is allowed. When the loader's model does not change -- a key nen
+keeps verbatim but reads nowhere -- the edit is still made and reported as
+'kept verbatim -- no loader reads <pointer>' (read: false).
+
+GATE CHANGES need --gate-change, else exit 2 naming the pointer and why:
+gates.json reviewers/*/*_pattern, round_quorum, round_policy,
+approval_policy, default_approvers, base_reviewers, delivery, checks;
+contract.json any exe, argv, env, onStall, preconditions or targets segment;
+workflow.json branch/base. With it, a 'security-relevant:' line is printed
+and --json carries gateChange: true.
+
+The declaration must be a regular file directly in a real nen/: a symbolic
+link at the file or at nen/ is exit 2. A write goes to a temporary file
+beside the target, given its mode, renamed over it after the target's
+identity and containment are re-checked; a file that changed after it was
+read is refused. After the write the file is read back through the loader; a
+failure after the rename is read-back-mismatch with written: true.
 
   --file <nen/...json>  The declaration, repo-relative, as listed above.
   --pointer <pointer>   An RFC 6901 JSON pointer: /coverage/minimum,
                         /reviewers/0/name; '~1' is '/', '~0' is '~'.
   --value <JSON>        The value, as JSON: --value 85, --value true,
                         --value '"main"', --value null. A negative number is
-                        --value=-1. An object or array is accepted only where
-                        a member is added.
+                        --value=-1. A number is written in JSON's normalised
+                        spelling (1.0 is written 1). An object or array is
+                        accepted only where a member is added.
+  --gate-change         Required for a gate-change pointer (above).
   --dry-run             Validate and print before -> after; write nothing.
   --json                { contract: "nen.schema.set/v0.1", ok, file, pointer,
                           op: "replace"|"add", before (null for an add),
-                          after, changed, dryRun, written, target, line,
-                          failure: null|{ code, message } }
+                          after, changed, read, gateChange, repaired, dryRun,
+                          written, target, line, failure: null|{ code,
+                          message } }
 
 Exit: 0 set, already that value, or a dry run; 1 refused (no-file,
 outside-repo, file-changed, not-json, refused-edit, invalid, write-failed,
-read-back-mismatch -- nothing written unless the code is read-back-mismatch);
-2 usage (a missing flag, a file that is not a JSON declaration, a malformed
-pointer, a '$' segment, a value that is not JSON).`;
+read-back-mismatch -- nothing written unless the code is read-back-mismatch,
+whose document says written: true); 2 usage (a missing flag, a file that is
+not a JSON declaration, a malformed pointer, a '$' or empty segment, a value
+that is not JSON, a gate change without --gate-change, a symbolic link).`;
 
 // The flags the TWO pre-registry commands share. Left as one spec because
 // those two are parsed together, exactly as they always were; a registry
@@ -294,7 +315,11 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
   // `bootstrap`; widening that spec for set's --file/--pointer/--value would
   // let `schema check --file x` parse and be silently ignored. So `set` is
   // parsed against its own spec here, before that one.
-  if (head.rest[0] === "schema" && head.rest[1] === "set") {
+  //
+  // THE SUBCOMMAND IS THE FIRST POSITIONAL after `schema`, past any flag this
+  // family knows (Nobunaga N4): `nen schema --repo X set ...` and `nen schema
+  // --json set ...` are `set` too.
+  if (head.rest[0] === "schema" && schemaSubcommand(head.rest) === "set") {
     return schemaSet(head.rest, head.values["repo"] ?? null, head.booleans.has("json"), io, seams);
   }
 
@@ -511,13 +536,28 @@ function bootstrap(
   return result.code;
 }
 
+/** The flags `schema` and its verbs take a value for, so a scan skips the value too. */
+const SCHEMA_VALUE_FLAGS: ReadonlySet<string> = new Set([...GLOBAL_FLAGS.values, ...SCHEMA_SET_FLAGS.values]);
+
+/** The first positional after `schema`, skipping every flag and a value flag's value. */
+export function schemaSubcommand(rest: readonly string[]): string | undefined {
+  for (let index = 1; index < rest.length; index += 1) {
+    const token = rest[index] ?? "";
+    if (token === "--") return undefined;
+    if (!token.startsWith("-") || token === "-") return token;
+    const name = token.replace(/^--?/, "");
+    if (!name.includes("=") && SCHEMA_VALUE_FLAGS.has(name)) index += 1;
+  }
+  return undefined;
+}
+
 function schemaSet(argv: readonly string[], headRepo: string | null, headJson: boolean, io: Io, seams: Seams): number {
   let args;
   try {
     args = parseArgs(argv, SCHEMA_SET_FLAGS);
   } catch (error) {
     if (error instanceof UsageError) {
-      io.err(`${PROGRAM} schema set: ${error.message}`);
+      io.err(plainLine(`${PROGRAM} schema set: ${error.message}`));
       io.err(`Run '${PROGRAM} schema --help'.`);
       return 2;
     }
@@ -530,7 +570,7 @@ function schemaSet(argv: readonly string[], headRepo: string | null, headJson: b
   try {
     return runSchemaSet(args, args.values["repo"] ?? headRepo, args.booleans.has("json") || headJson, io, seams.platform);
   } catch (error) {
-    io.err(`${PROGRAM} schema set: ${error instanceof Error ? error.message : String(error)}`);
+    io.err(plainLine(`${PROGRAM} schema set: ${error instanceof Error ? error.message : String(error)}`));
     return error instanceof RepoRootError ? 2 : 1;
   }
 }

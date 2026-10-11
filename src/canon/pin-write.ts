@@ -28,6 +28,7 @@ export {
   TargetChangedError,
   TEMP_PATTERN,
   writeFileAtomic,
+  WrittenButUnverifiedError,
   type AtomicHooks,
   type CheckedTarget,
 } from "../edit/atomic.js";

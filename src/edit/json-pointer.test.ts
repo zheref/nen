@@ -75,6 +75,12 @@ describe("setJsonPointer -- replace an existing scalar", () => {
     expect(edit.text).toBe(MESSY);
   });
 
+  it("refuses replacing a scalar with an object or an array (v1), and still adds one as a new member", () => {
+    expect((): unknown => setJsonPointer(MESSY, ["coverage", "minimum"], { a: 1 })).toThrow(/replacing it with an object is not supported in v1/);
+    expect((): unknown => setJsonPointer(MESSY, ["branch", "base"], ["x"])).toThrow(/replacing it with an array is not supported in v1/);
+    expect(setJsonPointer(MESSY, ["monitor", "list"], ["x"]).op).toBe("add");
+  });
+
   it("refuses an object or array target, and an index past the end or '-'", () => {
     expect((): unknown => setJsonPointer(MESSY, ["coverage"], 1)).toThrow(/holds an object/);
     expect((): unknown => setJsonPointer(MESSY, ["reviewers"], 1)).toThrow(/holds an array/);
@@ -110,6 +116,17 @@ describe("setJsonPointer -- add a member to an existing object", () => {
     const empty = setJsonPointer(MESSY, ["empty", "k"], "v");
     expect(empty.text).toContain('  "empty": {\n    "k": "v"\n  },');
     expect(empty.line).toBe(10);
+  });
+
+  it("matches a one-line object's own comma and colon spacing (N6)", () => {
+    expect(setJsonPointer('{"a":1,"b":2}', ["c"], 3).text).toBe('{"a":1,"b":2,"c":3}');
+    expect(setJsonPointer('{ "a" : 1 , "b" : 2 }', ["c"], 3).text).toBe('{ "a" : 1 , "b" : 2 , "c" : 3 }');
+    expect(setJsonPointer('{"a" :1}', ["c"], 3).text).toBe('{"a" :1,"c" :3}');
+  });
+
+  it("keeps { }'s inner space, in a one-line and a multi-line document (N6)", () => {
+    expect(setJsonPointer('{"a":{ }}', ["a", "b"], 1).text).toBe('{"a":{ "b":1 }}');
+    expect(setJsonPointer('{\n  "a": { }\n}\n', ["a", "b"], 1).text).toBe('{\n  "a": { "b": 1 }\n}\n');
   });
 
   it("writes into an empty object inline in a one-line document, and into the root of an empty one", () => {

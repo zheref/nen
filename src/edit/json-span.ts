@@ -1,6 +1,8 @@
 // src/edit/json-span.ts -- where a value sits in a JSON TEXT, without
-// re-serialising the text (lifted from ../canon/pin-write.ts for
-// zheref/nen#338, unchanged; `canon pin --write` and `schema set` share it).
+// re-serialising the text (zheref/nen#338; shared by `canon pin --write` and
+// `schema set`). The locator -- `locateJsonValue`, `memberCount` and the scan
+// under them -- is moved from ../canon/pin-write.ts without a behavioural
+// change; `objectMembers`, `indentUnit` and `insertMember` are new here.
 //
 // A DECLARATION IS A HAND-MAINTAINED FILE: its indentation, its key order, its
 // other members, its `$`-prefixed notes and its trailing newline are the
@@ -241,12 +243,13 @@ export interface MemberInsertion {
  * Add `"<key>": <literal>` as the LAST member of the object whose value starts
  * at `at`, written in the object's own style and touching no other byte.
  *
- * A NON-EMPTY OBJECT lends its own spelling: the whitespace before its last
- * member (or, with one member, after its brace) and the separator between that
- * member's key and value. AN EMPTY ONE is written the way the document is
- * written: expanded, one indentation unit past the line the brace sits on,
- * when the document is multi-line or the braces already hold a line break;
- * inline otherwise. The literal is spliced as given; the caller proves the
+ * A NON-EMPTY OBJECT lends its own spelling: the whitespace around the comma
+ * before its last member (or, with one member, after its brace) and the
+ * separator between its first member's key and value. AN EMPTY ONE holding
+ * spaces on one line (`{ }`) keeps them on both sides of the new member; an
+ * empty `{}` is written the way the document is written: expanded, one
+ * indentation unit past the line the brace sits on, when the document is
+ * multi-line or the braces already hold a line break; inline otherwise. The literal is spliced as given; the caller proves the
  * result by parsing it.
  */
 export function insertMember(text: string, at: number, key: string, literal: string): MemberInsertion {
@@ -257,18 +260,23 @@ export function insertMember(text: string, at: number, key: string, literal: str
   const last = members[members.length - 1];
   if (last !== undefined) {
     const previous = members[members.length - 2];
-    // The whitespace a member is introduced with: after the comma before the
-    // last member, or after the brace when there is only one.
-    const lead =
-      previous === undefined
-        ? text.slice(at + 1, last.keySpan.start)
-        : text.slice(text.indexOf(",", previous.valueSpan.end) + 1, last.keySpan.start);
-    const insert = `,${lead}${entry}`;
+    // The object's own comma spacing: the whitespace BEFORE the comma that
+    // precedes its last member and the whitespace AFTER it (after the brace,
+    // when there is only one member, and nothing before).
+    const comma = previous === undefined ? -1 : text.indexOf(",", previous.valueSpan.end);
+    const before = previous === undefined ? "" : text.slice(previous.valueSpan.end, comma);
+    const lead = previous === undefined ? text.slice(at + 1, last.keySpan.start) : text.slice(comma + 1, last.keySpan.start);
+    const insert = `${before},${lead}${entry}`;
     const offset = last.valueSpan.end;
-    const start = offset + 1 + lead.length;
+    const start = offset + before.length + 1 + lead.length;
     return { text: `${text.slice(0, offset)}${insert}${text.slice(offset)}`, span: { start, end: start + entry.length } };
   }
   const interior = text.slice(at + 1, close);
+  // `{ }` KEEPS ITS INNER SPACE, on both sides of the new member, wherever it sits.
+  if (interior !== "" && !interior.includes("\n")) {
+    const start = at + 1 + interior.length;
+    return { text: `${text.slice(0, at + 1)}${interior}${entry}${interior}${text.slice(close)}`, span: { start, end: start + entry.length } };
+  }
   const expanded = interior.includes("\n") || text.trimEnd().includes("\n");
   if (!expanded) {
     const start = at + 1;
