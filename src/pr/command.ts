@@ -445,16 +445,24 @@ threads:
   head, thread, replied, resolved, dryRun, threads[] }'.
   'settle --from <file.json>' settles a BATCH (zheref/nen#230): the thread
   list is walked ONCE, then one reply and one resolve mutation per entry, in
-  file order -- 2N + 1 calls where the single verbs cost 4N. The file is a
-  JSON array of { "thread": "<id>", "body": "<text>" } or { "thread": "<id>",
-  "bodyFile": "<path>" } (relative to the file's own directory, read raw).
+  file order -- 2N + P calls (P = pages of 100 threads) where the single
+  verbs cost 4N. The file is a JSON array of { "thread": "<id>", "body":
+  "<text>" } or { "thread": "<id>", "bodyFile": "<path>" }. A bodyFile is
+  CONFINED to the batch file's own directory: relative, no '..' segment, its
+  real path (after symlinks) inside that directory's real path, and a
+  regular file, checked on the descriptor it is read from -- an absolute
+  path, a symlink that escapes, a device or a FIFO is refused. Its real path
+  is reported in bodyFrom and on each entry line. Every body, inline or
+  read, is at most 65536 characters.
   --from <file.json>  Required by 'settle'; relative to --repo.
   REFUSED AT EXIT 2, ALL PROBLEMS NAMED, NOTHING SENT: a file that is not a
-  non-empty JSON array; an entry with an unknown key, no 'thread', both or
-  neither of 'body'/'bodyFile', an unreadable bodyFile or an empty body; a
+  non-empty JSON array; an entry with an unknown key, no 'thread', a thread
+  id carrying a control character, both or neither of 'body'/'bodyFile', a
+  bodyFile refused as above or unreadable, or an empty or oversize body; a
   thread id named twice; and -- after the one walk -- an id this pull
-  request does not carry. An ALREADY-RESOLVED thread is reported against its
-  entry as 'already-resolved', nothing sent to it, and the rest proceeds.
+  request does not carry. An ALREADY-RESOLVED thread (per the walk's
+  snapshot) is reported against its entry as 'already-resolved', nothing
+  sent to it, and the rest proceeds.
   A mutation refused partway STOPS the batch: the report names which
   threads were replied to and resolved, replied to only, and not attempted;
   nothing is retried. --dry-run walks, validates, prints both argvs and every
@@ -929,8 +937,8 @@ export const prCommand: Command = {
     if (subcommand !== "edit-body" && subcommand !== "threads" && subcommand !== "open" && context.args.values["body-file"] !== undefined) {
       throw new VerbUsageError("--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'.");
     }
-    // Same shape for open's own three: a title file, a head and a draft flag
-    // mean nothing to any other subcommand here.
+    // Same shape for open's own four: a title file, a head, an assignee list
+    // and a draft flag mean nothing to any other subcommand here.
     if (subcommand !== "open") {
       for (const flag of ["title-file", "head", "assignee"]) {
         if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is only read by 'pr open'.`);
@@ -1811,7 +1819,7 @@ function settle(context: CommandContext, target: Target, prNumber: number, dryRu
   }
   // RESOLVED AGAINST `--repo`, like every other path flag (Feitan F7).
   const fromPath = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), fromFlag);
-  const entries = readSettleFile(fromPath);
+  const { entries, baseDir } = readSettleFile(fromPath);
   let listing;
   try {
     listing = listThreads(context.seams, target, prNumber);
@@ -1835,7 +1843,7 @@ function settle(context: CommandContext, target: Target, prNumber: number, dryRu
     stoppedAt: result.stoppedAt,
     entries: result.outcomes,
   };
-  emit(context.io, context.json, report, renderSettle(report));
+  emit(context.io, context.json, report, renderSettle(report, baseDir));
   if (result.failure !== null) context.io.err(`nen pr threads settle: ${stoppedLine(report)}`);
   return settleExit(result, EXIT_FOR);
 }

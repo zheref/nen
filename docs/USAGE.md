@@ -2671,7 +2671,7 @@ nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-r
 |---|---|---|---|
 | `--target <owner/name>` | **yes** | the GitHub side | `--repo` names a checkout on disk and never addresses the API |
 | `--pr <n>` | **yes** | the pull request | a positive whole number |
-| `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form. Each action refuses the flags it does not read — `--thread` on `list`, `--body-file` on `list`/`resolve`, `--dry-run` on `list` — rather than accepting and ignoring them |
+| `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form. Each action refuses the flags it does not read — `--thread` on `list`/`settle`, `--body-file` on `list`/`resolve`/`settle`, `--from` on `list`/`reply`/`resolve`, `--dry-run` on `list` — rather than accepting and ignoring them |
 | `--body-file <path>` | `reply` | the reply's bytes, read raw | a reply typed on a command line is a reply nobody reviewed; an empty or whitespace-only file is refused. A relative path resolves against `--repo`, not the process cwd |
 | `--from <file.json>` | `settle` | the batch — see [`settle`](#settling-a-batch-pr-threads-settle) below | a relative path resolves against `--repo`; refused on every other action |
 | `--dry-run` | no | print the exact `gh api graphql` argv and write nothing | the thread is still looked up, so exits 3 and 4 still fire |
@@ -2723,11 +2723,13 @@ zheref/nen#217 @ 1f4bb2c0: 10 review thread(s), 0 unresolved
 ([#230](https://github.com/zheref/nen/issues/230)). Settling a reviewer round
 with `reply` then `resolve` per thread costs `4N` calls — each verb walks the
 whole thread list before its one mutation. `settle` walks **once**, then sends
-one reply and one resolve per entry, in file order: `2N + 1`.
+one reply and one resolve per entry, in file order: `2N + P`, where `P` is
+the number of pages of 100 threads the walk reads (1 for most pull requests).
 
 The `--from` file is a JSON array; each entry carries `thread` (the node id
 `list` prints) and exactly one of `body` (the reply text) or `bodyFile` (a path
-**relative to the batch file's own directory**, read raw):
+**relative to the batch file's own directory**, read raw, and confined to it —
+below):
 
 ```json
 [
@@ -2736,21 +2738,38 @@ The `--from` file is a JSON array; each entry carries `thread` (the node id
 ]
 ```
 
+**A `bodyFile` cannot leave the batch file's directory.** The body is posted
+publicly under your identity, so a batch file must not be able to publish an
+arbitrary local file. An absolute `bodyFile` and any `..` segment are refused;
+the path is resolved to its **real** path (after symlinks) and must sit inside
+the batch file's own real directory, so a symlink that escapes is refused by
+where it lands; the file is opened non-blocking and `fstat`ed through the
+descriptor it is then read from, and must be a regular file — a directory, a
+device, a FIFO or a socket is refused. The real path is what `bodyFrom`
+reports, and every human entry line names it relative to the batch
+(`[body: replies/declined.md]`). Every body, inline or read, is at most
+**65536 characters** (GitHub's comment limit; a file too large to fit is
+refused without being read).
+
 **Refused at exit `2`, every problem named in one refusal, nothing sent:** a
 file that cannot be read, is not JSON, is not an array or is empty; an entry
 that is not an object, carries a key other than those three, has no non-empty
-`thread`, has both or neither of `body`/`bodyFile`, names an unreadable
-`bodyFile`, or whose body is empty or whitespace-only; a thread id named
+`thread` or one carrying a control character, has both or neither of
+`body`/`bodyFile`, names a `bodyFile` refused as above or unreadable, or whose
+body is empty, whitespace-only or over the limit; a thread id named
 twice; and — after the one walk — an id this pull request does not carry
 (each named, with the thread count). An unknown id is `2` here where `reply`
 and `resolve` answer `4`: in a batch it is a defect in the file, refused before
 anything is sent.
 
-**Already resolved is a per-entry disposition, not a refusal.** A thread
-somebody else closed gets nothing — neither the reply nor the resolve — and is
+**Already resolved is a per-entry disposition, not a refusal** — per the
+walk's snapshot. A thread somebody else closed gets nothing — neither the reply nor the resolve — and is
 reported against its entry as `already-resolved`, consistent with `resolve`'s
 exit `3`; the rest of the batch proceeds, and the batch exits `3` when
-everything else settled.
+everything else settled. A thread resolved **between** the walk and its own
+mutation is not seen: GitHub accepts the resolve as a no-op, and it is
+reported `resolved` — the same window `resolve` has between its list and its
+mutation.
 
 **A failure partway through stops the batch** at the first refused mutation:
 the report names which threads were replied to and resolved, which was replied
@@ -2779,7 +2798,7 @@ replied, resolved, bodyBytes, bodyFrom, replyArgv, resolveArgv, error }`.
 `disposition` is one of `resolved` (replied and resolved), `replied` (the
 resolve was the mutation that failed), `already-resolved`, `failed` (the reply
 was the mutation that failed; nothing confirmed sent), `not-attempted`, or
-`planned` (a dry run). `bodyFrom` is `inline` or the absolute path read;
+`planned` (a dry run). `bodyFrom` is `inline` or the **real** absolute path read (after symlinks);
 `replyArgv`/`resolveArgv` carry the full argv, body bytes included, and are
 `null` where nothing would be sent. On a stopped batch the document is still
 printed and stderr carries the one-line account.
@@ -2791,8 +2810,8 @@ nen pr threads settle --target zheref/nen --pr 217 --from round-1.json --dry-run
 ```
 ```text
 zheref/nen#217 @ 1f4bb2c0: would settle 1 of 2 thread(s) from /…/round-1.json -- dry run, nothing written
-  PRRT_kwDOPmRi0c5ktVBH  would reply (18 byte(s)) and resolve
-      would run: gh api --method POST graphql -f 'query=mutation(…){addPullRequestReviewThreadReply(…)…}' -f threadId=PRRT_kwDOPmRi0c5ktVBH -f 'body=<18 byte(s); first line: Fixed in 2a6539c.>'
+  PRRT_kwDOPmRi0c5ktVBH  would reply (17 byte(s)) and resolve
+      would run: gh api --method POST graphql -f 'query=mutation(…){addPullRequestReviewThreadReply(…)…}' -f threadId=PRRT_kwDOPmRi0c5ktVBH -f 'body=<17 byte(s); first line: Fixed in 2a6539c.>'
       would run: gh api --method POST graphql -f 'query=mutation(…){resolveReviewThread(…)…}' -f threadId=PRRT_kwDOPmRi0c5ktVBH
       | Fixed in 2a6539c.
   PRRT_kwDOPmRi0c5ktVBJ  already resolved -- nothing would be sent to it

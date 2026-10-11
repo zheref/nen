@@ -6,14 +6,15 @@
 // throws -- so "sent nothing" is proved by the recorded calls, not asserted.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { parseTarget } from "../github/target.js";
 import { prCommand } from "./command.js";
-import { SETTLE_CONTRACT } from "./settle.js";
+import { MAX_BODY_CHARS, SETTLE_CONTRACT } from "./settle.js";
 import { listArgv, listPageArgv, replyArgv, resolveArgv } from "./threads.js";
 
 const TARGET = parseTarget("zheref/nen");
@@ -96,7 +97,7 @@ describe("nen pr threads settle -- the batch", () => {
       ["T2", "resolved", true, true],
     ]);
     expect(doc.entries[0]?.["bodyFrom"]).toBe("inline");
-    expect(doc.entries[1]?.["bodyFrom"]).toBe(join(from, "..", "replies", "t2.md"));
+    expect(doc.entries[1]?.["bodyFrom"]).toBe(join(realpathSync(join(from, "..")), "replies", "t2.md"));
   });
 
   it("follows the walk across pages before any mutation", async () => {
@@ -284,5 +285,109 @@ describe("nen pr threads settle --dry-run", () => {
     const human = await capture(args(from, ["--dry-run"]), [listCall(pageBody([node("T1", false)]))]);
     expect(human.out.join("\n")).not.toContain("\u001b");
     expect(human.out.join("\n")).toContain("      | a[2Kb");
+  });
+});
+
+describe("nen pr threads settle -- a bodyFile is confined to the batch's directory (Feitan F1)", () => {
+  /** Refused at exit 2 with nothing called, the refusal matching `pattern`. */
+  async function refused(entry: Record<string, unknown>, pattern: RegExp, setup?: (dir: string) => void): Promise<void> {
+    const from = batch([entry]);
+    setup?.(join(from, ".."));
+    const captured = await capture(args(from), []);
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(pattern);
+    expect(captured.seams.calls).toEqual([]);
+  }
+
+  it("refuses an absolute bodyFile, even one that exists", async () => {
+    const outside = join(mkdtempSync(join(tmpdir(), "nen-settle-outside-")), "secret.txt");
+    writeFileSync(outside, "a secret", "utf8");
+    await refused({ thread: "T1", bodyFile: outside }, /entry 0: 'bodyFile' '.*secret\.txt' is absolute/);
+  });
+
+  it("refuses a '..' segment, even one that lands back inside", async () => {
+    await refused({ thread: "T1", bodyFile: "sub/../reply.md" }, /entry 0: 'bodyFile' 'sub\/\.\.\/reply\.md' carries a '\.\.' segment/, (dir) => {
+      mkdirSync(join(dir, "sub"));
+      writeFileSync(join(dir, "reply.md"), "hi", "utf8");
+    });
+  });
+
+  it("refuses a symlink that escapes the directory, by where it lands", async () => {
+    const outside = join(mkdtempSync(join(tmpdir(), "nen-settle-outside-")), "secret.txt");
+    writeFileSync(outside, "a secret", "utf8");
+    await refused({ thread: "T1", bodyFile: "link.md" }, /'bodyFile' 'link\.md' resolves to '.*secret\.txt', outside the batch file's directory/, (dir) => {
+      symlinkSync(outside, join(dir, "link.md"));
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a device path, named directly or through a link", async () => {
+    await refused({ thread: "T1", bodyFile: "/dev/stdin" }, /is absolute/);
+    await refused({ thread: "T1", bodyFile: "zero" }, /'bodyFile' 'zero' resolves to '\/dev\/zero', outside/, (dir) => {
+      symlinkSync("/dev/zero", join(dir, "zero"));
+    });
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a FIFO inside the directory without blocking on it", async () => {
+    await refused({ thread: "T1", bodyFile: "pipe" }, /'bodyFile' 'pipe' is not a regular file/, (dir) => {
+      execFileSync("mkfifo", [join(dir, "pipe")]);
+    });
+  });
+
+  it("refuses a directory inside the directory", async () => {
+    await refused({ thread: "T1", bodyFile: "sub" }, /'bodyFile' 'sub' is not a regular file/, (dir) => {
+      mkdirSync(join(dir, "sub"));
+    });
+  });
+
+  it("reports the REAL path of an in-directory symlink in bodyFrom and on the live line, relative to the batch", async () => {
+    const from = batch([{ thread: "T1", bodyFile: "alias.md" }], { "replies/real.md": "ok" });
+    const dir = join(from, "..");
+    symlinkSync(join(dir, "replies", "real.md"), join(dir, "alias.md"));
+    const script = [listCall(pageBody([node("T1", false)])), replyOk("T1", "ok"), resolveOk("T1")];
+    const human = await capture(args(from), script);
+    expect(human.code).toBe(0);
+    expect(human.out).toContain(`  T1  [body: ${join("replies", "real.md")}]  replied, resolved`);
+    const json = await capture([...args(from), "--json"], script);
+    const doc = JSON.parse(json.out.join("\n")) as { entries: { bodyFrom: string }[] };
+    expect(doc.entries[0]?.bodyFrom).toBe(join(realpathSync(dir), "replies", "real.md"));
+  });
+});
+
+describe("nen pr threads settle -- body size and file-controlled text (Feitan F2, F3)", () => {
+  it(`refuses a body over ${MAX_BODY_CHARS} characters, inline or from a file, in the all-problems pass`, async () => {
+    const big = "x".repeat(MAX_BODY_CHARS + 1);
+    const from = batch([{ thread: "T1", body: big }, { thread: "T2", bodyFile: "big.md" }, { thread: "T3", body: "x".repeat(MAX_BODY_CHARS) }], { "big.md": big });
+    const captured = await capture(args(from), []);
+    expect(captured.code).toBe(2);
+    const err = captured.err.join("\n");
+    expect(err).toMatch(/entry 0: the body is 65537 characters, over the 65536-character limit/);
+    expect(err).toMatch(/entry 1: the body in 'big\.md' is 65537 characters/);
+    expect(err).not.toMatch(/entry 2/);
+    expect(captured.seams.calls).toEqual([]);
+  });
+
+  it("refuses a bodyFile too large to be a body without reading it", async () => {
+    const from = batch([{ thread: "T1", bodyFile: "huge.md" }], { "huge.md": "x".repeat(MAX_BODY_CHARS * 4 + 1) });
+    const captured = await capture(args(from), []);
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/'huge\.md' is 262145 bytes, more than a 65536-character body can be; it was not read/);
+  });
+
+  it("refuses a thread id carrying a control character, and strips control characters from every echoed fragment", async () => {
+    const from = batch([{ thread: "T\u001b[2K1", body: "a" }, { thread: "T2", body: "b", "k\u001b[1A": 1 }, { thread: "T3", bodyFile: "x\u001b[2K.md" }]);
+    const captured = await capture(args(from), []);
+    expect(captured.code).toBe(2);
+    const err = captured.err.join("\n");
+    expect(err).not.toContain("\u001b");
+    expect(err).toMatch(/entry 0: 'thread' 'T\[2K1' carries a control character/);
+    expect(err).toMatch(/entry 1: unknown key\(s\) 'k\[1A'/);
+    expect(err).toMatch(/entry 2: could not read bodyFile 'x\[2K\.md'/);
+  });
+
+  it("strips control characters from an unknown thread id echoed after the walk", async () => {
+    const from = batch([{ thread: "NO\u200bPE", body: "a" }]);
+    const captured = await capture(args(from), [listCall(pageBody([node("T1", false)]))]);
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/carries no review thread with id 'NOPE'/);
   });
 });

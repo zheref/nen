@@ -6,7 +6,8 @@
 // `reply` then `resolve` per thread, and each of those walks the pull request's
 // whole thread list before its one mutation -- 4N calls for N threads, and a
 // shell loop improvised fresh every round. This walks once and sends 2N
-// mutations: 2N + 1 where the loop costs 4N.
+// mutations: 2N + P (P = pages of 100 threads, 1 for most pull requests)
+// where the loop costs 4N.
 //
 // THE FILE IS VALIDATED IN FULL BEFORE ANY MUTATION, and every problem is
 // named in ONE refusal (exit 2), not the first one found. A malformed entry,
@@ -23,8 +24,12 @@
 // closed; here that same fact is reported against the entry that named it --
 // nothing is sent to that thread, neither the reply nor the resolve -- and the
 // rest of the batch proceeds. The batch then exits 3 (the single verb's code
-// for the same fact) when everything else settled, so a caller can never
-// record "I resolved it" about a thread it did not resolve.
+// for the same fact) when everything else settled, so a caller does not
+// record "I resolved it" about a thread the walk's snapshot showed somebody
+// else had resolved. PER THE WALK'S SNAPSHOT, and only that: a thread resolved
+// between the walk and its own mutation is not seen (GitHub accepts the
+// resolve as a no-op) -- the same window `resolve` has between its list and
+// its mutation.
 //
 // A FAILURE PARTWAY THROUGH STOPS, AND SAYS EXACTLY WHERE. Mutations are sent
 // in file order, reply then resolve per thread. The first refused mutation
@@ -41,8 +46,8 @@
 // come back `isResolved: true` for the thread it was sent for) are the ones
 // those verbs already prove.
 
-import { readFileSync } from "node:fs";
-import { dirname, isAbsolute, resolve as resolvePath } from "node:path";
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
@@ -111,25 +116,103 @@ export interface SettleReport {
 const ENTRY_KEYS = new Set(["thread", "body", "bodyFile"]);
 
 /**
+ * The most characters (UTF-16 code units, JavaScript's `length`) one reply
+ * body may carry -- GitHub's own comment limit. Checked in the all-problems
+ * pass for an inline body and a `bodyFile` alike (Feitan F2), so no oversize
+ * body reaches a mutation.
+ */
+export const MAX_BODY_CHARS = 65536;
+
+/** The most bytes a `bodyFile` may hold before it is read at all: 4 per character, UTF-8's ceiling. */
+const MAX_BODY_FILE_BYTES = MAX_BODY_CHARS * 4;
+
+/** A character a terminal or a GraphQL id has no business carrying. */
+const CONTROL = /[\u0000-\u001F\u007F-\u009F]/;
+
+/** The validated batch, and the REAL directory every `bodyFile` was confined to. */
+export interface SettleBatch {
+  readonly entries: readonly SettleEntry[];
+  readonly baseDir: string;
+}
+
+/**
+ * One `bodyFile`, CONFINED TO THE BATCH FILE'S DIRECTORY (Feitan F1, Nobunaga
+ * N2), or the problem that refuses it.
+ *
+ * WHY CONFINED. The body is posted PUBLICLY under the caller's identity, and
+ * `nen *` runs without a prompt where it is allowlisted -- so a batch file that
+ * could name `/etc/…`, `../../.ssh/id_ed25519`, a symlink out of its
+ * directory, `/dev/stdin` or a FIFO would turn "settle these threads" into
+ * "publish this local file", with nobody asked. So: an absolute path and any
+ * `..` segment are refused outright; the path is `realpath`ed and must still
+ * sit inside the batch file's own real directory (a symlink that escapes is
+ * refused by where it LANDS, not what it is called); the file is opened
+ * non-blocking (a FIFO must not hang the verb), `fstat`ed THROUGH THE
+ * DESCRIPTOR it is read from, and must be a regular file no larger than the
+ * body limit allows -- so what was checked is what is read.
+ */
+function readBodyFile(value: string, realBase: string): { readonly body: string; readonly real: string } | { readonly problem: string } {
+  const shown = plainLine(value);
+  if (isAbsolute(value) || /^[\\/]/.test(value) || /^[A-Za-z]:/.test(value)) {
+    return { problem: `'bodyFile' '${shown}' is absolute; a bodyFile is a path RELATIVE to the batch file's own directory, and may not leave it.` };
+  }
+  if (value.split(/[\\/]/).includes("..")) {
+    return { problem: `'bodyFile' '${shown}' carries a '..' segment; a bodyFile may not leave the batch file's own directory.` };
+  }
+  let real: string;
+  try {
+    real = realpathSync(resolvePath(realBase, value));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { problem: `could not read bodyFile '${shown}'${code === undefined ? "" : ` (${code})`}.` };
+  }
+  if (real !== realBase && !real.startsWith(realBase.endsWith(sep) ? realBase : `${realBase}${sep}`)) {
+    return { problem: `'bodyFile' '${shown}' resolves to '${plainLine(real)}', outside the batch file's directory '${plainLine(realBase)}' (a symlink that escapes it is refused by where it lands).` };
+  }
+  let fd: number;
+  try {
+    fd = openSync(real, fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NONBLOCK));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { problem: `could not open bodyFile '${shown}'${code === undefined ? "" : ` (${code})`}.` };
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) {
+      return { problem: `'bodyFile' '${shown}' is not a regular file (a directory, a device, a FIFO or a socket is never read as a reply).` };
+    }
+    if (stat.size > MAX_BODY_FILE_BYTES) {
+      return { problem: `'bodyFile' '${shown}' is ${stat.size} bytes, more than a ${MAX_BODY_CHARS}-character body can be; it was not read.` };
+    }
+    return { body: readFileSync(fd, "utf8"), real };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return { problem: `could not read bodyFile '${shown}'${code === undefined ? "" : ` (${code})`}.` };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * The `--from` file, read and validated IN FULL. Every problem is collected
  * and the whole list refused once (exit 2): a caller fixing a batch should not
  * have to discover its problems one run at a time.
  *
- * `bodyFile` RESOLVES AGAINST THE FILE'S OWN DIRECTORY, not the process's and
- * not `--repo`'s: the batch file and the reply files it names are written
- * together, and a reference that moved with the shell would read a different
- * reply than the one written beside it. An absolute path is used as-is. The
- * body is read RAW -- the bytes on disk are the bytes posted, as `reply
- * --body-file` reads them.
+ * `bodyFile` RESOLVES AGAINST THE FILE'S OWN DIRECTORY, AND STAYS THERE --
+ * `readBodyFile` above says why and how. The body is read RAW -- the bytes on
+ * disk are the bytes posted, as `reply --body-file` reads them. Every
+ * fragment of the file echoed into a refusal goes through `plainLine`
+ * (Feitan F3): the file is text somebody else may have written.
  */
-export function readSettleFile(fullPath: string): readonly SettleEntry[] {
+export function readSettleFile(fullPath: string): SettleBatch {
+  const shownPath = plainLine(fullPath);
   let text: string;
   try {
     text = readFileSync(fullPath, "utf8");
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
     throw new VerbUsageError(
-      `could not read --from '${fullPath}'${code === undefined ? "" : ` (${code})`}. It is the batch of replies this verb posts, so an unreadable one is refused before anything is sent.`,
+      `could not read --from '${shownPath}'${code === undefined ? "" : ` (${code})`}. It is the batch of replies this verb posts, so an unreadable one is refused before anything is sent.`,
     );
   }
   let parsed: unknown;
@@ -137,19 +220,19 @@ export function readSettleFile(fullPath: string): readonly SettleEntry[] {
     parsed = JSON.parse(text) as unknown;
   } catch (error) {
     throw new VerbUsageError(
-      `--from '${fullPath}' is not JSON (${error instanceof Error ? error.message : String(error)}). It must be an array of { "thread": "<id>", "body": "<text>" } or { "thread": "<id>", "bodyFile": "<path>" }. Nothing was sent.`,
+      `--from '${shownPath}' is not JSON (${plainLine(error instanceof Error ? error.message : String(error))}). It must be an array of { "thread": "<id>", "body": "<text>" } or { "thread": "<id>", "bodyFile": "<path>" }. Nothing was sent.`,
     );
   }
   if (!Array.isArray(parsed)) {
     throw new VerbUsageError(
-      `--from '${fullPath}' must hold a JSON ARRAY of { "thread", "body" | "bodyFile" } entries; it holds ${parsed === null ? "null" : typeof parsed}. Nothing was sent.`,
+      `--from '${shownPath}' must hold a JSON ARRAY of { "thread", "body" | "bodyFile" } entries; it holds ${parsed === null ? "null" : typeof parsed}. Nothing was sent.`,
     );
   }
   if (parsed.length === 0) {
-    throw new VerbUsageError(`--from '${fullPath}' is an empty array: there is nothing to settle, and an empty batch is never assumed to be what was meant.`);
+    throw new VerbUsageError(`--from '${shownPath}' is an empty array: there is nothing to settle, and an empty batch is never assumed to be what was meant.`);
   }
 
-  const baseDir = dirname(fullPath);
+  const realBase = realpathSync(dirname(fullPath));
   const problems: string[] = [];
   const entries: SettleEntry[] = [];
   const firstSeen = new Map<string, number>();
@@ -162,19 +245,21 @@ export function readSettleFile(fullPath: string): readonly SettleEntry[] {
     const record = raw as Record<string, unknown>;
     const unknownKeys = Object.keys(record).filter((key): boolean => !ENTRY_KEYS.has(key));
     if (unknownKeys.length > 0) {
-      problems.push(`${at}: unknown key(s) ${unknownKeys.map((key): string => `'${key}'`).join(", ")} -- an entry carries 'thread' and exactly one of 'body' or 'bodyFile'.`);
+      problems.push(`${at}: unknown key(s) ${unknownKeys.map((key): string => `'${plainLine(key)}'`).join(", ")} -- an entry carries 'thread' and exactly one of 'body' or 'bodyFile'.`);
     }
     const thread = record["thread"];
     let threadOk = false;
     if (typeof thread !== "string" || thread.trim() === "") {
       problems.push(`${at}: 'thread' must be a non-empty string -- the GraphQL node id 'nen pr threads list' prints, never a position.`);
+    } else if (CONTROL.test(thread)) {
+      problems.push(`${at}: 'thread' '${plainLine(thread)}' carries a control character; no GraphQL node id does.`);
     } else if (thread !== thread.trim()) {
-      problems.push(`${at}: 'thread' '${thread}' carries surrounding whitespace; an id is matched exactly and is never trimmed into another one.`);
+      problems.push(`${at}: 'thread' '${plainLine(thread)}' carries surrounding whitespace; an id is matched exactly and is never trimmed into another one.`);
     } else {
       threadOk = true;
       const earlier = firstSeen.get(thread);
       if (earlier !== undefined) {
-        problems.push(`${at}: thread '${thread}' is already named by entry ${earlier}. One thread, one reply -- a second would post twice under your identity.`);
+        problems.push(`${at}: thread '${plainLine(thread)}' is already named by entry ${earlier}. One thread, one reply -- a second would post twice under your identity.`);
       } else {
         firstSeen.set(thread, index);
       }
@@ -196,28 +281,31 @@ export function readSettleFile(fullPath: string): readonly SettleEntry[] {
       if (typeof value !== "string" || value.trim() === "") {
         problems.push(`${at}: 'bodyFile' must be a non-empty path string.`);
       } else {
-        const full = isAbsolute(value) ? value : resolvePath(baseDir, value);
-        bodyFrom = full;
-        try {
-          body = readFileSync(full, "utf8");
-        } catch (error) {
-          const code = (error as NodeJS.ErrnoException).code;
-          problems.push(`${at}: could not read bodyFile '${full}'${code === undefined ? "" : ` (${code})`}.`);
+        const read = readBodyFile(value, realBase);
+        if ("problem" in read) {
+          problems.push(`${at}: ${read.problem}`);
+        } else {
+          body = read.body;
+          bodyFrom = read.real;
         }
       }
     }
+    const where = bodyFrom === "inline" ? "" : ` in '${plainLine(relative(realBase, bodyFrom))}'`;
     if (body !== null && body.trim() === "") {
-      problems.push(`${at}: the body${bodyFrom === "inline" ? "" : ` in '${bodyFrom}'`} is empty (or holds only whitespace). An empty reply is never what a caller meant, and it is never assumed.`);
+      problems.push(`${at}: the body${where} is empty (or holds only whitespace). An empty reply is never what a caller meant, and it is never assumed.`);
+      body = null;
+    } else if (body !== null && body.length > MAX_BODY_CHARS) {
+      problems.push(`${at}: the body${where} is ${body.length} characters, over the ${MAX_BODY_CHARS}-character limit GitHub puts on a comment.`);
       body = null;
     }
     if (threadOk && body !== null) entries.push({ thread: thread as string, body, bodyFrom });
   });
   if (problems.length > 0) {
     throw new VerbUsageError(
-      `--from '${fullPath}' cannot be settled as written; nothing was sent. ${problems.length} problem(s):\n  ${problems.join("\n  ")}`,
+      `--from '${shownPath}' cannot be settled as written; nothing was sent. ${problems.length} problem(s):\n  ${problems.join("\n  ")}`,
     );
   }
-  return entries;
+  return { entries, baseDir: realBase };
 }
 
 /**
@@ -229,7 +317,7 @@ export function refuseUnknownThreads(listing: ThreadsListing, entries: readonly 
   const unknown = entries.filter((entry): boolean => !known.has(entry.thread)).map((entry): string => entry.thread);
   if (unknown.length > 0) {
     throw new VerbUsageError(
-      `${slug}#${prNumber} carries no review thread with id ${unknown.map((id): string => `'${id}'`).join(", ")}; nothing was sent. Each id is the GraphQL node id 'nen pr threads list' prints for THIS pull request, never a position or another pull request's id. This pull request has ${listing.threads.length} thread(s).`,
+      `${slug}#${prNumber} carries no review thread with id ${unknown.map((id): string => `'${plainLine(id)}'`).join(", ")}; nothing was sent. Each id is the GraphQL node id 'nen pr threads list' prints for THIS pull request, never a position or another pull request's id. This pull request has ${listing.threads.length} thread(s).`,
     );
   }
 }
@@ -343,8 +431,13 @@ function ids(outcomes: readonly SettleOutcome[], disposition: SettleDisposition)
  * line summarises the body (./threads.ts's `printableArgv`). Control
  * characters are stripped there as everywhere; `--json`'s `replyArgv` carries
  * the exact bytes.
+ *
+ * EVERY ENTRY LINE NAMES WHERE ITS BODY CAME FROM (Feitan F1): a `bodyFile`'s
+ * REAL path -- after symlinks -- relative to `baseDir`, the batch file's real
+ * directory, so a reader sees which file was posted, not only what it was
+ * called in the batch.
  */
-export function renderSettle(report: SettleReport): readonly string[] {
+export function renderSettle(report: SettleReport, baseDir: string): readonly string[] {
   const head = /^[0-9a-f]{40}$/i.test(report.head) ? report.head.slice(0, 8) : "unknown head";
   const settled = report.entries.filter((outcome): boolean => outcome.disposition === "resolved").length;
   const lines = [
@@ -353,7 +446,7 @@ export function renderSettle(report: SettleReport): readonly string[] {
       : `${plainLine(report.target)}#${report.pr} @ ${head}: settled ${settled} of ${report.entries.length} thread(s) from ${plainLine(report.from)}`,
   ];
   for (const outcome of report.entries) {
-    const id = plainLine(outcome.thread);
+    const id = `${plainLine(outcome.thread)}${outcome.bodyFrom === "inline" ? "" : `  [body: ${plainLine(relative(baseDir, outcome.bodyFrom))}]`}`;
     switch (outcome.disposition) {
       case "planned":
         lines.push(`  ${id}  would reply (${outcome.bodyBytes} byte(s)) and resolve`);

@@ -275,6 +275,32 @@ describe("nen pr open --assignee (zheref/nen#293)", () => {
     expect(result.err.join("\n")).toMatch(/does not show 'zheref' assigned/);
   });
 
+  it("a read-back that fails is exit 1, assigned null, and the assignment NOT confirmed (N1)", async () => {
+    const { root, bodyFile } = repo();
+    const result = await capture(root, ["--assignee", "zheref"], [
+      ON_WORK, TRACKED, LOCAL, REMOTE, USER("zheref"), ASSIGNABLE("zheref"), NONE_OPEN,
+      { match: `${createArgv(bodyFile)} --assignee zheref`, result: { stdout: "https://github.com/zheref/nen/pull/244\n" } },
+      { match: "gh pr view 244 --repo zheref/nen --json assignees", result: { code: 1, stderr: "HTTP 502: Bad gateway" } },
+    ], true);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ number: 244, assignees: ["zheref"], assigned: null });
+    expect(result.err.join("\n")).toMatch(/NOT confirmed/);
+  });
+
+  it("a create that exits 1 after printing a url, then an empty read-back, names both (N1)", async () => {
+    const { root, bodyFile } = repo();
+    const result = await capture(root, ["--assignee", "zheref"], [
+      ON_WORK, TRACKED, LOCAL, REMOTE, USER("zheref"), ASSIGNABLE("zheref"), NONE_OPEN,
+      { match: `${createArgv(bodyFile)} --assignee zheref`, result: { code: 1, stdout: "https://github.com/zheref/nen/pull/245\n", stderr: "could not assign user" } },
+      READ_BACK(245, []),
+    ]);
+    expect(result.code).toBe(1);
+    expect(result.out).toContain("opened zheref/nen#245: https://github.com/zheref/nen/pull/245");
+    const err = result.err.join("\n");
+    expect(err).toMatch(/the read-back does not show 'zheref' assigned/);
+    expect(err).toMatch(/'gh pr create' exited 1 after printing .*could not assign user.*the pull request exists/);
+  });
+
   it("a create that exits non-zero after printing a url is reported opened, at exit 1", async () => {
     const { root, bodyFile } = repo();
     const result = await capture(root, [], [...PUSHED, { match: createArgv(bodyFile), result: { code: 1, stdout: "https://github.com/zheref/nen/pull/243\n", stderr: "could not add label" } }]);
