@@ -10162,7 +10162,7 @@ looks for one. The target contributes the destination:
 `nen shu deploy --lane site --target production` then prints
 
 ```text
-target:        'production'  (appends: --env production)  requires env: YOUR_DEPLOY_TOKEN
+target:        production  (appends: --env production)  requires env: YOUR_DEPLOY_TOKEN
 would run:     your-deploy-tool publish --dir public --env production
 ```
 
