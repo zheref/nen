@@ -183,6 +183,13 @@ export interface PrStateSource {
   repoRunnersPage?(repo: PrRef, page: number): Promise<unknown>;
   orgRunnersPage?(org: string, page: number): Promise<unknown>;
   accountType?(login: string): Promise<string>;
+  /**
+   * The pull request's changed files, raw and paginated (REST
+   * `pulls/{n}/files`, which GitHub caps at 3000). Read by the same diagnosis
+   * only, to tell whether the PR edits `.github/workflows/**` and so set its own
+   * `runs-on` labels (zheref/nen#224, Feitan F2). OPTIONAL, failing closed.
+   */
+  pullRequestFiles?(repo: PrRef, prNumber: number): Promise<unknown[]>;
 }
 
 export interface FetchStateOptions {

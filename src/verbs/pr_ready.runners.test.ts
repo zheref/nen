@@ -22,11 +22,17 @@ const WINDOWS = ["self-hosted", "Windows", "X64"];
 const MACOS = ["self-hosted", "macOS", "ARM64"];
 const JOB_URL = "https://github.com/zheref/example/actions/runs/38164140114/job/114543053976";
 
+const NOW = "2026-10-11T12:00:00Z";
+
+let nextRunnerId = 1;
 function runner(name: string, status: "online" | "offline", labels: readonly string[]): unknown {
-  return { id: 1, name, status, busy: false, labels: labels.map((label) => ({ name: label })) };
+  return { id: nextRunnerId++, name, status, busy: false, labels: labels.map((label) => ({ name: label })) };
 }
 
-type RunnerReads = Pick<PrStateSource, "actionsJob" | "repoRunnersPage" | "orgRunnersPage" | "accountType">;
+type RunnerReads = Pick<
+  PrStateSource,
+  "actionsJob" | "repoRunnersPage" | "orgRunnersPage" | "accountType" | "pullRequestFiles"
+>;
 
 /** A PR whose only blocker is one check QUEUED behind a runner, plus whatever runner reads a case scripts. */
 function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CHECK): PrStateSource {
@@ -46,7 +52,9 @@ function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CH
     defaultBranch: "main",
     checkRollup: [
       { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
-      { name: checkName, status: "QUEUED", conclusion: null, startedAt: null, detailsUrl: JOB_URL },
+      // N1: GitHub stamps a real `startedAt` on a check run still QUEUED with
+      // no runner -- the shape NN-PR-#217's job 105994605680 had.
+      { name: checkName, status: "QUEUED", conclusion: null, startedAt: "2026-10-11T11:00:01Z", detailsUrl: JOB_URL },
     ],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
@@ -67,6 +75,7 @@ function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CH
   const repoRunnersPage = record("repoRunnersPage", reads.repoRunnersPage);
   const orgRunnersPage = record("orgRunnersPage", reads.orgRunnersPage);
   const accountType = record("accountType", reads.accountType);
+  const pullRequestFiles = record("pullRequestFiles", reads.pullRequestFiles);
   return {
     pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => snapshot,
     reviews: async (): Promise<unknown[]> => [
@@ -86,12 +95,15 @@ function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CH
     ...(repoRunnersPage === undefined ? {} : { repoRunnersPage }),
     ...(orgRunnersPage === undefined ? {} : { orgRunnersPage }),
     ...(accountType === undefined ? {} : { accountType }),
+    ...(pullRequestFiles === undefined ? {} : { pullRequestFiles }),
   };
 }
 
-function deps(src: PrStateSource): PrReadyDeps {
+function deps(src: PrStateSource, env: Record<string, string> = {}): PrReadyDeps {
   return {
-    now: (): string => "2025-01-01T00:00:00Z",
+    now: (): string => NOW,
+    // Never the suite's own environment: under CI GITHUB_ACTIONS is "true".
+    env: (): Record<string, string> => env,
     executable: (): string => "/opt/nen/nen-linux-x64",
     openSource: (): { ok: true; source: PrStateSource } => ({ ok: true, source: src }),
     localCheckout: (): null => null,
@@ -107,11 +119,15 @@ function input(booleans: readonly string[]): PrReadyInput {
   };
 }
 
-async function run(src: PrStateSource, booleans: readonly string[]): Promise<{ code: number; out: string[]; err: string[] }> {
+async function run(
+  src: PrStateSource,
+  booleans: readonly string[],
+  env: Record<string, string> = {},
+): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
-  const code = await prReady(input(booleans), io, deps(src));
+  const code = await prReady(input(booleans), io, deps(src, env));
   return { code, out, err };
 }
 
@@ -120,7 +136,15 @@ async function json(src: PrStateSource): Promise<{ code: number; report: ReadyRe
   return { code, report: JSON.parse(out.join("\n")) as ReadyReport };
 }
 
-const queuedJob = (labels: readonly string[]) => async (): Promise<unknown> => ({ id: 1, status: "queued", labels });
+const queuedJob = (labels: readonly string[]) => async (): Promise<unknown> => ({
+  id: 114543053976,
+  status: "queued",
+  labels,
+  head_sha: "cafebabe",
+  check_run_url: "https://api.github.com/repos/zheref/example/check-runs/114543053976",
+  created_at: "2026-10-11T11:00:00Z",
+});
+const noWorkflowChange = async (): Promise<unknown[]> => [{ filename: "src/index.ts" }];
 const pool = (runners: readonly unknown[]) => async (): Promise<unknown> => ({ total_count: runners.length, runners });
 const user = async (): Promise<string> => "User";
 const http = (status: number, accepted?: string): Error =>
@@ -140,12 +164,18 @@ const SCENARIOS: Readonly<Record<string, { reads: RunnerReads; determination: st
       actionsJob: queuedJob(WINDOWS),
       repoRunnersPage: pool([runner("NZ-NNR1", "offline", WINDOWS), runner("RJ2-NNR1", "online", MACOS)]),
       accountType: user,
+      pullRequestFiles: noWorkflowChange,
     },
     determination: "offline-only",
     stall: true,
   },
   "no runner carrying the labels": {
-    reads: { actionsJob: queuedJob(WINDOWS), repoRunnersPage: pool([runner("RJ2-NNR1", "online", MACOS)]), accountType: user },
+    reads: {
+      actionsJob: queuedJob(WINDOWS),
+      repoRunnersPage: pool([runner("RJ2-NNR1", "online", MACOS)]),
+      accountType: user,
+      pullRequestFiles: noWorkflowChange,
+    },
     determination: "no-runner",
     stall: true,
   },
@@ -234,10 +264,32 @@ describe("pr ready -- runner availability for a queued required check (zheref/ne
     const { code, out } = await run(source(SCENARIOS["unreadable runners (403)"]?.reads ?? {}), ["explain"]);
     expect(code).toBe(1);
     const text = out.join("\n");
-    expect(text).toContain("could not determine whether an online runner can start it: the token may not list zheref/example's self-hosted runners (HTTP 403): it lacks administration=read");
+    expect(text).toContain(
+      "runner diagnosis unavailable without administration=read (HTTP 403 trying to list zheref/example's self-hosted runners); the gate does not need it",
+    );
     expect(text).toContain("      missing permission: administration=read");
     const { report } = await json(source(SCENARIOS["unreadable runners (403)"]?.reads ?? {}));
     expect(report.meta.runnerAvailability?.[0]?.missingPermission).toBe("administration=read");
+  });
+
+  it("F5: under GITHUB_ACTIONS=true the grant hint is omitted, and the exit is the same", async () => {
+    const { code, out } = await run(source(SCENARIOS["unreadable runners (403)"]?.reads ?? {}), ["explain"], {
+      GITHUB_ACTIONS: "true",
+    });
+    expect(code).toBe(1);
+    const text = out.join("\n");
+    expect(text).toContain("runner diagnosis unavailable (HTTP 403 trying to list zheref/example's self-hosted runners); the gate does not need it");
+    expect(text).not.toContain("missing permission:");
+    expect(text).not.toContain("administration=read");
+  });
+
+  it("N4: the JSON carries the queue age the stall floor is judged on", async () => {
+    const { report } = await json(source(SCENARIOS["offline-only match"]?.reads ?? {}));
+    expect(report.meta.runnerAvailability?.[0]).toMatchObject({
+      queuedSince: "2026-10-11T11:00:00Z",
+      queuedMinutes: 60,
+      labelsFromPrHead: false,
+    });
   });
 
   it("every --explain line passes through plainLine: a hostile check name cannot rewrite the terminal", async () => {

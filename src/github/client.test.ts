@@ -36,6 +36,7 @@ import {
   REVIEW_THREADS_QUERY,
 } from "./graphql.js";
 import { PROGRAM, VERSION } from "../version.js";
+import { diagnoseWaitingChecks } from "../pr/runner_stall.js";
 
 // ── ONE FAKE CLOCK, SET IN THE PAST, FOR EVERY TEST IN THIS FILE ────────────
 //
@@ -419,6 +420,81 @@ describe("GitHubClient's runner-availability reads (zheref/nen#224)", () => {
       status: 403,
       response: { headers: { "x-accepted-github-permissions": "administration=read" } },
     });
+  });
+});
+
+describe("GitHubClient.pullRequestFiles -- the PR's changed files, paginated (zheref/nen#224, Feitan F2)", () => {
+  it("GETs pulls/{n}/files at per_page=100 and follows Link: rel=\"next\"", async () => {
+    const { fetch: stub, calls } = recordingFetch((_call, index) =>
+      index === 0
+        ? {
+            body: [{ filename: "a.ts" }],
+            link: '<https://api.github.com/repositories/1/pulls/9/files?per_page=100&page=2>; rel="next"',
+          }
+        : { body: [{ filename: ".github/workflows/ci.yml" }] },
+    );
+    expect(await drive(clientWith(stub).pullRequestFiles(REPO, 9))).toEqual([
+      { filename: "a.ts" },
+      { filename: ".github/workflows/ci.yml" },
+    ]);
+    expect(calls[0]?.url).toContain("/repos/zheref/nen/pulls/9/files");
+    expect(calls[0]?.url).toMatch(/per_page=100/);
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe("diagnoseWaitingChecks over a REAL GitHubClient (zheref/nen#224 round 1, N2)", () => {
+  // The diagnosis must CALL the client's methods on the client: a detached
+  // `const read = client.orgRunnersPage; read(...)` loses `this` and throws
+  // inside octokit, which the diagnosis would report as "could not list" --
+  // so every scripted-source test passed while the real client never worked.
+  it("reads the job, the repository's runners, the account and the organization's runners through octokit", async () => {
+    const { fetch: stub, calls } = recordingFetch((call) => {
+      if (call.url.includes("/actions/jobs/7")) {
+        return {
+          body: {
+            id: 7,
+            status: "queued",
+            labels: ["self-hosted", "Windows", "X64"],
+            head_sha: "cafebabe",
+            check_run_url: "https://api.github.com/repos/acme/app/check-runs/7",
+            created_at: "2026-10-11T11:00:00Z",
+          },
+        };
+      }
+      if (call.url.includes("/repos/acme/app/actions/runners")) return { body: { total_count: 0, runners: [] } };
+      if (call.url.includes("/users/acme")) return { body: { login: "acme", type: "Organization" } };
+      if (call.url.includes("/orgs/acme/actions/runners")) {
+        return {
+          body: {
+            total_count: 1,
+            runners: [{ id: 3, name: "ORG-WIN", status: "online", busy: false, labels: [{ name: "self-hosted" }, { name: "Windows" }, { name: "X64" }] }],
+          },
+        };
+      }
+      return { status: 404, body: { message: "Not Found" } };
+    });
+    const [diagnosis] = await drive(
+      diagnoseWaitingChecks(
+        clientWith(stub),
+        { owner: "acme", repo: "app" },
+        [
+          {
+            kind: "check_run",
+            name: "check (Windows)",
+            status: "QUEUED",
+            conclusion: null,
+            startedAt: "2026-10-11T11:00:01Z",
+            completedAt: null,
+            detailsUrl: "https://github.com/acme/app/actions/runs/1/job/7",
+          },
+        ],
+        { prNumber: 9, headSha: "cafebabe", now: "2026-10-11T12:00:00Z", inActions: false },
+      ),
+    );
+    expect(diagnosis).toMatchObject({ determination: "online", organizationRunners: { online: 1, offline: 0 } });
+    expect(calls.map((call) => call.method)).toEqual(["GET", "GET", "GET", "GET"]);
+    expect(calls.some((call) => call.url.includes("/orgs/acme/actions/runners"))).toBe(true);
   });
 });
 

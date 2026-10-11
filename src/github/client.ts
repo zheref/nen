@@ -393,6 +393,20 @@ export class GitHubClient {
     return type;
   }
 
+  // The pull request's CHANGED FILES, paginated, raw (`pulls/{n}/files`;
+  // GitHub serves at most 3000). Read by `nen pr ready`'s runner diagnosis
+  // only, to tell whether the PR edits its own workflows (zheref/nen#224,
+  // Feitan F2); the cap and what an unreadable list means are the caller's.
+  // Needs `pull_requests:read`.
+  async pullRequestFiles(repo: RepoRef, prNumber: number): Promise<unknown[]> {
+    return await this.octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/files", {
+      owner: repo.owner,
+      repo: repo.repo,
+      pull_number: prNumber,
+      per_page: 100,
+    });
+  }
+
   // The login of the identity this token authenticates as (`GET /user`) --
   // the identity RUNNING the gate, which `pr ready`'s own-request reading
   // compares a pending request's requester against (zheref/nen#240). An App

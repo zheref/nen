@@ -322,16 +322,22 @@ export function pendingCheckLabels(entries: readonly RollupEntry[]): string[] {
 
 /**
  * The latest entries still WAITING FOR A RUNNER (zheref/nen#224), in
- * latestChecks() order: a check run with no verdict and no start time -- the
- * same `notYetStarted` reading latestChecks() orders by -- and a commit status
- * still PENDING/EXPECTED (or carrying no state), which no runner list can
- * explain and the diagnosis says so. A run already started is excluded: a
- * runner has it, so whether one is online is not the question. Diagnosis input
- * only; nothing here touches a verdict.
+ * latestChecks() order: a check run with no conclusion whose lifecycle STATUS
+ * is QUEUED, WAITING, PENDING or REQUESTED -- and a commit status still
+ * PENDING/EXPECTED (or carrying no state), which no runner list can explain and
+ * the diagnosis says so. Selected on STATUS, never on `startedAt`: GitHub sets
+ * a real `startedAt` on a check run that is still queued with no runner
+ * (round 1, N1 -- seen live on NN-PR-#217's job 105994605680), so a
+ * start-time reading never fires. A run IN_PROGRESS has a runner and is
+ * excluded. Diagnosis input only; nothing here touches a verdict.
  */
+const WAITING_RUN_STATUSES: ReadonlySet<string> = new Set(["QUEUED", "WAITING", "PENDING", "REQUESTED"]);
+
 export function waitingCheckEntries(entries: readonly RollupEntry[]): RollupEntry[] {
   return latestChecks(entries).filter((entry): boolean =>
-    entry.kind === "check_run" ? notYetStarted(entry) : !checkSettled(entry),
+    entry.kind === "check_run"
+      ? entry.conclusion === null && entry.status !== null && WAITING_RUN_STATUSES.has(entry.status)
+      : !checkSettled(entry),
   );
 }
 

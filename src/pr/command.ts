@@ -166,12 +166,13 @@ ready:
                               counted, never a conjunct (zheref/nen#240). And
                               for each check still QUEUED at the judged head,
                               whether an ONLINE runner carries its runs-on
-                              labels -- online, offline-only or no-runner (an
-                              infrastructure stall), github-hosted, started, or
+                              labels -- online, offline-only, no-runner,
+                              github-hosted, started, environment-wait, or
                               undetermined with why and any missing permission
-                              (--json: meta.runnerAvailability). Diagnosis
-                              only: the verdict and exit are unchanged
-                              (zheref/nen#224).
+                              -- and its queue age; a stall is called only
+                              after 10 minutes queued (--json:
+                              meta.runnerAvailability). Diagnosis only: the
+                              verdict and exit are unchanged (zheref/nen#224).
   --reviewers <a,b,c>         The configured reviewer set (mirrors the shell
                               gate's flag). Also the identity source of last
                               resort -- see --gates. On that path each name is

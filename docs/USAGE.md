@@ -1277,29 +1277,52 @@ What `nen pr ready` does with what it read:
   a file stating neither key gets a byte-identical report.
 - `meta.runnerAvailability` (additive, [#224](https://github.com/zheref/nen/issues/224))
   is present only under `--json` or `--explain`, and only when CON-32(a) still
-  weighs a check that has **not started** (after every exclusion): one entry per
-  such check, `{ check, jobId, labels, determination, infrastructureStall,
-  runners, missingPermission, detail }`. `determination` is `online` (an online
-  runner carries every `runs-on` label: slow, not stalled), `offline-only` or
-  `no-runner` (an **infrastructure stall**: `infrastructureStall: true`, waiting
-  will not start it), `github-hosted` (a standard hosted image label: always
-  available), `started` (a runner picked the job up after the rollup was read),
-  or `undetermined` (`infrastructureStall: null`, `detail` says why). Labels come
-  from the Actions jobs API (`actions:read`); runners from
-  `repos/<slug>/actions/runners`, every page, plus `orgs/<owner>/actions/runners`
-  when the owner is an organization and no repository runner is online for the
-  labels. Listing runners needs **administration:read** on the repository
-  (classic token: `repo`, held by an admin) and **organization self-hosted
-  runners:read** for the organization's (classic: `admin:org`): a 403 — or the
-  404 GitHub hides those endpoints behind — is `undetermined` with
-  `missingPermission` naming the grant, GitHub's own
-  `X-Accepted-GitHub-Permissions` value when it sends one. A short page, the
-  ten-page cap, or a malformed runner is an incomplete list and is
-  `undetermined`: no stall is ever claimed from a partial pool. Enterprise
-  runners and GitHub-hosted larger runners are listed by neither endpoint, and a
-  `no-runner` detail says so. At most 20 jobs are read per evaluation. The
-  verdict, every row and the exit code are **unchanged**: a stalled check is
-  still not-ready, and excluding it stays the caller's `--exclude-check`.
+  weighs a check run whose status is `QUEUED`, `WAITING`, `PENDING` or
+  `REQUESTED` with no conclusion (selected on status, never on `startedAt`,
+  which GitHub sets on a queued run), or a pending commit status, after every
+  exclusion: one entry per such check, `{ check, jobId, labels, queuedSince,
+  queuedMinutes, determination, infrastructureStall, runners,
+  organizationRunners, labelsFromPrHead, missingPermission, detail }`.
+  - `determination` is `online` (an online runner carries every `runs-on`
+    label: slow, not stalled), `offline-only` or `no-runner`, `github-hosted`
+    (a standard hosted image label — ubuntu `latest|22.04|24.04` with `-arm` on
+    the dated ones, windows `latest|2022|2025|11-arm`, macos `latest|13+` with
+    `-large|-xlarge` — that no listed runner carries), `started` (picked up, or
+    completed without a runner, after the rollup was read), `environment-wait`
+    (held by an environment protection rule), or `undetermined` (`detail` says
+    why).
+  - `infrastructureStall: true` only for `offline-only`/`no-runner`, and only
+    once the job has been queued at least **10 minutes**
+    (`STALL_FLOOR_MINUTES`): younger, it is `false` with *too young to call a
+    stall (an autoscaled or ephemeral pool may still register a runner)*; an
+    unreadable `created_at` is `null`. It is also not called when the pull
+    request changes `.github/workflows/**` — its author set those labels — which
+    is `undetermined` with `labelsFromPrHead: true`; the changed files are read
+    paginated and fail closed at GitHub's 3000-file cap.
+  - The job read back must be this check's at the judged head (`head_sha`,
+    `check_run_url`), or the entry is `undetermined`.
+  - Repository runners are named in `runners` (only the online ones on
+    `online`); organization runners are only **counted**, in
+    `organizationRunners: { online, offline }`, never named.
+  - Labels come from the Actions jobs API (`actions:read`; a 404 there is *job
+    not found*); runners from `repos/<slug>/actions/runners`, every page, plus
+    `orgs/<owner>/actions/runners` when the owner is an organization and no
+    repository runner is online. Listing runners needs **administration:read**
+    on the repository (classic: `repo`, held by an admin) and **organization
+    self-hosted runners:read** for the organization's (classic: `admin:org`): a
+    403 — or the 404 GitHub hides those two endpoints behind — reads *runner
+    diagnosis unavailable without <grant>; the gate does not need it*, naming
+    GitHub's own `X-Accepted-GitHub-Permissions` or `X-Accepted-OAuth-Scopes`
+    value when it is well-formed, the documented grant otherwise. Under
+    `GITHUB_ACTIONS=true` the grant is omitted and `missingPermission` is
+    `null`.
+  - The runner list is complete only when its distinct runner ids equal a
+    `total_count` that did not move between pages; a short page, the ten-page
+    cap, or a malformed runner is `undetermined`, never a smaller pool.
+    Enterprise runners and GitHub-hosted larger runners are listed by neither
+    endpoint, and a `no-runner` detail says so. At most 20 jobs are read.
+  - The verdict, every row and the exit code are **unchanged**: a stalled check
+    is still not-ready, and excluding it stays the caller's `--exclude-check`.
 - A rollup that held **only** excluded checks is still
   `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
   names from both sources listed once. An exclusion never turns an empty or

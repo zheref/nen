@@ -231,6 +231,12 @@ export interface PrReadyDeps {
    * produces a WARNING -- never a verdict, never an exit code.
    */
   readonly localCheckout: (repoRoot: string) => LocalCheckout | null;
+  /**
+   * The environment, read for `GITHUB_ACTIONS` alone: inside Actions the
+   * runner diagnosis names no grant (zheref/nen#224, Feitan F5). OPTIONAL so
+   * every in-process caller keeps compiling; absent, `process.env` is read.
+   */
+  readonly env?: () => Readonly<Record<string, string | undefined>>;
 }
 
 /** The local branch tip the head-mismatch warning compares against. */
@@ -1652,7 +1658,12 @@ export async function readReady(
   const waiting = evaluation.context.waitingChecks ?? [];
   const runnerAvailability =
     options.diagnoseRunners === true && waiting.length > 0
-      ? await diagnoseWaitingChecks(opened.source, ref, waiting)
+      ? await diagnoseWaitingChecks(opened.source, ref, waiting, {
+          prNumber: ref.number,
+          headSha: evaluation.context.headSha,
+          now: deps.now(),
+          inActions: (deps.env ?? ((): NodeJS.ProcessEnv => process.env))()["GITHUB_ACTIONS"] === "true",
+        })
       : undefined;
   if (runnerAvailability !== undefined) {
     report = { ...report, meta: { ...report.meta, runnerAvailability } };
