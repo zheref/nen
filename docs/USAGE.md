@@ -12991,14 +12991,23 @@ nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
 **Arguments**
 
 - `--surface` -- one of the three rows above; anything else exits 2.
-- `--plugin <name>` -- the plugin's manifest name (no `@`, `/` or `\`, not `.`
-  or `..`, no control character).
+- `--plugin <name>` -- the plugin's manifest name, by an **allowlist**:
+  letters, digits, `.`, `_` and `-`, starting with a letter, digit or `_`, not
+  ending in `.`, and not a Windows reserved device name (`CON`, `PRN`, `AUX`,
+  `NUL`, `COM1`-`COM9`, `LPT1`-`LPT9`, any case). So no `@`, `/`, `\`, `:`,
+  space or control character reaches a path or an argument. The same rule
+  holds for `surface status` and `mirror check --plugin`.
 - `--root <checkout>` -- **required**: a directory whose regular
   `.claude-plugin/plugin.json` names `--plugin`, the toplevel of its own git
   checkout (`git rev-parse --show-toplevel`, run with `GIT_DIR`,
   `GIT_WORK_TREE` and `GIT_INDEX_FILE` removed), and **never** under a
   `plugins/cache/` path -- that is a copy an install made, which the next
-  update replaces out from under a link.
+  update replaces out from under a link. It is also refused **inside any
+  surface's own directory** -- this run's `--config-dir` and each surface's
+  default, compared as real paths (a link into one is still inside) -- and
+  when it **equals** an `installLocation` recorded in Claude Code's
+  `known_marketplaces.json`: those are copies a surface manages, never a
+  checkout the caller controls.
 - `--config-dir <dir>` -- the surface's own directory: `claude-code`
   `$CLAUDE_CONFIG_DIR`, else `~/.claude`; `codex` `$CODEX_HOME`, else
   `~/.codex`; `antigravity` `$GEMINI_CONFIG_DIR`, else `~/.gemini`. `$HOME` is
@@ -13006,7 +13015,8 @@ nen surface install --surface <claude-code|codex|antigravity> --plugin <name>
   variable named the directory, the CLI is run with it (`CLAUDE_CONFIG_DIR` /
   `CODEX_HOME`), so what it writes is what the verb reads back; the default is
   the CLI's own and is **never** passed, and a suggested command names the
-  directory exactly when the CLI was run with it.
+  directory exactly when the CLI was run with it. A value carrying a control
+  character is refused (exit 2).
 - `--surface-dir <dir>` -- `antigravity` only, and **required** there: the
   checkout-relative directory holding the generated plugin. A plain relative
   path (no `..`, `.`, `:` or absolute path), a real directory with every
@@ -13023,26 +13033,46 @@ replaced, never data.** A destination is written only when it is absent or a
 link to some root of the **same** plugin (for Antigravity, to that root's
 `--surface-dir`), whoever made it. It is inspected **again right before the
 write**: unless it is still absent, or still the very link entry (same `lstat`
-device and inode) with the same target, the write is refused at exit 3. A
-re-point is a fresh link, `.<name>.nen-relink`, renamed over the old one, so the
-destination is never absent in between and the old link is never followed; on
-Windows, where a rename will not replace a junction, the old junction is removed
-with `rmdir` (never recursive) first, and put back if the rename then fails --
-a failed re-point never leaves the destination absent, and never leaves its
-temporary behind. A stale `.<name>.nen-relink` is removed
-only when it is itself a link to a root of the plugin. A real directory, a
+device and inode) with the same target, the write is refused at exit 3 --
+and so is a destination that appears between that check and the write
+(`EEXIST`). A re-point is a fresh link renamed over the old one, so the
+destination is never absent in between and the old link is never followed. The
+fresh link is `.<name>.nen-relink-<pid>-<random>`, created by the symlink call
+itself: a name already taken (`EEXIST`) means another name, so there is never a
+leftover to judge, and nothing already beside the destination is touched. The
+destination is `lstat`ed **once more immediately before the rename**; a
+same-user race in the microseconds after that last check is **not defended**.
+On Windows, where a rename will not replace a junction, the old junction is
+removed with `rmdir` (never recursive) first; if the rename then fails, the
+verb **tries to put the previous link back** -- with the target text it
+carried, read back afterwards -- and if that also fails, the report says the
+destination is absent. A failed re-point removes its temporary. A real directory, a
 file, a dangling link or a link anywhere else is refused, named and left exactly
 as it was -- and so is a `<name>@<other>` install from a marketplace the
 checkout does not publish (Claude Code or Codex), and a Codex marketplace of the
-same name registered at another root. The checkout's marketplace name must be
-letters, digits, `.`, `_` and `-`, not starting with `-` (exit 2 otherwise).
+same name registered at another root. The checkout's marketplace name follows
+the `--plugin` rule (bar the reserved names) -- not all dots, not starting with
+`.` or `-`, not ending in `.` -- exit 2 otherwise.
+
+**A known marketplace is removed only when it is ours, and only when nothing
+else needs it.** `claude plugin marketplace remove` uninstalls every plugin
+installed from that marketplace, so the hand-over runs it only when **all
+three** hold: `<name>@<marketplace>` is recorded as installed; the known
+entry's recorded source **is this checkout** -- a `directory` source whose real
+path is `--root`, or a `git`/`github` source equal to the checkout's `origin`
+remote, both normalised to `host/owner/repo`; and no other `*@<marketplace>`
+key is in `installed_plugins.json`. A known marketplace of the same name whose
+source is anything else is **refused** (exit 3: installing beside it is not
+safe either). One that other plugins depend on is left known, and its removal is
+an **action owed** (exit 4) naming them.
 
 **Never edits a settings file.** A declaration in Claude Code's
 `settings.json` that would bring a marketplace copy back on the next reload --
 `enabledPlugins["<name>@<marketplace>"]: true`, `enabledPlugins["<name>@skills-dir"]:
 false`, `extraKnownMarketplaces.<marketplace>` -- is reported as an **action
 owed**, with the command that clears it, and the verb neither writes the file
-nor runs that command. For `extraKnownMarketplaces` that command is a
+nor runs that command. An `enabledPlugins` key that carries a control
+character is flagged with **no** command suggested. For `extraKnownMarketplaces` that command is a
 **second** `claude plugin marketplace remove`: the hand-over runs the first,
 once, for the known entry only. Under `--dry-run` the actions are the declarations
 standing now; after a real run, the ones still standing once the hand-over

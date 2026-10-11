@@ -14,6 +14,7 @@ import {
   STATUS_EXIT,
   claudeSelector,
   configDirIsExplicit,
+  forbiddenRoots,
   status,
   surfaceConfigDir,
   validateRoot,
@@ -64,17 +65,26 @@ install of a plugin from the checkout --root names, on one surface:
                are read back.
 A LINK TO ANY ROOT OF THE SAME PLUGIN COUNTS AS OURS; ONLY A LINK IS EVER
 REPLACED, NEVER DATA: a destination is written only when absent or such a link
-(re-inspected right before the write); a real directory, a file, a dangling
-link or a link elsewhere is refused (exit 3) and left as it was -- as is an
-installed copy from another marketplace (Claude Code or Codex), or a Codex
-marketplace of the same name at another root. NEVER EDITS A SETTINGS FILE: a settings.json declaration
+(re-inspected right before the write, and lstat'ed once more right before a
+re-point's rename -- a same-user race in the microseconds after that last
+check is NOT defended); a real directory, a file, a dangling link or a link
+elsewhere is refused (exit 3) and left as it was -- as is an installed copy
+from another marketplace (Claude Code or Codex), a Codex marketplace of the
+same name at another root, and a known Claude Code marketplace of the same name
+whose recorded source is not this checkout. A known marketplace is removed only
+when it is this checkout's, this plugin is installed from it, and nothing else
+is; when other plugins are, removing it is an action owed, naming them. A
+failed re-point on Windows tries to put the previous link back; if that also
+fails, the report says the destination is absent. NEVER EDITS A SETTINGS FILE: a settings.json declaration
 that would bring a marketplace copy back on the next reload is reported as an
 action owed, with the command that clears it (exit 4). Every precondition is
 read before anything is written; every write is previewed by --dry-run and
 read back after it is made.
   --root <checkout>   REQUIRED for install: a directory whose regular
                       .claude-plugin/plugin.json names --plugin, the toplevel
-                      of its own git checkout, never under plugins/cache/.
+                      of its own git checkout, never under plugins/cache/,
+                      never inside any surface's own directory (real paths),
+                      and never a marketplace's installLocation.
   --config-dir <dir>  the surface's own directory: claude-code
                       \$CLAUDE_CONFIG_DIR else ~/.claude; codex \$CODEX_HOME
                       else ~/.codex; antigravity \$GEMINI_CONFIG_DIR else
@@ -110,6 +120,8 @@ function value(context: CommandContext, flag: string): string | null {
   const raw = context.args.values[flag];
   if (raw === undefined) return null;
   if (raw.trim() === "") throw new VerbUsageError(`--${flag} was given an empty value. Omit it entirely, or give one.`);
+  // F6: a directory this verb links into, or hands a CLI, carries no control character.
+  if (flag === "config-dir" && /[\x00-\x1f\x7f-\x9f]/.test(raw)) throw new VerbUsageError(`--config-dir carries a control character.`);
   return raw;
 }
 
@@ -153,10 +165,10 @@ export function runInstall(context: CommandContext): number {
   if (surface !== "antigravity" && surfaceDirFlag !== null) {
     throw new VerbUsageError(`--surface-dir is read only with --surface antigravity; ${surface} links the checkout root itself.`);
   }
-  const root = validateRoot(rootFlag, plugin, context.seams);
-  const surfaceDir = surfaceDirFlag === null ? null : validateSurfaceDir(root, surfaceDirFlag, plugin);
   const configFlag = value(context, "config-dir");
   const configDir = surfaceConfigDir(surface, configFlag, context.seams.env);
+  const root = validateRoot(rootFlag, plugin, context.seams, forbiddenRoots(surface, configDir, context.seams.env));
+  const surfaceDir = surfaceDirFlag === null ? null : validateSurfaceDir(root, surfaceDirFlag, plugin);
   const configExplicit = configDirIsExplicit(surface, configFlag, context.seams.env);
   const report = install({ surface, plugin, root, configDir, configExplicit, surfaceDir, dryRun: context.args.booleans.has("dry-run"), seams: context.seams });
   const exit = INSTALL_EXIT[report.verdict];

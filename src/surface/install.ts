@@ -11,7 +11,9 @@
 //                `<plugin>@<marketplace>` takes precedence over it, so a prior
 //                one from the checkout's OWN marketplace is handed over:
 //                `claude plugin uninstall`, then ONE `claude plugin marketplace
-//                remove` for the known entry. That remove does not clear a
+//                remove` for the known entry -- only when its recorded source
+//                is this checkout, this plugin was installed from it, and no
+//                other plugin is (removing it uninstalls them all). That remove does not clear a
 //                settings.json declaration of the same marketplace; the SECOND
 //                remove that would is never run here -- it is an action owed
 //                (below). `claude plugin list --json` is the read-back.
@@ -55,8 +57,9 @@
 // was killed by a signal is reported as that, with its last line; nothing is
 // swallowed into "not found".
 
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { outputLines, type Seams } from "../seam/exec.js";
@@ -193,7 +196,7 @@ export interface InstallReport {
 
 const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
 /** A marketplace name this verb will hand a CLI: no shell or flag meaning possible. */
-const MARKETPLACE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._-]*$/;
+const MARKETPLACE_NAME = /^(?!\.+$)[A-Za-z0-9_][A-Za-z0-9._-]*(?<!\.)$/;
 const CONTROL_ALL = /[\x00-\x1f\x7f-\x9f]/g;
 
 /** The last non-empty line of a tool's output, credentials redacted, control characters removed, capped at 200. */
@@ -304,7 +307,7 @@ export function readMarketplace(root: string, plugin: string): MarketplaceRead {
   if (typeof name !== "string" || !MARKETPLACE_NAME.test(name)) {
     return {
       state: "bad",
-      reason: `${safe(path)} carries no usable 'name' (only letters, digits, '.', '_' and '-', not starting with '-': it is passed to the surface's CLI as an argument)`,
+      reason: `${safe(path)} carries no usable 'name' (only letters, digits, '.', '_' and '-', starting with a letter, digit or '_' and not ending in '.': it is passed to the surface's CLI as an argument)`,
     };
   }
   const plugins = read.value["plugins"];
@@ -557,7 +560,7 @@ const GIT_PROBE_ENV: Readonly<Record<string, undefined>> = { GIT_DIR: undefined,
  * made, which the next update replaces), and the toplevel of its own git
  * checkout. Returns the real path. Every refusal is exit 2.
  */
-export function validateRoot(rootFlag: string, plugin: string, seams: Seams): string {
+export function validateRoot(rootFlag: string, plugin: string, seams: Seams, forbidden: ForbiddenRoots = { insideOf: [], equalTo: [] }): string {
   if (CONTROL.test(rootFlag)) throw new VerbUsageError("--root carries a control character.");
   const id = identityOf(rootFlag);
   let isDir = false;
@@ -571,6 +574,23 @@ export function validateRoot(rootFlag: string, plugin: string, seams: Seams): st
   if (manifest.state === "unreadable") throw new VerbUsageError(`--root '${safe(rootFlag)}' could not be inspected: ${manifest.reason}.`);
   if (manifest.state === "none") {
     throw new VerbUsageError(`--root '${safe(rootFlag)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`);
+  }
+  // F2 (Feitan): a checkout inside a surface's OWN directory is something an
+  // install made there -- a cached copy, a cloned marketplace -- never one the
+  // caller controls. Real-path containment, never a pattern.
+  for (const dir of forbidden.insideOf) {
+    const realDir = realOrNull(dir);
+    if (realDir !== null && contains(realDir, id.real)) {
+      throw new VerbUsageError(
+        `--root '${safe(id.real)}' lies inside ${safe(realDir)}, an agent surface's own directory: what is there an install made, and the next update replaces it. A first-party install points at a checkout the caller controls.`,
+      );
+    }
+  }
+  for (const location of forbidden.equalTo) {
+    const realLocation = realOrNull(location);
+    if (realLocation !== null && realLocation === id.real) {
+      throw new VerbUsageError(`--root '${safe(id.real)}' is the installLocation of a marketplace Claude Code cloned (known_marketplaces.json): a copy it manages, never a checkout the caller controls.`);
+    }
   }
   if (/(^|\/)plugins\/cache\//.test(id.real.split(sep).join("/"))) {
     throw new VerbUsageError(
@@ -588,6 +608,45 @@ export function validateRoot(rootFlag: string, plugin: string, seams: Seams): st
     throw new VerbUsageError(`--root '${safe(id.real)}' is not the toplevel of its git checkout (the toplevel is ${safe(topPath)}): point --root at the checkout root.`);
   }
   return id.real;
+}
+
+/** Directories a --root may not lie inside, and paths it may not equal (F2). */
+export interface ForbiddenRoots {
+  readonly insideOf: readonly string[];
+  readonly equalTo: readonly string[];
+}
+
+function realOrNull(path: string): string | null {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return null;
+  }
+}
+
+/** `child` is `parent` or below it, both real paths. */
+function contains(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || !(rel === ".." || rel.startsWith(`..${sep}`) || rel.startsWith("../") || isAbsolute(rel));
+}
+
+/**
+ * Every surface's own directory (the one this run names, and each surface's
+ * default from the environment), and every `installLocation` Claude Code's
+ * known_marketplaces.json records: the places a --root may not be (F2).
+ */
+export function forbiddenRoots(surface: InstallSurface, configDir: string, env: Readonly<Record<string, string | undefined>>): ForbiddenRoots {
+  const dirs = new Set<string>([configDir, ...INSTALL_SURFACES.map((each): string => surfaceConfigDir(each, null, env))]);
+  const claudeDir = surface === "claude-code" ? configDir : surfaceConfigDir("claude-code", null, env);
+  const known = readJsonObject(join(claudeDir, "plugins", "known_marketplaces.json"));
+  const locations: string[] = [];
+  if (known.state === "read") {
+    for (const entry of Object.values(known.value)) {
+      const location = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["installLocation"] : undefined;
+      if (typeof location === "string" && location !== "") locations.push(location);
+    }
+  }
+  return { insideOf: [...dirs], equalTo: locations };
 }
 
 /** `--surface-dir`: one plain relative path inside the checkout, a real directory there with a plugin.json naming the plugin. */
@@ -738,47 +797,52 @@ function createLink(dest: string, target: string, platform: NodeJS.Platform, ops
   }
 }
 
+/** How many fresh temporary names are tried before a re-point gives up. */
+const TEMPORARY_ATTEMPTS = 8;
+
 /**
- * Re-point the link at `dest`: a fresh link beside it (`.<name>.nen-relink`),
- * renamed over it, so the destination is never absent and the old link is
- * replaced as an entry, never followed. A stale temporary is removed only when
- * it is a link to a root of the same plugin (`owner`) -- never anything else.
+ * Re-point the link at `dest`: a fresh link beside it, renamed over it, so the
+ * destination is never absent and the old link is replaced as an entry, never
+ * followed. The temporary is `.<name>.nen-relink-<pid>-<random>`, created by
+ * the symlink call itself -- EEXIST means another name, so there is never a
+ * leftover to judge or remove (F5). The destination is lstat'ed once more
+ * immediately before the rename; a same-user race in the microseconds after
+ * that is NOT defended, and the help says so.
  */
-function repointLink(dest: string, target: string, previous: string, platform: NodeJS.Platform, ops: LinkOps, owner: Owner): void {
-  const temporary = join(dirname(dest), `.${basename(dest)}.nen-relink`);
-  let stale;
-  try {
-    stale = lstatSync(temporary);
-  } catch (error) {
-    if (classifyError(error) !== "absent") throw new Stop("failed", `could not inspect ${safe(temporary)} (${code(error)})`);
-  }
-  if (stale !== undefined) {
-    let ours = false;
-    if (stale.isSymbolicLink()) {
-      try {
-        ours = owner(realpathSync.native(temporary)) !== null;
-      } catch {
-        ours = false;
-      }
-    }
-    if (!ours) throw new Stop("refused", `${safe(temporary)} exists and is not a link to a root of this plugin; it is never removed`);
+function repointLink(dest: string, target: string, seen: Extract<LinkState, { kind: "link" }>, platform: NodeJS.Platform, ops: LinkOps): void {
+  let temporary: string | null = null;
+  for (let attempt = 0; attempt < TEMPORARY_ATTEMPTS && temporary === null; attempt += 1) {
+    const candidate = join(dirname(dest), `.${basename(dest)}.nen-relink-${process.pid}-${randomBytes(6).toString("hex")}`);
     try {
-      removeLink(temporary, platform, ops);
+      ops.symlink(target, candidate, linkType(platform));
+      temporary = candidate;
     } catch (error) {
-      throw new Stop("failed", `could not remove the stale ${safe(temporary)} (${code(error)})`);
+      if (code(error) !== "EEXIST") throw new Stop("failed", `could not create the link ${safe(candidate)} (${code(error)})`);
     }
   }
-  createLink(temporary, target, platform, ops);
+  if (temporary === null) throw new Stop("failed", `could not find a free temporary name beside ${safe(dest)} in ${TEMPORARY_ATTEMPTS} attempts`);
+  const made = temporary;
   /** The temporary is ours: removed on every failure, so none is left behind. */
   const dropTemporary = (): void => {
     try {
-      removeLink(temporary, platform, ops);
+      removeLink(made, platform, ops);
     } catch {
-      /* already gone, or not removable: the next run's stale check names it */
+      /* already gone, or not removable: named by nothing, harmless */
     }
   };
+  // Once more, immediately before the rename: still the very entry planned against.
+  let last;
   try {
-    ops.rename(temporary, dest);
+    last = lstatSync(dest);
+  } catch {
+    last = undefined;
+  }
+  if (last === undefined || !last.isSymbolicLink() || last.dev !== seen.dev || last.ino !== seen.ino) {
+    dropTemporary();
+    throw new Stop("refused", `${safe(dest)} changed immediately before the rename: refusing to replace it`);
+  }
+  try {
+    ops.rename(made, dest);
   } catch (error) {
     if (platform !== "win32") {
       dropTemporary();
@@ -793,21 +857,23 @@ function repointLink(dest: string, target: string, previous: string, platform: N
       throw new Stop("failed", `could not re-point ${safe(dest)} (${code(second)}); the previous link is left in place`);
     }
     try {
-      ops.rename(temporary, dest);
+      ops.rename(made, dest);
     } catch (third) {
-      // The old junction is gone and the new one did not land: put the
-      // previous link back, so a failed re-point never leaves the
-      // destination absent.
+      // The old junction is gone and the new one did not land: TRY to put the
+      // previous link back, with the target text it carried (N3), and read
+      // that back before saying it was restored.
       dropTemporary();
-      let restored = true;
+      const previous = seen.raw !== "" ? seen.raw : (seen.real ?? "");
+      let restored = false;
       try {
         ops.symlink(previous, dest, linkType(platform));
+        restored = lstatSync(dest).isSymbolicLink() && readlinkSync(dest) === previous;
       } catch {
         restored = false;
       }
       throw new Stop(
         "failed",
-        `could not re-point ${safe(dest)} (${code(third)}); ${restored ? `the previous link to ${safe(previous)} was restored` : `the previous link to ${safe(previous)} could NOT be restored -- ${safe(dest)} is absent`}`,
+        `could not re-point ${safe(dest)} (${code(third)}); ${restored ? `the previous link to ${safe(previous)} was put back` : `putting the previous link to ${safe(previous)} back also failed -- ${safe(dest)} is absent`}`,
       );
     }
   }
@@ -889,7 +955,11 @@ function applyLink(dest: string, target: string, plan: LinkPlan, draft: Draft, i
   }
   try {
     if (plan.kind === "link") createLink(dest, target, platform, ops);
-    else repointLink(dest, target, plan.previous ?? target, platform, ops, owner);
+    else {
+      // A re-point is only ever planned from a link of ours (planLink).
+      if (plan.seen.kind !== "link") throw new Error("internal: a re-point planned from something other than a link");
+      repointLink(dest, target, plan.seen, platform, ops);
+    }
     readBackLink(dest, target);
   } catch (error) {
     settle(link, false);
@@ -1051,6 +1121,8 @@ export function install(inputs: InstallInputs): InstallReport {
 /** What Claude Code's own files say about the plugin: read in full, refused (exit 2) when a file cannot be trusted. */
 interface ClaudeState {
   readonly recordKeys: readonly string[];
+  /** EVERY install key the record holds, any plugin: who else depends on a marketplace (F1). */
+  readonly allRecordKeys: readonly string[];
   readonly enabled: Readonly<Record<string, unknown>>;
   readonly extraMarketplaces: Readonly<Record<string, unknown>>;
   readonly known: Readonly<Record<string, unknown>>;
@@ -1071,6 +1143,7 @@ function readClaudeState(configDir: string, plugin: string): ClaudeState {
   if (known.state === "bad") throw new VerbUsageError(`${known.reason}: which marketplaces are known cannot be verified, so nothing is changed.`);
   return {
     recordKeys,
+    allRecordKeys: record.state === "read" ? Object.keys(record.plugins) : [],
     enabled: objectField(settingsValue, "enabledPlugins", safe(settingsPath)),
     extraMarketplaces: objectField(settingsValue, "extraKnownMarketplaces", safe(settingsPath)),
     known: known.state === "read" ? known.value : {},
@@ -1091,6 +1164,17 @@ function claudeActions(state: ClaudeState, inputs: InstallInputs, marketplace: s
   const skills = skillsDirKey(inputs.plugin);
   for (const [key, value] of Object.entries(state.enabled)) {
     if (!key.startsWith(`${inputs.plugin}@`) || key === skills || value !== true) continue;
+    if (CONTROL.test(key)) {
+      // F6: never a command built from a key carrying a control character.
+      actions.push({
+        key,
+        action: {
+          what: `${settings} enables '${safe(key)}' in enabledPlugins, a key carrying a control character: flagged, and no command is suggested for it -- clear it by hand`,
+          command: null,
+        },
+      });
+      continue;
+    }
     actions.push({
       key,
       action: {
@@ -1138,6 +1222,57 @@ function reread(configDir: string, plugin: string): ClaudeState {
   }
 }
 
+/** A known marketplace's recorded source, as Claude Code writes it in known_marketplaces.json. */
+type KnownSource =
+  | { readonly kind: "directory"; readonly path: string }
+  | { readonly kind: "git"; readonly url: string }
+  | { readonly kind: "unknown"; readonly shape: string };
+
+function knownSource(entry: unknown): KnownSource {
+  const source = typeof entry === "object" && entry !== null ? (entry as Record<string, unknown>)["source"] : undefined;
+  if (typeof source !== "object" || source === null) return { kind: "unknown", shape: "no recorded source" };
+  const fields = source as Record<string, unknown>;
+  const kind = fields["source"];
+  if (kind === "directory" && typeof fields["path"] === "string") return { kind: "directory", path: fields["path"] };
+  if ((kind === "git" || kind === "url") && typeof fields["url"] === "string") return { kind: "git", url: fields["url"] };
+  if (kind === "github" && typeof fields["repo"] === "string") return { kind: "git", url: `https://github.com/${fields["repo"]}` };
+  return { kind: "unknown", shape: `a '${safe(String(kind))}' source` };
+}
+
+function describeSource(source: KnownSource): string {
+  if (source.kind === "directory") return `the directory ${safe(source.path)}`;
+  if (source.kind === "git") return `the git source ${safe(source.url)}`;
+  return source.shape;
+}
+
+/**
+ * A git remote as `host/owner/repo`, lower-cased: scheme, user info, port, a
+ * trailing `.git` and `/` dropped; `git@host:owner/repo` read as scp syntax.
+ */
+export function normalizeRemote(url: string): string {
+  let text = url.trim();
+  const scp = /^[^@/\s]+@([^:/\s]+):(.+)$/.exec(text);
+  if (scp !== null && !text.includes("://")) text = `${scp[1] as string}/${scp[2] as string}`;
+  else text = text.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").replace(/^[^@/]*@/, "");
+  text = text.replace(/^([^/:]+):\d+\//, "$1/");
+  return text.replace(/\/+$/, "").replace(/\.git$/i, "").replace(/\/+$/, "").toLowerCase();
+}
+
+/** True when a known marketplace's source IS this checkout: its directory, or its remote. */
+function sourceIsCheckout(source: KnownSource, root: string, seams: Seams): boolean {
+  if (source.kind === "directory") {
+    const real = realOrNull(source.path);
+    return real !== null && real === root;
+  }
+  if (source.kind === "git") {
+    const remote = seams.run("git", ["remote", "get-url", "origin"], { cwd: root, env: GIT_PROBE_ENV });
+    if (remote.spawnFailed || remote.code !== 0) return false;
+    const url = remote.stdout.split("\n")[0]?.trim() ?? "";
+    return url !== "" && normalizeRemote(url) === normalizeRemote(source.url);
+  }
+  return false;
+}
+
 function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
   const { plugin, root, configDir } = inputs;
   const dest = draft.destination as string;
@@ -1158,8 +1293,35 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
     );
   }
   const installed = ours !== null && state.recordKeys.includes(ours);
+  // F1 (Feitan): a known marketplace of the same NAME is removed only when it
+  // is this checkout's (by its recorded source), this plugin is installed from
+  // it, and no other plugin is -- removing a marketplace uninstalls everything
+  // installed from it.
   const known = marketplace !== null && own(state.known, marketplace);
-  const pending = claudeActions(state, inputs, marketplace);
+  let removeMarketplace = false;
+  const handover: PendingAction[] = [];
+  if (known && marketplace !== null) {
+    const source = knownSource(state.known[marketplace]);
+    if (!sourceIsCheckout(source, root, inputs.seams)) {
+      throw new Stop(
+        "refused",
+        `the known Claude Code marketplace '${marketplace}' comes from ${describeSource(source)}, not this checkout: a marketplace of the same name that is not ours is never removed, and installing beside it is refused`,
+      );
+    }
+    const dependents = state.allRecordKeys.filter((key): boolean => key.endsWith(`@${marketplace}`) && key !== ours);
+    if (dependents.length > 0) {
+      handover.push({
+        key: null,
+        action: {
+          what: `the '${marketplace}' marketplace is also the source of ${dependents.join(", ")}: removing it would uninstall ${dependents.length === 1 ? "that plugin" : "those plugins"}, so it is left known`,
+          command: suggest(inputs.surface, configDir, inputs.configExplicit, ["claude", "plugin", "marketplace", "remove", marketplace]),
+        },
+      });
+    } else if (installed) {
+      removeMarketplace = true;
+    }
+  }
+  const pending = [...handover, ...claudeActions(state, inputs, marketplace)];
   // PLAN, THEN PROBE. Planning only reads, so a destination that is not ours
   // is refused (exit 3) before a missing CLI is (exit 5); the re-check right
   // before the write (applyLink) covers whatever the probe's moment allowed.
@@ -1169,11 +1331,11 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
   // handover it cannot perform must not leave a link behind for the
   // marketplace copy to keep shadowing.
   const probe = callTool(inputs.seams, "claude", ["--version"], env);
-  const owed = installed || known || pending.length > 0;
+  const owed = installed || removeMarketplace || pending.length > 0;
   if (probe.spawnFailed && owed) {
     throw new Stop(
       "tool missing",
-      `claude could not be started, and a handover is owed (${[installed ? `${ours} is installed` : "", known ? `the ${marketplace} marketplace is known` : "", pending.length > 0 ? "settings.json declares it" : ""].filter((part): boolean => part !== "").join(", ")}); nothing was changed`,
+      `claude could not be started, and a handover is owed (${[installed ? `${ours} is installed` : "", removeMarketplace ? `the ${marketplace} marketplace is known` : "", pending.length > 0 ? "a change is owed" : ""].filter((part): boolean => part !== "").join(", ")}); nothing was changed`,
     );
   }
   if (!probe.spawnFailed && !probe.ok) throw new Stop("failed", `claude --version failed: ${probe.last}`);
@@ -1193,7 +1355,7 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
   // ONE remove, for the KNOWN entry: that is the hand-over. A settings.json
   // declaration of the same marketplace survives it, and the second remove
   // that would clear it is an action owed by the caller (claudeActions).
-  if (known && marketplace !== null) {
+  if (removeMarketplace && marketplace !== null) {
     step(draft, inputs, ["plugin", "marketplace", "remove", marketplace]);
     if (!inputs.dryRun && own(reread(configDir, plugin).known, marketplace)) {
       throw new Stop("failed", `known_marketplaces.json still records ${marketplace} after claude plugin marketplace remove`);
@@ -1205,7 +1367,7 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
     return;
   }
   // What the handover left standing in settings.json is owed by the caller.
-  owe(draft, claudeActions(reread(configDir, plugin), inputs, marketplace));
+  owe(draft, [...handover, ...claudeActions(reread(configDir, plugin), inputs, marketplace)]);
   const listed = read(inputs, ["plugin", "list", "--json"]);
   const entries = parseClaudeList(listed.stdout);
   if (typeof entries === "string") throw new Stop("failed", `claude plugin list --json could not be read: ${entries}`);

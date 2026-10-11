@@ -87,10 +87,23 @@ export function readJudgeContext(context: CommandContext, plugin: string, source
   };
 }
 
-/** `--plugin`, refused unless it is a plain plugin name: no '@', '/' or '\', not '.' or '..', no control character. */
+/** A plugin name: letters, digits, '.', '_' and '-'; not all dots, not starting with '.' or '-', not ending in '.' (F3/F4). */
+const PLUGIN_NAME = /^(?!\.+$)[A-Za-z0-9_][A-Za-z0-9._-]*(?<!\.)$/;
+
+/** A name Windows reserves for a device, in any case: never a directory a link can be named. */
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/**
+ * `--plugin`, refused unless it is a plain plugin name -- an ALLOWLIST (F4):
+ * letters, digits, '.', '_' and '-', not starting with '.' or '-', not ending
+ * in '.', and not a Windows reserved device name. So no '@', '/', '\', ':',
+ * space or control character can reach a path or an argument.
+ */
 export function validatePluginName(plugin: string): string {
-  if (/[\x00-\x1f\x7f-\x9f]/.test(plugin) || /[@/\\]/.test(plugin) || plugin === "." || plugin === "..") {
-    throw new VerbUsageError(`--plugin '${safe(plugin)}' is not a plugin name (no '@', '/' or '\\', not '.' or '..', no control character).`);
+  if (!PLUGIN_NAME.test(plugin) || WINDOWS_RESERVED.test(plugin)) {
+    throw new VerbUsageError(
+      `--plugin '${safe(plugin)}' is not a plugin name (letters, digits, '.', '_' and '-' only, starting with a letter, digit or '_', not ending in '.', and not a Windows reserved name such as CON or LPT1).`,
+    );
   }
   return plugin;
 }

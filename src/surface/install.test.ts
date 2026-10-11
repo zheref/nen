@@ -12,7 +12,7 @@
 // on the scripted call. The plugin is a made-up name: names are data.
 
 import { describe, expect, it } from "vitest";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Io } from "../index.js";
@@ -20,6 +20,7 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { CommandResult } from "../seam/exec.js";
 import { statusTreesExit } from "./install-command.js";
 import {
+  normalizeRemote,
   commandText,
   install,
   shellQuote,
@@ -42,6 +43,11 @@ const MARKET = "zephyr-market";
 const SKILLS_ID = `${PLUGIN}@skills-dir`;
 const MARKET_ID = `${PLUGIN}@${MARKET}`;
 const POSIX = process.platform !== "win32";
+
+/** The re-point temporaries (`.<plugin>.nen-relink-<pid>-<random>`) left in `dir`: there should never be any. */
+function temporaries(dir: string): string[] {
+  return readdirSync(dir).filter((name): boolean => name.startsWith(`.${PLUGIN}.nen-relink-`));
+}
 
 /** Remove a directory link on the REAL host: a junction goes by rmdir, a symlink by unlink. */
 function hostRemoveLink(path: string): void {
@@ -368,7 +374,7 @@ describe("surface install --surface claude-code", () => {
     expect(moved.code).toBe(0);
     expect(moved.doc()).toMatchObject({ link: "re-pointed", previous: v.other });
     expect(realpathSync.native(destV)).toBe(v.root);
-    expect(existsSync(`${destV}.nen-relink`)).toBe(false);
+    expect(temporaries(join(v.cfg, "skills"))).toEqual([]);
   });
 
   it("never replaces what it did not make: a real directory, a file, a foreign or dangling link (exit 3, untouched)", async () => {
@@ -433,8 +439,15 @@ describe("surface install --surface claude-code", () => {
     expect(String(stuck.doc()["reason"])).toMatch(/still recorded in installed_plugins.json/);
 
     const v = world();
-    writeJson(join(v.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: {} });
-    const kept = await capture([...installArgs(v, "claude-code"), "--json"], seams(v, [git(v.root), ok("claude --version"), ok(`claude plugin marketplace remove ${MARKET}`)]));
+    const recordV = join(v.cfg, "plugins", "installed_plugins.json");
+    writeJson(recordV, { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }] } });
+    writeJson(join(v.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: { source: { source: "directory", path: v.root } } });
+    const kept = await capture(
+      [...installArgs(v, "claude-code"), "--json"],
+      seams(v, [git(v.root), ok("claude --version"), ok(`claude plugin uninstall ${MARKET_ID}`), ok(`claude plugin marketplace remove ${MARKET}`)], {
+        [`claude plugin uninstall ${MARKET_ID}`]: (): void => writeJson(recordV, { version: 2, plugins: {} }),
+      }),
+    );
     expect(kept.code).toBe(1);
     expect(String(kept.doc()["reason"])).toMatch(/still records zephyr-market/);
 
@@ -500,7 +513,7 @@ describe("surface install --surface claude-code", () => {
     writeJson(join(w.cfg, "settings.json"), { enabledPlugins: { [MARKET_ID]: true } });
     const result = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, [git(w.root), { match: "claude --version", result: { spawnFailed: true, code: -1, stderr: "spawn claude ENOENT" } }]));
     expect(result.code).toBe(5);
-    expect(String(result.doc()["reason"])).toMatch(/claude could not be started, and a handover is owed .*settings.json declares it/);
+    expect(String(result.doc()["reason"])).toMatch(/claude could not be started, and a handover is owed .*a change is owed/);
     expect(existsSync(join(w.cfg, "skills"))).toBe(false);
   });
 
@@ -1130,7 +1143,7 @@ describe("surface install: Nobunaga round 1", () => {
     expect(report.reason).toMatch(/could not re-point .*EXDEV.*left in place/);
     expect(report.steps.map((step) => step.outcome)).toEqual(["failed"]);
     expect(realpathSync.native(dest)).toBe(w.other);
-    expect(existsSync(join(w.cfg, "skills", `.${PLUGIN}.nen-relink`))).toBe(false);
+    expect(temporaries(join(w.cfg, "skills"))).toEqual([]);
   });
 
   it("N13: on Windows a rename that fails after the old junction is removed restores the previous link", () => {
@@ -1153,11 +1166,12 @@ describe("surface install: Nobunaga round 1", () => {
       },
     });
     expect(report.verdict).toBe("failed");
-    expect(report.reason).toMatch(/the previous link to .* was restored/);
+    expect(report.reason).toMatch(/the previous link to .* was put back/);
     // the old junction went, then the temporary was dropped -- both as links
-    expect(removed).toEqual([dest, join(w.cfg, "skills", `.${PLUGIN}.nen-relink`)]);
+    expect(removed[0]).toBe(dest);
+    expect(removed[1]).toMatch(/[\\/]\.zephyr\.nen-relink-\d+-[0-9a-f]{12}$/);
     expect(realpathSync.native(dest)).toBe(w.other);
-    expect(existsSync(join(w.cfg, "skills", `.${PLUGIN}.nen-relink`))).toBe(false);
+    expect(temporaries(join(w.cfg, "skills"))).toEqual([]);
   });
 
   it("N16: a write whose read-back resolves elsewhere is failed (1), not refused", () => {
@@ -1169,35 +1183,18 @@ describe("surface install: Nobunaga round 1", () => {
     expect(report.reason).toMatch(/does not resolve to/);
   });
 
-  it("N17: a stale dot-named temporary is removed only when it is a link to a root of the plugin", () => {
+  it("N17/F5: the temporary is a fresh pid-and-random name; nothing already beside the destination is touched", () => {
     const w = world();
     const dest = join(w.cfg, "skills", PLUGIN);
-    const temporary = join(w.cfg, "skills", `.${PLUGIN}.nen-relink`);
+    const oldStyle = join(w.cfg, "skills", `.${PLUGIN}.nen-relink`);
     mkdirSync(join(w.cfg, "skills"));
     link(w.other, dest);
-    link(w.other, temporary);
+    writeFileSync(oldStyle, "not ours");
     const report = direct(w, seams(w, [ok("claude --version"), claudeList([servedLink(w)])]), undefined);
     expect(report.verdict).toBe("ok");
-    expect(existsSync(temporary)).toBe(false);
+    expect(readFileSync(oldStyle, "utf8")).toBe("not ours");
     expect(realpathSync.native(dest)).toBe(w.root);
-
-    const v = world();
-    const destV = join(v.cfg, "skills", PLUGIN);
-    const tempV = join(v.cfg, "skills", `.${PLUGIN}.nen-relink`);
-    mkdirSync(join(v.cfg, "skills"));
-    link(v.other, destV);
-    writeFileSync(tempV, "not ours");
-    const kept = direct(v, seams(v, [ok("claude --version")]), undefined);
-    expect(kept.verdict).toBe("refused");
-    expect(readFileSync(tempV, "utf8")).toBe("not ours");
-    const x = world();
-    const destX = join(x.cfg, "skills", PLUGIN);
-    const tempX = join(x.cfg, "skills", `.${PLUGIN}.nen-relink`);
-    mkdirSync(join(x.cfg, "skills"));
-    link(x.other, destX);
-    link(x.work, tempX);
-    expect(direct(x, seams(x, [ok("claude --version")]), undefined).verdict).toBe("refused");
-    expect(lstatSync(tempX).isSymbolicLink()).toBe(true);
+    expect(temporaries(join(w.cfg, "skills"))).toEqual([]);
   });
 });
 
@@ -1240,5 +1237,216 @@ describe("surface install: Nobunaga round 2", () => {
       ["mkdir", "ok"],
       ["link", "failed"],
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Feitan's security review on NN-PR-#392, and Nobunaga's extra round.
+// ---------------------------------------------------------------------------
+
+/** Rename the checkout's marketplace. */
+function marketplaceNamed(root: string, name: string): void {
+  writeFileSync(join(root, ".claude-plugin", "marketplace.json"), JSON.stringify({ name, plugins: [{ name: PLUGIN }] }));
+}
+
+describe("surface install: Feitan (security) and Nobunaga's extra round", () => {
+  it("F1: a known marketplace of the same name from ANOTHER source is never removed -- refused (exit 3)", async () => {
+    const w = world();
+    marketplaceNamed(w.root, "shared-market");
+    writeJson(join(w.cfg, "plugins", "installed_plugins.json"), { version: 2, plugins: { "unrelated@shared-market": [{ installPath: "/u" }] } });
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { "shared-market": { source: { source: "github", repo: "someone-else/other-repo" } } });
+    const s = seams(w, [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n")]);
+    const result = await capture([...installArgs(w, "claude-code"), "--dry-run", "--json"], s);
+    expect(result.code).toBe(3);
+    expect(String(result.doc()["reason"])).toMatch(/'shared-market' comes from the git source https:\/\/github.com\/someone-else\/other-repo, not this checkout/);
+    expect(commandsOf(s)).not.toContain("claude plugin marketplace remove shared-market");
+    // A directory source elsewhere, or none recorded, is not ours either.
+    for (const known of [{ source: { source: "directory", path: w.other } }, {}]) {
+      const v = world();
+      writeJson(join(v.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: known });
+      expect((await capture([...installArgs(v, "claude-code"), "--dry-run"], seams(v, [git(v.root)]))).code).toBe(3);
+    }
+  });
+
+  it("F1: a marketplace other plugins depend on is left known -- owed (exit 4), naming them, never removed", async () => {
+    const w = world();
+    const record = join(w.cfg, "plugins", "installed_plugins.json");
+    writeJson(record, { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }], [`other@${MARKET}`]: [{ installPath: "/o" }] } });
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: { source: { source: "git", url: "https://GitHub.com/Me/Zephyr.git/" } } });
+    const s = seams(
+      w,
+      [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n"), ok("claude --version"), ok(`claude plugin uninstall ${MARKET_ID}`), claudeList([servedLink(w)])],
+      { [`claude plugin uninstall ${MARKET_ID}`]: (): void => writeJson(record, { version: 2, plugins: { [`other@${MARKET}`]: [{ installPath: "/o" }] } }) },
+    );
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], s);
+    expect(result.code).toBe(4);
+    expect(commandsOf(s)).not.toContain(`claude plugin marketplace remove ${MARKET}`);
+    const actions = result.doc()["actions"] as Array<{ what: string; command: string }>;
+    expect(actions[0]?.what).toMatch(/also the source of other@zephyr-market/);
+    expect(actions[0]?.command).toBe(`CLAUDE_CONFIG_DIR=${shellQuote(w.cfg)} claude plugin marketplace remove ${MARKET}`);
+  });
+
+  it("F1: ours, installed, and nothing else on it -- the one remove runs; ours but not installed -- none", async () => {
+    const w = world();
+    const record = join(w.cfg, "plugins", "installed_plugins.json");
+    const known = join(w.cfg, "plugins", "known_marketplaces.json");
+    writeJson(record, { version: 2, plugins: { [MARKET_ID]: [{ installPath: "/x" }] } });
+    writeJson(known, { [MARKET]: { source: { source: "directory", path: w.root } } });
+    expect((await capture([...installArgs(w, "claude-code"), "--dry-run"], seams(w, [git(w.root), ok("claude --version")]))).out.join("\n")).toMatch(
+      /would run: claude plugin marketplace remove zephyr-market/,
+    );
+    const v = world();
+    writeJson(join(v.cfg, "plugins", "known_marketplaces.json"), { [MARKET]: { source: { source: "directory", path: v.root } } });
+    const none = await capture([...installArgs(v, "claude-code"), "--dry-run"], seams(v, [git(v.root), ok("claude --version")]));
+    expect(none.code).toBe(0);
+    expect(none.out.join("\n")).not.toMatch(/marketplace remove/);
+  });
+
+  it("F1: normalises a remote to host/owner/repo", () => {
+    for (const url of ["git@github.com:Me/Zephyr.git", "https://github.com/me/zephyr", "https://user:tok@github.com/me/zephyr.git/", "ssh://git@github.com:22/me/zephyr.git", "git+https://github.com/me/zephyr"]) {
+      expect(normalizeRemote(url), url).toBe("github.com/me/zephyr");
+    }
+    expect(normalizeRemote("https://github.com/me/other")).not.toBe(normalizeRemote("https://github.com/me/zephyr"));
+  });
+
+  it("F2: refuses a root inside a surface's own directory, by real path, or equal to a marketplace's installLocation (exit 2)", async () => {
+    const w = world();
+    const inCfg = checkout(join(w.cfg, "plugins", "marketplaces", "m"));
+    const first = await capture(["surface", "install", "--surface", "claude-code", "--plugin", PLUGIN, "--root", inCfg, "--config-dir", w.cfg], seams(w, [git(inCfg)]));
+    expect(first.code).toBe(2);
+    expect(first.err.join("\n")).toMatch(/an agent surface's own directory/);
+    // Another surface's default directory counts too.
+    const inCodex = checkout(join(w.home, ".codex", "plugins", "x"));
+    expect((await capture(["surface", "install", "--surface", "claude-code", "--plugin", PLUGIN, "--root", inCodex, "--config-dir", w.cfg], seams(w, [git(inCodex)]))).code).toBe(2);
+    // Reached through a link, it is still inside (real-path containment, not a pattern).
+    const alias = join(w.work, "alias");
+    link(inCfg, alias);
+    const viaLink = await capture(["surface", "install", "--surface", "claude-code", "--plugin", PLUGIN, "--root", alias, "--config-dir", w.cfg], seams(w, [git(inCfg)]));
+    expect(viaLink.code).toBe(2);
+    expect(viaLink.err.join("\n")).toMatch(/an agent surface's own directory/);
+    const v = world();
+    writeJson(join(v.cfg, "plugins", "known_marketplaces.json"), { m: { source: { source: "git", url: "x" }, installLocation: v.root } });
+    const located = await capture([...installArgs(v, "claude-code")], seams(v, [git(v.root)]));
+    expect(located.code).toBe(2);
+    expect(located.err.join("\n")).toMatch(/installLocation/);
+  });
+
+  it("F3: a marketplace name that is all dots or ends in '.' is refused (exit 2); 'a.b' is fine", async () => {
+    for (const name of [".", "..", "a.", "...", ".hidden"]) {
+      const w = world();
+      marketplaceNamed(w.root, name);
+      expect((await capture(installArgs(w, "codex"), seams(w, [git(w.root)]))).code, name).toBe(2);
+    }
+    const w = world();
+    marketplaceNamed(w.root, "a.b_c-1");
+    expect((await capture([...installArgs(w, "codex"), "--dry-run"], seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", HEADER)]))).code).toBe(0);
+  });
+
+  it("F4: --plugin is an allowlist, refusing Windows reserved names, ':' and a trailing space (exit 2)", async () => {
+    const w = world();
+    for (const name of ["CON", "lpt1", "Com9", "nul", "a:b", "a ", ".x", "x.", "a b", "a@b"]) {
+      const result = await capture(["surface", "install", "--surface", "codex", "--plugin", name, "--root", w.root, "--config-dir", w.cfg], seams(w, []));
+      expect(result.code, name).toBe(2);
+      expect(result.err.join("\n"), name).toMatch(/is not a plugin name/);
+    }
+    for (const name of ["con1", "my-plugin.v2", "_x"]) {
+      const result = await capture(["surface", "status", "--surface", "antigravity", "--plugin", name, "--config-dir", w.cfg], seams(w, []));
+      expect(result.code, name).toBe(3);
+    }
+  });
+
+  it("F5: a taken temporary name (EEXIST) is retried with a fresh one", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    const tried: string[] = [];
+    const report = direct(w, seams(w, [ok("claude --version"), claudeList([servedLink(w)])]), {
+      linkOps: {
+        symlink: (target, path): void => {
+          tried.push(path);
+          if (tried.length === 1) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+          link(target, path);
+        },
+      },
+    });
+    expect(report.verdict).toBe("ok");
+    expect(tried).toHaveLength(2);
+    expect(tried[0]).not.toBe(tried[1]);
+    for (const path of tried) expect(path).toMatch(new RegExp(`[\\\\/]\\.zephyr\\.nen-relink-${process.pid}-[0-9a-f]{12}$`));
+    expect(temporaries(join(w.cfg, "skills"))).toEqual([]);
+  });
+
+  it("F5: the destination is lstat'ed again right before the rename -- swapped then, it is refused and survives", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    link(w.other, dest);
+    const report = direct(w, seams(w, [ok("claude --version")]), {
+      linkOps: {
+        symlink: (target, path): void => {
+          link(target, path);
+          hostRemoveLink(dest);
+          writeFileSync(dest, "swapped in");
+        },
+        unlink: hostRemoveLink,
+        rmdir: hostRemoveLink,
+      },
+    });
+    expect(report.verdict).toBe("refused");
+    expect(report.reason).toMatch(/changed immediately before the rename/);
+    expect(readFileSync(dest, "utf8")).toBe("swapped in");
+    expect(temporaries(join(w.cfg, "skills"))).toEqual([]);
+  });
+
+  it("F6: --config-dir with a control character is refused; an enabledPlugins key with one is flagged, never a command", async () => {
+    const w = world();
+    for (const verb of [installArgs(w, "codex"), statusArgs(w, "codex")]) {
+      const argv = verb.map((arg): string => (arg === w.cfg ? `${w.cfg}\u001b[2J` : arg));
+      const result = await capture(argv, seams(w, []));
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toMatch(/--config-dir carries a control character/);
+    }
+    const v = world();
+    writeJson(join(v.cfg, "settings.json"), { enabledPlugins: { [`${PLUGIN}@x\u001b[2J`]: true } });
+    const result = await capture([...installArgs(v, "claude-code"), "--json"], seams(v, [git(v.root), ok("claude --version"), claudeList([servedLink(v)])]));
+    expect(result.code).toBe(4);
+    const actions = result.doc()["actions"] as Array<{ what: string; command: string | null }>;
+    expect(actions[0]?.command).toBeNull();
+    expect(actions[0]?.what).toMatch(/a key carrying a control character: flagged, and no command is suggested/);
+    expect(actions[0]?.what).not.toContain("\u001b");
+  });
+
+  it.skipIf(!POSIX)("N3: the previous link is put back with the target TEXT it carried, and read back before saying so", () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(join(w.cfg, "skills"));
+    const raw = join("..", "..", "other");
+    symlinkSync(raw, dest);
+    const failingRename = (): void => {
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    };
+    const s = (): ScriptedSeams => new ScriptedSeams([ok("claude --version")], { env: { HOME: w.home }, platform: "win32" });
+    const restored = direct(w, s(), { linkOps: { rmdir: hostRemoveLink, unlink: hostRemoveLink, rename: failingRename } });
+    expect(restored.verdict).toBe("failed");
+    expect(restored.reason).toMatch(/was put back/);
+    expect(readlinkSync(dest)).toBe(raw);
+
+    // A restore that "succeeds" but leaves nothing there is not claimed.
+    let calls = 0;
+    const lost = direct(w, s(), {
+      linkOps: {
+        rmdir: hostRemoveLink,
+        unlink: hostRemoveLink,
+        rename: failingRename,
+        symlink: (target, path): void => {
+          calls += 1;
+          if (calls === 1) symlinkSync(target, path);
+        },
+      },
+    });
+    expect(lost.verdict).toBe("failed");
+    expect(lost.reason).toMatch(/putting the previous link to .* back also failed -- .* is absent/);
+    expect(existsSync(dest)).toBe(false);
   });
 });
