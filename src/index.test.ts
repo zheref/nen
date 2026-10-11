@@ -609,6 +609,12 @@ describe("runFamily maps a family whose run() REJECTS through the same exit-code
     expect(result.err.join("\n")).toBe("nen explode: the thing you asked for did not work");
   });
 
+  it("strips control characters from every line of a thrown message, keeping its line breaks (Feitan F3)", async () => {
+    const result = await drive(new Error("gh said \u001b[2Kerased\nsecond\u001b[1A line\u202e"));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toBe("nen explode: gh said [2Kerased\nsecond[1A line");
+  });
+
   it("a family that RESOLVES is still just its own number", async () => {
     // The control: the await must not change the successful path.
     const err: string[] = [];
