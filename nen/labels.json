@@ -1,5 +1,5 @@
 {
-  "$comment": "Existing GitHub labels for zheref/nen, verified 2026-09-12. Filing validation only; no stage, routing, or gate labels are invented. Update this declaration with the owning label policy when labels change. The model/ family (five lines: claude, gpt, gemini, grok, composer) is hatsu:direct's opt-in verdict label (nen/workflow.json -> direct.publish), declared here first, synced with nen labels sync, and applied through nen label apply.",
+  "$comment": "Existing GitHub labels for zheref/nen, verified 2026-09-12. Filing validation only; no stage, routing, or gate labels are invented. Update this declaration with the owning label policy when labels change. The model/ family (five lines: claude, gpt, gemini, grok, composer) is hatsu:direct's opt-in verdict label (nen/workflow.json -> direct.publish), declared here first, synced to GitHub with nen labels sync once this declaration lands, and applied through nen label apply.",
   "labels": [
     {
       "color": "f143ab",
