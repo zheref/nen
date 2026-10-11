@@ -26,7 +26,7 @@
 // pin a reader of the marker can reason about, and "cut the tag before
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
@@ -132,7 +132,8 @@ usage:
       (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)', which now
       defaults to the new pin (the root printed shell-quoted).
       --json: { contract: "nen.canon.pin.write/v0.1", ok: true, source,
-      before, after, changed, dryRun, written, recordedIn, writtenTo, row,
+      before, after, changed, dryRun, written, recordedIn, target,
+      writtenTo (target when written, else null), row,
       line, tag: { commit, checkout, resolvedFrom }, mirror: { stale,
       regenerate, regenerateArgv }, failure: null }; on an exit-1 refusal,
       { contract, ok: false, failure: { code, message } } (an exit-2 usage
@@ -594,7 +595,10 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
   }
 
   const where = `${registryPath} (maintained_tools[${index}].pinned, line ${edit.line})`;
-  const through = realRegistry === registryPath ? "" : ` (through the link ${registryPath})`;
+  // A LINK IS NAMED ONLY WHERE ONE EXISTS (Nobunaga N10): a symlinked
+  // consumer root or a case-variant --repo makes the real path differ from
+  // the one typed with no link at nen/repos.json itself.
+  const through = lstatSync(registryPath).isSymbolicLink() ? ` (through the link ${registryPath})` : "";
   const verified = resolution.verified;
   const lines = [
     `source: ${key}`,
@@ -625,7 +629,10 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
       dryRun,
       written,
       recordedIn: `${REPOS_FILE} (maintained_tools[${index}].pinned)`,
-      writtenTo: changed ? realRegistry : null,
+      // `target` is the real file a write lands in, on every run; `writtenTo`
+      // is set only when one did (Nobunaga N9).
+      target: realRegistry,
+      writtenTo: written ? realRegistry : null,
       row: index,
       line: edit.line,
       tag: { commit: verified.tagCommit, checkout: resolution.path, resolvedFrom: resolution.resolvedFrom },

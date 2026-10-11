@@ -10,7 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -190,6 +190,38 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
       ok: false,
       failure: { code: "tag-missing", message: expect.stringMatching(/^refusing to pin owner\/handbooks to v1\.4\.0: tag-missing: /) as unknown },
     });
+  });
+
+  it("reports target on every run, and writtenTo only when a write happened (Nobunaga N9)", async () => {
+    const root = consumer();
+    const real = realpathSync.native(join(root, "nen", "repos.json"));
+    const dry = JSON.parse((await run(root, ["canon", "pin", "--write", "v1.3.0", "--dry-run"], true)).out) as Record<string, unknown>;
+    expect(dry).toMatchObject({ written: false, target: real, writtenTo: null });
+    const wet = JSON.parse((await run(root, ["canon", "pin", "--write", "v1.3.0"], true)).out) as Record<string, unknown>;
+    expect(wet).toMatchObject({ written: true, target: real, writtenTo: real });
+    const same = JSON.parse((await run(root, ["canon", "pin", "--write", "v1.3.0"], true)).out) as Record<string, unknown>;
+    expect(same).toMatchObject({ changed: false, written: false, target: real, writtenTo: null });
+  });
+
+  it.skipIf(process.platform === "win32")("names no link when the consumer ROOT is the link and nen/repos.json is not (Nobunaga N10)", async () => {
+    const root = consumer();
+    const alias = join(mkdtempSync(join(base, "alias-")), "consumer");
+    symlinkSync(root, alias);
+    const result = await run(alias, ["canon", "pin", "--write", "v1.3.0"]);
+    expect(result.code, result.err).toBe(0);
+    expect(result.out).toContain(`written: ${realpathSync.native(join(root, "nen", "repos.json"))}, read back`);
+    expect(result.out).not.toContain("through the link");
+  });
+
+  it("names no link for a case-variant --repo on a case-insensitive filesystem (Nobunaga N10)", async (ctx) => {
+    const root = consumer();
+    const variant = root.replace(/consumer-/, "CONSUMER-");
+    // Only a case-insensitive filesystem reaches the same directory by another case.
+    if (!existsSync(join(variant, "nen", "repos.json"))) ctx.skip();
+    const result = await run(variant, ["canon", "pin", "--write", "v1.3.0"]);
+    expect(result.code, result.err).toBe(0);
+    expect(result.out).not.toContain("through the link");
+    expect(registryOf(root)).toContain('"pinned": "v1.3.0",');
   });
 
   it("quotes the root in the regenerate command and carries it as argv in --json (Nobunaga N4)", async () => {
