@@ -53,7 +53,7 @@ function row(name: string): SurfaceRow {
 
 /** A fresh copy of the fixture tree -- plus the one shell file this repository will not track (AK-11). */
 function tree(): string {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-links-")));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-links-")));
   cpSync(FIXTURE, root, { recursive: true });
   mkdirSync(join(root, "scripts"));
   writeFileSync(join(root, "scripts", "tool.sh"), "echo tool\n");
@@ -419,7 +419,7 @@ describe("LinkRewriter, on strings", () => {
 describe("resolveLinkOptions", () => {
   it("resolves every end through symlinks, an --out that does not exist yet included", () => {
     const root = tree();
-    const link = join(realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-links-alias-"))), "alias");
+    const link = join(realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-links-alias-"))), "alias");
     symlinkSync(root, link);
     const options = resolveLinkOptions({
       root: link,
@@ -573,7 +573,7 @@ describe("a whole mirror at the depth a consumer commits it at", () => {
 describe("the tree a rewritten link may reach", () => {
   it("leaves a link out of the mirror AS WRITTEN when --out is outside --repo, names it, and still re-aims links between mirrored items", async () => {
     const root = tree();
-    const installed = realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-links-installed-")));
+    const installed = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-links-installed-")));
     const result = await generate(root, "cursor", installed, ["--json"]);
     expect(result.code).toBe(0);
     const verbatim = json(result)["linksVerbatim"] as readonly string[];
@@ -606,7 +606,7 @@ describe("the tree a rewritten link may reach", () => {
     const root = tree();
     const committed = join(root, "surfaces", "antigravity");
     await generate(root, "antigravity", committed);
-    const link = join(realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-links-plugin-"))), "plugin");
+    const link = join(realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-links-plugin-"))), "plugin");
     symlinkSync(committed, link);
     const result = await capture([
       "surface", "mirror", "check", ...inputs(root, "antigravity"), "--installed", link, "--repo", root, "--json",
@@ -621,7 +621,7 @@ describe("the tree a rewritten link may reach", () => {
     const root = tree();
     const committed = join(root, "surfaces", "antigravity");
     await generate(root, "antigravity", committed);
-    const installed = join(realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-links-copy-"))), "installed-ag");
+    const installed = join(realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-links-copy-"))), "installed-ag");
     cpSync(committed, installed, { recursive: true });
     const args = ["surface", "mirror", "check", ...inputs(root, "antigravity"), "--installed", installed, "--repo", root];
     const result = await capture([...args, "--json"]);
@@ -667,7 +667,7 @@ describe("the tree a rewritten link may reach", () => {
 
   it("the verbatim claude-code row rewrites nothing: an installed plugin copy is its source, links and all", async () => {
     const root = tree();
-    const installed = realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-links-claude-")));
+    const installed = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-links-claude-")));
     cpSync(join(root, "plugin", "skills"), join(installed, "skills"), { recursive: true });
     cpSync(join(root, "plugin", "agents"), join(installed, "agents"), { recursive: true });
     const result = await capture([

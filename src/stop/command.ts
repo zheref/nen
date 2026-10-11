@@ -147,8 +147,9 @@ clear:
   the marker itself once the bell has rung; this is that consumption as a verb.
 
 Rungs 2-3 of the escalation ladder (an OS notification, an audible cue) are
-NOT fired by this command: nen only ever shells out to git and gh, and
-neither is a notification primitive. Wire them through your own
+NOT fired by this command: nen requires only git and gh (a surface's own
+CLI is an optional dependency of 'surface install|status' alone), and none of
+them is a notification primitive. Wire them through your own
 host if you need them; this command renders rung 4 (the banner and table) and
 states rung 1's status, which is the caller's to have fired.
 

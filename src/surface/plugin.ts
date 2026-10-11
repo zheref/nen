@@ -106,7 +106,7 @@ export function resolveConfigDir(
  * An absolute path, a `..` segment or a control character is refused: a tree
  * is a directory the plugin ships, never a way out of it.
  */
-export function validateTrees(trees: readonly string[]): readonly string[] {
+export function validateTrees(trees: readonly string[], flag = "--trees"): readonly string[] {
   if (trees.length === 0) {
     throw new PluginCheckError(
       "--trees is required with --plugin: the directories the plugin ships (e.g. 'skills,agents,hooks'). Which trees a plugin ships is the plugin's own fact, never a guess of this binary.",
@@ -124,7 +124,7 @@ export function validateTrees(trees: readonly string[]): readonly string[] {
       parts.some((part): boolean => part === ".." || part === "." || part === "")
     ) {
       throw new PluginCheckError(
-        `--trees entry '${safe(tree)}' is not a plain relative path inside the plugin root (no leading '/' or '\\', no ':', no '.' or '..' segment, no empty segment, no control character).`,
+        `${flag} entry '${safe(tree)}' is not a plain relative path inside the plugin root (no leading '/' or '\\', no ':', no '.' or '..' segment, no empty segment, no control character).`,
       );
     }
     normalized.push(parts.join("/"));
@@ -135,7 +135,7 @@ export function validateTrees(trees: readonly string[]): readonly string[] {
 /** The real path of `path`, or null when it cannot be resolved (gone, dangling, looping, unreadable). */
 function real(path: string): string | null {
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
     return null;
   }
@@ -182,7 +182,7 @@ export function classifyError(error: unknown): InspectionFailure {
 /** The real path of `path`, or how resolving it failed. */
 function resolveReal(path: string): { readonly real: string } | { readonly failure: InspectionFailure; readonly code: string } {
   try {
-    return { real: realpathSync(path) };
+    return { real: realpathSync.native(path) };
   } catch (error) {
     return { failure: classifyError(error), code: (error as NodeJS.ErrnoException).code ?? "error" };
   }
@@ -740,6 +740,28 @@ export interface PluginCheckReport {
   /** The install record's state: `read`, `absent`, `unreadable`, or `not read` (an explicit --installed). */
   readonly record: "read" | "absent" | "unreadable" | "not read";
   readonly copies: readonly CopyJudgement[];
+  /** Copies a selector set aside, with why: present only when one was given (zheref/nen#298). */
+  readonly skipped?: readonly SkippedCopy[];
+}
+
+/**
+ * Which recorded copies to judge (zheref/nen#298): given an install key --
+ * `<plugin>@<marketplace>`, or `<plugin>@skills-dir` for the skills-directory
+ * install -- null to judge it, or one sentence saying why it is set aside.
+ * `surface status` passes the copies Claude Code SERVES; `mirror check
+ * --installed auto` passes none and judges every recorded copy, as it always has.
+ */
+export type CopySelector = (key: string) => string | null;
+
+/** A recorded copy a selector set aside: what named it, and why. */
+export interface SkippedCopy {
+  readonly label: string;
+  readonly reason: string;
+}
+
+/** The install key Claude Code reports a skills-directory install under. */
+export function skillsDirKey(plugin: string): string {
+  return `${plugin}@skills-dir`;
 }
 
 function broken(label: string, path: string, reason: string): CopyJudgement {
@@ -781,8 +803,16 @@ export function checkExplicitCopy(installed: string, context: JudgeContext): Plu
  * and `<config>/skills/<plugin>` when it exists -- each judged once by real
  * path.
  */
-export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
+export function checkRecordedCopies(context: JudgeContext, select?: CopySelector): PluginCheckReport {
   const copies: CopyJudgement[] = [];
+  const skipped: SkippedCopy[] = [];
+  /** True when `key` is judged; otherwise the copy is recorded as skipped under `label`. */
+  const selected = (key: string, label: string): boolean => {
+    const why = select === undefined ? null : select(key);
+    if (why === null) return true;
+    skipped.push({ label, reason: why });
+    return false;
+  };
   const judged = new Set<string>();
   let sawSource = false;
   // An inspection failure is not absence (Copilot on NN-PR-#378): a recorded
@@ -848,6 +878,7 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
   } else if (record.state === "read") {
     for (const key of pluginKeys(record.plugins, context.plugin)) {
       const label = `the ${safe(key)} installPath`;
+      if (!selected(key, `the ${safe(key)} entry`)) continue;
       const installs = record.plugins[key];
       if (!Array.isArray(installs) || installs.length === 0) {
         copies.push(broken(`the ${safe(key)} entry`, "", `the ${safe(key)} entry carries no usable installPath`));
@@ -876,7 +907,9 @@ export function checkRecordedCopies(context: JudgeContext): PluginCheckReport {
   } catch (error) {
     present = classifyError(error) !== "absent";
   }
-  if (present) judgePath(skills, `skills/${context.plugin}`);
+  if (present && selected(skillsDirKey(context.plugin), `skills/${context.plugin}`)) judgePath(skills, `skills/${context.plugin}`);
   if (context.independentSource !== null && !sawSource) throw new PluginCheckError(INDEPENDENT_UNREAD);
-  return { verdict: overallVerdict(copies), record: record.state, copies };
+  return select === undefined
+    ? { verdict: overallVerdict(copies), record: record.state, copies }
+    : { verdict: overallVerdict(copies), record: record.state, copies, skipped };
 }

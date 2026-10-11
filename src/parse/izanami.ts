@@ -1456,6 +1456,11 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
         "regenerates the mirror in memory and diffs the committed one; unlike 'canon mirror check' it has no report-writing flag at all, so there is nothing to gate",
       ),
       capabilities: RO("prints a table this binary ships; reads nothing"),
+      // zheref/nen#298. install links into the surface's own directory and runs
+      // its CLI (uninstall, marketplace add/remove, plugin add) unless
+      // --dry-run, which reads only; status reads files and list commands.
+      install: DRY("links the plugin into the surface's own directory and runs its install CLI unless --dry-run is given"),
+      status: RO("reads the surface's files and its plugin list commands; writes nothing"),
     },
   },
   tag: { subcommands: { cut: MUT("creates a tag locally even without --push") } },

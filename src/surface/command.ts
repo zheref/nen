@@ -48,21 +48,15 @@ import {
   readRules,
   SurfacePackError,
 } from "./packs.js";
-import { commaList } from "../cli/comma.js";
 import { plainLine } from "../cli/plain.js";
-import { GIT } from "../seam/exec.js";
+import { readJudgeContext, validatePluginName } from "./judge.js";
+import { INSTALL_FAMILY_BOOLEANS, INSTALL_FAMILY_VALUES, INSTALL_HELP, INSTALL_USAGE, runInstall, runStatus } from "./install-command.js";
 import {
-  assertTreesInSource,
   checkExplicitCopy,
-  identityOf,
-  inspectManifest,
-  Unreadable,
   checkRecordedCopies,
   PluginCheckError,
-  pluginManifest,
   resolveConfigDir,
   safe,
-  validateTrees,
   VERDICT_EXIT,
   type CopyJudgement,
   type Difference,
@@ -92,9 +86,11 @@ export const DEFAULT_SOURCE_SURFACE = "claude";
 const SURFACE_LIST = SURFACES.map((row): string => `    ${row.surface.padEnd(12)} ${row.summary}`).join("\n");
 
 const USAGE = `nen surface -- mirror a skills directory into another agent surface's own layout,
-               and say what each surface can do.
+               say what each surface can do, and make or report a host's
+               first-party install of a plugin.
 
 usage:
+${INSTALL_USAGE}
   nen surface capabilities --surface <name> [--json]
   nen surface capabilities [--json]                 (every surface)
   nen surface mirror generate --source <dir> --surface <name> --out <dir>
@@ -310,6 +306,8 @@ the surface requires, a rules file over the surface's limit (its links
 re-aimed), a tier --models does not declare, or a destination that exists and
 carries no marker (this verb never overwrites a hand-written file).
 
+${INSTALL_HELP}
+
 check --plugin has six verdicts, each its own exit: 0 identical (or served by
 link to a git checkout named independently); 1 different, every differing path
 named; 2 wiring -- a bad flag, a --source or explicit --installed that is not a
@@ -337,10 +335,10 @@ const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; boo
 };
 
 const FAMILY_VALUES = [
-  ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values)),
+  ...new Set([...Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values), ...INSTALL_FAMILY_VALUES]),
 ].sort();
 const FAMILY_BOOLEANS = [
-  ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.booleans)),
+  ...new Set([...Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.booleans), ...INSTALL_FAMILY_BOOLEANS]),
 ].sort();
 
 /** Refused rather than ignored -- ../report/command.ts's argument, verbatim. */
@@ -644,13 +642,21 @@ function runCheck(context: CommandContext): number {
 
 export const surfaceCommand: Command = {
   name: "surface",
-  subcommands: ["mirror", "capabilities"],
-  summary: "Mirror a skills directory into another agent surface's layout, and check it for drift.",
+  subcommands: ["mirror", "capabilities", "install", "status"],
+  summary: "Mirror a skills directory into another agent surface's layout, check it for drift, and make or report a host's first-party plugin install.",
   usage: USAGE,
   flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS },
   run(context: CommandContext): number {
-    const family = requireSubcommand("surface", context.args, ["mirror", "capabilities"]);
+    const family = requireSubcommand("surface", context.args, ["mirror", "capabilities", "install", "status"]);
     if (family === "capabilities") return runCapabilities(context);
+    if (family === "install" || family === "status") {
+      try {
+        return family === "install" ? runInstall(context) : runStatus(context);
+      } catch (error) {
+        if (error instanceof PluginCheckError) throw new VerbUsageError(error.message);
+        throw error;
+      }
+    }
     const sub = context.args.positionals[2];
     if (sub !== "generate" && sub !== "check") {
       throw new VerbUsageError(
@@ -706,10 +712,7 @@ function copyLines(copy: CopyJudgement): string[] {
  * under ./plugin.ts's independence rule. Six verdicts, six exits.
  */
 function runPluginCheck(context: CommandContext): number {
-  const plugin = required(context, "plugin", "It names the plugin whose install is judged.");
-  if (CONTROL_CHAR.test(plugin) || /[@/\\]/.test(plugin) || plugin === "." || plugin === "..") {
-    throw new VerbUsageError(`--plugin '${safe(plugin)}' is not a plugin name (no '@', '/' or '\\', not '.' or '..', no control character).`);
-  }
+  const plugin = validatePluginName(required(context, "plugin", "It names the plugin whose install is judged."));
   const surfaceName = required(context, "surface", "--plugin judges a Claude Code plugin install: give --surface claude-code.");
   if (surfaceName !== "claude-code") {
     throw new VerbUsageError(
@@ -723,53 +726,10 @@ function runPluginCheck(context: CommandContext): number {
     );
   }
   const installed = required(context, "installed", "It names the installed copy to judge, or 'auto' for every copy the host has recorded.");
-  const trees = validateTrees(commaList(context.args.values["trees"]));
   const sourceFlag = required(context, "source", "With --plugin it names the plugin's source root: the directory holding .claude-plugin/plugin.json.");
-  const sourceManifest = inspectManifest(sourceFlag, plugin);
-  if (sourceManifest.state === "unreadable") {
-    throw new VerbUsageError(`--source '${safe(sourceFlag)}' could not be inspected: ${sourceManifest.reason}.`);
-  }
-  if (sourceManifest.state === "none") {
-    throw new VerbUsageError(
-      `--source '${safe(sourceFlag)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`,
-    );
-  }
-  const sourceId = identityOf(sourceFlag);
-  /* c8 ignore next 3 -- pluginManifest above already proved the directory is there */
-  if (sourceId === null) {
-    throw new VerbUsageError(`--source '${safe(sourceFlag)}' cannot be resolved.`);
-  }
-  // Every tree a real directory in the source, every segment lstat'ed (N1):
-  // a typo'd tree would otherwise compare as empty on both sides and read identical.
-  try {
-    assertTreesInSource(sourceId.real, trees);
-  } catch (error) {
-    // A segment that could not be READ is no claim that the tree is missing:
-    // each copy's judgement reports it as wiring, with the report printed.
-    if (!(error instanceof Unreadable)) throw error;
-  }
-  const independent = optionalPath(context, "independent-source");
-  if (independent !== null && pluginManifest(independent, plugin) === null) {
-    throw new VerbUsageError(
-      `--independent-source '${safe(independent)}' is not a root of '${plugin}' (no regular .claude-plugin/plugin.json naming it).`,
-    );
-  }
   const configDir = resolveConfigDir(optionalPath(context, "config-dir"), context.seams.env);
-  const judge: JudgeContext = {
-    plugin,
-    trees,
-    source: sourceId.real,
-    sourceId,
-    independentSource: independent,
-    configDir,
-    standIn: resolve(context.repoFlag ?? process.cwd()),
-    git: (cwd, args) => {
-      // Read-only probes of the checkout named by cwd: a GIT_DIR, GIT_WORK_TREE
-      // or GIT_INDEX_FILE inherited from a hook must not redirect them (N13).
-      const result = context.seams.run(GIT, [...args], { cwd, env: GIT_PROBE_ENV });
-      return { code: result.spawnFailed ? 127 : result.code, stdout: result.stdout.split("\n")[0]?.trim() ?? "" };
-    },
-  };
+  const judge: JudgeContext = readJudgeContext(context, plugin, sourceFlag, configDir);
+  const trees = judge.trees;
   const report = installed === "auto" ? checkRecordedCopies(judge) : checkExplicitCopy(installed, judge);
   const notInstalled =
     report.verdict === "not installed"
@@ -805,8 +765,6 @@ function runPluginCheck(context: CommandContext): number {
   return VERDICT_EXIT[report.verdict];
 }
 
-const GIT_PROBE_ENV: Readonly<Record<string, undefined>> = { GIT_DIR: undefined, GIT_WORK_TREE: undefined, GIT_INDEX_FILE: undefined };
-const CONTROL_CHAR = /[\x00-\x1f\x7f-\x9f]/;
 const PLUGIN_MANIFESTS_LINE = ".claude-plugin/plugin.json, .claude-plugin/marketplace.json";
 
 function runCapabilities(context: CommandContext): number {

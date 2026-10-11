@@ -82,7 +82,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { connect } from "node:net";
 import { constants as osConstants } from "node:os";
 
-/** The two external tools this binary is allowed to know about (D16). */
+/**
+ * The two external tools this binary REQUIRES (D16). One family reaches past
+ * them: `surface install|status` (zheref/nen#298) run a surface's own CLI --
+ * `claude`, `codex`, `agy` -- as an OPTIONAL, per-surface dependency, named in
+ * ../surface/install.ts's SURFACE_CLI and spawned through this same seam; no
+ * other verb runs them, and their absence is that verb's exit 5, never a
+ * broken install of nen.
+ */
 export const GIT = "git";
 export const GH = "gh";
 
