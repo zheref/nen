@@ -287,6 +287,7 @@ verb it invoked. The complete list:
 | every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
 | [`stage list`](#nen-stage-list) | `3` | the add list is empty and nothing is flagged — a tree with no stageable change, never a tree the verb failed to read (that is `1`) ([#237](https://github.com/zheref/nen/issues/237)) |
 | [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
+| [`shu test`](#shu-test-select) | `6` | `--select` resolved to zero executed tests: the run exited 0 and its declared results record none ([#207](https://github.com/zheref/nen/issues/207)) |
 | [`shu coverage`](#nen-shu-coverage) | `8` | `--from-capture` refused the capture on disk as not proven this tree's: no provenance sidecar, a different tree fingerprint, lane or report list, or a report whose sha256 changed; nothing measured, no document ([#250](https://github.com/zheref/nen/issues/250)). A third use of `8`, unrelated to `pr ready`'s and `pr mark-ready`'s |
 | [`shu tools`](#nen-shu-tools) | `7` | every row passes, but nen is inside its `dependency.minimum` and **behind** `dependency.pinned_ref` (a BEHIND row): install the pinned ref the row's remedy names ([#327](https://github.com/zheref/nen/issues/327)) |
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
@@ -8675,13 +8676,14 @@ invocation emits one object with the same top-level keys, in this order:
 
 ```text
 { contract, lane, stack, verb, target, steps, cwd, env, host,
-  preconditions, exitCode, durationMs, artifacts, log }
+  preconditions, exitCode, durationMs, artifacts, log, proof, selection }
 ```
 
 `contract` is `nen.shu.<verb>/v0.1` — per verb, so a consumer that recognises
-`nen.shu.build/v0.1` is never handed a `test` report by accident. `build` adds
-one key after `log`: `proof`, the `.nen/proof/<lane>.json` a green build records
-(`null` when the build was not green or nothing was run). `target` is `null`
+`nen.shu.build/v0.1` is never handed a `test` report by accident. Two keys
+follow `log` on every verb: `proof`, the `.nen/proof/<lane>.json` a green build
+records (only `build` fills it; `null` when the build was not green or nothing
+was run), and `selection` (only `test --select` fills it; see below). `target` is `null`
 unless a destination or a device was resolved — on [`deploy`](#nen-shu-deploy) it is
 `{ name, args, requiresEnv }` (variable **names**, never a value), and on
 [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) with `--target` it is
@@ -8795,6 +8797,18 @@ because the child never gave one — nen stopped waiting rather than killing it.
 `proof` is the build proof this run wrote, or `null`. Only
 [`shu build`](#nen-shu-build) ever fills it; it is on every verb's document for
 the reason `target` is — one family, one document shape.
+
+`selection` (zheref/nen#207; expected in `0.21.0`, to be confirmed by the
+release proposal) is `null` unless the run was
+[`shu test --select`](#shu-test-select), and then
+`{ pointer, ids, pattern, each, appended, results, executed, zeroMatch }`: where
+the focused form is declared, the identifiers in the order named, the declared
+grammar, the per-identifier template, exactly the arguments the expansion
+appended, the declared `{ path, format }` results, the tests those results say
+were **executed** (total − skipped; `null` until a run that exited 0 has had
+them read), and `zeroMatch` (`true` when that count is 0, `null` with it).
+`steps[0].argv` is still the whole argv; `selection` says which tail of it was
+the selection.
 
 [`shu coverage`](#nen-shu-coverage) and
 [`shu test-report`](#nen-shu-test-report) are the two executing verbs whose
@@ -9335,10 +9349,242 @@ then parses the results file it names under `artifacts`.
 **Usage**
 
 ```text
-nen shu test [--repo <path>] [--lane <name>] [--dry-run] [--stream] [--heartbeat <s>] [--json]
+nen shu test [--repo <path>] [--lane <name>] [--select <id>[,<id>...]] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 **Output and exit codes** — as `build`, and `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.test/v0.1"`. Like every executing verb in this family it is **`dry-run-gated`** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository — a declared test task may well write, and one keystroke separates a golden-image check from its recorder — so the bare form is never certified, while the dry run is, because rendering and spawning nothing is a property of nen rather than a claim about that argv.
+
+<a id="shu-test-select"></a>
+#### Focused selection — `--select` (zheref/nen#207)
+
+`nen shu test --select <id>[,<id>...]` runs the lane's **one declared focused
+form** over concrete test identifiers, so a repository keeps a single focused
+declaration and passes any selection through nen — no lane per selection, no
+copied selection script, no edit to its command policy. **The first release
+expected to carry it is `0.21.0`, to be confirmed by the release proposal**; a
+consumer adopting it pins `dependency.minimum` to that release's minor. On an
+older nen the `select` block is an unknown key, preserved and read by nobody,
+and `--select` is an unknown flag (exit 2) — so nothing runs that the
+declaration did not mean.
+
+**The declaration** lives on the lane's `test` row in `nen/contract.json`, as
+`project.verbs.<lane>.test.select`. It is **data**: nen knows no runner's
+selection syntax, and the block states it.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `exe` | yes | The program the focused run spawns. |
+| `argv` | yes | The focused **base** argv. It replaces the regression row's argv — nothing of that row is inherited. May not name `{id}`. |
+| `each` | yes | The per-identifier template. Every `{id}` in it is replaced with one identifier; the expansions are appended after `argv`, once per identifier, in the order named. Must name `{id}`. |
+| `pattern` | yes | The runner's identifier grammar, a regular expression matched against the **whole** identifier. It must compile **on its own** — nen anchors it as `^(?:<pattern>)$`, and a pattern such as `a)|(?:.*` that only compiles once wrapped is refused — and shapes with exponential backtracking are refused at load. |
+| `results` | **yes** | `{ "path": ".nen/focused/<name>", "format": "junit" \| "assertion-results" \| "xcresult-summary" }` — the focused run's results, in one of the formats [`shu test-report`](#nen-shu-test-report) reads (a `junit` path may be a directory of XML). The path must sit **strictly inside `.nen/focused/`** (below). nen reads it after the run and counts the tests it **executed**. |
+| `artifacts` | no | The focused run's own result paths, reported exactly as a row's `artifacts` are. |
+| `stdoutTo` | no | A file for the focused run's stdout, as on any row — the way to hand nen results a runner prints (a JUnit reporter on stdout, a summary an extraction prints). |
+| `env` | no | Variables for the focused run. The regression row's `env` is **not** inherited. |
+| `why` | no | The repository's own sentence. |
+
+The loader refuses, by pointer: `select` on any verb but `test`, on a `test`
+seat, or under a near-miss of its name (`selct`, `Select`); a near-miss of any
+key above or of `results`' two; a missing `results` or a format outside the
+three; a `stall` guard (tests are untimed); `{id}` in `exe`/`argv`, or an
+`each` without it; a focused output path that normalises outside the tree
+(`out/../../x`); and an overlap with the **aka regression capture** — the
+`stdoutTo`/`artifacts` of **every lane's** `test` and `coverage` rows, plus
+`.nen/coverage-capture`. A focused run never writes that capture **through its
+declared `results`/`stdoutTo`/`artifacts`, or through an argv element naming
+those paths** (whole, or as the value of a `--flag=`/`-flag:`); nen does not
+interpret other argv; an argv token is compared as a path only when it is
+path-shaped (it contains `/` or ends in an extension) or the output it is
+compared to has more than one segment, so `--reporter=junit` or a bare `test`
+action never collides with an output named `junit` or `test`. Paths are
+compared after `posix.normalize`, without a leading `./` or trailing `/`, and
+**case-folded** — conservative on case-sensitive filesystems, where two paths
+differing only in case are distinct and still refused. The comparison is
+lexical: a symlink cannot be judged at load. At run time real paths are
+resolved only to keep every write inside the tree, not to detect an in-tree
+symlinked overlap — with one exception, `results.path`, which the run proves
+segment by segment before it moves anything (below). An output a runner derives
+from a config file, an environment variable or its own default is not seen.
+
+**The run.** The plan is the focused block's alone: its program, base argv,
+`env`, `stdoutTo` and `artifacts`. The lane's `cwd`, `project.hosts` and
+`project.preconditions` still apply, in the same order as a bare `test` (host
+`3`, unmet precondition `2`). Coverage is on only if the focused `argv` turns it
+on — nen adds nothing — and **no capture sidecar is recorded**, so
+[`coverage --from-capture`](#nen-shu-coverage) keeps vouching for the regression
+run alone. The argv is a list handed to the child: no shell, no globbing.
+
+**Zero executed is never a pass.** A runner handed an identifier that matches
+nothing exits `0` and prints *Executed 0 tests*. So after a run that exited `0`
+nen reads `results` with `test-report`'s own parser and counts the tests
+executed (total − skipped — a skipped test did not run; for a summary that
+states its counts, a test outside the passed/failed buckets still ran).
+
+<a id="shu-test-select-results"></a>
+**The results path is nen's, and clearing it is a rename.** Before each focused
+run nen **moves** whatever is at the declared `results.path` — the file, or the
+directory and everything under it — **aside** into
+`.nen/focused/.previous/<run-id>/`, so whatever is there afterwards is this
+run's and an earlier run's suite file in a JUnit results directory can never be
+counted. A guard that missed something costs a rename **now**; the moved run is
+deleted only after **2 further focused runs**, when `.previous` is pruned to the
+run just moved plus the newest earlier one. A run id is
+`<ISO stamp>-<pid>-<6 hex>`, claimed with a non-recursive `mkdir`; **only
+entries of exactly that shape are ever pruned** — anything else in `.previous`
+is named on stderr and never touched. Each pruned run is re-proved first, then
+renamed to a unique `.doomed-<hex>` inside `.previous`, its ancestors and its
+own device/inode re-checked, and only then removed; a run that fails any of it
+is kept, with a line on stderr.
+
+**One focused run at a time.** A focused run takes `.nen/focused/.lock`
+(`O_EXCL`, holding its pid and start time) across the move, the run and the
+read, and releases it however it ends. Another **live** holder is exit `2`,
+naming its pid; a lock whose pid is no longer running is reported, removed —
+only once it is proved a regular file inside the real `.nen/focused` — and
+taken. A lock that is a link or a directory is never touched: exit `2`.
+
+That is safe by construction because the path is an **allowlist**, not a
+denylist:
+
+- **At load** (a malformed declaration: exit `1`), `results.path` must sit
+  **strictly inside `.nen/focused/`**, the prefix spelled **exactly** after
+  `posix.normalize` (`.NEN/focused/x` is refused, not folded onto it), already
+  **NFC** (a decomposed spelling is refused), and never be `.nen/focused`
+  itself, its `.previous` area or its `.lock` — in any case. The root, `src`,
+  `SRC`, `.git`, `nen/`, `:(exclude)x` and every other path outside the prefix
+  are refused by name. The focused `stdoutTo` and `artifacts` are never moved,
+  and keep their own rules (inside the tree, never the root, `.git` or `nen/`,
+  never the regression capture).
+- **At run time, before anything moves** (exit `2`, nothing moved or run):
+  every segment from the real repository root down to the path is a real
+  entry — no symlink (Node reports a junction as one), and a native realpath
+  equal to its own path, which catches any other reparse point and any case
+  variant of the entry on disk; its real path is strictly inside the real
+  `.nen/focused`, and the real root is not inside that; no `.git` entry (file
+  or directory) exists at or below it, so no nested repository, worktree or
+  submodule; it does not overlap git's own directory as
+  `git rev-parse --git-dir` reports it (a worktree's lives elsewhere), nor the
+  real path of any regression output; and
+  `git --literal-pathspecs ls-files --recurse-submodules -z -- <path>` lists
+  nothing. Outside a git repository the two git reads are skipped ("not a git
+  repository" is the one git failure read as an answer); a git that cannot be
+  started, or answers anything else, refuses. **`.nen/focused/.previous` is
+  proved the same way** before a run id is chosen in it — absent (then created
+  non-recursively) or a real directory inside the real `.nen/focused`, never a
+  link or a file — and the move re-checks every ancestor's device and inode
+  against the proof immediately before renaming. A failed create or rename
+  (`ENOTDIR`, `EEXIST`, `EXDEV`) is exit `2` naming the path.
+- **`--dry-run` makes every one of those read-only proofs** and refuses with
+  the same exit `2`, so a dry run that exits `0` is one the real run will not
+  refuse for its results path — and it moves nothing and takes no lock.
+
+What remains is a window of microseconds between each last check and the
+syscall it guards. nen assumes a **single user's working copy**, where the only
+other writer is that user's own tooling; a hostile local writer with access to
+the tree is out of scope.
+
+| Outcome | nen exits | `--json` `selection` |
+|---|---|---|
+| ≥ 1 executed | `0` | `executed: <n>, zeroMatch: false` |
+| **0 executed** — stderr says *selection resolved to zero executed tests* | **`6`** | `executed: 0, zeroMatch: true` |
+| results missing (the run wrote nothing where the old results were moved from), unreadable, or in another format than declared | `1` | `executed: null, zeroMatch: null` |
+| the tool itself failed | `1` (results not read) | `executed: null, zeroMatch: null` |
+
+`6` is the code `coverage --touched` uses for the same kind of fact — the tool
+passed, its output is sound, and what came back empty is the selection.
+
+**Refused at exit 2, with nothing spawned** (on `--dry-run` too):
+
+- `--select` with no value, an empty value, or an empty entry (`a,,b`, `a,`);
+- an identifier carrying whitespace, a control character or an invisible
+  format character (zero-width, bidi), a cmd/batch metacharacter (`"` `%` `^` `&`
+  `|` `<` `>` `!` or a backtick — whatever `pattern` admits), beginning with `-`
+  (the runner would read it as an option), carrying `{` or `}`, or named twice;
+- an identifier the declared `pattern` does not match whole — every such one is
+  named;
+- a lane whose `test` row declares no `select`. **There is never a fallback to
+  the full regression command.**
+
+`--select` is one comma-separated value, as every list flag in this CLI; an
+identifier containing a comma cannot be named. It is refused on every other
+verb as a flag that verb does not read.
+
+**Adoption — an xcodebuild-shaped lane** (synthetic identifiers). nen reads no
+`.xcresult` bundle, and raw `xcodebuild` prints prose, not a summary nen reads —
+so a focused form that spawned `xcodebuild` directly could never pass. The
+focused `exe` is therefore the repository's **own wrapper**: it runs
+`xcodebuild` with the arguments nen appends and then writes a supported summary
+(here the `xcresult-summary` JSON an `xcresulttool` extraction produces) to the
+declared results path. The wrapper is the repository's code, not nen's.
+
+```json
+"test": {
+  "exe": "xcodebuild",
+  "argv": ["-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+           "-enableCodeCoverage", "YES", "-resultBundlePath", ".nen/aka/regression.xcresult", "test"],
+  "artifacts": [".nen/aka/regression.xcresult"],
+  "select": {
+    "exe": "scripts/focused-xctest",
+    "argv": ["--summary", ".nen/focused/apple/summary.json", "--",
+             "-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+             "-resultBundlePath", ".nen/focused-bundles/apple.xcresult", "test"],
+    "each": ["-only-testing:{id}"],
+    "pattern": "[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*){0,2}",
+    "results": { "path": ".nen/focused/apple/summary.json", "format": "xcresult-summary" },
+    "artifacts": [".nen/focused-bundles/apple.xcresult"],
+    "why": "scripts/focused-xctest runs xcodebuild with everything after '--', then writes the result bundle's test summary to --summary."
+  }
+}
+```
+
+```bash
+nen shu test --lane apple --select KroTests/CaptureTests/testInlinePills,KroTests/InboxTests --dry-run
+```
+```text
+lane:          apple  (xcode-ios)
+verb:          test
+selection:     KroTests/CaptureTests/testInlinePills, KroTests/InboxTests  (2 identifiers, from project.verbs.apple.test.select; appends: -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests)
+results:       .nen/focused/apple/summary.json (xcresult-summary)  -- not read
+…
+would run:     scripts/focused-xctest --summary .nen/focused/apple/summary.json -- -scheme Kro -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused-bundles/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests
+…
+```
+
+**Adoption — a vitest-shaped lane.** This repository's own `nen` lane declares
+exactly this (`nen/contract.json`), beside the instrumented regression row:
+
+```json
+"select": {
+  "exe": "bunx",
+  "argv": ["vitest", "run", "--reporter=default", "--reporter=junit", "--outputFile.junit=.nen/focused/nen.junit.xml"],
+  "each": ["{id}"],
+  "pattern": "src/[A-Za-z0-9_/-]*[A-Za-z0-9_.-]+\\.test\\.ts",
+  "results": { "path": ".nen/focused/nen.junit.xml", "format": "junit" },
+  "artifacts": [".nen/focused/nen.junit.xml"]
+}
+```
+
+The pattern admits nested test files and no `..`: directory segments carry no
+dot, so no segment can climb.
+
+```bash
+nen shu test --repo . --select src/shu/select.test.ts,src/cli/comma.test.ts
+```
+```text
+lane:          nen  (bun-cli)
+verb:          test
+selection:     src/shu/select.test.ts, src/cli/comma.test.ts  (2 identifiers, from project.verbs.nen.test.select; appends: src/shu/select.test.ts src/cli/comma.test.ts)
+results:       .nen/focused/nen.junit.xml (junit)  -- 109 executed
+…
+```
+(run for real against this checkout; no `coverage/` written, no sidecar recorded.)
+
+A Gradle-shaped runner is the same block with `"each": ["--tests", "{id}"]`.
+**Until a repository declares `select`** — or pins a nen older than the release
+that carries it — its focused path is whatever static lane it declares (this
+repository's `device-records` lane is one), and `--select` on it is exit 2
+saying the lane declares no focused selection: the capability is missing there,
+and nen says so rather than running the regression.
 
 ### `nen shu ui-test`
 
@@ -14745,7 +14991,11 @@ run.
 ### Nen's own phase verification lanes
 
 The `device-records` lane runs the focused launch/schema/executor tests through
-`nen shu test --repo . --lane device-records`, without coverage. The default `nen` lane's full
+`nen shu test --repo . --lane device-records`, without coverage. Any other
+focused set runs through the `nen` lane's declared `select`
+(`nen shu test --repo . --select <file>[,<file>...]`, [focused selection](#shu-test-select)),
+also without coverage and writing `.nen/focused/nen.junit.xml`, never the
+regression capture. The default `nen` lane's full
 `test` collects JUnit and LCOV during the aka regression phase. Its `coverage` row only checks that
 the saved LCOV exists and lets Nen parse it during mukai; it never reruns the suite. Verify the
 capture's source-tree and configuration provenance before measurement; mere artifact existence

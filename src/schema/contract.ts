@@ -74,6 +74,9 @@ import {
   SchemaError,
 } from "./errors.js";
 import { matchesGlob } from "../shu/evidence/glob.js";
+import { CAPTURE_DIRECTORY } from "../shu/coverage/capture.js";
+import { catastrophicShape } from "./pattern.js";
+import { posix } from "node:path";
 import { CONTRACT_FILE, readSchemaJson, type SchemaLocation } from "./source.js";
 
 // ── the closed sets ─────────────────────────────────────────────────────────
@@ -258,6 +261,69 @@ export interface InvocationStep {
   readonly stdoutTo: string | null;
 }
 
+/**
+ * `project.verbs.<lane>.test.select` -- the lane's ONE focused-test
+ * declaration, and the argv a concrete selection expands into
+ * (zheref/nen#207).
+ *
+ * IT IS A SECOND COMMAND, NOT A FILTER ON THE FIRST. The regression row is the
+ * suite aka runs -- routinely instrumented for coverage and writing the
+ * capture mukai later measures -- and a focused run that inherited its argv
+ * would inherit both. So the focused form states its OWN program and base
+ * argv, its own `stdoutTo`, `artifacts` and `env`, and nothing of the
+ * regression row reaches it: coverage is on only where this block says so, and
+ * the loader refuses a focused path that would land on the regression row's
+ * own outputs or on the capture directory.
+ *
+ * NEN KNOWS NO RUNNER'S SELECTION SYNTAX. `each` is the repository's template
+ * for ONE identifier -- `["-only-testing:{id}"]` for an xcodebuild-shaped
+ * runner, `["{id}"]` for a vitest-shaped one, `["--tests", "{id}"]` for a
+ * Gradle-shaped one -- and nen's only act is to substitute `{id}` and append
+ * the expansions after `argv`, in the order the caller named them. `pattern` is
+ * the repository's own grammar for an identifier, matched against the WHOLE
+ * identifier, because what a well-formed test id looks like is knowledge about
+ * a runner and nen carries none.
+ */
+export interface TestSelection {
+  readonly exe: string;
+  /** The focused base argv. `each`'s expansions are appended after it. */
+  readonly argv: readonly string[];
+  /** The per-identifier template; every `{id}` in it is the identifier. */
+  readonly each: readonly string[];
+  /** The repository's identifier grammar, as written (nen anchors it). */
+  readonly pattern: string;
+  /** Repo-relative file the focused run's stdout is written to, or null. */
+  readonly stdoutTo: string | null;
+  /**
+   * The focused run's results file and its format -- REQUIRED (zheref/nen#207,
+   * the maintainer's ruling on the 2026-09-27 acceptance criterion). A runner
+   * that matched nothing exits 0 and prints "Executed 0 tests"; nen reads this
+   * file after the run and refuses a selection that executed no test, so a
+   * typed-from-memory identifier can never read as a pass.
+   */
+  readonly results: SelectionResults;
+  readonly why: string | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/** `select.results`: where the focused run's results land, in which format. */
+export interface SelectionResults {
+  /** Repo-relative file (or, for `junit`, a directory of XML). */
+  readonly path: string;
+  /** One of SELECT_RESULT_FORMATS -- the formats `nen shu test-report` reads. */
+  readonly format: SelectResultFormat;
+}
+
+/**
+ * The results formats a focused selection may declare: EXACTLY the ids
+ * ../shu/test-report/parse.ts's FORMATS carry. Stated here rather than imported
+ * so this loader does not pull every parser in; ../shu/select.test.ts pins the
+ * two lists equal, so they cannot drift apart silently.
+ */
+export const SELECT_RESULT_FORMATS = ["junit", "assertion-results", "xcresult-summary"] as const;
+
+export type SelectResultFormat = (typeof SELECT_RESULT_FORMATS)[number];
+
 export type Invocation =
   | {
       readonly kind: "command";
@@ -267,6 +333,8 @@ export type Invocation =
       /** Repo-relative file this invocation's stdout is written to, or null. */
       readonly stdoutTo: string | null;
       readonly why: string | null;
+      /** The focused form (`test` only), or absent. */
+      readonly select?: TestSelection;
       readonly raw: Readonly<Record<string, unknown>>;
     }
   | {
@@ -275,6 +343,8 @@ export type Invocation =
       /** The guard every step of this invocation runs under, or null. */
       readonly stall: StallGuard | null;
       readonly why: string | null;
+      /** The focused form (`test` only), or absent. */
+      readonly select?: TestSelection;
       readonly raw: Readonly<Record<string, unknown>>;
     }
   | {
@@ -1118,6 +1188,402 @@ function optionalStdoutTo(path: string, pointer: string, value: unknown): string
   return requireStdoutTo(path, pointer, value);
 }
 
+/** The one verb a focused selection may be declared on (zheref/nen#207). */
+export const SELECTABLE_VERB = "test";
+
+/** The one token `select.each` is substituted with: the caller's identifier. */
+export const SELECTION_TOKEN = "{id}";
+
+/** The keys `project.verbs.<lane>.test.select` is made of. Nen's, not the repo's. */
+const SELECT_KEYS: readonly string[] = ["exe", "argv", "each", "pattern", "results", "stdoutTo", "artifacts", "env", "why"];
+
+/**
+ * The one directory a focused `results.path` may name something inside
+ * (zheref/nen#207, the maintainer's structural ruling on PR #393). nen moves
+ * the declared results path aside before every focused run; an ALLOWLIST is
+ * what makes that safe by construction, where a denylist of things never to
+ * touch (the root, `.git`, `nen/`, tracked files) was reproduced failing open
+ * four ways -- a case variant, a symlinked ancestor, untracked work and a
+ * submodule.
+ */
+export const FOCUSED_RESULTS_DIR = ".nen/focused";
+
+/** Where moved-aside results live, inside FOCUSED_RESULTS_DIR. Never a results path. */
+export const FOCUSED_PREVIOUS = ".previous";
+
+/** nen's lock for one focused run at a time, inside FOCUSED_RESULTS_DIR. Never a results path. */
+export const FOCUSED_LOCK = ".lock";
+
+/**
+ * The declared results path, normalised for the filesystem -- separators to
+ * `/`, `posix.normalize`d, no leading `./` or trailing `/` -- when it sits
+ * STRICTLY inside FOCUSED_RESULTS_DIR, spelled EXACTLY (`.NEN/focused/x` is
+ * refused, not folded onto nen's directory), is already NFC (a decomposed
+ * spelling is a different name on some filesystems and the same on others),
+ * and does not name, in ANY case, nen's own FOCUSED_PREVIOUS area or
+ * FOCUSED_LOCK; null otherwise.
+ */
+export function focusedResultsRelative(value: string): string | null {
+  if (value !== value.normalize("NFC")) return null;
+  const normalised = posix
+    .normalize(value.replace(/\\/g, "/"))
+    .replace(/^(?:\.\/)+/, "")
+    .replace(/\/+$/, "");
+  const prefix = `${FOCUSED_RESULTS_DIR}/`;
+  if (!normalised.startsWith(prefix) || normalised.length === prefix.length) return null;
+  const inside = normalised.slice(prefix.length).split("/");
+  if (inside.some((segment): boolean => segment === "" || segment === "." || segment === "..")) return null;
+  const first = (inside[0] ?? "").toLowerCase();
+  if (first === FOCUSED_PREVIOUS || first === FOCUSED_LOCK) return null;
+  return normalised;
+}
+
+/** The two keys `select.results` is made of. */
+const SELECT_RESULTS_KEYS: readonly string[] = ["path", "format"];
+
+/**
+ * Attach `select` to the row that declares it, or refuse it where nen would
+ * never read it.
+ *
+ * THREE PLACES A `select` CANNOT HONESTLY SIT, each refused by pointer at load
+ * rather than preserved, because preserved it would be read by nobody and the
+ * repository would believe it had a focused path:
+ *
+ *   * on any verb but `test` -- `--select` exists on `nen shu test` alone;
+ *   * on a `test` SEAT -- a row that says the lane has no test cannot also say
+ *     how to run some of them;
+ *   * under a near-miss of its own name (`selct`, `Select`, `selects`) on the
+ *     `test` row -- the same rule `project.launch` and `project.evidence` are
+ *     held to.
+ */
+function withSelection(path: string, pointer: string, verb: string, invocation: Invocation): Invocation {
+  const raw = invocation.raw;
+  if (verb === SELECTABLE_VERB) {
+    refuseNearMissKey(path, pointer, raw, ["select"], `project.verbs.<lane>.${SELECTABLE_VERB}`, (): string =>
+      "`nen shu test --select` would refuse this lane as declaring no focused selection",
+    );
+  }
+  if (raw["select"] === undefined || raw["select"] === null) return invocation;
+  if (verb !== SELECTABLE_VERB) {
+    throw new SchemaError(
+      path,
+      `${pointer}.select`,
+      `declares a focused selection on '${verb}', and nen reads one on '${SELECTABLE_VERB}' only: '--select' is a 'nen shu ${SELECTABLE_VERB}' flag. Move the block to project.verbs.<lane>.${SELECTABLE_VERB}.select, or drop it`,
+    );
+  }
+  if (invocation.kind === "unsupported") {
+    throw new SchemaError(
+      path,
+      `${pointer}.select`,
+      `declares a focused selection on a '${verb}' seat. A row that says this lane has no ${verb} cannot also say how to run some of them: declare the regression row, or drop 'select'`,
+    );
+  }
+  return { ...invocation, select: parseSelection(path, `${pointer}.select`, raw["select"]) };
+}
+
+/** True when any element of `argv` names the selection token. */
+function namesSelectionToken(argv: readonly string[]): boolean {
+  return argv.some((item): boolean => item.includes(SELECTION_TOKEN));
+}
+
+function parseSelection(path: string, pointer: string, value: unknown): TestSelection {
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(path, pointer, raw, SELECT_KEYS, pointer, (meant): string =>
+    `the focused run would go ahead with '${meant}' silently unset`,
+  );
+  if (raw["stall"] !== undefined && raw["stall"] !== null) {
+    throw new SchemaError(
+      path,
+      `${pointer}.stall`,
+      `declares a stall guard on the focused '${SELECTABLE_VERB}' form, and tests are untimed (zheref/nen#227): a quiet test run is a run that is thinking. Remove the block`,
+    );
+  }
+  const exe = requireString(path, `${pointer}.exe`, raw["exe"]);
+  const argv = requireArgv(path, `${pointer}.argv`, raw["argv"]);
+  const each = requireArgv(path, `${pointer}.each`, raw["each"]);
+  if (exe.includes(SELECTION_TOKEN) || namesSelectionToken(argv)) {
+    throw new SchemaError(
+      path,
+      exe.includes(SELECTION_TOKEN) ? `${pointer}.exe` : `${pointer}.argv`,
+      `names ${SELECTION_TOKEN}, and nen substitutes ${SELECTION_TOKEN} in 'each' only -- once per identifier, appended after 'argv'. Here it would reach the runner as the literal token. Move it into 'each'`,
+    );
+  }
+  if (!namesSelectionToken(each)) {
+    throw new SchemaError(
+      path,
+      `${pointer}.each`,
+      `names no ${SELECTION_TOKEN}, so every identifier the caller selects would expand to the same arguments and select nothing. Write the runner's per-identifier form with ${SELECTION_TOKEN} where the identifier goes, e.g. ["-only-testing:${SELECTION_TOKEN}"] or ["${SELECTION_TOKEN}"]`,
+    );
+  }
+  const pattern = requireString(path, `${pointer}.pattern`, raw["pattern"]);
+  // THE PATTERN MUST COMPILE ON ITS OWN, NOT ONLY INSIDE nen's ANCHORS
+  // (Nobunaga N2). `a)|(?:.*` is no regular expression by itself, yet
+  // `^(?:a)|(?:.*)$` compiles -- and matches everything, because the author's
+  // own `)` closed nen's group and turned the anchors into two alternatives.
+  try {
+    new RegExp(pattern);
+  } catch (error) {
+    throw new SchemaError(
+      path,
+      `${pointer}.pattern`,
+      `is not a regular expression nen can compile on its own (${error instanceof Error ? error.message : String(error)}). nen anchors the pattern as ^(?:<pattern>)$, so a pattern that only compiles once wrapped is one whose parentheses close nen's anchoring group and match far more than it says`,
+    );
+  }
+  const hazard = catastrophicShape(pattern);
+  if (hazard !== null) {
+    throw new SchemaError(
+      path,
+      `${pointer}.pattern`,
+      `is refused: '${hazard.fragment}' is ${hazard.why}. The pattern is run against every identifier a caller passes to '--select', so a potentially exponential-backtracking shape is refused at load. Rewrite it as a character class or a single quantifier`,
+    );
+  }
+  try {
+    new RegExp(`^(?:${pattern})$`);
+  } catch (error) {
+    throw new SchemaError(
+      path,
+      `${pointer}.pattern`,
+      `is not a regular expression nen can compile (${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
+  optionalStrings(path, `${pointer}.artifacts`, raw["artifacts"]).forEach((value, index): void =>
+    void requireRelativeOutput(path, `${pointer}.artifacts[${index}]`, value),
+  );
+  return {
+    exe,
+    argv,
+    each,
+    pattern,
+    results: parseSelectionResults(path, `${pointer}.results`, raw["results"]),
+    stdoutTo: focusedStdoutTo(path, `${pointer}.stdoutTo`, raw["stdoutTo"]),
+    why: optionalString(path, `${pointer}.why`, raw["why"]),
+    raw,
+  };
+}
+
+/** The focused block's `stdoutTo`, held to every other focused output's rules. */
+function focusedStdoutTo(path: string, pointer: string, value: unknown): string | null {
+  const stdoutTo = optionalStdoutTo(path, pointer, value);
+  if (stdoutTo !== null) requireRelativeOutput(path, pointer, stdoutTo);
+  return stdoutTo;
+}
+
+/**
+ * `select.results`, required: a focused block that names no results file is a
+ * focused run whose "0 tests executed" nen could not see.
+ */
+function parseSelectionResults(path: string, pointer: string, value: unknown): SelectionResults {
+  if (value === undefined || value === null) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `is required. A focused run must name its results file so nen can count the tests it EXECUTED: a runner that matched none of the identifiers exits 0, and without the file that reads exactly like a pass. Declare {"path": "<repo-relative results path>", "format": "<one of ${SELECT_RESULT_FORMATS.join(", ")}>"}`,
+    );
+  }
+  const raw = requireRecord(path, pointer, value);
+  refuseNearMissKey(path, pointer, raw, SELECT_RESULTS_KEYS, pointer, (meant): string =>
+    `the focused run's results would be read with '${meant}' unset`,
+  );
+  const resultsPath = requireStdoutTo(path, `${pointer}.path`, raw["path"]);
+  requireRelativeOutput(path, `${pointer}.path`, resultsPath);
+  if (resultsPath !== resultsPath.normalize("NFC")) {
+    throw new SchemaError(
+      path,
+      `${pointer}.path`,
+      `'${resultsPath}' is not NFC-normalised. A decomposed spelling names a different file on some filesystems and the same file on others, and nen will not guess which; write the path in NFC`,
+    );
+  }
+  if (focusedResultsRelative(resultsPath) === null) {
+    throw new SchemaError(
+      path,
+      `${pointer}.path`,
+      `'${resultsPath}' is not strictly inside '${FOCUSED_RESULTS_DIR}/'. nen moves the declared results path aside before every focused run, so it may only name something inside the directory nen owns for exactly this -- '${FOCUSED_RESULTS_DIR}/<name>', never the directory itself, its '${FOCUSED_PREVIOUS}' area or its '${FOCUSED_LOCK}'. The prefix is matched exactly, after posix.normalize. Name e.g. '${FOCUSED_RESULTS_DIR}/results.xml'`,
+    );
+  }
+  return { path: resultsPath, format: requireEnum(path, `${pointer}.format`, raw["format"], SELECT_RESULT_FORMATS) };
+}
+
+/**
+ * A repo-relative path normalised for comparison (Nobunaga N4): separators
+ * folded to `/`, `posix.normalize`d (so `a/./b`, `a//b` and `a/x/../b` are one
+ * path), no leading `./` or trailing `/`, and CASE-FOLDED -- a case-insensitive
+ * filesystem (the default on macOS and Windows) writes `Coverage/LCOV.info`
+ * and `coverage/lcov.info` to one file. Lexical only: a symlink cannot be
+ * judged at load, and ../shu/run.ts's real containment is the run-time half.
+ */
+function comparablePath(value: string): string {
+  const normalised = posix.normalize(value.replace(/\\/g, "/"));
+  return normalised.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "").replace(/^\.$/, "").toLowerCase();
+}
+
+/** A focused output path that climbs out of the tree, refused by pointer. */
+function requireRelativeOutput(path: string, pointer: string, value: string): void {
+  const normalised = posix.normalize(value.replace(/\\/g, "/"));
+  if (normalised === ".." || normalised.startsWith("../") || normalised.startsWith("/") || /^[A-Za-z]:\//.test(normalised)) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${value}' normalises to '${normalised}', which is outside the repository. A focused run's outputs are repo-relative paths inside the tree`,
+    );
+  }
+  // GENERATED OUTPUT ONLY. `results.path` is REMOVED, recursively, before every
+  // focused run (../shu/run.ts), so a focused output naming the repository
+  // root, git's own directory or this contract's directory is a declaration
+  // that deletes the repository, its history or its own policy on first use.
+  // Refused for every focused output, not only `results.path`, so the three
+  // can never be told apart by what nen does to them. Compared case-folded
+  // (`.GIT` is `.git` on the default macOS and Windows filesystems).
+  const folded = comparablePath(value);
+  const protectedAs =
+    folded === ""
+      ? "the repository root"
+      : folded === ".git" || folded.startsWith(".git/")
+        ? "git's own directory"
+        : folded === "nen" || folded.startsWith("nen/")
+          ? "nen/, the directory this contract lives in"
+          : null;
+  if (protectedAs !== null) {
+    throw new SchemaError(
+      path,
+      pointer,
+      `'${value}' is ${protectedAs === "the repository root" ? "" : "or is inside "}${protectedAs}. A focused output must be GENERATED output -- nen clears the declared results path, file or directory, before every focused run -- so it is never the root, never under .git, never under nen/, and never anything git tracks. Name a path of its own, e.g. '.nen/focused/results.xml'`,
+    );
+  }
+}
+
+/** True when `a` and `b` are the same path, or one is a directory holding the other. */
+function pathsOverlap(a: string, b: string): boolean {
+  const left = comparablePath(a);
+  const right = comparablePath(b);
+  if (left === "" || right === "") return true;
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
+/** True when `token` IS `written`, or a path inside it. Never the other way. */
+function namesWrittenPath(token: string, written: string): boolean {
+  const left = comparablePath(token);
+  const right = comparablePath(written);
+  if (left === "" || right === "") return false;
+  return left === right || left.startsWith(`${right}/`);
+}
+
+/**
+ * The path-shaped pieces of one argv element: the element itself, and what is
+ * left of it after cutting at `=`, `:`, `,`, `@` and quotes -- the places a
+ * runner's `--flag=value` or `-flag:value` puts a path.
+ */
+function argvTokens(element: string): readonly string[] {
+  return [element, ...element.split(/[=:,@"'\s]/)].filter((token): boolean => token !== "");
+}
+
+/** Every path a row says it writes: its `stdoutTo`(s) and its `artifacts`. */
+function writtenPaths(invocation: Invocation | undefined): readonly string[] {
+  if (invocation === undefined || invocation.kind === "unsupported") return [];
+  const redirects =
+    invocation.kind === "command"
+      ? [invocation.stdoutTo]
+      : invocation.steps.map((step): string | null => step.stdoutTo);
+  const artifacts = Array.isArray(invocation.raw["artifacts"])
+    ? (invocation.raw["artifacts"] as unknown[]).filter((item): item is string => typeof item === "string")
+    : [];
+  return [...redirects.filter((item): item is string => item !== null), ...artifacts];
+}
+
+/**
+ * A focused run never writes where the regression run does.
+ *
+ * THE AKA REGRESSION CAPTURE IS EVERY LANE'S `test` ROW OUTPUTS, EVERY LANE'S
+ * `coverage` ROW REPORTS AND nen's capture sidecars under CAPTURE_DIRECTORY --
+ * the files mukai later measures and `--from-capture` vouches for. Gathered
+ * across EVERY lane (Nobunaga N4), because two lanes routinely share one tree.
+ * A focused run that wrote over any of them would leave a capture describing a
+ * subset of the suite. So, at load and by pointer:
+ *
+ *   * the focused block's `results.path`, `stdoutTo` and every `artifacts`
+ *     entry may not be, sit inside, or contain such a path;
+ *   * no `argv` or `each` element may NAME one, whole or as the value of a
+ *     `--flag=` / `-flag:` (Nobunaga N3) -- `--outputFile.junit=<the regression
+ *     file>` is the regression capture overwritten by a flag.
+ *
+ * WHAT THIS DOES NOT CLAIM: nen does not interpret argv beyond that. A runner
+ * that derives an output path from something else (a config file, an
+ * environment variable, a default) is not seen, and a symlink cannot be judged
+ * here -- both are said in USAGE rather than implied away.
+ */
+/**
+ * Every path the aka regression run writes, across every lane: each `test` and
+ * `coverage` row's `stdoutTo`(s) and `artifacts`, and CAPTURE_DIRECTORY.
+ * Exported for ../shu/run.ts, which re-checks a focused results path against
+ * these REAL paths before it clears it (Nobunaga N10).
+ */
+export function regressionOutputs(verbs: Readonly<Record<string, Readonly<Record<string, Invocation>>>>): readonly string[] {
+  return [
+    ...Object.values(verbs).flatMap((rows): readonly string[] => [
+      ...writtenPaths(rows[SELECTABLE_VERB]),
+      ...writtenPaths(rows["coverage"]),
+    ]),
+    CAPTURE_DIRECTORY,
+  ];
+}
+
+/**
+ * Does an argv token LOOK like a path (Nobunaga N11)? It names a directory
+ * (`/`) or ends in an extension (`.xml`). A bare word -- `junit` in
+ * `--reporter=junit`, the `test` action -- is a word, and comparing it to a
+ * single-segment output of the same spelling would refuse a declaration that
+ * writes nothing there.
+ */
+function pathShaped(token: string): boolean {
+  return token.includes("/") || token.includes("\\") || /[^./\\]\.[A-Za-z0-9]+$/.test(token);
+}
+
+function refuseSelectionOverlap(path: string, verbs: Readonly<Record<string, Readonly<Record<string, Invocation>>>>): void {
+  const regression = regressionOutputs(verbs);
+  for (const [lane, rows] of Object.entries(verbs)) {
+    const test = rows[SELECTABLE_VERB];
+    if (test === undefined || test.kind === "unsupported" || test.select === undefined) continue;
+    const select = test.select;
+    const at = `project.verbs.${lane}.${SELECTABLE_VERB}.select`;
+    const focused: { readonly value: string; readonly at: string }[] = [
+      { value: select.results.path, at: `${at}.results.path` },
+    ];
+    if (select.stdoutTo !== null) focused.push({ value: select.stdoutTo, at: `${at}.stdoutTo` });
+    optionalStrings(path, `${at}.artifacts`, select.raw["artifacts"]).forEach(
+      (value, index): void => void focused.push({ value, at: `${at}.artifacts[${index}]` }),
+    );
+    for (const entry of focused) {
+      const clash = regression.find((other): boolean => pathsOverlap(entry.value, other));
+      if (clash === undefined) continue;
+      throw new SchemaError(
+        path,
+        entry.at,
+        `'${entry.value}' overlaps '${clash}', which the regression run writes (every lane's '${SELECTABLE_VERB}' and 'coverage' outputs, and nen's capture sidecars under '${CAPTURE_DIRECTORY}'; compared normalised and case-folded). A focused run writes its own results and never the aka regression capture: name a separate path`,
+      );
+    }
+    const elements: { readonly value: string; readonly at: string }[] = [
+      ...select.argv.map((value, index): { value: string; at: string } => ({ value, at: `${at}.argv[${index}]` })),
+      ...select.each.map((value, index): { value: string; at: string } => ({ value, at: `${at}.each[${index}]` })),
+    ];
+    for (const element of elements) {
+      for (const token of argvTokens(element.value)) {
+        // A BARE WORD IS COMPARED ONLY TO A MULTI-SEGMENT OUTPUT, where a
+        // same-spelled word cannot be an accident of vocabulary; a
+        // path-shaped token is compared to every output.
+        const clash = regression.find(
+          (other): boolean =>
+            (pathShaped(token) || comparablePath(other).includes("/")) && namesWrittenPath(token, other),
+        );
+        if (clash === undefined) continue;
+        throw new SchemaError(
+          path,
+          element.at,
+          `'${element.value}' names '${clash}', which the regression run writes. A focused run must not be pointed at the aka regression capture through an argument either: give the runner a separate path, and declare it under 'results', 'stdoutTo' or 'artifacts'`,
+        );
+      }
+    }
+  }
+}
+
 function parseVerbs(
   path: string,
   value: unknown,
@@ -1137,7 +1603,7 @@ function parseVerbs(
       // uses `analyze`, `publish`, `codegen`, `tokens`, `storybook`,
       // `resume:pdf`; a closed verb list here would make this file nen's.
       refuseStallOnTests(path, `${pointer}.${verb}`, verb, invocation);
-      parsed[verb] = parseInvocation(path, `${pointer}.${verb}`, invocation);
+      parsed[verb] = withSelection(path, `${pointer}.${verb}`, verb, parseInvocation(path, `${pointer}.${verb}`, invocation));
     }
     // EMPTY IS REFUSED AT BOTH LEVELS, exactly as `project.lanes` refuses it,
     // and for the same reason: `$`-prefixed metadata is skipped above, so a map
@@ -1155,6 +1621,7 @@ function parseVerbs(
     }
     verbs[lane] = parsed;
   }
+  refuseSelectionOverlap(path, verbs);
   if (Object.keys(verbs).length === 0) {
     throw new SchemaError(
       path,
