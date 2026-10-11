@@ -1249,18 +1249,35 @@ export async function fetchPrState(
   // SEPARATE field -- `checks` stays the head's rollup, byte for byte, for
   // CON-32(a), enrolment and every other reader -- and zero calls on every
   // evaluation the narrowing above rules out (see readEarlierRoundChecks).
+  // WHICH earlier-head round checks to read. Under `bounded` the verdict
+  // counts them (option B of the 2026-09-29 ruling). Under `strict` the
+  // verdict never does -- `reviewerRound`'s earlier-head limb is bounded-only
+  // -- but the rounds-owed row's pending-request reading (zheref/nen#240,
+  // criterion 4) asks whether an owed reviewer had a round at ANY head, and
+  // for a check-only reviewer that is an earlier run (Copilot on
+  // zheref/nen#388). So under strict they are read ONLY for a reviewer with a
+  // review request PENDING that the bounded rule would want read -- no call
+  // otherwise -- and only the detail text uses them.
+  const boundedWanted = earlierRoundCheckWanted(
+    options.identities,
+    "bounded",
+    normalizeReviewers(reviewers),
+    checkRollupNodes,
+    reviews,
+  );
+  const earlierWanted =
+    options.policy === "bounded"
+      ? boundedWanted
+      : boundedWanted.filter((wanted): boolean => {
+          const pattern = options.identities.reviewer(wanted.reviewer)?.loginPattern;
+          return pattern !== undefined && requests.some((login): boolean => pattern.test(login));
+        });
   const earlier = await readEarlierRoundChecks(
     source,
     repo,
     prNumber,
     head,
-    earlierRoundCheckWanted(
-      options.identities,
-      options.policy,
-      normalizeReviewers(reviewers),
-      checkRollupNodes,
-      reviews,
-    ),
+    earlierWanted,
     options.maxEarlierCommitReads ?? EARLIER_COMMIT_READS_DEFAULT,
   );
 

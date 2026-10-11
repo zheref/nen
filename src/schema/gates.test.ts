@@ -13,6 +13,7 @@ import {
   findDuplicateKey,
   GatesDuplicateKeyError,
   visibleKey,
+  pointerSegment,
   type GatesKeyLevel,
 } from "./gates.js";
 import { SchemaError } from "./errors.js";
@@ -1005,6 +1006,21 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     // The raw key stays raw in the structured list, for --json.
     expect(error.unread.map((entry) => entry.key)).toEqual(hostile);
     expect(visibleKey("plain_key")).toBe("'plain_key'");
+  });
+
+  it("Copilot on #388 (C): an ANCESTOR key with an ESC and a newline is escaped inside the duplicate-key pointer", () => {
+    const text = '{"version":1,"$note\\u001b[2J\\nforged":{"a":1,"a":2}}';
+    let error: unknown = null;
+    try {
+      parseGatesText(at, text);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(GatesDuplicateKeyError);
+    const message = (error as GatesDuplicateKeyError).message;
+    expect(message).not.toMatch(/[\u001b\n]/);
+    expect(message).toContain('at "$note\\u001b[2J\\nforged", carries the key \'a\' twice');
+    expect(pointerSegment("round_policy")).toBe("round_policy");
   });
 
   it("F3: a key repeated in one object is refused by pointer, never read as the last value", () => {

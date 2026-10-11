@@ -659,6 +659,17 @@ export function visibleKey(key: string): string {
   );
 }
 
+/**
+ * One key as a POINTER segment (Copilot on zheref/nen#388): bare when
+ * printable ASCII with no quote or backslash, else the F2 escaped form -- so an
+ * ancestor key a file chose (`$note\u001b[2J\nforged`) never reaches a
+ * terminal raw inside a pointer either.
+ */
+export function pointerSegment(key: string): string {
+  const visible = visibleKey(key);
+  return visible.startsWith("'") ? visible.slice(1, -1) : visible;
+}
+
 /** The edit distance between `a` and `b`, ignoring case, `_` and `-`. */
 function keyDistance(a: string, b: string): number {
   const x = a.toLowerCase().replace(/[_-]/g, "");
@@ -715,7 +726,7 @@ function collectUnknownKeys(
       found.push({ pointer, key, level });
       continue;
     }
-    const here = pointer === "$" ? key : `${pointer}.${key}`;
+    const here = pointer === "$" ? pointerSegment(key) : `${pointer}.${pointerSegment(key)}`;
     if (spec.object !== undefined && isRecord(value)) {
       collectUnknownKeys(here, value, spec.object, found);
     }
@@ -1432,7 +1443,7 @@ export function findDuplicateKey(text: string): { readonly pointer: string; read
     const top = stack[stack.length - 1];
     if (top === undefined) return "$";
     if (top.kind === "array") return `${top.path}[${top.index}]`;
-    const key = top.lastKey ?? "?";
+    const key = pointerSegment(top.lastKey ?? "?");
     return top.path === "$" ? key : `${top.path}.${key}`;
   };
   let i = 0;

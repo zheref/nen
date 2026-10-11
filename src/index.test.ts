@@ -813,6 +813,22 @@ describe("nen schema check -- an unknown nen/gates.json key is exit 2 (zheref/ne
     }
   });
 
+  it("Copilot on #388 (C): a duplicate under an ancestor key carrying ESC and a newline reaches neither stream raw", async () => {
+    const root = withGates((): void => undefined);
+    try {
+      const path = join(root, "nen", "gates.json");
+      writeFileSync(path, readFileSync(path, "utf8").replace(/^\{/, '{"$note\\u001b[2J\\nforged":{"a":1,"a":2},'));
+      const text = await capture(["schema", "check", "--repo", root]);
+      expect(text.code).toBe(2);
+      const all = [...text.out, ...text.err].join("\n");
+      expect(all).not.toContain("\u001b");
+      expect(all).not.toContain("\nforged");
+      expect(text.err.join("\n")).toContain('nen/gates.json: "$note\\u001b[2J\\nforged".a');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("F3: a key repeated in one object is exit 2, named by pointer, and listed in duplicateKeys", async () => {
     const root = withGates((): void => undefined);
     try {

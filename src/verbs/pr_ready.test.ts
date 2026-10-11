@@ -2367,3 +2367,71 @@ describe("prReady -- the rounds-owed row's own-request reading (zheref/nen#240)"
     expect(timelineReads).toBe(0);
   });
 });
+
+// ── Copilot on zheref/nen#388, thread B: the AC4 reading under strict, end to end ──
+
+describe("prReady -- the pending-request reading reads earlier-head round checks under strict, for the reading only", () => {
+  const earlierRun = {
+    name: "bisky / review",
+    status: "completed",
+    conclusion: "success",
+    pull_requests: [
+      {
+        number: 9,
+        url: "https://api.github.com/repos/zheref/example/pulls/9",
+        base: { ref: "main", repo: { id: 1, name: "example", url: "https://api.github.com/repos/zheref/example" } },
+      },
+    ],
+  };
+  const strictWithPendingBisky = (calls: string[]): PrStateSource => {
+    const base = stubSource({
+      pullRequestCommits: async (): Promise<unknown[]> => {
+        calls.push("commits");
+        return [{ sha: "0ldhead" }, { sha: "cafebabe" }];
+      },
+      commitCheckRuns: async (_repo: PrRef, sha: string): Promise<unknown> => {
+        calls.push(sha);
+        return { total_count: 1, check_runs: sha === "0ldhead" ? [earlierRun] : [] };
+      },
+    });
+    return {
+      ...base,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => ({
+        ...(await base.pullRequestSnapshot(repo, n)),
+        reviewRequests: [{ login: "bisky" }],
+      }),
+    };
+  };
+  const strictInput = (): PrReadyInput =>
+    input({ values: { ...input().values, "round-policy": "strict", reviewers: "sasuke,tenma,bisky" } });
+
+  it("bisky's earlier-head SUCCESS makes the reading 'pending request only', while the STRICT verdict still owes bisky", async () => {
+    const calls: string[] = [];
+    const { io, out } = capture();
+    const code = await prReady(strictInput(), io, stubDeps(strictWithPendingBisky(calls)));
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n")) as ReadyReport;
+    expect(calls).toEqual(["commits", "0ldhead"]);
+    const row = report.conjuncts.find((conjunct) => conjunct.id === "rounds-owed");
+    expect(row?.status).toBe("failed");
+    expect(row?.reason).toBe(
+      "not-ready: a configured reviewer's round is still owed at the current head (CON-32b): bisky (review requested, not yet posted)" +
+        " — pending request only: no owed reviewer lacks a round at any head; each is owed because a review request for it is still pending (zheref/nen#240)",
+    );
+  });
+
+  it("with no pending request, strict reads no earlier commit at all", async () => {
+    const calls: string[] = [];
+    const base = strictWithPendingBisky(calls);
+    const source: PrStateSource = {
+      ...base,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => ({
+        ...(await base.pullRequestSnapshot(repo, n)),
+        reviewRequests: [],
+      }),
+    };
+    const { io } = capture();
+    await prReady(strictInput(), io, stubDeps(source));
+    expect(calls).toEqual([]);
+  });
+});

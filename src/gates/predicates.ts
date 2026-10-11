@@ -1282,12 +1282,24 @@ export function reviewerRoundFacts(
     );
     return {
       reviewer: name,
-      posted: inputs.reviews.filter((review): boolean => loginPattern.test(review.author)).length,
+      // Copilot on zheref/nen#388: the SAME posted-review test the any-head
+      // round reads, so a draft (`PENDING`, or no commit) is never a round.
+      posted: inputs.reviews.filter((review): boolean => isPostedReviewBy(review, loginPattern)).length,
       pendingRequest: inputs.reviewRequests.some((request): boolean => requestMatches(request, loginPattern)),
       round: outcome.had ? outcome.via : null,
       loginPattern,
     };
   });
+}
+
+/**
+ * A review POSTED by the reviewer `loginPattern` names: submitted (not
+ * `PENDING` -- a draft somebody started and never submitted) and on a commit.
+ * The one test `reviewerRound`'s any-head limb and `reviewerRoundFacts`'
+ * posted count share (Copilot review on zheref/nen#217, and on #388).
+ */
+export function isPostedReviewBy(review: Review, loginPattern: RegExp): boolean {
+  return loginPattern.test(review.author) && review.state !== "PENDING" && review.commitId !== null;
 }
 
 /** Which branch of `reviewerRound` found a reviewer's round. */
@@ -1374,11 +1386,7 @@ function reviewerRound(
   // would satisfy CON-32(b) on a PR nobody has reviewed (Copilot review on
   // zheref/nen#217). `roundAtCurrentHead` already excludes it, since a
   // null commitId never equals a head SHA.
-  const roundAtAnyHead = (): boolean =>
-    reviews.some(
-      (review): boolean =>
-        loginPattern.test(review.author) && review.state !== "PENDING" && review.commitId !== null,
-    );
+  const roundAtAnyHead = (): boolean => reviews.some((review): boolean => isPostedReviewBy(review, loginPattern));
   const roundAtCurrentHead = (): boolean =>
     reviews.some(
       (review): boolean =>

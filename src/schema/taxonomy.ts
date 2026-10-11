@@ -22,7 +22,7 @@
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
 import { describeContract, loadContract } from "./contract.js";
-import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, visibleKey, type GateIdentities } from "./gates.js";
+import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
@@ -355,11 +355,8 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
   const duplicateKeys: string[] = [];
   // A key as the list shows it: plain when printable ASCII, else escaped
   // (Feitan F2) -- the file's text never reaches a terminal raw.
-  const shown = (pointer: string, key: string): string => {
-    const visible = visibleKey(key);
-    const bare = visible.startsWith("'") ? visible.slice(1, -1) : visible;
-    return `${GATES_FILE}: ${pointer === "$" ? "" : `${pointer}.`}${bare}`;
-  };
+  const shown = (pointer: string, key: string): string =>
+    `${GATES_FILE}: ${pointer === "$" ? "" : `${pointer}.`}${pointerSegment(key)}`;
   const checks: SchemaCheck[] = [
     run(LABELS_FILE, root, true, (): string => {
       const labels = loadLabelTaxonomy(root);

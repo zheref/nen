@@ -24,7 +24,7 @@ import {
 } from "./ready.js";
 import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
 import { parseCheckRollup } from "../github/parse.js";
-import { defaultReviewers } from "./predicates.js";
+import { defaultReviewers, reviewerRoundFacts } from "./predicates.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 // The same fixture identities ./predicates.test.ts runs the ported bats cases
@@ -1830,6 +1830,42 @@ describe("evaluateReady -- the rounds-owed row's pending-request and own-request
     expect(evaluation.conjuncts.find((row) => row.id === "rounds-owed")?.reason).toBe(
       `${OWED_PREFIX}bugbot (review requested, not yet posted)${NO_ROUND_YET("bugbot")}`,
     );
+  });
+
+  it("Copilot on #388 (A): a DRAFT review -- PENDING, or on no commit -- is not a round at any head", () => {
+    for (const draft of [
+      { author: "sasuke", state: "PENDING", commit_id: null, submitted_at: null },
+      { author: "sasuke", state: "PENDING", commit_id: "0ldhead", submitted_at: null },
+      { author: "sasuke", state: "COMMENTED", commit_id: null, submitted_at: NOW },
+    ]) {
+      const evaluation = evaluateReady(
+        IDENTITIES,
+        readyState({ reviews: [draft, approvedAtHead("tenma")], review_requests: [{ login: "sasuke" }] }),
+        OPTIONS,
+      );
+      expect(evaluation.line, JSON.stringify(draft)).toBe(
+        `${OWED_PREFIX}sasuke (review requested, not yet posted)${NO_ROUND_YET("sasuke")}`,
+      );
+    }
+  });
+
+  it("Copilot on #388 (A): a draft review is not counted as a POSTED round in the round counts either", () => {
+    const facts = reviewerRoundFacts(
+      IDENTITIES,
+      {
+        reviewRequests: [],
+        checks: [],
+        reviews: [
+          { author: "sasuke", state: "PENDING", commitId: null, submittedAt: null },
+          { author: "sasuke", state: "PENDING", commitId: "0ldhead", submittedAt: null },
+          { author: "sasuke", state: "COMMENTED", commitId: "0ldhead", submittedAt: NOW },
+        ],
+      },
+      HEAD,
+      ["sasuke"],
+      "bounded",
+    );
+    expect(facts[0]?.posted).toBe(1);
   });
 
   it("R4: under --round-policy strict, an EARLIER-head round check still counts as a round at some head", () => {
