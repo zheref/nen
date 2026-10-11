@@ -3,7 +3,9 @@
 // is pushed), and -- zheref/nen#227 -- `nen wc catch-up` (./catchup.ts) and
 // `nen wc publish` (./publish.ts), so no skill hand-rolls a rebase or a push;
 // and -- zheref/nen#241 -- `nen wc worktrees` and `nen wc swap` (./swap.ts),
-// so no skill hand-rolls a worktree swap with raw checkout and stash.
+// so no skill hand-rolls a worktree swap with raw checkout and stash; and --
+// zheref/nen#299 -- `nen wc worktree` (./worktree.ts), one detached worktree at
+// a fixed path with the core-to-worktree copy.
 
 import { assertRepoRoot } from "../repo/root.js";
 import {
@@ -16,6 +18,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { readTextFile } from "../cli/inputs.js";
+import { plainLine } from "../cli/plain.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
 import { addedNote, admittedAdditions, injectedMessage, readBack, sentTrailers } from "../commit/readback.js";
@@ -37,6 +40,7 @@ import {
   WORKTREES_CONTRACT,
   type SwapOutcome,
 } from "./swap.js";
+import { copyPathRefusal, manageWorktree, nameRefusal, WORKTREE_CONTRACT, WORKTREES_DIR } from "./worktree.js";
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
@@ -46,6 +50,7 @@ nen wc catch-up -- bring this branch up to date with its base; stop on a conflic
 nen wc publish -- push this branch, under its own name, to its upstream's remote; never a force, never the trunk.
 nen wc worktrees -- every checkout of this project: branch, dirt, distance, last commit.
 nen wc swap -- bring a worktree's committed tree into the core checkout, and put core back.
+nen wc worktree -- one detached worktree at a fixed path, at origin/<base>'s tip; files copied in from core.
 
 classify:
   nen wc classify --repo <path> [--base main]
@@ -357,7 +362,83 @@ where, and the parked commit is still pinned.
 return | status), core, coreBranch, head, active, target, branch, mode (view |
 take), home, homeSha, parked, reloadHints: [path, ...], dirty ({ checkout,
 paths } on exit 3, else null) }. After --return, active is false and the
-other fields describe the swap that was undone.`;
+other fields describe the swap that was undone.
+
+worktree:
+  nen wc worktree --repo <path> --name <name> --base <branch>
+                  [--copy-from-core <path>]... [--dry-run] [--json]
+
+  --repo            ANY checkout of the project; core (the checkout whose .git
+                    is the common git directory) is resolved through 'git
+                    rev-parse --git-common-dir'.
+  --name            one plain path segment; the worktree is
+                    <core>/${WORKTREES_DIR}/<name>.
+  --base            the branch whose fetched tip the worktree stands at, as
+                    origin/<base>: a short name 'git check-ref-format
+                    --branch' returns unchanged, never shaped like an option,
+                    a refspec or a force.
+  --copy-from-core  a repo-relative path copied FROM CORE into the worktree;
+                    repeatable. Only this flag names the list today: reading
+                    nen/contract.json's project.fromCore[] is a follow-up.
+  --dry-run         fetch nothing (the tip is read as last fetched), write
+                    nothing; print the state and every planned action.
+
+THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at origin/<base>'s
+fetched tip ('git fetch --end-of-options origin
+refs/heads/<base>:refs/remotes/origin/<base>', no '+': a rewound trunk fails
+the fetch rather than moving the worktree backwards):
+  absent                               -> 'git worktree add --detach'   created
+  present, clean, detached at the tip  -> nothing                        reused
+  present, clean, anywhere else        -> 'git checkout --detach <tip>' moved
+  present, dirty                       -> refused, every path listed; NEVER
+                                          reset, cleaned, stashed or discarded
+  present and not this project's worktree -- a stray directory, a symlink, a
+  directory beside a sibling registration ('<name>2' never matches '<name>'),
+  or a symlinked .nen or .nen/worktrees  -> refused
+  registered, its directory gone       -> that ONE registration dropped ('git
+                                          worktree remove --force' on its own
+                                          path), then created         recreated
+A repository-wide 'git worktree prune' is never run.
+
+THE COPY. Each --copy-from-core path is proven before a byte moves. In core:
+a literal path (no glob or pathspec character, no backslash, no '..', not
+absolute) whose directory resolves inside core; a regular file, not a
+symlink; not tracked; gitignored (an unignored copy would dirty the worktree
+and the next run would refuse it). At the tip, from its tree ('git ls-tree'),
+before anything is created or moved -- so under --dry-run too: not tracked
+(a regular file, a symlink leaf or a directory), and no ancestor tracked as a
+symlink, a submodule or a file -- case-insensitively on darwin and win32,
+whose filesystems fold case. In the worktree, on a real run: gitignored
+there; no ancestor directory and no leaf a symlink (an untracked symlink at
+the destination is refused like a tracked one); the leaf, when present, a
+regular file; the destination directory resolving inside the worktree. The
+bytes go through a temp file beside the destination and a rename, which
+never follows a link.
+
+Every git call runs with GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR,
+GIT_NAMESPACE, GIT_CEILING_DIRECTORIES, GIT_DISCOVERY_ACROSS_FILESYSTEM,
+GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_PREFIX and every
+GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> removed from its environment. Paths
+are compared through realpathSync.native, so a Windows 8.3 short name and
+git's long spelling are one directory. Whether core's own ignore rules cover
+the worktree's path is said ('core-ignore:'), never assumed.
+
+Exits: 0 the worktree stands at the tip with every named file copied, or
+the dry-run plan; 2 every refusal above and every bad argument, the reason
+on stderr (dirty paths one per line after it) -- a refusal before the state
+step changed nothing but the fetched ref, and a copy refusal after it leaves
+the worktree at the tip, which the next run reads as reused; 1 a git step or
+a write that failed part-way, the message saying which.
+
+--json's contract is '${WORKTREE_CONTRACT}': { contract, core, name, path, base,
+tip, fetched, state (created | reused | moved | recreated | refused), dryRun,
+headBefore, head, dropped, coreIgnored, copies: [{ path, action (copied |
+would-copy) }], refusal: null | { kind, reason, paths } }. Under --dry-run
+state is what WOULD happen and fetched is false. On a refusal the document is
+still printed, with state 'refused' and head null; refusal.kind is one of
+not-a-checkout, base, parent-symlink, symlink, stray, not-root, dirty,
+copy-source, copy-destination.`;
 
 function printFoldedCommits(context: CommandContext, folded: readonly FoldedCommit[]): void {
   for (const commit of folded) context.io.out(`  ${commit.sha} ${commit.subject}`);
@@ -692,19 +773,56 @@ function doSwap(context: CommandContext): number {
   return 0;
 }
 
+function doWorktree(context: CommandContext): number {
+  // --repo unbracketed: this verb adds, moves and drops a worktree of whatever
+  // project it is pointed at (zheref/nen#28's rule).
+  const root = assertRepoRoot({
+    repoFlag: requireRepoFlag(context, "It names any checkout of the project whose core holds the worktree."),
+  });
+  const extra = extraPositionals(context);
+  if (extra.length > 0) throw new VerbUsageError(`'wc worktree' takes no positional argument; got '${extra[0]}'.`);
+  const name = requireValue(context.args, "name", `The worktree's directory under <core>/${WORKTREES_DIR}/.`);
+  const base = requireValue(context.args, "base", "The branch whose fetched tip, origin/<base>, the worktree stands at.");
+  const nameProblem = nameRefusal(name);
+  if (nameProblem !== null) throw new VerbUsageError(nameProblem);
+  const copyFromCore = context.args.lists["copy-from-core"] ?? [];
+  for (const path of copyFromCore) {
+    const problem = copyPathRefusal(path);
+    if (problem !== null) throw new VerbUsageError(problem);
+  }
+  const duplicate = copyFromCore.find((path, index): boolean => copyFromCore.indexOf(path) !== index);
+  if (duplicate !== undefined) throw new VerbUsageError(`--copy-from-core '${duplicate}' is named twice; name each path once.`);
+
+  const outcome = manageWorktree(context.seams, root, {
+    name,
+    base,
+    copyFromCore,
+    dryRun: context.args.booleans.has("dry-run"),
+  });
+  if (outcome.kind === "refused") {
+    if (context.json) context.io.out(JSON.stringify(outcome.report, null, 2));
+    context.io.err(plainLine(`nen wc: ${outcome.message}`));
+    for (const path of outcome.report.refusal?.paths ?? []) context.io.err(`    ${plainLine(path)}`);
+    return 2;
+  }
+  emit(context.io, context.json, outcome.report, outcome.lines.map((line): string => plainLine(line)));
+  return 0;
+}
+
 const SWAP_ONLY_BOOLEANS: readonly string[] = ["take", "return", "status"];
 
 export const wcCommand: Command = {
   name: "wc",
-  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap"],
-  summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, or swap one into core.",
+  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree"],
+  summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, or keep one at a fixed path.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name"],
     booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status"],
+    lists: ["copy-from-core"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap"]);
+    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree"]);
     // `--remote` IS PUBLISH'S ALONE; accepted and ignored elsewhere it would be
     // an instruction silently dropped (../commit/command.ts's rule).
     if (subcommand !== "publish" && context.args.values["remote"] !== undefined) {
@@ -715,11 +833,21 @@ export const wcCommand: Command = {
     if (subcommand !== "swap" && stray !== undefined) {
       throw new VerbUsageError(`--${stray} is not read by 'wc ${subcommand}'; only 'wc swap' takes it. A flag accepted and ignored is worse than one refused.`);
     }
+    // --name / --copy-from-core ARE WORKTREE'S ALONE, by the same rule.
+    if (subcommand !== "worktree") {
+      if (context.args.values["name"] !== undefined) {
+        throw new VerbUsageError(`--name is not read by 'wc ${subcommand}'; only 'wc worktree' takes it. A flag accepted and ignored is worse than one refused.`);
+      }
+      if ((context.args.lists["copy-from-core"] ?? []).length > 0) {
+        throw new VerbUsageError(`--copy-from-core is not read by 'wc ${subcommand}'; only 'wc worktree' takes it. A flag accepted and ignored is worse than one refused.`);
+      }
+    }
     if (subcommand === "squash") return squash(context);
     if (subcommand === "catch-up") return doCatchUp(context);
     if (subcommand === "publish") return doPublish(context);
     if (subcommand === "worktrees") return doWorktrees(context);
     if (subcommand === "swap") return doSwap(context);
+    if (subcommand === "worktree") return doWorktree(context);
 
     // Usage lists --repo unbracketed: omitting it is refused by name at exit 2,
     // never silently read as "classify wherever this process happens to be

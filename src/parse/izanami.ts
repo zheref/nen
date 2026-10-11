@@ -1485,6 +1485,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       squash: MUT("resets the branch and commits -- git reset --soft plus git commit -F"),
       "catch-up": MUT("fetches, then rebases or merges origin/<base> into the current branch (or continues / aborts one in progress) -- the working tree and the branch ref move"),
       publish: MUT("pushes the current branch to origin -- a remote write, refused as a force or on the trunk"),
+      // zheref/nen#299: WRITES BY DEFAULT -- fetches origin/<base>, adds,
+      // moves or drops-and-recreates one worktree and copies files into it.
+      // --dry-run fetches nothing and writes nothing, so it alone is a read.
+      worktree: DRY("fetches origin/<base>, adds, moves or recreates one worktree at <core>/.nen/worktrees/<name> and copies files from core into it, unless --dry-run is given"),
     },
   },
 };
