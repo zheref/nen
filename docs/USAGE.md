@@ -300,7 +300,7 @@ verb it invoked. The complete list:
 | [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
 | [`surface install`](#nen-surface-install) | `3` / `4` / `5` | refused: the destination, an installed copy or a Codex marketplace is not this verb's to replace, nothing written / owed: installed and read back, and a `settings.json` declaration the caller must clear (never edited) / the surface's CLI could not be started. Its `1` is a CLI step or the read-back failing ([#298](https://github.com/zheref/nen/issues/298)) |
 | [`surface status`](#nen-surface-status) | `3` / `5` | not installed / the surface's CLI could not be started, so nothing is known to be served. Its `1` is a mismatch (served, but not `--root` at its version). With `--trees` the exit is the judgement's, [`check --plugin`](#nen-surface-mirror-check---plugin)'s table -- or the worse of it and the status's own `2`/`5` when the surface could not be read ([#298](https://github.com/zheref/nen/issues/298)) |
-| [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate |
+| [`pr threads`](#nen-pr-threads) | `3` / `4` / `5` | the thread is already resolved / no thread with that id / the credential could not authenticate. `settle`: `3` every other entry settled and at least one was already resolved (nothing sent to it); an unknown id is `2` there, refused with the rest of the file before any write; `4` only when the pull request itself is not visible ([#230](https://github.com/zheref/nen/issues/230)) |
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
@@ -756,7 +756,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
-| [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, or resolve one | github (gh api graphql: one read walk; one mutation for reply/resolve unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, resolve one, or settle a batch from one file | github (gh api graphql: one read walk; one mutation for reply/resolve, one reply and one resolve per entry for settle, unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
@@ -2697,6 +2697,7 @@ what lets `--dry-run` be truthful about a thread that is not there.
 nen pr threads list --target <owner/name> --pr <n> [--json]
 nen pr threads reply --target <owner/name> --pr <n> --thread <id> --body-file <path> [--dry-run] [--json]
 nen pr threads resolve --target <owner/name> --pr <n> --thread <id> [--dry-run] [--json]
+nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -2705,8 +2706,9 @@ nen pr threads resolve --target <owner/name> --pr <n> --thread <id> [--dry-run] 
 |---|---|---|---|
 | `--target <owner/name>` | **yes** | the GitHub side | `--repo` names a checkout on disk and never addresses the API |
 | `--pr <n>` | **yes** | the pull request | a positive whole number |
-| `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form. Each action refuses the flags it does not read — `--thread` on `list`, `--body-file` on `list`/`resolve`, `--dry-run` on `list` — rather than accepting and ignoring them |
+| `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form. Each action refuses the flags it does not read — `--thread` on `list`/`settle`, `--body-file` on `list`/`resolve`/`settle`, `--from` on `list`/`reply`/`resolve`, `--dry-run` on `list` — rather than accepting and ignoring them |
 | `--body-file <path>` | `reply` | the reply's bytes, read raw | a reply typed on a command line is a reply nobody reviewed; an empty or whitespace-only file is refused. A relative path resolves against `--repo`, not the process cwd |
+| `--from <file.json>` | `settle` | the batch — see [`settle`](#settling-a-batch-pr-threads-settle) below | a relative path resolves against `--repo`; refused on every other action |
 | `--dry-run` | no | print the exact `gh api graphql` argv and write nothing | the thread is still looked up, so exits 3 and 4 still fire |
 | `--json` | no | the document | see below |
 
@@ -2750,6 +2752,128 @@ zheref/nen#217 @ 1f4bb2c0: 10 review thread(s), 0 unresolved
   …
 ```
 
+#### Settling a batch: `pr threads settle`
+
+`settle` replies to and resolves **a batch of threads from one file**
+([#230](https://github.com/zheref/nen/issues/230)). Settling a reviewer round
+with `reply` then `resolve` per thread costs `4N` calls — each verb walks the
+whole thread list before its one mutation. `settle` walks **once**, then sends
+one reply and one resolve per entry, in file order: `2N + P`, where `P` is
+the number of pages of 100 threads the walk reads (1 for most pull requests).
+
+The `--from` file is a JSON array; each entry carries `thread` (the node id
+`list` prints) and exactly one of `body` (the reply text) or `bodyFile` (a path
+**relative to the batch file's own directory**, read raw, and confined to it —
+below):
+
+```json
+[
+  { "thread": "PRRT_kwDOPmRi0c5ktVBH", "body": "Fixed in 2a6539c." },
+  { "thread": "PRRT_kwDOPmRi0c5ktVBJ", "bodyFile": "replies/declined.md" }
+]
+```
+
+**A `bodyFile` cannot leave the batch file's directory.** The body is posted
+publicly under your identity, so a batch file must not be able to publish an
+arbitrary local file. An absolute `bodyFile` and any `..` segment are refused;
+the path is resolved to its **real** path (after symlinks) and must sit inside
+the batch file's own real directory, so a symlink that escapes is refused by
+where it lands; any path segment starting with `.` — `.env`, `.git/config`,
+`.npmrc` — is refused, in the name given and in the real path (a lone `.` is
+allowed); the file is opened non-blocking and without following a final
+symlink (`O_NOFOLLOW`; not on Windows), `fstat`ed through the descriptor it is
+then read from, and must be a regular file with exactly one hard link — a
+directory, a device, a FIFO, a socket or a hard link to a file elsewhere is
+refused. After the open, the descriptor's device and inode must still match
+what sits at the real path, which must not be a symlink and must still
+resolve to itself; that guarantees the bytes read are those of a regular file
+that sat inside the directory when those checks ran. It does **not** guard
+against a writer who swaps a directory component above the file between the
+open and the re-checks and restores it after (Node has no `openat`); such a
+writer can already edit the batch file itself. The real path is what `bodyFrom`
+reports, and every human entry line names it relative to the batch
+(`[body: replies/declined.md]`). Every body, inline or read, is at most
+**65536 characters** (GitHub's comment limit; a file too large to fit is
+refused without being read). Every body is also checked, by content, for a
+credential's shape — the one content detector nen has, the redactor its own
+stderr echoes go through: a GitHub token (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`),
+a fine-grained `github_pat_`, or a URL's `user:secret@` — and refused without
+echoing the match. It is not a general secret scanner.
+
+The `--from` file itself is read the same way: opened non-blocking,
+`fstat`ed through the descriptor it is read from, required to be a regular
+file and at most **4 MiB** — a FIFO, a device or a directory given as
+`--from` is refused at exit `2`, named, rather than hanging or reading without
+bound.
+
+**Refused at exit `2`, every problem named in one refusal, nothing sent:** a
+file that cannot be read, is not a regular file, is over 4 MiB, is not JSON, is not an array or is empty; an entry
+that is not an object, carries a key other than those three, has no non-empty
+`thread` or one carrying a control character, has both or neither of
+`body`/`bodyFile`, names a `bodyFile` refused as above or unreadable, or whose
+body is empty, whitespace-only, over the limit or carrying a credential's
+shape; a `--from` whose directory cannot be resolved; a thread id named
+twice; and — after the one walk — an id this pull request does not carry
+(each named, with the thread count). An unknown id is `2` here where `reply`
+and `resolve` answer `4`: in a batch it is a defect in the file, refused before
+anything is sent.
+
+**Already resolved is a per-entry disposition, not a refusal** — per the
+walk's snapshot. A thread somebody else closed gets nothing — neither the reply nor the resolve — and is
+reported against its entry as `already-resolved`, consistent with `resolve`'s
+exit `3`; the rest of the batch proceeds, and the batch exits `3` when
+everything else settled. A thread resolved **between** the walk and its own
+mutation is not seen: GitHub accepts the resolve as a no-op, and it is
+reported `resolved` — the same window `resolve` has between its list and its
+mutation.
+
+**A failure partway through stops the batch** at the first refused mutation:
+the report names which threads were replied to and resolved, which was replied
+to and **not** resolved, and which were never attempted, and nothing is
+retried — a retried reply whose acceptance could not be confirmed is a second
+public comment. Every mutation goes through `reply`'s and `resolve`'s own
+payload checks, so a reply must name the comment it created and a resolve must
+come back `isResolved: true` for the thread it was sent for.
+
+`--dry-run` walks, validates and refuses exactly as the real run does, then
+prints, per entry, both `would run:` lines and **every line of the reply
+body** (`| `-prefixed, control characters stripped), and sends nothing.
+
+| Code | Meaning |
+|---|---|
+| `0` | every entry replied to and resolved — or, under `--dry-run`, planned |
+| `1` | the batch stopped on an API refusal; the report says where |
+| `2` | usage, or the file / an id refused as above; nothing sent |
+| `3` | every other entry settled, and at least one was already resolved |
+| `4` | the pull request itself is not visible to this credential |
+| `5` | the walk, or the batch, stopped on an authentication failure |
+
+**`--json`** — `nen.pr.threads-settle/v0.1`: `{ contract, target, pr, head,
+from, dryRun, ok, stoppedAt, entries[] }`, each entry `{ thread, disposition,
+replied, resolved, bodyBytes, bodyFrom, replyArgv, resolveArgv, error }`.
+`disposition` is one of `resolved` (replied and resolved), `replied` (the
+resolve was the mutation that failed), `already-resolved`, `failed` (the reply
+was the mutation that failed; nothing confirmed sent), `not-attempted`, or
+`planned` (a dry run). `bodyFrom` is `inline` or the **real** absolute path read (after symlinks);
+`replyArgv`/`resolveArgv` carry the full argv, body bytes included, and are
+`null` where nothing would be sent. On a stopped batch the document is still
+printed and stderr carries the one-line account.
+
+**Example**
+
+```bash
+nen pr threads settle --target zheref/nen --pr 217 --from round-1.json --dry-run
+```
+```text
+zheref/nen#217 @ 1f4bb2c0: would settle 1 of 2 thread(s) from /…/round-1.json -- dry run, nothing written
+  PRRT_kwDOPmRi0c5ktVBH  would reply (17 byte(s)) and resolve
+      would run: gh api --method POST graphql -f 'query=mutation(…){addPullRequestReviewThreadReply(…)…}' -f threadId=PRRT_kwDOPmRi0c5ktVBH -f 'body=<17 byte(s); first line: Fixed in 2a6539c.>'
+      would run: gh api --method POST graphql -f 'query=mutation(…){resolveReviewThread(…)…}' -f threadId=PRRT_kwDOPmRi0c5ktVBH
+      | Fixed in 2a6539c.
+  PRRT_kwDOPmRi0c5ktVBJ  already resolved -- nothing would be sent to it
+```
+(scripted — the ids are synthetic; the query text is elided here)
+
 
 ### `nen pr open`
 
@@ -2761,7 +2885,8 @@ remote (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — the
 
 ```text
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path>
-            [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
+            [--head <branch>] [--draft] [--assignee <login>[,<login>...]]
+            [--repo <path>] [--dry-run] [--json]
 ```
 
 | Flag | Required | Meaning |
@@ -2772,6 +2897,7 @@ nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <
 | `--body-file <path>` | **yes** | the body, handed to `gh pr create --body-file` by path (read once first, so a missing file is refused before any question is asked) |
 | `--head <branch>` | no | the head branch; default the branch checked out under `--repo` (the current directory by default — this verb's write goes to GitHub, and the checkout is only asked which branch is out) |
 | `--draft` | no | open as a draft |
+| `--assignee <login>[,<login>...]` | no | assign the pull request as it is opened ([#293](https://github.com/zheref/nen/issues/293)); `@me` is the login of the token running the verb — see below. A malformed, empty or repeated login is refused at exit 2 before any call |
 | `--dry-run` | no | print the `gh pr create` argv; still asks git and GitHub every question below, creates nothing |
 | `--json` | no | `nen.pr.open/v0.1` — see below |
 
@@ -2789,12 +2915,34 @@ pull request is already open for that head (`gh pr list --head <branch>
 --state open`), reported with its number and url — one head, one pull
 request. Then `gh pr create --repo --base --head --title --body-file
 [--draft]`, and the number is **read out of the url gh printed**: a create
-that prints none is exit 1, never reported as opened.
+that prints none is exit 1, never reported as opened; one that exits
+non-zero **after** printing a url is reported as opened, at exit 1, so nobody
+is invited to open a second.
+
+**`--assignee`** is checked **before anything is opened**, so a pull request
+asked to be assigned is never opened unassigned. `@me` is resolved to the
+login of the token running the verb (`GET /user`), and the human output says
+which login that was (`@me resolved to '<login>'`); `@me` is never handed to
+`gh` literally. Each login is then asked of GitHub — `GET /users/<login>`
+(an unknown one is refused at exit 2, named) and `GET
+/repos/<owner>/<name>/assignees/<login>` (one that exists but cannot be
+assigned on this repository is refused at exit 2, named) — every failing
+login is named in one refusal, and a lookup that could not be made at all
+(not a 404) is exit 1. Logins are kept in GitHub's canonical spelling and
+folded case-insensitively, so `@me,<your-login>` assigns one person. They
+go to `gh pr create --assignee`, and after the create the assignees are
+**read back** (`gh pr view <n> --json assignees`): one missing, or a
+read-back that fails, is exit 1 with the opened pull request still named
+and nothing retried.
 
 **`--json`** — `nen.pr.open/v0.1`: `{ contract, number, url, head, base,
-draft, dryRun, existing }`. `number` and `url` are `null` on a dry run;
-`existing` is `true` on the exit-1 case, where they name the pull request
-already there.
+draft, dryRun, existing, assignees, me, assigned }`. `number` and `url` are
+`null` on a dry run; `existing` is `true` on the exit-1 case, where they name
+the pull request already there. `assignees` is the validated logins asked for
+(`[]` without `--assignee`); `me` the login `@me` resolved to, else `null`;
+`assigned` the logins the read-back found, `null` when nothing was opened or
+nothing was read back. The three are appended — every earlier key keeps its
+place.
 
 **Example**
 
