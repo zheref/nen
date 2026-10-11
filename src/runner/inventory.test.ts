@@ -205,8 +205,26 @@ describe("assembleInventory -- runners grouped by the declared pools", () => {
     const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), POLICY, "windows-x64");
     expect(report.pools?.[0]?.unlabelled).toEqual([evil]);
     const line = renderInventory(report).find((text) => text.startsWith("pool windows-x64")) ?? "";
-    expect(line).toMatch(/without pool-windows-x64: NZ-NNR1\[2K \(nen runner relabel --target zheref\/nen --pool windows-x64 --runner NZ-NNR1\[2K --run\)$/);
+    expect(line).toMatch(/without pool-windows-x64: NZ-NNR1\[2K \(nen runner relabel --target zheref\/nen --pool windows-x64 --runner 'NZ-NNR1\[2K' --run\)$/);
     expect(line).not.toContain("\u001b");
+  });
+
+  it("prints every GitHub name and label in the runners table, the pool lists and unpooled plain (R3)", () => {
+    const answer = runnersAnswer([
+      { name: "NZ-NNR1\u001b[2K", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] },
+      { name: "Odd\u001b[1A", labels: ["self-hosted", "Windows", "ARM64", "x\u009by"] },
+    ]);
+    const s = new ScriptedSeams(inventoryCalls(answer));
+    const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), POLICY, null);
+    expect(report.unpooled).toEqual(["Odd\u001b[1A"]);
+    expect(report.runners[1]?.labels).toContain("x\u009by");
+    const text = renderInventory(report).join("\n");
+    expect(text).not.toContain("\u001b");
+    expect(text).not.toContain("\u009b");
+    expect(text).toContain("| NZ-NNR1[2K |");
+    expect(text).toContain("self-hosted,Windows,ARM64,xy");
+    expect(text).toMatch(/pool windows-x64 \[[^\]]*\]: 1 runner\(s\), 1 online, 1 free -- NZ-NNR1\[2K$/m);
+    expect(text).toMatch(/^unpooled: Odd\[1A$/m);
   });
 
   it("carries no pools at all without a policy", () => {

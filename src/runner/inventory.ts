@@ -37,6 +37,7 @@ import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import { renderPipeTable } from "../cli/table.js";
 import { plainLine } from "../cli/plain.js";
+import { shellWord } from "./shellword.js";
 import { DESKTOP_LABEL, POOL_LABEL_PREFIX, poolOwnLabel, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
 import { asRecord, ghJson, RunnerFailure } from "./github.js";
 
@@ -276,7 +277,7 @@ export function assembleInventory(
 function unlabelledHint(target: string, pool: PoolRow): string {
   if (pool.unlabelled.length === 0) return "";
   const names = pool.unlabelled.map(plainLine);
-  return `; without ${poolOwnLabel(pool.id)}: ${names.join(", ")} (nen runner relabel --target ${target} --pool ${pool.id} --runner ${names.join(",")} --run)`;
+  return `; without ${poolOwnLabel(pool.id)}: ${names.join(", ")} (nen runner relabel --target ${shellWord(target)} --pool ${shellWord(pool.id)} --runner ${shellWord(names.join(","))} --run)`;
 }
 
 export function renderInventory(report: InventoryReport): string[] {
@@ -286,11 +287,11 @@ export function renderInventory(report: InventoryReport): string[] {
       ...renderPipeTable([
         ["name", "status", "busy", "os", "labels", "machine", "consumer", "slot"],
         ...report.runners.map((runner): string[] => [
-          runner.name,
+          plainLine(runner.name),
           runner.status,
           runner.busy ? "busy" : "idle",
           runner.os,
-          runner.labels.join(","),
+          runner.labels.map(plainLine).join(","),
           runner.machine ?? "(runner 0)",
           runner.consumer ?? "",
           runner.slot === null ? "" : String(runner.slot),
@@ -302,11 +303,11 @@ export function renderInventory(report: InventoryReport): string[] {
     for (const pool of report.pools) {
       lines.push(
         `pool ${pool.id} [${pool.labels.join(", ")}]: ${pool.runners.length} runner(s), ${pool.online} online, ${pool.free} free${
-          pool.runners.length === 0 ? "" : ` -- ${pool.runners.join(", ")}`
+          pool.runners.length === 0 ? "" : ` -- ${pool.runners.map(plainLine).join(", ")}`
         }${unlabelledHint(report.target, pool)}`,
       );
     }
-    lines.push(`unpooled: ${report.unpooled === null || report.unpooled.length === 0 ? "(none)" : report.unpooled.join(", ")}`);
+    lines.push(`unpooled: ${report.unpooled === null || report.unpooled.length === 0 ? "(none)" : report.unpooled.map(plainLine).join(", ")}`);
   }
   return lines;
 }

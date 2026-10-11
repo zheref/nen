@@ -28,6 +28,7 @@ import { plainLine } from "../cli/plain.js";
 import { poolOwnLabel } from "../schema/workflow.js";
 import { POLL_INTERVAL_MS, type Sleep } from "./github.js";
 import { fetchRunners, poolLabelsOf, type RunnerRow } from "./inventory.js";
+import { shellWord } from "./shellword.js";
 
 /** The pool `--pool` named, and the target the relabel step would act on. */
 export interface VerifyPool {
@@ -69,7 +70,11 @@ export function judge(runners: readonly RunnerRow[], expect: readonly string[], 
         missingLabels.length === 1 &&
         missingLabels[0]?.toLowerCase() === poolOwnLabel(pool.id).toLowerCase() &&
         poolLabelsOf(runner).length === 0;
-      const remedy = exact ? ` -- registered without its pool label: nen runner relabel --target ${pool.target} --pool ${pool.id} --runner ${runner.name} --run` : "";
+      // Raw here (the report's `detail` is --json's); `renderVerify` strips
+      // control characters, and shellWord makes the line paste as one word each.
+      const remedy = exact
+        ? ` -- registered without its pool label: nen runner relabel --target ${shellWord(pool.target)} --pool ${shellWord(pool.id)} --runner ${shellWord(runner.name)} --run`
+        : "";
       return { name, verdict: "labels", status: runner.status, missingLabels, detail: `labels: missing ${missingLabels.join(", ")}${remedy}` };
     }
     return { name, verdict: "ok", status: runner.status, missingLabels: [], detail: "ok" };

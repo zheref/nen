@@ -44,6 +44,12 @@ function caught(run: () => unknown): RunnerFailure {
 }
 
 describe("relabelPool -- the pool's own label on runners registered before it (#340)", () => {
+  it("shell-quotes every operand of the then: line (R2)", () => {
+    const report = relabelPool(seams([{ name: "NZ-NNR1" }, { name: "NZ NNR2" }]), TARGET, POLICY_, windows, null, false);
+    expect(renderRelabel(report, TARGET).at(-1)).toBe("then: nen runner relabel --target zheref/nen --pool windows-x64 --runner 'NZ-NNR1,NZ NNR2' --run");
+    expect(shellWord("a,b")).toBe("a,b");
+  });
+
   it("names the one write and its read-back; the would-run line is shell-quoted, the argv is not (N4)", () => {
     expect(addLabelArgv(TARGET, 100, "pool-windows-x64")).toEqual(["api", "--method", "POST", "repos/zheref/nen/actions/runners/100/labels", "-f", "labels[]=pool-windows-x64"]);
     expect(runnerLabelsArgv(TARGET, 100)).toEqual(["api", "--method", "GET", "repos/zheref/nen/actions/runners/100/labels"]);
@@ -142,7 +148,7 @@ describe("relabelPool -- the pool's own label on runners registered before it (#
     );
     const failure = caught(() => relabelPool(s, TARGET, POLICY_, windows, ["NZ-NNR1", "NZ-NNR2"], true));
     expect(failure.exitCode).toBe(1);
-    expect(failure.message).toMatch(/^the POST for NZ-NNR2 was accepted; its read-back failed: reading runner NZ-NNR2's labels failed on zheref\/nen: gh: HTTP 502: Bad Gateway Already labelled by this run: NZ-NNR1\.$/);
+    expect(failure.message).toMatch(/^the POST for NZ-NNR2 was accepted; its read-back failed: reading runner NZ-NNR2's labels failed on zheref\/nen: gh: HTTP 502: Bad Gateway\. Already labelled by this run: NZ-NNR1\.$/);
     const unstartable = seams([{ name: "NZ-NNR1" }], { match: at(addLabelArgv(TARGET, 100, "pool-windows-x64")), result: {} }, { match: at(runnerLabelsArgv(TARGET, 100)), result: { spawnFailed: true } });
     expect(caught(() => relabelPool(unstartable, TARGET, POLICY_, windows, ["NZ-NNR1"], true)).exitCode).toBe(5);
   });
@@ -156,7 +162,7 @@ describe("relabelPool -- the pool's own label on runners registered before it (#
     );
     const failure = caught(() => relabelPool(s, TARGET, POLICY_, windows, ["NZ-NNR1", "NZ-NNR2"], true));
     expect(failure.exitCode).toBe(1);
-    expect(failure.message).toMatch(/adding pool-windows-x64 to runner NZ-NNR2 was refused \(403\): needs admin on zheref\/nen.*Already labelled by this run: NZ-NNR1\./);
+    expect(failure.message).toMatch(/adding pool-windows-x64 to runner NZ-NNR2 was refused \(403\): needs admin on zheref\/nen.*\(HTTP 403\)\. Already labelled by this run: NZ-NNR1\.$/);
   });
 
   it("refuses a read-back that is not a labels list", () => {
@@ -209,10 +215,38 @@ describe("relabelPool -- the pool's own label on runners registered before it (#
     expect(relabelPool(seams(rows), TARGET, PLAIN_AND_DESKTOP, PLAIN_AND_DESKTOP.pools[0]!, null, false).runners).toEqual([{ name: "NZ-NNR1", id: 100, verdict: "candidate" }]);
   });
 
-  it("lets the maintainer name which of two pools sharing one label set a runner joins", () => {
+  // Nobunaga R1: two pools declaring one label set. The safe default was
+  // chosen -- refuse outright -- rather than an acknowledgement flag.
+  describe("a runner that fits two pools sharing one label set (R1)", () => {
     const twin = policyOf(POLICY_BODY.pools[0]!, { ...POLICY_BODY.pools[0]!, id: "windows-two", preflightWorkflow: "two.yml" });
-    expect(relabelPool(seams([{ name: "NZ-NNR1" }]), TARGET, twin, twin.pools[0]!, null, false).runners).toEqual([{ name: "NZ-NNR1", id: 100, verdict: "candidate" }]);
-    expect(relabelPool(seams([{ name: "NZ-NNR1" }]), TARGET, twin, twin.pools[1]!, ["NZ-NNR1"], false).runners).toEqual([{ name: "NZ-NNR1", id: 100, verdict: "would-add" }]);
+    const rows = [{ name: "NZ-NNR1" }, { name: "NZ-NNR2", labels: [...DEFAULTS, "pool-windows-two"] }];
+
+    it("is listed as a candidate that also fits the other pool, and left off the then: line", () => {
+      const report = relabelPool(seams(rows), TARGET, twin, twin.pools[0]!, null, false);
+      expect(report.runners).toEqual([{ name: "NZ-NNR1", id: 100, verdict: "candidate", alsoFits: ["windows-two"] }]);
+      const text = renderRelabel(report, TARGET);
+      expect(text).toContain("| NZ-NNR1 | candidate (also fits windows-two) |");
+      expect(text).toContain("1 runner(s) fit more than one pool and cannot be named: make those pools' declared labels differ first.");
+      expect(text.some((line) => line.startsWith("then:"))).toBe(false);
+    });
+
+    it("is refused by name at exit 2, with --run or without, under either pool, writing nothing", () => {
+      for (const [pool, run] of [[twin.pools[0]!, true], [twin.pools[1]!, true], [twin.pools[1]!, false]] as const) {
+        const s = seams(rows);
+        expect(() => relabelPool(s, TARGET, twin, pool, ["NZ-NNR1"], run)).toThrow(VerbUsageError);
+        expect(() => relabelPool(seams(rows), TARGET, twin, pool, ["NZ-NNR1"], run)).toThrow(
+          /NZ-NNR1 fits pool windows-(x64|two) and windows-(two|x64) -- those pools declare one label set, so a runner carrying it would belong to both\. Make their declared labels differ, then relabel\./,
+        );
+        expect(s.calls).toHaveLength(1);
+      }
+    });
+
+    it("keeps an unambiguous candidate on the then: line beside an ambiguous one, and an already-labelled runner is not ambiguous", () => {
+      const desktopTwin = policyOf(POLICY_BODY.pools[0]!, { ...POLICY_BODY.pools[0]!, id: "windows-two", preflightWorkflow: "two.yml" }, DESKTOP_POOL_BODY);
+      const report = relabelPool(seams([{ name: "NZ-NNR1" }, { name: "NZ-KWIR1", labels: [...DEFAULTS, "desktop"] }]), TARGET, desktopTwin, desktopTwin.pools[2]!, null, false);
+      expect(renderRelabel(report, TARGET).at(-1)).toBe("then: nen runner relabel --target zheref/nen --pool windows-x64-desktop --runner NZ-KWIR1 --run");
+      expect(relabelPool(seams(rows), TARGET, twin, twin.pools[1]!, ["NZ-NNR2"], true).runners).toEqual([{ name: "NZ-NNR2", id: 101, verdict: "already" }]);
+    });
   });
 
   it("prints GitHub's runner names plain on the human path, and keeps them raw in the report (F3)", () => {
@@ -221,7 +255,7 @@ describe("relabelPool -- the pool's own label on runners registered before it (#
     expect(listed.runners[0]?.name).toBe(evil);
     const text = renderRelabel(listed, TARGET).join("\n");
     expect(text).not.toContain("\u001b");
-    expect(text).toContain("--runner NZ-NNR1[2K --run");
+    expect(text).toContain("--runner 'NZ-NNR1[2K' --run");
     const named = relabelPool(seams([{ name: evil }]), TARGET, POLICY_, windows, [evil], false);
     expect(renderRelabel(named, TARGET).join("\n")).not.toContain("\u001b");
     const refused = caught(() => relabelPool(seams([{ name: evil, labels: [...DEFAULTS, "gp\u001b[1Au"] }]), TARGET, POLICY_, windows, [evil], true));

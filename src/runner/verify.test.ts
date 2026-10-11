@@ -82,6 +82,7 @@ describe("verify -- the pool's own label (#340)", () => {
 
   const runner = (name: string, labels: string[]): RunnerRow => ({ name, id: 1, os: "", status: "online", busy: false, labels, convention: "runner-0" as const, machine: null, consumer: null, slot: null });
   const POOL = { id: "windows-x64", target: "zheref/nen" };
+  const DEFAULTS_ONLY = ["self-hosted", "Windows", "X64"];
 
   it("does not offer relabel when what is missing is a default label", () => {
     const [row] = judge([runner("A", ["self-hosted", "pool-windows-x64"])], ["A"], POOL_LABELS, POOL);
@@ -93,6 +94,10 @@ describe("verify -- the pool's own label (#340)", () => {
     expect(judge([runner("A", ["self-hosted", "Windows"])], ["A"], POOL_LABELS, POOL)[0]?.detail).toBe("labels: missing X64, pool-windows-x64");
     // Already in another pool: relabel would refuse it.
     expect(judge([runner("A", ["self-hosted", "Windows", "X64", "pool-windows-x64-desktop"])], ["A"], POOL_LABELS, POOL)[0]?.detail).toBe("labels: missing pool-windows-x64");
+    // A target or a runner name a shell would split is quoted (R2).
+    expect(judge([runner("NZ NNR1", DEFAULTS_ONLY)], ["NZ NNR1"], POOL_LABELS, { id: "windows-x64", target: "o/r x" })[0]?.detail).toBe(
+      "labels: missing pool-windows-x64 -- registered without its pool label: nen runner relabel --target 'o/r x' --pool windows-x64 --runner 'NZ NNR1' --run",
+    );
     // No --pool: the id is never sliced out of a label.
     expect(judge([runner("A", ["self-hosted", "Windows", "X64"])], ["A"], POOL_LABELS)[0]?.detail).toBe("labels: missing pool-windows-x64");
   });
@@ -102,9 +107,9 @@ describe("verify -- the pool's own label (#340)", () => {
     const seams = new ScriptedSeams([{ match: LIST, result: { stdout: runnersAnswer([{ name: evil }]) } }]);
     const report = verifyRunners(seams, TARGET, [evil], POOL_LABELS, 0, () => undefined, POOL);
     expect(report.runners[0]?.name).toBe(evil);
-    expect(report.runners[0]?.detail).toContain(`--runner ${evil} --run`);
+    expect(report.runners[0]?.detail).toContain(`--runner '${evil}' --run`);
     const text = renderVerify(report).join("\n");
     expect(text).not.toContain("\u001b");
-    expect(text).toContain("--runner NZ-NNR2[2K --run");
+    expect(text).toContain("--runner 'NZ-NNR2[2K' --run");
   });
 });

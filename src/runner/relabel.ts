@@ -22,6 +22,14 @@
 // as "the runner carries it", and a read-back that disagrees -- or fails after
 // an accepted POST -- is reported as exactly that.
 //
+// A RUNNER THAT FITS TWO POOLS IS REFUSED, NOT CHOSEN (Nobunaga R1). Two pools
+// may declare one label set, and a runner carrying it fits both: admitting it
+// into either by name would leave the other pool's declaration claiming it
+// too. The safe default is chosen over an acknowledgement flag -- a named
+// runner that `awaitingPools` returns for more than one pool is refused at
+// exit 2, dry run or not, and the dry run lists it as `candidate (also fits
+// <pools>)`, off the `then:` line. Make the declarations differ first.
+//
 // A RUNNER FITS A POOL EXACTLY (./inventory.ts's `misfit`): it carries every
 // declared label and nothing outside them but the pool's own label. `desktop`
 // is reserved for an interactive pool. Every named runner is checked before
@@ -42,6 +50,7 @@ import { renderPipeTable } from "../cli/table.js";
 import { poolOwnLabel, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
 import { apiRefusal, asRecord, gh, RunnerFailure } from "./github.js";
 import { awaitingPools, fetchRunners, inPool, misfit, poolLabelsOf, type RunnerRow } from "./inventory.js";
+import { shellWord } from "./shellword.js";
 
 /** `candidate`: eligible, listed by a dry run without `--runner`, to be named. */
 export type RelabelVerdict = "added" | "would-add" | "already" | "candidate";
@@ -50,6 +59,13 @@ export interface RelabelRow {
   readonly name: string;
   readonly id: number;
   readonly verdict: RelabelVerdict;
+  /**
+   * A candidate that ALSO fits these other pools -- two pools declaring one
+   * label set (Nobunaga R1). Present only then. Such a runner is never put on
+   * the `then:` line, and naming it is refused: which pool it joins is a
+   * declaration to fix, not a choice nen makes by order.
+   */
+  readonly alsoFits?: readonly string[];
 }
 
 export interface RelabelReport {
@@ -74,14 +90,7 @@ export function runnerLabelsArgv(target: Target, id: number): readonly string[] 
   return ["api", "--method", "GET", `repos/${target.slug}/actions/runners/${id}/labels`];
 }
 
-/**
- * One argv element as a POSIX shell would need it to be pasted back, for the
- * `would run:` line only -- `labels[]=x` is a glob a shell may expand. The argv
- * handed to `gh` is never quoted: it is not parsed by a shell.
- */
-export function shellWord(word: string): string {
-  return /^[A-Za-z0-9_./:=@%+-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
-}
+export { shellWord };
 
 const lower = (labels: readonly string[]): string[] => labels.map((label): string => label.toLowerCase());
 
@@ -96,8 +105,9 @@ function refusal(runner: RunnerRow, pool: RunnerPool): string | null {
 }
 
 /** The runners a `--runner` list names, each checked before anything is written. */
-function namedRunners(runners: readonly RunnerRow[], pool: RunnerPool, names: readonly string[], target: Target): RunnerRow[] {
+function namedRunners(runners: readonly RunnerRow[], policy: RunnersPolicy, pool: RunnerPool, names: readonly string[], target: Target): RunnerRow[] {
   const problems: string[] = [];
+  const ambiguous: string[] = [];
   const chosen: RunnerRow[] = [];
   const seen = new Set<string>();
   for (const name of names) {
@@ -113,10 +123,20 @@ function namedRunners(runners: readonly RunnerRow[], pool: RunnerPool, names: re
       problems.push(why);
       continue;
     }
+    const others = inPool(runner, pool) ? [] : awaitingPools(runner, policy.pools).filter((other): boolean => other !== pool);
+    if (others.length > 0) {
+      ambiguous.push(`${plainLine(runner.name)} fits pool ${pool.id} and ${others.map((other): string => other.id).join(", ")}`);
+      continue;
+    }
     chosen.push(runner);
   }
+  if (ambiguous.length > 0 && problems.length === 0) {
+    throw new VerbUsageError(
+      `no runner was relabelled for pool ${pool.id}: ${ambiguous.join("; ")} -- those pools declare one label set, so a runner carrying it would belong to both. Make their declared labels differ, then relabel.`,
+    );
+  }
   if (problems.length > 0) {
-    throw new RunnerFailure(1, `no runner was relabelled for pool ${pool.id}: ${problems.join("; ")}.`);
+    throw new RunnerFailure(1, `no runner was relabelled for pool ${pool.id}: ${[...problems, ...ambiguous].join("; ")}.`);
   }
   return chosen;
 }
@@ -161,14 +181,19 @@ export function relabelPool(
       ...runners.filter((runner): boolean => inPool(runner, pool)).map((runner): RelabelRow => ({ name: runner.name, id: runner.id, verdict: "already" })),
       ...runners
         .filter((runner): boolean => awaitingPools(runner, policy.pools).includes(pool))
-        .map((runner): RelabelRow => ({ name: runner.name, id: runner.id, verdict: "candidate" })),
+        .map((runner): RelabelRow => {
+          const others = awaitingPools(runner, policy.pools).filter((other): boolean => other !== pool).map((other): string => other.id);
+          return others.length === 0 ? { name: runner.name, id: runner.id, verdict: "candidate" } : { name: runner.name, id: runner.id, verdict: "candidate", alsoFits: others };
+        }),
     ];
     return { target: target.slug, pool: pool.id, label, selection: "candidates", run: false, runners: rows, changed: 0 };
   }
-  const chosen = namedRunners(runners, pool, names, target);
+  const chosen = namedRunners(runners, policy, pool, names, target);
   const rows: RelabelRow[] = [];
   const done: string[] = [];
   const partial = (): string => (done.length === 0 ? "" : ` Already labelled by this run: ${done.map(plainLine).join(", ")}.`);
+  /** A message, ended with a period before anything follows it (R4). */
+  const ended = (message: string): string => (message.endsWith(".") ? message : `${message}.`);
   for (const runner of chosen) {
     if (inPool(runner, pool)) {
       rows.push({ name: runner.name, id: runner.id, verdict: "already" });
@@ -181,7 +206,7 @@ export function relabelPool(
     const added = gh(seams, addLabelArgv(target, runner.id, label));
     if (added.code !== 0) {
       const failure = apiRefusal(added, target, `adding ${label} to runner ${plainLine(runner.name)}`);
-      throw new RunnerFailure(failure.exitCode, `${failure.message}${partial()}`);
+      throw new RunnerFailure(failure.exitCode, `${ended(failure.message)}${partial()}`);
     }
     let after: string[];
     try {
@@ -190,7 +215,7 @@ export function relabelPool(
       if (!(error instanceof RunnerFailure)) throw error;
       // The write happened; only the proof of it is missing. Said as such, at
       // the read's own exit code, so nobody re-reads "failed" as "not written".
-      throw new RunnerFailure(error.exitCode, `the POST for ${plainLine(runner.name)} was accepted; its read-back failed: ${error.message}${partial()}`);
+      throw new RunnerFailure(error.exitCode, `the POST for ${plainLine(runner.name)} was accepted; its read-back failed: ${ended(error.message)}${partial()}`);
     }
     if (!lower(after).includes(label.toLowerCase())) {
       throw new RunnerFailure(
@@ -213,19 +238,26 @@ export function relabelPool(
 }
 
 export function renderRelabel(report: RelabelReport, target: Target): string[] {
-  const table = (): string[] => renderPipeTable([["name", "verdict"], ...report.runners.map((row): string[] => [plainLine(row.name), row.verdict])]);
+  const verdict = (row: RelabelRow): string => (row.alsoFits === undefined ? row.verdict : `${row.verdict} (also fits ${row.alsoFits.join(", ")})`);
+  const table = (): string[] => renderPipeTable([["name", "verdict"], ...report.runners.map((row): string[] => [plainLine(row.name), verdict(row)])]);
   if (report.selection === "candidates") {
-    const candidates = report.runners.filter((row): boolean => row.verdict === "candidate").map((row): string => plainLine(row.name));
-    if (candidates.length === 0) {
+    const all = report.runners.filter((row): boolean => row.verdict === "candidate");
+    const candidates = all.filter((row): boolean => row.alsoFits === undefined).map((row): string => plainLine(row.name));
+    const shared = all.length - candidates.length;
+    const sharedNote = shared === 0 ? [] : [`${shared} runner(s) fit more than one pool and cannot be named: make those pools' declared labels differ first.`];
+    if (all.length === 0) {
       return [
         `no runner on ${report.target} is a candidate for ${report.label}: none fits pool ${report.pool}'s declared labels exactly without a pool label. Nothing to do.`,
         ...(report.runners.length === 0 ? [] : table()),
       ];
     }
     return [
-      `(dry run) ${candidates.length} runner(s) on ${report.target} could take ${report.label} (pool ${report.pool}); nothing is admitted in bulk -- name each one you mean:`,
+      `(dry run) ${all.length} runner(s) on ${report.target} could take ${report.label} (pool ${report.pool}); nothing is admitted in bulk -- name each one you mean:`,
       ...table(),
-      `then: nen runner relabel --target ${report.target} --pool ${report.pool} --runner ${candidates.join(",")} --run`,
+      ...sharedNote,
+      ...(candidates.length === 0
+        ? []
+        : [`then: nen runner relabel --target ${shellWord(report.target)} --pool ${shellWord(report.pool)} --runner ${shellWord(candidates.join(","))} --run`]),
     ];
   }
   if (report.changed === 0) {

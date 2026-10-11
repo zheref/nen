@@ -221,7 +221,8 @@ describe("GitHub Actions runner policy", () => {
   });
 
   it("admits each declared pool's canonical set plus its own pool label, read from nen/workflow.json and equal to the literal list (#340, F4)", () => {
-    expect([...ALLOWED_SELF_HOSTED]).toEqual([...SELF_HOSTED_SETS]);
+    // Order-independent (R5): a declaration that lists its pools in another order is the same policy.
+    expect([...ALLOWED_SELF_HOSTED].sort()).toEqual([...SELF_HOSTED_SETS].sort());
     for (const pool of POOLS) {
       expect(pool.labels).toEqual([...declaredPoolLabels(pool.os, pool.arch, pool.mode), `pool-${pool.id}`]);
       const job = `on:\n  push:\njobs:\n  ok:\n    if: github.repository == 'zheref/nen'\n    runs-on: [${pool.labels.join(", ")}]\n`;

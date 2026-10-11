@@ -13045,7 +13045,11 @@ runner awaits a pool only when it fits it **exactly**: every declared label,
 and no label outside them. `desktop` is reserved for an interactive pool, so a
 desktop runner never awaits a plain pool, and with no interactive pool
 declared it is unpooled; a runner carrying any other undeclared label is
-unpooled too. Two pools that declare one set both list it.
+unpooled too. Two pools that declare one set both list it (and
+[`runner relabel`](#nen-runner-relabel) refuses to name it into either). Every
+runner name and label the human rendering prints — the table, the pool lists,
+`unpooled:` and the relabel hint — has its control characters stripped;
+`--json` carries them raw.
 
 **Usage**
 
@@ -13794,9 +13798,13 @@ runner is in one pool; moving it is a label to remove in GitHub first). One
 refusal refuses the whole call, exit 1, every reason named, nothing written. A
 runner already carrying the label is reported `already` and not written; when
 every named runner already carries it, the verb says `every selected runner
-already carries pool-<id>; nothing written.` Two pools that declare one label
-set both list the runner as a candidate; naming it under one `--pool` is the
-maintainer's choice.
+already carries pool-<id>; nothing written.` **A runner that fits two pools
+is refused, not chosen**: when two pools declare one label set, a runner
+carrying it fits both, so the dry run lists it as `candidate (also fits
+<pools>)` and leaves it off the `then:` line, and naming it is **exit 2** —
+with `--run` or without, under either pool — until the two declarations
+differ. (An acknowledgement flag was considered and rejected: refusing is the
+safe default.)
 
 **Dry run by default.** With `--runner` and without `--run` it reads the
 runners list, checks, and prints each write as `would run: gh api --method
@@ -13836,13 +13844,19 @@ line (`(dry run) would add pool-<id> to <n> runner(s) ...`, `<n> runner(s)
 already carries pool-<id>; nothing written.`), the table, and without `--run`
 one `would run:` line per write. `--json` top-level keys: `target`, `pool`,
 `label`, `selection` (`named`\|`candidates`), `run`, `runners[]` (`name`,
-`id`, `verdict` `added`\|`would-add`\|`already`\|`candidate`), `changed`
+`id`, `verdict` `added`\|`would-add`\|`already`\|`candidate`, and
+`alsoFits[]` — the other pools' ids — only on a candidate that fits more than
+one pool), `changed`
 (writes made or, named without `--run`, that would be; candidates are not
 counted). Exit 0; 1 when a named runner is refused, GitHub refused (403: needs
 admin) or answered something unreadable, or a read-back lacks the label or
 fails (the read's own code — 5 when `gh` could not be started); 2 on usage,
-`--run` without `--runner`, an unknown pool or a missing `runners` block; 5
-without `gh`.
+`--run` without `--runner`, a named runner that fits more than one pool, an
+unknown pool or a missing `runners` block; 5 without `gh`. Every printed
+command line — `then:`, `would run:`, and the relabel hints of
+[`runner inventory`](#nen-runner-inventory) and
+[`runner verify`](#nen-runner-verify) — single-quotes any operand a shell
+would split or expand.
 
 **Example**
 
