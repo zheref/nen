@@ -156,6 +156,18 @@ export interface RepoRegistry {
    * "no entry declares a checkout".
    */
   readonly toolCheckouts?: Readonly<Record<string, ToolCheckout>>;
+  /**
+   * `owner/name` -> the `maintained_tools` index of the row whose `pinned` tag
+   * `toolPins` holds -- the LAST row naming the tool, the one row that answers
+   * for the pin and the checkout alike. Keyed exactly as `toolPins` is. Read by
+   * `nen canon pin --write` (zheref/nen#291), which must move the pin in the
+   * very row the read path answers from, never an earlier one a later row
+   * shadows.
+   *
+   * OPTIONAL IN THE TYPE, ALWAYS SET BY THE LOADER, for `toolCheckouts`'
+   * reason.
+   */
+  readonly toolPinIndexes?: Readonly<Record<string, number>>;
   byRepo(repo: string): ConsumerEntry | undefined;
   byCode(code: string): ConsumerEntry | undefined;
   /** Consumers whose `consumes` intersects `changed`. Order is the file's. */
@@ -369,9 +381,13 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     lastRow.set(key, tool);
   }
   const toolPins: Record<string, string> = {};
+  const toolPinIndexes: Record<string, number> = {};
   const toolCheckouts: Record<string, ToolCheckout> = {};
   for (const tool of lastRow.values()) {
-    if (tool.pinned !== null) toolPins[tool.repo] = tool.pinned;
+    if (tool.pinned !== null) {
+      toolPins[tool.repo] = tool.pinned;
+      toolPinIndexes[tool.repo] = tool.index;
+    }
     if (tool.checkoutEnv !== null || tool.checkout !== null) {
       toolCheckouts[tool.repo] = { index: tool.index, checkoutEnv: tool.checkoutEnv, checkout: tool.checkout };
     }
@@ -389,6 +405,7 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     pendingOnboarding: slugs(pending),
     listed: [...maintained, ...pending].map(asEntry),
     toolPins,
+    toolPinIndexes,
     toolCheckouts,
     byRepo: (repo): ConsumerEntry | undefined => byRepoIndex.get(repo),
     byCode: (code): ConsumerEntry | undefined => byCodeIndex.get(code),

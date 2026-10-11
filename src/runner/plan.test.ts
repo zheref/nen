@@ -50,7 +50,7 @@ describe("computePlan -- the NZ-NNR1..3 plan for zheref/nen's windows-x64 pool",
       os: "Windows",
       arch: "X64",
       mode: "service",
-      labels: ["self-hosted", "Windows", "X64"],
+      labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"],
       machineCode: "NZ",
       consumerCode: "NN",
       root: "C:\\GithubRunners",
@@ -74,7 +74,7 @@ describe("computePlan -- the NZ-NNR1..3 plan for zheref/nen's windows-x64 pool",
       existing: [],
     });
     const text = renderPlan(plan).join("\n");
-    expect(text).toMatch(/labels: self-hosted,Windows,X64/);
+    expect(text).toMatch(/^labels: self-hosted,Windows,X64,pool-windows-x64$/m);
     expect(text).toMatch(/NZ-NNR3 .*C:\\GithubRunners\\nen-runners\\Runner3/);
     expect(text).toMatch(/already registered for NZ\/NN: \(none\)/);
     expect(text).toMatch(/^mode: service$/m);
@@ -119,11 +119,12 @@ describe("computePlan -- an interactive Windows pool (#333)", () => {
   const desktop = (overrides: Partial<PlanInputs> = {}): RunnerPlan =>
     computePlan(inputs({ pool: pool("windows-x64-desktop"), serviceAccount: "kwidesktop", count: 1, env: { USERNAME: "zhere" }, ...overrides }));
 
-  it("carries the mode and the four labels, and says the runner is online only while its identity is signed in", () => {
+  it("carries the mode and the five labels, and says the runner is online only while its identity is signed in", () => {
     const plan = desktop();
-    expect(plan).toMatchObject({ mode: "interactive", labels: ["self-hosted", "Windows", "X64", "desktop"], identity: ".\\kwidesktop", dailyAccount: false });
+    expect(plan).toMatchObject({ mode: "interactive", labels: ["self-hosted", "Windows", "X64", "desktop", "pool-windows-x64-desktop"], identity: ".\\kwidesktop", dailyAccount: false });
     const text = renderPlan(plan).join("\n");
-    expect(text).toMatch(/^labels: self-hosted,Windows,X64,desktop$/m);
+    expect(text).toMatch(/^labels: self-hosted,Windows,X64,desktop,pool-windows-x64-desktop$/m);
+    expect(text).toMatch(/GitHub gives a runner carrying \[self-hosted, Windows, X64, desktop, pool-windows-x64-desktop\] every job on zheref\/nen whose runs-on is a subset of those labels/);
     expect(text).toMatch(/^mode: interactive -- a Scheduled Task at the identity's logon starts run\.cmd in its desktop session; no service is installed$/m);
     expect(text).toMatch(/online only while \.\\kwidesktop is signed in to the desktop \(or auto-logged on\); nen never configures auto-logon/);
     expect(text).toMatch(/with that account's profile and credentials/);
@@ -235,6 +236,15 @@ describe("validatePlan -- the contract's refusal", () => {
     delete v01["dailyAccount"];
     const read = validatePlan({ ...v01, contract: "nen.runner.plan/v0.1" }, "<plan>");
     expect(read).toEqual(nzPlan());
+  });
+
+  it("refuses a plan written before the pool's own label, naming it (#340)", () => {
+    const plan = JSON.parse(JSON.stringify(nzPlan())) as Record<string, unknown>;
+    expect(() => validatePlan({ ...plan, labels: ["self-hosted", "Windows", "X64"] }, "<plan>")).toThrow(
+      /'labels' is \["self-hosted","Windows","X64"\], expected \["self-hosted","Windows","X64","pool-windows-x64"\] -- the plan predates the pool's own label 'pool-windows-x64' \(#340\)/,
+    );
+    expect(() => validatePlan({ ...plan, labels: ["self-hosted", "Windows", "X64", "pool-macos-arm64"] }, "<plan>")).toThrow(/'labels'/);
+    expect(() => validatePlan({ ...plan, labels: ["self-hosted", "Windows", "X64", "pool-macos-arm64"] }, "<plan>")).not.toThrow(/predates/);
   });
 
   it("refuses every field that reaches a script when it is not what plan would write", () => {

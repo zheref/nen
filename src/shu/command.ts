@@ -53,7 +53,7 @@ import { readChangedFiles } from "./evidence/diff.js";
 import { buildEvidenceReport, renderEvidence } from "./evidence/report.js";
 import { ENABLED_INSTALLERS } from "./install.js";
 import { probeTool, runInstallSteps } from "./probe.js";
-import { declaredHostsFor } from "./render.js";
+import { declaredHostsFor, parseSelectionIds } from "./render.js";
 import { runTestReport } from "./test-report.js";
 import { insideRepo, runVerb } from "./run.js";
 import { DEFAULT_TRUNK, runWarmup, WARMUP_CONTRACT, WARMUP_REMOTE } from "./warmup.js";
@@ -82,7 +82,10 @@ import {
 export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   detect: { booleans: ["write"] },
   build: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
-  test: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
+  // `--select` IS `test`'s ALONE (zheref/nen#207): the lane's one declared
+  // focused form, expanded per identifier. Refused everywhere else by the
+  // foreign-flag rule below rather than ignored.
+  test: { values: ["lane", "effort", "heartbeat", "select"], booleans: ["dry-run", "stream"] },
   "ui-test": { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   lint: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   archive: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
@@ -180,7 +183,9 @@ verbs:
   build       Compile or assemble the lane.
   test        Run the lane's test suite. Where the lane's test row declares
               every coverage report its coverage row names, the run also
-              records their capture sidecar (see --from-capture).
+              records their capture sidecar (see --from-capture). With
+              --select <id>[,<id>...] it runs the lane's declared FOCUSED form
+              instead -- see --select below.
   ui-test     Run the lane's UI/E2E suite.
   lint        Run the lane's linter and format check.
   archive     Produce the lane's distributable artifact.
@@ -423,6 +428,40 @@ flags:
                    NOT READ AT ALL on 'evidence' -- project.evidence is a
                    project-level block, and giving --lane there is refused as
                    a flag this subcommand does not read.
+  --select <ids>   'test' only (zheref/nen#207). One comma-separated value of
+                   concrete test identifiers. nen runs the lane's FOCUSED form,
+                   project.verbs.<lane>.test.select -- its own exe and base
+                   argv, then its 'each' template once per identifier with
+                   {id} substituted, appended in the order named. Nothing of
+                   the regression row reaches it: not its argv (so no coverage
+                   flag it carries), not its env, not its outputs, and no
+                   capture sidecar is recorded. Exit 2, NOTHING SPAWNED, for no
+                   identifier, an empty entry, whitespace, a control or
+                   invisible format character, a cmd/batch metacharacter
+                   (" % ^ & | < > ! or a backtick), a leading '-', a brace, a
+                   repeat, an identifier the declared 'pattern' does not match
+                   whole, or a lane whose test row declares no 'select' --
+                   never a fallback to the full regression. After a run that
+                   exited 0, nen reads the block's REQUIRED 'results' file
+                   with test-report's parser and counts the tests EXECUTED:
+                   zero is exit 6 ("selection resolved to zero executed
+                   tests"); results missing, unreadable or in another format
+                   are exit 1 -- never a pass. The results path must sit
+                   strictly inside .nen/focused/, spelled exactly and in NFC
+                   (refused at load otherwise); one focused run at a time
+                   holds .nen/focused/.lock (a live holder is exit 2); before
+                   every focused run nen MOVES what is there aside into
+                   .nen/focused/.previous/<run-id>/ (a moved run is deleted
+                   after 2 further focused runs; only nen-minted run ids are
+                   pruned), and only after proving every
+                   segment is a real entry (no symlink, junction or case
+                   variant), its real path is inside the real .nen/focused,
+                   no .git entry is at or below it, and git tracks nothing
+                   there -- else exit 2, nothing moved or run. --dry-run makes
+                   the same proofs, refuses the same way, and moves nothing.
+                   --dry-run and --json show the expanded argv and a
+                   'selection' block naming what was appended, the results,
+                   'executed' and 'zeroMatch'.
   --base <ref>     'evidence' only, and REQUIRED. The other end of
                    'git diff --name-status <base>...HEAD' -- HEAD is always
                    the checkout's own current commit, never a flag.
@@ -1020,6 +1059,11 @@ exit codes:
      install form is permanently red on a machine nen can never fix, and the
      question "is this host ready" is what the CHECK and its 5 are for
 
+  6  'test --select' (zheref/nen#207): the focused run exited 0, its declared
+     results parsed, and they record ZERO executed tests -- "selection
+     resolved to zero executed tests", usually an identifier that names no
+     test. --json carries selection.executed 0 and selection.zeroMatch true.
+     Not 0, which a runner's own "Executed 0 tests" exit would have been.
   6  'coverage --touched' only: the run succeeded and its reports parsed, the
      diff named at least one file, and NOT ONE of them joined to a report row
      -- nothing was measured. Not 0, which read as "measured and fine" to a
@@ -1494,6 +1538,10 @@ export const shuCommand: Command = {
       // READ BEFORE ANYTHING RUNS, so a malformed --heartbeat is exit 2 with
       // nothing spawned rather than a refusal halfway through a build.
       const liveness = readLiveness(context);
+      // PARSED BEFORE THE DECLARATION IS OPENED, so a malformed --select is
+      // exit 2 whatever the repository says (zheref/nen#207).
+      const selectRaw = context.args.values["select"];
+      const select = selectRaw === undefined ? null : parseSelectionIds(selectRaw);
       const execute = (): Promise<number> =>
         runVerb(context, repoRoot, {
           ...liveness,
@@ -1506,13 +1554,17 @@ export const shuCommand: Command = {
           // unconditionally here cannot turn another verb's line into an action.
           run: context.args.booleans.has("run"),
           effort: context.args.values["effort"] ?? null,
+          select,
         });
       // A `test` WHOSE ROW DECLARES THE LANE'S COVERAGE REPORTS PRODUCES A
       // CAPTURE, and records its provenance exactly as `coverage` does
       // (zheref/nen#250; ./capture-provenance.ts's header says which runs and
       // why). Every other verb, and a `test` row that declares no such
       // report, runs exactly as before.
-      if (subcommand === "test") {
+      // A FOCUSED RUN RECORDS NO CAPTURE: it is a subset of the suite, and a
+      // sidecar vouching for its reports would be the aka regression capture
+      // overwritten by something smaller (zheref/nen#207).
+      if (subcommand === "test" && select === null) {
         return refusalCode(context, subcommand, recordCapture(context, repoRoot, {
           lane: context.args.values["lane"] ?? null,
           verb: "test",

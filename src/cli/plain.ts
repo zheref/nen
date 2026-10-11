@@ -38,13 +38,25 @@
 const CONTROL = /[\u0000-\u001F\u007F-\u009F]/g;
 
 /**
+ * Characters that print NOTHING and still change what a reader sees (Feitan,
+ * zheref/nen#340): the Unicode bidi controls -- LRM/RLM (U+200E-200F), the
+ * embeddings and overrides (U+202A-202E) and the isolates (U+2066-2069), which
+ * reorder the text around them so a name can read as another -- and the
+ * zero-width characters (U+200B-200D, U+FEFF), which make two different
+ * strings look identical. A one-line rendering has no use for either, so
+ * `plainLine` strips them with the control characters. `plainBlock` keeps its
+ * narrower contract.
+ */
+const INVISIBLE = /[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+
+/**
  * One line of text nen did not write, made safe to print.
  *
  * Every verb that prints a GitHub-controlled string in its HUMAN rendering
  * calls this; the `--json` document carries the original bytes.
  */
 export function plainLine(text: string): string {
-  return text.replace(CONTROL, "");
+  return text.replace(CONTROL, "").replace(INVISIBLE, "");
 }
 
 /**

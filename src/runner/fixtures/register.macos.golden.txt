@@ -3,7 +3,7 @@
 # rendered by nen 0.0.0-test runner script — do not edit; re-run nen runner script
 #
 # target:   zheref/nen
-# pool:     macos-arm64 (self-hosted,macOS,ARM64)
+# pool:     macos-arm64 (self-hosted,macOS,ARM64,pool-macos-arm64)
 # runners:  NZ-NNR1, NZ-NNR2, NZ-NNR3
 # identity: invoking-user
 # root:     /Users/runner-host/actions-runners
@@ -23,7 +23,7 @@ set -euo pipefail
 
 TARGET='zheref/nen'
 REPO_URL='https://github.com/zheref/nen'
-LABELS='self-hosted,macOS,ARM64'
+LABELS='self-hosted,macOS,ARM64,pool-macos-arm64'
 ROOT='/Users/runner-host/actions-runners'
 PROJECT_DIR='/Users/runner-host/actions-runners/nen-runners'
 DOWNLOAD_URL='https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-osx-arm64-2.337.0.tar.gz'

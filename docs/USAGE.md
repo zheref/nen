@@ -287,6 +287,7 @@ verb it invoked. The complete list:
 | every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
 | [`stage list`](#nen-stage-list) | `3` | the add list is empty and nothing is flagged — a tree with no stageable change, never a tree the verb failed to read (that is `1`) ([#237](https://github.com/zheref/nen/issues/237)) |
 | [`shu coverage`](#nen-shu-coverage) | `6` | `--touched` measured nothing: no touched file joined a report row ([#236](https://github.com/zheref/nen/issues/236)) |
+| [`shu test`](#shu-test-select) | `6` | `--select` resolved to zero executed tests: the run exited 0 and its declared results record none ([#207](https://github.com/zheref/nen/issues/207)) |
 | [`shu coverage`](#nen-shu-coverage) | `8` | `--from-capture` refused the capture on disk as not proven this tree's: no provenance sidecar, a different tree fingerprint, lane or report list, or a report whose sha256 changed; nothing measured, no document ([#250](https://github.com/zheref/nen/issues/250)). A third use of `8`, unrelated to `pr ready`'s and `pr mark-ready`'s |
 | [`shu tools`](#nen-shu-tools) | `7` | every row passes, but nen is inside its `dependency.minimum` and **behind** `dependency.pinned_ref` (a BEHIND row): install the pinned ref the row's remedy names ([#327](https://github.com/zheref/nen/issues/327)) |
 | every [`runner`](#family-runner) verb that calls `gh` | `5` | `gh` could not be started, in `shu`'s sense; a GitHub refusal there is `1`, because this table reserves no code for a network failure |
@@ -341,6 +342,7 @@ verb does by default:
 | [`tag cut`](#nen-tag-cut) | yes | `--push` | the tag is created locally; a tag is never auto-pushed |
 | [`canon mirror generate`](#nen-canon-mirror-generate) | no | `--dry-run` | writes into every declared surface's rules location under `--repo`; the dry form reports every write, deletion and foreign file and performs none. [`canon mirror check`](#nen-canon-mirror-check) writes nothing but its `--markdown-out` table (creating that table's parent directory) and refuses `--dry-run` |
 | [`surface install`](#nen-surface-install) | no | `--dry-run` | prints every directory, link and CLI step it would make and makes none; it **still runs** the read-only probes (`git rev-parse --show-toplevel`, `claude --version`, `codex plugin list`, `codex plugin marketplace list`) so every refusal answers exactly as the real run would ([#298](https://github.com/zheref/nen/issues/298)) |
+| [`canon pin --write`](#nen-canon-pin) | no | `--dry-run` | moves `maintained_tools[].pinned` in the consumer's `nen/repos.json`, one value and no other byte; the dry form prints the pin before → after and writes nothing, after the same tag resolution in the canon checkout (read-only git, no fetch). The bare `canon pin` reads and writes nothing, so it classifies **read-only** in izanami's table; `--write` classifies **mutating** and `--write --dry-run` **read-only** again ([#291](https://github.com/zheref/nen/issues/291)) |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
@@ -349,6 +351,7 @@ verb does by default:
 | [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, so it can print which route each name or `--add-bots` id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
+| [`runner relabel`](#nen-runner-relabel) | yes | `--run` | without it, reads the runners list and either lists the candidates (no `--runner`) or prints each label write as `would run:`; with it -- and only with `--runner` naming every runner -- adds the pool's own label and reads each runner's labels back (#340) |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
@@ -501,7 +504,7 @@ they assumed instead); they come back empty or `null`.
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 | `release.unitPaths` | the release-unit entry list a release unit is bounded to. Each entry is either a STRING (a repo-relative prefix or narrow glob, `src/report/patterns.ts`'s grammar) or an OBJECT `{"path": "<exact file>", "keys": ["<json pointer or dotted key>", ...]}` bounding one exact JSON file to a set of its own leaf keys rather than its whole content (item 4) — `path` matched by exact equality, never a pattern; `keys` a non-empty list of non-empty JSON-pointer or dotted leaf paths. `null` (the key absent) means UNDECLARED, never "everything" or "nothing" — [`release unit-check`](#nen-release-unit-check) and [`nen pr merge`](#nen-pr-merge)'s own unit gate both refuse (naming the key) rather than guess a boundary the repository never drew. A STRING pattern the shared matcher proves claims EVERY path (`**`, `**/*`, and any other pattern that matches a repo-relative path no matter its shape) is refused by pointer too: a release unit that bounds nothing is never what declaring this key is meant to say. `*` (one path segment) is NOT refused -- it claims a single top-level entry, never every path -- and a leading `/` (e.g. `/**`) is refused separately as an invalid absolute pattern, since every path this key is compared against is already repo-relative. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (read from the pull request's BASE commit, never this checkout's own file) |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
-| `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `mode` (optional, #333: `service` or `interactive` -- how the runners run on their host; absent is `service` for `Windows` and `Linux` and `interactive` for `macOS`, whose runner is always a LaunchAgent in the user's session. `macOS` + `service` and `Linux` + `interactive` are refused, naming why. An interactive `Windows` pool runs inside a signed-in desktop session, for jobs that drive a real UI, which a service in session 0 cannot), `labels` exactly `["self-hosted", os, arch]`, or `["self-hosted", "Windows", arch, "desktop"]` for an interactive Windows pool (any other extra label is refused: the runner-policy guard admits only the canonical sets, and a bare `self-hosted` would match every runner; `desktop` on a service pool is refused naming the missing `"mode": "interactive"`), `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools with one label set are refused. **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
+| `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `mode` (optional, #333: `service` or `interactive` -- how the runners run on their host; absent is `service` for `Windows` and `Linux` and `interactive` for `macOS`, whose runner is always a LaunchAgent in the user's session. `macOS` + `service` and `Linux` + `interactive` are refused, naming why. An interactive `Windows` pool runs inside a signed-in desktop session, for jobs that drive a real UI, which a service in session 0 cannot), `labels` exactly `["self-hosted", os, arch]`, or `["self-hosted", "Windows", arch, "desktop"]` for an interactive Windows pool, optionally followed by the pool's own label written out (any other extra label is refused: nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) admits only the canonical sets plus the pool's own label, and a bare `self-hosted` would match every runner; `desktop` on a service pool is refused naming the missing `"mode": "interactive"`; the refusal names each fault -- a bare `self-hosted`, a missing os or arch, a second extra label, another pool's `pool-*` label, the pool's own label in the wrong case). **From #340 every pool also carries one label of its own, `pool-<id>`, derived from its `id` and appended LAST** -- `["self-hosted", "Windows", "X64", "pool-windows-x64"]`, `["self-hosted", "Windows", "X64", "desktop", "pool-kwi-desktop"]`. It is never declared (a declaration written before it parses unchanged), and it is the set every `runner` verb uses: what the host script registers with, a rendered workflow's `runs-on`, what `runner verify --pool` and `runner enable` require. GitHub gives `self-hosted`, the OS and the arch to every runner of that OS and arch, so without it any later registration would join the pool by accident. The label prevents that accidental join; it is not an authorization boundary -- anyone who can register a runner on the repository can register it with the label. Pool ids are unique, so two pools never share a pool label and need no refusal of their own, `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools of one os and arch are two pools from #340, told apart by their own labels (a repeated `id` is still refused). **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
 
 **Unknown keys are preserved, and near-miss keys are refused *because* they
 are.** A key nen has never heard of survives a round trip untouched — the file
@@ -780,13 +783,14 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim — and, with [`--plugin <name>`](#nen-surface-mirror-check---plugin), judges a Claude Code plugin cache or skills-directory install in the plugin's own layout against an independent source, six verdicts on six exits | caller-named --source + --agents + --out or --installed; with --plugin: --source's trees, the copy, `<config>/plugins/*.json` and `<config>/skills/<name>`, plus read-only `git rev-parse`/`symbolic-ref` probes of the stand-in and served checkouts; writes nothing at all; no gh | yes |
-| [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
+| [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free, and the runners still without the pool's own label) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
 | [`runner`](#family-runner) | [`nen runner plan`](#nen-runner-plan) | which runners to add: the lowest free slots for a machine and consumer code, install dirs under the root in the host's separators, the service identity (or `ask`), the pool's mode, and the package with its SHA-256 -- the `nen.runner.plan/v0.2` contract, `--out` writes it; on the pool's own host, a stderr warning (exit 0) when the account already runs another repository's runners of different visibility | nen/workflow.json (runners), nen/repos.json (product_codes), github (gh api GET), this host's runner services (powershell Get-CimInstance / systemctl, read-only); writes --out only | yes |
 | [`runner`](#family-runner) | [`nen runner script`](#nen-runner-script) | render a plan's host script -- PowerShell 5.1 (elevated; locks the runner root first, asks the password once, mints each token itself, hands both to config.cmd through the environment, never argv; an interactive Windows plan asks no password and registers logon tasks instead of services), bash for Linux (sudo) and macOS (as yourself) -- and print the one launch line; never runs it | a caller-named --plan file; writes --out unless --dry-run; no gh | yes |
-| [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled; never exits 0 on a partial pass | github (gh api GET runners) | yes |
+| [`runner`](#family-runner) | [`nen runner verify`](#nen-runner-verify) | poll the runners list until every expected name is present, online and labelled -- with `--pool`, with every label of that pool, its own `pool-<id>` included; never exits 0 on a partial pass | github (gh api GET runners); nen/workflow.json with --pool | yes |
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
 | [`runner`](#family-runner) | [`nen runner enable`](#nen-runner-enable) | set a pool's enable variable only after re-reading a completed, successful run of its own preflight whose jobs asked for its labels, dispatched on the default branch with the default branch's own workflow blob; read back, idempotent | nen/workflow.json (runners), github (gh api GET runs/jobs/contents, gh repo view, gh variable get; gh variable set unless --dry-run) | yes |
+| [`runner`](#family-runner) | [`nen runner relabel`](#nen-runner-relabel) | add a pool's own label, `pool-<id>`, to runners registered before it existed (#340) -- only runners named with `--runner` (`--run` without it is exit 2); a dry run without `--runner` lists the candidates; every write read back | nen/workflow.json (runners), github (gh api GET runners and runners/<id>/labels; gh api POST runners/<id>/labels with --run) | yes |
 | [`surface`](#family-surface) | [`nen surface install`](#nen-surface-install) | make, re-point or report a host's FIRST-PARTY install of a plugin from a checkout, per surface: the Claude Code skills-directory link with the hand-over of a prior marketplace copy, the Codex marketplace and plugin, the Antigravity global plugin link -- never replacing what it did not make, never editing a settings file, every write read back | the checkout's manifests; the surface's own directory (--config-dir) and registry files; claude / codex / agy and one `git rev-parse`; writes a link under --config-dir and runs the surface's install CLI unless --dry-run; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface status`](#nen-surface-status) | the version each surface serves for a plugin, read back from `claude plugin list --json`, `codex plugin list` or the linked `plugin.json`, and whether it is a given checkout; with `--trees`, the copies Claude Code SERVES judged as `check --plugin` judges them | the surface's directory and registry files; claude / codex / agy list and validate commands; with --trees, the copies and the source; writes nothing; no gh | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
@@ -805,7 +809,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
 | [`canon`](#family-canon) | [`nen canon resolve`](#nen-canon-resolve) | resolve a target repo's always-load handbook set plus its ONE stack handbook, from the scenario nen/repos.json records for it | nen/repos.json | yes |
-| [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to | nen/repos.json | yes |
+| [`canon`](#family-canon) | [`nen canon pin`](#nen-canon-pin) | read the canonical handbooks repository a consumer mirrors and the TAG it is pinned to, from the `pinned` field on that repository's maintained_tools entry -- data a sync checks the canon out at, and a drift check holds the mirror to; with `--write <tag>`, MOVE that pin -- one value, every other byte kept -- only to a tag the canon checkout carries | nen/repos.json; with --write, the canon checkout `canon checkout` resolves (read-only, isolated git; fetches nothing) and an atomic write of nen/repos.json unless --dry-run | yes |
 | [`canon`](#family-canon) | [`nen canon checkout`](#nen-canon-checkout) | resolve WHERE the canon checkout is on this machine -- `--canon-checkout`, then the variable the pinned entry's `checkout_env` names, then its `checkout` path template -- and verify it is a clean checkout of the pinned source at the pinned tag, reporting every step | nen/repos.json + the environment; read-only, isolated git (rev-parse, remote get-url on the checkout and the consumer, status, ls-files); fetches nothing | yes |
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
@@ -1114,7 +1118,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 |---|---|---|---|
 | `<ref>` | yes | `<CODE>#<N>` (the `#` optional) or a bare `<N>` with `--gh-repo` | the shorthand splits at the LONGEST trailing digit run; a code ending in a digit needs the `#` |
 | `--gh-repo <owner/name>` | no | the repository, when `<ref>` is a bare number | wins over a code if both are given |
-| `--explain` | no | print the full conjunct table plus what the gate does not decide, and — when `nen/gates.json` states `round_policy.minRounds` or `.maxRounds` — each reviewer's requested and posted rounds against both ([#240](https://github.com/zheref/nen/issues/240)) | suppressed by `--json` (the JSON already carries the table, and `meta.roundCounts`) |
+| `--explain` | no | print the full conjunct table plus what the gate does not decide, and — when `nen/gates.json` states `round_policy.minRounds` or `.maxRounds` — each reviewer's requested and posted rounds against both ([#240](https://github.com/zheref/nen/issues/240)); and, for each check still queued at the judged head, whether an online runner carries its `runs-on` labels ([#224](https://github.com/zheref/nen/issues/224)) | suppressed by `--json` (the JSON already carries the table, and `meta.roundCounts`) |
 | `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies. On that flags path each name (and each `--approvers` name) matches the **whole** login, case-insensitively, with an optional `[bot]` suffix — `^<name>(\[bot\])?$`, the name taken literally — never a substring or a regex, so `sasuke` is not `Not-Sasuke-Fan` ([#264](https://github.com/zheref/nen/issues/264), Feitan F1). A repository that needs a pattern declares `login_pattern` in `nen/gates.json`. The same exact reading now applies wherever a reviewer name has no declared identity (a `--reviewers` name a gates file does not declare): the name is the login |
 | `--reviewer-login <name>=<login>` | no, repeatable | the exact login a `--reviewers` name posts under | flags path only ([#264](https://github.com/zheref/nen/issues/264)). Whole login, case-insensitive, optional `[bot]` suffix, taken literally; repeat a name for alternative logins. **Nothing is built in** — which login a bot posts under is data (§3), so without this flag the name must equal the login, e.g. `--reviewers copilot --reviewer-login copilot=copilot-pull-request-reviewer[bot]`. Split at the first `=`; an empty half is exit `2`, and so is a name `--reviewers` does not list. Beside a gates file it is ignored with a warning in `meta.warnings` — declare `login_pattern` there instead |
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
@@ -1152,21 +1156,23 @@ matching, and a name given twice is applied (and warned about) once.
 
 **Naming a check whose name contains a comma (zheref/nen#243).** A GitHub
 Actions matrix job is named `<job> (<v1>, <v2>, ...)` — this repository's own
-CI reports `check (Windows, ["self-hosted","Windows","X64"])` — and through
+CI reports `check (Windows, ["self-hosted","Windows","X64","pool-windows-x64"])`
+(`check (Windows, ["self-hosted","Windows","X64"])` before the pool labels of
+#340) — and through
 v0.15.x `--exclude-check` split its one value on every comma, so such a name
 fragmented into pieces that matched nothing and the verdict stayed
 `not-ready` on a job the maintainer had ruled out
 ([zheref/nen#242](https://github.com/zheref/nen/pull/242)). The flag now
 **repeats** — `--exclude-check readiness --exclude-check 'check (Windows,
-["self-hosted","Windows","X64"])'` is two names — and within one occurrence a
+["self-hosted","Windows","X64","pool-windows-x64"])'` is two names — and within one occurrence a
 comma separates names **only outside brackets**: `(`, `[` and `{` open a
 group, the matching closer ends it, and a comma inside a group belongs to the
 name. So `--exclude-check a,b` is still two names, exactly as before, and a
 matrix name is one name with or without the repeat:
 
 ```bash
-nen pr ready 242 --gh-repo zheref/nen --exclude-check 'check (Windows, ["self-hosted","Windows","X64"])'
-nen pr ready 242 --gh-repo zheref/nen --exclude-check 'compile,check (Windows, ["self-hosted","Windows","X64"])'
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'check (Windows, ["self-hosted","Windows","X64","pool-windows-x64"])'
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'compile,check (Windows, ["self-hosted","Windows","X64","pool-windows-x64"])'
 ```
 
 Two shapes are stated rather than guessed. A value with an opener that is
@@ -1190,7 +1196,7 @@ a check is out of scope belongs in the declaration the verdict already reads.
 "checks": {
   "excluded": [
     {
-      "name": "check (Windows, [\"self-hosted\",\"Windows\",\"X64\"])",
+      "name": "check (Windows, [\"self-hosted\",\"Windows\",\"X64\",\"pool-windows-x64\"])",
       "reason": "the maintainer ruled Windows out of scope until a runner exists",
       "ruled": "2026-09-22",
       "until": { "condition": "a self-hosted Windows runner is registered" }
@@ -1282,6 +1288,76 @@ What `nen pr ready` does with what it read:
   `owed`, `owed-in-flight`, `fulfilled-by-quorum` or `no-minimum`; `max` is
   `under`, `reached`, `over`, `unknown` or `no-ceiling`. Absent otherwise, so
   a file stating neither key gets a byte-identical report.
+- `meta.runnerAvailability` (additive, [#224](https://github.com/zheref/nen/issues/224))
+  is present only under `--json` or `--explain`, and only when CON-32(a) still
+  weighs a check run whose status is `QUEUED`, `WAITING`, `PENDING` or
+  `REQUESTED` with no conclusion (selected on status, never on `startedAt`,
+  which GitHub sets on a queued run), or a pending commit status, after every
+  exclusion: one entry per such check, `{ check, jobId, labels, queuedSince,
+  queuedMinutes, determination, infrastructureStall, runners,
+  organizationRunners, labelsFromPrHead, missingPermission, missingPermissions,
+  detail }`.
+  - `determination` is `online` (an online runner carries every `runs-on`
+    label: slow, not stalled), `offline-only` or `no-runner`, `github-hosted`
+    (a standard hosted image label — ubuntu `latest|slim|22.04|24.04|26.04`
+    with `-arm` on the dated ones, windows `latest|2022|2025|2025-vs2026` and
+    `11-arm|11-vs2026-arm`, macos `latest|14+` with `-large|-xlarge`, and
+    `macos-<n>-intel` on 14+, and `xcode-<n>` with an optional `-xlarge`;
+    macOS 13 was retired in November 2025 and is not admitted, and macOS 14 is
+    deprecated (actions/runner-images#13518) and leaves the list on its next
+    pass; the list follows the actions/runner-images README as of 2026-10-11 —
+    that no listed runner carries), `started` (picked up, or
+    completed without a runner, after the rollup was read), `environment-wait`
+    (held by an environment protection rule), or `undetermined` (`detail` says
+    why).
+  - `infrastructureStall: true` only for `offline-only`/`no-runner`, and only
+    once the job has been queued at least **10 minutes**
+    (`STALL_FLOOR_MINUTES`): younger, it is `false` with *too young to call a
+    stall (an autoscaled or ephemeral pool may still register a runner)*. On
+    those two determinations `null` means only that the queue age could not be
+    read; a `created_at` up to two minutes ahead of this machine's clock is
+    skew and reads as 0. It is also not called when the pull request changes
+    anything under `.github/` — its author may have set those labels — which is
+    `undetermined` with `labelsFromPrHead: true`. `labelsFromPrHead: false`
+    means this PR changes nothing under `.github/` — a fact about its files,
+    not a finding about who set the labels; the changed files are read
+    paginated and fail closed at GitHub's 3000-file cap. The stall line is
+    still hedged *unless this PR changes what computes runs-on*.
+  - The job is bound to its rollup entry before it is read: the check run's
+    app must be `github-actions` and its id (`databaseId`) the job id in its
+    `detailsUrl` — a third-party check pointing at an Actions job is not that
+    job — and the job read back must be this check's at the judged head
+    (`head_sha`, `check_run_url`). Otherwise, or when the id or app cannot be
+    read, the entry is `undetermined`.
+  - `queuedSince`/`queuedMinutes` are the job's `created_at` and the minutes
+    since; both are `null` on `started` and `environment-wait`, where the job
+    is not queued for a runner.
+  - Repository runners are named in `runners` (only the online ones on
+    `online`); organization runners are only **counted**, in
+    `organizationRunners: { online, offline }`, never named.
+  - Labels come from the Actions jobs API (`actions:read`; a 404 there is *job
+    not found*); runners from `repos/<slug>/actions/runners`, every page, plus
+    `orgs/<owner>/actions/runners` when the owner is an organization and no
+    repository runner is online. Listing runners needs **administration:read**
+    on the repository (classic: `repo`, held by an admin) and **organization
+    self-hosted runners:read** for the organization's (classic: `admin:org`): a
+    403 — or the 404 GitHub hides those two endpoints behind — reads *runner
+    diagnosis unavailable without <grant>; the gate does not need it*, naming
+    GitHub's own `X-Accepted-GitHub-Permissions` or `X-Accepted-OAuth-Scopes`
+    value when it is well-formed (`name[=read|write|admin]`, separated by `,`
+    or `;`, at most 200 characters), the documented grant otherwise.
+    `missingPermissions` lists every distinct refused grant (the repository's
+    and the organization's when both are refused); `missingPermission` is its
+    first, kept for compatibility. Under `GITHUB_ACTIONS=true` the grant is
+    omitted: `missingPermission` is `null` and `missingPermissions` empty.
+  - The runner list is complete only when its distinct runner ids equal a
+    `total_count` that did not move between pages, and page 1 read again
+    answers the same `total_count` and exactly the same runner ids in order; a short page, the ten-page
+    cap, or a malformed runner is `undetermined`, never a smaller pool.
+    Enterprise runners and GitHub-hosted larger runners are listed by neither
+    endpoint, and a `no-runner` detail says so. At most 20 jobs are read.
+  - The verdict, every row and the exit code are **unchanged**: a stalled check
+    is still not-ready, and excluding it stays the caller's `--exclude-check`.
 - A rollup that held **only** excluded checks is still
   `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
   names from both sources listed once. An exclusion never turns an empty or
@@ -7965,6 +8041,8 @@ Answers "which canonical handbooks repository does this consumer mirror, and at 
 
 ```text
 nen canon pin --repo <consumer> [--source <owner/name>] [--json]
+nen canon pin --repo <consumer> --write <tag> [--source <owner/name>]
+              [--canon-checkout <path>] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -7972,9 +8050,43 @@ nen canon pin --repo <consumer> [--source <owner/name>] [--json]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | yes | The consumer whose registry records the pin. | Listed unbracketed: omitted, exits 2 by name. |
-| `--source <owner/name>` | no | Which pinned tool is the canon, when the registry pins more than one. | Refused (exit 1) when the registry records no `pinned` for it. |
+| `--source <owner/name>` | no | Which pinned tool is the canon, when the registry pins more than one. | Refused (exit 1) when the registry records no `pinned` for it. Compared case-insensitively. |
+| `--write <tag>` | no | Move the pin to `<tag>`. | Tag-shaped, as everywhere in this family; anything else is exit 2. |
+| `--canon-checkout <path>` | no | With `--write`: an explicit canon checkout, step 1 of [`canon checkout`](#nen-canon-checkout)'s order. | Refused without `--write`. |
+| `--dry-run` | no | With `--write`: print the pin before → after and write nothing. | Refused without `--write`. |
 
 **Output and exit codes** -- prints `source: <owner/name>`, `ref: <tag>`, `recorded in: <path> (maintained_tools[].pinned)`. `--json`: `{ contract: "nen.canon.pin/v0.1", source, ref, tagShaped, recordedIn }`. Exit 0 when exactly one pin answers. Exit **1**, with a distinct reason naming `maintained_tools[].pinned` as the field to record, when `--repo` has no `nen/repos.json`, when no maintained tool is pinned, when several are and `--source` does not say which, or when `--source` names a tool the registry does not pin. A recorded pin that is not tag-shaped (`main`, a SHA) is printed and then **exits 1** too: a canon mirror is rendered from a tag, never a floating branch (`CON-13`). Exit 2 on an omitted `--repo` or an empty `--source`.
+
+#### Moving the pin: `--write <tag>`
+
+A repin used to be a hand-edit of one JSON key followed by [`schema check`](#nen-schema-check) to read it back -- the one step of a repin that was a text edit, and one that could be applied without the regenerate it owes ([#291](https://github.com/zheref/nen/issues/291)). `--write <tag>` makes it a verb:
+
+- **It writes the row the read form answers from**: the **last** `maintained_tools` row naming the source, compared case-insensitively -- the row [`canon checkout`](#nen-canon-checkout) reads the checkout declaration from too. An earlier row a later one shadows is never touched.
+- **It changes one value and no other byte.** The file is scanned, never re-serialised: indentation, key order, `$comment`s, the other rows, CRLF line endings and a trailing newline (or its absence) are kept, and only the string literal of that one `pinned` is replaced. Where `maintained_tools`, or the edited row's `repo` or `pinned`, appears **more than once**, the edit is refused (`not-one-value-edit`): `JSON.parse` keeps only the last, so the value a reader sees and the one a reviewer reads could differ -- fix the file by hand first. A duplicate anywhere else is not the edit path's. The new text is then **proved** before anything is written: it must parse to the old document with that one value changed, or the write is refused.
+- **The tag must resolve on the canon, as `refs/tags/<tag>`.** The canon checkout is found exactly as [`canon checkout`](#nen-canon-checkout) finds it -- `--canon-checkout`, then `checkout_env`, then `checkout` -- and verified with the same read-only, isolated git calls as far as the tag: the top of a work tree whose `origin` names the source on the consumer's own host, holding `refs/tags/<tag>` (a branch of the same name does not count) **as a ref of its own**: `git rev-parse --symbolic-full-name refs/tags/<tag>` must print exactly `refs/tags/<tag>`, so a symbolic ref under `refs/tags/` that follows a branch is `tag-missing` too. The **recorded** pin must itself be tag-shaped, as the read form requires: a row pinned to `main` is refused (`pin-not-tag-shaped`) rather than moved -- fix it by hand. A missing tag's advice is the fetch alone (`git -C <checkout> fetch --tags origin`): checking the tag out is the regenerate's step, not this one's. **HEAD need not be on the tag yet and the tree need not be clean**: the pin moves first, and the regenerate that must follow verifies the checkout at the new pin. nen fetches nothing: fetch the tag into the checkout first. A checkout that does not resolve is a refusal with its code (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...), never a pin written on trust.
+- **Checked after the tag, read from what was checked.** The row is picked from a first read, but nothing is edited from it. Only after every git call of the tag resolution is the registry's path resolved, its containment checked (below), and the text read again **from that checked real path** -- opened without following a final link, its device, inode, size, modification time and status-change time (ctime) recorded. That text must still pick the same source, row and pin, or the run is refused (`registry-changed`): a file swapped or edited while git ran is never the one edited.
+- **Inside the repository only.** The registry's real path (`realpath`, links resolved) must lie inside `--repo`'s own real root: a `nen/repos.json` that links **out** of the repository is refused at exit 1 (`registry-outside-repo`), naming both paths, and neither file is touched. A link that stays inside is written **through** -- the link is kept, its target replaced -- and the output names the real file written (`written: <real> (through the link <path>)`) -- only when `nen/repos.json` itself is a symbolic link; a symlinked consumer root or a case-variant `--repo` names the real file with no link. In `--json`, `target` is that real file on every run, `--dry-run` included, and `writtenTo` is the same path when a write happened and `null` otherwise.
+- **Atomic.** A temporary file beside that real file -- named `.repos.json.nen-<pid>-<hex>.tmp`, so an ignore rule can name it -- is written, given the file's permission bits explicitly (`fchmod`, so the umask cannot narrow a `0664` to `0644`), flushed and renamed over it. The checked path is **not resolved again**: right after the temporary file is opened, and again right before the rename, the write re-asserts that the directory and the file still resolve to themselves, that the file is still inside `--repo`, and that it is still the same file, unmodified (device, inode, size, modification time, and **ctime**, which no call can set -- so a same-size edit with its modification time restored, or a `chmod`, is caught too, as is a lost update by another writer). It also re-asserts that the **temporary file** is still the one it opened -- its directory still resolves to the target's, and the path still names the descriptor's device and inode -- the first time **before any content is written**, so a refused run leaves no orphan holding the text. The descriptor stays open through the second check, and every failure path truncates it before unlinking, so wherever the file really is, it holds nothing. After the rename the target must be the temporary file's inode, or the run is `write-failed` with *landed elsewhere*. Any mismatch removes the temporary file and refuses (`write-failed`, saying what changed). **A window of microseconds remains** between the last check and `rename(2)`, and a process that wins that race **could make the rename write outside the repository**: closing it needs `renameat(2)` against a directory descriptor, which Node does not offer; the post-rename check reports such a landing but cannot undo it. **On win32** there is no `O_NOFOLLOW` and inode identity is not reliable, so the re-checks there rely on the `realpath.native` comparisons, size and timestamps, and claim no more. While the temporary file exists, SIGINT, SIGTERM and SIGHUP are held; the guard is removed only on the **next turn** of the event loop, so a signal that arrived during the synchronous write still finds it: the handler removes the temporary file if still present and re-raises the signal, and the process dies of it (exit 130 for SIGINT) rather than exiting 0. A replace that fails is exit 1 (`write-failed`): *the pin was not moved; `<file>` could not be replaced: `<errno>`*, with the temporary file removed and the original untouched.
+- **Read once for the edit.** The text the registry loader validates on the checked path is the text the edit is made in, and the row at the loader's index must name the source (case-insensitively) or the edit is refused.
+- **Read back.** After the write the file is reloaded through the registry loader and the new pin checked in the same row; [`schema check`](#nen-schema-check)'s `nen/repos.json` row reads the result exactly as it read the old one, with the new pin in its `pinned tools`.
+- **The mirror is now stale, and it is said.** A moved pin leaves every mirrored file naming the old tag -- which [`canon mirror check`](#nen-canon-mirror-check) reports as `stale` on every surface -- so the output and a `nen: note:` on stderr name the regenerate that must land **in the same commit**: `nen canon mirror generate --repo '<consumer>' --canon-values <path> (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)` -- a **POSIX shell** command, labelled so, with the root printed as one single-quoted word -- which now defaults to the new pin. `--json` carries the same command as `mirror.regenerate` and as an argv array, `mirror.regenerateArgv`.
+
+**Every refusal comes before any write.** Exit **2**: `<tag>` is not tag-shaped (`v<major>.<minor>[.<patch>][-pre]`); an empty `--write`/`--source`, a `--source` that is not `owner/name`, or a flag another `canon` verb reads (`--ref` above all -- the tag is `--write`'s value -- `--rules-dir`, `--stack-dir`, ...); a `nen/repos.json` that does not parse or validate (the loader's pointer). Exit **1**: `--repo` has no `nen/repos.json`, or its real file is outside `--repo`, or it changed while the tag was resolved; the recorded pin is not tag-shaped; no maintained tool is pinned; several are and `--source` does not say which; `--source` names a tool with no pin to move (`--write` moves a recorded pin -- record the first by hand); or `<tag>` does not resolve in the canon checkout, the refusal naming the tag and the checkout step. A `<tag>` equal to the current pin writes nothing and exits 0 once the tag resolves. A failed replace is exit 1 too. `--write` is refused on every other `canon` verb.
+
+**Output** -- `source: <owner/name>`, `pin: <before> -> <after>` (`(unchanged)` when equal), `recorded in: <path> (maintained_tools[<i>].pinned, line <n>)`, `tag: <tag> is <sha12> in <checkout> (resolved from <kind> <what>)`, `written: ...`, and, when the pin moved, `mirror: now STALE -- regenerate it in the same commit (POSIX shell): <command>` (`would be STALE` under `--dry-run`). Text lines are stripped of control characters. `--json`: `{ contract: "nen.canon.pin.write/v0.1", ok: true, source, before, after, changed, dryRun, written, recordedIn, target, writtenTo, row, line, tag: { commit, checkout, resolvedFrom }, mirror: { stale, regenerate, regenerateArgv }, failure: null }`. **Every refusal it names emits a document under `--json` too**, as [`canon checkout`](#nen-canon-checkout) does: `{ contract: "nen.canon.pin.write/v0.1", ok: false, failure: { code, message } }`, where `code` is `no-registry`, `registry-outside-repo`, `registry-changed`, `pin-not-tag-shaped`, `no-pin`, `ambiguous-source`, `source-not-pinned`, `not-one-value-edit`, `write-failed`, `read-back-mismatch`, or the checkout's own code when the tag does not resolve (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...). An exit-2 usage error carries no document: its refusal is on stderr alone.
+
+```bash
+nen canon pin --repo /path/to/consumer --write v0.7.0 --dry-run
+```
+```text
+source: owner/handbooks
+pin: v0.6.0 -> v0.7.0
+recorded in: /path/to/consumer/nen/repos.json (maintained_tools[2].pinned, line 9)
+tag: v0.7.0 is 3f1c2a9b8d7e in /home/me/.cache/canon/owner/handbooks (resolved from declared-path '${XDG_CACHE_HOME:-${HOME}/.cache}/canon/owner/handbooks' (nen/repos.json maintained_tools[2].checkout))
+written: nothing (--dry-run)
+mirror: would be STALE -- regenerate it in the same commit (POSIX shell): nen canon mirror generate --repo '/path/to/consumer' --canon-values <path> (--stack-dir <dir> --leaf <name> | --rules-dir <dir>)
+```
+(shape from `src/canon/pin-write.integration.test.ts`)
 
 **Example**
 
@@ -8039,7 +8151,7 @@ nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
 | `--ref <tag>` | no, when the registry pins it | The tag the checkout must sit on. | Tag-shaped, as everywhere in this family. |
 | `--canon-checkout <path>` | no | An explicit checkout, step 1 of the order. | An empty value is exit 2. |
 
-Every other `canon` flag (`--rules-dir`, `--stack-dir`, `--canon-values`, ...) is refused here at exit 2: a flag accepted and ignored would read as though it steered the resolution. For the same reason `--canon-checkout` is refused on [`canon pin`](#nen-canon-pin) and [`canon resolve`](#nen-canon-resolve).
+Every other `canon` flag (`--rules-dir`, `--stack-dir`, `--canon-values`, ...) is refused here at exit 2: a flag accepted and ignored would read as though it steered the resolution. For the same reason `--canon-checkout` is refused on [`canon pin`](#nen-canon-pin) without `--write` and on [`canon resolve`](#nen-canon-resolve).
 
 **Output and exit codes** -- prints `source: <owner/name>@<tag>`, `checkout: <path>` (or `(unresolved)`), `resolved from: <kind> <what>`, one `  passed over: <kind> <what> (<why>)` line per absent step, then `verified: origin <url> names <owner/name> on <host>; HEAD <sha12> is <tag>; clean` -- or `failed: <code>: <reason>`. Credentials in an origin URL are redacted. Every text line, and the `nen:` refusal on stderr, has its control characters stripped -- an origin, a path or a status line can carry an escape sequence -- while `--json` keeps the raw bytes; `canon mirror`'s checkout refusal is stripped the same way. `--json`, the same document on success and failure: `{ contract: "nen.canon.checkout/v0.1", ok, source, ref, path, resolvedFrom: { kind, status, from } | null, steps: [{ kind, status, from, note? }], verified: { origin, originSlug, host, head, tag, tagCommit, clean } | null, failure: { code, message } | null }`. `kind` is `flag`, `env` or `declared-path`. Exit 0 on a verified checkout; exit **1** on any resolution or verification failure, with `nen: <code>: <reason>` on stderr; exit 2 on an omitted `--repo`, an empty or foreign flag, no pin to take `--source`/`--ref` from (the same refusal `mirror` gives), or a malformed `nen/repos.json` (the loader's pointer, as on `mirror`). **A usage error carries no `--json` document**, even under `--json`: its refusal is on stderr alone, because there is no resolved source or ref to fill one with.
 
@@ -8216,7 +8328,7 @@ drift: yes
 ```
 (the pin moved to `v0.7.0` and nothing was regenerated: every file is stale on every surface, and the fix is one `generate` at the new pin; shape derived from `src/canon/mirror.ts`'s `checkSurface` and `src/canon/command.test.ts`)
 
-**Driving the pair from a skill or CI.** Where the consumer declares its checkout (`checkout_env`/`checkout`, [`canon checkout`](#nen-canon-checkout)), the whole sequence is one portable command per half: `nen canon mirror generate|check --repo <consumer> --canon-values <path> --stack-dir handbooks/stacks --leaf rules --not-mirrored README.md,placeholders.md` -- the pin, the checkout and the rules directory are all resolved from data, and a checkout that is missing, behind or dirty is exit 2 with its code. Without a declaration, the sequence a sync skill runs is: `nen canon pin --repo <consumer> --json` to learn the canonical repository and the tag the consumer is pinned to; check that repository out **at the tag**; `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; `nen canon mirror generate --repo <consumer> --rules-dir <that> --canon-values <path>` (source and ref default to the recorded pin; its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check` with the same inputs and fails on exit 1 -- the drift check `CON-13` asks for. Repinning is then one edit to `maintained_tools[].pinned` followed by one `generate`; a repin without the regenerate is what `check` reports as stale on every surface.
+**Driving the pair from a skill or CI.** Where the consumer declares its checkout (`checkout_env`/`checkout`, [`canon checkout`](#nen-canon-checkout)), the whole sequence is one portable command per half: `nen canon mirror generate|check --repo <consumer> --canon-values <path> --stack-dir handbooks/stacks --leaf rules --not-mirrored README.md,placeholders.md` -- the pin, the checkout and the rules directory are all resolved from data, and a checkout that is missing, behind or dirty is exit 2 with its code. Without a declaration, the sequence a sync skill runs is: `nen canon pin --repo <consumer> --json` to learn the canonical repository and the tag the consumer is pinned to; check that repository out **at the tag**; `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; `nen canon mirror generate --repo <consumer> --rules-dir <that> --canon-values <path>` (source and ref default to the recorded pin; its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check` with the same inputs and fails on exit 1 -- the drift check `CON-13` asks for. Repinning is then `nen canon pin --repo <consumer> --write <tag>` (fetch the tag into the canon checkout first) followed by one `generate`, committed together; a repin without the regenerate is what `check` reports as stale on every surface, and the pin verb says so when it writes.
 
 <a id="family-quality"></a>
 
@@ -8790,13 +8902,14 @@ invocation emits one object with the same top-level keys, in this order:
 
 ```text
 { contract, lane, stack, verb, target, steps, cwd, env, host,
-  preconditions, exitCode, durationMs, artifacts, log }
+  preconditions, exitCode, durationMs, artifacts, log, proof, selection }
 ```
 
 `contract` is `nen.shu.<verb>/v0.1` — per verb, so a consumer that recognises
-`nen.shu.build/v0.1` is never handed a `test` report by accident. `build` adds
-one key after `log`: `proof`, the `.nen/proof/<lane>.json` a green build records
-(`null` when the build was not green or nothing was run). `target` is `null`
+`nen.shu.build/v0.1` is never handed a `test` report by accident. Two keys
+follow `log` on every verb: `proof`, the `.nen/proof/<lane>.json` a green build
+records (only `build` fills it; `null` when the build was not green or nothing
+was run), and `selection` (only `test --select` fills it; see below). `target` is `null`
 unless a destination or a device was resolved — on [`deploy`](#nen-shu-deploy) it is
 `{ name, args, requiresEnv }` (variable **names**, never a value), and on
 [`dev`](#nen-shu-dev)/[`run`](#nen-shu-run) with `--target` it is
@@ -8910,6 +9023,18 @@ because the child never gave one — nen stopped waiting rather than killing it.
 `proof` is the build proof this run wrote, or `null`. Only
 [`shu build`](#nen-shu-build) ever fills it; it is on every verb's document for
 the reason `target` is — one family, one document shape.
+
+`selection` (zheref/nen#207; expected in `0.21.0`, to be confirmed by the
+release proposal) is `null` unless the run was
+[`shu test --select`](#shu-test-select), and then
+`{ pointer, ids, pattern, each, appended, results, executed, zeroMatch }`: where
+the focused form is declared, the identifiers in the order named, the declared
+grammar, the per-identifier template, exactly the arguments the expansion
+appended, the declared `{ path, format }` results, the tests those results say
+were **executed** (total − skipped; `null` until a run that exited 0 has had
+them read), and `zeroMatch` (`true` when that count is 0, `null` with it).
+`steps[0].argv` is still the whole argv; `selection` says which tail of it was
+the selection.
 
 [`shu coverage`](#nen-shu-coverage) and
 [`shu test-report`](#nen-shu-test-report) are the two executing verbs whose
@@ -9450,10 +9575,242 @@ then parses the results file it names under `artifacts`.
 **Usage**
 
 ```text
-nen shu test [--repo <path>] [--lane <name>] [--dry-run] [--stream] [--heartbeat <s>] [--json]
+nen shu test [--repo <path>] [--lane <name>] [--select <id>[,<id>...]] [--dry-run] [--stream] [--heartbeat <s>] [--json]
 ```
 
 **Output and exit codes** — as `build`, and `--json` is the family's [shared run report](#shu-run-report), with `contract: "nen.shu.test/v0.1"`. Like every executing verb in this family it is **`dry-run-gated`** in izanami's automation-policy table, so `nen watch until --command "nen shu test"` refuses and `nen shu test --dry-run` is the form a watcher or a loop can use. The reason is in [`--dry-run` discipline](#--dry-run-discipline) above and in `src/parse/izanami.ts`: the argv comes from a file in the *target* repository — a declared test task may well write, and one keystroke separates a golden-image check from its recorder — so the bare form is never certified, while the dry run is, because rendering and spawning nothing is a property of nen rather than a claim about that argv.
+
+<a id="shu-test-select"></a>
+#### Focused selection — `--select` (zheref/nen#207)
+
+`nen shu test --select <id>[,<id>...]` runs the lane's **one declared focused
+form** over concrete test identifiers, so a repository keeps a single focused
+declaration and passes any selection through nen — no lane per selection, no
+copied selection script, no edit to its command policy. **The first release
+expected to carry it is `0.21.0`, to be confirmed by the release proposal**; a
+consumer adopting it pins `dependency.minimum` to that release's minor. On an
+older nen the `select` block is an unknown key, preserved and read by nobody,
+and `--select` is an unknown flag (exit 2) — so nothing runs that the
+declaration did not mean.
+
+**The declaration** lives on the lane's `test` row in `nen/contract.json`, as
+`project.verbs.<lane>.test.select`. It is **data**: nen knows no runner's
+selection syntax, and the block states it.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `exe` | yes | The program the focused run spawns. |
+| `argv` | yes | The focused **base** argv. It replaces the regression row's argv — nothing of that row is inherited. May not name `{id}`. |
+| `each` | yes | The per-identifier template. Every `{id}` in it is replaced with one identifier; the expansions are appended after `argv`, once per identifier, in the order named. Must name `{id}`. |
+| `pattern` | yes | The runner's identifier grammar, a regular expression matched against the **whole** identifier. It must compile **on its own** — nen anchors it as `^(?:<pattern>)$`, and a pattern such as `a)|(?:.*` that only compiles once wrapped is refused — and shapes with exponential backtracking are refused at load. |
+| `results` | **yes** | `{ "path": ".nen/focused/<name>", "format": "junit" \| "assertion-results" \| "xcresult-summary" }` — the focused run's results, in one of the formats [`shu test-report`](#nen-shu-test-report) reads (a `junit` path may be a directory of XML). The path must sit **strictly inside `.nen/focused/`** (below). nen reads it after the run and counts the tests it **executed**. |
+| `artifacts` | no | The focused run's own result paths, reported exactly as a row's `artifacts` are. |
+| `stdoutTo` | no | A file for the focused run's stdout, as on any row — the way to hand nen results a runner prints (a JUnit reporter on stdout, a summary an extraction prints). |
+| `env` | no | Variables for the focused run. The regression row's `env` is **not** inherited. |
+| `why` | no | The repository's own sentence. |
+
+The loader refuses, by pointer: `select` on any verb but `test`, on a `test`
+seat, or under a near-miss of its name (`selct`, `Select`); a near-miss of any
+key above or of `results`' two; a missing `results` or a format outside the
+three; a `stall` guard (tests are untimed); `{id}` in `exe`/`argv`, or an
+`each` without it; a focused output path that normalises outside the tree
+(`out/../../x`); and an overlap with the **aka regression capture** — the
+`stdoutTo`/`artifacts` of **every lane's** `test` and `coverage` rows, plus
+`.nen/coverage-capture`. A focused run never writes that capture **through its
+declared `results`/`stdoutTo`/`artifacts`, or through an argv element naming
+those paths** (whole, or as the value of a `--flag=`/`-flag:`); nen does not
+interpret other argv; an argv token is compared as a path only when it is
+path-shaped (it contains `/` or ends in an extension) or the output it is
+compared to has more than one segment, so `--reporter=junit` or a bare `test`
+action never collides with an output named `junit` or `test`. Paths are
+compared after `posix.normalize`, without a leading `./` or trailing `/`, and
+**case-folded** — conservative on case-sensitive filesystems, where two paths
+differing only in case are distinct and still refused. The comparison is
+lexical: a symlink cannot be judged at load. At run time real paths are
+resolved only to keep every write inside the tree, not to detect an in-tree
+symlinked overlap — with one exception, `results.path`, which the run proves
+segment by segment before it moves anything (below). An output a runner derives
+from a config file, an environment variable or its own default is not seen.
+
+**The run.** The plan is the focused block's alone: its program, base argv,
+`env`, `stdoutTo` and `artifacts`. The lane's `cwd`, `project.hosts` and
+`project.preconditions` still apply, in the same order as a bare `test` (host
+`3`, unmet precondition `2`). Coverage is on only if the focused `argv` turns it
+on — nen adds nothing — and **no capture sidecar is recorded**, so
+[`coverage --from-capture`](#nen-shu-coverage) keeps vouching for the regression
+run alone. The argv is a list handed to the child: no shell, no globbing.
+
+**Zero executed is never a pass.** A runner handed an identifier that matches
+nothing exits `0` and prints *Executed 0 tests*. So after a run that exited `0`
+nen reads `results` with `test-report`'s own parser and counts the tests
+executed (total − skipped — a skipped test did not run; for a summary that
+states its counts, a test outside the passed/failed buckets still ran).
+
+<a id="shu-test-select-results"></a>
+**The results path is nen's, and clearing it is a rename.** Before each focused
+run nen **moves** whatever is at the declared `results.path` — the file, or the
+directory and everything under it — **aside** into
+`.nen/focused/.previous/<run-id>/`, so whatever is there afterwards is this
+run's and an earlier run's suite file in a JUnit results directory can never be
+counted. A guard that missed something costs a rename **now**; the moved run is
+deleted only after **2 further focused runs**, when `.previous` is pruned to the
+run just moved plus the newest earlier one. A run id is
+`<ISO stamp>-<pid>-<6 hex>`, claimed with a non-recursive `mkdir`; **only
+entries of exactly that shape are ever pruned** — anything else in `.previous`
+is named on stderr and never touched. Each pruned run is re-proved first, then
+renamed to a unique `.doomed-<hex>` inside `.previous`, its ancestors and its
+own device/inode re-checked, and only then removed; a run that fails any of it
+is kept, with a line on stderr.
+
+**One focused run at a time.** A focused run takes `.nen/focused/.lock`
+(`O_EXCL`, holding its pid and start time) across the move, the run and the
+read, and releases it however it ends. Another **live** holder is exit `2`,
+naming its pid; a lock whose pid is no longer running is reported, removed —
+only once it is proved a regular file inside the real `.nen/focused` — and
+taken. A lock that is a link or a directory is never touched: exit `2`.
+
+That is safe by construction because the path is an **allowlist**, not a
+denylist:
+
+- **At load** (a malformed declaration: exit `1`), `results.path` must sit
+  **strictly inside `.nen/focused/`**, the prefix spelled **exactly** after
+  `posix.normalize` (`.NEN/focused/x` is refused, not folded onto it), already
+  **NFC** (a decomposed spelling is refused), and never be `.nen/focused`
+  itself, its `.previous` area or its `.lock` — in any case. The root, `src`,
+  `SRC`, `.git`, `nen/`, `:(exclude)x` and every other path outside the prefix
+  are refused by name. The focused `stdoutTo` and `artifacts` are never moved,
+  and keep their own rules (inside the tree, never the root, `.git` or `nen/`,
+  never the regression capture).
+- **At run time, before anything moves** (exit `2`, nothing moved or run):
+  every segment from the real repository root down to the path is a real
+  entry — no symlink (Node reports a junction as one), and a native realpath
+  equal to its own path, which catches any other reparse point and any case
+  variant of the entry on disk; its real path is strictly inside the real
+  `.nen/focused`, and the real root is not inside that; no `.git` entry (file
+  or directory) exists at or below it, so no nested repository, worktree or
+  submodule; it does not overlap git's own directory as
+  `git rev-parse --git-dir` reports it (a worktree's lives elsewhere), nor the
+  real path of any regression output; and
+  `git --literal-pathspecs ls-files --recurse-submodules -z -- <path>` lists
+  nothing. Outside a git repository the two git reads are skipped ("not a git
+  repository" is the one git failure read as an answer); a git that cannot be
+  started, or answers anything else, refuses. **`.nen/focused/.previous` is
+  proved the same way** before a run id is chosen in it — absent (then created
+  non-recursively) or a real directory inside the real `.nen/focused`, never a
+  link or a file — and the move re-checks every ancestor's device and inode
+  against the proof immediately before renaming. A failed create or rename
+  (`ENOTDIR`, `EEXIST`, `EXDEV`) is exit `2` naming the path.
+- **`--dry-run` makes every one of those read-only proofs** and refuses with
+  the same exit `2`, so a dry run that exits `0` is one the real run will not
+  refuse for its results path — and it moves nothing and takes no lock.
+
+What remains is a window of microseconds between each last check and the
+syscall it guards. nen assumes a **single user's working copy**, where the only
+other writer is that user's own tooling; a hostile local writer with access to
+the tree is out of scope.
+
+| Outcome | nen exits | `--json` `selection` |
+|---|---|---|
+| ≥ 1 executed | `0` | `executed: <n>, zeroMatch: false` |
+| **0 executed** — stderr says *selection resolved to zero executed tests* | **`6`** | `executed: 0, zeroMatch: true` |
+| results missing (the run wrote nothing where the old results were moved from), unreadable, or in another format than declared | `1` | `executed: null, zeroMatch: null` |
+| the tool itself failed | `1` (results not read) | `executed: null, zeroMatch: null` |
+
+`6` is the code `coverage --touched` uses for the same kind of fact — the tool
+passed, its output is sound, and what came back empty is the selection.
+
+**Refused at exit 2, with nothing spawned** (on `--dry-run` too):
+
+- `--select` with no value, an empty value, or an empty entry (`a,,b`, `a,`);
+- an identifier carrying whitespace, a control character or an invisible
+  format character (zero-width, bidi), a cmd/batch metacharacter (`"` `%` `^` `&`
+  `|` `<` `>` `!` or a backtick — whatever `pattern` admits), beginning with `-`
+  (the runner would read it as an option), carrying `{` or `}`, or named twice;
+- an identifier the declared `pattern` does not match whole — every such one is
+  named;
+- a lane whose `test` row declares no `select`. **There is never a fallback to
+  the full regression command.**
+
+`--select` is one comma-separated value, as every list flag in this CLI; an
+identifier containing a comma cannot be named. It is refused on every other
+verb as a flag that verb does not read.
+
+**Adoption — an xcodebuild-shaped lane** (synthetic identifiers). nen reads no
+`.xcresult` bundle, and raw `xcodebuild` prints prose, not a summary nen reads —
+so a focused form that spawned `xcodebuild` directly could never pass. The
+focused `exe` is therefore the repository's **own wrapper**: it runs
+`xcodebuild` with the arguments nen appends and then writes a supported summary
+(here the `xcresult-summary` JSON an `xcresulttool` extraction produces) to the
+declared results path. The wrapper is the repository's code, not nen's.
+
+```json
+"test": {
+  "exe": "xcodebuild",
+  "argv": ["-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+           "-enableCodeCoverage", "YES", "-resultBundlePath", ".nen/aka/regression.xcresult", "test"],
+  "artifacts": [".nen/aka/regression.xcresult"],
+  "select": {
+    "exe": "scripts/focused-xctest",
+    "argv": ["--summary", ".nen/focused/apple/summary.json", "--",
+             "-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+             "-resultBundlePath", ".nen/focused-bundles/apple.xcresult", "test"],
+    "each": ["-only-testing:{id}"],
+    "pattern": "[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*){0,2}",
+    "results": { "path": ".nen/focused/apple/summary.json", "format": "xcresult-summary" },
+    "artifacts": [".nen/focused-bundles/apple.xcresult"],
+    "why": "scripts/focused-xctest runs xcodebuild with everything after '--', then writes the result bundle's test summary to --summary."
+  }
+}
+```
+
+```bash
+nen shu test --lane apple --select KroTests/CaptureTests/testInlinePills,KroTests/InboxTests --dry-run
+```
+```text
+lane:          apple  (xcode-ios)
+verb:          test
+selection:     KroTests/CaptureTests/testInlinePills, KroTests/InboxTests  (2 identifiers, from project.verbs.apple.test.select; appends: -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests)
+results:       .nen/focused/apple/summary.json (xcresult-summary)  -- not read
+…
+would run:     scripts/focused-xctest --summary .nen/focused/apple/summary.json -- -scheme Kro -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused-bundles/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests
+…
+```
+
+**Adoption — a vitest-shaped lane.** This repository's own `nen` lane declares
+exactly this (`nen/contract.json`), beside the instrumented regression row:
+
+```json
+"select": {
+  "exe": "bunx",
+  "argv": ["vitest", "run", "--reporter=default", "--reporter=junit", "--outputFile.junit=.nen/focused/nen.junit.xml"],
+  "each": ["{id}"],
+  "pattern": "src/[A-Za-z0-9_/-]*[A-Za-z0-9_.-]+\\.test\\.ts",
+  "results": { "path": ".nen/focused/nen.junit.xml", "format": "junit" },
+  "artifacts": [".nen/focused/nen.junit.xml"]
+}
+```
+
+The pattern admits nested test files and no `..`: directory segments carry no
+dot, so no segment can climb.
+
+```bash
+nen shu test --repo . --select src/shu/select.test.ts,src/cli/comma.test.ts
+```
+```text
+lane:          nen  (bun-cli)
+verb:          test
+selection:     src/shu/select.test.ts, src/cli/comma.test.ts  (2 identifiers, from project.verbs.nen.test.select; appends: src/shu/select.test.ts src/cli/comma.test.ts)
+results:       .nen/focused/nen.junit.xml (junit)  -- 109 executed
+…
+```
+(run for real against this checkout; no `coverage/` written, no sidecar recorded.)
+
+A Gradle-shaped runner is the same block with `"each": ["--tests", "{id}"]`.
+**Until a repository declares `select`** — or pins a nen older than the release
+that carries it — its focused path is whatever static lane it declares (this
+repository's `device-records` lane is one), and `--select` on it is exit 2
+saying the lane declares no focused selection: the capability is missing there,
+and nen says so rather than running the regression.
 
 ### `nen shu ui-test`
 
@@ -13432,8 +13789,44 @@ repository has), `plan` (what to add, where, as whom, from which package),
 `workflow` (the pool's preflight workflow, rendered from a caller's template),
 `preflight` (dispatch it and wait for a verdict — the only check that runs
 **as the service**), and `enable` (set the pool's repository variable, only on
-a green preflight). `--target` defaults to `--repo`'s `origin` for the four
-that read or render; `preflight` and `enable` write to GitHub and require it.
+a green preflight) — and an eighth for runners registered before the pool's
+own label existed: `relabel` (#340). `--target` defaults to `--repo`'s
+`origin` for the four that read or render; `preflight`, `enable` and
+`relabel` write to GitHub and require it.
+
+**Every pool carries one label of its own (#340).** A pool's labels are
+GitHub's three defaults (`self-hosted`, the OS, the arch; then `desktop` for an
+interactive Windows pool) **plus `pool-<id>`, last**, derived from the pool's
+`id` and never declared — so `nen/workflow.json` needs no edit. The defaults
+go to every runner of that OS and arch at registration, so with them alone any
+later registration on the repository would silently join the pool and take its
+preflight and gated jobs without having been proven. The label lands only on
+runners **registered or relabelled into this pool**, which prevents that
+accidental join; it is **not an authorization boundary** — anyone who can
+register a runner on the repository can register it with the label. The host
+script registers new runners with the full set, `runner workflow` targets it
+in `runs-on`, `runner verify --pool` and `runner enable` require it, and
+nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) admits a self-hosted job only on a declared pool's full set.
+
+<a id="upgrading-to-pool-labels"></a>
+**The upgrade step — relabel before the new workflows can schedule.** A
+workflow targeting `pool-<id>` queues until a runner carrying it is free, and
+a runner registered before #340 carries only the defaults: until it is
+relabelled, **every job aimed at the pool waits**, the preflight and a gated
+leg included. So, per pool, before (or together with) merging the re-rendered
+workflows: `nen runner inventory --repo .` lists each pool's runners
+`without pool-<id>`, with the exact relabel line; `nen runner relabel --target
+<owner/name> --repo . --pool <id>` lists the same runners as candidates;
+**name every runner you mean to admit** — `nen runner relabel --target
+<owner/name> --repo . --pool <id> --runner <name>,<name> --run` adds the label
+to those and no others, reading each runner back (nothing is admitted in bulk:
+`--run` without `--runner` is exit 2); `nen runner verify --target
+<owner/name> --repo . --pool <id> --expect <names>` then reads every runner
+with its full set. Then re-render the preflight
+(`nen runner workflow --force`), land it, and dispatch and `enable` as usual —
+a run of a preflight rendered before the label no longer certifies the pool.
+The label is the repository's record of the runner: nothing on the host
+changes, and a runner re-registered by `runner script` gets it anyway.
 Exit codes: `0`, `1` (the verb's own failure — **including a GitHub refusal or
 an unreadable answer**: this CLI reserves no code for a network failure, the
 same reading [`pr ready`](#nen-pr-ready) gives "GitHub could not be read"),
@@ -13457,9 +13850,22 @@ parsed against the one convention, `<MachineCode>-<ConsumerCode>R<N>`
 (`^([A-Za-z0-9]+)-([A-Za-z0-9]+)R([1-9][0-9]*)$`); a name that does not read
 as it is **runner 0**, a grandfathered runner, reported and never renamed.
 With `--repo` or `--pool`, each runner is matched to the declared pools by a
-**superset** of the pool's three labels, compared case-insensitively as
-GitHub's scheduler compares them — a runner carrying an extra label still
-matches, exactly as a job would land on it.
+**superset** of the pool's labels — its own `pool-<id>` included (#340) —
+compared case-insensitively as GitHub's scheduler compares them; a runner
+carrying an extra label still matches, exactly as a job would land on it. A
+runner that carries a pool's declared labels and **no** `pool-*` label —
+registered before #340 — is in no pool (no pool-labelled job lands on it) and
+is listed under the pool it would join as `unlabelled` — the candidates
+[`runner relabel`](#nen-runner-relabel) lists — rather than as unpooled. A
+runner awaits a pool only when it fits it **exactly**: every declared label,
+and no label outside them. `desktop` is reserved for an interactive pool, so a
+desktop runner never awaits a plain pool, and with no interactive pool
+declared it is unpooled; a runner carrying any other undeclared label is
+unpooled too. Two pools that declare one set both list it (and
+[`runner relabel`](#nen-runner-relabel) refuses to name it into either). Every
+runner name and label the human rendering prints — the table, the pool lists,
+`unpooled:` and the relabel hint — has its control characters stripped;
+`--json` carries them raw.
 
 **Usage**
 
@@ -13478,12 +13884,20 @@ nen runner inventory [--target <owner/name>] [--repo <path>] [--pool <id>] [--js
 
 **Output and exit codes** — human: a count line, one table of runners (name,
 status, busy/idle, os, labels, machine, consumer, slot), then one line per
-pool and the unpooled names. `--json` top-level keys: `target`, `runners[]`
+pool (with `; without pool-<id>: <names> (nen runner relabel --target
+<owner/name> --pool <id> --runner <names> --run)` when any await the pool's
+label — runner names printed with control characters stripped, raw under
+`--json`) and the unpooled names. `--json` top-level keys: `target`, `runners[]`
 (`name`, `id`, `os`, `status`, `busy`, `labels[]`, `convention`
 `named`\|`runner-0`, `machine`, `consumer`, `slot`), `downloads[]` (the API's
 own `os`, `architecture`, `filename`, `download_url`, `sha256_checksum`),
-`pools[]` (`id`, `labels[]`, `runners[]` names, `online`, `free` — online and
-not busy) and `unpooled[]`; the last two are `null` when no policy was read.
+`pools[]` (`id`, `labels[]` — the full set, `pool-<id>` last — `runners[]`
+names, `online`, `free` — online and not busy — and, from #340,
+`unlabelled[]`: the runners awaiting the pool's own label — and `alsoFit`,
+present only when some of them also fit other pools: runner name → those
+pools' ids; such a runner is left off the relabel command, which is omitted
+when none is left, and named with `<names> also fit <pools>: make the
+declarations differ`) and `unpooled[]`; the last two are `null` when no policy was read.
 Exit 0 when GitHub answered; 1 when it refused — a 403 is worded **"needs
 admin on `<target>`"**, because listing runners is a repository-admin
 operation; 5 when `gh` cannot be started.
@@ -13504,7 +13918,13 @@ pool windows-x64 [self-hosted, Windows, X64]: 0 runner(s), 0 online, 0 free
 pool macos-arm64 [self-hosted, macOS, ARM64]: 3 runner(s), 3 online, 3 free -- RJ2-NNR1, RJ2-NNR2, RJ2-NNR3
 unpooled: (none)
 ```
-(run for real against zheref/nen, 2026-09-30)
+(run for real against zheref/nen, 2026-09-30, before #340. From #340 the same
+three runners, still carrying the defaults alone, read `pool macos-arm64
+[self-hosted, macOS, ARM64, pool-macos-arm64]: 0 runner(s), 0 online, 0 free;
+without pool-macos-arm64: RJ2-NNR1, RJ2-NNR2, RJ2-NNR3 (nen runner relabel
+--target zheref/nen --pool macos-arm64 --runner RJ2-NNR1,RJ2-NNR2,RJ2-NNR3
+--run)` until they are relabelled — the recorded fixture
+`src/runner/fixtures/runners.json` pins that reading)
 
 ### `nen runner plan`
 
@@ -13545,9 +13965,10 @@ auto-logged on, which nen never configures), and every job it takes runs with
 that account's profile and credentials — and that is **every** job such a
 runner takes, not only the ones asking for `desktop`: GitHub gives a job to
 any runner carrying all of its labels, so a runner labelled
-`[self-hosted, Windows, X64, desktop]` also takes every job aimed at
-`[self-hosted, Windows, X64]` on that repository ([`runner
-inventory`](#nen-runner-inventory) counts it in both pools for that reason).
+`[self-hosted, Windows, X64, desktop, pool-<id>]` takes every job whose
+`runs-on` is a subset of that set. From #340 that no longer includes the plain
+pool's jobs, which ask for that pool's own label; it still includes any job
+aimed at the bare defaults, which nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) refuses.
 A UI job also needs that session **active and unlocked**, with `run.cmd`'s
 console window open: a locked screen or a disconnected session still has a
 non-zero session id, which the preflight probe accepts. When the identity is **the account
@@ -13645,8 +14066,11 @@ cannot vouch for — top-level keys: `contract`, `target`, `pool`, `os`, `arch`,
 `architecture`, `filename`, `download_url`, `sha256_checksum`), `runners[]`
 (`slot`, `name`, `installDir`, `serviceName` — GitHub's own
 `actions.runner.<owner>-<repo>.<name>`, also the logon task's name) and
-`existing[]`. v0.2 added `mode` and `dailyAccount`; a `v0.1` plan still
-reads, as the service plan it was. Exit 0; 1 when GitHub refused, offers no package for the
+`existing[]`. v0.2 added `mode` and `dailyAccount`; a `v0.1` plan reads as
+the service plan it was. `labels[]` is the pool's full set, `pool-<id>` last
+(#340), so a plan of either version written **before** #340 is refused by
+[`runner script`](#nen-runner-script), exit 2, naming the pool label it
+predates: re-run `runner plan`. Exit 0; 1 when GitHub refused, offers no package for the
 pool's OS and architecture, or a planned name is already registered; 2 for
 every usage refusal above and a missing `runners` block; 5 without `gh`.
 
@@ -13657,7 +14081,7 @@ nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code N
 ```
 ```text
 plan: 3 runner(s) for zheref/nen, pool windows-x64
-labels: self-hosted,Windows,X64
+labels: self-hosted,Windows,X64,pool-windows-x64
 mode: service
 identity: .\lordzheref
 download: actions-runner-win-x64-2.337.0.zip (runner 2.337.0, sha256 1150692afa94e71f872017e254ea55b6eece1eece3fe7e3a6d4c93d0a1b85cfc)
@@ -13669,7 +14093,8 @@ project dir: C:\GithubRunners\nen-runners
 | 3    | NZ-NNR3 | C:\GithubRunners\nen-runners\Runner3 | actions.runner.zheref-nen.NZ-NNR3 |
 already registered for NZ/NN: (none)
 ```
-(run for real against zheref/nen, 2026-09-30)
+(run for real against zheref/nen, 2026-09-30; the `labels:` line is this
+build's, #340 having appended `pool-windows-x64`)
 
 ```bash
 nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code NZ --count 1 --service-account lordzheref
@@ -13777,7 +14202,7 @@ around the one call and cleared in a `finally`.
   (a mismatch deletes it, exit 6), mint a registration token **now** with
   `gh api -X POST repos/<owner>/<repo>/actions/runners/registration-token
   --jq .token`, and run `config.cmd --unattended --url ... --name <name>
-  --labels self-hosted,<OS>,<ARCH> --work _work --runasservice
+  --labels self-hosted,<OS>,<ARCH>,pool-<id> --work _work --runasservice
   --windowslogonaccount .\<account>` (no account flag for
   `network-service`) with the token and password in the environment as
   above. **`config.cmd`'s output is discarded, never replayed**: the
@@ -13863,6 +14288,13 @@ transcript, which is the maintainer's. It is written from the point the
 script has its `_jusshin` directory (after the lockdown on Windows): a run
 that stopped before that — not elevated, wrong user — leaves none.
 
+**Every script registers with the pool's full label set** (#340) — Windows
+`$Labels`, Linux and macOS `LABELS`: the defaults, `desktop` for an
+interactive Windows pool, then `pool-<id>`. A runner the script **skips**
+(already configured and live) keeps the labels it has; one registered before
+#340 gains its pool label through [`runner relabel`](#nen-runner-relabel), not
+through the script.
+
 The header carries the target, pool, names, identity, root and package as
 comments, and the line `# rendered by nen <version> runner script — do not
 edit; re-run nen runner script` (`--` in place of the dash in the PowerShell
@@ -13924,7 +14356,14 @@ launch (elevated): powershell -NoProfile -ExecutionPolicy Bypass -Command "Start
 
 Polls the runners list every 10 s, for up to `--wait` seconds, until every
 `--expect` name is present, `online`, and — with `--labels` — carries every
-listed label (case-insensitively). **Never exits 0 on a partial pass**: every
+listed label (case-insensitively). **`--pool <id>`** (#340) adds that pool's
+full set from `--repo`'s `runners` block — its own `pool-<id>` included — to
+`--labels`, each label once; a runner whose ONE missing label is that pool's
+own, and that carries no other `pool-*` label, is reported `labels: missing
+pool-<id> -- registered without its pool label: nen runner relabel --target
+<owner/name> --pool <id> --runner <name> --run` — the step is offered only
+when it is exact, and never without `--pool`. Names are printed with control
+characters stripped; `--json` carries them raw. **Never exits 0 on a partial pass**: every
 expected name is judged on every attempt, and the verdict is their
 conjunction. An online runner proves the runner **process**; it says nothing
 about the host's toolchain — that is [`runner preflight`](#nen-runner-preflight)'s.
@@ -13932,7 +14371,7 @@ about the host's toolchain — that is [`runner preflight`](#nen-runner-prefligh
 **Usage**
 
 ```text
-nen runner verify --expect <name>[,<name>...] [--target <owner/name>] [--labels <a,b,c>] [--wait <seconds>] [--json]
+nen runner verify --expect <name>[,<name>...] [--target <owner/name>] [--repo <path>] [--pool <id>] [--labels <a,b,c>] [--wait <seconds>] [--json]
 ```
 
 **Arguments**
@@ -13942,16 +14381,18 @@ nen runner verify --expect <name>[,<name>...] [--target <owner/name>] [--labels 
 | `--expect <names>` | yes | the runners that must be online | comma-separated; an empty list is exit 2 |
 | `--target <owner/name>` | no | the repository | defaults to `--repo`'s `origin` |
 | `--labels <a,b,c>` | no | labels each must carry | — |
+| `--pool <id>` | no | also require every label of this pool, `pool-<id>` included | read from `--repo`'s `runners` block; an unknown id or a missing block is exit 2 |
 | `--wait <seconds>` | no | how long to keep polling | default `0`: one read |
 | `--json` | no | the report | — |
 
 **Output and exit codes** — human: a verdict line (`ok` or `NOT READY`, the
 count online, attempts, seconds waited) and a table of name and verdict:
 `ok`, `missing`, `offline` (or GitHub's own status word), or `labels: missing
-<x>`. `--json` top-level keys: `target`, `ok`, `attempts`, `waitedSeconds`,
+<x>` (with the relabel step when `<x>` is a pool's own label). `--json` top-level keys: `target`, `ok`, `attempts`, `waitedSeconds`,
 `runners[]` (`name`, `verdict` `ok`\|`missing`\|`offline`\|`labels`,
 `status`, `missingLabels[]`, `detail`). Exit 0 when all pass; 1 otherwise, or
-when GitHub refused; 2 on usage; 5 without `gh`.
+when GitHub refused; 2 on usage (an unknown `--pool`, or `--pool` with no
+`runners` block); 5 without `gh`.
 
 **Example**
 
@@ -13971,8 +14412,10 @@ NOT READY: 0/1 runner(s) online on zheref/nen (1 attempt(s), waited 0s)
 Renders the pool's **preflight workflow** from a template the caller
 supplies. Nen carries the **renderer**, not the template — the same split the
 readiness workflow a skill installs already has. Eight placeholders, all
-`@@NAME@@`: `@@REPO_SLUG@@`, `@@RUNS_ON@@` (the pool's labels as a flow
-sequence, `[self-hosted, Windows, X64]`), `@@OS@@` (the `RUNNER_OS` value),
+`@@NAME@@`: `@@REPO_SLUG@@`, `@@RUNS_ON@@` (the pool's full label set as a
+flow sequence, its own label last, `[self-hosted, Windows, X64,
+pool-windows-x64]` — #340: re-render every preflight after upgrading, and
+[relabel](#upgrading-to-pool-labels) the pool's runners, or its job queues), `@@OS@@` (the `RUNNER_OS` value),
 `@@MODE@@` (the pool's mode, `service` or `interactive`, #333; a
 template that predates it still renders — a template need not use every
 value), `@@TOOLS@@` (space-separated), `@@POOL_ID@@`, `@@WORKFLOW_FILE@@` (the pool's
@@ -14012,9 +14455,9 @@ repository through its own pull request, like any workflow.
 nen runner workflow --repo . --pool windows-x64 --template ../hatsu/templates/runner-preflight.yml --dry-run
 ```
 ```text
-(dry run) would write C:\Users\zhere\Code\CLIs\nen\.github\workflows\runner-preflight-windows-x64.yml -- preflight for pool windows-x64 [self-hosted, Windows, X64] on zheref/nen
+(dry run) would write C:\Users\zhere\Code\CLIs\nen\.github\workflows\runner-preflight-windows-x64.yml -- preflight for pool windows-x64 [self-hosted, Windows, X64, pool-windows-x64] on zheref/nen
 ```
-(run for real with `src/runner/fixtures/runner-preflight.template.yml`, the candidate template; its rendering for this pool is pinned by `runner-preflight-windows-x64.golden.yml` and passes `src/ci/runner-policy.test.ts`)
+(run for real with `src/runner/fixtures/runner-preflight.template.yml`, the candidate template, before #340; the pool's labels in the line are this build's. Its rendering for this pool is pinned by `runner-preflight-windows-x64.golden.yml` and passes `src/ci/runner-policy.test.ts`)
 
 ### `nen runner preflight`
 
@@ -14074,7 +14517,10 @@ The fail-closed switch. It reads the pool's `enableVariable` (a pool that
 declares none is exit 2 — "not variable-gated; nothing to enable"), re-reads
 run `--after-run` from GitHub and **requires** all of: a run of the pool's own
 `preflightWorkflow` (the run's `path`), `completed`, concluded `success`,
-every job in it asked for this pool's labels and concluded `success`, and
+every job in it asked for this pool's labels — its own `pool-<id>` included
+(#340): a run of a preflight rendered before the label, which any runner of
+that OS and arch could have taken, is refused naming the re-render — and
+concluded `success`, and
 (#319) **the default branch's own proof**: the run's `event` is
 `workflow_dispatch` (what [`runner preflight`](#nen-runner-preflight)
 starts), its `head_branch` is the target's default branch, and the
@@ -14147,6 +14593,123 @@ nen runner enable --target zheref/nen --repo . --pool windows-x64 --after-run 36
 (run for real on the green `push` run that certified this repository's own
 pool before #319: exit 1, nothing set, the stderr line omitted; the JSON is
 re-indented here)
+
+### `nen runner relabel`
+
+Adds a pool's own label, `pool-<id>` (#340), to runners that were registered
+before it existed — [the upgrade step](#upgrading-to-pool-labels). The write
+is GitHub's `POST /repos/{owner}/{repo}/actions/runners/{runner_id}/labels`
+(`gh api --method POST ... -f 'labels[]=pool-<id>'`), a repository-admin
+operation: a 403 is worded **"needs admin on `<target>`"**. Nothing on the
+host changes, and the label prevents an accidental join; it is not an
+authorization boundary.
+
+**Nothing is admitted in bulk.** `--run` writes only to runners named with
+`--runner <names>` — every one (comma-separated, compared without regard to
+case, each once); `--run` without `--runner` is **exit 2**, before anything is
+read. Without `--runner`, the dry run lists the **candidates** — the runners
+[`runner inventory`](#nen-runner-inventory) lists as `unlabelled` for the pool
+— and the exact line naming them, for the maintainer to check and name. Every
+named runner is checked **before any write**: it must be registered, carry the
+pool's declared labels, carry no label outside them (`desktop` is reserved for
+an interactive pool — a desktop runner is refused from a plain pool, naming
+`desktop`: declare the interactive pool), and carry no other `pool-*` label (a
+runner is in one pool; moving it is a label to remove in GitHub first). One
+refusal refuses the whole call, exit 1, every reason named, nothing written. A
+runner already carrying the label is reported `already` and not written; when
+every named runner already carries it, the verb says `every selected runner
+already carries pool-<id>; nothing written.` **A runner that fits two pools
+is refused, not chosen**: when two pools declare one label set, a runner
+carrying it fits both, so the dry run lists it as `candidate (also fits
+<pools>)` and leaves it off the `then:` line, and naming it is **exit 2** —
+with `--run` or without, under either pool — until the two declarations
+differ. (An acknowledgement flag was considered and rejected: refusing is the
+safe default.)
+
+**Dry run by default.** With `--runner` and without `--run` it reads the
+runners list, checks, and prints each write as `would run: gh api --method
+POST ... -f 'labels[]=pool-<id>'` (shell-quoted for pasting; the argv nen
+hands `gh` is not); with `--run` it writes, then **reads the runner's labels
+back** (`gh api --method GET .../runners/<id>/labels`) — a read-back without
+the label is exit 1; a read-back that fails after an accepted POST is reported
+at the read's own exit code as `the POST for <runner> was accepted; its
+read-back failed: ...`; and a failure partway names the runners this call
+already labelled. Runner names and labels are GitHub's: the human output and
+every failure message print them with control characters stripped, `--json`
+raw.
+
+**Usage**
+
+```text
+nen runner relabel --target <owner/name> --pool <id> [--runner <name>[,<name>...]] [--repo <path>] [--run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--target <owner/name>` | **yes** | the repository | this verb writes runner labels, so it never falls back to a remote |
+| `--pool <id>` | yes | the pool whose own label the runners gain | from `--repo`'s `runners` block; an unknown id or a missing block is exit 2 |
+| `--runner <names>` | with `--run` | every runner to relabel | comma-separated; an empty list is exit 2. Absent: a dry run listing the candidates |
+| `--run` | no | write | without it, nothing is written; refused at exit 2 without `--runner` |
+| `--json` | no | the report | — |
+
+**Output and exit codes** — human: without `--runner`, `(dry run) <n>
+runner(s) on <target> could take pool-<id> ...`, a table of name and verdict
+(`candidate`, `already`) and `then: nen runner relabel --target <target>
+--pool <id> --runner <names> --run` (`no runner on <target> is a candidate
+for pool-<id> ... Nothing to do.` when none is); with `--runner`, a verdict
+line (`(dry run) would add pool-<id> to <n> runner(s) ...`, `<n> runner(s)
+... now carry pool-<id> ...; each read back.`, or `every selected runner
+already carries pool-<id>; nothing written.`), the table, and without `--run`
+one `would run:` line per write. `--json` top-level keys: `target`, `pool`,
+`label`, `selection` (`named`\|`candidates`), `run`, `runners[]` (`name`,
+`id`, `verdict` `added`\|`would-add`\|`already`\|`candidate`, and
+`alsoFits[]` — the other pools' ids — only on a candidate that fits more than
+one pool), `changed`
+(writes made or, named without `--run`, that would be; candidates are not
+counted). Exit 0; 1 when a named runner is refused, GitHub refused (403: needs
+admin) or answered something unreadable, or a read-back lacks the label or
+fails (the read's own code — 5 when `gh` could not be started); 2 on usage,
+`--run` without `--runner`, a named runner that fits more than one pool, an
+unknown pool or a missing `runners` block; 5 without `gh`. Every printed
+command line — `then:`, `would run:`, and the relabel hints of
+[`runner inventory`](#nen-runner-inventory) and
+[`runner verify`](#nen-runner-verify) — single-quotes any operand a shell
+would split or expand.
+
+**Example**
+
+```bash
+nen runner relabel --target zheref/nen --repo . --pool macos-arm64
+```
+```text
+(dry run) 3 runner(s) on zheref/nen could take pool-macos-arm64 (pool macos-arm64); nothing is admitted in bulk -- name each one you mean:
+| name     | verdict   |
+| -------- | --------- |
+| RJ2-NNR1 | candidate |
+| RJ2-NNR2 | candidate |
+| RJ2-NNR3 | candidate |
+then: nen runner relabel --target zheref/nen --pool macos-arm64 --runner RJ2-NNR1,RJ2-NNR2,RJ2-NNR3 --run
+```
+
+```bash
+nen runner relabel --target zheref/nen --repo . --pool macos-arm64 --runner RJ2-NNR1,RJ2-NNR2,RJ2-NNR3
+```
+```text
+(dry run) would add pool-macos-arm64 to 3 runner(s) on zheref/nen (pool macos-arm64); pass --run to write.
+| name     | verdict   |
+| -------- | --------- |
+| RJ2-NNR1 | would-add |
+| RJ2-NNR2 | would-add |
+| RJ2-NNR3 | would-add |
+would run: gh api --method POST repos/zheref/nen/actions/runners/21/labels -f 'labels[]=pool-macos-arm64'
+would run: gh api --method POST repos/zheref/nen/actions/runners/22/labels -f 'labels[]=pool-macos-arm64'
+would run: gh api --method POST repos/zheref/nen/actions/runners/23/labels -f 'labels[]=pool-macos-arm64'
+```
+(both rendered from the recorded runners list
+`src/runner/fixtures/runners.json`, not run against GitHub; the ids are the
+recording's)
 
 ## Developer workflows
 
@@ -14860,7 +15423,11 @@ run.
 ### Nen's own phase verification lanes
 
 The `device-records` lane runs the focused launch/schema/executor tests through
-`nen shu test --repo . --lane device-records`, without coverage. The default `nen` lane's full
+`nen shu test --repo . --lane device-records`, without coverage. Any other
+focused set runs through the `nen` lane's declared `select`
+(`nen shu test --repo . --select <file>[,<file>...]`, [focused selection](#shu-test-select)),
+also without coverage and writing `.nen/focused/nen.junit.xml`, never the
+regression capture. The default `nen` lane's full
 `test` collects JUnit and LCOV during the aka regression phase. Its `coverage` row only checks that
 the saved LCOV exists and lets Nen parse it during mukai; it never reruns the suite. Verify the
 capture's source-tree and configuration provenance before measurement; mere artifact existence

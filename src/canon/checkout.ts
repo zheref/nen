@@ -102,7 +102,23 @@ export interface CheckoutFailure {
   readonly message: string;
 }
 
-export interface CheckoutResolution {
+/**
+ * What a TAG-DEPTH verification proves (zheref/nen#291): the identity facts a
+ * full verification proves first -- the top of a work tree whose origin names
+ * the source on the consumer's own host -- and that `refs/tags/<ref>` resolves
+ * to a commit there. Nothing about HEAD or the working tree: a pin may be MOVED
+ * to a tag the checkout has fetched but not yet checked out.
+ */
+export interface TagVerification {
+  readonly origin: string;
+  readonly originSlug: string;
+  readonly host: string;
+  readonly tag: string;
+  readonly tagCommit: string;
+}
+
+/** A resolution through the fixed order, verified to depth `V`. */
+export interface Resolution<V> {
   readonly source: string;
   readonly ref: string;
   /** The checkout's absolute path, symlinks resolved; null when no source supplied one. */
@@ -111,9 +127,14 @@ export interface CheckoutResolution {
   readonly resolvedFrom: CheckoutStep | null;
   /** Every step consulted, in order -- the ones passed over included. */
   readonly steps: readonly CheckoutStep[];
-  readonly verified: CheckoutVerification | null;
+  readonly verified: V | null;
   readonly failure: CheckoutFailure | null;
 }
+
+export type CheckoutResolution = Resolution<CheckoutVerification>;
+
+/** `ref` resolved as a tag in the canon checkout, without requiring HEAD to sit on it. */
+export type TagResolution = Resolution<TagVerification>;
 
 export interface ResolveCheckoutOptions {
   /** The consumer's root (`--repo`); relative paths resolve against it. */
@@ -234,15 +255,34 @@ function pointer(declaration: ToolCheckout, field: "checkout_env" | "checkout"):
 
 /** Resolve, then verify. Never throws for a resolution or verification failure: `failure` carries it. */
 export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutResolution {
+  return resolveThen(options, (path): Verified<CheckoutVerification> =>
+    verifyCanonCheckout(options.seams, path, options.source, options.ref, options.root, options.paths),
+  );
+}
+
+/**
+ * Resolve through THE SAME ORDER, then verify only as far as the tag
+ * (zheref/nen#291): `canon pin --write` asks whether `refs/tags/<ref>` exists
+ * in the canon checkout, not whether the checkout already sits on it -- the
+ * pin is what moves first, and the regenerate that must follow in the same
+ * commit is what holds the checkout to it. Read-only, and nothing is fetched.
+ */
+export function resolveCanonTag(options: ResolveCheckoutOptions): TagResolution {
+  return resolveThen(options, (path): Verified<TagVerification> =>
+    verifyCanonTag(options.seams, path, options.source, options.ref, options.root, options.paths),
+  );
+}
+
+function resolveThen<V>(options: ResolveCheckoutOptions, verify: (path: string) => Verified<V>): Resolution<V> {
   const { root, source, ref, flag, declaration, seams } = options;
   const steps: CheckoutStep[] = [];
   const done = (
     path: string | null,
     resolvedFrom: CheckoutStep | null,
-    verified: CheckoutVerification | null,
+    verified: V | null,
     failure: CheckoutFailure | null,
-  ): CheckoutResolution => ({ source, ref, path, resolvedFrom, steps, verified, failure });
-  const fail = (code: CheckoutFailureCode, message: string, path: string | null = null, from: CheckoutStep | null = null): CheckoutResolution =>
+  ): Resolution<V> => ({ source, ref, path, resolvedFrom, steps, verified, failure });
+  const fail = (code: CheckoutFailureCode, message: string, path: string | null = null, from: CheckoutStep | null = null): Resolution<V> =>
     done(path, from, null, { code, message });
 
   // 1. The flag.
@@ -306,7 +346,7 @@ export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutR
     );
   }
 
-  const checked = verifyCanonCheckout(seams, candidate.path, source, ref, root, options.paths);
+  const checked = verify(candidate.path);
   if ("failure" in checked) return fail(checked.failure.code, checked.failure.message, checked.path, candidate.step);
   return done(checked.path, candidate.step, checked.verified, null);
 }
@@ -315,7 +355,9 @@ export function resolveCanonCheckout(options: ResolveCheckoutOptions): CheckoutR
 // Verification
 // ---------------------------------------------------------------------------
 
-type Verified = { readonly path: string; readonly verified: CheckoutVerification } | { readonly path: string; readonly failure: CheckoutFailure };
+type Verified<V = CheckoutVerification> = { readonly path: string; readonly verified: V } | { readonly path: string; readonly failure: CheckoutFailure };
+
+type Failed = (at: string, code: CheckoutFailureCode, message: string) => { readonly path: string; readonly failure: CheckoutFailure };
 
 /**
  * The git variables that would point a `git -C <path>` call at some OTHER
@@ -419,7 +461,38 @@ export function verifyCanonCheckout(
   consumerRoot: string,
   paths: PathSeam = nativePaths,
 ): Verified {
-  const failed = (at: string, code: CheckoutFailureCode, message: string): Verified => ({ path: at, failure: { code, message } });
+  return verifyAt(seams, path, source, ref, (real, failed): Verified => verifyIn(seams, real, source, ref, consumerRoot, paths, failed), paths);
+}
+
+/**
+ * The identity facts and the tag, and nothing past them: the same calls, in
+ * the same order, under the same isolated environment as `verifyCanonCheckout`
+ * -- it stops where that one goes on to HEAD and the working tree.
+ */
+export function verifyCanonTag(
+  seams: Seams,
+  path: string,
+  source: string,
+  ref: string,
+  consumerRoot: string,
+  paths: PathSeam = nativePaths,
+): Verified<TagVerification> {
+  return verifyAt(seams, path, source, ref, (real, failed): Verified<TagVerification> => {
+    const facts = verifyIdentityAndTag(gitRunner(seams, real), real, source, ref, consumerRoot, paths, seams.platform, failed, "tag");
+    if ("failure" in facts) return facts;
+    return { path: real, verified: { origin: facts.origin, originSlug: facts.originSlug, host: facts.host, tag: ref, tagCommit: facts.tagCommit } };
+  }, paths);
+}
+
+function verifyAt<V>(
+  seams: Seams,
+  path: string,
+  source: string,
+  ref: string,
+  body: (real: string, failed: Failed) => Verified<V>,
+  paths: PathSeam,
+): Verified<V> {
+  const failed: Failed = (at, code, message) => ({ path: at, failure: { code, message } });
 
   // THE OS'S OWN SPELLING (`realpathSync.native`): on Windows it expands an
   // 8.3 short name, which the JavaScript realpath keeps -- and git always
@@ -433,7 +506,7 @@ export function verifyCanonCheckout(
   }
 
   try {
-    return verifyIn(seams, real, source, ref, consumerRoot, paths, failed);
+    return body(real, failed);
   } catch (error) {
     // THREE OUTCOMES ON EVERY CALL, not only the first (Copilot round 1, B):
     // ran and passed, ran and failed, or could not be started. The last is
@@ -445,30 +518,50 @@ export function verifyCanonCheckout(
   }
 }
 
-function verifyIn(
-  seams: Seams,
-  real: string,
-  source: string,
-  ref: string,
-  consumerRoot: string,
-  paths: PathSeam,
-  failed: (at: string, code: CheckoutFailureCode, message: string) => Verified,
-): Verified {
+interface GitRunner {
+  /** A verification git call in `dir`. */
+  readonly gitIn: (dir: string, args: readonly string[], stdin?: string) => { code: number; stdout: string };
+  /** The same, in the checkout. */
+  readonly git: (args: readonly string[], stdin?: string) => { code: number; stdout: string };
+}
+
+function gitRunner(seams: Seams, real: string): GitRunner {
   const env = verificationGitEnv(seams.env);
   const gitIn = (dir: string, args: readonly string[], stdin?: string): { code: number; stdout: string } => {
     const result = seams.run(GIT, [...VERIFICATION_CONFIG, "-C", dir, ...args], stdin === undefined ? { env } : { env, stdin });
     if (result.spawnFailed) throw new GitNotStarted();
     return { code: result.code, stdout: result.stdout };
   };
-  const git = (args: readonly string[], stdin?: string): { code: number; stdout: string } => gitIn(real, args, stdin);
+  return { gitIn, git: (args, stdin) => gitIn(real, args, stdin) };
+}
 
+interface IdentityFacts {
+  readonly origin: string;
+  readonly originSlug: string;
+  readonly host: string;
+  readonly tagCommit: string;
+}
+
+/** The checkout's root, its origin's source and host, and the tag's commit -- the facts both depths share. */
+function verifyIdentityAndTag(
+  runner: GitRunner,
+  real: string,
+  source: string,
+  ref: string,
+  consumerRoot: string,
+  paths: PathSeam,
+  platform: Seams["platform"],
+  failed: Failed,
+  depth: "pin" | "tag",
+): IdentityFacts | { readonly path: string; readonly failure: CheckoutFailure } {
+  const { git, gitIn } = runner;
   const top = git(["rev-parse", "--show-toplevel"]);
   const topLine = outputLines(top.stdout)[0];
   if (top.code !== 0 || topLine === undefined) return failed(real, "not-a-checkout", `'${real}' is not inside a git work tree.`);
   // ONE DIRECTORY, TWO SPELLINGS: git's toplevel is forward-slashed and in
   // its own case on Windows. Both sides are resolved and compared as the
   // platform compares paths (./paths.ts).
-  if (!samePath(topLine, real, seams.platform, paths)) {
+  if (!samePath(topLine, real, platform, paths)) {
     return failed(real, "not-checkout-root", `'${real}' is inside the work tree at '${topLine}' but is not its top. Name the checkout's root; nen does not walk up to find one.`);
   }
 
@@ -503,8 +596,43 @@ function verifyIn(
   const tag = git(["rev-parse", "--verify", "--quiet", `refs/tags/${ref}^{commit}`]);
   const tagCommit = outputLines(tag.stdout)[0];
   if (tag.code !== 0 || tagCommit === undefined) {
-    return failed(real, "tag-missing", `'${real}' has no tag ${ref}. Fetch the tags (git -C '${real}' fetch --tags origin) and check ${ref} out; nen fetches nothing.`);
+    // AT TAG DEPTH THE ADVICE STOPS AT THE FETCH (Nobunaga N7): HEAD is not
+    // that verification's to move, so "check it out" would be a step it never
+    // asked for.
+    const after = depth === "pin" ? ` and check ${ref} out` : "";
+    return failed(real, "tag-missing", `'${real}' has no tag ${ref}. Fetch the tags (git -C '${real}' fetch --tags origin)${after}; nen fetches nothing.`);
   }
+  // A TAG IS A REF OF ITS OWN, NOT A NAME FOR ANOTHER (Feitan F2): a symbolic
+  // ref under refs/tags/ -- `git symbolic-ref refs/tags/v9.9.9 refs/heads/main`
+  // -- resolves to a commit like a tag does, but follows a branch that moves.
+  // git names the ref it dereferences to; anything but refs/tags/<ref> itself
+  // is refused as no tag.
+  const named = git(["rev-parse", "--symbolic-full-name", `refs/tags/${ref}`]);
+  const namedLine = outputLines(named.stdout)[0];
+  if (named.code !== 0 || namedLine !== `refs/tags/${ref}`) {
+    return failed(
+      real,
+      "tag-missing",
+      `'${real}' has no tag ${ref}: refs/tags/${ref} is a symbolic ref${namedLine === undefined ? "" : ` to ${namedLine}`}, which follows another ref rather than naming a tag. A pin is a tag of its own.`,
+    );
+  }
+  return { origin: redacted, originSlug: parsed.slug, host, tagCommit };
+}
+
+function verifyIn(
+  seams: Seams,
+  real: string,
+  source: string,
+  ref: string,
+  consumerRoot: string,
+  paths: PathSeam,
+  failed: Failed,
+): Verified {
+  const runner = gitRunner(seams, real);
+  const { git } = runner;
+  const facts = verifyIdentityAndTag(runner, real, source, ref, consumerRoot, paths, seams.platform, failed, "pin");
+  if ("failure" in facts) return facts;
+  const { origin: redacted, originSlug, host, tagCommit } = facts;
   const head = git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
   const headCommit = outputLines(head.stdout)[0];
   if (head.code !== 0 || headCommit === undefined) return failed(real, "off-pin", `'${real}' has no HEAD commit, so it is not at ${ref}.`);
@@ -544,7 +672,7 @@ function verifyIn(
     );
   }
 
-  return { path: real, verified: { origin: redacted, originSlug: parsed.slug, host, head: headCommit, tag: ref, tagCommit, clean: true } };
+  return { path: real, verified: { origin: redacted, originSlug, host, head: headCommit, tag: ref, tagCommit, clean: true } };
 }
 
 /**

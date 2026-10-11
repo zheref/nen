@@ -59,6 +59,20 @@ export const EXIT_TOOL_NOT_INSTALLED = 5;
 export const EXIT_COVERAGE_UNJOINED = 6;
 
 /**
+ * `shu test --select` executed nothing: the focused run exited 0, its declared
+ * results parsed, and they record ZERO executed tests -- "selection resolved
+ * to zero executed tests" (zheref/nen#207).
+ *
+ * THE SAME CODE AS `coverage --touched`'s, FOR THE SAME FACT IN ANOTHER VERB:
+ * the tool passed and its output is sound, and what came back empty is the
+ * selection itself. Not 0 -- that was the defect the issue's evidence names, a
+ * mistyped identifier certifying a flake diagnosis -- and not 1, which is a
+ * failed tool or an unreadable results file (a focused run's missing or stale
+ * results are exactly that, and answer 1). Codes above 5 are per verb.
+ */
+export const EXIT_SELECTION_EMPTY = 6;
+
+/**
  * `shu tools` only: every row is satisfied, and the `dependency` row's host
  * version is BEHIND `dependency.pinned_ref` while still inside `minimum`'s
  * range (zheref/nen#327).

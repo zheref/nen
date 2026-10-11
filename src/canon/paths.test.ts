@@ -65,6 +65,7 @@ describe("canon path compares -- the win32 branch, on any host", () => {
       "rev-parse --show-toplevel": { stdout: `${GIT_TOP}\n` },
       "remote get-url origin": { stdout: "https://github.com/owner/handbooks.git\n" },
       "rev-parse --verify --quiet refs/tags/v1.2.0^{commit}": { stdout: `${tag}\n` },
+      "rev-parse --symbolic-full-name refs/tags/v1.2.0": { stdout: "refs/tags/v1.2.0\n" },
       "rev-parse --verify --quiet HEAD^{commit}": { stdout: `${tag}\n` },
       "--no-optional-locks status --porcelain=v1 --untracked-files=all --ignored=matching --ignore-submodules=none": { stdout: "" },
       "ls-files -v": { stdout: "" },

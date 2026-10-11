@@ -70,7 +70,7 @@ jobs:
           - os: ubuntu
             runner: '"ubuntu-latest"'
           - os: macOS
-            runner: '["self-hosted","macOS","ARM64"]'
+            runner: '["self-hosted","macOS","ARM64","pool-macos-arm64"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
     # check-windows below repeats these steps VERBATIM (no YAML anchor: nen's
@@ -153,7 +153,7 @@ jobs:
       matrix:
         include:
           - os: Windows
-            runner: '["self-hosted","Windows","X64"]'
+            runner: '["self-hosted","Windows","X64","pool-windows-x64"]'
     runs-on: ${{ fromJSON(matrix.runner) }}
     timeout-minutes: 15
     # Every run: step here is bash, the shell the windows-x64 pool's preflight proves
@@ -231,7 +231,7 @@ jobs:
     if: github.repository == 'zheref/nen'
     # Bun cross-compiles every target from macOS, so this portable job belongs
     # on the maintainer's pool and must queue when that pool is unavailable.
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: [self-hosted, macOS, ARM64, pool-macos-arm64]
     timeout-minutes: 20
     steps:
       - name: Check out

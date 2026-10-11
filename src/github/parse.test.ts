@@ -521,3 +521,28 @@ describe("parsePullRequest", () => {
     expect(parsePullRequest("736").ok).toBe(false);
   });
 });
+
+describe("parseCheckRollup -- the check run's identity (zheref/nen#224, Feitan round-3 R1)", () => {
+  it("carries databaseId and checkSuite.app.slug when readable", () => {
+    const parsed = parseCheckRollup(
+      [{ name: "c", status: "QUEUED", conclusion: null, detailsUrl: "u", databaseId: 7, checkSuite: { app: { slug: "github-actions" } } }],
+      "$",
+    );
+    expect(parsed.ok && parsed.value[0]).toMatchObject({ databaseId: 7, appSlug: "github-actions" });
+  });
+
+  it("leaves them ABSENT, never a parse failure, when absent or mis-typed -- they decide no verdict", () => {
+    const parsed = parseCheckRollup(
+      [
+        { name: "a", status: "QUEUED", conclusion: null },
+        { name: "b", status: "QUEUED", conclusion: null, databaseId: "7", checkSuite: { app: null } },
+      ],
+      "$",
+    );
+    expect(parsed.ok).toBe(true);
+    for (const entry of parsed.ok ? parsed.value : []) {
+      expect(entry).not.toHaveProperty("databaseId");
+      expect(entry).not.toHaveProperty("appSlug");
+    }
+  });
+});

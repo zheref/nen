@@ -3,7 +3,7 @@
 # rendered by nen 0.0.0-test runner script — do not edit; re-run nen runner script
 #
 # target:   zheref/nen
-# pool:     linux-x64 (self-hosted,Linux,X64)
+# pool:     linux-x64 (self-hosted,Linux,X64,pool-linux-x64)
 # runners:  NZ-NNR1, NZ-NNR2, NZ-NNR3
 # identity: runner
 # root:     /opt/actions-runners
@@ -24,7 +24,7 @@ set -euo pipefail
 
 TARGET='zheref/nen'
 REPO_URL='https://github.com/zheref/nen'
-LABELS='self-hosted,Linux,X64'
+LABELS='self-hosted,Linux,X64,pool-linux-x64'
 ROOT='/opt/actions-runners'
 PROJECT_DIR='/opt/actions-runners/nen-runners'
 DOWNLOAD_URL='https://github.com/actions/runner/releases/download/v2.337.0/actions-runner-linux-x64-2.337.0.tar.gz'

@@ -39,6 +39,7 @@ import {
   roundQuorum,
   unapprovedApprovers,
   uncheckedChecks,
+  waitingCheckEntries,
   defaultApprovers,
   type EarlierHeadCheck,
   type OwedRound,
@@ -2946,5 +2947,66 @@ describe("quorumExcusedRounds", () => {
     const split = quorumExcusedRounds(owed, quorum(true, [member("copilot", null), member("bugbot", "pending")]));
     expect(split.excused.map((r): string => r.reviewer)).toEqual(["copilot"]);
     expect(split.owed.map((r): string => r.reviewer)).toEqual(["bugbot", "sasuke"]);
+  });
+});
+
+// --- waitingCheckEntries (zheref/nen#224) ------------------------------------
+
+describe("waitingCheckEntries -- the latest checks still waiting for a runner", () => {
+  const run = (name: string, fields: Partial<CheckRun>): CheckRun => ({
+    kind: "check_run",
+    name,
+    status: null,
+    conclusion: null,
+    startedAt: null,
+    completedAt: null,
+    detailsUrl: null,
+    ...fields,
+  });
+  const status = (context: string, state: StatusContext["state"]): StatusContext => ({
+    kind: "status_context",
+    context,
+    state,
+    startedAt: null,
+    completedAt: null,
+    targetUrl: null,
+  });
+
+  it("keeps a waiting run and a pending status; drops a running run and every verdict", () => {
+    const entries: RollupEntry[] = [
+      run("queued", { status: "QUEUED" }),
+      run("waiting", { status: "WAITING" }),
+      run("pending", { status: "PENDING" }),
+      run("requested", { status: "REQUESTED" }),
+      run("running", { status: "IN_PROGRESS", startedAt: "2026-10-11T00:00:00Z" }),
+      run("no-status", {}),
+      run("green", { status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-11T00:00:00Z" }),
+      status("external", "PENDING"),
+      status("external-done", "SUCCESS"),
+    ];
+    expect(waitingCheckEntries(entries).map((entry) => rollupEntryLabel(entry))).toEqual([
+      "external",
+      "pending",
+      "queued",
+      "requested",
+      "waiting",
+    ]);
+  });
+
+  it("N1: selects on STATUS -- a QUEUED run GitHub stamped with a real startedAt is still waiting", () => {
+    // GitHub sets `startedAt` on a queued Actions check run with no runner
+    // (NN-PR-#217's job 105994605680; pytorch job 114520521176).
+    const entries: RollupEntry[] = [
+      run("check (Windows)", { status: "QUEUED", startedAt: "2026-09-19T21:04:11Z" }),
+    ];
+    expect(waitingCheckEntries(entries)).toHaveLength(1);
+  });
+
+  it("reads the LATEST run per name: a queued re-run of a green check is waiting (zheref/nen#317)", () => {
+    const entries: RollupEntry[] = [
+      run("build", { status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-10-11T00:00:00Z" }),
+      run("build", { status: "QUEUED" }),
+    ];
+    expect(waitingCheckEntries(entries)).toHaveLength(1);
   });
 });

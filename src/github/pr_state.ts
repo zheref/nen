@@ -174,6 +174,24 @@ export interface PrStateSource {
    * (an App token has no user) means "unknown": no own-request claim is made.
    */
   viewerLogin?(): Promise<string>;
+  /**
+   * The four reads of `nen pr ready`'s runner-availability diagnosis
+   * (zheref/nen#224), raw: one Actions job, one page of the repository's or
+   * an organization's self-hosted runners, and an account's type. OPTIONAL,
+   * and their absence -- or any failure -- makes the diagnosis say it could
+   * not tell and why; it never touches the verdict. See ../pr/runner_stall.ts.
+   */
+  actionsJob?(repo: PrRef, jobId: number): Promise<unknown>;
+  repoRunnersPage?(repo: PrRef, page: number): Promise<unknown>;
+  orgRunnersPage?(org: string, page: number): Promise<unknown>;
+  accountType?(login: string): Promise<string>;
+  /**
+   * The pull request's changed files, raw and paginated (REST
+   * `pulls/{n}/files`, which GitHub caps at 3000). Read by the same diagnosis
+   * only, to tell whether the PR edits `.github/workflows/**` and so set its own
+   * `runs-on` labels (zheref/nen#224, Feitan F2). OPTIONAL, failing closed.
+   */
+  pullRequestFiles?(repo: PrRef, prNumber: number): Promise<unknown[]>;
 }
 
 export interface FetchStateOptions {

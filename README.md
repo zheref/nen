@@ -226,7 +226,8 @@ managed block in `AGENTS.md` for Codex, `.cursor/rules/` for Cursor,
 names which rows in its `canon-values.yml` (`surfaces:`), and every rendered
 file carries a marker naming the tag it came from. That tag is data in the
 consumer's own `nen/repos.json` -- the `pinned` field on the canonical
-repository's `maintained_tools` entry, read back by `nen canon pin` -- and
+repository's `maintained_tools` entry, read back by `nen canon pin` and
+moved by `nen canon pin --write <tag>` (one value, every other byte kept) -- and
 `--source`/`--ref` default to it. A hand-written file where canon must land
 refuses the whole run before anything is written; `check` is the CI half and
 fails on a mirror that is missing, orphaned, stale or hand-edited on any
@@ -436,8 +437,10 @@ Fork workflow runs must never be approved under the repository's
 
 The Linux parity lane may use GitHub-hosted Ubuntu until a real self-hosted
 Linux pool exists. macOS, Windows, release, and portable compile jobs select
-the standard self-hosted OS and architecture labels, and there is no hosted
-fallback: a saturated pool's job queues. The Windows leg is gated besides: it
+a declared pool's exact labels — the standard self-hosted OS and architecture
+labels plus the pool's own `pool-<id>` (zheref/nen#340), so a runner that
+merely shares the OS and architecture never takes them — and there is no
+hosted fallback: a saturated pool's job queues. The Windows leg is gated besides: it
 runs only while the repository variable `NEN_WINDOWS_RUNNER` is `online`,
 and is skipped otherwise — a job queued on a pool with no runner never fails,
 it stays pending and holds every pull request's checks with it.
@@ -485,10 +488,12 @@ they compose into. The families group roughly as:
   still an image of it, and a host's first-party install of a plugin made,
   re-pointed and read back on each surface
 - **Self-hosted runners** — `runner` (`inventory`, `plan`, `script`, `verify`,
-  `workflow`, `preflight`, `enable`): a repository's runner pools, declared in
-  `nen/workflow.json`'s `runners` block, registered by a host script nen renders
-  and never runs, proved by a preflight job running as the service, and
-  switched on only after that job is green
+  `workflow`, `preflight`, `enable`, `relabel`): a repository's runner pools,
+  declared in `nen/workflow.json`'s `runners` block, each carrying a label of
+  its own (`pool-<id>`, which `relabel` adds to runners registered before it),
+  registered by a host script nen renders and never runs, proved by a
+  preflight job running as the service, and switched on only after that job
+  is green
 
 Every command accepts `--repo <path>` (the target repository's working-tree
 root — never an owner/name slug) and `--json` where the verb has a

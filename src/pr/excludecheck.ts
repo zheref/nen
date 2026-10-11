@@ -8,7 +8,9 @@
 // comma, so a check whose own name contains a comma could never be named. A
 // GitHub Actions MATRIX job is exactly that: Actions names it `<job> (<v1>,
 // <v2>, ...)`, and this repository's own CI reports `check (Windows,
-// ["self-hosted","Windows","X64"])`. On zheref/nen#242 the maintainer ruled
+// ["self-hosted","Windows","X64","pool-windows-x64"])` (since #340's pool
+// labels; `check (Windows, ["self-hosted","Windows","X64"])` before). On
+// zheref/nen#242 the maintainer ruled
 // that job out of scope, and `--exclude-check 'check (Windows,
 // ["self-hosted","Windows","X64"])'` split into four fragments, excluded none
 // of them, and left the verdict `not-ready` on a job nobody had to run.

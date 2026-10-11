@@ -897,7 +897,16 @@ export type NenVerbPolicy =
    * different kind, or nowhere.
    */
   | { readonly kind: "dry-run-gated"; readonly alsoRead?: readonly string[]; readonly why: string }
-  | { readonly kind: "write-flag-gated"; readonly writeFlags: readonly string[]; readonly why: string }
+  /**
+   * READS BY DEFAULT; any of the named flags makes it write. `dryRunReads`
+   * (zheref/nen#291) marks a row whose write form is itself DRY-RUN-GATED: a
+   * write flag beside the exact `--dry-run` token, on a scan-faithful line,
+   * is a read -- the same gate, exact-token rule and faithfulness rule
+   * `dry-run-gated` applies, so a spelling the scan misses still falls back
+   * to `mutating`. Set only where the verb's own suite pins that its dry run
+   * writes nothing (`canon pin --write --dry-run`).
+   */
+  | { readonly kind: "write-flag-gated"; readonly writeFlags: readonly string[]; readonly dryRunReads?: boolean; readonly why: string }
   /**
    * ONLY THE EXPLICIT DRY RUN IS A READ; the bare form is `unknown` and a write
    * flag is `mutating`. The sixth kind, and the narrowest.
@@ -951,6 +960,13 @@ const DRY_OR = (alsoRead: readonly string[], why: string): NenVerbPolicy => ({
 const GATED = (writeFlags: readonly string[], why: string): NenVerbPolicy => ({
   kind: "write-flag-gated",
   writeFlags,
+  why,
+});
+/** The same, with the write form itself dry-run-gated. See `dryRunReads`. */
+const GATED_DRY = (writeFlags: readonly string[], why: string): NenVerbPolicy => ({
+  kind: "write-flag-gated",
+  writeFlags,
+  dryRunReads: true,
   why,
 });
 const DRY_ONLY = (writeFlags: readonly string[], why: string): NenVerbPolicy => ({
@@ -1010,7 +1026,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // write of any kind, so it is watchable -- and it has to be classified at
       // all, or a caller that classifies before running (the limbo path) refuses
       // it as unclassified rather than reading the pin it exists to read.
-      pin: RO("reads the canon pin from the consumer's registry; writes nothing"),
+      //
+      // --write MOVES the pin (zheref/nen#291): it rewrites one value in the
+      // consumer's nen/repos.json, so it is a write -- unless --dry-run sits
+      // beside it, which prints before -> after and writes nothing. The bare
+      // form stays the read it always was.
+      pin: GATED_DRY(["--write"], "--write rewrites maintained_tools[].pinned in the consumer's nen/repos.json unless --dry-run is given"),
       // Resolves where the canon checkout is from the consumer's declaration
       // and the environment, then verifies it with read-only git calls
       // (rev-parse, remote get-url, status --porcelain). It fetches nothing
@@ -1242,7 +1263,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // that line (elevated) is the maintainer's. `verify` polls reads only.
   // `preflight` dispatches a workflow run and `enable` sets a repository
   // variable, each unless `--dry-run` -- whose forms still READ GitHub (the
-  // default branch; the run `enable` certifies) and write nothing.
+  // default branch; the run `enable` certifies) and write nothing. `relabel`
+  // (#340) is the other way round: it writes a runner's labels only with
+  // `--run`, and its bare form reads the runners list and nothing more.
   runner: {
     subcommands: {
       inventory: RO("lists a repository's self-hosted runners and runner downloads -- gh api GET reads only"),
@@ -1252,6 +1275,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       workflow: DRY("writes the rendered preflight workflow into the checkout unless --dry-run is given"),
       preflight: DRY("dispatches a workflow run (gh workflow run) unless --dry-run is given"),
       enable: DRY("sets a repository variable (gh variable set) unless --dry-run is given"),
+      relabel: GATED(["--run"], "adds a pool's own label to registered runners (gh api POST .../runners/<id>/labels) once --run is given; reads the runners list otherwise"),
     },
   },
   // BOTH ROWS MOVED FROM `MUT` TO `DRY` WHEN THE FLAG ARRIVED, and the move is
@@ -2011,6 +2035,18 @@ function evaluateNenPolicy(
           hit.token === hit.flag
             ? hit.flag
             : `${hit.token} (the ${hit.flag} flag -- nen's own argv reader takes one or two leading dashes alike)`;
+        // THE WRITE FORM'S OWN DRY-RUN GATE, where the row declares one: the
+        // `dry-run-gated` rule exactly -- the exact token, on a faithful line,
+        // or no gate at all.
+        if (policy.dryRunReads === true && tokens.includes("--dry-run")) {
+          if (!lineFaithful) {
+            return {
+              classification: "mutating",
+              reason: `${label} ${spelled} -- ${UNFAITHFUL}; the --dry-run cannot be proven to be an argument of its own rather than part of an adjacent value, and an unprovable gate on a write is no gate`,
+            };
+          }
+          return { classification: "read-only", reason: `${label} ${spelled} --dry-run -- the explicit dry-run form reports without writing` };
+        }
         return { classification: "mutating", reason: `${label} ${spelled} -- ${policy.why}` };
       }
       if (!lineFaithful) {

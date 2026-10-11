@@ -55,9 +55,11 @@ import {
   type StreamedChunk,
   type WatchVerdict,
 } from "../seam/exec.js";
-import type { DeviceExtraction, DeviceReadiness, StallGuard } from "../schema/contract.js";
+import { regressionOutputs, type DeviceExtraction, type DeviceReadiness, type ProjectBlock, type StallGuard } from "../schema/contract.js";
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
-import { EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
+import { EXIT_SELECTION_EMPTY, EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
+import { readSelectionResults } from "./select-results.js";
+import { acquireFocusedLock, moveResultsAside, proveResultsClearable } from "./focused-guard.js";
 import { openDeclaration } from "./declaration.js";
 import { appendStepsToOpenPhase, EFFORT_ID, type PhaseStep } from "../phase/ledger.js";
 import {
@@ -70,12 +72,14 @@ import {
   renderInvocation,
   resolveLaunch,
   resolveTarget,
+  selectInvocation,
   TARGETED_VERBS,
   type HostVerdict,
   type RenderedInvocation,
   type RenderedPrecondition,
   type RenderedStep,
   type ResolvedLaunch,
+  type ResolvedSelection,
   type ResolvedTarget,
 } from "./render.js";
 import { ARTIFACT_TOKEN, DEVICE_ID_TOKEN, findDevice, substituteSteps, tokensUsed } from "./launch.js";
@@ -241,6 +245,17 @@ export interface ShuReport {
    * is a line on stderr, never a failed build).
    */
   readonly proof: BuildProof | null;
+  /**
+   * The focused selection this run was expanded from, or null (zheref/nen#207).
+   *
+   * ON EVERY VERB'S REPORT for `target`'s and `proof`'s reason -- one family,
+   * one document shape -- and only `nen shu test --select` fills it. It is the
+   * PROVENANCE of the step's argv: the declaration it came from, the
+   * identifiers the caller named, the grammar they were held to, and exactly
+   * which arguments the expansion appended. `steps[0].argv` is still the whole
+   * argv; this says which part of it was the selection.
+   */
+  readonly selection: ResolvedSelection | null;
 }
 
 /** `nen.shu.<verb>/v0.1` -- one versioned contract string per verb. */
@@ -571,6 +586,32 @@ export function renderReport(report: ShuReport): readonly string[] {
   const lines: string[] = [];
   lines.push(labelled("lane", `${report.lane}  (${report.stack})`));
   lines.push(labelled("verb", report.verb));
+  // THE SELECTION, HIGH, for the target's reason below: it is the fact a reader
+  // checks before letting the argv run -- this is a SUBSET, and here is which.
+  if (report.selection !== null) {
+    const selection = report.selection;
+    lines.push(
+      labelled(
+        "selection",
+        `${selection.ids.join(", ")}  (${selection.ids.length} identifier${selection.ids.length === 1 ? "" : "s"}, from ${selection.pointer}; appends: ${renderArgv({
+          exe: selection.appended[0] as string,
+          argv: selection.appended.slice(1),
+        })})`,
+      ),
+    );
+    lines.push(
+      labelled(
+        "results",
+        `${selection.results.path} (${selection.results.format})${
+          selection.executed === null
+            ? "  -- not read"
+            : selection.zeroMatch === true
+              ? "  -- ZERO executed tests: the selection resolved to nothing"
+              : `  -- ${selection.executed} executed`
+        }`,
+      ),
+    );
+  }
   // THE DESTINATION, ON THE VERB THAT HAS ONE, and printed high -- above the
   // argv, because it is the fact a reader is checking before they let the argv
   // run. `args` is what this target APPENDED, so a reader can see which part of
@@ -792,7 +833,11 @@ function artifactReports(
   repoRoot: string,
 ): readonly ShuArtifactReport[] {
   return plan.artifacts.map((value, index): ShuArtifactReport => {
-    const absolute = insideRepo(repoRoot, value, `project.verbs.${plan.lane}.${plan.verb}.artifacts[${index}]`);
+    // A FOCUSED PLAN'S ARTIFACTS ARE ITS `select` BLOCK'S, and a refusal
+    // naming the regression row's position for one would send a reader to
+    // the wrong line of their file.
+    const owner = plan.selection?.pointer ?? `project.verbs.${plan.lane}.${plan.verb}`;
+    const absolute = insideRepo(repoRoot, value, `${owner}.artifacts[${index}]`);
     return { kind: "path", value, exists: entryExists(absolute) };
   });
 }
@@ -824,6 +869,7 @@ function assemble(
     artifacts: artifactReports(plan, repoRoot),
     log: logReport(mode, stdoutTargets(steps)),
     proof,
+    selection: plan.selection ?? null,
   };
 }
 
@@ -882,6 +928,13 @@ export interface RunOptions {
    * ran `nen shu dev` yesterday.
    */
   readonly target: string | null;
+  /**
+   * `test`'s `--select`: the identifiers, already parsed by
+   * ./render.ts's `parseSelectionIds`, or absent/null for the lane's row as
+   * declared (zheref/nen#207). ./command.ts's flag table refuses the flag on
+   * every other verb.
+   */
+  readonly select?: readonly string[] | null;
   /**
    * `deploy`'s mandatory `--run`. False for every other verb, which do not
    * read it -- ./command.ts's per-subcommand flag table refuses it there.
@@ -1161,11 +1214,19 @@ export async function runVerb(
   // named, because a bare `nen shu dev` is the ordinary local iteration this
   // verb has always been and a repository declaring its first launch target
   // must not change what that line does.
+  // THE FOCUSED FORM IS EXPANDED HERE, after every refusal `renderInvocation`
+  // makes and before anything is asserted -- so a lane with no `select`, or an
+  // identifier the declared grammar refuses, is exit 2 with nothing spawned,
+  // and never a quiet run of the full regression instead (zheref/nen#207).
+  const focused =
+    options.select === undefined || options.select === null
+      ? rendered
+      : selectInvocation(project, rendered, options.select);
   const plan = TARGETED_VERBS.includes(options.verb)
-    ? resolveTarget(project, rendered, options.target)
+    ? resolveTarget(project, focused, options.target)
     : LAUNCHING_VERBS.includes(options.verb) && options.target !== null
       ? resolveLaunch(project, rendered, options.target, options.lane)
-      : rendered;
+      : focused;
   const cwd = insideRepo(repoRoot, plan.cwdRelative, `project.lanes.${plan.lane}.cwd`);
   // THE TARGET'S OWN ARTIFACT IS A PATH, SO IT IS HELD TO EVERY OTHER DECLARED
   // PATH'S RULE -- and it is checked HERE, before the dry-run report is emitted,
@@ -1213,6 +1274,19 @@ export async function runVerb(
   // A refusal instead would make the safe form of this verb the one that
   // fails, so a caller checking the plan reads a non-zero code for having done
   // the careful thing -- and every wrapper script would learn to ignore it.
+  // A FOCUSED RUN's RESULTS PATH IS PROVED HERE, ON `--dry-run` TOO (the
+  // ruling on PR #393): every read-only proof the real run makes before it
+  // moves anything, refused with the same exit 2, so a dry run that exits 0
+  // is one the real run will not refuse for its results path. Moves nothing.
+  if (plan.selection !== undefined && plan.selection !== null) {
+    proveResultsClearable(
+      context,
+      repoRoot,
+      plan.selection.results.path,
+      `${plan.selection.pointer}.results.path`,
+      regressionOutputs(project.verbs),
+    );
+  }
   const gated = TARGETED_VERBS.includes(options.verb) && !options.run;
   if (options.dryRun || gated) {
     const steps = plannedSteps(plan).map(
@@ -1250,11 +1324,108 @@ export async function runVerb(
   if (INTERACTIVE_VERBS.includes(plan.verb)) {
     return runInteractively(context, plan, cwd, repoRoot, preconditions, sink);
   }
-  return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink, {
+  const liveness: Liveness = {
     stream: options.stream === true,
     heartbeatMs: options.heartbeatMs === undefined ? DEFAULT_HEARTBEAT_MS : options.heartbeatMs,
     holdLimitBytes: options.holdLimitBytes ?? CAPTURE_MAX_BUFFER,
+  };
+  const selection = plan.selection ?? null;
+  if (selection === null) {
+    return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink, liveness);
+  }
+  return await runSelected(context, project, plan, selection, cwd, repoRoot, preconditions, sink, liveness);
+}
+
+/**
+ * A focused run: the same captured executor, then its declared results read
+ * and its executed tests counted (zheref/nen#207).
+ *
+ * THE REPORT IS HELD, NOT PRINTED, until the count is in -- so `--json` is
+ * still exactly one document, and it carries `selection.executed` and
+ * `selection.zeroMatch` rather than a second object saying them. The verdict:
+ *
+ *   * the tool failed                            -> its 1, unchanged, nothing read;
+ *   * results missing, unreadable, another format,
+ *     or not rewritten by this run               -> 1, the reason on stderr;
+ *   * results record zero executed tests          -> 6 (EXIT_SELECTION_EMPTY);
+ *   * otherwise                                   -> 0.
+ */
+async function runSelected(
+  context: CommandContext,
+  project: ProjectBlock,
+  plan: RenderedInvocation,
+  selection: ResolvedSelection,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+  sink: ReportSink | undefined,
+  liveness: Liveness,
+): Promise<number> {
+  // ONE FOCUSED RUN AT A TIME (M6): the lock is held across the move, the run
+  // and the read, and released however this function leaves.
+  const lock = acquireFocusedLock(context, repoRoot, `${selection.pointer}.results.path`, selection.results.path);
+  try {
+    return await runSelectedLocked(context, project, plan, selection, cwd, repoRoot, preconditions, sink, liveness);
+  } finally {
+    lock.release();
+  }
+}
+
+async function runSelectedLocked(
+  context: CommandContext,
+  project: ProjectBlock,
+  plan: RenderedInvocation,
+  selection: ResolvedSelection,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+  sink: ReportSink | undefined,
+  liveness: Liveness,
+): Promise<number> {
+  // PROVED AGAIN IMMEDIATELY BEFORE THE MOVE -- `runVerb` proved it before
+  // the dry-run gate too, but the time between is the caller's, and a proof
+  // is about the moment it is acted on. Then MOVED ASIDE, never deleted.
+  const proof = proveResultsClearable(
+    context,
+    repoRoot,
+    selection.results.path,
+    `${selection.pointer}.results.path`,
+    regressionOutputs(project.verbs),
+  );
+  moveResultsAside(context, proof, `${selection.pointer}.results.path`, selection.results.path);
+  const absolute = proof.absolute;
+  const held: { report: ShuReport | null } = { report: null };
+  const code = await runCaptured(context, plan, cwd, repoRoot, preconditions, (report): void => {
+    held.report = report;
+  }, liveness);
+  let verdict = code;
+  let executed: number | null = null;
+  if (code === 0) {
+    const read = readSelectionResults(absolute, selection.results.path, selection.results.format);
+    if (!read.ok) {
+      verdict = 1;
+      context.io.err(`nen shu test --select: ${read.why}.`);
+    } else {
+      executed = read.executed;
+      if (executed === 0) {
+        verdict = EXIT_SELECTION_EMPTY;
+        context.io.err(
+          `nen shu test --select: selection resolved to zero executed tests. The run exited 0, and '${selection.results.path}' records no test that ran for ${selection.ids
+            .map((id): string => `'${id}'`)
+            .join(", ")} -- most often an identifier that names no test. Nothing was certified; exit ${EXIT_SELECTION_EMPTY}.`,
+        );
+      }
+    }
+  }
+  const report = held.report;
+  /* c8 ignore next -- runCaptured always hands its report to the sink */
+  if (report === null) return verdict;
+  emitReport(context, sink, {
+    ...report,
+    exitCode: verdict,
+    selection: { ...selection, executed, zeroMatch: executed === null ? null : executed === 0 },
   });
+  return verdict;
 }
 
 /** How a run relays its steps' output and says it is still alive (zheref/nen#244). */

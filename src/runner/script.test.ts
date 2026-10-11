@@ -54,6 +54,13 @@ describe("renderScript -- golden files, one per host OS", () => {
     golden("register.macos.golden.txt", mac.text);
   });
 
+  it("registers every OS's runners with the pool's own label, last (#340)", () => {
+    expect(windows.text).toContain("$Labels = 'self-hosted,Windows,X64,pool-windows-x64'");
+    expect(linux.text).toContain("LABELS='self-hosted,Linux,X64,pool-linux-x64'");
+    expect(mac.text).toContain("LABELS='self-hosted,macOS,ARM64,pool-macos-arm64'");
+    expect(windows.text).toContain("# pool:     windows-x64 (self-hosted,Windows,X64,pool-windows-x64)");
+  });
+
   it("is deterministic: the same plan renders the same bytes", () => {
     expect(renderScript(planFor("windows-x64"), VERSION).text).toBe(windows.text);
   });
@@ -335,13 +342,13 @@ describe("the interactive Windows script -- a logon task in a desktop session, n
     expect(renderScript(planFor("windows-x64-desktop", { serviceAccount: "kwidesktop", count: 1 }), VERSION).text).toBe(desktop.text);
   });
 
-  it("says what it is in the header: the four labels, the identity, and online only while signed in", () => {
+  it("says what it is in the header: the five labels, the identity, and online only while signed in", () => {
     const lines = desktop.text.split("\n");
     expect(lines[0]).toBe("# jusshin -- register self-hosted GitHub Actions runners as logon tasks in a desktop session.");
-    expect(lines).toContain("# pool:     windows-x64-desktop (self-hosted,Windows,X64,desktop)");
+    expect(lines).toContain("# pool:     windows-x64-desktop (self-hosted,Windows,X64,desktop,pool-windows-x64-desktop)");
     expect(lines).toContain("# identity: .\\kwidesktop");
     expect(desktop.text).toContain("# is online only while that identity is signed in (or auto-logged on -- this");
-    expect(desktop.text).toContain("$Labels = 'self-hosted,Windows,X64,desktop'");
+    expect(desktop.text).toContain("$Labels = 'self-hosted,Windows,X64,desktop,pool-windows-x64-desktop'");
   });
 
   it("installs no service and asks no password: config runs without --runasservice or a logon account", () => {

@@ -301,6 +301,22 @@ describe("toolPins -- the canon pin is data on the maintained_tools entry (CON-1
     expect(loadRepoRegistry(BANKAI_REPO).toolPins).toEqual({});
   });
 
+  it("records the index of the row each pin comes from: the LAST row naming the tool, in any case (zheref/nen#291)", () => {
+    const registry = parseRepoRegistry(at, {
+      consumers: [],
+      maintained_tools: [
+        { repo: "Owner/Handbooks", pinned: "v0.5.0" },
+        { repo: "owner/tool" },
+        { repo: "owner/handbooks", pinned: "v0.6.0" },
+        { repo: "owner/other", pinned: "v1.0" },
+        { repo: "owner/unpinned-later", pinned: "v2.0" },
+        { repo: "owner/unpinned-later" },
+      ],
+    });
+    expect(registry.toolPins).toEqual({ "owner/handbooks": "v0.6.0", "owner/other": "v1.0" });
+    expect(registry.toolPinIndexes).toEqual({ "owner/handbooks": 2, "owner/other": 3 });
+  });
+
   it("refuses a pinned that is not a string, by pointer", () => {
     expect(() =>
       parseRepoRegistry(at, { consumers: [], maintained_tools: [{ repo: "owner/handbooks", pinned: 6 }] }),
