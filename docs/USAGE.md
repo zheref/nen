@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 128 verbs, every flag checked against the binary this repository
+families, 129 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -697,7 +697,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 128 verbs, grouped as the README groups them. **Reads** is what a
+All 129 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
