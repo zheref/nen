@@ -682,8 +682,8 @@ retryable exit `4` ([#228](https://github.com/zheref/nen/issues/228)). Fetch
 the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.20.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.20.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.21.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.21.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -691,7 +691,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.20.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.21.0)"
 "$nen" --version
 ```
 
@@ -9410,8 +9410,7 @@ because the child never gave one — nen stopped waiting rather than killing it.
 [`shu build`](#nen-shu-build) ever fills it; it is on every verb's document for
 the reason `target` is — one family, one document shape.
 
-`selection` (zheref/nen#207; expected in `0.21.0`, to be confirmed by the
-release proposal) is `null` unless the run was
+`selection` (zheref/nen#207; from `0.21.0`) is `null` unless the run was
 [`shu test --select`](#shu-test-select), and then
 `{ pointer, ids, pattern, each, appended, results, executed, zeroMatch }`: where
 the focused form is declared, the identifiers in the order named, the declared
@@ -10001,7 +10000,7 @@ nen shu test [--repo <path>] [--lane <name>] [--select <id>[,<id>...]] [--dry-ru
 form** over concrete test identifiers, so a repository keeps a single focused
 declaration and passes any selection through nen — no lane per selection, no
 copied selection script, no edit to its command policy. **The first release
-expected to carry it is `0.21.0`, to be confirmed by the release proposal**; a
+to carry it is `0.21.0`**; a
 consumer adopting it pins `dependency.minimum` to that release's minor. On an
 older nen the `select` block is an unknown key, preserved and read by nobody,
 and `--select` is an unknown flag (exit 2) — so nothing runs that the
@@ -12549,10 +12548,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.20.0 --source zheref/nen
+nen bootstrap --ref v0.21.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/zheref_nen/v0.20.0/nen-linux-x64
+/home/me/.cache/nen/zheref_nen/v0.21.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -15589,8 +15588,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.20.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.20.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.21.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.21.0)"
 "$nen" --version
 ```
 
@@ -15601,7 +15600,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.20.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.21.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash
