@@ -81,21 +81,21 @@ import {
  */
 export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   detect: { booleans: ["write"] },
-  build: { values: ["lane", "effort"], booleans: ["dry-run"] },
-  test: { values: ["lane", "effort"], booleans: ["dry-run"] },
-  "ui-test": { values: ["lane", "effort"], booleans: ["dry-run"] },
-  lint: { values: ["lane", "effort"], booleans: ["dry-run"] },
-  archive: { values: ["lane", "effort"], booleans: ["dry-run"] },
-  release: { values: ["lane", "effort"], booleans: ["dry-run"] },
+  build: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
+  test: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
+  "ui-test": { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
+  lint: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
+  archive: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
+  release: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   // `--target` ON THESE TWO NAMES A DEVICE, NOT A DESTINATION: a key of
   // `project.launch` rather than of `project.targets`, and OPTIONAL rather than
   // required. `--run` stays `deploy`'s alone -- these two have always spawned
   // without it, and a gate arriving with a flag would break every script.
   dev: { values: ["lane", "target", "effort"], booleans: ["dry-run"] },
   run: { values: ["lane", "target", "effort"], booleans: ["dry-run"] },
-  deploy: { values: ["lane", "target", "effort"], booleans: ["dry-run", "run"] },
-  coverage: { values: ["lane", "threshold", "base", "effort"], booleans: ["dry-run", "touched", "from-capture"] },
-  "test-report": { values: ["lane", "effort"], booleans: ["dry-run", "from-artifacts"] },
+  deploy: { values: ["lane", "target", "effort", "heartbeat"], booleans: ["dry-run", "run", "stream"] },
+  coverage: { values: ["lane", "threshold", "base", "effort", "heartbeat"], booleans: ["dry-run", "touched", "from-capture", "stream"] },
+  "test-report": { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "from-artifacts", "stream"] },
   tools: { values: ["lane", "only"], booleans: ["install", "dry-run"] },
   warmup: { values: ["lane", "branch", "from"], booleans: ["discard", "carry", "tests", "dry-run"] },
   // NO --lane, AND NO --dry-run. `project.evidence` is a project-level block,
@@ -160,6 +160,7 @@ export const EXECUTING_VERBS: readonly string[] = [
 const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
 const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
+                  [--stream] [--heartbeat <s>]   (the nine verbs that run a step)
 
 --repo is bracketed there because fourteen of the fifteen verbs default it to the
 directory you are standing in. It is REQUIRED on 'warmup', the one verb here
@@ -456,6 +457,49 @@ flags:
                    what a real run would decide differently -- that
                    '${DEFAULT_TRUNK}' is an assumption, and that the orphan-commit count is
                    asked only on a detached HEAD.
+  --stream         build, test, ui-test, lint, archive, release, deploy,
+                   coverage and test-report. Relay each step's stdout and
+                   stderr AS IT IS PRODUCED, whole line by whole line, instead
+                   of once the step has exited (zheref/nen#244). The STREAMS
+                   ARE KEPT: the child's stdout stays on stdout (on stderr
+                   under --json, so stdout stays one document) and its stderr
+                   on stderr -- but the two now INTERLEAVE IN ARRIVAL ORDER,
+                   where the default prints all of a step's stdout and then
+                   all of its stderr. NOT THE DEFAULT. A step declaring a
+                   'stall' guard is relayed live either way. A step with a
+                   declared 'stdoutTo' keeps its stdout for that file under
+                   both modes. ONLY --stream makes the log's growth reflect the
+                   CHILD.
+  --heartbeat <s>  The same nine verbs. While a step is still running, print
+                   'nen shu: step <i> of <n> (<exe>) still running (<elapsed>)'
+                   on stderr once per <s> seconds. ON BY DEFAULT, every 30
+                   seconds, with or without --stream; '--heartbeat 0' turns it
+                   off. A decimal is accepted (0.1 or more); anything else is
+                   exit 2. The line is NEN'S, never the child's: under the
+                   heartbeat alone, a growing log proves nen is alive and
+                   NEVER that the child is -- so a log-growth watchdog no
+                   longer kills a healthy compile, and can no longer catch a
+                   hung one either. To detect a hang, declare a 'stall' guard:
+                   it judges the CHILD's silence, which no heartbeat resets.
+                   Neither flag is read with coverage --from-capture or
+                   test-report --from-artifacts, which run nothing (exit 2).
+                   NEITHER FLAG CHANGES A STEP'S EXIT CODE, NEN'S EXIT CODE OR
+                   THE REPORT (text or --json) for the same run of the same
+                   step -- with ONE exception: a step printing more than 64 MB
+                   of stdout or stderr under '--heartbeat 0' without --stream
+                   (the captured path, which buffers) cannot be read and is
+                   reported as not started (exit 5); every other form reads it
+                   through and reports the tool's own code. Under the default,
+                   a step holds at most those same 64 MB: past them nen prints
+                   'nen shu: step <i> of <n> output passed 64 MB; relaying the
+                   rest live', relays everything held so far and the rest of
+                   the step as --stream does -- nothing lost, same exit code,
+                   same report. (A 'stdoutTo' step's stdout is kept whole for
+                   its file and is not counted.) Beyond that they
+                   change when, and in what interleaving, output reaches you,
+                   and add heartbeat lines to stderr. 'warmup' delegates its
+                   build and test with the default heartbeat and takes neither
+                   flag.
   --only <t[,t]>   'tools' only. Check (and install) just these tools, by the
                    name the declaration gives them. A name it does not declare
                    is exit 2 listing the ones it does -- an empty report is not
@@ -1022,6 +1066,52 @@ An argv is printed with any element containing whitespace quoted. Those quotes
 are information: '-destination platform=iOS Simulator,name=...' is ONE argv
 element, and a reader who re-splits the line on spaces gets a different command.`;
 
+/**
+ * `--stream` and `--heartbeat <seconds>`, read once for every executing verb
+ * (zheref/nen#244).
+ *
+ * `--heartbeat` ABSENT IS `undefined`, NOT A NUMBER, so the default lives in
+ * exactly one place (./run.ts's DEFAULT_HEARTBEAT_MS) rather than in a second
+ * copy here. `0` is `null` -- no heartbeat -- and anything that is not a
+ * non-negative decimal, or is a positive one under a tenth of a second, is
+ * exit 2: a typo silently read as "off" would be the one flag here that turns
+ * a signal off while the caller believes it on.
+ */
+export function readLiveness(context: CommandContext): {
+  readonly stream: boolean;
+  readonly heartbeatMs?: number | null;
+} {
+  const stream = context.args.booleans.has("stream");
+  const raw = context.args.values["heartbeat"];
+  if (raw === undefined) return { stream };
+  if (!/^\d+(\.\d+)?$/.test(raw)) {
+    throw new VerbUsageError(
+      `--heartbeat takes a number of SECONDS (a non-negative decimal, '0' for none), and got '${raw}'.`,
+    );
+  }
+  const seconds = Number(raw);
+  const ms = Math.round(seconds * 1000);
+  // A DIGIT RUN CAN STILL BE NO NUMBER (Copilot B): hundreds of 9s parse to
+  // Infinity, and a large finite one overflows the timer. `setInterval` takes
+  // at most 2^31-1 ms and quietly clamps anything above it to 1 ms, which would
+  // turn a heartbeat meant to be rare into a busy loop.
+  if (!Number.isFinite(seconds) || !Number.isFinite(ms) || ms > MAX_HEARTBEAT_MS) {
+    throw new VerbUsageError(
+      `--heartbeat ${raw.length > 32 ? `${raw.slice(0, 32)}... (${raw.length} characters)` : raw} is past the longest interval a timer can hold, ${MAX_HEARTBEAT_MS / 1000} seconds (2^31-1 ms). Name fewer seconds, or 0 for none.`,
+    );
+  }
+  if (seconds === 0) return { stream, heartbeatMs: null };
+  if (seconds < 0.1) {
+    throw new VerbUsageError(
+      `--heartbeat ${raw} is under a tenth of a second. A heartbeat that fine is a busy loop, not a signal; name 0.1 or more, or 0 for none.`,
+    );
+  }
+  return { stream, heartbeatMs: ms };
+}
+
+/** setInterval's own ceiling, 2^31-1 ms: past it node clamps the period to 1 ms. */
+export const MAX_HEARTBEAT_MS = 2_147_483_647;
+
 function declaresFlag(spec: FlagSpec, flag: string): boolean {
   return (spec.values ?? []).includes(flag) || (spec.booleans ?? []).includes(flag);
 }
@@ -1347,6 +1437,7 @@ export const shuCommand: Command = {
           fromCapture: context.args.booleans.has("from-capture"),
           advisories: coverageAdvisories(),
           effort: context.args.values["effort"] ?? null,
+          liveness: readLiveness(context),
         }));
       }
 
@@ -1356,6 +1447,7 @@ export const shuCommand: Command = {
           dryRun: context.args.booleans.has("dry-run"),
           fromArtifacts: context.args.booleans.has("from-artifacts"),
           effort: context.args.values["effort"] ?? null,
+          liveness: readLiveness(context),
         }));
       }
 
@@ -1399,8 +1491,12 @@ export const shuCommand: Command = {
       // made a written `deploy` seat unreachable, because a lane that will
       // never deploy answered "--target is required" instead of its own reason.
       // ./run.ts's `runVerb` header carries the order and the argument.
+      // READ BEFORE ANYTHING RUNS, so a malformed --heartbeat is exit 2 with
+      // nothing spawned rather than a refusal halfway through a build.
+      const liveness = readLiveness(context);
       const execute = (): Promise<number> =>
         runVerb(context, repoRoot, {
+          ...liveness,
           verb: subcommand,
           lane: context.args.values["lane"] ?? null,
           dryRun: context.args.booleans.has("dry-run"),
