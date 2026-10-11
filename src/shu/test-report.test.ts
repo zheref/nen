@@ -389,6 +389,27 @@ describe("--from-artifacts", () => {
     expect(result.seams.calls).toEqual([]);
   });
 
+  it.each([[["--stream"]], [["--heartbeat", "5"]], [["--heartbeat", "0"]]])(
+    "refuses %j beside --from-artifacts at 2, before anything spawns (zheref/nen#244)",
+    async (flags) => {
+      const result = await capture(["test-report", "--from-artifacts", ...flags]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("--stream and --heartbeat are not read with --from-artifacts");
+      expect(result.seams.calls).toEqual([]);
+    },
+  );
+
+  it("takes the captured seam under --heartbeat 0 and the streamed one by default, with the same document (zheref/nen#244)", async () => {
+    const captured = await capture(["test-report", "--json", "--heartbeat", "0"], { script: [ok(WEB)] });
+    const watched = await capture(["test-report", "--json"], { script: [ok(WEB)] });
+    const step = (result: Captured): boolean | undefined =>
+      result.seams.calls.find((call): boolean => [call.command, ...call.args].join(" ") === WEB)?.streamed;
+    expect(step(captured)).toBeUndefined();
+    expect(step(watched)).toBe(true);
+    expect(watched.code).toBe(captured.code);
+    expect(document(watched)).toEqual(document(captured));
+  });
+
   it("is refused on every other verb in the family", async () => {
     const result = await capture(["test", "--from-artifacts"]);
     expect(result.code).toBe(2);

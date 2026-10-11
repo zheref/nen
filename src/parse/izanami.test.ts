@@ -427,6 +427,8 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen canon mirror check --rules-dir r --canon-values v --mirror-dir m --ref x --header-template h --header-pattern p --not-mirrored a").classification).toBe("read-only");
     expect(classifyCommand("nen canon mirror check --rules-dir r --markdown-out report.md").classification).toBe("mutating");
     expect(classifyCommand("nen canon mirror generate --rules-dir r --out-dir o").classification).toBe("mutating");
+    // zheref/nen#294: resolving and verifying the canon checkout reads git and writes nothing.
+    expect(classifyCommand("nen canon checkout --repo . --json").classification).toBe("read-only");
     expect(classifyCommand("nen epic next-wave --body-file b.md --out rewritten.md").classification).toBe("mutating");
     expect(classifyCommand("nen epic next-wave --body-file b.md").classification).toBe("read-only");
   });
