@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { JsonSpanError, locateJsonValue, rewritePin, writeFileAtomic } from "./pin-write.js";
+import { dirname, join } from "node:path";
+import { guardTempFile, JsonSpanError, locateJsonValue, memberCount, rewritePin, TargetChangedError, writeFileAtomic, type CheckedTarget } from "./pin-write.js";
 
 /** The lines of `before` and `after` that differ, as [before, after] pairs -- the diff a reviewer reads. */
 function changedLines(before: string, after: string): [string, string][] {
@@ -98,11 +98,14 @@ describe("rewritePin -- one value changes, and nothing else", () => {
     expect(edit.text.endsWith("}")).toBe(true);
   });
 
-  it("edits the pinned member JSON.parse reads when a row repeats the key", () => {
-    const text = '{"maintained_tools":[{"repo":"o/h","pinned":"v0.1","pinned":"v0.2"}]}';
-    const edit = rewritePin(text, 0, "v0.3", "o/h");
-    expect(edit.before).toBe("v0.2");
-    expect(edit.text).toBe('{"maintained_tools":[{"repo":"o/h","pinned":"v0.1","pinned":"v0.3"}]}');
+  it("refuses a duplicated member on the edit path: maintained_tools, or a row's repo or pinned (Feitan F3)", () => {
+    expect(() => rewritePin('{"maintained_tools":[{"repo":"o/h","pinned":"v0.1","pinned":"v0.2"}]}', 0, "v0.3", "o/h")).toThrow(/maintained_tools\[0\] carries 'pinned' more than once/);
+    expect(() => rewritePin('{"maintained_tools":[{"repo":"x/y","repo":"o/h","pinned":"v0.1"}]}', 0, "v0.3", "o/h")).toThrow(/carries 'repo' more than once/);
+    expect(() => rewritePin('{"maintained_tools":[{"repo":"x/y","pinned":"v0.1"}],"maintained_tools":[{"repo":"o/h","pinned":"v0.1"}]}', 0, "v0.3", "o/h")).toThrow(/maintained_tools appears more than once/);
+    // A duplicate elsewhere -- another row, another key -- is not the edit path's.
+    expect(rewritePin('{"x":1,"x":2,"maintained_tools":[{"repo":"a/b","repo":"a/b"},{"repo":"o/h","pinned":"v0.1"}]}', 1, "v0.3", "o/h").after).toBe("v0.3");
+    expect(memberCount('{"a":1,"b":{"a":2},"a":3}', 0, "a")).toBe(2);
+    expect(memberCount("{}", 0, "a")).toBe(0);
   });
 
   it("refuses an index whose row names another source, whatever its pin (Nobunaga N3)", () => {
@@ -118,12 +121,19 @@ describe("rewritePin -- one value changes, and nothing else", () => {
   });
 });
 
-describe("writeFileAtomic -- a temporary file beside the target, renamed over it", () => {
+/** A target checked as the verb checks one: real path, real root, the file's identity as read. */
+function checked(path: string, over: Partial<CheckedTarget> = {}): CheckedTarget {
+  const real = realpathSync.native(path);
+  const stat = lstatSync(real);
+  return { path: real, root: realpathSync.native(dirname(real)), platform: process.platform, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, mode: stat.mode & 0o777, ...over };
+}
+
+describe("writeFileAtomic -- a temporary file beside the CHECKED target, renamed over it", () => {
   it("replaces the bytes, keeps the permission bits and leaves no temporary file", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-pin-atomic-"));
     const path = join(dir, "repos.json");
     writeFileSync(path, "old\n", { mode: 0o640 });
-    writeFileAtomic(path, "new\n");
+    writeFileAtomic(checked(path), "new\n");
     expect(readFileSync(path, "utf8")).toBe("new\n");
     if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o640);
     expect(readdirSync(dir)).toEqual(["repos.json"]);
@@ -136,36 +146,87 @@ describe("writeFileAtomic -- a temporary file beside the target, renamed over it
     chmodSync(path, 0o664);
     const previous = process.umask(0o022);
     try {
-      writeFileAtomic(path, "new\n");
+      writeFileAtomic(checked(path), "new\n");
     } finally {
       process.umask(previous);
     }
     expect(statSync(path).mode & 0o777).toBe(0o664);
   });
 
-  it.skipIf(process.platform === "win32")("writes through a symbolic link, keeping the link", () => {
-    const dir = mkdtempSync(join(tmpdir(), "nen-pin-atomic-link-"));
-    mkdirSync(join(dir, "real"));
-    const real = join(dir, "real", "repos.json");
-    writeFileSync(real, "old\n");
-    const link = join(dir, "repos.json");
-    symlinkSync(real, link);
-    writeFileAtomic(link, "new\n");
-    expect(lstatSync(link).isSymbolicLink()).toBe(true);
-    expect(readlinkSync(link)).toBe(real);
-    expect(readFileSync(real, "utf8")).toBe("new\n");
-    expect(readdirSync(join(dir, "real"))).toEqual(["repos.json"]);
+  // Feitan F1: the target is never re-resolved; every fact the caller checked
+  // is re-asserted after the open and before the rename.
+  const raced = (what: string, swap: (path: string, dir: string) => void, hook: "afterOpen" | "beforeRename", message: RegExp): void => {
+    it.skipIf(process.platform === "win32")(`refuses, removing its temporary file, when ${what} (${hook})`, () => {
+      const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-race-")));
+      mkdirSync(join(dir, "repo"));
+      const path = join(dir, "repo", "repos.json");
+      writeFileSync(path, "old\n");
+      const target = checked(path, { root: join(dir, "repo") });
+      expect(() => writeFileAtomic(target, "new\n", { [hook]: (): void => swap(path, dir) })).toThrow(message);
+      expect(readdirSync(join(dir, "repo")).filter((name): boolean => name.endsWith(".tmp"))).toEqual([]);
+    });
+  };
+  raced("the file is replaced by another (a lost update)", (path) => {
+    rmSync(path);
+    writeFileSync(path, "someone else's\n");
+  }, "beforeRename", /changed after it was checked \((it is another file now|it was modified)/);
+  raced("the file is edited in place", (path) => {
+    writeFileSync(path, "edited in place, longer\n");
+  }, "beforeRename", /it was modified since it was read -- a lost update/);
+  raced("the file becomes a link out of the root", (path, dir) => {
+    writeFileSync(join(dir, "outside.json"), "outside\n");
+    rmSync(path);
+    symlinkSync(join(dir, "outside.json"), path);
+  }, "afterOpen", /it now resolves to .*outside\.json/);
+  raced("the file vanishes", (path) => {
+    rmSync(path);
+  }, "beforeRename", /it no longer resolves: ENOENT/);
+
+  it.skipIf(process.platform === "win32")("refuses a target outside the root it was checked against", () => {
+    const dir = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-pin-atomic-root-")));
+    const path = join(dir, "repos.json");
+    writeFileSync(path, "old\n");
+    expect(() => writeFileAtomic(checked(path, { root: join(dir, "elsewhere") }), "new\n")).toThrow(TargetChangedError);
+    expect(readFileSync(path, "utf8")).toBe("old\n");
+    expect(readdirSync(dir)).toEqual(["repos.json"]);
   });
 
   it("removes its temporary file when the rename fails, leaving the target as it was", () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-pin-atomic-fail-"));
-    // A directory where the file should be: realpath and stat succeed, the
-    // rename of a file over a non-empty directory does not.
     const path = join(dir, "repos.json");
     mkdirSync(path);
     writeFileSync(join(path, "inside"), "x");
-    expect(() => writeFileAtomic(path, "new\n")).toThrow();
+    expect(() => writeFileAtomic(checked(path), "new\n")).toThrow();
     expect(readdirSync(dir)).toEqual(["repos.json"]);
     expect(readFileSync(join(path, "inside"), "utf8")).toBe("x");
+  });
+});
+
+describe("guardTempFile -- an interrupt never leaves the temporary file behind (Feitan F6)", () => {
+  it("is installed for the write's window and removed after it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pin-guard-window-"));
+    const path = join(dir, "repos.json");
+    writeFileSync(path, "old\n");
+    const before = process.listenerCount("SIGINT");
+    let during = -1;
+    writeFileAtomic(checked(path), "new\n", { beforeRename: (): void => void (during = process.listenerCount("SIGINT")) });
+    expect(during).toBe(before + 1);
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
+  it("removes the temporary file on SIGINT and re-raises the signal", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-pin-guard-"));
+    const temp = join(dir, ".repos.json.nen-1-abc.tmp");
+    writeFileSync(temp, "partial");
+    const before = process.listeners("SIGINT");
+    const kills: string[] = [];
+    const dispose = guardTempFile(temp, (_pid, signal): void => void kills.push(signal));
+    const added = process.listeners("SIGINT").filter((listener): boolean => !before.includes(listener));
+    expect(added).toHaveLength(1);
+    (added[0] as () => void)();
+    expect(existsSync(temp)).toBe(false);
+    expect(kills).toEqual(["SIGINT"]);
+    expect(process.listeners("SIGINT")).toEqual(before);
+    dispose();
   });
 });

@@ -25,9 +25,10 @@
 // never crosses a filesystem), flushed, then renamed over the target. A reader
 // sees the old file or the new one, never half of either.
 
-import { closeSync, fchmodSync, fsyncSync, openSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { closeSync, fchmodSync, fsyncSync, lstatSync, openSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
+import { containedOn } from "./paths.js";
 
 /** A half-open byte span `[start, end)` of `text`. */
 export interface Span {
@@ -90,6 +91,29 @@ function scanValue(text: string, at: number): number {
   const literal = /^[^\s,\]}]+/.exec(text.slice(at));
   if (literal === null) throw new JsonSpanError(`expected a value at offset ${at}`);
   return at + literal[0].length;
+}
+
+/**
+ * How many members named `name` the object whose value starts at `at` carries
+ * (Feitan F3): the edit path must name each member once, so a duplicate --
+ * which JSON.parse silently collapses to its last -- is refused rather than
+ * edited.
+ */
+export function memberCount(text: string, at: number, name: string): number {
+  if (text.charAt(at) !== "{") throw new JsonSpanError(`expected an object at offset ${at} for member '${name}'`);
+  let index = skipWs(text, at + 1);
+  let count = 0;
+  if (text.charAt(index) === "}") return 0;
+  for (;;) {
+    const keyEnd = scanString(text, index);
+    if ((JSON.parse(text.slice(index, keyEnd)) as string) === name) count += 1;
+    index = skipWs(text, keyEnd);
+    if (text.charAt(index) !== ":") throw new JsonSpanError(`expected ':' at offset ${index}`);
+    index = skipWs(text, scanValue(text, skipWs(text, index + 1)));
+    if (text.charAt(index) === "}") return count;
+    if (text.charAt(index) !== ",") throw new JsonSpanError(`expected ',' or '}' at offset ${index}`);
+    index = skipWs(text, index + 1);
+  }
 }
 
 /** The span of the value `step` selects inside the container whose value starts at `at`. */
@@ -157,6 +181,19 @@ export interface PinEdit {
  */
 export function rewritePin(text: string, index: number, tag: string, source: string): PinEdit {
   const path: readonly JsonStep[] = ["maintained_tools", index, "pinned"];
+  // EACH MEMBER ON THE EDIT PATH ONCE (Feitan F3): a repeated
+  // `maintained_tools`, or a row repeating `repo` or `pinned`, is a file in
+  // which the value a reader sees and the value a reviewer reads can differ.
+  const top = skipWs(text, 0);
+  if (memberCount(text, top, "maintained_tools") > 1) {
+    throw new JsonSpanError("maintained_tools appears more than once; JSON.parse keeps only the last, so the file must be fixed by hand first");
+  }
+  const rowSpan = locateJsonValue(text, ["maintained_tools", index]);
+  for (const member of ["repo", "pinned"]) {
+    if (memberCount(text, rowSpan.start, member) > 1) {
+      throw new JsonSpanError(`maintained_tools[${index}] carries '${member}' more than once; JSON.parse keeps only the last, so the file must be fixed by hand first`);
+    }
+  }
   const span = locateJsonValue(text, path);
   const literal = text.slice(span.start, span.end);
   const current: unknown = JSON.parse(literal);
@@ -185,30 +222,126 @@ export function rewritePin(text: string, index: number, tag: string, source: str
   return { before: current, after: tag, text: next, span, line };
 }
 
+/** The temporary-file name `writeFileAtomic` writes beside `target`: `.<name>.nen-<pid>-<12 hex>.tmp`. */
+export const TEMP_PATTERN = ".<name>.nen-<pid>-<hex>.tmp";
+
+/** The file `writeFileAtomic` may replace, as the caller CHECKED it -- never re-resolved here. */
+export interface CheckedTarget {
+  /** The real path (symbolic links resolved), contained in `root`. */
+  readonly path: string;
+  /** The real root it must stay contained in. */
+  readonly root: string;
+  readonly platform: NodeJS.Platform;
+  /** The identity and state of the file as it was read: a replacement or an in-place edit since then is refused. */
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+  /** The permission bits to give the new file. */
+  readonly mode: number;
+}
+
+/** Thrown when the checked target is no longer what the caller checked. */
+export class TargetChangedError extends Error {}
+
+/** Test seams: called with the temporary file's path at the two re-check points. */
+export interface AtomicHooks {
+  readonly afterOpen?: (temp: string) => void;
+  readonly beforeRename?: (temp: string) => void;
+}
+
+/** The signals during which a temporary file is guarded. */
+const GUARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+
 /**
- * Write `text` to `path` atomically: a temporary file beside the target (the
- * REAL target, when `path` is a symbolic link -- the link survives, and its
- * target is what is replaced), written and flushed, then renamed over it. The
- * target's permission bits carry over. The temporary file is removed on any
- * failure before the rename.
+ * Guard `temp` against an interrupt for as long as it exists (Feitan F6).
+ * Without a listener, SIGINT kills the process WHERE IT STANDS -- mid-write --
+ * and the temporary file is left behind. With one, Node defers the signal to
+ * the event loop, so the synchronous write and its own cleanup finish first;
+ * the listener then removes anything left and re-raises the signal with the
+ * default disposition, so the process still dies of it. Returns the disposer.
  */
-export function writeFileAtomic(path: string, text: string): void {
-  const target = realpathSync(path);
-  const mode = statSync(target).mode & 0o777;
-  const temp = join(dirname(target), `.${basename(target)}.nen-${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
-  const fd = openSync(temp, "wx", mode);
+export function guardTempFile(temp: string, kill: (pid: number, signal: NodeJS.Signals) => void = (pid, signal) => void process.kill(pid, signal)): () => void {
+  const handlers = GUARDED_SIGNALS.map((signal): [NodeJS.Signals, () => void] => {
+    const handler = (): void => {
+      dispose();
+      try {
+        unlinkSync(temp);
+      } catch {
+        // Already removed by the write's own cleanup.
+      }
+      kill(process.pid, signal);
+    };
+    return [signal, handler];
+  });
+  const dispose = (): void => {
+    for (const [signal, handler] of handlers) (process as NodeJS.EventEmitter).removeListener(signal, handler);
+  };
+  const emitter = process as NodeJS.EventEmitter;
+  for (const [signal, handler] of handlers) emitter.on(signal, handler);
+  return dispose;
+}
+
+function assertUnchanged(target: CheckedTarget): void {
+  const where = dirname(target.path);
+  const fail = (why: string): never => {
+    throw new TargetChangedError(`${target.path} changed after it was checked (${why}); refusing to replace it`);
+  };
+  let realDir: string;
+  let realFile: string;
+  try {
+    realDir = realpathSync.native(where);
+    realFile = realpathSync.native(target.path);
+  } catch (error) {
+    return fail(`it no longer resolves: ${error instanceof Error ? ((error as NodeJS.ErrnoException).code ?? error.message) : String(error)}`);
+  }
+  if (realDir !== where) fail(`its directory now resolves to ${realDir}`);
+  if (realFile !== target.path) fail(`it now resolves to ${realFile}`);
+  if (!containedOn(target.root, target.path, target.platform)) fail(`it is not inside ${target.root}`);
+  const now = lstatSync(target.path);
+  if (!now.isFile() || now.dev !== target.dev || now.ino !== target.ino) fail("it is another file now");
+  if (now.size !== target.size || now.mtimeMs !== target.mtimeMs) fail("it was modified since it was read -- a lost update");
+}
+
+/**
+ * Write `text` over the CHECKED `target` atomically (Feitan F1): a temporary
+ * file beside it, given `target.mode` explicitly (`fchmod`, so the umask
+ * cannot narrow it), written and flushed, then renamed over it.
+ *
+ * THE PATH IS NOT RESOLVED AGAIN HERE. The caller resolved it, checked its
+ * containment and recorded the identity of the file it read; this function
+ * re-asserts all of that -- the directory and the file still resolve to
+ * themselves, the file is still contained, and it is still the same file,
+ * unmodified -- right after the temporary file is opened and again right
+ * before the rename. Any mismatch removes the temporary file and throws
+ * `TargetChangedError`; nothing is replaced.
+ *
+ * THE WINDOW THAT REMAINS. Between the last check and `rename(2)` a few
+ * microseconds remain in which a path component could be swapped: Node has no
+ * `renameat`/`openat`, so the rename cannot be pinned to the directory the
+ * check saw. A process able to win that race can already write the repository
+ * it is racing.
+ */
+export function writeFileAtomic(target: CheckedTarget, text: string, hooks: AtomicHooks = {}): void {
+  const temp = join(dirname(target.path), `.${basename(target.path)}.nen-${process.pid}-${randomBytes(6).toString("hex")}.tmp`);
+  const fd = openSync(temp, "wx", target.mode);
+  const dispose = guardTempFile(temp);
   let renamed = false;
   try {
     try {
       // THE MODE IS SET, NOT REQUESTED (Nobunaga N1): open()'s mode is masked
       // by the umask, so a 0664 file would come back 0644.
-      fchmodSync(fd, mode);
+      fchmodSync(fd, target.mode);
+      hooks.afterOpen?.(temp);
+      assertUnchanged(target);
       writeFileSync(fd, text, "utf8");
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
-    renameSync(temp, target);
+    hooks.beforeRename?.(temp);
+    assertUnchanged(target);
+    renameSync(temp, target.path);
     renamed = true;
   } finally {
     if (!renamed) {
@@ -218,5 +351,6 @@ export function writeFileAtomic(path: string, text: string): void {
         // Already gone; the original is untouched either way.
       }
     }
+    dispose();
   }
 }

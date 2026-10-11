@@ -946,6 +946,20 @@ describe("nen canon pin --write -- the refusals before any git call and any writ
     expect(invalid.err.join("\n")).toMatch(/maintained_tools\[0\]\.pinned/);
   });
 
+  // The parser's message quotes the file's own bytes on some runtimes (Bun's
+  // "Unrecognized token '\u001b'") and the path on every one, so both carry one.
+  it.skipIf(process.platform === "win32")("strips control characters from the parser's refusal, which quotes the path and, on some runtimes, the file's bytes (Feitan F4)", async () => {
+    const base = mkdtempSync(join(tmpdir(), "nen-canon-plain-"));
+    const root = join(base, "consumer\u001b[2K");
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "repos.json"), '{ "consumers": [] \u001b[2K }');
+    const result = await capture(["canon", "pin", "--write", "v1.3.0"], root);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/is not valid JSON/);
+    expect(err).not.toContain("\u001b");
+  });
+
   it("refuses several pins without --source, a --source with no pin, and no pin at all -- the read path's disambiguation", async () => {
     const fx = fixture();
     writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0", "owner/tool": null });

@@ -602,6 +602,20 @@ function verifyIdentityAndTag(
     const after = depth === "pin" ? ` and check ${ref} out` : "";
     return failed(real, "tag-missing", `'${real}' has no tag ${ref}. Fetch the tags (git -C '${real}' fetch --tags origin)${after}; nen fetches nothing.`);
   }
+  // A TAG IS A REF OF ITS OWN, NOT A NAME FOR ANOTHER (Feitan F2): a symbolic
+  // ref under refs/tags/ -- `git symbolic-ref refs/tags/v9.9.9 refs/heads/main`
+  // -- resolves to a commit like a tag does, but follows a branch that moves.
+  // git names the ref it dereferences to; anything but refs/tags/<ref> itself
+  // is refused as no tag.
+  const named = git(["rev-parse", "--symbolic-full-name", `refs/tags/${ref}`]);
+  const namedLine = outputLines(named.stdout)[0];
+  if (named.code !== 0 || namedLine !== `refs/tags/${ref}`) {
+    return failed(
+      real,
+      "tag-missing",
+      `'${real}' has no tag ${ref}: refs/tags/${ref} is a symbolic ref${namedLine === undefined ? "" : ` to ${namedLine}`}, which follows another ref rather than naming a tag. A pin is a tag of its own.`,
+    );
+  }
   return { origin: redacted, originSlug: parsed.slug, host, tagCommit };
 }
 

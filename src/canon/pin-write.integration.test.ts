@@ -117,8 +117,8 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
     expect(result.out).toContain("recorded in: " + join(root, "nen", "repos.json") + " (maintained_tools[2].pinned, line 9)");
     expect(result.out).toContain("read back: owner/handbooks pinned to v1.3.0");
     // The stale mirror is said out loud, naming the regenerate.
-    expect(result.out).toContain(`mirror: now STALE -- regenerate it in the same commit: nen canon mirror generate --repo '${root}' --canon-values <path>`);
-    expect(result.err).toMatch(/nen: note: the canon mirror now names v1\.2\.0, not v1\.3\.0: it is STALE\. Regenerate it and commit it WITH this pin: nen canon mirror generate/);
+    expect(result.out).toContain(`mirror: now STALE -- regenerate it in the same commit (POSIX shell): nen canon mirror generate --repo '${root}' --canon-values <path>`);
+    expect(result.err).toMatch(/nen: note: the canon mirror now names v1\.2\.0, not v1\.3\.0: it is STALE\. Regenerate it and commit it WITH this pin \(POSIX shell\): nen canon mirror generate/);
     // The read path now answers with the new pin.
     const read = await run(root, ["canon", "pin"]);
     expect(read.out).toContain("ref: v1.3.0");
@@ -300,6 +300,92 @@ describe.skipIf(!HAVE_GIT)("canon pin --write -- the pin moves without an editor
     expect(host.code).toBe(1);
     expect(host.err).toMatch(/wrong-host/);
     expect(registryOf(root)).toBe(REGISTRY);
+  });
+
+  // Feitan F1: a git on PATH that swaps nen/ for a link out of the repository
+  // while the tag is being resolved. The containment check and the read now
+  // come AFTER every git call, so the swapped-in file is refused, never written.
+  it.skipIf(process.platform === "win32")("refuses a nen/ swapped for an outside link during the tag rev-parse, leaving the outside file unchanged", async () => {
+    const root = consumer();
+    const outsideDir = mkdtempSync(join(base, "outside-"));
+    writeFileSync(join(outsideDir, "repos.json"), REGISTRY);
+    writeFileSync(join(outsideDir, "labels.json"), "{}");
+    const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    const shim = mkdtempSync(join(base, "shim-"));
+    const script = [
+      "#!/bin/sh",
+      'case "$*" in',
+      `  *"refs/tags/v1.3.0^{commit}"*) if [ ! -L '${root}/nen' ]; then mv '${root}/nen' '${root}/nen.moved' && ln -s '${outsideDir}' '${root}/nen'; fi ;;`,
+      "esac",
+      `exec '${realGit}' "$@"`,
+      "",
+    ].join("\n");
+    writeFileSync(join(shim, "git"), script, { mode: 0o755 });
+    const previous = process.env["PATH"];
+    process.env["PATH"] = `${shim}:${previous ?? ""}`;
+    let result;
+    try {
+      result = await run(root, ["canon", "pin", "--write", "v1.3.0"], true);
+    } finally {
+      process.env["PATH"] = previous;
+    }
+    // The shim really ran: nen/ is the outside link now.
+    expect(lstatSync(join(root, "nen")).isSymbolicLink()).toBe(true);
+    expect(result.code, result.err).toBe(1);
+    expect((JSON.parse(result.out) as { failure: { code: string } }).failure.code).toBe("registry-outside-repo");
+    expect(readFileSync(join(outsideDir, "repos.json"), "utf8")).toBe(REGISTRY);
+    expect(readdirSync(outsideDir).sort()).toEqual(["labels.json", "repos.json"]);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses when the picked row changes while the tag is resolved (registry-changed)", async () => {
+    const root = consumer();
+    const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    const shim = mkdtempSync(join(base, "shim-edit-"));
+    const edited = REGISTRY.replace('"pinned": "v1.2.0",\n        "repo"', '"pinned": "v1.2.1",\n        "repo"');
+    writeFileSync(join(base, "edited.json"), edited);
+    writeFileSync(join(shim, "git"), ["#!/bin/sh", 'case "$*" in', `  *"refs/tags/v1.3.0^{commit}"*) cp '${join(base, "edited.json")}' '${join(root, "nen", "repos.json")}' ;;`, "esac", `exec '${realGit}' "$@"`, ""].join("\n"), { mode: 0o755 });
+    const previous = process.env["PATH"];
+    process.env["PATH"] = `${shim}:${previous ?? ""}`;
+    let result;
+    try {
+      result = await run(root, ["canon", "pin", "--write", "v1.3.0"]);
+    } finally {
+      process.env["PATH"] = previous;
+    }
+    expect(result.code).toBe(1);
+    expect(result.err).toMatch(/changed while the tag was being resolved/);
+    expect(registryOf(root)).toBe(edited);
+  });
+
+  it("refuses a symbolic ref under refs/tags/ that names a branch (Feitan F2)", async () => {
+    git(canon, ["symbolic-ref", "refs/tags/v8.0.0", "refs/heads/" + git(canon, ["for-each-ref", "--format=%(refname:short)", "refs/heads/", "--count=1"])]);
+    try {
+      const root = consumer();
+      const result = await run(root, ["canon", "pin", "--write", "v8.0.0"]);
+      expect(result.code).toBe(1);
+      expect(result.err).toMatch(/tag-missing: .*refs\/tags\/v8\.0\.0 is a symbolic ref to refs\/heads\//);
+      expect(registryOf(root)).toBe(REGISTRY);
+    } finally {
+      git(canon, ["update-ref", "--no-deref", "-d", "refs/tags/v8.0.0"]);
+    }
+  });
+
+  it("refuses to move a recorded pin that is not tag-shaped, as the read form refuses it", async () => {
+    const text = REGISTRY.replace('"pinned": "v1.2.0",\n        "repo"', '"pinned": "main",\n        "repo"');
+    const root = consumer(text);
+    const result = await run(root, ["canon", "pin", "--write", "v1.3.0"], true);
+    expect(result.code).toBe(1);
+    expect((JSON.parse(result.out) as { failure: { code: string } }).failure.code).toBe("pin-not-tag-shaped");
+    expect(registryOf(root)).toBe(text);
+  });
+
+  it("refuses a duplicated pinned on the edited row as not-one-value-edit (Feitan F3)", async () => {
+    const text = REGISTRY.replace('"role": "the canon",', '"role": "the canon",\n        "pinned": "v1.2.0",');
+    const root = consumer(text);
+    const result = await run(root, ["canon", "pin", "--write", "v1.3.0"], true);
+    expect(result.code).toBe(1);
+    expect((JSON.parse(result.out) as { failure: { code: string } }).failure.code).toBe("not-one-value-edit");
+    expect(registryOf(root)).toBe(text);
   });
 
   it("writes nothing and exits 0 when the tag is the pin already", async () => {
