@@ -1282,23 +1282,30 @@ What `nen pr ready` does with what it read:
   which GitHub sets on a queued run), or a pending commit status, after every
   exclusion: one entry per such check, `{ check, jobId, labels, queuedSince,
   queuedMinutes, determination, infrastructureStall, runners,
-  organizationRunners, labelsFromPrHead, missingPermission, detail }`.
+  organizationRunners, labelsFromPrHead, missingPermission, missingPermissions,
+  detail }`.
   - `determination` is `online` (an online runner carries every `runs-on`
     label: slow, not stalled), `offline-only` or `no-runner`, `github-hosted`
-    (a standard hosted image label — ubuntu `latest|22.04|24.04` with `-arm` on
-    the dated ones, windows `latest|2022|2025|11-arm`, macos `latest|13+` with
-    `-large|-xlarge` — that no listed runner carries), `started` (picked up, or
+    (a standard hosted image label — ubuntu `latest|slim|22.04|24.04` with
+    `-arm` on the dated ones, windows `latest|2022|2025|11-arm`, macos
+    `latest|14+` with `-large|-xlarge`, and `macos-<n>-intel` on 14+; macOS 13
+    was retired in November 2025 and is not admitted; the list follows the
+    actions/runner-images README as of 2026-10-11 — that no listed runner
+    carries), `started` (picked up, or
     completed without a runner, after the rollup was read), `environment-wait`
     (held by an environment protection rule), or `undetermined` (`detail` says
     why).
   - `infrastructureStall: true` only for `offline-only`/`no-runner`, and only
     once the job has been queued at least **10 minutes**
     (`STALL_FLOOR_MINUTES`): younger, it is `false` with *too young to call a
-    stall (an autoscaled or ephemeral pool may still register a runner)*; an
-    unreadable `created_at` is `null`. It is also not called when the pull
-    request changes `.github/workflows/**` — its author set those labels — which
-    is `undetermined` with `labelsFromPrHead: true`; the changed files are read
-    paginated and fail closed at GitHub's 3000-file cap.
+    stall (an autoscaled or ephemeral pool may still register a runner)*. On
+    those two determinations `null` means only that the queue age could not be
+    read; a `created_at` up to two minutes ahead of this machine's clock is
+    skew and reads as 0. It is also not called when the pull request changes
+    anything under `.github/` — its author may have set those labels — which is
+    `undetermined` with `labelsFromPrHead: true`; the changed files are read
+    paginated and fail closed at GitHub's 3000-file cap. The stall line is
+    still hedged *unless this PR changes what computes runs-on*.
   - The job read back must be this check's at the judged head (`head_sha`,
     `check_run_url`), or the entry is `undetermined`.
   - Repository runners are named in `runners` (only the online ones on
@@ -1313,11 +1320,15 @@ What `nen pr ready` does with what it read:
     403 — or the 404 GitHub hides those two endpoints behind — reads *runner
     diagnosis unavailable without <grant>; the gate does not need it*, naming
     GitHub's own `X-Accepted-GitHub-Permissions` or `X-Accepted-OAuth-Scopes`
-    value when it is well-formed, the documented grant otherwise. Under
-    `GITHUB_ACTIONS=true` the grant is omitted and `missingPermission` is
-    `null`.
+    value when it is well-formed (`name[=read|write|admin]`, separated by `,`
+    or `;`, at most 200 characters), the documented grant otherwise.
+    `missingPermissions` lists every distinct refused grant (the repository's
+    and the organization's when both are refused); `missingPermission` is its
+    first, kept for compatibility. Under `GITHUB_ACTIONS=true` the grant is
+    omitted: `missingPermission` is `null` and `missingPermissions` empty.
   - The runner list is complete only when its distinct runner ids equal a
-    `total_count` that did not move between pages; a short page, the ten-page
+    `total_count` that did not move between pages, and page 1 read again
+    answers the same `total_count` and the same first runner; a short page, the ten-page
     cap, or a malformed runner is `undetermined`, never a smaller pool.
     Enterprise runners and GitHub-hosted larger runners are listed by neither
     endpoint, and a `no-runner` detail says so. At most 20 jobs are read.

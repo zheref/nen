@@ -493,7 +493,8 @@ describe("diagnoseWaitingChecks over a REAL GitHubClient (zheref/nen#224 round 1
       ),
     );
     expect(diagnosis).toMatchObject({ determination: "online", organizationRunners: { online: 1, offline: 0 } });
-    expect(calls.map((call) => call.method)).toEqual(["GET", "GET", "GET", "GET"]);
+    // job, repo runners + its page-1 re-read (N13), account, org runners + re-read.
+    expect(calls.map((call) => call.method)).toEqual(["GET", "GET", "GET", "GET", "GET", "GET"]);
     expect(calls.some((call) => call.url.includes("/orgs/acme/actions/runners"))).toBe(true);
   });
 });

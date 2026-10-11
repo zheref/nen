@@ -92,9 +92,11 @@ export interface WaitingCheckDiagnosis {
   readonly determination: RunnerDetermination;
   /**
    * `true` only for `offline-only`/`no-runner` once the job has been queued at
-   * least STALL_FLOOR_MINUTES and the PR does not set its own `runs-on` labels;
+   * least STALL_FLOOR_MINUTES and the PR does not change `.github/**`;
    * `false` when a runner can start it, it is younger than the floor, or it is
-   * not waiting on a runner; `null` when undetermined.
+   * not waiting on a runner. On an `offline-only`/`no-runner` entry `null`
+   * means ONLY that the queue age could not be read (N15); every
+   * `undetermined` entry carries `null` as well, because nothing was decided.
    */
   readonly infrastructureStall: boolean | null;
   /** REPOSITORY runners carrying every label (only the online ones on `online`). */
@@ -102,13 +104,16 @@ export interface WaitingCheckDiagnosis {
   /** ORGANIZATION runners carrying every label, as counts; `null` when that pool was not read or does not exist. */
   readonly organizationRunners: OrganizationRunnerCounts | null;
   /**
-   * Whether the PR changes `.github/workflows/**`, so its author set these
-   * labels (Feitan F2). Read only when a stall would otherwise be called;
+   * Whether the PR changes anything under `.github/` -- workflows, composite
+   * actions, the files that compute `runs-on` -- so its author may have set
+   * these labels (Feitan F2, widened by N14). Read only when a stall would otherwise be called;
    * `null` when not read or unreadable.
    */
   readonly labelsFromPrHead: boolean | null;
-  /** The permission GitHub (or the endpoint's documentation) says the token lacks; `null` otherwise. */
+  /** The FIRST refused grant -- `missingPermissions[0]` -- kept for compatibility; `null` when none. */
   readonly missingPermission: string | null;
+  /** Every DISTINCT grant a refused read named (N11), in read order; empty when none. */
+  readonly missingPermissions: readonly string[];
   /** The one human sentence `--explain` prints. */
   readonly detail: string;
 }
@@ -156,18 +161,29 @@ const PERMISSION_FILES = "pull_requests:read (classic token: repo)";
 // The standard GitHub-hosted image labels, per family (N3): never a pattern
 // loose enough to admit a lookalike a self-hosted pool could carry
 // (`ubuntu-99`, `windows-latest-arm`, `macos-12-xlarge`).
+//
+// SOURCE, AS OF 2026-10-11: the "Available Images" table of the
+// actions/runner-images README (github.com/actions/runner-images), plus its
+// `ubuntu-slim` and `macos-<n>-intel` labels. macOS 13 was RETIRED in November
+// 2025 (N10): a job still pinned to `macos-13` never starts, so it must not
+// read "always available". Re-check this list against that README when an
+// image is added or retired; a label missing here is looked up among
+// self-hosted runners, which can only make the reading stricter.
 const HOSTED_LABELS: readonly RegExp[] = [
-  /^ubuntu-(?:latest|(?:22|24)\.04(?:-arm)?)$/i,
+  /^ubuntu-(?:latest|slim|(?:22|24)\.04(?:-arm)?)$/i,
   /^windows-(?:latest|2022|2025|11-arm)$/i,
-  /^macos-(?:latest|1[3-9]|[2-9]\d)(?:-(?:large|xlarge))?$/i,
+  /^macos-(?:latest(?:-(?:large|xlarge))?|(?:1[4-9]|[2-9]\d)(?:-(?:large|xlarge|intel))?)$/i,
 ];
 const SELF_HOSTED = "self-hosted";
-const WORKFLOWS_PREFIX = ".github/workflows/";
+// N14: anything under `.github/` can change what computes `runs-on` -- a
+// workflow, a composite action, a matrix file a workflow reads.
+const GITHUB_DIR_PREFIX = ".github/";
 
 // What a permissions header may look like before it is repeated (Feitan F4):
-// `administration=read`, `repo, admin:org`. Anything else -- a value a proxy
-// or a compromised hop wrote -- is not echoed; the documented grant is named.
-const PERMISSION_HEADER = /^[a-z_:]+(=(read|write))?(, ?[a-z_:]+(=(read|write))?)*$/;
+// `administration=read`, `repo, admin:org`, `organization_administration=admin;
+// repo`. Anything else -- a value a proxy or a compromised hop wrote -- is not
+// echoed; the documented grant is named (N12 widens it to `admin` and `;`).
+const PERMISSION_HEADER = /^[a-z_:]+(=(read|write|admin))?([,;] ?[a-z_:]+(=(read|write|admin))?)*$/;
 const PERMISSION_HEADER_MAX = 200;
 // GitHub's own refusal message, appended to a reason (N9), bounded.
 const MESSAGE_MAX = 200;
@@ -304,6 +320,7 @@ export async function readRunnerList(
 ): Promise<RunnerList> {
   const runners = new Map<number, Runner>();
   let total: number | null = null;
+  let firstId: number | null = null;
   const incomplete = (why: string): RunnerList => ({ ok: false, reason: `could not ${what}: ${why}`, missingPermission: null, permission: false });
   for (let page = 1; page <= maxPages; page += 1) {
     let data: unknown;
@@ -321,12 +338,30 @@ export async function readRunnerList(
     else if (count !== total) {
       return incomplete(`total_count moved from ${total} to ${count} on page ${page}, so the list is incomplete`);
     }
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
       const runner = parseRunner(entry);
       if (runner === null) return incomplete(`a runner on page ${page} carried no readable id, name, status and labels`);
+      if (page === 1 && index === 0) firstId = runner.id;
       runners.set(runner.id, runner);
     }
-    if (runners.size === total) return { ok: true, runners: [...runners.values()] };
+    if (runners.size === total) {
+      // N13: the walk is not atomic -- a runner registered or removed while it
+      // ran shifts every later page. Re-read page 1: the same total_count and
+      // the same first id, or the list is not one consistent snapshot.
+      let again: unknown;
+      try {
+        again = await fetchPage(1);
+      } catch (error) {
+        return { ok: false, ...refusal(error, what, documentedPermission, true, inActions) };
+      }
+      const againCount = digPath(again, "total_count");
+      const againEntries = digPath(again, "runners");
+      const againFirst = Array.isArray(againEntries) && againEntries.length > 0 ? digPath(againEntries[0], "id") : null;
+      if (againCount !== total || (againFirst ?? null) !== firstId) {
+        return incomplete("page 1 read again did not answer the same total_count and first runner, so the pool changed during the walk and the list is incomplete");
+      }
+      return { ok: true, runners: [...runners.values()] };
+    }
     if (runners.size > total) {
       return incomplete(`${runners.size} distinct runners were read against a total_count of ${total}, so the list is inconsistent`);
     }
@@ -349,12 +384,20 @@ function organizationText(counts: OrganizationRunnerCounts): string {
   return `${total} ${noun} these labels, ${counts.online} online`;
 }
 
-/** Whole minutes from `since` to `now`, or `null` when either is unreadable or `since` is in the future. */
+/** Clock skew between this machine and GitHub tolerated as "just queued" (N15). */
+const CLOCK_SKEW_MS = 2 * 60_000;
+
+/**
+ * Whole minutes from `since` to `now`, or `null` when either is unreadable or
+ * `since` is more than two minutes in the future. A `since` up to two minutes
+ * ahead is this machine's clock trailing GitHub's, read as 0 (N15).
+ */
 export function minutesBetween(since: string | null, now: string): number | null {
   if (since === null) return null;
   const start = Date.parse(since);
   const end = Date.parse(now);
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
+  if (Number.isNaN(start) || Number.isNaN(end)) return null;
+  if (end < start) return start - end <= CLOCK_SKEW_MS ? 0 : null;
   return Math.floor((end - start) / 60_000);
 }
 
@@ -373,12 +416,21 @@ interface JobFacts {
   readonly queuedMinutes: number | null;
 }
 
+/** N11: every distinct refused grant, and the first of them under the compatible key. */
+function permissionsOf(
+  first: string | null,
+  all: readonly string[] | undefined,
+): { missingPermission: string | null; missingPermissions: readonly string[] } {
+  const list = all ?? (first === null ? [] : [first]);
+  return { missingPermission: list[0] ?? first, missingPermissions: list };
+}
+
 function diagnosis(
   facts: JobFacts,
   determination: RunnerDetermination,
   infrastructureStall: boolean | null,
   detail: string,
-  extra: Partial<Pick<WaitingCheckDiagnosis, "runners" | "organizationRunners" | "labelsFromPrHead" | "missingPermission">> = {},
+  extra: Partial<Pick<WaitingCheckDiagnosis, "runners" | "organizationRunners" | "labelsFromPrHead" | "missingPermission" | "missingPermissions">> = {},
 ): WaitingCheckDiagnosis {
   return {
     ...facts,
@@ -387,7 +439,7 @@ function diagnosis(
     runners: extra.runners ?? [],
     organizationRunners: extra.organizationRunners ?? null,
     labelsFromPrHead: extra.labelsFromPrHead ?? null,
-    missingPermission: extra.missingPermission ?? null,
+    ...permissionsOf(extra.missingPermission ?? null, extra.missingPermissions),
     detail,
   };
 }
@@ -395,7 +447,7 @@ function diagnosis(
 function undetermined(
   facts: JobFacts,
   reason: string,
-  extra: Partial<Pick<WaitingCheckDiagnosis, "runners" | "organizationRunners" | "labelsFromPrHead" | "missingPermission">> = {},
+  extra: Partial<Pick<WaitingCheckDiagnosis, "runners" | "organizationRunners" | "labelsFromPrHead" | "missingPermission" | "missingPermissions">> = {},
   permission = false,
 ): WaitingCheckDiagnosis {
   return diagnosis(
@@ -500,7 +552,7 @@ export async function diagnoseWaitingChecks(
         if (typeof name !== "string") {
           return { ok: false, reason: "a changed file carried no readable filename", missingPermission: null, permission: false };
         }
-        if (name.startsWith(WORKFLOWS_PREFIX) || (typeof previous === "string" && previous.startsWith(WORKFLOWS_PREFIX))) {
+        if (name.startsWith(GITHUB_DIR_PREFIX) || (typeof previous === "string" && previous.startsWith(GITHUB_DIR_PREFIX))) {
           workflows = true;
         }
       }
@@ -665,11 +717,13 @@ async function matchRunners(
   const extra = { runners: repoMatched, organizationRunners: org };
   const failure = failures[0];
   if (failure !== undefined) {
-    const permissionFailure = failures.find((each): boolean => each.permission);
+    const grants = [
+      ...new Set(failures.flatMap((each): string[] => (each.missingPermission === null ? [] : [each.missingPermission]))),
+    ];
     return undetermined(
       facts,
       failures.map((each): string => each.reason).join("; "),
-      { ...extra, missingPermission: permissionFailure?.missingPermission ?? null },
+      { ...extra, missingPermissions: grants },
       failures.every((each): boolean => each.permission),
     );
   }
@@ -718,7 +772,7 @@ async function matchRunners(
   if (files.workflows) {
     return undetermined(
       facts,
-      `${finding}, but this pull request changes .github/workflows/, so its own author set these runs-on labels; no infrastructure stall is called`,
+      `${finding}, but this pull request changes .github/, so its own author may have set these runs-on labels; no infrastructure stall is called`,
       { ...extra, labelsFromPrHead: true },
     );
   }
@@ -726,7 +780,7 @@ async function matchRunners(
     facts,
     determination,
     true,
-    `INFRASTRUCTURE STALL: ${finding}; queued ${ageText(facts.queuedMinutes)}, so nothing can start it and waiting will not turn it green`,
+    `INFRASTRUCTURE STALL: ${finding}; queued ${ageText(facts.queuedMinutes)}, so nothing can start it and waiting will not turn it green, unless this PR changes what computes runs-on`,
     { ...extra, labelsFromPrHead: false },
   );
 }
@@ -738,7 +792,9 @@ export function renderRunnerAvailability(diagnoses: readonly WaitingCheckDiagnos
   for (const each of diagnoses) {
     const labels = each.labels === null ? "" : ` [runs-on: ${each.labels.join(", ")}]`;
     lines.push(`  - ${each.check}${labels}: ${each.detail}`);
-    if (each.missingPermission !== null) {
+    if (each.missingPermissions.length > 1) {
+      lines.push(`      missing permissions: ${each.missingPermissions.join("; ")}`);
+    } else if (each.missingPermission !== null) {
       lines.push(`      missing permission: ${each.missingPermission}`);
     }
   }

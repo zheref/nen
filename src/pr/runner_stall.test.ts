@@ -174,6 +174,7 @@ describe("actionsJobRef / githubHostedLabels / runnerCarries / acceptedHeader", 
   it("N3: admits the standard hosted labels, per family", () => {
     for (const label of [
       "ubuntu-latest",
+      "ubuntu-slim",
       "ubuntu-22.04",
       "ubuntu-24.04",
       "ubuntu-24.04-arm",
@@ -183,8 +184,9 @@ describe("actionsJobRef / githubHostedLabels / runnerCarries / acceptedHeader", 
       "windows-2025",
       "windows-11-arm",
       "macos-latest",
-      "macos-13",
+      "macos-14",
       "macos-15",
+      "macos-15-intel",
       "macos-15-xlarge",
       "macos-14-large",
       "macos-latest-xlarge",
@@ -204,6 +206,11 @@ describe("actionsJobRef / githubHostedLabels / runnerCarries / acceptedHeader", 
       "windows-11",
       "macos-12",
       "macos-12-xlarge",
+      // N10: retired November 2025 -- a job pinned to it never starts.
+      "macos-13",
+      "macos-13-intel",
+      "macos-latest-intel",
+      "ubuntu-slim-arm",
       "macos-latest-arm",
       "macos-15-arm64",
     ]) {
@@ -223,6 +230,10 @@ describe("actionsJobRef / githubHostedLabels / runnerCarries / acceptedHeader", 
     expect(acceptedHeader("administration=read")).toBe("administration=read");
     expect(acceptedHeader("repo, admin:org")).toBe("repo, admin:org");
     expect(acceptedHeader("administration=read,actions=write")).toBe("administration=read,actions=write");
+    // N12: `admin` levels and `;` separators, as GitHub sends them.
+    expect(acceptedHeader("organization_administration=admin; repo")).toBe("organization_administration=admin; repo");
+    expect(acceptedHeader("administration=admin;actions=read")).toBe("administration=admin;actions=read");
+    expect(acceptedHeader("administration=owner")).toBeNull();
     expect(acceptedHeader("admin=root; run rm -rf")).toBeNull();
     expect(acceptedHeader("\u001b[2Jadministration=read")).toBeNull();
     expect(acceptedHeader("Administration=Read")).toBeNull();
@@ -236,6 +247,10 @@ describe("actionsJobRef / githubHostedLabels / runnerCarries / acceptedHeader", 
     expect(minutesBetween(null, NOW)).toBeNull();
     expect(minutesBetween("not a date", NOW)).toBeNull();
     expect(minutesBetween("2026-10-11T13:00:00Z", NOW)).toBeNull();
+    // N15: up to two minutes ahead is clock skew, read as just queued.
+    expect(minutesBetween("2026-10-11T12:01:00Z", NOW)).toBe(0);
+    expect(minutesBetween("2026-10-11T12:02:00Z", NOW)).toBe(0);
+    expect(minutesBetween("2026-10-11T12:03:00Z", NOW)).toBeNull();
   });
 });
 
@@ -256,6 +271,8 @@ describe("diagnoseWaitingChecks -- the determinations", () => {
     expect(diagnosis?.runners.map((each) => each.name)).toEqual(["NZ-NNR1", "NZ-NNR2", "NZ-NNR3"]);
     expect(diagnosis?.detail).toMatch(/^INFRASTRUCTURE STALL: every runner carrying these labels is offline \(NZ-NNR1 \(offline\)/);
     expect(diagnosis?.detail).toContain("queued 1 h 0 min");
+    // N14: the stall line is hedged on the one thing the files read cannot see.
+    expect(diagnosis?.detail).toMatch(/waiting will not turn it green, unless this PR changes what computes runs-on$/);
   });
 
   it("ONLINE: names only the ONLINE runners (F3), busy included, and never asks the organization", async () => {
@@ -265,7 +282,8 @@ describe("diagnoseWaitingChecks -- the determinations", () => {
     expect(diagnosis?.runners).toEqual([{ name: "NZ-NNR9", status: "online", busy: true }]);
     expect(diagnosis?.detail).toContain("(NZ-NNR9 (online, busy))");
     expect(diagnosis?.detail).not.toContain("NZ-NNR1");
-    expect(calls).toEqual(["job 7", "repo runners 1"]);
+    // One page, then its N13 re-read.
+    expect(calls).toEqual(["job 7", "repo runners 1", "repo runners 1"]);
   });
 
   it("NO-RUNNER, queued an hour: a stall, hedged for enterprise and on-demand pools (N4)", async () => {
@@ -281,7 +299,7 @@ describe("diagnoseWaitingChecks -- the determinations", () => {
   it("GITHUB-HOSTED: no listed runner carries the label, so it is always available", async () => {
     const { diagnosis, calls } = await one({ jobs: { 7: job(["ubuntu-latest"]) }, repoPages: [pool(MAC_ONLINE_WINDOWS_OFFLINE)] });
     expect(diagnosis).toMatchObject({ determination: "github-hosted", infrastructureStall: false });
-    expect(calls).toEqual(["job 7", "repo runners 1"]);
+    expect(calls).toEqual(["job 7", "repo runners 1", "repo runners 1"]);
   });
 
   it("GITHUB-HOSTED even when the runner list cannot be read: the hosted fleet does not depend on it", async () => {
@@ -324,14 +342,14 @@ describe("diagnoseWaitingChecks -- the determinations", () => {
     expect(diagnosis?.detail).toContain("larger runner");
   });
 
-  it("reads the runner list ONCE for every check that needs it", async () => {
+  it("reads the runner list ONCE (one walk plus its page-1 re-read) for every check that needs it", async () => {
     const { source, calls } = scripted({
       jobs: { 7: job(WINDOWS), 8: job(MACOS, { id: 8 }) },
       repoPages: [pool(MAC_ONLINE_WINDOWS_OFFLINE)],
     });
     const out = await diagnoseWaitingChecks(source, REPO, [queued("w", 7), queued("m", 8)], CTX);
     expect(out.map((each) => each.determination)).toEqual(["offline-only", "online"]);
-    expect(calls.filter((call) => call.startsWith("repo runners"))).toEqual(["repo runners 1"]);
+    expect(calls.filter((call) => call.startsWith("repo runners"))).toEqual(["repo runners 1", "repo runners 1"]);
   });
 });
 
@@ -402,7 +420,14 @@ describe("diagnoseWaitingChecks -- F2: a PR that edits its own workflows", () =>
   it("a .github/workflows change makes the stall undetermined, labelsFromPrHead: true", async () => {
     const { diagnosis } = await one({ ...stalled, files: [{ filename: "src/a.ts" }, { filename: ".github/workflows/ci.yml" }] });
     expect(diagnosis).toMatchObject({ determination: "undetermined", infrastructureStall: null, labelsFromPrHead: true });
-    expect(diagnosis?.detail).toContain("this pull request changes .github/workflows/, so its own author set these runs-on labels");
+    expect(diagnosis?.detail).toContain("this pull request changes .github/, so its own author may have set these runs-on labels");
+  });
+
+  it("N14: any change under .github/ counts -- a composite action can compute runs-on too", async () => {
+    const { diagnosis } = await one({ ...stalled, files: [{ filename: ".github/actions/matrix/action.yml" }] });
+    expect(diagnosis).toMatchObject({ determination: "undetermined", labelsFromPrHead: true });
+    const { diagnosis: lookalike } = await one({ ...stalled, files: [{ filename: "docs/.github-notes.md" }] });
+    expect(lookalike).toMatchObject({ infrastructureStall: true, labelsFromPrHead: false });
   });
 
   it("a workflow renamed AWAY counts too", async () => {
@@ -448,7 +473,7 @@ describe("diagnoseWaitingChecks -- organization runners (F3: counted, never name
     expect(diagnosis).toMatchObject({ determination: "online", organizationRunners: { online: 1, offline: 1 }, runners: [] });
     expect(diagnosis?.detail).toContain("1 online organization runner");
     expect(JSON.stringify(diagnosis)).not.toContain("ORG-WIN");
-    expect(calls).toEqual(["job 7", "repo runners 1", "account acme", "org runners acme 1"]);
+    expect(calls).toEqual(["job 7", "repo runners 1", "repo runners 1", "account acme", "org runners acme 1", "org runners acme 1"]);
   });
 
   it("an all-offline organization pool is a count in the stall line", async () => {
@@ -490,6 +515,45 @@ describe("diagnoseWaitingChecks -- organization runners (F3: counted, never name
     expect(diagnosis).toMatchObject({ determination: "undetermined", infrastructureStall: null });
     expect(diagnosis?.missingPermission).toContain("admin:org");
     expect(diagnosis?.runners.map((each) => each.name)).toEqual(["NZ-NNR1"]);
+  });
+
+  it("N11: both pools refused -- every distinct grant in missingPermissions, the first kept as missingPermission", async () => {
+    const { diagnosis } = await one(
+      {
+        jobs: { 7: job(WINDOWS) },
+        repoError: httpError(403),
+        accountType: "Organization",
+        orgError: httpError(403),
+      },
+      queued("w", 7, "acme/app"),
+      CTX,
+      ORG_REPO,
+    );
+    expect(diagnosis?.determination).toBe("undetermined");
+    expect(diagnosis?.missingPermissions).toEqual([
+      "administration:read on the repository (classic token: repo, held by a repository admin)",
+      "organization_self_hosted_runners:read (classic token: admin:org)",
+    ]);
+    expect(diagnosis?.missingPermission).toBe(diagnosis?.missingPermissions[0]);
+    const lines = renderRunnerAvailability(diagnosis === undefined ? [] : [diagnosis]);
+    expect(lines).toContain(
+      "      missing permissions: administration:read on the repository (classic token: repo, held by a repository admin); organization_self_hosted_runners:read (classic token: admin:org)",
+    );
+  });
+
+  it("N11: the same grant refused twice is listed once", async () => {
+    const { diagnosis } = await one(
+      {
+        jobs: { 7: job(WINDOWS) },
+        repoError: httpError(403, { "x-accepted-oauth-scopes": "repo" }),
+        accountType: "Organization",
+        orgError: httpError(403, { "x-accepted-oauth-scopes": "repo" }),
+      },
+      queued("w", 7, "acme/app"),
+      CTX,
+      ORG_REPO,
+    );
+    expect(diagnosis?.missingPermissions).toEqual(["repo"]);
   });
 
   it("an organization owner on a transport that cannot read its pool is undetermined, said so", async () => {
@@ -557,7 +621,7 @@ describe("diagnoseWaitingChecks -- unreadable reads say so, and name the permiss
 
   it("N5: a 404 on the JOBS endpoint is a job not found, with no permission claimed", async () => {
     const { diagnosis } = await one({ jobError: httpError(404) });
-    expect(diagnosis).toMatchObject({ determination: "undetermined", missingPermission: null });
+    expect(diagnosis).toMatchObject({ determination: "undetermined", missingPermission: null, missingPermissions: [] });
     expect(diagnosis?.detail).toContain("Actions job 7 not found (deleted or not visible)");
   });
 
@@ -623,6 +687,42 @@ describe("readRunnerList -- pagination, and truncation failing closed (N8)", () 
       "perm",
     );
     expect(!list.ok && list.reason).toContain("2 distinct runners were read against a total_count of 1");
+  });
+
+  it("N13: page 1 re-read with a different total_count is an incomplete list", async () => {
+    let reads = 0;
+    const list = await readRunnerList(
+      async (): Promise<unknown> => {
+        reads += 1;
+        return reads === 1
+          ? { total_count: 1, runners: [runner("a", "offline", WINDOWS, false, 1)] }
+          : { total_count: 2, runners: [runner("a", "offline", WINDOWS, false, 1), runner("b", "online", WINDOWS, false, 2)] };
+      },
+      "list runners",
+      "perm",
+    );
+    expect(reads).toBe(2);
+    expect(!list.ok && list.reason).toContain("page 1 read again did not answer the same total_count and first runner");
+  });
+
+  it("N13: page 1 re-read with a different first runner is an incomplete list", async () => {
+    let reads = 0;
+    const list = await readRunnerList(
+      async (): Promise<unknown> => {
+        reads += 1;
+        return { total_count: 1, runners: [runner("a", "offline", WINDOWS, false, reads === 1 ? 1 : 9)] };
+      },
+      "list runners",
+      "perm",
+    );
+    expect(list.ok).toBe(false);
+  });
+
+  it("N13: a re-read that agrees completes the list; an empty pool agrees with itself", async () => {
+    expect(await readRunnerList(async (): Promise<unknown> => ({ total_count: 0, runners: [] }), "list runners", "perm")).toEqual({
+      ok: true,
+      runners: [],
+    });
   });
 
   it("the online match on page 2 is found -- page 1 alone would have said offline-only", async () => {
