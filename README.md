@@ -239,6 +239,20 @@ nen canon mirror check    --repo /path/to/repo --rules-dir ../handbooks/handbook
   --canon-values .claude/canon-values.yml --source owner/handbooks --ref v0.6.0 --not-mirrored README.md,placeholders.md
 ```
 
+Where the canon checkout sits is per machine, so declare how to find it on
+the same `maintained_tools` entry -- `checkout_env` (the name of a variable a
+machine exports the path in) and/or `checkout` (a path template such as
+`${XDG_CACHE_HOME:-${HOME}/.cache}/canon/owner/handbooks`). `nen canon
+checkout` resolves it, verifies it is a clean checkout of the pinned source
+at the pinned tag, and reports every step; give `mirror` `--stack-dir` and
+`--leaf` instead of `--rules-dir` and the command names no host path at all,
+so it can sit verbatim in a declared gate:
+
+```bash
+nen canon mirror check --repo . --canon-values .claude/canon-values.yml \
+  --stack-dir handbooks/stacks --leaf rules --not-mirrored README.md,placeholders.md
+```
+
 ### Use it every day
 
 **Is this pull request ready to merge, before you look any further?**
@@ -360,7 +374,7 @@ that repository's `nen/` directory at the path given by `--repo`
 | File | What it holds |
 |---|---|
 | `nen/labels.json` | The label set — names, colors, descriptions |
-| `nen/repos.json` | The repository registry — product codes, consumers, and the canon pin (the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry) |
+| `nen/repos.json` | The repository registry — product codes, consumers, and the canon pin (the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry, with `checkout_env`/`checkout` saying where its checkout is found) |
 | `nen/colors.yml` | The status-color precedence for board rendering |
 | `nen/gates.json` | Reviewer identities for `nen pr ready`'s readiness check, and optionally `checks.excluded`: checks the maintainer ruled out of CON-32(a), each with its reason, ruling date and `until` — read at the pull request's **base**, never its head |
 | `nen/contract.json` | Optional. What this repository needs *from* Nen (`dependency`), and the stack declaration Nen reads *about* it (`project`). Parsed, validated and reported; nothing acts on it yet |
@@ -433,7 +447,7 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (43); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-127 verbs outside the binary — each one's purpose, arguments, exit codes and
+128 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
