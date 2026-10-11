@@ -339,6 +339,18 @@ export class GitHubClient {
     });
   }
 
+  // The login of the identity this token authenticates as (`GET /user`) --
+  // the identity RUNNING the gate, which `pr ready`'s own-request reading
+  // compares a pending request's requester against (zheref/nen#240). An App
+  // installation token has no user and this throws; the caller then makes no
+  // own-request claim.
+  async viewerLogin(): Promise<string> {
+    const response = await this.octokit.request("GET /user");
+    const login = (response.data as { login?: unknown }).login;
+    if (typeof login !== "string" || login === "") throw new Error("GET /user answered no login");
+    return login;
+  }
+
   // ONE page of review threads, raw, with its cursor.
   //
   // The walk is the caller's, deliberately: CON-32(d)'s boundary is "zero

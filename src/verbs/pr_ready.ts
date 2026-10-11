@@ -85,6 +85,7 @@ import {
 } from "../gates/predicates.js";
 import { createClient, tokenFromEnv } from "../github/client.js";
 import { fetchPrState, type PrRef, type PrStateSource } from "../github/pr_state.js";
+import { renderRoundCounts, type RoundCounts } from "../gates/round_counts.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { SchemaError } from "../schema/errors.js";
 import { GIT, spawnRunner } from "../seam/exec.js";
@@ -95,7 +96,7 @@ import {
   type ReviewerIdentity,
 } from "../schema/gates.js";
 import { loadRepoRegistry } from "../schema/repos.js";
-import { GATES_FILE, readSchemaJson, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
+import { GATES_FILE, readSchemaFile, REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
 import { PROGRAM, VERSION } from "../version.js";
 import { plainLine } from "../cli/plain.js";
 import {
@@ -104,7 +105,7 @@ import {
   type BaseExclusions,
   type BaseGatesRead,
 } from "../gates/base_exclusions.js";
-import { untilText, type DeclaredCheckExclusion } from "../schema/gates.js";
+import { parseGatesText, untilText, type DeclaredCheckExclusion } from "../schema/gates.js";
 import { ExcludeCheckError, parseExcludeCheckNames } from "../pr/excludecheck.js";
 
 /**
@@ -511,6 +512,16 @@ export interface ReadyMeta {
    * never by the default output. Always the array. Additive.
    */
   readonly notes: readonly string[];
+  /**
+   * Each configured reviewer's review rounds against `nen/gates.json`'s
+   * `round_policy.minRounds`/`.maxRounds` (zheref/nen#240): requested (from
+   * the timeline; `null` when it could not be read), posted, the rounds
+   * counted, and a `min`/`max` status. ABSENT when the file states neither key
+   * or the rounds-owed row was not judged through the ordinary owed-round
+   * path, so such a report is byte-identical to before. Context, never a
+   * conjunct. Additive to v0.1.
+   */
+  readonly roundCounts?: RoundCounts;
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -997,16 +1008,8 @@ export function resolveIdentities(
     } catch (error) {
       throw gatesReadFailure(gatesPath, gatesFlag, error);
     }
-    let value: unknown;
-    try {
-      value = JSON.parse(text);
-    } catch (error) {
-      throw new SchemaError(
-        gatesPath,
-        null,
-        `is not valid JSON (${error instanceof Error ? error.message : String(error)})`,
-      );
-    }
+    // Duplicate keys refused by pointer before the parse (Feitan F3).
+    const value = parseGatesText(gatesPath, text);
     return { identities: parseGateIdentities(gatesPath, value), source: "schema", path: gatesPath };
   }
   // THE IN-REPO PATH IS THE RESOLVER'S, NOT THIS FILE'S. This verb bypasses
@@ -1026,13 +1029,13 @@ export function resolveIdentities(
   if (inRepo.canonical.present) {
     // Same shaping as the `--gates <path>` branch above: a malformed
     // gates.json must fail as a path-bearing SchemaError, not as a bare
-    // SyntaxError with no file/pointer context. readSchemaJson is the shared
+    // SyntaxError with no file/pointer context. readSchemaFile + parseGatesText is the shared
     // reader every other in-repo taxonomy load already goes through (see
     // ../schema/gates.ts's own loadGateIdentities, ../schema/repos.ts's
     // loadRepoRegistry) -- reusing it here instead of hand-rolling a second
     // JSON.parse keeps this the ONE failure channel schema/errors.ts documents.
-    const { path, value } = readSchemaJson(repoRoot, GATES_FILE);
-    return { identities: parseGateIdentities(path, value), source: "schema", path };
+    const { path, text } = readSchemaFile(repoRoot, GATES_FILE);
+    return { identities: parseGateIdentities(path, parseGatesText(path, text)), source: "schema", path };
   }
   if (reviewers.length > 0) {
     return { identities: identitiesFromFlags(reviewers, approvers, logins), source: "flags", path: null };
@@ -1181,6 +1184,9 @@ export function renderExplain(report: ReadyReport): string[] {
     if (!isDeclarationNotice(warning)) lines.push(`  warning: ${warning}`);
   }
   for (const note of report.meta.notes) lines.push(`  note: ${note}`);
+  if (report.meta.roundCounts !== undefined) {
+    for (const line of renderRoundCounts(report.meta.roundCounts)) lines.push(line);
+  }
   lines.push("");
   lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
   lines.push("  when every row is ready, and the line above is the first failing row's reason.");
@@ -1265,7 +1271,9 @@ const SHA_PREFIX = /^[0-9a-f]{7,40}$/i;
  *
  * 8 is `head-mismatch` (EXIT_HEAD_MISMATCH above): `--require-head` named a
  * commit that is not GitHub's head for the pull request, and no verdict was
- * decided. 2 is a usage error, as everywhere in this CLI.
+ * decided. 2 is a usage error, as everywhere in this CLI -- and a refused
+ * gates file (unreadable, malformed, or carrying a key this build does not
+ * read, zheref/nen#310) is one: no verdict is printed for it.
  */
 export async function prReady(
   input: PrReadyInput,
@@ -1605,6 +1613,7 @@ export async function readReady(
       declaredExclusions: evaluation.context.declaredExclusions,
       declaredExclusionsSource: base.origin,
       notes: base.notes,
+      ...(evaluation.context.roundCounts === undefined ? {} : { roundCounts: evaluation.context.roundCounts }),
       deliveryPr: evaluation.context.deliveryPr,
       identities: { source: identities.source, path: identities.path },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,

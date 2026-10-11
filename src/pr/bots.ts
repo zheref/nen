@@ -103,10 +103,23 @@ export interface PrAndKnownBots {
    * requested, reviewed, and was re-requested) are folded by id.
    */
   readonly bots: readonly KnownBot[];
+  /**
+   * The base commit GitHub reports for the pull request (`baseRefOid`), "" when
+   * it answered none -- where `nen pr request-reviews` reads
+   * `round_policy.maxRounds` (zheref/nen#240), so a pull request cannot raise
+   * its own ceiling.
+   */
+  readonly baseRefOid: string;
+  /**
+   * The repository's default branch and its tip, `null` when GitHub answered
+   * none -- the second commit `round_policy.maxRounds` is read at, the lower
+   * of the two applied (Feitan F1).
+   */
+  readonly defaultBranch: { readonly name: string; readonly oid: string } | null;
 }
 
 const PR_AND_KNOWN_BOTS_QUERY =
-  "query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){id " +
+  "query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{name target{oid}} pullRequest(number:$pr){id baseRefOid " +
   "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on Bot{login id}}}} " +
   "timelineItems(first:100,itemTypes:[PULL_REQUEST_REVIEW]){nodes{... on PullRequestReview{author{__typename ... on Bot{login id}}}}}}}}";
 
@@ -181,7 +194,12 @@ function readBot(raw: unknown): KnownBot | null {
  */
 export function parsePrAndKnownBots(raw: string, what: string): PrAndKnownBots {
   let parsed: {
-    data?: { repository?: { pullRequest?: { id?: unknown; reviewRequests?: unknown; timelineItems?: unknown } } };
+    data?: {
+      repository?: {
+        defaultBranchRef?: { name?: unknown; target?: { oid?: unknown } | null } | null;
+        pullRequest?: { id?: unknown; baseRefOid?: unknown; reviewRequests?: unknown; timelineItems?: unknown };
+      };
+    };
   };
   try {
     parsed = JSON.parse(raw) as typeof parsed;
@@ -208,7 +226,21 @@ export function parsePrAndKnownBots(raw: string, what: string): PrAndKnownBots {
   collect(timelineNodes, (node): unknown =>
     typeof node === "object" && node !== null ? (node as Record<string, unknown>)["author"] : null,
   );
-  return { pullRequestId: pr.id, bots: [...byId.values()] };
+  return {
+    pullRequestId: pr.id,
+    bots: [...byId.values()],
+    baseRefOid: typeof pr.baseRefOid === "string" ? pr.baseRefOid : "",
+    defaultBranch: defaultBranchOf(parsed.data?.repository?.defaultBranchRef),
+  };
+}
+
+function defaultBranchOf(raw: { name?: unknown; target?: { oid?: unknown } | null } | null | undefined): {
+  readonly name: string;
+  readonly oid: string;
+} | null {
+  const name = raw?.name;
+  const oid = raw?.target?.oid;
+  return typeof name === "string" && name !== "" && typeof oid === "string" && oid !== "" ? { name, oid } : null;
 }
 
 /** `prAndKnownBotsArgv` run through `seams` and parsed. Throws on a `gh` failure. */

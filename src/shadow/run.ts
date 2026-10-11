@@ -61,6 +61,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { prReady, type PrReadyInput } from "../verbs/pr_ready.js";
+import { NO_ROUND_YET_READING, PENDING_ONLY_READING } from "../gates/ready.js";
 
 export interface Targets {
   readonly openPrRepos: readonly string[];
@@ -92,13 +93,13 @@ export interface Candidate {
   readonly origin: string;
 }
 
-interface OracleResult {
+export interface OracleResult {
   readonly verdictLine: string | null;
   readonly exitCode: number;
   readonly stderr: string;
 }
 
-interface NenResult {
+export interface NenResult {
   readonly verdict: "ready" | "not-ready" | "unevaluated";
   readonly gateLine: string;
 }
@@ -237,8 +238,22 @@ function oracleReady(oracle: OracleResult): boolean | null {
   return oracle.verdictLine === "ready";
 }
 
+/**
+ * ../gates/ready.ts's DIVERGENCE (11) (zheref/nen#240): the rounds-owed row's
+ * pending-request suffix, which the shell never prints. Stripped from BOTH
+ * lines before they are compared -- it is only ever on nen's, and stripping
+ * an absent suffix changes nothing -- so the reading never reads as a
+ * disagreement while every other byte of the reason still must match.
+ */
+const NEN_ONLY_READING = new RegExp(` — (?:${PENDING_ONLY_READING}|${NO_ROUND_YET_READING}): .*$`);
+
+export function stripNenOnlyReadings(line: string): string {
+  return line.replace(NEN_ONLY_READING, "");
+}
+
 function normalizeOracleLine(line: string, knownDivergence: string): string {
-  return knownDivergence === "" ? line : line.split(knownDivergence).join("");
+  const stripped = stripNenOnlyReadings(line);
+  return knownDivergence === "" ? stripped : stripped.split(knownDivergence).join("");
 }
 
 function readyAgrees(oracle: OracleResult, nen: NenResult): boolean {
@@ -265,10 +280,10 @@ function readyAgrees(oracle: OracleResult, nen: NenResult): boolean {
  * rather than written here, because the citation it names is the name of the
  * source system and this file is swept for exactly that (see the header).
  */
-function reasonAgrees(oracle: OracleResult, nen: NenResult, knownDivergence: string): boolean {
+export function reasonAgrees(oracle: OracleResult, nen: NenResult, knownDivergence: string): boolean {
   if (oracle.verdictLine === null) return true;
   if (oracle.verdictLine === "ready" || nen.verdict === "ready") return true;
-  return normalizeOracleLine(oracle.verdictLine, knownDivergence) === nen.gateLine;
+  return normalizeOracleLine(oracle.verdictLine, knownDivergence) === stripNenOnlyReadings(nen.gateLine);
 }
 
 // ── enumeration ──────────────────────────────────────────────────────────────
