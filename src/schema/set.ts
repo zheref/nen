@@ -15,16 +15,19 @@
 // named as such; then the edited text does, before the disk is touched. A
 // result the loader refuses is refused here, at exit 1, with the loader's own
 // message and nothing written -- and an edit that REPAIRS a failing file is
-// allowed, and says so. The two models are then compared
-// (`canonicalModel`): an edit no loader reads -- a key nen keeps verbatim but
-// acts on nowhere -- is reported as kept verbatim (`read: false`), never
-// refused. After a write the file is read back through the loader itself.
+// allowed, and says so. The two typed models are then compared
+// (`canonicalModel`), and the keys commands read from the raw form
+// (`RAW_READ`) counted: an edit that changes neither is reported as leaving
+// the loader's typed model unchanged (`read: false`), never refused. After a
+// write the file is read back through the loader itself.
 //
-// SOME POINTERS ARE A GATE CHANGE (Feitan F1). A validated one-liner can widen
-// who approves a pull request or change what nen executes. The pointers that
-// do are listed in `GATE_CHANGE_RULES`, and setting one needs `--gate-change`:
-// without it the verb refuses at exit 2, naming the pointer and why; with it
-// the report carries a `security-relevant:` line and `gateChange: true`.
+// GATE CHANGES FAIL CLOSED (Feitan F1, Nobunaga R1). A validated one-liner can
+// widen who approves a pull request or change what nen executes, so whole
+// files and blocks are gated (`GATE_SCOPES`) and only named prose keys are
+// let through (`GATE_EXCEPTIONS`). An added object or array is matched key
+// path by key path. A gated edit needs `--gate-change` (exit 2 without it);
+// the flag on an edit that is no gate change is exit 2 too. The canon pin is
+// never this verb's: `nen canon pin --write` moves it.
 //
 // THE WRITE IS ../edit/atomic.ts's, shared with `canon pin --write`. The
 // declaration must be a regular file -- never a symbolic link -- directly in
@@ -46,7 +49,7 @@ import { JsonSpanError } from "../edit/json-span.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { PROGRAM } from "../version.js";
 import { canonicalModel, DECLARATIONS, declarationFor, isMetadataKey, METADATA_PREFIX } from "./declarations.js";
-import { CONTRACT_FILE, GATES_FILE, parseSchemaJsonText, readSchemaFile, resolveSchemaFile } from "./source.js";
+import { CONTRACT_FILE, DECISIONS_FILE, GATES_FILE, parseSchemaJsonText, readSchemaFile, REPOS_FILE, resolveSchemaFile } from "./source.js";
 import { WORKFLOW_FILE } from "./workflow.js";
 
 export const SCHEMA_SET_CONTRACT = "nen.schema.set/v0.1";
@@ -62,57 +65,134 @@ export const SCHEMA_SET_FLAGS = {
 export const SETTABLE_FILES: readonly string[] = DECLARATIONS.filter((row): boolean => row.format === "json").map((row): string => row.file);
 
 /**
- * One family of pointers that is a GATE CHANGE (Feitan F1). `prefix`: the
- * pointer starts with `path`, each step matching exactly, `*` any one step,
- * and `*<suffix>` any step ending in it. `segment`: any step of the pointer
- * is `path[0]`.
+ * One GATED SCOPE (Feitan F1 / Nobunaga R1, fail closed). `file`: every
+ * pointer in the file. `prefix`: the pointer starts with `path`, each step
+ * exact or `*` for any one step. `segment`: any step of the pointer is
+ * `path[0]`.
  */
-export interface GateChangeRule {
+export interface GateScope {
   readonly file: string;
-  readonly kind: "prefix" | "segment";
+  readonly kind: "file" | "prefix" | "segment";
   readonly path: readonly string[];
   readonly reason: string;
 }
 
-const gates = (key: string, reason: string): GateChangeRule => ({ file: GATES_FILE, kind: "prefix", path: [key], reason });
-const executes = (key: string, reason: string): GateChangeRule => ({ file: CONTRACT_FILE, kind: "segment", path: [key], reason });
+const whole = (file: string, reason: string): GateScope => ({ file, kind: "file", path: [], reason });
+const under = (file: string, path: readonly string[], reason: string): GateScope => ({ file, kind: "prefix", path, reason });
+const anywhere = (key: string, reason: string): GateScope => ({ file: CONTRACT_FILE, kind: "segment", path: [key], reason });
 
-/** The pointers `schema set` writes only under `--gate-change` -- the ONE table, documented in docs/USAGE.md. */
-export const GATE_CHANGE_RULES: readonly GateChangeRule[] = [
-  { file: GATES_FILE, kind: "prefix", path: ["reviewers", "*", "*_pattern"], reason: "a reviewer's login or check pattern decides whose review counts toward readiness" },
-  gates("round_quorum", "the round quorum decides which reviewers' rounds readiness owes"),
-  gates("round_policy", "the round policy decides how many review rounds readiness owes"),
-  gates("approval_policy", "the approval policy decides what approval readiness needs"),
-  gates("default_approvers", "the default approvers decide whose approval readiness needs"),
-  gates("base_reviewers", "the base reviewers decide which reviews readiness owes"),
-  gates("delivery", "the delivery block decides which pull requests take the delivery path"),
-  gates("checks", "the checks block decides which failing checks readiness excuses"),
-  executes("exe", "an exe is a program nen runs"),
-  executes("argv", "an argv is a command line nen runs"),
-  executes("env", "env is the environment nen runs a command in"),
-  executes("onStall", "onStall decides what nen does to a stalled command"),
-  executes("preconditions", "preconditions decide when nen runs a command"),
-  executes("targets", "targets decide where nen deploys"),
-  { file: WORKFLOW_FILE, kind: "prefix", path: ["branch", "base"], reason: "branch.base is the trunk every branch is cut from and every merge lands on" },
+/**
+ * The scopes `schema set` writes only under `--gate-change` -- the ONE table,
+ * documented in docs/USAGE.md (#gate-changes). FAIL CLOSED: a whole file or a
+ * whole block is gated, and only `GATE_EXCEPTIONS` are let through, rather
+ * than a list of keys known to loosen a gate, which a new key slips past.
+ */
+export const GATE_SCOPES: readonly GateScope[] = [
+  whole(GATES_FILE, "nen/gates.json decides whose review and approval readiness owes, and what it excuses"),
+  whole(DECISIONS_FILE, "nen/decisions.json decides which stops a person answers and which run on their own"),
+  under(CONTRACT_FILE, ["dependency"], "the dependency block decides which nen runs here and how it is fetched"),
+  under(CONTRACT_FILE, ["project", "verbs"], "project.verbs is what nen runs for each verb"),
+  under(CONTRACT_FILE, ["project", "lanes"], "project.lanes decides where nen runs it"),
+  under(CONTRACT_FILE, ["project", "toolchain"], "project.toolchain decides what nen installs and probes"),
+  under(CONTRACT_FILE, ["project", "targets"], "project.targets decides where nen deploys"),
+  anywhere("probe", "a probe is a command nen runs"),
+  anywhere("version_probe", "a version probe is a command nen runs"),
+  anywhere("args", "args are a command line nen runs"),
+  anywhere("cwd", "cwd is where nen runs a command"),
+  anywhere("installer", "an installer is what nen runs to install a tool"),
+  anywhere("bootstrap", "the bootstrap is how nen itself is fetched and verified"),
+  anywhere("select", "select is the command line nen runs for a focused test"),
+  anywhere("pinned_ref", "pinned_ref is the nen release this repository runs"),
+  under(WORKFLOW_FILE, ["branch"], "branch is the trunk and the shape every branch is cut on"),
+  under(WORKFLOW_FILE, ["review"], "review decides which scopes a change is reviewed under"),
+  under(WORKFLOW_FILE, ["coverage"], "coverage is the ladder a change must meet"),
+  under(WORKFLOW_FILE, ["tests"], "tests are the suites a change must pass"),
+  under(WORKFLOW_FILE, ["iteration"], "iteration is the checks every turn runs"),
+  under(WORKFLOW_FILE, ["deploy"], "deploy decides where a release goes"),
 ];
 
-function stepMatches(pattern: string, step: string): boolean {
-  if (pattern === "*") return true;
-  if (pattern.startsWith("*")) return step.endsWith(pattern.slice(1));
-  return pattern === step;
+/** A NAMED BENIGN EXCEPTION: a pointer in a gated scope whose last step is `key` is prose, never a gate. */
+export interface GateException {
+  /** The file it applies in, or `*` for every one. */
+  readonly file: string;
+  readonly key: string;
+  readonly reason: string;
 }
 
-/** The rule that makes `segments` in `file` a gate change, or null. */
-export function gateChangeRule(file: string, segments: readonly string[]): GateChangeRule | null {
-  for (const rule of GATE_CHANGE_RULES) {
-    if (rule.file !== file) continue;
-    const hit =
-      rule.kind === "segment"
-        ? segments.includes(rule.path[0] ?? "")
-        : rule.path.length <= segments.length && rule.path.every((pattern, index): boolean => stepMatches(pattern, segments[index] ?? ""));
-    if (hit) return rule;
+/** Kept minimal on purpose: each one is tested to be no gate. `$` keys need none -- they are never settable. */
+export const GATE_EXCEPTIONS: readonly GateException[] = [
+  { file: DECISIONS_FILE, key: "why", reason: "a decision row's why is the prose a stop prints beside it" },
+  { file: "*", key: "note", reason: "a note is prose for a person; no verb acts on it" },
+];
+
+/** The canon pin: never `schema set`'s to move, with or without `--gate-change`. */
+const CANON_PIN: readonly string[] = ["maintained_tools", "*", "pinned"];
+
+function prefixMatches(path: readonly string[], segments: readonly string[]): boolean {
+  return path.length <= segments.length && path.every((step, index): boolean => step === "*" || step === segments[index]);
+}
+
+function inScope(scope: GateScope, segments: readonly string[]): boolean {
+  if (scope.kind === "file") return true;
+  if (scope.kind === "segment") return segments.includes(scope.path[0] ?? "");
+  return prefixMatches(scope.path, segments);
+}
+
+/**
+ * Every pointer an edit touches: the pointer itself and, when the value is an
+ * object or an array being added, the pointer joined with every key path
+ * inside it -- so a gated key cannot ride in under an ungated parent.
+ */
+export function touchedPointers(segments: readonly string[], value: unknown): string[][] {
+  const out: string[][] = [[...segments]];
+  if (value !== null && typeof value === "object") {
+    const entries = Array.isArray(value) ? value.map((item, index): [string, unknown] => [String(index), item]) : Object.entries(value as Record<string, unknown>);
+    for (const [key, item] of entries) out.push(...touchedPointers([...segments, key], item));
+  }
+  return out;
+}
+
+/** What makes an edit a gate change: the scope, and the touched pointer that fell in it. */
+export interface GateHit {
+  readonly scope: GateScope;
+  readonly segments: readonly string[];
+}
+
+/** The first gated, non-excepted pointer the edit touches, or null. */
+export function gateChange(file: string, segments: readonly string[], value: unknown): GateHit | null {
+  for (const touched of touchedPointers(segments, value)) {
+    const last = touched[touched.length - 1] ?? "";
+    if (GATE_EXCEPTIONS.some((exception): boolean => (exception.file === "*" || exception.file === file) && exception.key === last)) continue;
+    const scope = GATE_SCOPES.find((entry): boolean => entry.file === file && inScope(entry, touched));
+    if (scope !== undefined) return { scope, segments: touched };
   }
   return null;
+}
+
+/** Whether the edit touches the canon pin, which only `nen canon pin --write` moves. */
+export function touchesCanonPin(file: string, segments: readonly string[], value: unknown): boolean {
+  return file === REPOS_FILE && touchedPointers(segments, value).some((touched): boolean => touched.length === CANON_PIN.length && prefixMatches(CANON_PIN, touched));
+}
+
+/**
+ * KEYS A COMMAND READS FROM THE LOADER'S RAW FORM rather than its typed model
+ * (Nobunaga R2): an edit to one changes behaviour even when the typed model
+ * does not, so it counts as read. Each names its reader.
+ */
+export const RAW_READ: readonly GateScope[] = [
+  anywhere("artifacts", "src/shu/render.ts, src/report/data.ts and contract.ts's writtenPaths read an invocation's raw artifacts"),
+  anywhere("env", "src/shu/render.ts reads an invocation's raw env"),
+  anywhere("report", "src/shu/coverage.ts reads a coverage block's raw report to warn it is ignored"),
+  anywhere("bootstrap", "the bootstrap block (its sha256 included) is read by the bootstrap consumers, not by the typed model"),
+  under(CONTRACT_FILE, ["dependency", "minimum_semantics"], "src/shu/tools.ts reads dependency.raw.minimum_semantics"),
+  under(WORKFLOW_FILE, ["monitor", "pollSeconds"], "src/watch/command.ts reads whether monitor.pollSeconds is declared at all"),
+  under(WORKFLOW_FILE, ["monitor", "maxCycles"], "src/watch/command.ts reads whether monitor.maxCycles is declared at all"),
+  under(WORKFLOW_FILE, ["review"], "src/review/command.ts reads whether review is declared at all"),
+];
+
+/** Whether any pointer the edit touches is one a command reads from the raw form. */
+export function readFromRaw(file: string, segments: readonly string[], value: unknown): boolean {
+  return touchedPointers(segments, value).some((touched): boolean => RAW_READ.some((entry): boolean => entry.file === file && inScope(entry, touched)));
 }
 
 /** Thrown for an invocation `schema set` refuses before writing anything: exit 2. */
@@ -120,6 +200,7 @@ export class SchemaSetUsageError extends Error {}
 
 export type SchemaSetFailureCode =
   | "no-file"
+  | "symlink"
   | "outside-repo"
   | "file-changed"
   | "not-json"
@@ -240,9 +321,17 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     throw error;
   }
   const canonicalPointer = formatPointer(segments);
-  const gate = gateChangeRule(file, segments);
-  if (gate !== null && !args.booleans.has("gate-change")) {
-    return fail(`${file} ${canonicalPointer} is a gate change: ${gate.reason}. Setting it needs --gate-change, so the change is made on purpose and read as one.`);
+  if (touchesCanonPin(file, segments, value)) {
+    return fail(`${file} ${canonicalPointer} is the canon pin. schema set never moves it, with or without --gate-change: 'nen canon pin --write <tag>' does, after resolving the tag in the canon checkout.`);
+  }
+  const gate = gateChange(file, segments, value);
+  const flagged = args.booleans.has("gate-change");
+  if (gate !== null && !flagged) {
+    const via = formatPointer(gate.segments) === canonicalPointer ? "" : ` (through ${formatPointer(gate.segments)} inside the value)`;
+    return fail(`${file} ${canonicalPointer} is a gate change${via}: ${gate.scope.reason}. Setting it needs --gate-change, so the change is made on purpose and read as one.`);
+  }
+  if (gate === null && flagged) {
+    return fail(`--gate-change was given, but ${canonicalPointer} is not a gate change; drop the flag, or report the missing rule.`);
   }
   const root = assertRepoRoot({ repoFlag });
 
@@ -261,8 +350,8 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
   // A DECLARATION IS A REGULAR FILE DIRECTLY IN A REAL `nen/` (Feitan F2): a
   // link -- at the file or at `nen/` -- is refused, wherever it points.
   const nenDir = join(root, "nen");
-  if (lstatSync(nenDir).isSymbolicLink()) return fail(`${nenDir} is a symbolic link; schema set writes only into a real nen/ directory. Nothing was written.`);
-  if (lstatSync(resolved.path).isSymbolicLink()) return fail(`${resolved.path} is a symbolic link; schema set writes only a regular file, never through a link. Nothing was written.`);
+  if (lstatSync(nenDir).isSymbolicLink()) return refuse("symlink", `${nenDir} is a symbolic link; schema set writes only into a real nen/ directory. Nothing was written.`);
+  if (lstatSync(resolved.path).isSymbolicLink()) return refuse("symlink", `${resolved.path} is a symbolic link; schema set writes only a regular file, never through a link. Nothing was written.`);
   const realRoot = resolvedOrSelf(root, undefined, platform);
   let realFile: string;
   let realNen: string;
@@ -311,8 +400,12 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     }
     return refuse("invalid", `${messageOf(error)} -- that is ${file} with ${canonicalPointer} set to ${show(edit.after)}, as its loader reads it; nothing was written.`);
   }
-  // READ: whether the loader's model changes. A key kept verbatim is reported, never refused.
-  const read = alreadyFailing !== null || JSON.stringify(canonicalModel(beforeModel, file)) !== JSON.stringify(canonicalModel(afterModel, file));
+  // READ: whether the loader's typed model changes, or the edit touches a key
+  // a command reads from the raw form (`RAW_READ`). Unread is reported, never refused.
+  const read =
+    alreadyFailing !== null ||
+    readFromRaw(file, segments, value) ||
+    JSON.stringify(canonicalModel(beforeModel, file)) !== JSON.stringify(canonicalModel(afterModel, file));
 
   let written = false;
   if (edit.changed && !dryRun) {
@@ -375,9 +468,9 @@ export function runSchemaSet(args: ParsedArgs, repoFlag: string | null, json: bo
     `file: ${file} (${realFile})`,
     `pointer: ${canonicalPointer} (line ${edit.line})`,
     `change: ${show(edit.before)} -> ${show(edit.after)}${edit.op === "add" ? " (added)" : edit.changed ? "" : " (unchanged)"}`,
-    ...(gate === null ? [] : [`security-relevant: ${canonicalPointer} is a gate change -- ${gate.reason}`]),
+    ...(gate === null ? [] : [`security-relevant: ${canonicalPointer} is a gate change -- ${gate.scope.reason}`]),
     ...(alreadyFailing === null ? [] : [`repaired: the file failed its loader before this edit: ${alreadyFailing}`]),
-    read ? `validated: ${file}'s loader accepts the result` : `kept verbatim -- no loader reads ${canonicalPointer}`,
+    read ? `validated: ${file}'s loader accepts the result` : `validated, and the loader's typed model is unchanged -- ${canonicalPointer} is kept verbatim`,
     !edit.changed
       ? `written: nothing (${canonicalPointer} is already ${show(edit.after)})`
       : dryRun

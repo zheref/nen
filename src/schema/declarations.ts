@@ -149,9 +149,11 @@ function verbatimAt([file, pattern]: readonly [string, readonly string[]], actua
  * functions dropped; RegExp, Map and Set spelled out; every `raw` (the file's
  * own preserved form) dropped, and the root's `path`; the documented
  * `$schema` echo dropped; and a verbatim block compared with its `$` keys
- * stripped. Two texts whose models agree here are two texts no verb reads
- * differently -- `nen schema set` reports such an edit as kept verbatim, and
- * declarations.test.ts holds the `$` guarantee with it.
+ * stripped. Two texts whose models agree here have the same TYPED model --
+ * which is not the same as "no verb reads them differently": some commands
+ * read keys from a loader's raw form, and `nen schema set` counts those
+ * separately (`RAW_READ` in ./set.ts) before it reports the loader's typed
+ * model as unchanged. declarations.test.ts holds the `$` guarantee with it.
  */
 export function canonicalModel(value: unknown, file: string, at: readonly string[] = []): unknown {
   const down = (key: string, item: unknown): unknown => canonicalModel(item, file, [...at, key]);

@@ -122,6 +122,9 @@ describe("setJsonPointer -- add a member to an existing object", () => {
     expect(setJsonPointer('{"a":1,"b":2}', ["c"], 3).text).toBe('{"a":1,"b":2,"c":3}');
     expect(setJsonPointer('{ "a" : 1 , "b" : 2 }', ["c"], 3).text).toBe('{ "a" : 1 , "b" : 2 , "c" : 3 }');
     expect(setJsonPointer('{"a" :1}', ["c"], 3).text).toBe('{"a" :1,"c" :3}');
+    // R4: one member, no comma to copy, a spaced colon -> ", ".
+    expect(setJsonPointer('{"a": 1}', ["b"], 2).text).toBe('{"a": 1, "b": 2}');
+    expect(setJsonPointer('{"a":1}', ["b"], 2).text).toBe('{"a":1,"b":2}');
   });
 
   it("keeps { }'s inner space, in a one-line and a multi-line document (N6)", () => {

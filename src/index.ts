@@ -211,19 +211,25 @@ The original text and then the edited text go through that file's own loader
 BEFORE anything is written. A result the loader refuses is exit 1, with the
 loader's message, and the file untouched; a failure that was already there is
 named as such ('the file already fails its loader: ...'), and an edit that
-repairs it is allowed. When the loader's model does not change -- a key nen
-keeps verbatim but reads nowhere -- the edit is still made and reported as
-'kept verbatim -- no loader reads <pointer>' (read: false).
+repairs it is allowed. When the loader's typed model does not change -- a key nen
+keeps verbatim, and no command reads from its raw form -- the edit is still
+made and reported as "the loader's typed model is unchanged" (read: false).
 
-GATE CHANGES need --gate-change, else exit 2 naming the pointer and why:
-gates.json reviewers/*/*_pattern, round_quorum, round_policy,
-approval_policy, default_approvers, base_reviewers, delivery, checks;
-contract.json any exe, argv, env, onStall, preconditions or targets segment;
-workflow.json branch/base. With it, a 'security-relevant:' line is printed
-and --json carries gateChange: true.
+GATE CHANGES FAIL CLOSED. These scopes need --gate-change, else exit 2
+naming the pointer and why: every pointer in gates.json and decisions.json;
+contract.json dependency/**, project/verbs/**, project/lanes/**,
+project/toolchain/**, project/targets/**, and any probe, version_probe, args,
+cwd, installer, bootstrap, select or pinned_ref segment anywhere; workflow.json
+branch/**, review/**, coverage/**, tests/**, iteration/**, deploy/**. The
+named exceptions are prose: a decision row's 'why', and a 'note' anywhere. An
+added object or array is matched at every key path inside it. With the flag,
+a 'security-relevant:' line is printed and --json carries gateChange: true;
+the flag on an edit that is no gate change is exit 2. The canon pin
+(repos.json maintained_tools/*/pinned) is exit 2 either way: 'nen canon pin
+--write' moves it.
 
 The declaration must be a regular file directly in a real nen/: a symbolic
-link at the file or at nen/ is exit 2. A write goes to a temporary file
+link at the file or at nen/ is exit 1, failure code 'symlink'. A write goes to a temporary file
 beside the target, given its mode, renamed over it after the target's
 identity and containment are re-checked; a file that changed after it was
 read is refused. After the write the file is read back through the loader; a
@@ -237,7 +243,8 @@ failure after the rename is read-back-mismatch with written: true.
                         --value=-1. A number is written in JSON's normalised
                         spelling (1.0 is written 1). An object or array is
                         accepted only where a member is added.
-  --gate-change         Required for a gate-change pointer (above).
+  --gate-change         Required for a gate change (above), refused on any
+                        other edit.
   --dry-run             Validate and print before -> after; write nothing.
   --json                { contract: "nen.schema.set/v0.1", ok, file, pointer,
                           op: "replace"|"add", before (null for an add),
@@ -245,12 +252,13 @@ failure after the rename is read-back-mismatch with written: true.
                           written, target, line, failure: null|{ code,
                           message } }
 
-Exit: 0 set, already that value, or a dry run; 1 refused (no-file,
+Exit: 0 set, already that value, or a dry run; 1 refused (no-file, symlink,
 outside-repo, file-changed, not-json, refused-edit, invalid, write-failed,
 read-back-mismatch -- nothing written unless the code is read-back-mismatch,
 whose document says written: true); 2 usage (a missing flag, a file that is
 not a JSON declaration, a malformed pointer, a '$' or empty segment, a value
-that is not JSON, a gate change without --gate-change, a symbolic link).`;
+that is not JSON, a gate change without --gate-change or the flag without
+one, the canon pin).`;
 
 // The flags the TWO pre-registry commands share. Left as one spec because
 // those two are parsed together, exactly as they always were; a registry

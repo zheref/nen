@@ -22,7 +22,7 @@ function attempt(hooks: (root: string) => AtomicHooks): { code: number; doc: Rec
   mkdirSync(join(root, "nen"));
   writeFileSync(join(root, "nen", "workflow.json"), WORKFLOW);
   const out: string[] = [];
-  const args = parseArgs(["schema", "set", "--file", "nen/workflow.json", "--pointer", "/coverage/minimum", "--value", "85"], SCHEMA_SET_FLAGS);
+  const args = parseArgs(["schema", "set", "--file", "nen/workflow.json", "--pointer", "/monitor/maxCycles", "--value", "25"], SCHEMA_SET_FLAGS);
   const code = runSchemaSet(args, root, true, { out: (line): void => void out.push(line), err: (): void => undefined }, process.platform, hooks(root));
   return { code, doc: JSON.parse(out.join("\n")) as Record<string, unknown>, root };
 }

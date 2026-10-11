@@ -6112,31 +6112,53 @@ pointer and all, and the file is not written. A failure that was **already there
 and a `repaired:` line naming the old failure). The edit itself is proved first: the new text must
 parse to the old document with that one value set, and any other difference refuses it.
 
-**Read, or kept verbatim.** The loader's model before and after the edit is compared, ignoring the raw
-form it keeps (`canonicalModel`, `src/schema/declarations.ts`). When it does not change — a key nen
-keeps verbatim and reads nowhere, like a note Hatsu writes beside a value — the edit is **still made**
-and reported as `kept verbatim -- no loader reads <pointer>` in place of the `validated:` line, with
-`read: false` under `--json` (`true` otherwise). Nothing is refused for being unread.
+**Read, or kept verbatim.** The loader's **typed** model before and after the edit is compared,
+ignoring the raw form it keeps (`canonicalModel`, `src/schema/declarations.ts`). Some commands read
+keys straight from that raw form, so those count as read whatever the typed model says — the one list
+is `RAW_READ` in `src/schema/set.ts`: an invocation's `artifacts` and `env`, a coverage block's
+`report`, anything under a `bootstrap` (its `sha256` included), `dependency.minimum_semantics`, and
+`workflow.json`'s `monitor.pollSeconds`, `monitor.maxCycles` and `review`. When neither changes — a
+key nen keeps verbatim, like a note Hatsu writes beside a value — the edit is **still made** and
+reported as `validated, and the loader's typed model is unchanged -- <pointer> is kept verbatim` in
+place of the `validated:` line, with `read: false` under `--json` (`true` otherwise). Nothing is
+refused for being unread.
 
 <a id="gate-changes"></a>
 
-**Gate changes need `--gate-change`** (Feitan F1). A validated one-liner can widen who approves a
-pull request or change what nen executes. These pointers — the one table is `GATE_CHANGE_RULES` in
-`src/schema/set.ts` — are refused at exit `2` without the flag, naming the pointer and the reason:
+**Gate changes fail closed** (Feitan F1, Nobunaga R1). A validated one-liner can widen who approves a
+pull request or change what nen executes, so whole files and blocks are gated, and only named prose
+keys are let through — a list of keys known to loosen a gate is what a new key slips past. The one
+table is `GATE_SCOPES` in `src/schema/set.ts`; an edit in any of these scopes is refused at exit `2`
+without `--gate-change`, naming the pointer and the reason:
 
-| File | Pointer | Why |
+| File | Gated scope | Why |
 |---|---|---|
-| `nen/gates.json` | `/reviewers/*/<…>_pattern` (and anything under it) | whose review counts toward readiness |
-| `nen/gates.json` | `/round_quorum`, `/round_policy`, `/approval_policy`, `/default_approvers`, `/base_reviewers`, `/delivery`, `/checks` (and anything under each) | which rounds and approvals readiness owes, which PRs take the delivery path, which failing checks it excuses |
-| `nen/contract.json` | any pointer with an `exe`, `argv`, `env`, `onStall`, `preconditions` or `targets` segment | what nen runs, in what environment, when, and where it deploys |
-| `nen/workflow.json` | `/branch/base` | the trunk every branch is cut from and every merge lands on |
+| `nen/gates.json` | every pointer | whose review and approval readiness owes, and what it excuses |
+| `nen/decisions.json` | every pointer | which stops a person answers and which run on their own |
+| `nen/contract.json` | `/dependency/**`, `/project/verbs/**`, `/project/lanes/**`, `/project/toolchain/**`, `/project/targets/**` | which nen runs here, what it runs, where, with what tools, and where it deploys |
+| `nen/contract.json` | any pointer with a `probe`, `version_probe`, `args`, `cwd`, `installer`, `bootstrap`, `select` or `pinned_ref` step, anywhere | a command line, a working directory, an install or a fetch |
+| `nen/workflow.json` | `/branch/**`, `/review/**`, `/coverage/**`, `/tests/**`, `/iteration/**`, `/deploy/**` | the trunk, the review scopes, the bars a change must meet, and where a release goes |
 
-With `--gate-change` the edit proceeds, the human output adds `security-relevant: <pointer> is a
-gate change -- <why>`, and `--json` carries `gateChange: true` (`false` on every other pointer).
+**The named exceptions** (`GATE_EXCEPTIONS`), each tested to be no gate: a decision row's **`why`**
+(the prose a stop prints beside it), and a **`note`** anywhere (prose for a person). An exception
+covers that key's own scalar, never a structure under it. `$` keys need none: no pointer through one
+is ever settable.
+
+**An added object or array is matched key path by key path**: the pointer is joined with every key
+path inside the value, so `{"exe": "sh", …}` added under an ungated parent is still a gate change, and
+the refusal names the inner pointer. With `--gate-change` the edit proceeds, the human output adds
+`security-relevant: <pointer> is a gate change -- <why>`, and `--json` carries `gateChange: true`.
+The flag on an edit that is **no** gate change is exit `2` too: *--gate-change was given, but
+`<pointer>` is not a gate change; drop the flag, or report the missing rule*.
+
+**The canon pin is never this verb's.** `nen/repos.json` `/maintained_tools/*/pinned` is refused at
+exit `2` with or without the flag, naming [`nen canon pin --write`](#nen-canon-pin), which moves it
+after resolving the tag in the canon checkout.
 
 **The write is the one [`canon pin --write`](#nen-canon-pin) uses** (`src/edit/atomic.ts`). The
 declaration must be a **regular file directly in a real `nen/`**: a symbolic link — at the file or at
-`nen/` itself, wherever it points, inside the repository or into `.git` — is exit `2` (Feitan F2). It
+`nen/` itself, wherever it points, inside the repository or into `.git` — is refused at exit `1` with
+failure code `symlink` and its `--json` document (Feitan F2, Nobunaga R3). It
 is resolved to its real path, which must be inside `--repo` and directly in the real `nen/`; it is read without following a final link, recording
 its identity; and it is replaced through a temporary file beside it (`.<name>.nen-<pid>-<hex>.tmp`),
 given the original's permission bits, after the directory and file are checked again to still be
@@ -6171,7 +6193,7 @@ The subcommand is the first positional after `schema`, so `nen schema --repo <pa
 path>)`, `pointer: <pointer> (line <n>)`, `change: <before> -> <after>` (`(absent) -> …  (added)` for a
 new member, `(unchanged)` when the value is already that), `security-relevant: …` for a gate change,
 `repaired: …` when the file failed its loader before the edit, `validated: <file>'s loader accepts the
-result` — or `kept verbatim -- no loader reads <pointer>` — and `written: <real path>, read back: <pointer> is <after>` — or `written: nothing (--dry-run)`
+result` — or `validated, and the loader's typed model is unchanged -- <pointer> is kept verbatim` — and `written: <real path>, read back: <pointer> is <after>` — or `written: nothing (--dry-run)`
 / `written: nothing (<pointer> is already <after>)`. `--json` (`nen.schema.set/v0.1`):
 
 ```json
@@ -6186,29 +6208,35 @@ result` — or `kept verbatim -- no loader reads <pointer>` — and `written: <r
 `line` is where the replaced literal sat, or where the added member now sits. A refusal at exit `1`
 prints `{ contract, ok: false, file, pointer, written: false, failure: { code, message } }` under
 `--json` and the message on stderr; `written` is `true` only on a `read-back-mismatch`. Exit `0` set, already that value, or a dry run; `1` refused —
-`failure.code` one of `no-file`, `outside-repo`, `file-changed`, `not-json`, `refused-edit`, `invalid`
+`failure.code` one of `no-file`, `symlink`, `outside-repo`, `file-changed`, `not-json`, `refused-edit`, `invalid`
 (the loader refused the result), `write-failed`, `read-back-mismatch` — with nothing written except on
 `read-back-mismatch`, which says so; `2` usage, nothing read.
 
 **Example**
 
 ```bash
-nen schema set --repo /tmp/site --file nen/workflow.json --pointer /coverage/minimum --value 85 --dry-run
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /coverage/minimum --value 85 --gate-change --dry-run
 ```
 ```text
 file: nen/workflow.json (/tmp/site/nen/workflow.json)
 pointer: /coverage/minimum (line 8)
 change: 80 -> 85
+security-relevant: /coverage/minimum is a gate change -- coverage is the ladder a change must meet
 validated: nen/workflow.json's loader accepts the result
 written: nothing (--dry-run); would write /tmp/site/nen/workflow.json
 ```
 ```bash
-nen schema set --repo /tmp/site --file nen/workflow.json --pointer /coverage/minimum --value '"high"'
+nen schema set --repo /tmp/site --file nen/workflow.json --pointer /coverage/minimum --value '"high"' --gate-change
 ```
 ```text
 nen schema set: /tmp/site/nen/workflow.json: at coverage.minimum, expected a number, got "high" -- that is nen/workflow.json with /coverage/minimum set to "high", as its loader reads it; nothing was written.
 ```
-exit 1. (both from real runs against a scratch copy of this repository's own `nen/workflow.json`; the
+exit 1. Without `--gate-change` the same pointer is exit 2:
+
+```text
+nen schema set: nen/workflow.json /coverage/minimum is a gate change: coverage is the ladder a change must meet. Setting it needs --gate-change, so the change is made on purpose and read as one.
+```
+(all from real runs against a scratch copy of this repository's own `nen/workflow.json`; the
 absolute path is elided to `/tmp/site`)
 
 <a id="family-color"></a>
@@ -8241,7 +8269,7 @@ A repin used to be a hand-edit of one JSON key followed by [`schema check`](#nen
 
 **Every refusal comes before any write.** Exit **2**: `<tag>` is not tag-shaped (`v<major>.<minor>[.<patch>][-pre]`); an empty `--write`/`--source`, a `--source` that is not `owner/name`, or a flag another `canon` verb reads (`--ref` above all -- the tag is `--write`'s value -- `--rules-dir`, `--stack-dir`, ...); a `nen/repos.json` that does not parse or validate (the loader's pointer). Exit **1**: `--repo` has no `nen/repos.json`, or its real file is outside `--repo`, or it changed while the tag was resolved; the recorded pin is not tag-shaped; no maintained tool is pinned; several are and `--source` does not say which; `--source` names a tool with no pin to move (`--write` moves a recorded pin -- record the first by hand); or `<tag>` does not resolve in the canon checkout, the refusal naming the tag and the checkout step. A `<tag>` equal to the current pin writes nothing and exits 0 once the tag resolves. A failed replace is exit 1 too. `--write` is refused on every other `canon` verb.
 
-**Output** -- `source: <owner/name>`, `pin: <before> -> <after>` (`(unchanged)` when equal), `recorded in: <path> (maintained_tools[<i>].pinned, line <n>)`, `tag: <tag> is <sha12> in <checkout> (resolved from <kind> <what>)`, `written: ...`, and, when the pin moved, `mirror: now STALE -- regenerate it in the same commit (POSIX shell): <command>` (`would be STALE` under `--dry-run`). Text lines are stripped of control characters. `--json`: `{ contract: "nen.canon.pin.write/v0.1", ok: true, source, before, after, changed, dryRun, written, recordedIn, target, writtenTo, row, line, tag: { commit, checkout, resolvedFrom }, mirror: { stale, regenerate, regenerateArgv }, failure: null }`. **Every refusal it names emits a document under `--json` too**, as [`canon checkout`](#nen-canon-checkout) does: `{ contract: "nen.canon.pin.write/v0.1", ok: false, failure: { code, message } }`, where `code` is `no-registry`, `registry-outside-repo`, `registry-changed`, `pin-not-tag-shaped`, `no-pin`, `ambiguous-source`, `source-not-pinned`, `not-one-value-edit`, `write-failed`, `read-back-mismatch`, or the checkout's own code when the tag does not resolve (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...). An exit-2 usage error carries no document: its refusal is on stderr alone.
+**Output** -- `source: <owner/name>`, `pin: <before> -> <after>` (`(unchanged)` when equal), `recorded in: <path> (maintained_tools[<i>].pinned, line <n>)`, `tag: <tag> is <sha12> in <checkout> (resolved from <kind> <what>)`, `written: ...`, and, when the pin moved, `mirror: now STALE -- regenerate it in the same commit (POSIX shell): <command>` (`would be STALE` under `--dry-run`). Text lines are stripped of control characters. `--json`: `{ contract: "nen.canon.pin.write/v0.1", ok: true, source, before, after, changed, dryRun, written, recordedIn, target, writtenTo, row, line, tag: { commit, checkout, resolvedFrom }, mirror: { stale, regenerate, regenerateArgv }, failure: null }`. **Every refusal it names emits a document under `--json` too**, as [`canon checkout`](#nen-canon-checkout) does: `{ contract: "nen.canon.pin.write/v0.1", ok: false, [written: true on read-back-mismatch], failure: { code, message } }`, where `code` is `no-registry`, `registry-outside-repo`, `registry-changed`, `pin-not-tag-shaped`, `no-pin`, `ambiguous-source`, `source-not-pinned`, `not-one-value-edit`, `write-failed`, `read-back-mismatch`, or the checkout's own code when the tag does not resolve (`unresolvable`, `tag-missing`, `wrong-source`, `wrong-host`, ...). An exit-2 usage error carries no document: its refusal is on stderr alone.
 
 ```bash
 nen canon pin --repo /path/to/consumer --write v0.7.0 --dry-run

@@ -265,7 +265,10 @@ export function insertMember(text: string, at: number, key: string, literal: str
     // when there is only one member, and nothing before).
     const comma = previous === undefined ? -1 : text.indexOf(",", previous.valueSpan.end);
     const before = previous === undefined ? "" : text.slice(previous.valueSpan.end, comma);
-    const lead = previous === undefined ? text.slice(at + 1, last.keySpan.start) : text.slice(comma + 1, last.keySpan.start);
+    const opened = text.slice(at + 1, last.keySpan.start);
+    // ONE MEMBER, NO COMMA TO COPY, AND THE BRACE HUGS IT (`{"a": 1}`): the
+    // colon's own spacing decides -- `, ` after a spaced colon, `,` after a tight one.
+    const lead = previous === undefined ? (opened === "" && /:[ \t]+$/.test(colon) ? " " : opened) : text.slice(comma + 1, last.keySpan.start);
     const insert = `${before},${lead}${entry}`;
     const offset = last.valueSpan.end;
     const start = offset + before.length + 1 + lead.length;
