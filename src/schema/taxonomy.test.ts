@@ -473,13 +473,53 @@ describe("checkTaxonomy and deploy.defaultTarget -- the pointer row that reads t
     }
   });
 
-  it("passes a name that IS a key of project.targets, and says so", () => {
+  it("passes a name that IS a key of project.targets marked nonProduction, and says so", () => {
     const { report, row } = rowOf(
-      repo({ workflow: { deploy: { defaultTarget: "testflight" } }, contract: declaring({ testflight: {}, staging: {} }) }),
+      repo({
+        workflow: { deploy: { defaultTarget: "testflight" } },
+        contract: declaring({ testflight: { nonProduction: true }, staging: {} }),
+      }),
     );
     expect(row?.ok).toBe(true);
-    expect(row?.detail).toBe("'testflight' (a key of nen/contract.json → project.targets)");
+    expect(row?.detail).toBe("'testflight' (a nonProduction key of nen/contract.json → project.targets)");
     expect(report.ok).toBe(true);
+  });
+
+  it("FAILS a declared target that is NOT marked nonProduction -- absent or false (Feitan F2)", () => {
+    for (const production of [{ why: "the internal beta channel -- non-production" }, { nonProduction: false }]) {
+      const { report, row } = rowOf(
+        repo({ workflow: { deploy: { defaultTarget: "live" } }, contract: declaring({ live: production }) }),
+      );
+      expect(row?.ok, JSON.stringify(production)).toBe(false);
+      expect(row?.required, JSON.stringify(production)).toBe(true);
+      expect(report.ok, JSON.stringify(production)).toBe(false);
+      expect(row?.detail).toMatch(/at deploy\.defaultTarget, names 'live', which nen\/contract\.json declares without "nonProduction": true/);
+      expect(row?.detail).toContain("a default deploy destination must be declared nonProduction");
+    }
+  });
+
+  it("WARNS, not fails, on a marked target with no command line (unsupported)", () => {
+    const { report, row } = rowOf(
+      repo({
+        workflow: { deploy: { defaultTarget: "preview" } },
+        contract: declaring({ preview: { nonProduction: true, unsupported: "the host's git integration deploys it" } }),
+      }),
+    );
+    expect(row?.ok).toBe(false);
+    expect(row?.required).toBe(false);
+    expect(report.ok).toBe(true);
+    expect(row?.detail).toMatch(/'preview' is a declared nonProduction target with no command line \(unsupported\)/);
+  });
+
+  it("never prints a name raw -- ESC, CR and an RLO override are escaped, in the default AND the declared keys", () => {
+    const hostile = "test\u001b[2J\rflight\u202e";
+    const { row } = rowOf(
+      repo({ workflow: { deploy: { defaultTarget: hostile } }, contract: declaring({ [`staging\u001b[31m`]: {} }) }),
+    );
+    expect(row?.ok).toBe(false);
+    for (const raw of ["\u001b", "\r", "\u202e"]) expect(row?.detail).not.toContain(raw);
+    expect(row?.detail).toContain('names "test\\u001b[2J\\rflight\\u202e"');
+    expect(row?.detail).toContain('declares project.targets: "staging\\u001b[31m"');
   });
 
   it("FAILS a DANGLING name by pointer, listing what IS declared and naming a one-edit neighbour", () => {
@@ -490,7 +530,7 @@ describe("checkTaxonomy and deploy.defaultTarget -- the pointer row that reads t
     expect(row?.required).toBe(true);
     expect(report.ok).toBe(false);
     expect(row?.detail).toMatch(/workflow\.json: at deploy\.defaultTarget, names 'testflght', which is not a key of project\.targets/);
-    expect(row?.detail).toContain("nen/contract.json declares project.targets: staging, testflight.");
+    expect(row?.detail).toContain("nen/contract.json declares project.targets: 'staging', 'testflight'.");
     expect(row?.detail).toContain("It is one edit from 'testflight'.");
     // The POLICY row itself loaded: the dangling name is a cross-file fact, and
     // this row is the one that says it.

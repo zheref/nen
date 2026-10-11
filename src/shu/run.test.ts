@@ -1210,6 +1210,22 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     expect(result.seams.calls).toEqual([]);
   });
 
+  it("never prints a declared target key or a requested name raw (Feitan F1 on zheref/nen#300)", async () => {
+    const declaration = oneLane({
+      verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+      targets: { "stag\u001b[31m\ring\u202e": {}, prod: {} },
+    });
+    for (const argv of [["deploy"], ["deploy", "--target", "nope\u001b[2J"]]) {
+      const result = await withDeclaration(declaration, argv);
+      expect(result.code, argv.join(" ")).toBe(2);
+      const message = result.err.join("\n");
+      for (const raw of ["\u001b", "\r", "\u202e"]) expect(message, argv.join(" ")).not.toContain(raw);
+      // Escaped, and a plain key keeps the bare spelling it always had.
+      expect(message, argv.join(" ")).toContain('prod, "stag\\u001b[31m\\ring\\u202e"');
+      expect(result.seams.calls).toEqual([]);
+    }
+  });
+
   it("refuses a --target that names no declared target, rather than accepting any word", async () => {
     const result = await capture(["deploy", "--lane", "pages", "--target", "anything"]);
     expect(result.code).toBe(2);

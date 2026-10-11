@@ -7582,14 +7582,14 @@ describe("detect proposes deploy.defaultTarget only for a DECLARED canonical tar
   }
 
   it("proposes the xcode-ios pack's 'testflight' when the declaration declares that target", () => {
-    const dir = xcodeTree({ testflight: { why: "the internal beta channel -- non-production" }, staging: {} });
+    const dir = xcodeTree({ testflight: { nonProduction: true, why: "the internal beta channel" }, staging: {} });
     try {
       const report = detect(dir);
       expect(report.declarationPresent).toBe(true);
       expect(report.workflow).toEqual({ deploy: { defaultTarget: "testflight" } });
       const note = report.notes.find((line): boolean => line.startsWith("proposed nen/workflow.json"));
       expect(note).toContain("deploy.defaultTarget 'testflight'");
-      expect(note).toContain("already declares project.targets.testflight");
+      expect(note).toContain('already declares project.targets.testflight with "nonProduction": true');
       expect(note).toContain("'nen shu deploy' still requires --target");
       // The CONTRACT proposal is untouched: `targets` stays the empty seat, and
       // nen proposes no destination of its own.
@@ -7599,6 +7599,84 @@ describe("detect proposes deploy.defaultTarget only for a DECLARED canonical tar
       expect(rendered).toContain("proposed nen/workflow.json fragment (never written, not even by --write -- merge it by hand):");
       expect(rendered).toContain('"defaultTarget": "testflight"');
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("proposes NOTHING for a declared target NOT marked nonProduction, naming the marker (Feitan F2)", () => {
+    // Prose that READS non-production is not the mark: only the boolean is.
+    for (const testflight of [{ why: "the internal beta channel -- non-production" }, { nonProduction: false }]) {
+      const dir = xcodeTree({ testflight });
+      try {
+        const report = detect(dir);
+        expect(report.workflow, JSON.stringify(testflight)).toBeNull();
+        expect(report.notes.join("\n")).toContain(
+          'nen/contract.json declares project.targets.testflight without "nonProduction": true. A default deploy destination must be declared nonProduction -- add "nonProduction": true',
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("proposes NOTHING for a marked target with no command line (unsupported) -- N4", () => {
+    const dir = xcodeTree({ testflight: { nonProduction: true, unsupported: "Xcode Cloud uploads it" } });
+    try {
+      const report = detect(dir);
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain("declares project.targets.testflight as unsupported (no command line)");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("notes, rather than proposes, when nen/workflow.json already states deploy.defaultTarget -- even null (N7)", () => {
+    for (const [stated, shown] of [[null, "null"], ["staging", "'staging'"]] as const) {
+      const dir = xcodeTree({ testflight: { nonProduction: true }, staging: { nonProduction: true } });
+      try {
+        writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ deploy: { defaultTarget: stated } }));
+        const report = detect(dir);
+        expect(report.workflow, shown).toBeNull();
+        expect(report.notes.join("\n"), shown).toContain(
+          `no deploy.defaultTarget is proposed: nen/workflow.json already declares it as ${shown}, which is this repository's decision.`,
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("proposes NOTHING when two lanes' stacks name two different declared defaults -- N5", () => {
+    // A PACK THE BUNDLE DOES NOT CARRY: the bundled one names a default for
+    // xcode-ios only, so a second stack's default is written into a copy.
+    const packDir = mkdtempSync(join(tmpdir(), "nen-detect-pack-"));
+    const dir = mkdtempSync(join(tmpdir(), "nen-detect-two-defaults-"));
+    try {
+      cpSync(join(process.cwd(), "profiles"), packDir, { recursive: true });
+      const androidPath = join(packDir, "gradle-android.json");
+      const android = JSON.parse(readFileSync(androidPath, "utf8")) as Record<string, unknown>;
+      android["deployDefault"] = { target: "internal", why: "a test pack's word", source: "this test" };
+      writeFileSync(androidPath, JSON.stringify(android));
+      const pack = loadProfilesPack(packDir);
+
+      cpSync(EXPO_BARE, dir, { recursive: true });
+      const proposal = detectOn(dir, "linux", pack).proposal as { project: Record<string, unknown> };
+      mkdirSync(join(dir, "nen"), { recursive: true });
+      writeFileSync(
+        join(dir, "nen", "contract.json"),
+        JSON.stringify({
+          ...proposal,
+          project: { ...proposal.project, targets: { testflight: { nonProduction: true }, internal: { nonProduction: true } } },
+        }),
+      );
+      const report = detectOn(dir, "linux", pack);
+      expect(report.lanes.map((lane): string => lane.stack)).toEqual(expect.arrayContaining(["gradle-android", "xcode-ios"]));
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain(
+        "the lanes' stacks name 2 different canonical non-production targets, all declared nonProduction ('internal' for gradle-android; 'testflight' for xcode-ios)",
+      );
+    } finally {
+      rmSync(packDir, { recursive: true, force: true });
       rmSync(dir, { recursive: true, force: true });
     }
   });

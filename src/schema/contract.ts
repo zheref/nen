@@ -426,6 +426,16 @@ export interface DeployTarget {
   /** This destination has no command line at all, in the repo's own words. */
   readonly unsupported: string | null;
   readonly why: string | null;
+  /**
+   * `nonProduction` -- the repository's own MACHINE-READABLE word that this
+   * destination reaches no production user (zheref/nen#300, Feitan F2).
+   * `false` unless stated `true`: absent is "not marked", never "probably
+   * fine". Nothing in `nen shu deploy` reads it; `nen schema check` refuses a
+   * `deploy.defaultTarget` naming a target without it, and `nen shu detect`
+   * proposes a default only for a target that carries it. A `why` that READS
+   * non-production is prose, and prose is not a gate.
+   */
+  readonly nonProduction: boolean;
   /** The entry exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -1832,8 +1842,8 @@ function optionalStrings(path: string, pointer: string, value: unknown): readonl
   );
 }
 
-/** The four keys `project.targets.<name>` is made of. Nen's, not the repo's. */
-const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "why"];
+/** The five keys `project.targets.<name>` is made of. Nen's, not the repo's. */
+const TARGET_KEYS: readonly string[] = ["args", "requiresEnv", "unsupported", "why", "nonProduction"];
 
 /**
  * The eight keys `project.launch.<name>` is made of.
@@ -1938,6 +1948,14 @@ function nearMissOf(key: string, known: string): string | null {
   if (lower.replace(/(?:es|s)$/, "") === target.replace(/(?:es|s)$/, "")) {
     return `is '${known}' with an English plural on it`;
   }
+  // A FOURTH SHAPE, AND IT HAS ITS OWN WORDS: a word-separator slip --
+  // `non_production`, `non-production`, `requires_env` -- which is the same
+  // name spelled in another file format's convention. Two or more edits out,
+  // so the distance rule alone let it through (zheref/nen#300).
+  const unseparated = lower.replace(/[_-]/g, "");
+  if (unseparated !== lower && unseparated === target.replace(/[_-]/g, "")) {
+    return `is '${known}' spelled with a word separator`;
+  }
   return null;
 }
 
@@ -2016,6 +2034,19 @@ function refuseNearMissKey(
  * every other key -- every key that is not one of the four and not a near-miss
  * of one -- preserves its whole entry on `raw`.
  */
+/**
+ * `nonProduction` -- a boolean or nothing. A string `"true"` is refused rather
+ * than read as true: the key exists to be a machine-readable fact, and a value
+ * that has to be interpreted is the prose it replaces.
+ */
+function parseNonProduction(path: string, pointer: string, value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (typeof value !== "boolean") {
+    throw new SchemaError(path, pointer, `expected a boolean (true or false), got ${describeValue(value)}`);
+  }
+  return value;
+}
+
 function parseTargets(path: string, value: unknown): Record<string, DeployTarget> {
   if (value === undefined || value === null) return {};
   const record = requireRecord(path, "project.targets", value);
@@ -2071,6 +2102,7 @@ function parseTargets(path: string, value: unknown): Record<string, DeployTarget
       ),
       unsupported,
       why: optionalString(path, `${pointer}.why`, raw["why"]),
+      nonProduction: parseNonProduction(path, `${pointer}.nonProduction`, raw["nonProduction"]),
       raw,
     };
   }

@@ -67,9 +67,10 @@ import {
   type StackProfile,
 } from "../profiles/pack.js";
 import { containedPath } from "../repo/contain.js";
-import { loadContract } from "../schema/contract.js";
+import { loadContract, type DeployTarget } from "../schema/contract.js";
+import { visibleKey } from "../schema/gates.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
-import { WORKFLOW_FILE } from "../schema/workflow.js";
+import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { parseYaml } from "../schema/yaml.js";
 import { ASSERTABLE_KINDS, TARGETED_VERBS } from "./render.js";
 
@@ -6447,8 +6448,14 @@ function hostSignature(hosts: Readonly<Record<string, readonly string[]>>): stri
  * for every other platform decision in this repository. ./command.ts passes
  * `context.seams.platform`.
  */
-export function detect(repoRoot: string, platform: NodeJS.Platform): DetectReport {
-  const pack = loadProfilesPack();
+export function detect(
+  repoRoot: string,
+  platform: NodeJS.Platform,
+  // THE PACK IS A PARAMETER FOR ONE REASON: a test that needs a stack shape the
+  // bundled pack does not carry (two stacks naming two different default
+  // deploy targets, zheref/nen#300 N5) can hand one in. The CLI never does.
+  pack: ProfilesPack = loadProfilesPack(),
+): DetectReport {
   const hostStacks = hostToolStacks(pack);
   const resolved = resolveSchemaFile(repoRoot, CONTRACT_FILE);
   const { found, nestedBuilds, nearMisses } = scan(repoRoot, hostStacks, packMarkersOf(pack));
@@ -6714,18 +6721,21 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
  * THE NAME IS THE PACK'S AND THE DESTINATION IS THE REPOSITORY'S. A stack's
  * profile may name one canonical non-production target (`deployDefault`); this
  * proposes it only when the repository's own `nen/contract.json` already
- * declares a `project.targets` key of exactly that name. Nen still never
- * proposes a destination -- `targets` stays the empty seat above -- and a
- * default naming a target nobody declared is one `nen schema check` would
- * refuse the moment it was pasted.
+ * declares a `project.targets` key of exactly that name, MARKED
+ * `nonProduction: true` and with a command line (not `unsupported`). Nen still
+ * never proposes a destination -- `targets` stays the empty seat above -- and
+ * a default naming an undeclared or unmarked target is one `nen schema check`
+ * would refuse the moment it was pasted.
  *
- * TWO NAMES DECLARED IS AN AMBIGUITY, AND NEN RESOLVES NONE. A tree whose lanes
- * name two different defaults, both declared, gets no proposal and a note
- * naming both -- the same rule `project.toolchain` follows above.
+ * TWO NAMES PROPOSABLE IS AN AMBIGUITY, AND NEN RESOLVES NONE. A tree whose
+ * lanes name two different defaults, both proposable, gets no proposal and a
+ * note naming both -- the same rule `project.toolchain` follows above.
  *
- * A NAME THE PACK HAS AND THE DECLARATION LACKS IS A NOTE, never a proposal: the
- * sentence says what would make it one, so the reader is not left to wonder
- * why a stack with a canonical destination got nothing.
+ * A POLICY THAT ALREADY STATES THE KEY -- a name or `null` -- is a decision,
+ * and gets a note saying so instead of a proposal to overwrite it.
+ *
+ * A NAME THE PACK HAS AND THE DECLARATION DOES NOT SATISFY IS A NOTE, never a
+ * proposal: the sentence says what would make it one.
  */
 function proposeDefaultTarget(
   repoRoot: string,
@@ -6744,43 +6754,76 @@ function proposeDefaultTarget(
   }
   if (named.size === 0) return null;
   const candidates = [...named].sort(([a], [b]): number => compareBytes(a, b));
-  let declared: ReadonlySet<string> = new Set<string>();
+  let declared: Readonly<Record<string, DeployTarget>> = {};
   let unreadable = false;
   if (declarationPresent) {
     try {
-      declared = new Set(Object.keys(loadContract(repoRoot).project?.targets ?? {}));
+      declared = loadContract(repoRoot).project?.targets ?? {};
     } catch {
       unreadable = true;
     }
   }
-  const proposable = candidates.filter(([target]): boolean => declared.has(target));
-  const [only] = proposable;
-  if (proposable.length === 1 && only !== undefined) {
-    const [target, stacks] = only;
-    notes.push(
-      `proposed ${WORKFLOW_FILE} → deploy.defaultTarget '${target}': the reference pack names it the canonical non-production deploy target for ${stacks.join(", ")}, and ${CONTRACT_FILE} already declares project.targets.${target}. It is a default for a caller's OWN tooling (a skill that passes it to --target); 'nen shu deploy' still requires --target and reads no default. --write never writes ${WORKFLOW_FILE} -- merge the fragment by hand, and set it to null if this destination is not one a bare invocation should send to.`,
-    );
-    return { deploy: { defaultTarget: target } };
+  const proposable: (readonly [string, string[]])[] = [];
+  for (const [target, stacks] of candidates) {
+    const shown = visibleKey(target);
+    const entry = Object.prototype.hasOwnProperty.call(declared, target) ? declared[target] : undefined;
+    const lead = `no deploy.defaultTarget is proposed: the reference pack names ${shown} the canonical non-production deploy target for ${stacks.join(", ")}, but`;
+    if (entry === undefined) {
+      const why = unreadable
+        ? `${CONTRACT_FILE} did not load, so nen cannot tell whether it declares one`
+        : declarationPresent
+          ? `${CONTRACT_FILE} declares no project.targets.${target}`
+          : `${CONTRACT_FILE} is absent, so it declares no project.targets.${target}`;
+      notes.push(
+        `${lead} ${why}. The name is proposed only for a destination this repository has declared -- declare project.targets.${target} with "nonProduction": true, run this again, and ${WORKFLOW_FILE} → deploy.defaultTarget is proposed beside it.`,
+      );
+    } else if (!entry.nonProduction) {
+      notes.push(
+        `${lead} ${CONTRACT_FILE} declares project.targets.${target} without "nonProduction": true. A default deploy destination must be declared nonProduction -- add "nonProduction": true to that target if it reaches no production user, and run this again.`,
+      );
+    } else if (entry.unsupported !== null) {
+      notes.push(
+        `${lead} ${CONTRACT_FILE} declares project.targets.${target} as unsupported (no command line), so 'nen shu deploy --target ${target}' answers exit 4 and a default naming it could never send anything.`,
+      );
+    } else {
+      proposable.push([target, stacks]);
+    }
   }
   if (proposable.length > 1) {
     notes.push(
-      `no deploy.defaultTarget is proposed: the lanes' stacks name ${proposable.length} different canonical non-production targets, all declared (${proposable
-        .map(([target, stacks]): string => `'${target}' for ${stacks.join(", ")}`)
+      `no deploy.defaultTarget is proposed: the lanes' stacks name ${proposable.length} different canonical non-production targets, all declared nonProduction (${proposable
+        .map(([target, stacks]): string => `${visibleKey(target)} for ${stacks.join(", ")}`)
         .join("; ")}), and a default is one name. nen resolves no ambiguity -- state the one this repository means in ${WORKFLOW_FILE}, or none.`,
     );
     return null;
   }
-  for (const [target, stacks] of candidates) {
-    const why = unreadable
-      ? `${CONTRACT_FILE} did not load, so nen cannot tell whether it declares one`
-      : declarationPresent
-        ? `${CONTRACT_FILE} declares no project.targets.${target}`
-        : `${CONTRACT_FILE} is absent, so it declares no project.targets.${target}`;
-    notes.push(
-      `no deploy.defaultTarget is proposed: the reference pack names '${target}' the canonical non-production deploy target for ${stacks.join(", ")}, but ${why}. The name is proposed only for a destination this repository has declared -- declare project.targets.${target}, run this again, and ${WORKFLOW_FILE} → deploy.defaultTarget is proposed beside it.`,
-    );
+  const [only] = proposable;
+  if (only === undefined) return null;
+  const [target, stacks] = only;
+  // A POLICY THAT ALREADY STATES THE KEY IS ANSWERED, NOT RE-PROPOSED (N7). A
+  // policy that does not load is the policy row's finding, not this verb's;
+  // the fragment is still proposed and merging it is the human's call.
+  let stated: { readonly value: string | null } | null = null;
+  try {
+    const loaded = loadWorkflow(repoRoot);
+    if (loaded.present && Object.prototype.hasOwnProperty.call(loaded.workflow.deploy.raw, "defaultTarget")) {
+      stated = { value: loaded.workflow.deploy.defaultTarget };
+    }
+  } catch {
+    stated = null;
   }
-  return null;
+  if (stated !== null) {
+    notes.push(
+      `no deploy.defaultTarget is proposed: ${WORKFLOW_FILE} already declares it as ${
+        stated.value === null ? "null" : visibleKey(stated.value)
+      }, which is this repository's decision. The reference pack would have proposed ${visibleKey(target)} for ${stacks.join(", ")}.`,
+    );
+    return null;
+  }
+  notes.push(
+    `proposed ${WORKFLOW_FILE} → deploy.defaultTarget ${visibleKey(target)}: the reference pack names it the canonical non-production deploy target for ${stacks.join(", ")}, and ${CONTRACT_FILE} already declares project.targets.${target} with "nonProduction": true. It is a default for a caller's OWN tooling (a skill that passes it to --target); 'nen shu deploy' still requires --target and reads no default. --write never writes ${WORKFLOW_FILE} -- merge the fragment by hand.`,
+  );
+  return { deploy: { defaultTarget: target } };
 }
 
 /**

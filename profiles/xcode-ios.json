@@ -164,7 +164,7 @@
   },
   "deployDefault": {
     "target": "testflight",
-    "why": "TestFlight is the one non-production destination an iOS build has: an upload puts a build in App Store Connect for the maintainer and internal testers and puts nothing on any App Store listing, while external testing and App Store submission are later, human actions. KroApple declares exactly this key, `project.targets.testflight`, its `why` stating it is non-production. PROPOSED ONLY WHERE THE REPOSITORY ALREADY DECLARES A `testflight` TARGET -- the name is the pack's, the destination is the repository's.",
+    "why": "TestFlight is the one non-production destination an iOS build has: an upload puts a build in App Store Connect for the maintainer and internal testers and puts nothing on any App Store listing, while external testing and App Store submission are later, human actions. KroApple declares exactly this key, `project.targets.testflight`, its `why` stating it is non-production. PROPOSED ONLY WHERE THE REPOSITORY ALREADY DECLARES A `testflight` TARGET MARKED `\"nonProduction\": true` -- the name is the pack's, the destination is the repository's.",
     "source": "KroApple/nen/contract.json -> project.targets.testflight (zheref/hatsu#146)"
   },
   "notes": [

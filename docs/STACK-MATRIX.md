@@ -73,7 +73,7 @@ The remaining 21 cells are those 3 rows: 6 carry something to run, 15 are declar
 
 **Coverage report (advisory, never opened):** none recorded -- No test command exists to instrument, so nothing writes a report. The JVM convention, once one does, is a JaCoCo XML under the module's own build tree -- named by the declaration, because the module layout is the repository's. (this profile's own `coverage` row (KroAndroid/program/, inventory sweep))
 
-**Default deploy target (proposed only where declared):** none recorded -- No deploy command or destination exists anywhere in the observed lane. (this profile's own `deploy` row (KroAndroid/program/ inventory sweep))
+**Default deploy target (proposed only where declared nonProduction):** none recorded -- No deploy command or destination exists anywhere in the observed lane. (this profile's own `deploy` row (KroAndroid/program/ inventory sweep))
 
 ### Verbs
 
@@ -129,7 +129,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Coverage report (advisory, never opened):** none recorded -- The collector this test project already references writes `TestResults/<run guid>/coverage.cobertura.xml` -- a directory named after a fresh GUID per run, so there is no fixed path to record and the declaration names the one its own run produces (or the results directory it pins). The FORMAT is Cobertura XML, which nen reads. (this profile's own `coverage` row (KroWindows/KroCoreTests/KroCoreTests.csproj, `coverlet.collector` 6.0.2))
 
-**Default deploy target (proposed only where declared):** none recorded -- The only deployment entries are Visual Studio gestures, not a destination with a command line, so there is no conventional target name. (this profile's own `deploy` row (KroWindows solution deploy entries))
+**Default deploy target (proposed only where declared nonProduction):** none recorded -- The only deployment entries are Visual Studio gestures, not a destination with a command line, so there is no conventional target name. (this profile's own `deploy` row (KroWindows solution deploy entries))
 
 ### Verbs
 
@@ -216,7 +216,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Coverage report (advisory, never opened):** none recorded -- Nothing to instrument, so no report exists to locate: no jest, no `jest-expo`, no vitest, and no `coverage` hit anywhere in the repository. (this profile's own `coverage` row (food-diary/package.json:14-49))
 
-**Default deploy target (proposed only where declared):** none recorded -- No deployment target of any kind is observed, so there is no conventional name to propose. An EAS build profile is a build configuration, not a destination. (food-diary (inventory sweep); this profile's own `deploy` row)
+**Default deploy target (proposed only where declared nonProduction):** none recorded -- No deployment target of any kind is observed, so there is no conventional name to propose. An EAS build profile is a build configuration, not a destination. (food-diary (inventory sweep); this profile's own `deploy` row)
 
 ### Verbs
 
@@ -277,7 +277,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Coverage report (advisory, never opened):** none recorded -- Nothing writes a coverage report: there is no test script and no test-runner dependency. If one is added, the convention in this ecosystem is `coverage/lcov.info` under the package that runs the tests -- and which package that is is the repository's fact, so the declaration states it. (this profile's own `coverage` row (zheref.io/package.json))
 
-**Default deploy target (proposed only where declared):** none recorded -- The one observed deploy publishes the live site to the `gh-pages` branch -- a production destination, which a default must never name. No non-production destination is observed. (this profile's own `deploy` row (zheref.io/package.json:14))
+**Default deploy target (proposed only where declared nonProduction):** none recorded -- The one observed deploy publishes the live site to the `gh-pages` branch -- a production destination, which a default must never name. No non-production destination is observed. (this profile's own `deploy` row (zheref.io/package.json:14))
 
 ### Verbs
 
@@ -334,7 +334,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Coverage report (advisory, never opened):** none recorded -- No coverage plugin is declared -- neither JaCoCo nor Kover is applied -- so there is no report and no path to record. With a plugin applied the location is the plugin's own (a JaCoCo report task writes under the module's `build/reports` tree, and its XML output is off by default), and the declaration states it: this repository's checklist already names a `jacocoTestReport` task that does not exist on a clean checkout, and recording a plausible path here would repeat that mistake in nen's own voice. (this profile's own `coverage` row (KroAndroid/build.gradle.kts:2-15, app/build.gradle.kts:4-13))
 
-**Default deploy target (proposed only where declared):** none recorded -- No canonical non-production destination is observed: no repository in the inventory publishes to a Play testing track or to Firebase App Distribution, and those two are rival conventions rather than one, so the pack names neither. (KroAndroid (inventory sweep); this profile's own `deploy` row)
+**Default deploy target (proposed only where declared nonProduction):** none recorded -- No canonical non-production destination is observed: no repository in the inventory publishes to a Play testing track or to Firebase App Distribution, and those two are rival conventions rather than one, so the pack names neither. (KroAndroid (inventory sweep); this profile's own `deploy` row)
 
 ### Verbs
 
@@ -425,7 +425,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Coverage report (advisory, never opened):** `packages/core/coverage/lcov.info` -- REPO-ROOT-RELATIVE, AND THAT IS WHY IT NAMES A PACKAGE. The observed configuration writes the `text` and `lcov` reporters, so the machine-readable file this stack produces today is an LCOV tracefile in the package's OWN `coverage/` directory -- and the coverage command fans out over the workspace members that declare a `test:coverage` script, so there is one such file per member, none of them at the repository root. `artifacts` is resolved against the repository root, so a bare `coverage/lcov.info` pasted from here would be a path nothing writes: the one recorded is the first member's, written out in full, and a declaration names each member's file it wants parsed. A `json-summary` reporter would write `coverage-summary.json` beside it, and nen reads either. (this profile's own `coverage` row (kro-pwa packages/core/package.json:19 and packages/app/package.json:22, each `vitest run --coverage` with `coverage: { provider: 'v8', reporter: ['text','lcov'] }`; kro-pwa/Makefile:71-73). NOT apps/web: that package's own `test` script bakes coverage in and the `test-coverage` target does not reach it, which this profile's `coverage` row already records as a gap.)
 
-**Default deploy target (proposed only where declared):** none recorded -- Three observed deploy shapes and none is a default -- a failing stub, the host's git integration with no command line, and a documented but unimplemented production deploy. None of them names a non-production destination. (this profile's own `deploy` row (kro-pwa/Makefile:93-96; GymKai/docs/Deployment.md:39-41, :65))
+**Default deploy target (proposed only where declared nonProduction):** none recorded -- Three observed deploy shapes and none is a default -- a failing stub, the host's git integration with no command line, and a documented but unimplemented production deploy. None of them names a non-production destination. (this profile's own `deploy` row (kro-pwa/Makefile:93-96; GymKai/docs/Deployment.md:39-41, :65))
 
 ### Verbs
 
@@ -484,7 +484,7 @@ What nen has been *tested* against, never what it installs: the pin an install w
 
 **Coverage report (advisory, never opened):** none recorded -- The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is still no shell in this family and therefore no redirection OPERATOR, but there is now a declared one: a lane that wants this parsed states `stdoutTo` on that step (a repo-relative path with `xccov` in its name, since the reader recognises a report by name) and names the same path under the verb's `artifacts`. nen writes the captured stdout to it itself. The `.xcresult` bundle itself is not a format nen reads. (this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209))
 
-**Default deploy target (proposed only where declared):** `testflight` -- TestFlight is the one non-production destination an iOS build has: an upload puts a build in App Store Connect for the maintainer and internal testers and puts nothing on any App Store listing, while external testing and App Store submission are later, human actions. KroApple declares exactly this key, `project.targets.testflight`, its `why` stating it is non-production. PROPOSED ONLY WHERE THE REPOSITORY ALREADY DECLARES A `testflight` TARGET -- the name is the pack's, the destination is the repository's. (KroApple/nen/contract.json -> project.targets.testflight (zheref/hatsu#146))
+**Default deploy target (proposed only where declared nonProduction):** `testflight` -- TestFlight is the one non-production destination an iOS build has: an upload puts a build in App Store Connect for the maintainer and internal testers and puts nothing on any App Store listing, while external testing and App Store submission are later, human actions. KroApple declares exactly this key, `project.targets.testflight`, its `why` stating it is non-production. PROPOSED ONLY WHERE THE REPOSITORY ALREADY DECLARES A `testflight` TARGET MARKED `"nonProduction": true` -- the name is the pack's, the destination is the repository's. (KroApple/nen/contract.json -> project.targets.testflight (zheref/hatsu#146))
 
 ### Verbs
 

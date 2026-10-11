@@ -267,7 +267,7 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
     // detect` proposes `deploy.defaultTarget` from this line only when the
     // repository already declares a `project.targets` key of this name, and
     // `nen shu deploy` still requires `--target` -- so the page says both.
-    `**Default deploy target (proposed only where declared):** ${
+    `**Default deploy target (proposed only where declared nonProduction):** ${
       profile.deployDefault.target === null ? "none recorded" : code(profile.deployDefault.target)
     } -- ${profile.deployDefault.why} (${profile.deployDefault.source})`,
     "",

@@ -454,6 +454,41 @@ describe("project", () => {
     }
   });
 
+  it("reads 'nonProduction' as a boolean, false unless stated true (zheref/nen#300, Feitan F2)", () => {
+    const contract = parse({
+      project: {
+        ...PROJECT,
+        targets: { beta: { nonProduction: true }, live: { nonProduction: false }, plain: {}, nulled: { nonProduction: null } },
+      },
+    });
+    expect(contract.project?.targets["beta"]?.nonProduction).toBe(true);
+    expect(contract.project?.targets["live"]?.nonProduction).toBe(false);
+    expect(contract.project?.targets["plain"]?.nonProduction).toBe(false);
+    expect(contract.project?.targets["nulled"]?.nonProduction).toBe(false);
+  });
+
+  it("refuses a non-boolean 'nonProduction' by pointer -- a string \"true\" is prose, not a mark", () => {
+    for (const value of ["true", 1, ["yes"], {}]) {
+      const error = refusal({ project: { ...PROJECT, targets: { beta: { nonProduction: value } } } });
+      expect(error.pointer, JSON.stringify(value)).toBe("project.targets.beta.nonProduction");
+      expect(error.message, JSON.stringify(value)).toMatch(/expected a boolean \(true or false\)/);
+    }
+  });
+
+  it("refuses near-misses of 'nonProduction' -- case, one letter, and a word separator", () => {
+    for (const [key, phrase] of [
+      ["nonproduction", "differs from 'nonProduction' only in case"],
+      ["nonProductio", "is one letter away from 'nonProduction'"],
+      ["non_production", "is 'nonProduction' spelled with a word separator"],
+      ["non-production", "is 'nonProduction' spelled with a word separator"],
+      ["Non_Production", "is 'nonProduction' spelled with a word separator"],
+    ] as const) {
+      const error = refusal({ project: { ...PROJECT, targets: { beta: { [key]: true } } } });
+      expect(error.pointer, key).toBe(`project.targets.beta.${key}`);
+      expect(error.message, key).toContain(phrase);
+    }
+  });
+
   it("keeps a key that is nobody's typo -- and a $-key -- exactly as written", () => {
     // THE OTHER DIRECTION, and the reason the radius is one edit rather than
     // two: these are keys a repository MEANT, for a release that may read them.

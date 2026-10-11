@@ -26,6 +26,7 @@
 // send a developer to a different machine to be told the same no.
 
 import { VerbUsageError } from "../cli/command.js";
+import { pointerSegment, visibleKey } from "../schema/gates.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import {
   LAUNCH_VERBS,
@@ -1027,7 +1028,11 @@ export function resolveTarget(
   plan: RenderedInvocation,
   requested: string | null,
 ): RenderedInvocation {
-  const declared = byteOrder(Object.keys(project.targets));
+  // A DECLARED KEY IS THE FILE'S TEXT, so every refusal below lists it through
+  // `pointerSegment`: bare when printable ASCII, escaped otherwise -- an ESC,
+  // a CR or a bidi override in a key never reaches a terminal raw (Feitan F1
+  // on zheref/nen#300). The requested name is the caller's, shown the same way.
+  const declared = byteOrder(Object.keys(project.targets)).map(pointerSegment);
   if (requested === null) {
     throw new VerbUsageError(
       `'${plan.verb}' on lane '${plan.lane}' (${plan.stack}) needs --target, and there is no default -- not even when exactly one target is declared. nen never chooses where a build goes. ${
@@ -1046,7 +1051,7 @@ export function resolveTarget(
     // word, which is the same as having no requirement -- and the requirement
     // exists because nen must never choose where a build goes.
     throw new VerbUsageError(
-      `--target '${requested}' is not declared under project.targets. ${
+      `--target ${visibleKey(requested)} is not declared under project.targets. ${
         declared.length === 0
           ? `This repository declares no targets at all; add one before asking nen to deploy to it -- ${TARGETS_STUB}.`
           : `Declared: ${declared.join(", ")}.`
@@ -1060,7 +1065,7 @@ export function resolveTarget(
     // repository's own sentence, exactly as an unsupported verb row answers.
     throw new ShuRefusal(
       EXIT_UNSUPPORTED_VERB,
-      `target '${requested}' has no command line at all, so there is nothing for nen to run on lane '${plan.lane}' (${plan.stack}). The declaration's own reason: ${target.unsupported}`,
+      `target ${visibleKey(requested)} has no command line at all, so there is nothing for nen to run on lane '${plan.lane}' (${plan.stack}). The declaration's own reason: ${target.unsupported}`,
     );
   }
   const steps = appendArgs(plan, target.args, requested);
@@ -1076,7 +1081,7 @@ export function resolveTarget(
   const composed = unsubstituted(steps);
   if (composed.length > 0) {
     throw new VerbUsageError(
-      `target '${requested}' composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this destination needs under project.targets.${requested}.args -- a destination is a fact this repository states, and nen substitutes nothing into it.`,
+      `target ${visibleKey(requested)} composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this destination needs under project.targets.${requested}.args -- a destination is a fact this repository states, and nen substitutes nothing into it.`,
     );
   }
   // DE-DUPLICATED FIRST, AND THE REPORT CARRIES THE DE-DUPLICATED LIST. A
