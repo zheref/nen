@@ -113,7 +113,7 @@ export function certifyRun(seams: Seams, target: Target, pool: RunnerPool, runId
     if (missing.length > 0) {
       const own = poolOwnLabel(pool.id);
       const unlabelled = !job.labels.some((label): boolean => label.toLowerCase().startsWith(POOL_LABEL_PREFIX));
-      const predates = unlabelled && missing.length === 1 && missing[0] === own ? ` -- a preflight rendered before the pool label (#340): re-render it with 'nen runner workflow', land it, relabel the pool's runners ('nen runner relabel'), and dispatch it again` : "";
+      const predates = unlabelled && missing.length === 1 && missing[0] === own ? ` -- a preflight rendered before the pool label (#340): re-render it with 'nen runner workflow', land it, relabel the pool's runners by name ('nen runner relabel --runner <names> --run'), and dispatch it again` : "";
       problems.push({ check: "labels", detail: `job '${job.name}' did not ask for pool ${pool.id}'s labels (missing ${missing.join(", ")})${predates}` });
     }
     if (job.conclusion !== "success") problems.push({ check: "job-conclusion", detail: `job '${job.name}' concluded '${job.conclusion ?? "(none)"}'` });

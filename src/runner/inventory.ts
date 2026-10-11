@@ -28,14 +28,16 @@
 // it matches no pool and takes none of the jobs a pool-labelled workflow
 // sends. It is listed under the pool it would join -- `unlabelled` -- so the
 // upgrade step (`nen runner relabel`) has its list. Which pool that is comes
-// from `awaitingPools`: the pools whose declared labels it carries, the most
-// specific only (a `desktop` runner awaits the interactive pool,
-// never the plain one).
+// from `awaitingPools`: the pools whose declared labels it carries EXACTLY --
+// every one of them, and no label outside them. `desktop` is reserved: a
+// runner carrying it never fits a pool that does not declare it, so with only
+// a plain pool declared, a desktop runner awaits nothing (#340, Nobunaga N1).
 
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import { renderPipeTable } from "../cli/table.js";
-import { POOL_LABEL_PREFIX, poolOwnLabel, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
+import { plainLine } from "../cli/plain.js";
+import { DESKTOP_LABEL, POOL_LABEL_PREFIX, poolOwnLabel, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
 import { asRecord, ghJson, RunnerFailure } from "./github.js";
 
 /** `<MachineCode>-<ConsumerCode>R<N>`, the spec's own pattern. */
@@ -195,21 +197,41 @@ export function poolLabelsOf(runner: Pick<RunnerRow, "labels">): string[] {
 }
 
 /**
+ * Why a runner cannot be relabelled into `pool`, or null when it fits it
+ * EXACTLY: it carries every one of the pool's declared labels and nothing
+ * outside them but the pool's own label (#340). `desktop` is reserved for an
+ * interactive pool and named as such. Names and labels are GitHub's, so the
+ * sentence is made terminal-safe here: it is only ever printed.
+ */
+export function misfit(runner: Pick<RunnerRow, "name" | "labels">, pool: Pick<RunnerPool, "id" | "labels">): string | null {
+  const declared = declaredOf(pool);
+  const declaredLower = declared.map((label): string => label.toLowerCase());
+  const own = poolOwnLabel(pool.id).toLowerCase();
+  const carried = runner.labels.map((label): string => label.toLowerCase());
+  const name = plainLine(runner.name);
+  const missing = declared.filter((label): boolean => !carried.includes(label.toLowerCase()));
+  if (missing.length > 0) {
+    return `${name} lacks ${missing.join(", ")} of pool ${pool.id}'s labels [${declared.join(", ")}], so it is not a runner of that pool`;
+  }
+  const extra = runner.labels.filter((label): boolean => !declaredLower.includes(label.toLowerCase()) && label.toLowerCase() !== own);
+  if (extra.some((label): boolean => label.toLowerCase() === DESKTOP_LABEL)) {
+    return `${name} carries '${DESKTOP_LABEL}', which is reserved for an interactive pool, and pool ${pool.id} does not declare it: declare the interactive pool ("mode": "interactive") and relabel it into that one`;
+  }
+  if (extra.length > 0) {
+    return `${name} carries ${extra.map((label): string => `'${plainLine(label)}'`).join(", ")}, which pool ${pool.id} does not declare: a pool's runners carry its declared labels and its own label, nothing else`;
+  }
+  return null;
+}
+
+/**
  * The pools a runner WOULD join if it carried their own label (#340): none for
- * a runner that already carries any `pool-*` label; otherwise every pool whose
- * declared labels it carries, less any pool another such pool is strictly more
- * specific than -- so a runner carrying `desktop` awaits the interactive pool
- * and not the plain one beside it. Two pools that declare one set are both
+ * a runner that already carries any `pool-*` label; otherwise every pool it
+ * fits EXACTLY (`misfit` is null). Two pools that declare one set are both
  * returned: which one the runner belongs to is the maintainer's to say.
  */
-export function awaitingPools<P extends Pick<RunnerPool, "id" | "labels">>(runner: Pick<RunnerRow, "labels">, pools: readonly P[]): P[] {
+export function awaitingPools<P extends Pick<RunnerPool, "id" | "labels">>(runner: Pick<RunnerRow, "name" | "labels">, pools: readonly P[]): P[] {
   if (poolLabelsOf(runner).length > 0) return [];
-  const fits = pools.filter((pool): boolean => carriesAll(runner, declaredOf(pool)));
-  const lower = (pool: P): string[] => declaredOf(pool).map((label): string => label.toLowerCase());
-  return fits.filter(
-    (pool): boolean =>
-      !fits.some((other): boolean => other !== pool && lower(other).length > lower(pool).length && lower(pool).every((label): boolean => lower(other).includes(label))),
-  );
+  return pools.filter((pool): boolean => misfit(runner, pool) === null);
 }
 
 export function assembleInventory(
@@ -245,6 +267,18 @@ export function assembleInventory(
   return { target: target.slug, runners, downloads, pools: rows, unpooled };
 }
 
+/**
+ * The pool line's tail naming the runners that await its own label, and the
+ * exact relabel line -- target, pool and every runner named (#340: `--run`
+ * acts only on runners named). Runner names are GitHub's: plain here, raw in
+ * `--json`.
+ */
+function unlabelledHint(target: string, pool: PoolRow): string {
+  if (pool.unlabelled.length === 0) return "";
+  const names = pool.unlabelled.map(plainLine);
+  return `; without ${poolOwnLabel(pool.id)}: ${names.join(", ")} (nen runner relabel --target ${target} --pool ${pool.id} --runner ${names.join(",")} --run)`;
+}
+
 export function renderInventory(report: InventoryReport): string[] {
   const lines: string[] = [`${report.target}: ${report.runners.length} self-hosted runner(s)`];
   if (report.runners.length > 0) {
@@ -269,7 +303,7 @@ export function renderInventory(report: InventoryReport): string[] {
       lines.push(
         `pool ${pool.id} [${pool.labels.join(", ")}]: ${pool.runners.length} runner(s), ${pool.online} online, ${pool.free} free${
           pool.runners.length === 0 ? "" : ` -- ${pool.runners.join(", ")}`
-        }${pool.unlabelled.length === 0 ? "" : `; without ${poolOwnLabel(pool.id)}: ${pool.unlabelled.join(", ")} (nen runner relabel --pool ${pool.id})`}`,
+        }${unlabelledHint(report.target, pool)}`,
       );
     }
     lines.push(`unpooled: ${report.unpooled === null || report.unpooled.length === 0 ? "(none)" : report.unpooled.join(", ")}`);

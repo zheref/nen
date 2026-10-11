@@ -26,8 +26,9 @@ export function workflowValues(pool: RunnerPool, target: Target, version: string
   return {
     REPO_SLUG: target.slug,
     // The FULL set, the pool's own `pool-<id>` last (#340): a job of this
-    // workflow lands only on a runner proven into this pool, never on one that
-    // merely shares its os and arch.
+    // workflow lands only on a runner registered or relabelled into this pool,
+    // never on one that merely shares its os and arch. That prevents an
+    // accidental join; it is not an authorization boundary.
     RUNS_ON: `[${pool.labels.join(", ")}]`,
     OS: pool.os,
     MODE: pool.mode,

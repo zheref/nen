@@ -424,7 +424,7 @@ describe("nen runner verify --pool (#340)", () => {
     const report = JSON.parse(result.out);
     expect(report.runners.map((row: { name: string; detail: string }) => [row.name, row.detail])).toEqual([
       ["NZ-NNR1", "ok"],
-      ["NZ-NNR2", "labels: missing pool-windows-x64 -- registered without its pool label: nen runner relabel --pool windows-x64 --runner NZ-NNR2 --run"],
+      ["NZ-NNR2", "labels: missing pool-windows-x64 -- registered without its pool label: nen runner relabel --target zheref/nen --pool windows-x64 --runner NZ-NNR2 --run"],
     ]);
   });
 
@@ -454,14 +454,29 @@ describe("nen runner relabel (#340)", () => {
     expect((await run(["relabel", "--target", "zheref/nen", "--repo", root, "--pool", "windows-x64", "--dry-run"])).err).toMatch(/--dry-run is not a 'runner relabel' flag/);
   });
 
-  it("is a dry run without --run: one read, no write, the would-run lines printed", async () => {
+  it("lists candidates without --runner: one read, no write, and the exact line naming them", async () => {
     const result = await run(["relabel", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64"], [
       { match: list, result: { stdout: runnersAnswer([{ name: "NZ-NNR1" }]) } },
     ]);
     expect(result.code).toBe(0);
-    expect(result.out).toMatch(/^\(dry run\) would add pool-windows-x64 to 1 runner\(s\) on zheref\/nen \(pool windows-x64\); pass --run to write\./);
-    expect(result.out).toMatch(/would run: gh api --method POST repos\/zheref\/nen\/actions\/runners\/100\/labels -f labels\[\]=pool-windows-x64/);
+    expect(result.out).toMatch(/^\(dry run\) 1 runner\(s\) on zheref\/nen could take pool-windows-x64 \(pool windows-x64\); nothing is admitted in bulk/);
+    expect(result.out).toMatch(/then: nen runner relabel --target zheref\/nen --pool windows-x64 --runner NZ-NNR1 --run$/);
     expect(result.seams.calls).toHaveLength(1);
+  });
+
+  it("refuses --run without --runner at exit 2, reading nothing (F1)", async () => {
+    const result = await run(["relabel", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64", "--run"]);
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/--run needs --runner/);
+    expect(result.seams.calls).toHaveLength(0);
+  });
+
+  it("prints the named dry run's writes shell-quoted (N4)", async () => {
+    const result = await run(["relabel", "--target", "zheref/nen", "--repo", consumer(), "--pool", "windows-x64", "--runner", "NZ-NNR1"], [
+      { match: list, result: { stdout: runnersAnswer([{ name: "NZ-NNR1" }]) } },
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out).toMatch(/would run: gh api --method POST repos\/zheref\/nen\/actions\/runners\/100\/labels -f 'labels\[\]=pool-windows-x64'$/);
   });
 
   it("writes and reads back with --run, under --json", async () => {

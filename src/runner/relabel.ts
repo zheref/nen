@@ -7,22 +7,29 @@
 // the label. The host script registers new runners with it; this verb is the
 // upgrade step for the ones already registered, through GitHub's own
 // `POST /repos/{owner}/{repo}/actions/runners/{runner_id}/labels`. Nothing on
-// the host changes: the label is the repository's record of the runner.
+// the host changes: the label is the repository's record of the runner, and it
+// prevents an ACCIDENTAL join -- it is not an authorization boundary.
+//
+// NO BULK ADMISSION (Feitan F1). `--run` writes only to runners named, every
+// one, with `--runner <names>`: admitting a runner into a pool is the
+// maintainer's act per runner, never a sweep over whatever happens to carry
+// the defaults today. Without `--runner`, `--run` is refused at exit 2, and
+// the dry run lists the runners that WOULD fit, as candidates to name.
 //
 // DRY-RUN BY DEFAULT, ACTING ONLY WITH `--run`, the shape `shu deploy`,
-// `label apply` and `wake fire` share: the bare form reads the runners list,
-// selects and checks, and prints each write as `would add`; `--run` makes it.
-// Every write is READ BACK (`GET .../runners/{id}/labels`): "the API accepted
-// it" is not the same fact as "the runner carries it", and a read that
-// disagrees is exit 1.
+// `label apply` and `wake fire` share. Every write is READ BACK
+// (`GET .../runners/{id}/labels`): "the API accepted it" is not the same fact
+// as "the runner carries it", and a read-back that disagrees -- or fails after
+// an accepted POST -- is reported as exactly that.
 //
-// WHICH RUNNERS. `--runner <names>` names them, and each is checked first --
-// registered, carrying the pool's declared labels, carrying no other pool's
-// label, and not claimed by a more specific pool (a `desktop` runner is never
-// relabelled into the plain pool beside it). Any refusal refuses the whole
-// call before anything is written. Without `--runner`, the runners the
-// inventory lists as awaiting this pool's label are taken, and two pools that
-// declare one label set make that choice the maintainer's: exit 2, name them.
+// A RUNNER FITS A POOL EXACTLY (./inventory.ts's `misfit`): it carries every
+// declared label and nothing outside them but the pool's own label. `desktop`
+// is reserved for an interactive pool. Every named runner is checked before
+// any write, and one refusal refuses the call.
+//
+// GITHUB'S STRINGS ARE PRINTED PLAIN. Runner names and labels are what
+// somebody registered; on the human path and in every failure message they go
+// through ../cli/plain.ts's `plainLine`. `--json` carries them raw.
 //
 // ADMIN-ONLY, AND SAID SO. A runner's labels are a repository-admin surface;
 // a 403 comes back through ./github.ts's `apiRefusal`, worded "needs admin".
@@ -30,12 +37,14 @@
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import { VerbUsageError } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { renderPipeTable } from "../cli/table.js";
 import { poolOwnLabel, type RunnerPool, type RunnersPolicy } from "../schema/workflow.js";
 import { apiRefusal, asRecord, gh, RunnerFailure } from "./github.js";
-import { awaitingPools, declaredOf, fetchRunners, inPool, poolLabelsOf, type RunnerRow } from "./inventory.js";
+import { awaitingPools, fetchRunners, inPool, misfit, poolLabelsOf, type RunnerRow } from "./inventory.js";
 
-export type RelabelVerdict = "added" | "would-add" | "already";
+/** `candidate`: eligible, listed by a dry run without `--runner`, to be named. */
+export type RelabelVerdict = "added" | "would-add" | "already" | "candidate";
 
 export interface RelabelRow {
   readonly name: string;
@@ -47,11 +56,11 @@ export interface RelabelReport {
   readonly target: string;
   readonly pool: string;
   readonly label: string;
-  /** `named` when `--runner` chose the runners, `awaiting` when the inventory did. */
-  readonly selection: "named" | "awaiting";
+  /** `named` when `--runner` chose the runners, `candidates` when a dry run listed the eligible ones. */
+  readonly selection: "named" | "candidates";
   readonly run: boolean;
   readonly runners: readonly RelabelRow[];
-  /** How many runners gained the label (or, without `--run`, would). */
+  /** How many runners gained the label (or, named without `--run`, would). Candidates are not counted. */
   readonly changed: number;
 }
 
@@ -65,40 +74,29 @@ export function runnerLabelsArgv(target: Target, id: number): readonly string[] 
   return ["api", "--method", "GET", `repos/${target.slug}/actions/runners/${id}/labels`];
 }
 
-const lower = (labels: readonly string[]): string[] => labels.map((label): string => label.toLowerCase());
-
-/** Why one named runner cannot take this pool's label, or null when it can. */
-function refusal(runner: RunnerRow, pool: RunnerPool, pools: readonly RunnerPool[]): string | null {
-  const own = poolOwnLabel(pool.id);
-  const foreign = poolLabelsOf(runner).filter((label): boolean => label.toLowerCase() !== own.toLowerCase());
-  if (foreign.length > 0) {
-    return `${runner.name} already carries ${foreign.map((label): string => `'${label}'`).join(", ")}: a runner is in one pool, and moving it is a label to remove in GitHub first`;
-  }
-  const carried = lower(runner.labels);
-  const missing = declaredOf(pool).filter((label): boolean => !carried.includes(label.toLowerCase()));
-  if (missing.length > 0) {
-    return `${runner.name} lacks ${missing.join(", ")} of pool ${pool.id}'s labels [${declaredOf(pool).join(", ")}], so it is not a runner of that pool`;
-  }
-  const claimants = awaitingPools(runner, pools).filter((other): boolean => other !== pool);
-  if (!awaitingPools(runner, pools).includes(pool) && claimants.length > 0) {
-    return `${runner.name} carries pool ${claimants.map((other): string => other.id).join(", ")}'s labels, a more specific set than pool ${pool.id}'s: label it into that pool instead`;
-  }
-  return null;
+/**
+ * One argv element as a POSIX shell would need it to be pasted back, for the
+ * `would run:` line only -- `labels[]=x` is a glob a shell may expand. The argv
+ * handed to `gh` is never quoted: it is not parsed by a shell.
+ */
+export function shellWord(word: string): string {
+  return /^[A-Za-z0-9_./:=@%+-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
 }
 
-/** Which runners this call acts on, checked, before anything is written. */
-export function selectRunners(runners: readonly RunnerRow[], policy: RunnersPolicy, pool: RunnerPool, names: readonly string[] | null, target: Target): RunnerRow[] {
-  if (names === null) {
-    const awaiting = runners.filter((runner): boolean => awaitingPools(runner, policy.pools).includes(pool));
-    const shared = awaiting.filter((runner): boolean => awaitingPools(runner, policy.pools).length > 1);
-    if (shared.length > 0) {
-      const others = [...new Set(shared.flatMap((runner): string[] => awaitingPools(runner, policy.pools).filter((other): boolean => other !== pool).map((other): string => other.id)))];
-      throw new VerbUsageError(
-        `${shared.map((runner): string => runner.name).join(", ")} could join pool ${pool.id} or ${others.join(", ")}: they declare one label set, so which pool a runner is in is yours to say. Name the runners with --runner <name>[,<name>...].`,
-      );
-    }
-    return [...runners.filter((runner): boolean => inPool(runner, pool)), ...awaiting];
+const lower = (labels: readonly string[]): string[] => labels.map((label): string => label.toLowerCase());
+
+/** Why one named runner cannot take this pool's label, or null when it can. Terminal-safe. */
+function refusal(runner: RunnerRow, pool: RunnerPool): string | null {
+  const own = poolOwnLabel(pool.id).toLowerCase();
+  const foreign = poolLabelsOf(runner).filter((label): boolean => label.toLowerCase() !== own);
+  if (foreign.length > 0) {
+    return `${plainLine(runner.name)} already carries ${foreign.map((label): string => `'${plainLine(label)}'`).join(", ")}: a runner is in one pool, and moving it is a label to remove in GitHub first`;
   }
+  return misfit(runner, pool);
+}
+
+/** The runners a `--runner` list names, each checked before anything is written. */
+function namedRunners(runners: readonly RunnerRow[], pool: RunnerPool, names: readonly string[], target: Target): RunnerRow[] {
   const problems: string[] = [];
   const chosen: RunnerRow[] = [];
   const seen = new Set<string>();
@@ -107,15 +105,13 @@ export function selectRunners(runners: readonly RunnerRow[], policy: RunnersPoli
     seen.add(name.toLowerCase());
     const runner = runners.find((row): boolean => row.name.toLowerCase() === name.toLowerCase());
     if (runner === undefined) {
-      problems.push(`${name} is not registered on ${target.slug}`);
+      problems.push(`${plainLine(name)} is not registered on ${target.slug}`);
       continue;
     }
-    if (!inPool(runner, pool)) {
-      const why = refusal(runner, pool, policy.pools);
-      if (why !== null) {
-        problems.push(why);
-        continue;
-      }
+    const why = inPool(runner, pool) ? null : refusal(runner, pool);
+    if (why !== null) {
+      problems.push(why);
+      continue;
     }
     chosen.push(runner);
   }
@@ -128,15 +124,15 @@ export function selectRunners(runners: readonly RunnerRow[], policy: RunnersPoli
 /** The labels runner `id` carries now, read from GitHub. */
 function readLabels(seams: Seams, target: Target, runner: RunnerRow): string[] {
   const result = gh(seams, runnerLabelsArgv(target, runner.id));
-  if (result.code !== 0) throw apiRefusal(result, target, `reading runner ${runner.name}'s labels`);
+  if (result.code !== 0) throw apiRefusal(result, target, `reading runner ${plainLine(runner.name)}'s labels`);
   let answer: unknown;
   try {
     answer = JSON.parse(result.stdout);
   } catch {
-    throw new RunnerFailure(1, `reading runner ${runner.name}'s labels on ${target.slug} answered something that is not JSON.`);
+    throw new RunnerFailure(1, `reading runner ${plainLine(runner.name)}'s labels on ${target.slug} answered something that is not JSON.`);
   }
   const list = asRecord(answer)?.["labels"];
-  if (!Array.isArray(list)) throw new RunnerFailure(1, `reading runner ${runner.name}'s labels on ${target.slug} answered without a 'labels' list.`);
+  if (!Array.isArray(list)) throw new RunnerFailure(1, `reading runner ${plainLine(runner.name)}'s labels on ${target.slug} answered without a 'labels' list.`);
   return list
     .map((entry): string | null => {
       const name = asRecord(entry)?.["name"];
@@ -154,9 +150,25 @@ export function relabelPool(
   run: boolean,
 ): RelabelReport {
   const label = poolOwnLabel(pool.id);
-  const chosen = selectRunners(fetchRunners(seams, target), policy, pool, names, target);
+  if (names === null && run) {
+    throw new VerbUsageError(
+      `--run needs --runner <name>[,<name>...] naming every runner to label: nen never admits runners into pool ${pool.id} in bulk. Run without --run to list the eligible ones, then name them.`,
+    );
+  }
+  const runners = fetchRunners(seams, target);
+  if (names === null) {
+    const rows = [
+      ...runners.filter((runner): boolean => inPool(runner, pool)).map((runner): RelabelRow => ({ name: runner.name, id: runner.id, verdict: "already" })),
+      ...runners
+        .filter((runner): boolean => awaitingPools(runner, policy.pools).includes(pool))
+        .map((runner): RelabelRow => ({ name: runner.name, id: runner.id, verdict: "candidate" })),
+    ];
+    return { target: target.slug, pool: pool.id, label, selection: "candidates", run: false, runners: rows, changed: 0 };
+  }
+  const chosen = namedRunners(runners, pool, names, target);
   const rows: RelabelRow[] = [];
   const done: string[] = [];
+  const partial = (): string => (done.length === 0 ? "" : ` Already labelled by this run: ${done.map(plainLine).join(", ")}.`);
   for (const runner of chosen) {
     if (inPool(runner, pool)) {
       rows.push({ name: runner.name, id: runner.id, verdict: "already" });
@@ -166,15 +178,25 @@ export function relabelPool(
       rows.push({ name: runner.name, id: runner.id, verdict: "would-add" });
       continue;
     }
-    const partial = done.length === 0 ? "" : ` Already labelled by this run: ${done.join(", ")}.`;
     const added = gh(seams, addLabelArgv(target, runner.id, label));
     if (added.code !== 0) {
-      const failure = apiRefusal(added, target, `adding ${label} to runner ${runner.name}`);
-      throw new RunnerFailure(failure.exitCode, `${failure.message}${partial}`);
+      const failure = apiRefusal(added, target, `adding ${label} to runner ${plainLine(runner.name)}`);
+      throw new RunnerFailure(failure.exitCode, `${failure.message}${partial()}`);
     }
-    const after = readLabels(seams, target, runner);
+    let after: string[];
+    try {
+      after = readLabels(seams, target, runner);
+    } catch (error) {
+      if (!(error instanceof RunnerFailure)) throw error;
+      // The write happened; only the proof of it is missing. Said as such, at
+      // the read's own exit code, so nobody re-reads "failed" as "not written".
+      throw new RunnerFailure(error.exitCode, `the POST for ${plainLine(runner.name)} was accepted; its read-back failed: ${error.message}${partial()}`);
+    }
     if (!lower(after).includes(label.toLowerCase())) {
-      throw new RunnerFailure(1, `added ${label} to runner ${runner.name} on ${target.slug}, and reading its labels back answered [${after.join(", ")}].${partial}`);
+      throw new RunnerFailure(
+        1,
+        `added ${label} to runner ${plainLine(runner.name)} on ${target.slug}, and reading its labels back answered [${after.map(plainLine).join(", ")}].${partial()}`,
+      );
     }
     done.push(runner.name);
     rows.push({ name: runner.name, id: runner.id, verdict: "added" });
@@ -183,7 +205,7 @@ export function relabelPool(
     target: target.slug,
     pool: pool.id,
     label,
-    selection: names === null ? "awaiting" : "named",
+    selection: "named",
     run,
     runners: rows,
     changed: rows.filter((row): boolean => row.verdict !== "already").length,
@@ -191,17 +213,34 @@ export function relabelPool(
 }
 
 export function renderRelabel(report: RelabelReport, target: Target): string[] {
-  if (report.runners.length === 0) {
-    return [`no runner on ${report.target} awaits ${report.label}: none carries pool ${report.pool}'s declared labels without a pool label. Nothing to do.`];
+  const table = (): string[] => renderPipeTable([["name", "verdict"], ...report.runners.map((row): string[] => [plainLine(row.name), row.verdict])]);
+  if (report.selection === "candidates") {
+    const candidates = report.runners.filter((row): boolean => row.verdict === "candidate").map((row): string => plainLine(row.name));
+    if (candidates.length === 0) {
+      return [
+        `no runner on ${report.target} is a candidate for ${report.label}: none fits pool ${report.pool}'s declared labels exactly without a pool label. Nothing to do.`,
+        ...(report.runners.length === 0 ? [] : table()),
+      ];
+    }
+    return [
+      `(dry run) ${candidates.length} runner(s) on ${report.target} could take ${report.label} (pool ${report.pool}); nothing is admitted in bulk -- name each one you mean:`,
+      ...table(),
+      `then: nen runner relabel --target ${report.target} --pool ${report.pool} --runner ${candidates.join(",")} --run`,
+    ];
+  }
+  if (report.changed === 0) {
+    return [`every selected runner already carries ${report.label}; nothing written.`, ...table()];
   }
   const head = report.run
     ? `${report.changed} runner(s) on ${report.target} now carry ${report.label} (pool ${report.pool}); each read back.`
     : `(dry run) would add ${report.label} to ${report.changed} runner(s) on ${report.target} (pool ${report.pool}); pass --run to write.`;
   return [
     head,
-    ...renderPipeTable([["name", "verdict"], ...report.runners.map((row): string[] => [row.name, row.verdict])]),
+    ...table(),
     ...(report.run
       ? []
-      : report.runners.filter((row): boolean => row.verdict === "would-add").map((row): string => `would run: gh ${addLabelArgv(target, row.id, report.label).join(" ")}`)),
+      : report.runners
+          .filter((row): boolean => row.verdict === "would-add")
+          .map((row): string => `would run: gh ${addLabelArgv(target, row.id, report.label).map(shellWord).join(" ")}`)),
   ];
 }

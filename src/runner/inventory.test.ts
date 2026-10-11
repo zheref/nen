@@ -5,6 +5,7 @@ import {
   assembleInventory,
   awaitingPools,
   declaredOf,
+  misfit,
   downloadsArgv,
   fetchDownloads,
   fetchRunners,
@@ -105,7 +106,7 @@ describe("assembleInventory -- runners grouped by the declared pools", () => {
     expect(report.unpooled).toEqual([]);
     expect(report.downloads.find((row) => row.os === "win" && row.architecture === "x64")?.filename).toBe("actions-runner-win-x64-2.337.0.zip");
     expect(renderInventory(report).join("\n")).toMatch(
-      /pool macos-arm64 \[self-hosted, macOS, ARM64, pool-macos-arm64\]: 0 runner\(s\), 0 online, 0 free; without pool-macos-arm64: RJ2-NNR1, RJ2-NNR2, RJ2-NNR3 \(nen runner relabel --pool macos-arm64\)/,
+      /pool macos-arm64 \[self-hosted, macOS, ARM64, pool-macos-arm64\]: 0 runner\(s\), 0 online, 0 free; without pool-macos-arm64: RJ2-NNR1, RJ2-NNR2, RJ2-NNR3 \(nen runner relabel --target zheref\/nen --pool macos-arm64 --runner RJ2-NNR1,RJ2-NNR2,RJ2-NNR3 --run\)$/m,
     );
   });
 
@@ -168,11 +169,44 @@ describe("assembleInventory -- runners grouped by the declared pools", () => {
   it("awaits nothing for a runner that already carries any pool label, and both pools when two declare one set (#340)", () => {
     const policy = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0], { ...POLICY_BODY.pools[0], id: "windows-two", preflightWorkflow: "two.yml" }] });
     const pools = policy?.pools ?? [];
-    expect(awaitingPools({ labels: ["self-hosted", "Windows", "X64", "pool-elsewhere"] }, pools)).toEqual([]);
-    expect(awaitingPools({ labels: ["self-hosted", "Windows", "X64"] }, pools).map((p) => p.id)).toEqual(["windows-x64", "windows-two"]);
-    expect(awaitingPools({ labels: ["self-hosted", "Linux", "X64"] }, pools)).toEqual([]);
+    expect(awaitingPools({ name: "A", labels: ["self-hosted", "Windows", "X64", "pool-elsewhere"] }, pools)).toEqual([]);
+    expect(awaitingPools({ name: "A", labels: ["self-hosted", "Windows", "X64"] }, pools).map((p) => p.id)).toEqual(["windows-x64", "windows-two"]);
+    expect(awaitingPools({ name: "A", labels: ["self-hosted", "Linux", "X64"] }, pools)).toEqual([]);
     expect(declaredOf(pools[1]!)).toEqual(["self-hosted", "Windows", "X64"]);
     expect(poolLabelsOf({ labels: ["self-hosted", "Pool-A", "pool-b"] })).toEqual(["Pool-A", "pool-b"]);
+  });
+
+  // KroWindows' shape (Nobunaga N1, Feitan F2): only the plain pool declared.
+  // A runner carrying `desktop` -- or any label the pool does not declare --
+  // never fits it, so it is not listed as awaiting, and relabel refuses it.
+  it("never lists a desktop runner, or one with any undeclared label, as awaiting a plain-only pool's label (#340)", () => {
+    const plainOnly = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0]] });
+    const answer = runnersAnswer([
+      { name: "NZ-KWIR1" },
+      { name: "NZ-KWIR2", labels: ["self-hosted", "Windows", "X64", "desktop"] },
+      { name: "NZ-KWIR3", labels: ["self-hosted", "Windows", "X64", "Desktop"] },
+      { name: "NZ-KWIR4", labels: ["self-hosted", "Windows", "X64", "gpu"] },
+    ]);
+    const s = new ScriptedSeams(inventoryCalls(answer));
+    const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), plainOnly, null);
+    expect(report.pools?.map((row) => [row.id, row.unlabelled])).toEqual([["windows-x64", ["NZ-KWIR1"]]]);
+    expect(report.unpooled).toEqual(["NZ-KWIR2", "NZ-KWIR3", "NZ-KWIR4"]);
+    const pool0 = plainOnly!.pools[0]!;
+    expect(misfit({ name: "NZ-KWIR2", labels: ["self-hosted", "Windows", "X64", "desktop"] }, pool0)).toMatch(
+      /NZ-KWIR2 carries 'desktop', which is reserved for an interactive pool, and pool windows-x64 does not declare it: declare the interactive pool/,
+    );
+    expect(misfit({ name: "NZ-KWIR4", labels: ["self-hosted", "Windows", "X64", "gpu"] }, pool0)).toMatch(/carries 'gpu', which pool windows-x64 does not declare/);
+    expect(misfit({ name: "NZ-KWIR1", labels: ["self-hosted", "Windows", "X64", "POOL-windows-x64"] }, pool0)).toBeNull();
+  });
+
+  it("prints GitHub's runner names plain in the hint, and keeps them raw under --json (#340)", () => {
+    const evil = "NZ-NNR1\u001b[2K";
+    const s = new ScriptedSeams(inventoryCalls(runnersAnswer([{ name: evil }])));
+    const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), POLICY, "windows-x64");
+    expect(report.pools?.[0]?.unlabelled).toEqual([evil]);
+    const line = renderInventory(report).find((text) => text.startsWith("pool windows-x64")) ?? "";
+    expect(line).toMatch(/without pool-windows-x64: NZ-NNR1\[2K \(nen runner relabel --target zheref\/nen --pool windows-x64 --runner NZ-NNR1\[2K --run\)$/);
+    expect(line).not.toContain("\u001b");
   });
 
   it("carries no pools at all without a policy", () => {

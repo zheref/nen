@@ -345,7 +345,7 @@ verb does by default:
 | [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, so it can print which route each name or `--add-bots` id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
-| [`runner relabel`](#nen-runner-relabel) | yes | `--run` | without it, reads the runners list and prints each label write as `would run:`; with it, adds the pool's own label and reads each runner's labels back (#340) |
+| [`runner relabel`](#nen-runner-relabel) | yes | `--run` | without it, reads the runners list and either lists the candidates (no `--runner`) or prints each label write as `would run:`; with it -- and only with `--runner` naming every runner -- adds the pool's own label and reads each runner's labels back (#340) |
 | [`shu detect`](#nen-shu-detect) | yes | `--write` | fully offline; refuses to overwrite an existing declaration even with `--write`, and there is no `--force` |
 | [`shu build`](#nen-shu-build), [`shu test`](#nen-shu-test), [`shu ui-test`](#nen-shu-ui-test), [`shu lint`](#nen-shu-lint), [`shu archive`](#nen-shu-archive), [`shu release`](#nen-shu-release), [`shu dev`](#nen-shu-dev), [`shu run`](#nen-shu-run), [`shu coverage`](#nen-shu-coverage), [`shu test-report`](#nen-shu-test-report) | no | `--dry-run` | prints every step's exact argv, cwd and env NAMES and spawns **nothing**. All ten are `dry-run-gated` in izanami's automation-policy table: the bare form classifies **mutating** — the argv comes from a file in the *target* repository, and certifying it read-only sight unseen would certify whatever it happens to contain — and the `--dry-run` form classifies **read-only**, because nen renders and spawns nothing whatever that file says. On `dev` and `run`, `--json` is **refused** without `--dry-run`. `coverage` and `test-report` additionally **parse** what their run produced — and their `--dry-run` parses nothing either, so the report sitting on disk from a previous run is never read. `test-report` and `coverage` each carry a **second** read gate — `--from-artifacts` and `--from-capture` ([#250](https://github.com/zheref/nen/issues/250)) — which never reach the executor at all; `--from-capture` starts only nen's own fixed-argv git reads, and a `--base` beginning with `-` is refused before any of them |
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
@@ -498,7 +498,7 @@ they assumed instead); they come back empty or `null`.
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
 | `release.unitPaths` | the release-unit entry list a release unit is bounded to. Each entry is either a STRING (a repo-relative prefix or narrow glob, `src/report/patterns.ts`'s grammar) or an OBJECT `{"path": "<exact file>", "keys": ["<json pointer or dotted key>", ...]}` bounding one exact JSON file to a set of its own leaf keys rather than its whole content (item 4) — `path` matched by exact equality, never a pattern; `keys` a non-empty list of non-empty JSON-pointer or dotted leaf paths. `null` (the key absent) means UNDECLARED, never "everything" or "nothing" — [`release unit-check`](#nen-release-unit-check) and [`nen pr merge`](#nen-pr-merge)'s own unit gate both refuse (naming the key) rather than guess a boundary the repository never drew. A STRING pattern the shared matcher proves claims EVERY path (`**`, `**/*`, and any other pattern that matches a repo-relative path no matter its shape) is refused by pointer too: a release unit that bounds nothing is never what declaring this key is meant to say. `*` (one path segment) is NOT refused -- it claims a single top-level entry, never every path -- and a leading `/` (e.g. `/**`) is refused separately as an invalid absolute pattern, since every path this key is compared against is already repo-relative. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (read from the pull request's BASE commit, never this checkout's own file) |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
-| `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `mode` (optional, #333: `service` or `interactive` -- how the runners run on their host; absent is `service` for `Windows` and `Linux` and `interactive` for `macOS`, whose runner is always a LaunchAgent in the user's session. `macOS` + `service` and `Linux` + `interactive` are refused, naming why. An interactive `Windows` pool runs inside a signed-in desktop session, for jobs that drive a real UI, which a service in session 0 cannot), `labels` exactly `["self-hosted", os, arch]`, or `["self-hosted", "Windows", arch, "desktop"]` for an interactive Windows pool, optionally followed by the pool's own label written out (any other extra label is refused: the runner-policy guard admits only the canonical sets plus the pool's own label, and a bare `self-hosted` would match every runner; `desktop` on a service pool is refused naming the missing `"mode": "interactive"`; the refusal names each fault -- a bare `self-hosted`, a missing os or arch, a second extra label, another pool's `pool-*` label). **From #340 every pool also carries one label of its own, `pool-<id>`, derived from its `id` and appended LAST** -- `["self-hosted", "Windows", "X64", "pool-windows-x64"]`, `["self-hosted", "Windows", "X64", "desktop", "pool-kwi-desktop"]`. It is never declared (a declaration written before it parses unchanged), and it is the set every `runner` verb uses: what the host script registers with, a rendered workflow's `runs-on`, what `runner verify --pool` and `runner enable` require. GitHub gives `self-hosted`, the OS and the arch to every runner of that OS and arch, so without it any later registration would join the pool unproven. Pool ids are unique, so two pools never share a pool label and need no refusal of their own, `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools of one os and arch are two pools from #340, told apart by their own labels (a repeated `id` is still refused). **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
+| `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `mode` (optional, #333: `service` or `interactive` -- how the runners run on their host; absent is `service` for `Windows` and `Linux` and `interactive` for `macOS`, whose runner is always a LaunchAgent in the user's session. `macOS` + `service` and `Linux` + `interactive` are refused, naming why. An interactive `Windows` pool runs inside a signed-in desktop session, for jobs that drive a real UI, which a service in session 0 cannot), `labels` exactly `["self-hosted", os, arch]`, or `["self-hosted", "Windows", arch, "desktop"]` for an interactive Windows pool, optionally followed by the pool's own label written out (any other extra label is refused: nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) admits only the canonical sets plus the pool's own label, and a bare `self-hosted` would match every runner; `desktop` on a service pool is refused naming the missing `"mode": "interactive"`; the refusal names each fault -- a bare `self-hosted`, a missing os or arch, a second extra label, another pool's `pool-*` label, the pool's own label in the wrong case). **From #340 every pool also carries one label of its own, `pool-<id>`, derived from its `id` and appended LAST** -- `["self-hosted", "Windows", "X64", "pool-windows-x64"]`, `["self-hosted", "Windows", "X64", "desktop", "pool-kwi-desktop"]`. It is never declared (a declaration written before it parses unchanged), and it is the set every `runner` verb uses: what the host script registers with, a rendered workflow's `runs-on`, what `runner verify --pool` and `runner enable` require. GitHub gives `self-hosted`, the OS and the arch to every runner of that OS and arch, so without it any later registration would join the pool by accident. The label prevents that accidental join; it is not an authorization boundary -- anyone who can register a runner on the repository can register it with the label. Pool ids are unique, so two pools never share a pool label and need no refusal of their own, `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools of one os and arch are two pools from #340, told apart by their own labels (a repeated `id` is still refused). **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
 
 **Unknown keys are preserved, and near-miss keys are refused *because* they
 are.** A key nen has never heard of survives a round trip untouched — the file
@@ -783,7 +783,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`runner`](#family-runner) | [`nen runner workflow`](#nen-runner-workflow) | render a pool's preflight workflow from a caller's `@@NAME@@` template, refusing a leftover placeholder or invalid YAML, and a changed file without --force | nen/workflow.json (runners), a caller-named --template; writes .github/workflows/<preflightWorkflow> (or --out) unless --dry-run | yes |
 | [`runner`](#family-runner) | [`nen runner preflight`](#nen-runner-preflight) | dispatch the pool's preflight workflow, find the run it created by id, and wait for its verdict; a job still queued at the deadline is named -- no free runner picked it up | github (gh repo view, gh run list, gh api GET runs/jobs; gh workflow run unless --dry-run) | yes |
 | [`runner`](#family-runner) | [`nen runner enable`](#nen-runner-enable) | set a pool's enable variable only after re-reading a completed, successful run of its own preflight whose jobs asked for its labels, dispatched on the default branch with the default branch's own workflow blob; read back, idempotent | nen/workflow.json (runners), github (gh api GET runs/jobs/contents, gh repo view, gh variable get; gh variable set unless --dry-run) | yes |
-| [`runner`](#family-runner) | [`nen runner relabel`](#nen-runner-relabel) | add a pool's own label, `pool-<id>`, to runners registered before it existed (#340) -- the named ones, or every runner awaiting it; dry run unless `--run`, every write read back | nen/workflow.json (runners), github (gh api GET runners and runners/<id>/labels; gh api POST runners/<id>/labels with --run) | yes |
+| [`runner`](#family-runner) | [`nen runner relabel`](#nen-runner-relabel) | add a pool's own label, `pool-<id>`, to runners registered before it existed (#340) -- only runners named with `--runner` (`--run` without it is exit 2); a dry run without `--runner` lists the candidates; every write read back | nen/workflow.json (runners), github (gh api GET runners and runners/<id>/labels; gh api POST runners/<id>/labels with --run) | yes |
 | [`surface`](#family-surface) | [`nen surface capabilities`](#nen-surface-capabilities) | what a running session on a surface can do -- picker, subagent, hook events and decision key, worktree isolation, artifact, notify, permissions file and shape, agent model key, rules file and limit, description budget -- as data with a citation per row | nothing; a table this binary ships | yes |
 | [`run`](#family-run) | [`nen run rerun-failed`](#nen-run-rerun-failed) | re-run a workflow run's failed jobs (gh run rerun --failed) | github (gh) | yes |
 | [`issue`](#family-issue) | [`nen issue search`](#nen-issue-search) | duplicate-search the backlog before filing: four gh passes (open subject, recently-closed subject, files+rule-ids, lane) reported with what each was for | gh (issue list x4) | yes |
@@ -12984,10 +12984,13 @@ interactive Windows pool) **plus `pool-<id>`, last**, derived from the pool's
 `id` and never declared — so `nen/workflow.json` needs no edit. The defaults
 go to every runner of that OS and arch at registration, so with them alone any
 later registration on the repository would silently join the pool and take its
-preflight and gated jobs without having been proven. The host script registers
-new runners with the full set, `runner workflow` targets it in `runs-on`,
-`runner verify --pool` and `runner enable` require it, and the runner-policy
-guard admits a self-hosted job only on a declared pool's full set.
+preflight and gated jobs without having been proven. The label lands only on
+runners **registered or relabelled into this pool**, which prevents that
+accidental join; it is **not an authorization boundary** — anyone who can
+register a runner on the repository can register it with the label. The host
+script registers new runners with the full set, `runner workflow` targets it
+in `runs-on`, `runner verify --pool` and `runner enable` require it, and
+nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) admits a self-hosted job only on a declared pool's full set.
 
 <a id="upgrading-to-pool-labels"></a>
 **The upgrade step — relabel before the new workflows can schedule.** A
@@ -12996,10 +12999,14 @@ a runner registered before #340 carries only the defaults: until it is
 relabelled, **every job aimed at the pool waits**, the preflight and a gated
 leg included. So, per pool, before (or together with) merging the re-rendered
 workflows: `nen runner inventory --repo .` lists each pool's runners
-`without pool-<id>`; `nen runner relabel --target <owner/name> --repo .
---pool <id>` prints what it would add; the same with `--run` adds it, reading
-each runner back; `nen runner verify --repo . --pool <id> --expect <names>`
-then reads every runner with its full set. Then re-render the preflight
+`without pool-<id>`, with the exact relabel line; `nen runner relabel --target
+<owner/name> --repo . --pool <id>` lists the same runners as candidates;
+**name every runner you mean to admit** — `nen runner relabel --target
+<owner/name> --repo . --pool <id> --runner <name>,<name> --run` adds the label
+to those and no others, reading each runner back (nothing is admitted in bulk:
+`--run` without `--runner` is exit 2); `nen runner verify --target
+<owner/name> --repo . --pool <id> --expect <names>` then reads every runner
+with its full set. Then re-render the preflight
 (`nen runner workflow --force`), land it, and dispatch and `enable` as usual —
 a run of a preflight rendered before the label no longer certifies the pool.
 The label is the repository's record of the runner: nothing on the host
@@ -13032,11 +13039,13 @@ compared case-insensitively as GitHub's scheduler compares them; a runner
 carrying an extra label still matches, exactly as a job would land on it. A
 runner that carries a pool's declared labels and **no** `pool-*` label —
 registered before #340 — is in no pool (no pool-labelled job lands on it) and
-is listed under the pool it would join as `unlabelled`, the list
-[`runner relabel`](#nen-runner-relabel) acts on, rather than as unpooled. The
-pool it would join is the most specific one whose declared labels it carries:
-a `desktop` runner awaits the interactive pool, never the plain pool beside
-it; two pools that declare one set both list it.
+is listed under the pool it would join as `unlabelled` — the candidates
+[`runner relabel`](#nen-runner-relabel) lists — rather than as unpooled. A
+runner awaits a pool only when it fits it **exactly**: every declared label,
+and no label outside them. `desktop` is reserved for an interactive pool, so a
+desktop runner never awaits a plain pool, and with no interactive pool
+declared it is unpooled; a runner carrying any other undeclared label is
+unpooled too. Two pools that declare one set both list it.
 
 **Usage**
 
@@ -13055,8 +13064,10 @@ nen runner inventory [--target <owner/name>] [--repo <path>] [--pool <id>] [--js
 
 **Output and exit codes** — human: a count line, one table of runners (name,
 status, busy/idle, os, labels, machine, consumer, slot), then one line per
-pool (with `; without pool-<id>: <names> (nen runner relabel --pool <id>)`
-when any await the pool's label) and the unpooled names. `--json` top-level keys: `target`, `runners[]`
+pool (with `; without pool-<id>: <names> (nen runner relabel --target
+<owner/name> --pool <id> --runner <names> --run)` when any await the pool's
+label — runner names printed with control characters stripped, raw under
+`--json`) and the unpooled names. `--json` top-level keys: `target`, `runners[]`
 (`name`, `id`, `os`, `status`, `busy`, `labels[]`, `convention`
 `named`\|`runner-0`, `machine`, `consumer`, `slot`), `downloads[]` (the API's
 own `os`, `architecture`, `filename`, `download_url`, `sha256_checksum`),
@@ -13087,7 +13098,8 @@ unpooled: (none)
 three runners, still carrying the defaults alone, read `pool macos-arm64
 [self-hosted, macOS, ARM64, pool-macos-arm64]: 0 runner(s), 0 online, 0 free;
 without pool-macos-arm64: RJ2-NNR1, RJ2-NNR2, RJ2-NNR3 (nen runner relabel
---pool macos-arm64)` until they are relabelled — the recorded fixture
+--target zheref/nen --pool macos-arm64 --runner RJ2-NNR1,RJ2-NNR2,RJ2-NNR3
+--run)` until they are relabelled — the recorded fixture
 `src/runner/fixtures/runners.json` pins that reading)
 
 ### `nen runner plan`
@@ -13132,7 +13144,7 @@ any runner carrying all of its labels, so a runner labelled
 `[self-hosted, Windows, X64, desktop, pool-<id>]` takes every job whose
 `runs-on` is a subset of that set. From #340 that no longer includes the plain
 pool's jobs, which ask for that pool's own label; it still includes any job
-aimed at the bare defaults, which the runner-policy guard refuses.
+aimed at the bare defaults, which nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) refuses.
 A UI job also needs that session **active and unlocked**, with `run.cmd`'s
 console window open: a locked screen or a disconnected session still has a
 non-zero session id, which the preflight probe accepts. When the identity is **the account
@@ -13522,9 +13534,12 @@ Polls the runners list every 10 s, for up to `--wait` seconds, until every
 `--expect` name is present, `online`, and — with `--labels` — carries every
 listed label (case-insensitively). **`--pool <id>`** (#340) adds that pool's
 full set from `--repo`'s `runners` block — its own `pool-<id>` included — to
-`--labels`, each label once; a runner missing only its pool label is
-reported `labels: missing pool-<id> -- registered without its pool label: nen
-runner relabel --pool <id> --runner <name> --run`. **Never exits 0 on a partial pass**: every
+`--labels`, each label once; a runner whose ONE missing label is that pool's
+own, and that carries no other `pool-*` label, is reported `labels: missing
+pool-<id> -- registered without its pool label: nen runner relabel --target
+<owner/name> --pool <id> --runner <name> --run` — the step is offered only
+when it is exact, and never without `--pool`. Names are printed with control
+characters stripped; `--json` carries them raw. **Never exits 0 on a partial pass**: every
 expected name is judged on every attempt, and the verdict is their
 conjunction. An online runner proves the runner **process**; it says nothing
 about the host's toolchain — that is [`runner preflight`](#nen-runner-preflight)'s.
@@ -13760,28 +13775,40 @@ re-indented here)
 Adds a pool's own label, `pool-<id>` (#340), to runners that were registered
 before it existed — [the upgrade step](#upgrading-to-pool-labels). The write
 is GitHub's `POST /repos/{owner}/{repo}/actions/runners/{runner_id}/labels`
-(`gh api --method POST ... -f labels[]=pool-<id>`), a repository-admin
+(`gh api --method POST ... -f 'labels[]=pool-<id>'`), a repository-admin
 operation: a 403 is worded **"needs admin on `<target>`"**. Nothing on the
-host changes.
+host changes, and the label prevents an accidental join; it is not an
+authorization boundary.
 
-**Which runners.** `--runner <names>` names them (comma-separated, compared
-without regard to case, each once), and every one is checked **before any
-write**: it must be registered, carry the pool's declared labels, carry no
-other `pool-*` label (a runner is in one pool; moving it is a label to remove
-in GitHub first), and not belong to a more specific pool (a `desktop` runner
-is never relabelled into the plain pool beside it). One refusal refuses the
-whole call, exit 1, every reason named, nothing written. Without `--runner`,
-the runners [`runner inventory`](#nen-runner-inventory) lists as
-`unlabelled` for the pool are taken; when two pools declare one label set,
-which pool such a runner is in is the maintainer's to say: exit 2, naming the
-runners and the pools, asking for `--runner`. A runner already carrying the
-label is reported `already` and not written.
+**Nothing is admitted in bulk.** `--run` writes only to runners named with
+`--runner <names>` — every one (comma-separated, compared without regard to
+case, each once); `--run` without `--runner` is **exit 2**, before anything is
+read. Without `--runner`, the dry run lists the **candidates** — the runners
+[`runner inventory`](#nen-runner-inventory) lists as `unlabelled` for the pool
+— and the exact line naming them, for the maintainer to check and name. Every
+named runner is checked **before any write**: it must be registered, carry the
+pool's declared labels, carry no label outside them (`desktop` is reserved for
+an interactive pool — a desktop runner is refused from a plain pool, naming
+`desktop`: declare the interactive pool), and carry no other `pool-*` label (a
+runner is in one pool; moving it is a label to remove in GitHub first). One
+refusal refuses the whole call, exit 1, every reason named, nothing written. A
+runner already carrying the label is reported `already` and not written; when
+every named runner already carries it, the verb says `every selected runner
+already carries pool-<id>; nothing written.` Two pools that declare one label
+set both list the runner as a candidate; naming it under one `--pool` is the
+maintainer's choice.
 
-**Dry run by default.** Without `--run` it reads the runners list, selects and
-checks, and prints each write as `would run: gh api --method POST ...`; with
-`--run` it writes, then **reads the runner's labels back** (`gh api --method
-GET .../runners/<id>/labels`) — a read-back without the label is exit 1, and a
-failure partway names the runners this call already labelled.
+**Dry run by default.** With `--runner` and without `--run` it reads the
+runners list, checks, and prints each write as `would run: gh api --method
+POST ... -f 'labels[]=pool-<id>'` (shell-quoted for pasting; the argv nen
+hands `gh` is not); with `--run` it writes, then **reads the runner's labels
+back** (`gh api --method GET .../runners/<id>/labels`) — a read-back without
+the label is exit 1; a read-back that fails after an accepted POST is reported
+at the read's own exit code as `the POST for <runner> was accepted; its
+read-back failed: ...`; and a failure partway names the runners this call
+already labelled. Runner names and labels are GitHub's: the human output and
+every failure message print them with control characters stripped, `--json`
+raw.
 
 **Usage**
 
@@ -13795,26 +13822,45 @@ nen runner relabel --target <owner/name> --pool <id> [--runner <name>[,<name>...
 |---|---|---|---|
 | `--target <owner/name>` | **yes** | the repository | this verb writes runner labels, so it never falls back to a remote |
 | `--pool <id>` | yes | the pool whose own label the runners gain | from `--repo`'s `runners` block; an unknown id or a missing block is exit 2 |
-| `--runner <names>` | no | the runners to relabel | comma-separated; an empty list is exit 2. Absent: every runner awaiting the pool's label |
-| `--run` | no | write | without it, nothing is written |
+| `--runner <names>` | with `--run` | every runner to relabel | comma-separated; an empty list is exit 2. Absent: a dry run listing the candidates |
+| `--run` | no | write | without it, nothing is written; refused at exit 2 without `--runner` |
 | `--json` | no | the report | — |
 
-**Output and exit codes** — human: a verdict line (`(dry run) would add
-pool-<id> to <n> runner(s) ...` or `<n> runner(s) ... now carry pool-<id>
-...; each read back.`), a table of name and verdict, and without `--run` one
-`would run:` line per write; `no runner on <target> awaits pool-<id> ...
-Nothing to do.` when none does. `--json` top-level keys: `target`, `pool`,
-`label`, `selection` (`named`\|`awaiting`), `run`, `runners[]` (`name`, `id`,
-`verdict` `added`\|`would-add`\|`already`), `changed`. Exit 0; 1 when a named
-runner is refused, GitHub refused (403: needs admin) or answered something
-unreadable, or a read-back lacks the label; 2 on usage, an unknown pool, a
-missing `runners` block, or a shared label set without `--runner`; 5 without
-`gh`.
+**Output and exit codes** — human: without `--runner`, `(dry run) <n>
+runner(s) on <target> could take pool-<id> ...`, a table of name and verdict
+(`candidate`, `already`) and `then: nen runner relabel --target <target>
+--pool <id> --runner <names> --run` (`no runner on <target> is a candidate
+for pool-<id> ... Nothing to do.` when none is); with `--runner`, a verdict
+line (`(dry run) would add pool-<id> to <n> runner(s) ...`, `<n> runner(s)
+... now carry pool-<id> ...; each read back.`, or `every selected runner
+already carries pool-<id>; nothing written.`), the table, and without `--run`
+one `would run:` line per write. `--json` top-level keys: `target`, `pool`,
+`label`, `selection` (`named`\|`candidates`), `run`, `runners[]` (`name`,
+`id`, `verdict` `added`\|`would-add`\|`already`\|`candidate`), `changed`
+(writes made or, named without `--run`, that would be; candidates are not
+counted). Exit 0; 1 when a named runner is refused, GitHub refused (403: needs
+admin) or answered something unreadable, or a read-back lacks the label or
+fails (the read's own code — 5 when `gh` could not be started); 2 on usage,
+`--run` without `--runner`, an unknown pool or a missing `runners` block; 5
+without `gh`.
 
 **Example**
 
 ```bash
 nen runner relabel --target zheref/nen --repo . --pool macos-arm64
+```
+```text
+(dry run) 3 runner(s) on zheref/nen could take pool-macos-arm64 (pool macos-arm64); nothing is admitted in bulk -- name each one you mean:
+| name     | verdict   |
+| -------- | --------- |
+| RJ2-NNR1 | candidate |
+| RJ2-NNR2 | candidate |
+| RJ2-NNR3 | candidate |
+then: nen runner relabel --target zheref/nen --pool macos-arm64 --runner RJ2-NNR1,RJ2-NNR2,RJ2-NNR3 --run
+```
+
+```bash
+nen runner relabel --target zheref/nen --repo . --pool macos-arm64 --runner RJ2-NNR1,RJ2-NNR2,RJ2-NNR3
 ```
 ```text
 (dry run) would add pool-macos-arm64 to 3 runner(s) on zheref/nen (pool macos-arm64); pass --run to write.
@@ -13823,12 +13869,13 @@ nen runner relabel --target zheref/nen --repo . --pool macos-arm64
 | RJ2-NNR1 | would-add |
 | RJ2-NNR2 | would-add |
 | RJ2-NNR3 | would-add |
-would run: gh api --method POST repos/zheref/nen/actions/runners/21/labels -f labels[]=pool-macos-arm64
-would run: gh api --method POST repos/zheref/nen/actions/runners/22/labels -f labels[]=pool-macos-arm64
-would run: gh api --method POST repos/zheref/nen/actions/runners/23/labels -f labels[]=pool-macos-arm64
+would run: gh api --method POST repos/zheref/nen/actions/runners/21/labels -f 'labels[]=pool-macos-arm64'
+would run: gh api --method POST repos/zheref/nen/actions/runners/22/labels -f 'labels[]=pool-macos-arm64'
+would run: gh api --method POST repos/zheref/nen/actions/runners/23/labels -f 'labels[]=pool-macos-arm64'
 ```
-(rendered from the recorded runners list `src/runner/fixtures/runners.json`,
-not run against GitHub; the ids are the recording's)
+(both rendered from the recorded runners list
+`src/runner/fixtures/runners.json`, not run against GitHub; the ids are the
+recording's)
 
 ## Developer workflows
 

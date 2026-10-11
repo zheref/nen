@@ -125,9 +125,10 @@ workflow; preflight, enable and relabel write to GitHub and require it.
 Every pool's labels end in its own 'pool-<id>' (#340), derived from its id and
 never declared: GitHub's defaults (self-hosted, the OS, the arch) go to every
 runner of that OS and arch, so without it any later registration joins the
-pool unproven. Generated workflows target the full set; a runner registered
-before it carries no pool label and takes none of those jobs until 'runner
-relabel --run' adds it -- the upgrade step.
+pool by accident. The label prevents that accidental join; it is not an
+authorization boundary. Generated workflows target the full set; a runner
+registered before it carries no pool label and takes none of those jobs until
+'runner relabel --runner <names> --run' adds it -- the upgrade step.
 
 inventory  GET .../actions/runners (every page) and .../runners/downloads.
            Each runner with its parsed <machine>-<consumer>R<slot> name (or
@@ -186,14 +187,16 @@ enable     Re-read --after-run and require it to be a completed, successful run
            A pool with no enableVariable is exit 2: nothing to enable.
 relabel    Add the pool's own label, pool-<id>, to runners registered without
            it (POST .../actions/runners/<id>/labels; admin-only, a 403 is
-           named). --runner names them; without it, the runners carrying the
-           pool's declared labels and no pool label are taken (exit 2 when two
-           pools declare one set: name them). A named runner that is not
-           registered, lacks the pool's labels, carries another pool's label,
-           or belongs to a more specific pool refuses the whole call, exit 1,
-           before any write. Dry run by default: --run writes, and reads each
-           runner's labels back (exit 1 when the label is not there).
-           Idempotent: a runner already carrying it is 'already'.
+           named). Nothing is admitted in bulk: --run requires --runner naming
+           every runner (exit 2 without it); a dry run without --runner lists
+           the candidates -- runners carrying exactly the pool's declared
+           labels and no pool label -- to name. A named runner that is not
+           registered, lacks a declared label, carries a label the pool does
+           not declare ('desktop' is reserved for an interactive pool) or
+           another pool's label refuses the whole call, exit 1, before any
+           write. --run writes, and reads each runner's labels back (exit 1
+           when the label is not there; a failed read-back says the POST was
+           accepted). Idempotent: a runner already carrying it is 'already'.
 
 Exit codes: 0 success; 1 the verb's own failure (GitHub refused or answered
 something unreadable, a planned name taken, a leftover placeholder, a run that
@@ -419,7 +422,7 @@ function verify(context: CommandContext, deps: RunnerDeps): number {
   const poolLabels = poolId === undefined ? [] : requirePool(loadRunners(assertRepoRoot({ repoFlag: context.repoFlag })), poolId).labels;
   const labels = [...new Map([...commaValues(context.args.values["labels"]), ...poolLabels].map((label): [string, string] => [label.toLowerCase(), label])).values()];
   const target = resolveTarget(context, false);
-  const report = verifyRunners(context.seams, target, expect, labels, readSeconds(context, "wait", 0), deps.sleep);
+  const report = verifyRunners(context.seams, target, expect, labels, readSeconds(context, "wait", 0), deps.sleep, poolId === undefined ? null : { id: poolId, target: target.slug });
   emit(context.io, context.json, report, renderVerify(report));
   return report.ok ? 0 : 1;
 }
@@ -510,7 +513,7 @@ function relabel(context: CommandContext): number {
   const pool = requirePool(policy, requireValue(context.args, "pool", "It names the pool whose own label, pool-<id>, the runners gain."));
   const raw = context.args.values["runner"];
   const names = raw === undefined ? null : commaValues(raw);
-  if (names !== null && names.length === 0) throw new VerbUsageError("--runner names no runner. Drop it to take every runner awaiting the pool's label, or name them.");
+  if (names !== null && names.length === 0) throw new VerbUsageError("--runner names no runner. Drop it (and --run) to list the candidates, then name them.");
   const report = relabelPool(context.seams, target, policy, pool, names, context.args.booleans.has("run"));
   emit(context.io, context.json, report, renderRelabel(report, target));
   return 0;

@@ -1032,6 +1032,8 @@ describe("runners -- the self-hosted runner policy hatsu:jusshin executes", () =
     ["a free-form own label", ["self-hosted", "Windows", "X64", "nz-windows"], /'nz-windows' is an extra label/],
     ["another pool's label", ["self-hosted", "Windows", "X64", "pool-macos-arm64"], /'pool-macos-arm64' is not this pool's own label: a pool's own label is derived from its id, 'pool-windows-x64', so it is never another pool's -- and since ids are unique, no two pools can carry one/],
     ["the own label out of place", ["pool-windows-x64", "self-hosted", "Windows", "X64"], /its labels are out of order/],
+    ["the own label in the wrong case (N8)", ["self-hosted", "Windows", "X64", "Pool-Windows-X64"], /'Pool-Windows-X64' is the pool label, in the wrong case: write 'pool-windows-x64'/],
+    ["another pool's label in upper case", ["self-hosted", "Windows", "X64", "POOL-macos-arm64"], /'POOL-macos-arm64' is not this pool's own label/],
     ["an interactive pool without desktop", ["self-hosted", "Windows", "X64", "pool-windows-x64"], /'desktop' is missing\..*'pool-windows-x64' last/, { mode: "interactive" }],
   ])("refuses %s, naming it (#340)", (_case, labels, pattern, extra: Record<string, unknown> = {}) => {
     expect(() => parseWorkflow("<doc>", runnersWith({ ...WINDOWS_POOL, ...extra, labels }))).toThrow(pattern);

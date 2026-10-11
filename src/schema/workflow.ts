@@ -1338,7 +1338,10 @@ export const DESKTOP_LABEL = "desktop";
  * every runner of that OS and arch at registration, so with the defaults alone
  * any later registration on the repository silently joins the pool -- and
  * takes its preflight and its gated jobs -- without having been proven. A
- * label only this pool's runners carry closes that, and deriving it from the
+ * label only runners registered or relabelled into this pool carry closes that
+ * ACCIDENTAL join. It is not an authorization boundary: anyone who can
+ * register a runner on the repository can register it with this label too.
+ * Deriving it from the
  * pool's id means a declaration written before it still parses unchanged, and
  * Hatsu's guard and tenkai compute the same string from the same id.
  *
@@ -1580,19 +1583,24 @@ function poolLabelsRefusal(
     if (declared.includes(DESKTOP_LABEL) && !labels.includes(DESKTOP_LABEL)) reasons.push(`'${DESKTOP_LABEL}' is missing`);
   }
   const extras = labels.filter((label): boolean => !declared.includes(label));
-  const foreignPool = extras.filter((label): boolean => label.startsWith(POOL_LABEL_PREFIX) && label !== own);
+  // CASE-INSENSITIVE, as GitHub matches labels: `Pool-windows-x64` is this
+  // pool's own label in the wrong case, not another pool's.
+  const isPoolLabel = (label: string): boolean => label.toLowerCase().startsWith(POOL_LABEL_PREFIX);
+  const wrongCase = extras.filter((label): boolean => label !== own && label.toLowerCase() === own.toLowerCase());
+  for (const label of wrongCase) reasons.push(`'${label}' is the pool label, in the wrong case: write '${own}'`);
+  const foreignPool = extras.filter((label): boolean => isPoolLabel(label) && label.toLowerCase() !== own.toLowerCase());
   if (foreignPool.length > 0) {
     reasons.push(
       `${foreignPool.map((label): string => `'${label}'`).join(", ")} is not this pool's own label: a pool's own label is derived from its id, '${own}', so it is never another pool's -- and since ids are unique, no two pools can carry one`,
     );
   }
-  const others = extras.filter((label): boolean => label !== own && !label.startsWith(POOL_LABEL_PREFIX));
+  const others = extras.filter((label): boolean => !isPoolLabel(label));
   if (extras.length > 1) {
     reasons.push(`it carries ${extras.length} labels beyond the defaults, and a pool carries exactly one of its own, '${own}'`);
   }
   if (others.length > 0) {
     reasons.push(
-      `${others.map((label): string => `'${label}'`).join(", ")} is an extra label: the runner-policy guard in this repository family admits a job only on a canonical label set plus its pool's own label, so a pool carrying another is a pool no guarded workflow can target`,
+      `${others.map((label): string => `'${label}'`).join(", ")} is an extra label: nen's own runner-policy guard (src/ci/runner-policy.test.ts), and a consumer's guard of the same shape, admits a job only on a canonical label set plus its pool's own label, so a pool carrying another is a pool no guarded workflow can target`,
     );
   }
   if (labels.join(",") !== declared.join(",") && reasons.length === 0) reasons.push("its labels are out of order");
