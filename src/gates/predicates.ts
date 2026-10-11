@@ -321,6 +321,21 @@ export function pendingCheckLabels(entries: readonly RollupEntry[]): string[] {
 }
 
 /**
+ * The latest entries still WAITING FOR A RUNNER (zheref/nen#224), in
+ * latestChecks() order: a check run with no verdict and no start time -- the
+ * same `notYetStarted` reading latestChecks() orders by -- and a commit status
+ * still PENDING/EXPECTED (or carrying no state), which no runner list can
+ * explain and the diagnosis says so. A run already started is excluded: a
+ * runner has it, so whether one is online is not the question. Diagnosis input
+ * only; nothing here touches a verdict.
+ */
+export function waitingCheckEntries(entries: readonly RollupEntry[]): RollupEntry[] {
+  return latestChecks(entries).filter((entry): boolean =>
+    entry.kind === "check_run" ? notYetStarted(entry) : !checkSettled(entry),
+  );
+}
+
+/**
  * The latest entries admitted WITHOUT succeeding, as `name (SKIPPED)` /
  * `name (NEUTRAL)`, in latestChecks() order -- what `--explain` names instead of
  * calling them green without qualification (zheref/nen#331).

@@ -163,7 +163,15 @@ ready:
                               states round_policy.minRounds or .maxRounds, also
                               each reviewer's requested and posted rounds
                               against both (--json: meta.roundCounts) --
-                              counted, never a conjunct (zheref/nen#240).
+                              counted, never a conjunct (zheref/nen#240). And
+                              for each check still QUEUED at the judged head,
+                              whether an ONLINE runner carries its runs-on
+                              labels -- online, offline-only or no-runner (an
+                              infrastructure stall), github-hosted, started, or
+                              undetermined with why and any missing permission
+                              (--json: meta.runnerAvailability). Diagnosis
+                              only: the verdict and exit are unchanged
+                              (zheref/nen#224).
   --reviewers <a,b,c>         The configured reviewer set (mirrors the shell
                               gate's flag). Also the identity source of last
                               resort -- see --gates. On that path each name is

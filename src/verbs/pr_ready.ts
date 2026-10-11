@@ -107,6 +107,11 @@ import {
 } from "../gates/base_exclusions.js";
 import { parseGatesText, untilText, type DeclaredCheckExclusion } from "../schema/gates.js";
 import { ExcludeCheckError, parseExcludeCheckNames } from "../pr/excludecheck.js";
+import {
+  diagnoseWaitingChecks,
+  renderRunnerAvailability,
+  type WaitingCheckDiagnosis,
+} from "../pr/runner_stall.js";
 
 /**
  * The flags this verb adds to the CLI's declared surface.
@@ -522,6 +527,18 @@ export interface ReadyMeta {
    * conjunct. Additive to v0.1.
    */
   readonly roundCounts?: RoundCounts;
+  /**
+   * For each check CON-32(a) is still WAITING on at the judged head -- queued,
+   * not started, after every exclusion -- whether any ONLINE runner carries
+   * its `runs-on` labels (zheref/nen#224): `determination` is `online`,
+   * `offline-only`, `no-runner`, `github-hosted`, `started` or `undetermined`,
+   * `infrastructureStall` is `true` only for the two stall readings, and an
+   * undetermined one says why and names any `missingPermission`. ABSENT when
+   * nothing is waiting, on an unevaluated report, and on the default output
+   * (only `--explain` and `--json` read it). A DIAGNOSIS: it never changes the
+   * verdict, a row or the exit code. Additive to v0.1.
+   */
+  readonly runnerAvailability?: readonly WaitingCheckDiagnosis[];
   readonly deliveryPr: boolean | null;
   /**
    * Whether CON-30's `dependabot_carve_out` fired for this pull request
@@ -1187,6 +1204,7 @@ export function renderExplain(report: ReadyReport): string[] {
   if (report.meta.roundCounts !== undefined) {
     for (const line of renderRoundCounts(report.meta.roundCounts)) lines.push(line);
   }
+  for (const line of renderRunnerAvailability(report.meta.runnerAvailability)) lines.push(line);
   lines.push("");
   lines.push("  The gate is a CONJUNCTION. Every row is evaluated; the verdict is ready only");
   lines.push("  when every row is ready, and the line above is the first failing row's reason.");
@@ -1292,7 +1310,10 @@ export async function prReady(
 
   const json = input.booleans.has("json");
   const explain = input.booleans.has("explain");
-  const read = await readReady(typedRef, input, deps);
+  // The runner-availability diagnosis (zheref/nen#224) costs reads, and only
+  // `--explain` and `--json` print it -- so the default output, and every
+  // `readReady` caller that does not ask (`nen watch until`), makes none.
+  const read = await readReady(typedRef, input, deps, { diagnoseRunners: json || explain });
   switch (read.kind) {
     case "usage":
       io.err(`${PROGRAM}: ${read.message}`);
@@ -1323,6 +1344,7 @@ export async function readReady(
   typedRef: string,
   input: PrReadyInput,
   deps: PrReadyDeps = defaultDeps,
+  options: { readonly diagnoseRunners?: boolean } = {},
 ): Promise<ReadyRead> {
   const policyText = input.values["round-policy"] ?? "bounded";
   if (policyText !== "strict" && policyText !== "bounded") {
@@ -1587,7 +1609,7 @@ export async function readReady(
     },
   );
 
-  const report: ReadyReport = {
+  let report: ReadyReport = {
     contract: CONTRACT,
     verdict: evaluation.ready ? "ready" : "not-ready",
     gateLine: evaluation.line,
@@ -1622,6 +1644,20 @@ export async function readReady(
       generator: { program: PROGRAM, version: VERSION, executable: deps.executable() },
     },
   };
+  // ── runner availability for the checks still waiting (zheref/nen#224) ────
+  //
+  // Read AFTER the verdict is decided and from nothing it decided on: the
+  // diagnosis is attached to the report, never fed back into a row, so the
+  // verdict and the exit are byte-for-byte what they were without it.
+  const waiting = evaluation.context.waitingChecks ?? [];
+  const runnerAvailability =
+    options.diagnoseRunners === true && waiting.length > 0
+      ? await diagnoseWaitingChecks(opened.source, ref, waiting)
+      : undefined;
+  if (runnerAvailability !== undefined) {
+    report = { ...report, meta: { ...report.meta, runnerAvailability } };
+  }
+
   // The mismatch warning rides in `meta.warnings` so it reaches EVERY output
   // mode -- `--json` included -- through the one channel each already renders.
   const mismatch = localHeadWarning(report);

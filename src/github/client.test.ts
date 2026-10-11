@@ -248,6 +248,7 @@ interface StubResponse {
   readonly status?: number;
   readonly body: unknown;
   readonly link?: string;
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 /** A recording fetch: every call is kept, and `answer` decides each response. */
@@ -273,6 +274,7 @@ function recordingFetch(answer: (call: RecordedCall, index: number) => StubRespo
       headers: {
         "content-type": "application/json",
         ...(reply.link === undefined ? {} : { link: reply.link }),
+        ...(reply.headers ?? {}),
       },
     });
   };
@@ -373,6 +375,50 @@ describe("GitHubClient.fileAtRef -- one file at one commit (zheref/nen#249, Feit
     expect(String(await rejection(clientWith(big).fileAtRef(REPO, "nen/gates.json", "b")))).toMatch(
       /encoding "none" \(size 2000000 bytes\), not base64/,
     );
+  });
+});
+
+describe("GitHubClient's runner-availability reads (zheref/nen#224)", () => {
+  it("actionsJob GETs actions/jobs/{id} and answers the raw job", async () => {
+    const job = { id: 7, status: "queued", labels: ["self-hosted", "Windows", "X64"], runner_name: null };
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: job }));
+    expect(await drive(clientWith(stub).actionsJob(REPO, 7))).toEqual(job);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toMatch(/\/repos\/zheref\/nen\/actions\/jobs\/7$/);
+  });
+
+  it("repoRunnersPage GETs ONE page of actions/runners at per_page=100 and the page asked for", async () => {
+    const page = { total_count: 1, runners: [{ name: "NZ-NNR1", status: "offline", busy: false, labels: [] }] };
+    const { fetch: stub, calls } = recordingFetch(() => ({ body: page }));
+    expect(await drive(clientWith(stub).repoRunnersPage(REPO, 2))).toEqual(page);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("GET");
+    expect(calls[0]?.url).toContain("/repos/zheref/nen/actions/runners");
+    expect(calls[0]?.url).toMatch(/per_page=100/);
+    expect(calls[0]?.url).toMatch(/page=2/);
+  });
+
+  it("orgRunnersPage GETs orgs/{org}/actions/runners, and accountType reads users/{login}'s type", async () => {
+    const { fetch: orgStub, calls: orgCalls } = recordingFetch(() => ({ body: { total_count: 0, runners: [] } }));
+    expect(await drive(clientWith(orgStub).orgRunnersPage("acme", 1))).toEqual({ total_count: 0, runners: [] });
+    expect(orgCalls[0]?.url).toContain("/orgs/acme/actions/runners");
+    const { fetch: userStub, calls: userCalls } = recordingFetch(() => ({ body: { login: "zheref", type: "User" } }));
+    expect(await drive(clientWith(userStub).accountType("zheref"))).toBe("User");
+    expect(userCalls[0]?.url).toMatch(/\/users\/zheref$/);
+    const { fetch: blank } = recordingFetch(() => ({ body: { login: "zheref" } }));
+    expect(String(await rejection(clientWith(blank).accountType("zheref")))).toMatch(/answered no type/);
+  });
+
+  it("a 403 rejects with its status AND GitHub's X-Accepted-GitHub-Permissions header, which the diagnosis names", async () => {
+    const { fetch: forbidden } = recordingFetch(() => ({
+      status: 403,
+      body: { message: "Resource not accessible by personal access token" },
+      headers: { "x-accepted-github-permissions": "administration=read" },
+    }));
+    expect(await rejection(clientWith(forbidden).repoRunnersPage(REPO, 1))).toMatchObject({
+      status: 403,
+      response: { headers: { "x-accepted-github-permissions": "administration=read" } },
+    });
   });
 });
 

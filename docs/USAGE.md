@@ -1107,7 +1107,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 |---|---|---|---|
 | `<ref>` | yes | `<CODE>#<N>` (the `#` optional) or a bare `<N>` with `--gh-repo` | the shorthand splits at the LONGEST trailing digit run; a code ending in a digit needs the `#` |
 | `--gh-repo <owner/name>` | no | the repository, when `<ref>` is a bare number | wins over a code if both are given |
-| `--explain` | no | print the full conjunct table plus what the gate does not decide, and — when `nen/gates.json` states `round_policy.minRounds` or `.maxRounds` — each reviewer's requested and posted rounds against both ([#240](https://github.com/zheref/nen/issues/240)) | suppressed by `--json` (the JSON already carries the table, and `meta.roundCounts`) |
+| `--explain` | no | print the full conjunct table plus what the gate does not decide, and — when `nen/gates.json` states `round_policy.minRounds` or `.maxRounds` — each reviewer's requested and posted rounds against both ([#240](https://github.com/zheref/nen/issues/240)); and, for each check still queued at the judged head, whether an online runner carries its `runs-on` labels ([#224](https://github.com/zheref/nen/issues/224)) | suppressed by `--json` (the JSON already carries the table, and `meta.roundCounts`) |
 | `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies. On that flags path each name (and each `--approvers` name) matches the **whole** login, case-insensitively, with an optional `[bot]` suffix — `^<name>(\[bot\])?$`, the name taken literally — never a substring or a regex, so `sasuke` is not `Not-Sasuke-Fan` ([#264](https://github.com/zheref/nen/issues/264), Feitan F1). A repository that needs a pattern declares `login_pattern` in `nen/gates.json`. The same exact reading now applies wherever a reviewer name has no declared identity (a `--reviewers` name a gates file does not declare): the name is the login |
 | `--reviewer-login <name>=<login>` | no, repeatable | the exact login a `--reviewers` name posts under | flags path only ([#264](https://github.com/zheref/nen/issues/264)). Whole login, case-insensitive, optional `[bot]` suffix, taken literally; repeat a name for alternative logins. **Nothing is built in** — which login a bot posts under is data (§3), so without this flag the name must equal the login, e.g. `--reviewers copilot --reviewer-login copilot=copilot-pull-request-reviewer[bot]`. Split at the first `=`; an empty half is exit `2`, and so is a name `--reviewers` does not list. Beside a gates file it is ignored with a warning in `meta.warnings` — declare `login_pattern` there instead |
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
@@ -1275,6 +1275,31 @@ What `nen pr ready` does with what it read:
   `owed`, `owed-in-flight`, `fulfilled-by-quorum` or `no-minimum`; `max` is
   `under`, `reached`, `over`, `unknown` or `no-ceiling`. Absent otherwise, so
   a file stating neither key gets a byte-identical report.
+- `meta.runnerAvailability` (additive, [#224](https://github.com/zheref/nen/issues/224))
+  is present only under `--json` or `--explain`, and only when CON-32(a) still
+  weighs a check that has **not started** (after every exclusion): one entry per
+  such check, `{ check, jobId, labels, determination, infrastructureStall,
+  runners, missingPermission, detail }`. `determination` is `online` (an online
+  runner carries every `runs-on` label: slow, not stalled), `offline-only` or
+  `no-runner` (an **infrastructure stall**: `infrastructureStall: true`, waiting
+  will not start it), `github-hosted` (a standard hosted image label: always
+  available), `started` (a runner picked the job up after the rollup was read),
+  or `undetermined` (`infrastructureStall: null`, `detail` says why). Labels come
+  from the Actions jobs API (`actions:read`); runners from
+  `repos/<slug>/actions/runners`, every page, plus `orgs/<owner>/actions/runners`
+  when the owner is an organization and no repository runner is online for the
+  labels. Listing runners needs **administration:read** on the repository
+  (classic token: `repo`, held by an admin) and **organization self-hosted
+  runners:read** for the organization's (classic: `admin:org`): a 403 — or the
+  404 GitHub hides those endpoints behind — is `undetermined` with
+  `missingPermission` naming the grant, GitHub's own
+  `X-Accepted-GitHub-Permissions` value when it sends one. A short page, the
+  ten-page cap, or a malformed runner is an incomplete list and is
+  `undetermined`: no stall is ever claimed from a partial pool. Enterprise
+  runners and GitHub-hosted larger runners are listed by neither endpoint, and a
+  `no-runner` detail says so. At most 20 jobs are read per evaluation. The
+  verdict, every row and the exit code are **unchanged**: a stalled check is
+  still not-ready, and excluding it stays the caller's `--exclude-check`.
 - A rollup that held **only** excluded checks is still
   `not-ready: no checks reported (after excluding: <names>) (CON-32a)`, the
   names from both sources listed once. An exclusion never turns an empty or

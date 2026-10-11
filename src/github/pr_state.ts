@@ -172,6 +172,17 @@ export interface PrStateSource {
    * (an App token has no user) means "unknown": no own-request claim is made.
    */
   viewerLogin?(): Promise<string>;
+  /**
+   * The four reads of `nen pr ready`'s runner-availability diagnosis
+   * (zheref/nen#224), raw: one Actions job, one page of the repository's or
+   * an organization's self-hosted runners, and an account's type. OPTIONAL,
+   * and their absence -- or any failure -- makes the diagnosis say it could
+   * not tell and why; it never touches the verdict. See ../pr/runner_stall.ts.
+   */
+  actionsJob?(repo: PrRef, jobId: number): Promise<unknown>;
+  repoRunnersPage?(repo: PrRef, page: number): Promise<unknown>;
+  orgRunnersPage?(org: string, page: number): Promise<unknown>;
+  accountType?(login: string): Promise<string>;
 }
 
 export interface FetchStateOptions {
