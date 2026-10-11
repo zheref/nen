@@ -475,8 +475,8 @@ set to the one trailer key `--agent-trailer` resolved to — its own default
 or a caller override — `commits.runTrailer` set to `--run-trailer`'s key when
 one was named, and a starting `models` matrix; it never declares
 `commits.subjectCase` or `commits.bodyMaxLineLength`, which are the
-repository's call). **Six fields have no default at all** — `models`,
-`launch.default`, `iteration.lane`, `commits.runTrailer`,
+repository's call). **Seven fields have no default at all** — `models`,
+`launch.default`, `deploy.defaultTarget`, `iteration.lane`, `commits.runTrailer`,
 `commits.subjectCase` and `commits.bodyMaxLineLength` — because each would be
 nen inventing a name or a convention rather than a number (the last IS a
 number, but it is the repository's own width, and absent it the verbs say what
@@ -490,6 +490,7 @@ they assumed instead); they come back empty or `null`.
 | `tests.required` / `tests.extra` | which declared verbs a test pass runs | callers |
 | `coverage.minimum` / `recommended` / `ideal` / `scope` | the ladder. Whole percentages `0`–`100`, and they must **ascend** — three rungs whose order is the whole of their meaning | callers |
 | `launch.default` / `launch.fallback` | which `project.launch` target a bare launch uses. No default ever | callers |
+| `deploy.defaultTarget` | the `project.targets` key a caller's **own** tooling sends to when it is told no target ([#300](https://github.com/zheref/nen/issues/300); Hatsu's `kagutsuchi`). `null` or absent means *ask*. **No default ever**, and **nen never reads it to choose anything**: [`shu deploy`](#nen-shu-deploy) still requires `--target`. A non-string, an empty string or a near-miss key (`defaultTaget`) is refused **by pointer** at load; a name that is no key of `nen/contract.json` → `project.targets` FAILs its own [`schema check`](#nen-schema-check) row | callers; [`schema check`](#nen-schema-check) validates it, [`shu detect`](#nen-shu-detect) proposes it |
 | `reports.sections` | which blocks each report VARIANT renders, and with which template. No default ever | [`report render --variant`](#nen-report-render) |
 | `review.scopes` | which reviewer, at which tier, within which budget, over which paths. No default ever | [`review scopes`](#nen-review-scopes) |
 | `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
@@ -5926,6 +5927,26 @@ first two has not adopted the two verbs, which reads `none declared`; the
 `profile` row reads the defaults when the key is absent, e.g.
 `nen/workflow.json#profile  default standard; allowed fast, standard, thorough`.
 
+**A fifth pointer row that CAN fail, from the release that carries
+[#300](https://github.com/zheref/nen/issues/300):
+`nen/workflow.json#deploy.defaultTarget`**, immediately under `#runners`. It is
+the one row that reads **two** files — the name lives in `nen/workflow.json`,
+and what it must name lives in `nen/contract.json` → `project.targets` — so it
+holds the half no single loader can see. `null`, an absent key or no policy
+file at all is `ok` (`none declared …`); a name that **is** a declared target
+is `ok` and says so (`'testflight' (a key of nen/contract.json → project.targets)`).
+A name that is **not** — a dangling name, against a contract that declares
+other targets, none, or is absent — is a **required FAIL by pointer**
+(`… at deploy.defaultTarget, names 'testflght', which is not a key of
+project.targets -- nen/contract.json declares project.targets: staging,
+testflight. It is one edit from 'testflight'. …`), and the report exits 1. A
+**malformed** value (a number, `""`) or a **near-miss** key (`defaultTaget`) is
+already refused by the policy row's own loader, by pointer; this row then reads
+`not read -- … see that row` rather than say it twice. Against a contract that
+is present and does **not load**, the row reads `not checked -- …` with
+`ok: false` but not required: the contract row already fails the report and
+names the cause, and a check that was not performed is not one that passed.
+
 **Two optional rows from v0.11.0 (zheref/nen#216).** `nen/colors.yml` is **optional**: an absent file is an
 `ok` row reading `absent (optional)` and no longer fails the aggregate -- the verbs that resolve a colour
 (`nen color status`, the board renderers) refuse by name when asked, which is where that refusal belongs.
@@ -9255,6 +9276,24 @@ reference pack's own word on `deploy` for that stack, the shape to write
 while you are writing it: `requiresEnv` names **variables**, never their values,
 because this file is committed.
 
+**`deploy.defaultTarget` — a name from the pack, proposed only for a destination
+you declared** ([#300](https://github.com/zheref/nen/issues/300)). A stack's
+profile may name **one** canonical non-production deploy target
+(`deployDefault` in `profiles/<id>.json`; today only `xcode-ios` names one,
+`testflight` — every other stack records `null` with its reason, and
+[STACK-MATRIX](STACK-MATRIX.md) prints each). When a lane's stack names one
+**and** the repository's existing `nen/contract.json` already declares a
+`project.targets` key of exactly that name, `detect` proposes the
+`nen/workflow.json` fragment `{ "deploy": { "defaultTarget": "<name>" } }`,
+printed after the contract block and carried in `--json` as `workflow`, with a
+note. Where the name is **not** declared — no declaration, a declaration
+without that key, or one that does not load — nothing is proposed and a note
+says what would make it so. Two lanes naming two different declared defaults
+get no proposal and a note naming both. `targets` in the contract proposal
+stays the empty seat either way, `--write` **never** writes `nen/workflow.json`,
+and [`nen shu deploy`](#nen-shu-deploy) reads no default: the key is for a
+caller's own tooling, which passes it to `--target` itself.
+
 **`{gw}`, the one token `detect` answers from the HOST.** Every other
 placeholder is a fact only your repository knows, and `detect` withholds the row
 rather than guess one. `{gw}` is the exception the pack documents: it is your
@@ -9420,7 +9459,8 @@ used to produce the same silence.
 
 **Output and exit codes** — the proposal on stdout (as text with the block to
 paste, or as `--json` `{ contract, repo, declaration, declarationPresent, lanes,
-proposal, notes, written, exitCode }`). Exit 0 when at least one lane was
+proposal, workflow, notes, written, exitCode }`, where `workflow` is the
+`nen/workflow.json` fragment to merge by hand, or `null`). Exit 0 when at least one lane was
 detected; exit **1**, with the reason, when nothing was — never a silent empty
 proposal. Exit 2 when `--write` would overwrite, or when `--write` was given and
 nothing was detected.
@@ -10050,7 +10090,7 @@ asserted, nothing sent -- and `--run` is what acts.
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--target <name>` | yes | Which declared destination. | **No default, ever** — not even when `project.targets` has exactly one key — and it must name a key of that map; anything else is exit 2 listing what is declared. Nen never picks where a build goes. |
+| `--target <name>` | yes | Which declared destination. | **No default, ever** — not even when `project.targets` has exactly one key — and it must name a key of that map; anything else is exit 2 listing what is declared. Nen never picks where a build goes — and that includes `nen/workflow.json` → `deploy.defaultTarget`, which this verb does **not** read: a bare `nen shu deploy` is the same exit 2 with or without it, and a caller that wants the default passes it here itself. |
 | `--run` | yes, to act | Send it. | Without it the verb prints the **fully resolved plan** — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0, with one line on stderr saying nothing was sent. |
 | `--dry-run` | no | The explicit spelling of that same report. | Identical output. `--run --dry-run` together is **exit 2**: one says send it and the other says send nothing, and nen will not pick between two contradicting instructions on this verb. |
 

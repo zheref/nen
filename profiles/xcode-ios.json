@@ -162,6 +162,11 @@
     "why": "The extraction step this profile proposes PRINTS its report to stdout (`xccov view --report --json <bundle>`), and nen parses a FILE -- there is still no shell in this family and therefore no redirection OPERATOR, but there is now a declared one: a lane that wants this parsed states `stdoutTo` on that step (a repo-relative path with `xccov` in its name, since the reader recognises a report by name) and names the same path under the verb's `artifacts`. nen writes the captured stdout to it itself. The `.xcresult` bundle itself is not a format nen reads.",
     "source": "this profile's own `coverage` row, step 2 (KroApple/.github/workflows/tests.yml:194-209)"
   },
+  "deployDefault": {
+    "target": "testflight",
+    "why": "TestFlight is the one non-production destination an iOS build has: an upload puts a build in App Store Connect for the maintainer and internal testers and puts nothing on any App Store listing, while external testing and App Store submission are later, human actions. KroApple declares exactly this key, `project.targets.testflight`, its `why` stating it is non-production. PROPOSED ONLY WHERE THE REPOSITORY ALREADY DECLARES A `testflight` TARGET -- the name is the pack's, the destination is the repository's.",
+    "source": "KroApple/nen/contract.json -> project.targets.testflight (zheref/hatsu#146)"
+  },
   "notes": [
     "Physical-device launch declarations can consume devicectl JSON directly with device.extract: records `result.devices`; name fallbacks `properties.state.name`, `deviceProperties.name`; identifier fallbacks `identifier`, `hardwareProperties.udid`; readiness fallbacks `properties.connection.state`, `connectionProperties.tunnelState`. The executable and argv remain the consumer's declaration.",
     "PRECONDITIONS THIS STACK ASSERTS AND NEVER PERFORMS (all from KroApple): a per-runner simulator created and booted by UDID (tests.yml:99-160, including the explicit prohibition on `xcrun simctl shutdown all` at :81-98); a gitignored `Kro/Config.xcconfig` written from secrets (:174-179); `defaults write com.apple.dt.Xcode IDESkipMacroFingerprintValidation -bool YES` (:186-188, and the whole of ci_scripts/ci_post_clone.sh:2); and, for food-diary, `pod install` plus an Expo prebuild.",

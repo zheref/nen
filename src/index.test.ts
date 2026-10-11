@@ -185,6 +185,7 @@ describe("nen schema check", () => {
       "nen/workflow.json#review.scopes",
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
+      "nen/workflow.json#deploy.defaultTarget",
       "nen/decisions.json",
     ]);
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);

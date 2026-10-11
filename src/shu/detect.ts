@@ -67,7 +67,9 @@ import {
   type StackProfile,
 } from "../profiles/pack.js";
 import { containedPath } from "../repo/contain.js";
+import { loadContract } from "../schema/contract.js";
 import { CONTRACT_FILE, resolveSchemaFile } from "../schema/source.js";
+import { WORKFLOW_FILE } from "../schema/workflow.js";
 import { parseYaml } from "../schema/yaml.js";
 import { ASSERTABLE_KINDS, TARGETED_VERBS } from "./render.js";
 
@@ -276,6 +278,16 @@ export interface DetectReport {
   readonly lanes: readonly DetectedLane[];
   /** The document to paste, or null when nothing was found. */
   readonly proposal: Readonly<Record<string, unknown>> | null;
+  /**
+   * The `nen/workflow.json` FRAGMENT to merge, or null (zheref/nen#300).
+   *
+   * Today it carries one key at most, `deploy.defaultTarget`, and only when a
+   * lane's stack names a canonical non-production target in the reference pack
+   * AND this repository's own declaration already has a `project.targets` key
+   * of that name. `--write` never writes it: the policy file is a second
+   * decision, and this verb writes one file into absence and nothing else.
+   */
+  readonly workflow: Readonly<Record<string, unknown>> | null;
   readonly notes: readonly string[];
   /** The path written, or null -- and null is the default. */
   readonly written: string | null;
@@ -6674,6 +6686,14 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
           },
         };
 
+  // AFTER THE CONTRACT PROPOSAL, AND FROM THE DECLARATION ON DISK RATHER THAN
+  // FROM IT: `proposal.project.targets` is the empty seat by design, so the
+  // only `project.targets` a default can name is one a human already wrote.
+  const workflow =
+    lanes.length === 0
+      ? null
+      : proposeDefaultTarget(repoRoot, resolved.canonical.present, lanes, profiles, notes);
+
   return {
     contract: DETECT_CONTRACT,
     repo: repoRoot,
@@ -6681,10 +6701,86 @@ export function detect(repoRoot: string, platform: NodeJS.Platform): DetectRepor
     declarationPresent: resolved.canonical.present,
     lanes,
     proposal,
+    workflow,
     notes,
     written: null,
     exitCode: lanes.length === 0 ? 1 : 0,
   };
+}
+
+/**
+ * The `deploy.defaultTarget` a tree earns, or null (zheref/nen#300).
+ *
+ * THE NAME IS THE PACK'S AND THE DESTINATION IS THE REPOSITORY'S. A stack's
+ * profile may name one canonical non-production target (`deployDefault`); this
+ * proposes it only when the repository's own `nen/contract.json` already
+ * declares a `project.targets` key of exactly that name. Nen still never
+ * proposes a destination -- `targets` stays the empty seat above -- and a
+ * default naming a target nobody declared is one `nen schema check` would
+ * refuse the moment it was pasted.
+ *
+ * TWO NAMES DECLARED IS AN AMBIGUITY, AND NEN RESOLVES NONE. A tree whose lanes
+ * name two different defaults, both declared, gets no proposal and a note
+ * naming both -- the same rule `project.toolchain` follows above.
+ *
+ * A NAME THE PACK HAS AND THE DECLARATION LACKS IS A NOTE, never a proposal: the
+ * sentence says what would make it one, so the reader is not left to wonder
+ * why a stack with a canonical destination got nothing.
+ */
+function proposeDefaultTarget(
+  repoRoot: string,
+  declarationPresent: boolean,
+  lanes: readonly DetectedLane[],
+  profiles: ReadonlyMap<string, StackProfile>,
+  notes: string[],
+): Readonly<Record<string, unknown>> | null {
+  const named = new Map<string, string[]>();
+  for (const lane of lanes) {
+    const target = profiles.get(lane.lane)?.deployDefault.target ?? null;
+    if (target === null) continue;
+    const stacks = named.get(target) ?? [];
+    if (!stacks.includes(lane.stack)) stacks.push(lane.stack);
+    named.set(target, stacks);
+  }
+  if (named.size === 0) return null;
+  const candidates = [...named].sort(([a], [b]): number => compareBytes(a, b));
+  let declared: ReadonlySet<string> = new Set<string>();
+  let unreadable = false;
+  if (declarationPresent) {
+    try {
+      declared = new Set(Object.keys(loadContract(repoRoot).project?.targets ?? {}));
+    } catch {
+      unreadable = true;
+    }
+  }
+  const proposable = candidates.filter(([target]): boolean => declared.has(target));
+  const [only] = proposable;
+  if (proposable.length === 1 && only !== undefined) {
+    const [target, stacks] = only;
+    notes.push(
+      `proposed ${WORKFLOW_FILE} → deploy.defaultTarget '${target}': the reference pack names it the canonical non-production deploy target for ${stacks.join(", ")}, and ${CONTRACT_FILE} already declares project.targets.${target}. It is a default for a caller's OWN tooling (a skill that passes it to --target); 'nen shu deploy' still requires --target and reads no default. --write never writes ${WORKFLOW_FILE} -- merge the fragment by hand, and set it to null if this destination is not one a bare invocation should send to.`,
+    );
+    return { deploy: { defaultTarget: target } };
+  }
+  if (proposable.length > 1) {
+    notes.push(
+      `no deploy.defaultTarget is proposed: the lanes' stacks name ${proposable.length} different canonical non-production targets, all declared (${proposable
+        .map(([target, stacks]): string => `'${target}' for ${stacks.join(", ")}`)
+        .join("; ")}), and a default is one name. nen resolves no ambiguity -- state the one this repository means in ${WORKFLOW_FILE}, or none.`,
+    );
+    return null;
+  }
+  for (const [target, stacks] of candidates) {
+    const why = unreadable
+      ? `${CONTRACT_FILE} did not load, so nen cannot tell whether it declares one`
+      : declarationPresent
+        ? `${CONTRACT_FILE} declares no project.targets.${target}`
+        : `${CONTRACT_FILE} is absent, so it declares no project.targets.${target}`;
+    notes.push(
+      `no deploy.defaultTarget is proposed: the reference pack names '${target}' the canonical non-production deploy target for ${stacks.join(", ")}, but ${why}. The name is proposed only for a destination this repository has declared -- declare project.targets.${target}, run this again, and ${WORKFLOW_FILE} → deploy.defaultTarget is proposed beside it.`,
+    );
+  }
+  return null;
 }
 
 /**
@@ -6778,5 +6874,12 @@ export function renderDetect(report: DetectReport): readonly string[] {
       : `wrote ${report.written}:`,
   );
   lines.push(JSON.stringify(report.proposal, null, 2));
+  if (report.workflow !== null) {
+    lines.push("");
+    lines.push(
+      `proposed ${WORKFLOW_FILE} fragment (never written, not even by --write -- merge it by hand):`,
+    );
+    lines.push(JSON.stringify(report.workflow, null, 2));
+  }
   return lines;
 }

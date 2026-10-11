@@ -1184,6 +1184,32 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     expect(result.seams.calls).toEqual([]);
   });
 
+  it("still asks for the destination when nen/workflow.json DECLARES deploy.defaultTarget (zheref/nen#300)", async () => {
+    // THE KEY IS A CALLER'S, NEVER NEN'S. `deploy.defaultTarget` is validated
+    // by `nen schema check` and proposed by `nen shu detect`, and `nen shu
+    // deploy` reads none of it: a skill that wants the default passes it to
+    // --target itself. A bare `deploy` is the same exit-2 refusal, listing the
+    // same declared targets, with or without the key -- and spawns nothing.
+    const result = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { testflight: {}, staging: {} },
+      }),
+      ["deploy"],
+      {},
+      (root): void => {
+        writeFileSync(
+          join(root, "nen", "workflow.json"),
+          JSON.stringify({ deploy: { defaultTarget: "testflight" } }),
+        );
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/Declared under project\.targets: staging, testflight\./);
+    expect(result.err.join("\n")).toMatch(/there is no default -- not even when exactly one target/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
   it("refuses a --target that names no declared target, rather than accepting any word", async () => {
     const result = await capture(["deploy", "--lane", "pages", "--target", "anything"]);
     expect(result.code).toBe(2);

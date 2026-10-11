@@ -263,6 +263,14 @@ function renderProfileSection(pack: ProfilesPack, profile: StackProfile): string
       profile.reportDefault.path === null ? "none recorded" : code(profile.reportDefault.path)
     } -- ${profile.reportDefault.why} (${profile.reportDefault.source})`,
     "",
+    // A NAME, AND PROPOSED ONLY WHERE DECLARED (zheref/nen#300). `nen shu
+    // detect` proposes `deploy.defaultTarget` from this line only when the
+    // repository already declares a `project.targets` key of this name, and
+    // `nen shu deploy` still requires `--target` -- so the page says both.
+    `**Default deploy target (proposed only where declared):** ${
+      profile.deployDefault.target === null ? "none recorded" : code(profile.deployDefault.target)
+    } -- ${profile.deployDefault.why} (${profile.deployDefault.source})`,
+    "",
     "### Verbs",
     "",
     ...table(["verb", "command", "why / source"], verbRows),

@@ -21,7 +21,7 @@
 
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
-import { describeContract, loadContract } from "./contract.js";
+import { describeContract, loadContract, withinOneEdit } from "./contract.js";
 import { GatesDuplicateKeyError, GatesUnknownKeyError, loadGateIdentities, pointerSegment, type GateIdentities } from "./gates.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "./labels.js";
 import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
@@ -32,6 +32,7 @@ import {
   describeProfile,
   describeRunners,
   describeWorkflow,
+  DEFAULT_TARGET_NONE,
   loadWorkflow,
   WORKFLOW_FILE,
   type Workflow,
@@ -345,6 +346,84 @@ function pointerCheck(root: string, pointer: string, describe: (workflow: Workfl
   }
 }
 
+// The `deploy.defaultTarget` row (zheref/nen#300). UNLIKE THE POINTER ROWS
+// ABOVE, THIS ONE CAN FAIL, and it is the only row that reads two files: the
+// value lives in `nen/workflow.json` and what it must name lives in
+// `nen/contract.json` → `project.targets`, so neither loader alone can say
+// whether it is right. A malformed value (a number, an empty string, a
+// near-miss key) is already refused by the POLICY row's loader, by pointer;
+// this row adds the half no single loader can see -- a well-shaped name that
+// names no declared destination. That is a FAIL, never a warning: a caller's
+// tooling would hand it to `nen shu deploy --target`, which refuses it at 2,
+// and a default nobody can send to is a default that does not exist.
+//
+// THE ROW NEVER FAILS ON ANOTHER ROW'S ACCOUNT. A policy or contract that did
+// not load is reported by its own row; this one then says it could not check
+// -- `ok: false` but not required, because the report already fails on the
+// row that names the cause, and a check that was not performed is not one
+// that passed.
+const DEFAULT_TARGET_POINTER = "deploy.defaultTarget";
+
+function defaultTargetCheck(root: string): SchemaCheck {
+  const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
+  const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#${DEFAULT_TARGET_POINTER}`,
+    path: resolved.path,
+    ok,
+    detail,
+    required,
+    legacy: false,
+    note: null,
+  });
+  let name: string | null;
+  let policyPath: string;
+  try {
+    const loaded = loadWorkflow(root);
+    if (!loaded.present) return row(true, false, "none declared (no policy file)");
+    name = loaded.workflow.deploy.defaultTarget;
+    policyPath = loaded.path;
+  } catch {
+    return row(true, false, `not read -- ${WORKFLOW_FILE} did not load; see that row`);
+  }
+  if (name === null) return row(true, false, DEFAULT_TARGET_NONE);
+  let declared: readonly string[];
+  try {
+    declared = Object.keys(loadContract(root).project?.targets ?? {}).sort();
+  } catch (error) {
+    // ABSENT IS A FACT THIS ROW CAN JUDGE; MALFORMED IS NOT. An absent contract
+    // declares no destination at all, so a stated name dangles -- that is
+    // this row's finding. A contract present and broken fails its own row.
+    if (error instanceof SchemaError && error.message.includes(ABSENT_FILE_MARKER)) {
+      declared = [];
+    } else {
+      return row(
+        false,
+        false,
+        `not checked -- names '${name}', but ${CONTRACT_FILE} did not load, so whether it is a key of project.targets is unknown; see that row`,
+      );
+    }
+  }
+  if (declared.includes(name)) {
+    return row(true, false, `'${name}' (a key of ${CONTRACT_FILE} → project.targets)`);
+  }
+  const meant = declared.find((candidate): boolean => withinOneEdit(name, candidate));
+  const listed =
+    declared.length === 0
+      ? `${CONTRACT_FILE} declares no project.targets at all`
+      : `${CONTRACT_FILE} declares project.targets: ${declared.join(", ")}`;
+  return row(
+    false,
+    true,
+    new SchemaError(
+      policyPath,
+      DEFAULT_TARGET_POINTER,
+      `names '${name}', which is not a key of project.targets -- ${listed}.${
+        meant === undefined ? "" : ` It is one edit from '${meant}'.`
+      } A caller's tooling would pass it to 'nen shu deploy --target', which refuses an undeclared destination at exit 2. Name a declared target, declare this one, or set it to null`,
+    ).message,
+  );
+}
+
 // Load every schema file and report each one's verdict, never stopping at the
 // first failure. Reporting one problem at a time is how a repository adopting
 // nen makes four round trips to learn four things it could have been told at
@@ -415,6 +494,9 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // ...and the `runners` row: the self-hosted pools `nen runner` acts on.
     // No default, so an absent block reads `none declared`.
     pointerCheck(root, "runners", describeRunners),
+    // ...and the `deploy.defaultTarget` row (zheref/nen#300): the one pointer
+    // row that can FAIL, because it is checked against a second file.
+    defaultTargetCheck(root),
     // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

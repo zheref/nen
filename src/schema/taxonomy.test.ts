@@ -90,6 +90,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#review.scopes",
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
+      "nen/workflow.json#deploy.defaultTarget",
       "nen/decisions.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
@@ -113,6 +114,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#review.scopes",
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
+      "nen/workflow.json#deploy.defaultTarget",
       "nen/colors.yml",
       "nen/decisions.json",
     ];
@@ -408,5 +410,139 @@ describe("checkTaxonomy and the schemas/ migration", () => {
     expect(row?.ok).toBe(false);
     expect(row?.required).toBe(true);
     expect(row?.detail).toMatch(/at coverage, states a ladder that does not ascend/);
+  });
+});
+
+// ── nen/workflow.json#deploy.defaultTarget (zheref/nen#300) ─────────────────
+
+describe("checkTaxonomy and deploy.defaultTarget -- the pointer row that reads two files", () => {
+  const ROW = "nen/workflow.json#deploy.defaultTarget";
+
+  /** The three required files, plus whatever policy and contract a case writes. */
+  function repo(files: { workflow?: unknown; contract?: unknown | string } = {}): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-deploy-"));
+    mkdirSync(join(root, "nen"), { recursive: true });
+    for (const file of ["labels.json", "repos.json", "colors.yml"]) {
+      copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    }
+    if (files.workflow !== undefined) {
+      writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify(files.workflow));
+    }
+    if (files.contract !== undefined) {
+      writeFileSync(
+        join(root, "nen", "contract.json"),
+        typeof files.contract === "string" ? files.contract : JSON.stringify(files.contract),
+      );
+    }
+    return root;
+  }
+
+  /** A contract whose project declares exactly these destinations. */
+  function declaring(targets: Readonly<Record<string, unknown>>): unknown {
+    return {
+      $schema: "nen.contract/v0.1",
+      project: {
+        lanes: { only: { stack: "placeholder-stack", cwd: "." } },
+        defaultLane: "only",
+        verbs: { only: { build: { exe: "placeholder-tool", argv: ["go"] } } },
+        targets,
+      },
+    };
+  }
+
+  function rowOf(root: string): { report: ReturnType<typeof checkTaxonomy>; row: SchemaCheck | undefined } {
+    const report = checkTaxonomy({ repoFlag: root });
+    return { report, row: report.checks.find((c): boolean => c.file === ROW) };
+  }
+
+  it("sits immediately under the runners row, and reads ok when no policy file exists", () => {
+    const { report, row } = rowOf(repo());
+    const files = report.checks.map((c): string => c.file);
+    expect(files.indexOf(ROW)).toBe(files.indexOf("nen/workflow.json#runners") + 1);
+    expect(row?.ok).toBe(true);
+    expect(row?.required).toBe(false);
+    expect(row?.detail).toBe("none declared (no policy file)");
+  });
+
+  it("reads ok when the policy states no name -- absent key or explicit null", () => {
+    for (const workflow of [{}, { deploy: {} }, { deploy: { defaultTarget: null } }]) {
+      const { report, row } = rowOf(repo({ workflow }));
+      expect(row?.ok, JSON.stringify(workflow)).toBe(true);
+      expect(row?.detail, JSON.stringify(workflow)).toMatch(/^none declared/);
+      expect(report.ok, JSON.stringify(workflow)).toBe(true);
+    }
+  });
+
+  it("passes a name that IS a key of project.targets, and says so", () => {
+    const { report, row } = rowOf(
+      repo({ workflow: { deploy: { defaultTarget: "testflight" } }, contract: declaring({ testflight: {}, staging: {} }) }),
+    );
+    expect(row?.ok).toBe(true);
+    expect(row?.detail).toBe("'testflight' (a key of nen/contract.json → project.targets)");
+    expect(report.ok).toBe(true);
+  });
+
+  it("FAILS a DANGLING name by pointer, listing what IS declared and naming a one-edit neighbour", () => {
+    const { report, row } = rowOf(
+      repo({ workflow: { deploy: { defaultTarget: "testflght" } }, contract: declaring({ testflight: {}, staging: {} }) }),
+    );
+    expect(row?.ok).toBe(false);
+    expect(row?.required).toBe(true);
+    expect(report.ok).toBe(false);
+    expect(row?.detail).toMatch(/workflow\.json: at deploy\.defaultTarget, names 'testflght', which is not a key of project\.targets/);
+    expect(row?.detail).toContain("nen/contract.json declares project.targets: staging, testflight.");
+    expect(row?.detail).toContain("It is one edit from 'testflight'.");
+    // The POLICY row itself loaded: the dangling name is a cross-file fact, and
+    // this row is the one that says it.
+    expect(report.checks.find((c): boolean => c.file === "nen/workflow.json")?.ok).toBe(true);
+  });
+
+  it("FAILS a name when the contract declares no targets -- or is absent altogether", () => {
+    const empty = rowOf(repo({ workflow: { deploy: { defaultTarget: "testflight" } }, contract: declaring({}) }));
+    expect(empty.row?.ok).toBe(false);
+    expect(empty.row?.required).toBe(true);
+    expect(empty.row?.detail).toContain("nen/contract.json declares no project.targets at all.");
+    expect(empty.row?.detail).not.toContain("one edit from");
+
+    const absent = rowOf(repo({ workflow: { deploy: { defaultTarget: "testflight" } } }));
+    expect(absent.row?.ok).toBe(false);
+    expect(absent.row?.required).toBe(true);
+    expect(absent.report.ok).toBe(false);
+    expect(absent.row?.detail).toContain("nen/contract.json declares no project.targets at all.");
+  });
+
+  it("FAILS a NON-STRING name by pointer on the policy row, and does not repeat it", () => {
+    const { report, row } = rowOf(
+      repo({ workflow: { deploy: { defaultTarget: 7 } }, contract: declaring({ testflight: {} }) }),
+    );
+    expect(report.ok).toBe(false);
+    const policy = report.checks.find((c): boolean => c.file === "nen/workflow.json");
+    expect(policy?.ok).toBe(false);
+    expect(policy?.required).toBe(true);
+    expect(policy?.detail).toMatch(/at deploy\.defaultTarget, expected a non-empty string, got/);
+    expect(row?.ok).toBe(true);
+    expect(row?.detail).toMatch(/^not read -- nen\/workflow\.json did not load; see that row/);
+  });
+
+  it("FAILS a NEAR-MISS key by pointer on the policy row", () => {
+    const { report } = rowOf(
+      repo({ workflow: { deploy: { defaultTaget: "testflight" } }, contract: declaring({ testflight: {} }) }),
+    );
+    expect(report.ok).toBe(false);
+    const policy = report.checks.find((c): boolean => c.file === "nen/workflow.json");
+    expect(policy?.ok).toBe(false);
+    expect(policy?.detail).toMatch(/at deploy\.defaultTaget, is one letter away from 'defaultTarget'/);
+  });
+
+  it("does not pass a name it could not check against a contract that did not load", () => {
+    const { report, row } = rowOf(
+      repo({ workflow: { deploy: { defaultTarget: "testflight" } }, contract: "{ not json" }),
+    );
+    expect(report.ok).toBe(false);
+    expect(row?.ok).toBe(false);
+    // The contract row already fails the report and names the cause; this row
+    // says it could not check, rather than failing twice in two voices.
+    expect(row?.required).toBe(false);
+    expect(row?.detail).toMatch(/^not checked -- names 'testflight', but nen\/contract\.json did not load/);
   });
 });
