@@ -1,5 +1,5 @@
 {
-  "$comment": "Existing GitHub labels for zheref/nen, verified 2026-09-12. Filing validation only; no stage, routing, or gate labels are invented. Update this declaration with the owning label policy when labels change.",
+  "$comment": "Existing GitHub labels for zheref/nen, verified 2026-09-12. Filing validation only; no stage, routing, or gate labels are invented. Update this declaration with the owning label policy when labels change. The model/ family (five lines: claude, gpt, gemini, grok, composer) is hatsu:direct's opt-in verdict label (nen/workflow.json -> direct.publish), declared here first, synced with nen labels sync, and applied through nen label apply.",
   "labels": [
     {
       "color": "f143ab",
@@ -285,6 +285,31 @@
       "color": "5319e7",
       "description": "Commits, PR preparation, reviewer rounds, thread settlement, catch-up, CI redrive, release PRs",
       "name": "job/delivery-ops"
+    },
+    {
+      "color": "0e8a16",
+      "description": "hatsu:direct's primary pick is on the Claude line (Anthropic)",
+      "name": "model/claude"
+    },
+    {
+      "color": "0e8a16",
+      "description": "hatsu:direct's primary pick is on the GPT line (OpenAI)",
+      "name": "model/gpt"
+    },
+    {
+      "color": "0e8a16",
+      "description": "hatsu:direct's primary pick is on the Gemini line (Google)",
+      "name": "model/gemini"
+    },
+    {
+      "color": "0e8a16",
+      "description": "hatsu:direct's primary pick is on the Grok line (xAI, served by Cursor)",
+      "name": "model/grok"
+    },
+    {
+      "color": "0e8a16",
+      "description": "hatsu:direct's primary pick is on Cursor's Composer line",
+      "name": "model/composer"
     }
   ]
 }
