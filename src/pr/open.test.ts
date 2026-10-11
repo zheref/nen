@@ -128,8 +128,8 @@ describe("nen pr open -- the create", () => {
     const result = await capture(root, ["--dry-run", "--draft"], PUSHED, true);
     expect(result.code).toBe(0);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
-    expect(Object.keys(doc)).toEqual(["contract", "number", "url", "head", "base", "draft", "dryRun", "existing"]);
-    expect(doc).toEqual({ contract: OPEN_CONTRACT, number: null, url: null, head: "feature/work", base: "main", draft: true, dryRun: true, existing: false });
+    expect(Object.keys(doc)).toEqual(["contract", "number", "url", "head", "base", "draft", "dryRun", "existing", "assignees", "me", "assigned"]);
+    expect(doc).toEqual({ contract: OPEN_CONTRACT, number: null, url: null, head: "feature/work", base: "main", draft: true, dryRun: true, existing: false, assignees: [], me: null, assigned: null });
     expect(calls(result.seams)).toEqual([
       "git symbolic-ref --short HEAD",
       "git rev-parse --abbrev-ref feature/work@{upstream}",
@@ -145,7 +145,7 @@ describe("nen pr open -- the create", () => {
     const { root, bodyFile } = repo();
     const result = await capture(root, [], [...PUSHED, { match: createArgv(bodyFile), result: { stdout: "https://github.com/zheref/nen/pull/232\n" } }], true);
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.out.join("\n"))).toEqual({ contract: OPEN_CONTRACT, number: 232, url: "https://github.com/zheref/nen/pull/232", head: "feature/work", base: "main", draft: false, dryRun: false, existing: false });
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ contract: OPEN_CONTRACT, number: 232, url: "https://github.com/zheref/nen/pull/232", head: "feature/work", base: "main", draft: false, dryRun: false, existing: false, assignees: [], me: null, assigned: null });
     const text = await capture(root, ["--draft"], [...PUSHED, { match: createArgv(bodyFile, true), result: { stdout: "https://github.com/zheref/nen/pull/233\n" } }]);
     expect(text.out).toEqual(["opened zheref/nen#233: https://github.com/zheref/nen/pull/233 (draft)"]);
   });
@@ -174,5 +174,118 @@ describe("nen pr open -- the create", () => {
     ]) {
       expect(await runFamily(prCommand, argv, root, false, io, new ScriptedSeams([])), argv.join(" ")).toBe(2);
     }
+  });
+});
+
+describe("nen pr open --assignee (zheref/nen#293)", () => {
+  const USER = (login: string): ScriptedCall => ({ match: `gh api --method GET users/${login}`, result: { stdout: JSON.stringify({ login, type: "User" }) } });
+  const ASSIGNABLE = (login: string): ScriptedCall => ({ match: `gh api --method GET repos/zheref/nen/assignees/${login}`, result: { code: 0, stdout: "" } });
+  const ME_IS = (login: string): ScriptedCall => ({ match: "gh api --method GET user", result: { stdout: JSON.stringify({ login }) } });
+  const READ_BACK = (number: number, logins: readonly string[]): ScriptedCall => ({
+    match: `gh pr view ${number} --repo zheref/nen --json assignees`,
+    result: { stdout: JSON.stringify({ assignees: logins.map((login) => ({ login })) }) },
+  });
+
+  it("opens assigned in one call, and reads the assignment back", async () => {
+    const { root, bodyFile } = repo();
+    const result = await capture(root, ["--assignee", "zheref"], [
+      ON_WORK, TRACKED, LOCAL, REMOTE, USER("zheref"), ASSIGNABLE("zheref"), NONE_OPEN,
+      { match: `${createArgv(bodyFile)} --assignee zheref`, result: { stdout: "https://github.com/zheref/nen/pull/240\n" } },
+      READ_BACK(240, ["zheref"]),
+    ], true);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ number: 240, assignees: ["zheref"], me: null, assigned: ["zheref"] });
+  });
+
+  it("resolves @me through GET /user, states the login, and never passes @me to gh", async () => {
+    const { root, bodyFile } = repo();
+    const script = [
+      ON_WORK, TRACKED, LOCAL, REMOTE, ME_IS("zheref"), USER("zheref"), ASSIGNABLE("zheref"), USER("octo-cat"), ASSIGNABLE("octo-cat"), NONE_OPEN,
+      { match: `${createArgv(bodyFile)} --assignee zheref,octo-cat`, result: { stdout: "https://github.com/zheref/nen/pull/241\n" } },
+      READ_BACK(241, ["octo-cat", "zheref"]),
+    ];
+    const result = await capture(root, ["--assignee", "@me,octo-cat"], script);
+    expect(result.code).toBe(0);
+    expect(result.out).toEqual([
+      "@me resolved to 'zheref' (the login of the token running this verb).",
+      "opened zheref/nen#241: https://github.com/zheref/nen/pull/241",
+      "assigned (read back): octo-cat, zheref",
+    ]);
+    expect(calls(result.seams).some((call): boolean => call.includes("@me"))).toBe(false);
+    const json = await capture(root, ["--assignee", "@me,octo-cat"], script, true);
+    expect(JSON.parse(json.out.join("\n"))).toMatchObject({ assignees: ["zheref", "octo-cat"], me: "zheref" });
+  });
+
+  it("folds @me and the same login typed out into one assignee", async () => {
+    const { root, bodyFile } = repo();
+    const result = await capture(root, ["--assignee", "@me,ZHEREF", "--dry-run"], [
+      ON_WORK, TRACKED, LOCAL, REMOTE, ME_IS("zheref"), USER("zheref"), ASSIGNABLE("zheref"),
+      // GitHub answers a login in any case with its canonical spelling.
+      { match: "gh api --method GET users/ZHEREF", result: { stdout: JSON.stringify({ login: "zheref" }) } },
+      ASSIGNABLE("zheref"), NONE_OPEN,
+    ]);
+    expect(result.code).toBe(0);
+    expect(result.out.at(-1)).toBe(`would run: gh pr create --repo zheref/nen --base main --head feature/work --title "feat: the thing" --body-file ${bodyFile} --assignee zheref`);
+  });
+
+  it("fails BEFORE the create, naming an unknown login and one that cannot be assigned", async () => {
+    const { root } = repo();
+    const result = await capture(root, ["--assignee", "ghost,outsider"], [
+      ON_WORK, TRACKED, LOCAL, REMOTE,
+      { match: "gh api --method GET users/ghost", result: { code: 1, stderr: "gh: Not Found (HTTP 404)" } },
+      USER("outsider"),
+      { match: "gh api --method GET repos/zheref/nen/assignees/outsider", result: { code: 1, stderr: "gh: Not Found (HTTP 404)" } },
+    ]);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/'ghost' is not a GitHub user/);
+    expect(err).toMatch(/'outsider' exists but cannot be assigned on zheref\/nen/);
+    expect(err).toMatch(/Nothing was opened/);
+    expect(calls(result.seams).some((call): boolean => call.startsWith("gh pr create") || call.startsWith("gh pr list"))).toBe(false);
+  });
+
+  it("a lookup that could not be made is exit 1, nothing opened -- never read as 'checked'", async () => {
+    const { root } = repo();
+    const result = await capture(root, ["--assignee", "zheref"], [
+      ON_WORK, TRACKED, LOCAL, REMOTE,
+      { match: "gh api --method GET users/zheref", result: { code: 1, stderr: "HTTP 502: Bad gateway" } },
+    ]);
+    expect(result.code).toBe(1);
+    expect(calls(result.seams).some((call): boolean => call.startsWith("gh pr create"))).toBe(false);
+  });
+
+  it("refuses a malformed, empty or duplicated --assignee at exit 2 before any call", async () => {
+    const { root } = repo();
+    for (const value of ["", "a,,b", "bad_login", "-x", "zheref,ZHEREF", "a b"]) {
+      const result = await capture(root, ["--assignee", value], []);
+      expect(result.code, value).toBe(2);
+      expect(result.seams.calls, value).toEqual([]);
+    }
+  });
+
+  it("a read-back missing an assignee is exit 1, the opened pull request still named", async () => {
+    const { root, bodyFile } = repo();
+    const result = await capture(root, ["--assignee", "zheref"], [
+      ON_WORK, TRACKED, LOCAL, REMOTE, USER("zheref"), ASSIGNABLE("zheref"), NONE_OPEN,
+      { match: `${createArgv(bodyFile)} --assignee zheref`, result: { stdout: "https://github.com/zheref/nen/pull/242\n" } },
+      READ_BACK(242, []),
+    ], true);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ number: 242, assigned: [] });
+    expect(result.err.join("\n")).toMatch(/does not show 'zheref' assigned/);
+  });
+
+  it("a create that exits non-zero after printing a url is reported opened, at exit 1", async () => {
+    const { root, bodyFile } = repo();
+    const result = await capture(root, [], [...PUSHED, { match: createArgv(bodyFile), result: { code: 1, stdout: "https://github.com/zheref/nen/pull/243\n", stderr: "could not add label" } }]);
+    expect(result.code).toBe(1);
+    expect(result.out).toEqual(["opened zheref/nen#243: https://github.com/zheref/nen/pull/243"]);
+    expect(result.err.join("\n")).toMatch(/the pull request exists/);
+  });
+
+  it("is refused on the other pr subcommands", async () => {
+    const io: Io = { out: (): void => {}, err: (): void => {} };
+    const { root } = repo();
+    expect(await runFamily(prCommand, ["pr", "fetch", "--target", "zheref/nen", "--pr", "1", "--assignee", "x"], root, false, io, new ScriptedSeams([]))).toBe(2);
   });
 });

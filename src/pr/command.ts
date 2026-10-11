@@ -88,7 +88,7 @@ import {
   type UnrecordedBot,
 } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
-import { OPEN_CONTRACT, openPullRequest } from "./open.js";
+import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
 import { plainLine } from "../cli/plain.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
 import {
@@ -102,6 +102,16 @@ import {
   THREADS_CONTRACT,
   type ThreadsReport,
 } from "./threads.js";
+import {
+  readSettleFile,
+  refuseUnknownThreads,
+  renderSettle,
+  SETTLE_CONTRACT,
+  settleExit,
+  settleThreads,
+  stoppedLine,
+  type SettleReport,
+} from "./settle.js";
 
 function requireTarget(context: CommandContext): Target {
   const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
@@ -134,7 +144,8 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
-nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--repo <path>] [--dry-run] [--json]
+nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json]
+nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--assignee <login>[,<login>...]] [--repo <path>] [--dry-run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
 
@@ -432,6 +443,29 @@ threads:
   thread on this pull request, named; 5 the credential could not
   authenticate. --json: '{ contract: "nen.pr.threads/v0.1", target, pr,
   head, thread, replied, resolved, dryRun, threads[] }'.
+  'settle --from <file.json>' settles a BATCH (zheref/nen#230): the thread
+  list is walked ONCE, then one reply and one resolve mutation per entry, in
+  file order -- 2N + 1 calls where the single verbs cost 4N. The file is a
+  JSON array of { "thread": "<id>", "body": "<text>" } or { "thread": "<id>",
+  "bodyFile": "<path>" } (relative to the file's own directory, read raw).
+  --from <file.json>  Required by 'settle'; relative to --repo.
+  REFUSED AT EXIT 2, ALL PROBLEMS NAMED, NOTHING SENT: a file that is not a
+  non-empty JSON array; an entry with an unknown key, no 'thread', both or
+  neither of 'body'/'bodyFile', an unreadable bodyFile or an empty body; a
+  thread id named twice; and -- after the one walk -- an id this pull
+  request does not carry. An ALREADY-RESOLVED thread is reported against its
+  entry as 'already-resolved', nothing sent to it, and the rest proceeds.
+  A mutation refused partway STOPS the batch: the report names which
+  threads were replied to and resolved, replied to only, and not attempted;
+  nothing is retried. --dry-run walks, validates, prints both argvs and every
+  reply body per entry, and sends nothing. Exit: 0 every entry settled (or
+  planned); 3 every other entry settled and at least one was already
+  resolved; 1 / 5 the batch stopped on an API refusal / an authentication
+  failure; 4 the pull request itself is not visible; 2 as above. --json:
+  '{ contract: "nen.pr.threads-settle/v0.1", target, pr, head, from, dryRun,
+  ok, stoppedAt, entries[]: { thread, disposition, replied, resolved,
+  bodyBytes, bodyFrom, replyArgv, resolveArgv, error } }', disposition one of
+  resolved, replied, already-resolved, failed, not-attempted, planned.
 
 open:
   Open exactly ONE pull request from a head that is already on the remote
@@ -442,6 +476,16 @@ open:
   --body-file <path>   the body, handed to 'gh pr create --body-file' as is.
   --head <branch>      the head branch; default the checked-out branch.
   --draft              open it as a draft.
+  --assignee <login>[,<login>...]  assign the pull request as it is opened
+                       (zheref/nen#293). '@me' is resolved to the login of
+                       the token running this verb ('GET /user') and that
+                       login is printed -- '@me' is never passed through.
+                       Every login is checked BEFORE the pull request is
+                       opened: 'GET /users/<login>' (exit 2 naming an unknown
+                       one) and 'GET /repos/<o>/<n>/assignees/<login>' (exit
+                       2 naming one that cannot be assigned here). The
+                       assignees are read back after the create; one missing
+                       is exit 1 with the opened pull request still named.
   --dry-run            print the 'gh pr create' argv; still asks git and
                        GitHub every question below, creates nothing.
   REFUSED AT EXIT 2: a detached HEAD with no --head; a head with no upstream;
@@ -451,8 +495,11 @@ open:
   fork) -- push first. EXIT 1, nothing opened: a pull request is already
   open for that head ('gh pr list --head'), reported with its number and url.
   --json: '{ contract: "${OPEN_CONTRACT}", number, url, head, base, draft,
-  dryRun, existing }' -- number and url null on a dry run; existing true on
-  the exit-1 case, where they name the pull request already there.
+  dryRun, existing, assignees, me, assigned }' -- number and url null on a
+  dry run; existing true on the exit-1 case, where they name the pull request
+  already there; assignees the validated logins asked for ([] without
+  --assignee); me the login '@me' resolved to, else null; assigned the
+  logins the read-back found, null when nothing was opened or read back.
 
 merge:
   THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms: a release
@@ -812,6 +859,8 @@ export const prCommand: Command = {
       "thread",
       "title-file",
       "head",
+      "from",
+      "assignee",
     ],
     booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft", "release-unit", "delivery", "run"],
     // `ready`'s repeatable `--exclude-check` (zheref/nen#243) -- declared as a
@@ -883,7 +932,7 @@ export const prCommand: Command = {
     // Same shape for open's own three: a title file, a head and a draft flag
     // mean nothing to any other subcommand here.
     if (subcommand !== "open") {
-      for (const flag of ["title-file", "head"]) {
+      for (const flag of ["title-file", "head", "assignee"]) {
         if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is only read by 'pr open'.`);
       }
       if (context.args.booleans.has("draft")) throw new VerbUsageError("--draft is only read by 'pr open'.");
@@ -893,6 +942,9 @@ export const prCommand: Command = {
     // 'threads' invocation is told rather than silently ignored.
     if (subcommand !== "threads" && context.args.values["thread"] !== undefined) {
       throw new VerbUsageError("--thread is only read by 'pr threads'.");
+    }
+    if (subcommand !== "threads" && context.args.values["from"] !== undefined) {
+      throw new VerbUsageError("--from is only read by 'pr threads settle'.");
     }
     if (subcommand !== "request-reviews" && context.args.values["add-bots"] !== undefined) {
       throw new VerbUsageError("--add-bots is only read by 'pr request-reviews'.");
@@ -1614,7 +1666,7 @@ function doMarkReady(context: CommandContext): number {
 // bad `--thread` into exit 4 naming it and an already-resolved one into exit 3
 // naming it, instead of a GraphQL error a caller has to read. See
 // ./threads.ts's header for why those two are separate codes at all.
-const THREAD_ACTIONS: readonly string[] = ["list", "reply", "resolve"];
+const THREAD_ACTIONS: readonly string[] = ["list", "reply", "resolve", "settle"];
 
 function threads(context: CommandContext): number {
   const action = context.args.positionals[2];
@@ -1634,10 +1686,11 @@ function threads(context: CommandContext): number {
     list: { values: [], booleans: [] },
     reply: { values: ["thread", "body-file"], booleans: ["dry-run"] },
     resolve: { values: ["thread"], booleans: ["dry-run"] },
+    settle: { values: ["from"], booleans: ["dry-run"] },
   };
   const mine = ACTION_FLAGS[action] as { values: readonly string[]; booleans: readonly string[] };
   const foreign = [
-    ...["thread", "body-file"].filter(
+    ...["thread", "body-file", "from"].filter(
       (flag): boolean => context.args.values[flag] !== undefined && !mine.values.includes(flag),
     ),
     ...["dry-run"].filter(
@@ -1653,6 +1706,7 @@ function threads(context: CommandContext): number {
   const target = requireTarget(context);
   const prNumber = requirePrStrict(context, `threads ${action}`);
   const dryRun = context.args.booleans.has("dry-run");
+  if (action === "settle") return settle(context, target, prNumber, dryRun);
   const threadId = context.args.values["thread"];
   if (action !== "list" && (threadId === undefined || threadId.trim() === "")) {
     throw new VerbUsageError(
@@ -1744,6 +1798,49 @@ function threads(context: CommandContext): number {
 }
 
 /**
+ * `nen pr threads settle` (zheref/nen#230). See ./settle.ts's header: the
+ * file is validated in full, then the ONE walk, then the unknown-id refusal,
+ * then the mutations -- so every exit-2 refusal fires before anything is sent.
+ */
+function settle(context: CommandContext, target: Target, prNumber: number, dryRun: boolean): number {
+  const fromFlag = context.args.values["from"];
+  if (fromFlag === undefined || fromFlag.trim() === "") {
+    throw new VerbUsageError(
+      "'pr threads settle' takes --from <file.json>: a JSON array of { \"thread\": \"<id>\", \"body\": \"<text>\" } or { \"thread\": \"<id>\", \"bodyFile\": \"<path>\" }.",
+    );
+  }
+  // RESOLVED AGAINST `--repo`, like every other path flag (Feitan F7).
+  const fromPath = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), fromFlag);
+  const entries = readSettleFile(fromPath);
+  let listing;
+  try {
+    listing = listThreads(context.seams, target, prNumber);
+  } catch (error) {
+    if (error instanceof ThreadsError) {
+      context.io.err(`nen pr threads settle: ${error.message}`);
+      return EXIT_FOR[error.kind];
+    }
+    throw error;
+  }
+  refuseUnknownThreads(listing, entries, target.slug, prNumber);
+  const result = settleThreads(context.seams, target, prNumber, listing, entries, dryRun);
+  const report: SettleReport = {
+    contract: SETTLE_CONTRACT,
+    target: target.slug,
+    pr: prNumber,
+    head: listing.head,
+    from: fromPath,
+    dryRun,
+    ok: result.failure === null && result.outcomes.every((outcome): boolean => outcome.disposition === (dryRun ? "planned" : "resolved")),
+    stoppedAt: result.stoppedAt,
+    entries: result.outcomes,
+  };
+  emit(context.io, context.json, report, renderSettle(report));
+  if (result.failure !== null) context.io.err(`nen pr threads settle: ${stoppedLine(report)}`);
+  return settleExit(result, EXIT_FOR);
+}
+
+/**
  * `nen pr open`. `--repo` is OPTIONAL here, unlike the verbs that mutate a
  * tree: the write goes to GitHub, and the checkout is only asked which branch
  * is out and whether the remote holds it -- reads whose wrong answer is a
@@ -1764,6 +1861,7 @@ function open(context: CommandContext): number {
   // cannot open would fail after the questions below were already asked.
   const bodyFile = resolveAgainstRepo(root, bodyPath);
   readTextFile(bodyPath, root, "It is the pull request body -- 'pr open' hands it to gh by path.");
+  const assignees = readAssignees(context.args.values["assignee"]);
   const outcome = openPullRequest(context.seams, root, target, {
     base,
     head: context.args.values["head"] ?? null,
@@ -1771,10 +1869,43 @@ function open(context: CommandContext): number {
     bodyFile,
     draft: context.args.booleans.has("draft"),
     dryRun: context.args.booleans.has("dry-run"),
+    assignees,
   });
   if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
-  emit(context.io, context.json, outcome.report, outcome.lines);
+  // Every line carries a branch name, a login or gh's own words.
+  emit(context.io, context.json, outcome.report, outcome.lines.map(plainLine));
+  if (outcome.failure !== undefined) {
+    context.io.err(`nen pr open: ${plainLine(outcome.failure)}`);
+    return 1;
+  }
   return outcome.report.existing ? 1 : 0;
+}
+
+/**
+ * `--assignee a,b,@me`, syntax-checked before any call (exit 2). An empty
+ * value, an empty item, a duplicate, or anything that is not a GitHub login's
+ * shape or `@me` is refused by name; whether each login EXISTS and can be
+ * assigned is ./open.ts's question, asked of GitHub before the create.
+ */
+function readAssignees(raw: string | undefined): readonly string[] {
+  if (raw === undefined) return [];
+  const items = raw.split(",").map((item): string => item.trim());
+  if (items.some((item): boolean => item === "")) {
+    throw new VerbUsageError(`--assignee '${raw}' has an empty login. It takes <login>[,<login>...], or @me for the token running this verb.`);
+  }
+  const bad = items.filter((item): boolean => item !== OPEN_ME && !OPEN_LOGIN.test(item));
+  if (bad.length > 0) {
+    throw new VerbUsageError(
+      `--assignee: ${bad.map((item): string => `'${item}'`).join(", ")} ${bad.length === 1 ? "is" : "are"} not a GitHub login (letters, digits and single interior hyphens, at most 39 characters) or @me.`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const item of items) {
+    const key = item.toLowerCase();
+    if (seen.has(key)) throw new VerbUsageError(`--assignee names '${item}' twice.`);
+    seen.add(key);
+  }
+  return items;
 }
 
 /**
