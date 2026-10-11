@@ -5,7 +5,7 @@ All notable changes to nen. Versions are git tags on `main`; a tag is not a rele
 ## v0.21.0 — 2026-10-11
 
 Release unit for `v0.20.0..v0.21.0`. It brings declared focused tests, live `shu` output, the refusal of unread `nen/gates.json` keys with nen's own round caps, per-pool runner labels, and six new verbs that retire Hatsu shell (`canon checkout`, `canon pin --write`, `surface install`/`status`, `wc worktree`, `schema set`, `pr threads settle`):
-- the deliveries: [#381](https://github.com/zheref/nen/pull/381), [#385](https://github.com/zheref/nen/pull/385), [#386](https://github.com/zheref/nen/pull/386), [#387](https://github.com/zheref/nen/pull/387), [#388](https://github.com/zheref/nen/pull/388), [#392](https://github.com/zheref/nen/pull/392), [#393](https://github.com/zheref/nen/pull/393), [#394](https://github.com/zheref/nen/pull/394), [#395](https://github.com/zheref/nen/pull/395), [#396](https://github.com/zheref/nen/pull/396), [#397](https://github.com/zheref/nen/pull/397), [#398](https://github.com/zheref/nen/pull/398), [#399](https://github.com/zheref/nen/pull/399), [#400](https://github.com/zheref/nen/pull/400).
+- the deliveries: [#381](https://github.com/zheref/nen/pull/381), [#385](https://github.com/zheref/nen/pull/385), [#386](https://github.com/zheref/nen/pull/386), [#387](https://github.com/zheref/nen/pull/387), [#388](https://github.com/zheref/nen/pull/388), [#392](https://github.com/zheref/nen/pull/392), [#393](https://github.com/zheref/nen/pull/393), [#394](https://github.com/zheref/nen/pull/394), [#395](https://github.com/zheref/nen/pull/395), [#396](https://github.com/zheref/nen/pull/396), [#397](https://github.com/zheref/nen/pull/397), [#398](https://github.com/zheref/nen/pull/398), [#399](https://github.com/zheref/nen/pull/399), [#400](https://github.com/zheref/nen/pull/400), [#401](https://github.com/zheref/nen/pull/401).
 
 The compatibility floor moves to `0.21`.
 
@@ -35,6 +35,7 @@ The deliveries each stated the verb count at their own merge (128, 129, 130, 131
 - **schema** — the `nen/colors.yml` loader skips `$`-prefixed keys, which it read as categories, values and extra fields ([#400](https://github.com/zheref/nen/pull/400)).
 - **cli** — `plainLine` strips Unicode bidi and zero-width characters as well as control characters ([#395](https://github.com/zheref/nen/pull/395)), and the top-level catch runs it over every line of a thrown message, for every verb ([#398](https://github.com/zheref/nen/pull/398)).
 - **ci** — nen's own `ci.yml`, `release-assets.yml` and `runner-preflight-windows-x64.yml` target the full pool label sets, and the runner-policy guard reads the allowed sets from `nen/workflow.json` ([#395](https://github.com/zheref/nen/pull/395)).
+- **config** — nen's own `nen/labels.json` declares hatsu:direct's five `model/` labels, and its `nen/workflow.json` sets `direct.publish` to `label`, so a direct verdict on a zheref/nen issue lands as the primary pick's `model/<line>` label ([#401](https://github.com/zheref/nen/pull/401)).
 
 ### Breaking / consumer notes
 
