@@ -8,8 +8,8 @@
 // ./worktree.integration.test.ts proves the same table against the real git.
 
 import { afterAll, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { closeSync, existsSync, mkdirSync, openSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHmac } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Stats } from "node:fs";
@@ -20,14 +20,18 @@ import {
   copyPathRefusal,
   copyThroughStaging,
   foldName,
+  KEY_FILE,
   manageWorktree,
   MANIFEST_CONTRACT,
+  MANIFEST_CONTRACT_V1,
   MANIFEST_FILE,
+  nativeWorktreeFs,
   nameRefusal,
   parseRegistrations,
   parseStatusZ,
   scrubbedGitEnv,
   WorktreeStepError,
+  type FileDigest,
   type WorktreeFs,
 } from "./worktree.js";
 
@@ -45,19 +49,27 @@ interface FakeFs extends WorktreeFs {
   readonly made: string[];
   readonly copied: Array<{ readonly source: string; readonly destination: string; readonly stagingDir: string }>;
   readonly unlinked: string[];
+  readonly swept: string[];
   readonly written: Map<string, string>;
 }
 
-function fakeFs(entries: Readonly<Record<string, Kind>>, options: { hashes?: Readonly<Record<string, string>>; texts?: Readonly<Record<string, string>> } = {}): FakeFs {
+const FAKE_KEY = Buffer.alloc(32, 7);
+
+function fakeFs(
+  entries: Readonly<Record<string, Kind>>,
+  options: { hashes?: Readonly<Record<string, string>>; texts?: Readonly<Record<string, string>>; mkdirp?: (path: string) => void } = {},
+): FakeFs {
   const tree = new Map<string, Kind>(Object.entries(entries));
   const made: string[] = [];
   const copied: Array<{ source: string; destination: string; stagingDir: string }> = [];
   const unlinked: string[] = [];
+  const swept: string[] = [];
   const written = new Map<string, string>(Object.entries(options.texts ?? {}));
   return {
     made,
     copied,
     unlinked,
+    swept,
     written,
     lstat: (path: string): Stats | null => {
       const kind = tree.get(path);
@@ -65,6 +77,7 @@ function fakeFs(entries: Readonly<Record<string, Kind>>, options: { hashes?: Rea
     },
     realpath: (path: string): string => path,
     mkdirp: (path: string): void => {
+      options.mkdirp?.(path);
       made.push(path);
       tree.set(path, "dir");
     },
@@ -73,10 +86,19 @@ function fakeFs(entries: Readonly<Record<string, Kind>>, options: { hashes?: Rea
       tree.set(destination, "file");
       return "c".repeat(64);
     },
-    hashFile: (path: string): string | null => options.hashes?.[path] ?? null,
-    unlink: (path: string): void => {
+    digestFile: (path: string): FileDigest | null => {
+      const digest = options.hashes?.[path];
+      return digest === undefined ? null : { digest, dev: 1n, ino: 1n };
+    },
+    unlinkIfSame: (path: string): boolean => {
       unlinked.push(path);
       tree.delete(path);
+      return true;
+    },
+    loadKey: (): Buffer => FAKE_KEY,
+    removeLeftovers: (dir: string): string[] => {
+      swept.push(dir);
+      return [];
     },
     readText: (path: string): string | null => written.get(path) ?? null,
     writeTextAtomic: (path: string, text: string): void => {
@@ -117,6 +139,7 @@ function base(core: string = CORE): ScriptedCall[] {
     { match: "git rev-parse --path-format=absolute --git-common-dir", result: { stdout: `${join(core, ".git")}\n` } },
     { match: "git rev-parse --is-bare-repository", result: { stdout: "false\n" } },
     { match: "git check-ref-format --branch main", result: { stdout: "main\n" } },
+    { match: "git remote get-url origin", result: { stdout: "https://example.invalid/x.git\n" } },
     { match: "git rev-parse --verify --quiet --end-of-options refs/remotes/origin/main^{commit}", result: { stdout: `${TIP}\n` } },
     { match: FETCH, result: {} },
     { match: "git check-ignore -q -- .nen/worktrees/kg", result: { code: 0 } },
@@ -138,11 +161,11 @@ function registeredAt(head: string): ScriptedCall[] {
 const OPTIONS = { name: "kg", base: "main", copyFromCore: [] as string[], dryRun: false };
 
 describe("scrubbedGitEnv", () => {
-  it("drops every redirect, config, exec-path and pathspec variable and every GIT_CONFIG_KEY/VALUE_<n>, and keeps nothing else of the caller's", () => {
+  it("drops every redirect, exec-path and pathspec variable and every GIT_CONFIG_KEY/VALUE_<n>, and keeps nothing else of the caller's", () => {
     const env = scrubbedGitEnv({ GIT_CONFIG_KEY_0: "core.worktree", GIT_CONFIG_VALUE_0: "/x", GIT_CONFIG_KEY_ZZ: "kept", PATH: "/bin" });
     for (const key of [
       "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_COUNT",
-      "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM", "GIT_EXEC_PATH",
+      "GIT_EXEC_PATH",
       "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS",
       "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
     ]) {
@@ -150,6 +173,8 @@ describe("scrubbedGitEnv", () => {
       expect(env[key], key).toBeUndefined();
     }
     expect("GIT_CONFIG_KEY_ZZ" in env).toBe(false);
+    // R4: the user's own choice of config files is kept.
+    for (const key of ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"]) expect(key in env, key).toBe(false);
     expect("PATH" in env).toBe(false);
     expect(env["GIT_OPTIONAL_LOCKS"]).toBe("0");
     expect(env["GIT_TERMINAL_PROMPT"]).toBe("0");
@@ -244,37 +269,124 @@ describe("manageWorktree over scripted git", () => {
     expect(fs.copied[0]?.stagingDir.startsWith(PATH)).toBe(false);
     expect(seams.calls.find((call) => call.args[0] === "fetch")?.args).toContain("--end-of-options");
     const record = JSON.parse(fs.written.get(join(GITDIR, MANIFEST_FILE)) ?? "{}") as unknown;
-    expect(record).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: secret, sha256: "c".repeat(64) }] });
+    expect(record).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: secret, hmac: "c".repeat(64) }] });
+    expect(fs.swept).toEqual([GITDIR]);
   });
 
-  it("retention: an unnamed copy whose bytes match is removed, an edited one kept, a vanished one forgotten; --dry-run removes nothing", () => {
+  /** A worktree at TIP whose record holds `copies`, with the git answers retention asks. */
+  function retentionScript(tracked: string, ignored: readonly string[]): ScriptedCall[] {
+    return [
+      ...base(),
+      ...registeredAt(TIP),
+      { match: "git ls-files -z --full-name", result: { stdout: tracked } },
+      ...["a.env", "b.env", "README", "plain.env"].map((path): ScriptedCall => ({ match: `git check-ignore -q -- ${path}`, result: { code: ignored.includes(path) ? 0 : 1 } })),
+    ];
+  }
+  const record = (copies: ReadonlyArray<{ path: string; hmac: string | null }>, contract = MANIFEST_CONTRACT): string =>
+    JSON.stringify({ contract, copies: contract === MANIFEST_CONTRACT ? copies : copies.map((copy) => ({ path: copy.path, sha256: copy.hmac })) });
+
+  it("retention: an unnamed copy whose bytes verify is removed, an edited one kept, a vanished one forgotten; --dry-run removes nothing", () => {
     const same = "d".repeat(64);
-    const manifest = JSON.stringify({
-      contract: MANIFEST_CONTRACT,
-      copies: [
-        { path: "a.env", sha256: same },
-        { path: "b.env", sha256: same },
-        { path: "gone.env", sha256: same },
-      ],
-    });
+    const manifest = record([
+      { path: "a.env", hmac: same },
+      { path: "b.env", hmac: same },
+      { path: "gone.env", hmac: same },
+    ]);
     const entries = { [PARENT]: "dir", [PATH]: "dir", [join(PATH, "a.env")]: "file", [join(PATH, "b.env")]: "file" } as const;
     const hashes = { [join(PATH, "a.env")]: same, [join(PATH, "b.env")]: "e".repeat(64) };
-    const script = (): ScriptedCall[] => [...base(), ...registeredAt(TIP)];
 
     const dryFs = fakeFs(entries, { hashes, texts: { [join(GITDIR, MANIFEST_FILE)]: manifest } });
-    const dry = manageWorktree(new ScriptedSeams(script()), CORE, { ...OPTIONS, dryRun: true }, dryFs);
+    const dry = manageWorktree(new ScriptedSeams(retentionScript("", ["a.env", "b.env"])), CORE, { ...OPTIONS, dryRun: true }, dryFs);
     expect(dry.report).toMatchObject({ state: "reused", removed: [{ path: "a.env", action: "would-remove" }], kept: [{ path: "b.env", reason: "edited since copy" }] });
     expect(dryFs.unlinked).toEqual([]);
+    expect(dryFs.swept).toEqual([]);
     expect(dryFs.written.get(join(GITDIR, MANIFEST_FILE))).toBe(manifest);
 
     const realFs = fakeFs(entries, { hashes, texts: { [join(GITDIR, MANIFEST_FILE)]: manifest } });
-    const real = manageWorktree(new ScriptedSeams(script()), CORE, OPTIONS, realFs);
+    const real = manageWorktree(new ScriptedSeams(retentionScript("", ["a.env", "b.env"])), CORE, OPTIONS, realFs);
     expect(real.report).toMatchObject({ removed: [{ path: "a.env", action: "removed" }], kept: [{ path: "b.env", reason: "edited since copy" }] });
     expect(realFs.unlinked).toEqual([join(PATH, "a.env")]);
-    expect(JSON.parse(realFs.written.get(join(GITDIR, MANIFEST_FILE)) ?? "{}")).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: "b.env", sha256: same }] });
+    expect(JSON.parse(realFs.written.get(join(GITDIR, MANIFEST_FILE)) ?? "{}")).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: "b.env", hmac: same }] });
     if (real.kind === "done") {
       expect(real.lines).toContain("removed:         a.env (no longer named; bytes as copied)");
       expect(real.lines).toContain("kept:            b.env (edited since copy)");
+    }
+  });
+
+  it("retention NEVER deletes a tracked file whose bytes verify -- planted, or tracked by the trunk later (R1)", () => {
+    const same = "d".repeat(64);
+    const manifest = record([{ path: "README", hmac: same }, { path: "a.env", hmac: same }]);
+    const entries = { [PARENT]: "dir", [PATH]: "dir", [join(PATH, "README")]: "file", [join(PATH, "a.env")]: "file" } as const;
+    const hashes = { [join(PATH, "README")]: same, [join(PATH, "a.env")]: same };
+    const fs = fakeFs(entries, { hashes, texts: { [join(GITDIR, MANIFEST_FILE)]: manifest } });
+    // The trunk now tracks a.env too, with the same bytes; README was always tracked.
+    const outcome = manageWorktree(new ScriptedSeams(retentionScript("README\0a.env\0", ["a.env", "README"])), CORE, OPTIONS, fs);
+    expect(outcome.report).toMatchObject({ removed: [], kept: [{ path: "README", reason: "tracked at the tip" }, { path: "a.env", reason: "tracked at the tip" }] });
+    expect(fs.unlinked).toEqual([]);
+  });
+
+  it("retention keeps an entry that is no longer ignored (R1)", () => {
+    const same = "d".repeat(64);
+    const fs = fakeFs({ [PARENT]: "dir", [PATH]: "dir", [join(PATH, "plain.env")]: "file" }, { hashes: { [join(PATH, "plain.env")]: same }, texts: { [join(GITDIR, MANIFEST_FILE)]: record([{ path: "plain.env", hmac: same }]) } });
+    const outcome = manageWorktree(new ScriptedSeams(retentionScript("", [])), CORE, OPTIONS, fs);
+    expect(outcome.report).toMatchObject({ removed: [], kept: [{ path: "plain.env", reason: "not ignored" }] });
+    expect(fs.unlinked).toEqual([]);
+  });
+
+  it("a v0.1 record's entries are kept as unverifiable, and the record is rewritten as v0.2 (N3)", () => {
+    const fs = fakeFs({ [PARENT]: "dir", [PATH]: "dir", [join(PATH, "a.env")]: "file" }, {
+      hashes: { [join(PATH, "a.env")]: "d".repeat(64) },
+      texts: { [join(GITDIR, MANIFEST_FILE)]: record([{ path: "a.env", hmac: "d".repeat(64) }], MANIFEST_CONTRACT_V1) },
+    });
+    const outcome = manageWorktree(new ScriptedSeams(retentionScript("", ["a.env"])), CORE, OPTIONS, fs);
+    expect(outcome.report).toMatchObject({ removed: [], kept: [{ path: "a.env", reason: "unverifiable record" }] });
+    expect(fs.unlinked).toEqual([]);
+    expect(JSON.parse(fs.written.get(join(GITDIR, MANIFEST_FILE)) ?? "{}")).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: "a.env", hmac: null }] });
+  });
+
+  it("a refusal on one named path keeps every still-named record entry (R2)", () => {
+    const same = "d".repeat(64);
+    const fs = fakeFs(
+      { [join(CORE, "a.env")]: "file", [join(CORE, "b.env")]: "file", [PARENT]: "dir", [PATH]: "dir", [join(PATH, "a.env")]: "link", [join(PATH, "b.env")]: "file" },
+      { texts: { [join(GITDIR, MANIFEST_FILE)]: record([{ path: "b.env", hmac: same }]) } },
+    );
+    const seams = new ScriptedSeams([
+      ...base(),
+      { match: "git ls-files -z --full-name", result: { stdout: "" } },
+      { match: "git check-ignore -q -- a.env", result: { code: 0 } },
+      { match: "git check-ignore -q -- b.env", result: { code: 0 } },
+      { match: `git ls-tree -z --full-tree --end-of-options ${TIP}`, result: { stdout: "" } },
+      ...registeredAt(TIP),
+    ]);
+    const outcome = manageWorktree(seams, CORE, { ...OPTIONS, copyFromCore: ["a.env", "b.env"] }, fs);
+    expect(outcome.report.refusal?.kind).toBe("copy-destination");
+    expect(JSON.parse(fs.written.get(join(GITDIR, MANIFEST_FILE)) ?? "{}")).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: "b.env", hmac: same }] });
+  });
+
+  it("a raw filesystem error is a step error, redacted and stripped (N4)", () => {
+    const fs = fakeFs({}, { mkdirp: (): void => { throw new Error("EACCES https://u:secret@host/x \u001b[2Kgone"); } });
+    const seams = new ScriptedSeams([...base(), { match: "git worktree list --porcelain", result: { stdout: corePorcelain(CORE) } }]);
+    let caught: unknown;
+    try {
+      manageWorktree(seams, CORE, OPTIONS, fs);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(WorktreeStepError);
+    expect((caught as Error).message).not.toContain("secret");
+    expect((caught as Error).message).not.toMatch(/\u001b/);
+  });
+
+  it("no origin remote is refused as base before any fetch, dry or real (R5)", () => {
+    for (const dryRun of [true, false]) {
+      const seams = new ScriptedSeams([
+        ...base().filter((call) => call.match !== "git remote get-url origin"),
+        { match: "git remote get-url origin", result: { code: 2, stderr: "error: No such remote 'origin'" } },
+      ]);
+      const outcome = manageWorktree(seams, CORE, { ...OPTIONS, dryRun }, fakeFs({}));
+      expect(outcome.report.refusal?.kind).toBe("base");
+      expect(outcome.report.refusal?.reason).toMatch(/no origin remote/);
+      expect(seams.calls.some((call) => call.args[0] === "fetch" || call.args[0] === "rev-parse" && call.args.includes("--verify"))).toBe(false);
     }
   });
 
@@ -356,10 +468,23 @@ describe("manageWorktree over scripted git", () => {
       { match: "git ls-files -z --others --ignored --exclude-standard --directory", result: { stdout: ignored } },
       { match: `git diff --no-ext-diff --no-renames --name-only -z --end-of-options HEAD ${TIP}`, result: { stdout: changed } },
     ]);
-    const outcome = manageWorktree(seams, CORE, OPTIONS, fakeFs({ [PARENT]: "dir", [PATH]: "dir" }));
+    const onDisk = { [PARENT]: "dir", [PATH]: "dir", [join(PATH, ...changed.replace(/\0$/, "").split("/"))]: "file" } as const;
+    const outcome = manageWorktree(seams, CORE, OPTIONS, fakeFs(onDisk));
     expect(outcome.report.refusal?.kind).toBe("would-overwrite-ignored");
     expect(outcome.report.refusal?.paths).toEqual([changed.replace(/\0$/, "")]);
     expect(seams.calls.some((call) => call.args[0] === "checkout")).toBe(false);
+  });
+
+  it("an ignored 'build/cache' does not stand in the way of a tip that adds 'build/out' (R3)", () => {
+    const seams = new ScriptedSeams([
+      ...base(),
+      ...registeredAt(OLD),
+      { match: "git ls-files -z --others --ignored --exclude-standard --directory", result: { stdout: "build/\0" } },
+      { match: `git diff --no-ext-diff --no-renames --name-only -z --end-of-options HEAD ${TIP}`, result: { stdout: "build/out\0" } },
+      { match: `git checkout --quiet --detach --end-of-options ${TIP}`, result: {} },
+    ]);
+    const outcome = manageWorktree(seams, CORE, OPTIONS, fakeFs({ [PARENT]: "dir", [PATH]: "dir", [join(PATH, "build")]: "dir", [join(PATH, "build", "cache")]: "file" }));
+    expect(outcome.report).toMatchObject({ state: "moved" });
   });
 
   it("a symlinked .nen is refused before the registration is read", () => {
@@ -472,6 +597,13 @@ describe("the tip walk folds case where the filesystem does, and NFC everywhere"
     expect(outcome.report.refusal?.reason).toContain("as 'kro/config.xcconfig'");
   });
 
+  it("on darwin, EVERY folded match is checked: a 'kro' symlink beside a 'Kro' directory is refused (R6)", () => {
+    const seams = new ScriptedSeams(script(`040000 tree ${OLD}\tKro\u0000120000 blob ${OLD}\tkro\0`, ""), { platform: "darwin" });
+    const outcome = manageWorktree(seams, CORE, { ...OPTIONS, dryRun: true, copyFromCore: [secret] }, fs());
+    expect(outcome.report.refusal?.kind).toBe("copy-destination");
+    expect(outcome.report.refusal?.reason).toMatch(/beneath 'kro', which is TRACKED as a symlink/);
+  });
+
   it("on linux, where the names are two files, the walk does not match across case", () => {
     const seams = new ScriptedSeams(script(`040000 tree ${OLD}\tkro\0`, `100644 blob ${OLD}\tconfig.xcconfig\0`), { platform: "linux" });
     const outcome = manageWorktree(seams, CORE, { ...OPTIONS, dryRun: true, copyFromCore: [secret] }, fs());
@@ -508,34 +640,99 @@ describe("copyThroughStaging -- the bytes, and the post-rename identity check (F
     return { source, staging, tree };
   }
   const inTree = (tree: string) => (directory: string): boolean => directory === tree;
+  const KEY = Buffer.alloc(32, 9);
 
   it("copies through the staging dir, returns the sha256, and leaves nothing staged", () => {
     const { source, staging, tree } = setup();
-    const hash = copyThroughStaging(source, join(tree, "x.env"), staging, inTree(tree));
-    expect(hash).toBe(createHash("sha256").update("SECRET=1\n").digest("hex"));
+    const hash = copyThroughStaging(source, join(tree, "x.env"), staging, inTree(tree), KEY);
+    expect(hash).toBe(createHmac("sha256", KEY).update("SECRET=1\n").digest("hex"));
+    expect(copyThroughStaging(source, join(tree, "y.env"), staging, inTree(tree), Buffer.alloc(32, 1))).not.toBe(hash);
     expect(readFileSync(join(tree, "x.env"), "utf8")).toBe("SECRET=1\n");
     expect(readdirSync(staging)).toEqual([]);
-    expect(readdirSync(tree)).toEqual(["x.env"]);
+    expect(readdirSync(tree).sort()).toEqual(["x.env", "y.env"]);
   });
 
   it("a file at the destination that is not the one written is left alone, and the run fails (exit 1)", () => {
     const { source, staging, tree } = setup();
+    // The written file's descriptor is held open while it is replaced, so the
+    // filesystem cannot hand its inode to the replacement (ext4 and tmpfs reuse
+    // a freed inode at once).
+    let held: number | null = null;
     const swap = {
       rename: (from: string, to: string): void => {
         renameSync(from, to);
+        held = openSync(to, "r");
         unlinkSync(to);
         writeFileSync(to, "theirs\n");
       },
     };
-    expect(() => copyThroughStaging(source, join(tree, "x.env"), staging, inTree(tree), swap)).toThrow(WorktreeStepError);
+    try {
+      expect(() => copyThroughStaging(source, join(tree, "x.env"), staging, inTree(tree), KEY, swap)).toThrow(WorktreeStepError);
+    } finally {
+      if (held !== null) closeSync(held);
+    }
     expect(readFileSync(join(tree, "x.env"), "utf8")).toBe("theirs\n");
     expect(readdirSync(staging)).toEqual([]);
   });
 
   it("a copy whose directory resolves outside the worktree after the rename is unlinked, and the run fails (exit 1)", () => {
     const { source, staging, tree } = setup();
-    expect(() => copyThroughStaging(source, join(tree, "x.env"), staging, () => false)).toThrow(/outside the worktree/);
+    expect(() => copyThroughStaging(source, join(tree, "x.env"), staging, () => false, KEY)).toThrow(/outside the worktree/);
     expect(existsSync(join(tree, "x.env"))).toBe(false);
+  });
+});
+
+describe("the native copy-record helpers (N2, N3, R1)", () => {
+  function dir(): string {
+    const at = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-wc-worktree-native-")));
+    scratch.push(at);
+    return at;
+  }
+
+  it("creates the key once, 32 bytes at mode 0600, and reads the same key back; absent and not created is null", () => {
+    const at = dir();
+    expect(nativeWorktreeFs.loadKey(join(at, KEY_FILE), false)).toBeNull();
+    const key = nativeWorktreeFs.loadKey(join(at, KEY_FILE), true);
+    expect(key?.length).toBe(32);
+    if (process.platform !== "win32") expect(statSync(join(at, KEY_FILE)).mode & 0o777).toBe(0o600);
+    expect(nativeWorktreeFs.loadKey(join(at, KEY_FILE), true)?.equals(key ?? Buffer.alloc(0))).toBe(true);
+  });
+
+  it("sweeps only REGULAR files matching the two leftover names", () => {
+    const at = dir();
+    writeFileSync(join(at, "nen-wc-worktree-copy.0123456789abcdef"), "partial");
+    writeFileSync(join(at, "nen-wc-worktree-copies.json.0123456789ab.tmp"), "{");
+    writeFileSync(join(at, "nen-wc-worktree-copy.keep"), "not ours");
+    writeFileSync(join(at, KEY_FILE), "k");
+    if (process.platform !== "win32") symlinkSync(join(at, "nen-wc-worktree-copy.keep"), join(at, "nen-wc-worktree-copy.fedcba9876543210"));
+    expect(nativeWorktreeFs.removeLeftovers(at).sort()).toEqual(["nen-wc-worktree-copies.json.0123456789ab.tmp", "nen-wc-worktree-copy.0123456789abcdef"]);
+    const left = readdirSync(at).sort();
+    expect(left).toContain("nen-wc-worktree-copy.keep");
+    expect(left).toContain(KEY_FILE);
+    if (process.platform !== "win32") expect(left).toContain("nen-wc-worktree-copy.fedcba9876543210");
+  });
+
+  it("digests from one descriptor and unlinks only the file that was digested", () => {
+    const at = dir();
+    const file = join(at, "a.env");
+    writeFileSync(file, "A=1\n");
+    const key = Buffer.alloc(32, 3);
+    const digest = nativeWorktreeFs.digestFile(file, key);
+    expect(digest?.digest).toBe(createHmac("sha256", key).update("A=1\n").digest("hex"));
+    // Replaced between the digest and the unlink: a different inode, left alone.
+    // The original stays open so its inode cannot be reused by the replacement.
+    const held = openSync(file, "r");
+    unlinkSync(file);
+    writeFileSync(file, "A=1\n");
+    try {
+      expect(nativeWorktreeFs.unlinkIfSame(file, digest?.dev ?? 0n, digest?.ino ?? 0n)).toBe(false);
+    } finally {
+      closeSync(held);
+    }
+    expect(existsSync(file)).toBe(true);
+    const again = nativeWorktreeFs.digestFile(file, key);
+    expect(nativeWorktreeFs.unlinkIfSame(file, again?.dev ?? 0n, again?.ino ?? 0n)).toBe(true);
+    expect(existsSync(file)).toBe(false);
   });
 });
 

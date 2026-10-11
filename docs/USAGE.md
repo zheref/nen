@@ -3832,8 +3832,10 @@ an absolute or drive-letter form.
 
 **The state table.** The tip is fetched with `git fetch --end-of-options
 origin refs/heads/<base>:refs/remotes/origin/<base>`, with no `+`, so a rewound
-trunk fails the fetch rather than moving the worktree backwards. When the
-fetch fails, `git ls-remote --exit-code` is asked whether the branch exists:
+trunk fails the fetch rather than moving the worktree backwards. First,
+`git remote get-url origin` must answer. A checkout with no `origin` is
+refused as `base` ("no origin remote"), in a dry run too. When the fetch
+fails, `git ls-remote --exit-code` is asked whether the branch exists:
 an absent branch is a refusal (exit `2`), and any other failure, such as the
 network or authentication, is exit `1`.
 
@@ -3864,7 +3866,8 @@ path is proven before a byte moves:
   one pointing inside core, is refused); the file is a regular file, not a
   symlink; it is tracked under no spelling; it is gitignored (an unignored
   copy would dirty the worktree, and the next run would refuse it);
-- **at the tip, from its tree** (`git ls-tree`, walked by object id), before
+- **at the tip, from its tree** (`git ls-tree`, walked by object id, every
+  folded match checked), before
   anything is created or moved, so under `--dry-run` too: it is not tracked as
   a regular file, a symlink leaf or a directory, and no ancestor is tracked as
   a symlink, a submodule or a file;
@@ -3882,30 +3885,45 @@ one written, by device and inode. If a copy landed outside the tree, it is
 unlinked. If the file is not the one written, the foreign file is left alone.
 Either way the run exits `1`.
 
-**Retention.** Each copy is recorded (its path and sha256) in
-`<worktree git dir>/nen-wc-worktree-copies.json`
-(`nen.wc.worktree.copies/v0.1`), outside the tree. A later run handles a
-recorded copy it no longer names like this:
+**Retention.** Each copy is recorded, outside the tree, in
+`<worktree git dir>/nen-wc-worktree-copies.json` (`nen.wc.worktree.copies/v0.2`).
+The record holds the copy's path and an HMAC-SHA256 of its bytes, keyed by a
+random 32-byte per-worktree key (`nen-wc-worktree-copies.key`, mode `0600`,
+created on first use beside the record). A later run handles a recorded copy
+it no longer names like this:
 
-- If its bytes still hash as recorded, it is **removed** (`removed[]`).
-- If it was edited, or is no longer a regular file, it is **kept**, listed as
-  `kept (edited since copy)` (`kept[]`), and never deleted. It stays recorded
-  until it is gone.
-- A copy whose core source was deleted can no longer be named (the source
-  proof refuses it), so it goes the same way.
+- It is **removed** (`removed[]`) only when it is untracked, still ignored, a
+  regular file, and its bytes verify under the key. Only the file that was
+  hashed is unlinked: its device and inode are checked again at the unlink.
+- Anything else is **kept** (`kept[]`), listed with its reason, and never
+  deleted. The reasons are `edited since copy`, `not a regular file`,
+  `tracked at the tip`, `not ignored` and `unverifiable record`. A kept copy
+  stays recorded until it is gone.
+- A path that is still named but whose core source was deleted is refused as
+  `copy-source`. To retire its copy, stop naming it.
+- A still-named entry that the run does not get to re-copy (because a refusal
+  stopped it first) stays recorded with its old digest. The record never loses
+  an entry for a file still on disk.
+- A `v0.1` record (plain sha256) found on disk is read with its entries kept
+  as `unverifiable record`, then rewritten as `v0.2`.
 
-`--dry-run` lists both and removes nothing. A record nen cannot read is exit
-`1`.
+A real run first sweeps the worktree git dir of a crashed run's staged bytes
+(`nen-wc-worktree-copy.<16 hex>`) and half-written record
+(`nen-wc-worktree-copies.json.<12 hex>.tmp`). It removes only regular files
+with those exact name shapes. `--dry-run` lists everything and removes
+nothing. A record or key nen cannot read is exit `1`.
 
 **Isolation.** Every git call runs with `GIT_DIR`, `GIT_WORK_TREE`,
 `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, `GIT_ALTERNATE_OBJECT_DIRECTORIES`,
 `GIT_COMMON_DIR`, `GIT_NAMESPACE`, `GIT_CEILING_DIRECTORIES`,
 `GIT_DISCOVERY_ACROSS_FILESYSTEM`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT`,
-`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`,
 `GIT_EXEC_PATH`, `GIT_PREFIX`, `GIT_LITERAL_PATHSPECS`, `GIT_GLOB_PATHSPECS`,
 `GIT_NOGLOB_PATHSPECS`, `GIT_ICASE_PATHSPECS` and every
 `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` removed from its environment, so a
-hook's inherited variables cannot point it at another repository. Paths are
+hook's inherited variables cannot point it at another repository.
+`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM` and `GIT_CONFIG_NOSYSTEM` are
+**kept**: they are the user's own choice of config files, not a hook's
+redirect, and #294's threat does not reach them. Paths are
 compared through `realpathSync.native`, so a Windows 8.3 short name and git's
 long spelling name one directory.
 
@@ -3928,8 +3946,9 @@ copies: [{ path, action }], removed: [{ path, action }], kept: [{ path, reason
   when the run was refused before the state step. On success it equals
   `state`.
 - `copies[].action` is `copied` or `would-copy`; `removed[].action` is
-  `removed` or `would-remove`; `kept[].reason` is `edited since copy` or
-  `not a regular file`.
+  `removed` or `would-remove`; `kept[].reason` is one of `edited since copy`,
+  `not a regular file`, `tracked at the tip`, `not ignored` or
+  `unverifiable record`.
 - `refusal` is `null`, or `{ kind, reason, paths }`. `kind` is one of
   `not-a-checkout`, `base`, `name-alias`, `parent-symlink`, `symlink`,
   `stray`, `locked`, `not-root`, `dirty`, `would-overwrite-ignored`,

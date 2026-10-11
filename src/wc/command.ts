@@ -40,7 +40,7 @@ import {
   WORKTREES_CONTRACT,
   type SwapOutcome,
 } from "./swap.js";
-import { copyPathRefusal, foldName, manageWorktree, MANIFEST_FILE, nameRefusal, WORKTREE_CONTRACT, WORKTREES_DIR } from "./worktree.js";
+import { copyPathRefusal, foldName, KEY_FILE, manageWorktree, MANIFEST_CONTRACT, MANIFEST_FILE, nameRefusal, WORKTREE_CONTRACT, WORKTREES_DIR } from "./worktree.js";
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
@@ -391,7 +391,9 @@ here, as --name and --copy-from-core are on every other subcommand.
 
 THE STATE TABLE, at <core>/${WORKTREES_DIR}/<name>, DETACHED at origin/<base>'s
 fetched tip ('git fetch --end-of-options origin
-refs/heads/<base>:refs/remotes/origin/<base>', no '+': a rewound trunk fails
+refs/heads/<base>:refs/remotes/origin/<base>', after 'git remote get-url
+origin' proves there is an origin -- no origin is a refusal, dry or real --
+with no '+': a rewound trunk fails
 the fetch rather than moving the worktree backwards; a failed fetch asks 'git
 ls-remote --exit-code' whether the branch exists -- absent is a refusal, any
 other failure exit 1):
@@ -429,20 +431,30 @@ renamed into place; after the rename the file there must be the one
 written, by device and inode, in a directory still inside the worktree --
 otherwise exit 1, and a copy that landed outside the tree is unlinked.
 
-RETENTION. Each copy is recorded, path and sha256, in <worktree git
-dir>/${MANIFEST_FILE}, outside the tree. A later run that no longer names a
-recorded copy -- dropped from the flags, or its core source deleted --
-REMOVES it only when its bytes still hash as recorded; an edited one (or one
-no longer a regular file) is KEPT, listed, and never deleted. --dry-run
-lists both and removes nothing.
+RETENTION. Each copy is recorded -- its path and an HMAC-SHA256 of its bytes
+under a random 32-byte per-worktree key (${KEY_FILE}, mode 0600, created on
+first use) -- in <worktree git dir>/${MANIFEST_FILE}
+(${MANIFEST_CONTRACT}), outside the tree. A later run that no longer names a
+recorded copy REMOVES it only when it is untracked, still ignored, a regular
+file, and its bytes verify -- and unlinks only the file it hashed (device and
+inode re-checked). Anything else is KEPT, listed with its reason (edited
+since copy, not a regular file, tracked at the tip, not ignored, unverifiable
+record), and never deleted. A still-named path whose core source was
+deleted is refused as copy-source, so stop naming it to retire its copy. A
+still-named entry the run does not get to re-copy stays recorded. A v0.1
+record's entries are kept as unverifiable and the record is rewritten. A
+real run first sweeps a crashed run's staged bytes and half-written record
+from the worktree git dir (only regular files of those two exact name
+shapes). --dry-run lists everything and removes nothing.
 
 Every git call runs with GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
 GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_COMMON_DIR,
 GIT_NAMESPACE, GIT_CEILING_DIRECTORIES, GIT_DISCOVERY_ACROSS_FILESYSTEM,
-GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM,
-GIT_CONFIG_NOSYSTEM, GIT_EXEC_PATH, GIT_PREFIX, GIT_LITERAL_PATHSPECS,
-GIT_GLOB_PATHSPECS, GIT_NOGLOB_PATHSPECS, GIT_ICASE_PATHSPECS and every
-GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n> removed from its environment. Paths
+GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT, GIT_EXEC_PATH, GIT_PREFIX,
+GIT_LITERAL_PATHSPECS, GIT_GLOB_PATHSPECS, GIT_NOGLOB_PATHSPECS,
+GIT_ICASE_PATHSPECS and every GIT_CONFIG_KEY_<n>/GIT_CONFIG_VALUE_<n>
+removed from its environment. GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM and
+GIT_CONFIG_NOSYSTEM are kept: they are the user's own choice of config files. Paths
 are compared through realpathSync.native. Whether core's own ignore rules
 cover the worktree's path is said ('core-ignore:'), never assumed.
 
@@ -458,7 +470,8 @@ tip, fetched, state (created | reused | moved | recreated | refused), reached
 (created | reused | moved | recreated, or null when refused before the state
 step), dryRun, headBefore, head, dropped, coreIgnored, copies: [{ path, action
 (copied | would-copy) }], removed: [{ path, action (removed | would-remove) }],
-kept: [{ path, reason (edited since copy | not a regular file) }], refusal:
+kept: [{ path, reason (edited since copy | not a regular file | tracked at the
+tip | not ignored | unverifiable record) }], refusal:
 null | { kind, reason, paths } }. Under --dry-run state is what WOULD happen
 and fetched is false. On a refusal the document is still printed, with state
 'refused' and head null; refusal.kind is one of not-a-checkout, base,

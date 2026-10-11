@@ -20,6 +20,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import { createHash, createHmac } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +28,7 @@ import type { Io } from "../index.js";
 import { runFamily } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
-import { MANIFEST_CONTRACT, MANIFEST_FILE, WORKTREE_CONTRACT } from "./worktree.js";
+import { KEY_FILE, MANIFEST_CONTRACT, MANIFEST_CONTRACT_V1, MANIFEST_FILE, WORKTREE_CONTRACT } from "./worktree.js";
 
 const PINNED = ["-c", "core.autocrlf=false", "-c", "protocol.file.allow=always"];
 
@@ -629,5 +630,97 @@ describe.skipIf(!HAVE_GIT)("nen wc worktree -- the reference self-test, ported",
     expect(run.code, run.err).toBe(0);
     expect(run.doc["removed"]).toEqual([{ path: "Kro/Other.xcconfig", action: "removed" }]);
     expect(existsSync(join(W, "Kro", "Other.xcconfig"))).toBe(false);
+  });
+
+  // ROUND 2 (Nobunaga R1-R5, Feitan N2/N3), over the same fixture.
+  const gitDir = (): string => join(C, ".git", "worktrees", "kagutsuchi");
+  const readRecord = (): { contract: string; copies: Array<{ path: string; hmac: string | null }> } =>
+    JSON.parse(readFileSync(join(gitDir(), MANIFEST_FILE), "utf8")) as { contract: string; copies: Array<{ path: string; hmac: string | null }> };
+
+  it("a record entry naming a TRACKED file whose bytes verify is kept, never deleted (R1)", async () => {
+    expect((await wc([...KG, ...COPY], C)).code).toBe(0);
+    const key = readFileSync(join(gitDir(), KEY_FILE));
+    const hmac = createHmac("sha256", key).update(readFileSync(join(W, "README"))).digest("hex");
+    writeFileSync(join(gitDir(), MANIFEST_FILE), JSON.stringify({ contract: MANIFEST_CONTRACT, copies: [{ path: "README", hmac }] }));
+    const run = await wc(KG, C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(run.doc["removed"]).toEqual([]);
+    expect(run.doc["kept"]).toEqual([{ path: "README", reason: "tracked at the tip" }]);
+    expect(existsSync(join(W, "README"))).toBe(true);
+    expect(mustGit(W, ["status", "--porcelain"])).toBe("");
+  });
+
+  it("a refusal on one named path keeps the record of another still-named copy; a later run still reports it (R2)", async () => {
+    writeFileSync(join(gitDir(), MANIFEST_FILE), JSON.stringify({ contract: MANIFEST_CONTRACT, copies: [] }));
+    expect((await wc([...KG, ...COPY], C)).code).toBe(0);
+    writeFileSync(join(C, "Kro", "Other.xcconfig"), "OTHER=1\n");
+    mkdirSync(join(W, "Kro", "Other.xcconfig"));
+    const run = await wc([...KG, "--copy-from-core", "Kro/Other.xcconfig", ...COPY], C, true);
+    expect(run.code).toBe(2);
+    expect((run.doc["refusal"] as { kind: string }).kind).toBe("copy-destination");
+    expect(readRecord().copies.map((copy) => copy.path)).toEqual([SECRET]);
+    rmSync(join(W, "Kro", "Other.xcconfig"), { recursive: true });
+    rmSync(join(C, "Kro", "Other.xcconfig"));
+    const later = await wc(KG, C, true);
+    expect(later.doc["removed"]).toEqual([{ path: SECRET, action: "removed" }]);
+  });
+
+  it("a v0.1 record's entries are kept as unverifiable, and the record is rewritten as v0.2 (N3)", async () => {
+    expect((await wc([...KG, ...COPY], C)).code).toBe(0);
+    const sha256 = createHash("sha256").update(readFileSync(join(W, SECRET))).digest("hex");
+    writeFileSync(join(gitDir(), MANIFEST_FILE), JSON.stringify({ contract: MANIFEST_CONTRACT_V1, copies: [{ path: SECRET, sha256 }] }));
+    const run = await wc(KG, C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(run.doc["kept"]).toEqual([{ path: SECRET, reason: "unverifiable record" }]);
+    expect(existsSync(join(W, SECRET))).toBe(true);
+    expect(readRecord()).toEqual({ contract: MANIFEST_CONTRACT, copies: [{ path: SECRET, hmac: null }] });
+    rmSync(join(W, SECRET));
+    expect((await wc(KG, C, true)).doc["kept"]).toEqual([]);
+  });
+
+  it("a crashed run's leftovers in the worktree git dir are swept on the next real run, and only those (N2)", async () => {
+    writeFileSync(join(gitDir(), "nen-wc-worktree-copy.0123456789abcdef"), "partial credential");
+    writeFileSync(join(gitDir(), "nen-wc-worktree-copies.json.0123456789ab.tmp"), "{");
+    writeFileSync(join(gitDir(), "nen-wc-worktree-copy.keep"), "not ours");
+    expect((await wc([...KG, "--dry-run"], C)).code).toBe(0);
+    expect(existsSync(join(gitDir(), "nen-wc-worktree-copy.0123456789abcdef"))).toBe(true);
+    expect((await wc(KG, C)).code).toBe(0);
+    expect(existsSync(join(gitDir(), "nen-wc-worktree-copy.0123456789abcdef"))).toBe(false);
+    expect(existsSync(join(gitDir(), "nen-wc-worktree-copies.json.0123456789ab.tmp"))).toBe(false);
+    expect(existsSync(join(gitDir(), "nen-wc-worktree-copy.keep"))).toBe(true);
+    rmSync(join(gitDir(), "nen-wc-worktree-copy.keep"));
+  });
+
+  it("an ignored 'build/cache' does not refuse a move to a tip that adds 'build/out' (R3)", async () => {
+    writeFileSync(join(C, ".git", "info", "exclude"), "build/\n");
+    mkdirSync(join(W, "build"), { recursive: true });
+    writeFileSync(join(W, "build", "cache"), "cached\n");
+    const blob = gitIn(O, ["hash-object", "-w", "--stdin"], "built\n");
+    const sub = gitIn(O, ["mktree"], `100644 blob ${blob}\tout\n`);
+    pushPlumbed(`040000 tree ${sub}\tbuild`, "build-out");
+    const run = await wc(KG, C, true);
+    expect(run.code, run.err).toBe(0);
+    expect(run.doc["state"]).toBe("moved");
+    expect(readFileSync(join(W, "build", "cache"), "utf8")).toBe("cached\n");
+    rewind();
+    expect((await wc(KG, C)).code).toBe(0);
+    expect(headOf(W)).toBe(newTip);
+    rmSync(join(W, "build"), { recursive: true, force: true });
+    writeFileSync(join(C, ".git", "info", "exclude"), "");
+  });
+
+  it("a checkout with no origin remote is refused as base, dry and real (R5)", async () => {
+    const lone = join(root, "lone");
+    mustGit(root, ["init", "--quiet", "--initial-branch=main", lone]);
+    pin(lone);
+    writeFileSync(join(lone, "README"), "x\n");
+    commitIn(lone, "lone");
+    for (const flags of [["--dry-run"], []]) {
+      const run = await wc([...KG, ...flags], lone, true);
+      expect(run.code).toBe(2);
+      expect((run.doc["refusal"] as { kind: string }).kind).toBe("base");
+      expect(run.err).toMatch(/no origin remote/);
+    }
+    expect(existsSync(join(lone, ".nen"))).toBe(false);
   });
 });
