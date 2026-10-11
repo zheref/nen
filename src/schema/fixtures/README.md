@@ -1,9 +1,12 @@
 # Test fixtures
 
-Seven fake repository roots. Two carry a migrated `nen/` directory; the third
-deliberately still carries `schemas/`; the last four carry only a contract — one
-for the executor, one for the toolchain check, one for the coverage parse, one
-for the test-report parse.
+Eleven fake repository roots. Three carry a migrated `nen/` taxonomy
+(`bankai-repo`, `alt-repo`, and `metadata-repo`, which carries every
+declaration file with `$` keys throughout); `legacy-repo` deliberately still
+carries `schemas/`; the other seven carry only a contract — one for the
+executor, one for the toolchain check, three for the coverage parse (a lane per
+answer, a workspace, a single package), one for the test-report parse and one
+for the evidence diff.
 
 These are **test data, not shipped code**. They deliberately contain concrete
 persona, label and check-name strings — that is the point of them: the loaders
@@ -126,6 +129,16 @@ different things.
   passes rather than one), `gone` declares a report that is not on disk, `stray`
   a directory holding XML that is not a test report, `noxml` a directory holding
   no XML at all, and `untested` declares a `build` and no `test` whatever.
+
+- `metadata-repo/nen/` — the **`$`-metadata guarantee** ([zheref/nen#338](https://github.com/zheref/nen/issues/338)):
+  every declaration file a loader reads (`labels`, `repos`, `colors.yml`, `gates`, `contract`,
+  `workflow`, `decisions`), each derived from `bankai-repo` (and `workflow.json` from nen's own),
+  with a `$`-prefixed key in **every** object — one named after the object's own first key, so a
+  near-miss guard is exercised, and a `$note` of a different JSON type each time. `colors.yml`
+  carries one at each of its five levels, with mapping- and list-valued ones beside the categories
+  and inside a `values` map. `src/schema/declarations.test.ts` loads each beside a copy
+  stripped of every `$` key and requires the same model; `src/schema/set.test.ts` edits it and
+  requires every note to survive.
 
 The marker trees `nen shu detect` scans are a different kind of input and live
 separately, at `src/shu/fixtures/` — see that directory's own README; the

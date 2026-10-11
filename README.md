@@ -450,7 +450,7 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (43); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-133 verbs outside the binary — each one's purpose, arguments, exit codes and
+134 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -466,7 +466,8 @@ they compose into. The families group roughly as:
   `install`, `status`, `apply`: classifying issues on two axes as labels),
   `direct` (`registry`, `resolve`, `answer`: which model, surface and effort an issue's
   classification calls for),
-  `schema check`, `color`, `repo`, `ref`
+  `schema` (`check`, `set`: validate the declarations, or write one value
+  into one by JSON pointer), `color`, `repo`, `ref`
 - **Release mechanics** — `release`, `changelog`, `tag`, `fanout`, `run`
 - **Issue & idea filing** — `issue`, `idea`
 - **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`

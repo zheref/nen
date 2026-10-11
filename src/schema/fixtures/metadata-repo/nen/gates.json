@@ -1,0 +1,176 @@
+{
+  "$comment": "TEST FIXTURE (zheref/nen#338) -- the $-metadata guarantee. Every object in this file carries a $-prefixed key named after its own first key and a $note of a different JSON type, so each loader is proved to ignore them as data; declarations.test.ts loads it beside a copy with every $ key stripped and requires the same model. Derived from bankai-repo/nen/gates.json.",
+  "$version": "metadata named after 'version'",
+  "version": 1,
+  "reviewers": [
+    {
+      "$name": "metadata named after 'name'",
+      "name": "sasuke",
+      "login_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "sasuke",
+        "ignoreCase": true,
+        "$note": "an annotation, read by no loader"
+      },
+      "review_check_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "^sasuke / audit$",
+        "ignoreCase": true,
+        "$note": 7
+      },
+      "delivery_holistic_pass": true,
+      "$note": true
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "name": "tenma",
+      "login_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "tenma",
+        "ignoreCase": true,
+        "$note": null
+      },
+      "review_check_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "^tenma / review$",
+        "ignoreCase": true,
+        "$note": {
+          "nested": [
+            "x"
+          ],
+          "$deeper": 1
+        }
+      },
+      "delivery_holistic_pass": true,
+      "$note": [
+        "a",
+        2
+      ]
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "$comment": "Posts as copilot-pull-request-reviewer[bot]; nothing re-requests it after a final push, so under the bounded policy only a PENDING request owes a round.",
+      "name": "copilot",
+      "login_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "copilot",
+        "ignoreCase": true,
+        "$note": "an annotation, read by no loader"
+      },
+      "bounded_policy_exempt": true,
+      "$note": 7
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "$comment": "The check IS the round: it posts a review only when it has findings. The enrolment pattern is ANCHORED and CASE-SENSITIVE on purpose -- a sibling probe job would otherwise enrol the reviewer on every PR. It is not a DEFAULT approver, but it joins the approval set for a PR it has actually posted a review on at head -- the shell's `approvers=\"$approvers,bisky\"` arm.",
+      "name": "bisky",
+      "login_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "bisky",
+        "ignoreCase": true,
+        "$note": true
+      },
+      "review_check_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "^bisky / review$",
+        "ignoreCase": true,
+        "$note": null
+      },
+      "round_check_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "^bisky / review$",
+        "ignoreCase": true,
+        "$note": {
+          "nested": [
+            "x"
+          ],
+          "$deeper": 1
+        }
+      },
+      "enrolment_check_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "^bisky / review$",
+        "ignoreCase": false,
+        "$note": [
+          "a",
+          2
+        ]
+      },
+      "approves_when_posted_at_head": true,
+      "$note": "an annotation, read by no loader"
+    },
+    {
+      "$name": "metadata named after 'name'",
+      "$comment": "Posts under a login carrying either word depending on the installation, and its check name varies with the installation too -- hence an UNANCHORED, case-insensitive substring where bisky's is anchored.",
+      "name": "bugbot",
+      "login_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "cursor|bugbot",
+        "ignoreCase": true,
+        "$note": 7
+      },
+      "round_check_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "bugbot",
+        "ignoreCase": true,
+        "$note": true
+      },
+      "enrolment_check_pattern": {
+        "$pattern": "metadata named after 'pattern'",
+        "pattern": "bugbot",
+        "ignoreCase": true,
+        "$note": null
+      },
+      "$note": {
+        "nested": [
+          "x"
+        ],
+        "$deeper": 1
+      }
+    }
+  ],
+  "default_approvers": [
+    "sasuke",
+    "tenma"
+  ],
+  "base_reviewers": [
+    "sasuke",
+    "tenma",
+    "copilot"
+  ],
+  "dependabot_carve_out": {
+    "$author_pattern": "metadata named after 'author_pattern'",
+    "$comment": "CON-30's review carve-out (zheref/nen#18). The dependency bot opens pull requests nothing re-requests a review on; the repository shims the two review contexts to success instead, and this is what lets the decider READ that shim rather than each caller re-deriving the exemption. Satisfied by PRESENCE of both contexts, green -- never by their absence.",
+    "author_pattern": {
+      "$pattern": "metadata named after 'pattern'",
+      "pattern": "^dependabot(\\[bot\\])?$",
+      "ignoreCase": true,
+      "$note": [
+        "a",
+        2
+      ]
+    },
+    "satisfied_by_context": [
+      "sasuke / audit",
+      "tenma / review"
+    ],
+    "$note": "an annotation, read by no loader"
+  },
+  "delivery": {
+    "$author_pattern": "metadata named after 'author_pattern'",
+    "author_pattern": {
+      "$pattern": "metadata named after 'pattern'",
+      "pattern": "(^|/)roy-bankai(\\[bot\\])?$",
+      "ignoreCase": true,
+      "$note": 7
+    },
+    "head_ref_prefixes": [
+      "integration/"
+    ],
+    "labels": [
+      "bankai:epic"
+    ],
+    "$note": true
+  },
+  "$note": null
+}

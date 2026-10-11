@@ -1,0 +1,93 @@
+{
+  "$comment": "TEST FIXTURE (zheref/nen#338) -- the $-metadata guarantee. Every object in this file carries a $-prefixed key named after its own first key and a $note of a different JSON type, so each loader is proved to ignore them as data; declarations.test.ts loads it beside a copy with every $ key stripped and requires the same model. Derived from bankai-repo/nen/repos.json.",
+  "$latest": "metadata named after 'latest'",
+  "latest": "v0.11.2",
+  "consumers": [
+    {
+      "$repo": "metadata named after 'repo'",
+      "repo": "zheref/KroApple",
+      "pinned": "v0.11.2",
+      "consumes": [
+        "sasuke-review.yml",
+        "tenma-review.yml",
+        "db-migrate.yml"
+      ],
+      "scenario": "swiftui-tca-uzf-v2",
+      "phases": [
+        "review-pair",
+        "builder-loop"
+      ],
+      "auth": "claude-max-oauth",
+      "notes": "Records the consumer's actual state, never a target.",
+      "code": "KP",
+      "$note": "an annotation, read by no loader"
+    },
+    {
+      "$repo": "metadata named after 'repo'",
+      "repo": "zheref/KroAndroid",
+      "pinned": "v0.11.2",
+      "consumes": [
+        "sasuke-review.yml",
+        "tenma-review.yml",
+        "resolve-runner.yml"
+      ],
+      "scenario": "compose-uzf-v2",
+      "phases": [
+        "review-pair",
+        "builder-loop"
+      ],
+      "auth": "claude-max-oauth",
+      "code": "KN",
+      "$note": 7
+    },
+    {
+      "$repo": "metadata named after 'repo'",
+      "repo": "zheref/bankai-scaffold",
+      "pinned": "v0.10.0",
+      "db_migrate_pinned": "v0.9.7",
+      "consumes": [
+        "sasuke-review.yml"
+      ],
+      "scenario": "scaffold",
+      "code": "BS",
+      "$note": true
+    }
+  ],
+  "maintained_tools": [
+    {
+      "$repo": "metadata named after 'repo'",
+      "repo": "zheref/bankai-scaffold",
+      "role": "scaffolder (Stack Matrix generator)",
+      "$note": null
+    }
+  ],
+  "pending_onboarding": [
+    {
+      "$repo": "metadata named after 'repo'",
+      "repo": "zheref/KroCloud",
+      "status": "not-a-consumer",
+      "reason": "No bankai.yml yet; recorded for onboarding visibility only.",
+      "$note": {
+        "nested": [
+          "x"
+        ],
+        "$deeper": 1
+      }
+    }
+  ],
+  "product_codes": {
+    "$BC": "metadata named after 'BC'",
+    "$comment": "Object-reference notation: each key is a two-or-three-letter product code, each value the repository it names -- REALISTIC SHAPE, zheref/nen#17: the live bankai-core schemas/repos.json nests this comment INSIDE product_codes rather than beside it, which is exactly the shape a loader that walks the object key-by-key must skip rather than treat as a code.",
+    "BC": "bankai-core",
+    "BS": "bankai-scaffold",
+    "KP": "KroApple",
+    "KN": "KroAndroid",
+    "KW": "KroWeb",
+    "KC": "KroCloud",
+    "$note": [
+      "a",
+      2
+    ]
+  },
+  "$note": "an annotation, read by no loader"
+}

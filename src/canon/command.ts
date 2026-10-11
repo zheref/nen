@@ -26,7 +26,7 @@
 // pin a reader of the marker can reason about, and "cut the tag before
 // repinning a consumer to it" is the rule this verb can hold a caller to.
 
-import { closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync, type Stats } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
@@ -45,6 +45,7 @@ import { plainLine } from "../cli/plain.js";
 import { resolveCanon, SCENARIO_TOKEN, SCENARIO_TOKEN_RULE } from "./resolve.js";
 import { CHECKOUT_CONTRACT, checkoutLines, resolveCanonCheckout, resolveCanonTag, type CheckoutFailureCode, type CheckoutResolution, type TagResolution } from "./checkout.js";
 import { JsonSpanError, rewritePin, TargetChangedError, TEMP_PATTERN, writeFileAtomic, type PinEdit } from "./pin-write.js";
+import { checkedTarget, errnoOf, readChecked, WrittenButUnverifiedError } from "../edit/atomic.js";
 import {
   CanonMirrorError,
   checkSurface,
@@ -152,7 +153,9 @@ usage:
       regenerate, regenerateArgv }, failure: null }; on an exit-1 refusal,
       { contract, ok: false, failure: { code, message } } (an exit-2 usage
       error carries no document). A failed replace is exit 1, write-failed:
-      the pin was not moved. The temporary file is '${TEMP_PATTERN}' beside
+      the pin was not moved. A failure AFTER the rename (the file landed
+      elsewhere, or does not read back) is exit 1, read-back-mismatch, and
+      its document adds written: true -- the pin may have moved. The temporary file is '${TEMP_PATTERN}' beside
       nen/repos.json, removed on any failure and on SIGINT/SIGTERM/SIGHUP.
 
   nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
@@ -487,8 +490,11 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
 
   // EVERY EXIT-1 REFUSAL CARRIES A --json DOCUMENT, as 'canon checkout' does
   // (Nobunaga N5): a machine reader gets { contract, ok: false, failure }.
-  const refuse = (code: PinWriteFailureCode, message: string, detail: readonly string[] = []): number => {
-    if (context.json) emit(context.io, true, { contract: PIN_WRITE_CONTRACT, ok: false, failure: { code, message } }, []);
+  // `written: true` is carried only by a refusal raised AFTER the rename
+  // (Nobunaga N3, zheref/nen#338): the new text is on disk and the caller must
+  // not read the refusal as "nothing was written".
+  const refuse = (code: PinWriteFailureCode, message: string, detail: readonly string[] = [], written = false): number => {
+    if (context.json) emit(context.io, true, { contract: PIN_WRITE_CONTRACT, ok: false, ...(written ? { written: true } : {}), failure: { code, message } }, []);
     for (const line of detail) context.io.err(plainLine(`nen: ${line}`));
     context.io.err(plainLine(`nen: ${message}`));
     return 1;
@@ -592,11 +598,11 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
   let written = false;
   if (changed && !dryRun) {
     try {
-      writeFileAtomic(
-        { path: realRegistry, root: realRoot, platform, dev: stat.dev, ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, mode: stat.mode & 0o777 },
-        edit.text,
-      );
+      writeFileAtomic(checkedTarget(realRegistry, realRoot, platform, stat), edit.text);
     } catch (error) {
+      if (error instanceof WrittenButUnverifiedError) {
+        return refuse("read-back-mismatch", plainLine(`the pin WAS written, but ${error.message}. Inspect ${realRegistry} before committing it.`), [], true);
+      }
       // A FAILED REPLACE IS NAMED (Nobunaga N6): the temporary file is already
       // removed, and the original is untouched. A target that changed after
       // it was checked is the same refusal, saying what changed (Feitan F1).
@@ -605,12 +611,19 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
     }
     written = true;
     // READ BACK THROUGH THE LOADER: the pin is what the read path now says.
-    const back = loadRepoRegistry(root);
-    /* c8 ignore next 6 -- rewritePin proved the parse before the write */
+    let back;
+    try {
+      back = loadRepoRegistry(root);
+    } catch (error) {
+      return refuse("read-back-mismatch", `${realRegistry} was written, but it could not be read back: ${error instanceof Error ? error.message : String(error)}. Inspect the file before committing it.`, [], true);
+    }
+    /* c8 ignore next 7 -- rewritePin proved the parse before the write */
     if (back.toolPins[key] !== tag || back.toolPinIndexes?.[key] !== index) {
       return refuse(
         "read-back-mismatch",
         `${realRegistry} was written, but the registry now reads ${key}'s pin as '${back.toolPins[key] ?? "(none)"}', not '${tag}'. Inspect the file before committing it.`,
+        [],
+        true,
       );
     }
   }
@@ -668,11 +681,6 @@ function pinWriteVerb(context: CommandContext, repoFlag: string, tag: string): n
   return 0;
 }
 
-/** The errno of a filesystem failure, or its message. */
-function errnoOf(error: unknown): string {
-  return error instanceof Error ? ((error as NodeJS.ErrnoException).code ?? error.message) : String(error);
-}
-
 /** `nen/repos.json`'s path and text, through the shared reader (its refusals are SchemaErrors). */
 function readRegistryText(root: string): { readonly path: string; readonly text: string } {
   const read = readSchemaFile(root, REPOS_FILE);
@@ -685,37 +693,6 @@ function parseRegistryJson(path: string, text: string): unknown {
   } catch (error) {
     throw new SchemaError(path, null, `is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
   }
-}
-
-/**
- * Read the CHECKED real path, recording the identity of the file read
- * (Feitan F1): opened without following a final symbolic link, and the path
- * re-resolved after the read must still be itself and still that file. A
- * string is the reason it is not.
- */
-function readChecked(real: string): { readonly text: string; readonly stat: Stats } | string {
-  let fd: number;
-  try {
-    fd = openSync(real, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-  } catch (error) {
-    return `could not be opened as the file that was checked (${errnoOf(error)})`;
-  }
-  let stat: Stats;
-  let text: string;
-  try {
-    stat = fstatSync(fd);
-    text = readFileSync(fd, "utf8");
-  } finally {
-    closeSync(fd);
-  }
-  try {
-    if (realpathSync.native(real) !== real) return "no longer resolves to itself";
-    const now = lstatSync(real);
-    if (now.dev !== stat.dev || now.ino !== stat.ino) return "is another file than the one read";
-  } catch (error) {
-    return `no longer resolves (${errnoOf(error)})`;
-  }
-  return { text, stat };
 }
 
 type Picked = { readonly key: string; readonly index: number; readonly pin: string } | { readonly code: PinWriteFailureCode; readonly message: string };
