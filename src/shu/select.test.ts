@@ -518,30 +518,67 @@ describe("the results path is this run's alone, and nothing is ever deleted to m
     expect((JSON.parse(result.out.join("\n")) as { selection: { executed: number } }).selection.executed).toBe(2);
   });
 
-  it("keeps at most the last two moved-aside runs", async () => {
+  const R2020 = "2020-01-01T00-00-00-000Z-1-aaaaaa";
+  const R2021 = "2021-01-01T00-00-00-000Z-1-bbbbbb";
+  const R2022 = "2022-01-01T00-00-00-000Z-1-cccccc";
+  const seedRuns = (root: string, runs: readonly string[]): void => {
+    for (const run of runs) {
+      mkdirSync(join(root, ".nen", "focused", ".previous", run, "fj"), { recursive: true });
+      writeFileSync(join(root, ".nen", "focused", ".previous", run, "fj", "x.xml"), junit(1));
+    }
+  };
+  const pruneProofs = (runs: readonly string[]): ScriptedCall[] =>
+    runs.map((run): ScriptedCall => ({ match: lsFiles(`.nen/focused/.previous/${run}`), result: { code: 0, stdout: "" } }));
+
+  it("keeps the run just moved plus the newest earlier one: two runs in all", async () => {
     const result = await shu(
       directoryProject(`${FJ}/new.xml`),
       ["test", "--select", ids.join(",")],
-      [
-        { match: focusedLine, result: { code: 0, stdout: junit(1) } },
-        // THE PRUNE RE-PROVES EACH RUN IT REMOVES, git read and all.
-        ...["2020-01-01T00-00-00-000Z", "2021-01-01T00-00-00-000Z"].map(
-          (run): ScriptedCall => ({ match: lsFiles(`.nen/focused/.previous/${run}`), result: { code: 0, stdout: "" } }),
-        ),
-      ],
+      // THE PRUNE RE-PROVES EACH RUN IT REMOVES, git read and all.
+      [{ match: focusedLine, result: { code: 0, stdout: junit(1) } }, ...pruneProofs([R2020, R2021])],
       "darwin",
       (root): void => {
         seedOld(root);
-        for (const run of ["2020-01-01T00-00-00-000Z", "2021-01-01T00-00-00-000Z", "2022-01-01T00-00-00-000Z"]) {
-          mkdirSync(join(root, ".nen", "focused", ".previous", run, "fj"), { recursive: true });
-          writeFileSync(join(root, ".nen", "focused", ".previous", run, "fj", "x.xml"), junit(1));
-        }
+        seedRuns(root, [R2020, R2021, R2022]);
       },
       (root): void => {
-        expect(previousRuns(root)).toEqual(["2022-01-01T00-00-00-000Z", "2026-01-01T00-00-00-000Z"]);
+        const runs = previousRuns(root);
+        expect(runs).toHaveLength(2);
+        expect(runs[0]).toBe(R2022);
+        expect(runs[1]).toMatch(new RegExp(`^2026-01-01T00-00-00-000Z-${process.pid}-[0-9a-f]{6}$`));
       },
     );
     expect(result.code).toBe(0);
+  });
+
+  it("never prunes an entry nen did not mint, nor the run it just moved (M2)", async () => {
+    const result = await shu(
+      directoryProject(`${FJ}/new.xml`),
+      ["test", "--select", ids.join(",")],
+      [{ match: focusedLine, result: { code: 0, stdout: junit(1) } }, ...pruneProofs([R2020])],
+      "darwin",
+      (root): void => {
+        seedOld(root);
+        seedRuns(root, [R2020, R2021]);
+        for (const foreign of ["0000-keep", "zz1", "zz2"]) {
+          mkdirSync(join(root, ".nen", "focused", ".previous", foreign), { recursive: true });
+          writeFileSync(join(root, ".nen", "focused", ".previous", foreign, "mine.txt"), "the user's");
+        }
+      },
+      (root): void => {
+        const runs = previousRuns(root);
+        for (const foreign of ["0000-keep", "zz1", "zz2"]) {
+          expect(existsSync(join(root, ".nen", "focused", ".previous", foreign, "mine.txt"))).toBe(true);
+        }
+        expect(runs).not.toContain(R2020);
+        expect(runs).toContain(R2021);
+        const moved = runs.find((run): boolean => run.startsWith("2026-"));
+        expect(moved).toBeDefined();
+        expect(existsSync(join(root, ".nen", "focused", ".previous", moved as string, "fj", "old.xml"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toMatch(/leaves '0000-keep', 'zz1', 'zz2' .* alone/);
   });
 
   it("a results path that is a symlink is refused at exit 2: nothing moved, nothing run", async () => {
@@ -802,7 +839,11 @@ describe("project.verbs.<lane>.test.select -- the schema", () => {
     ["a select with no results", (): unknown => load({ ...GOOD, results: undefined }), "project.verbs.only.test.select.results", /is required/],
     ["a results format nen does not read", (): unknown => load({ ...GOOD, results: { path: ".nen/focused/r.xml", format: "tap" } }), "project.verbs.only.test.select.results.format", /CLOSED set: junit, assertion-results, xcresult-summary/],
     ["a results path outside the tree", (): unknown => load({ ...GOOD, results: { path: "../r.xml", format: "junit" } }), "project.verbs.only.test.select.results.path", /\.\./],
-    ["a results path on the regression output", (): unknown => load({ ...GOOD, results: { path: ".NEN/Focused/Results.XML", format: "junit" } }, "test", { artifacts: [".nen/focused/results.xml"] }), "project.verbs.only.test.select.results.path", /overlaps '\.nen\/focused\/results\.xml'/],
+    ["a results path on the regression output", (): unknown => load({ ...GOOD, results: { path: ".nen/focused/Results.XML", format: "junit" } }, "test", { artifacts: [".nen/focused/results.xml"] }), "project.verbs.only.test.select.results.path", /overlaps '\.nen\/focused\/results\.xml'/],
+    ["a results path whose prefix differs in case (M7)", (): unknown => load({ ...GOOD, results: { path: ".NEN/focused/r.xml", format: "junit" } }), "project.verbs.only.test.select.results.path", /strictly inside/],
+    ["a results path naming nen's lock in any case (M7)", (): unknown => load({ ...GOOD, results: { path: ".nen/focused/.LOCK", format: "junit" } }), "project.verbs.only.test.select.results.path", /strictly inside/],
+    ["a results path naming .previous in any case (M7)", (): unknown => load({ ...GOOD, results: { path: ".nen/focused/.Previous/x", format: "junit" } }), "project.verbs.only.test.select.results.path", /strictly inside/],
+    ["a results path that is not NFC (M9)", (): unknown => load({ ...GOOD, results: { path: ".nen/focused/cafe\u0301.xml", format: "junit" } }), "project.verbs.only.test.select.results.path", /not NFC-normalised/],
     ["a near-miss key inside results", (): unknown => load({ ...GOOD, results: { path: "r.xml", format: "junit", formats: "x" } }), "project.verbs.only.test.select.results.formats", /'format'/],
     ["a pattern that only compiles inside the anchors (N2)", (): unknown => load({ ...GOOD, pattern: "a)|(?:.*" }), "project.verbs.only.test.select.pattern", /on its own/],
     ["an argv element naming the regression output (N3)", (): unknown => load({ ...GOOD, argv: ["run", "--outputFile.junit=./out/results.xml"] }, "test", { artifacts: ["out/results.xml"] }), "project.verbs.only.test.select.argv[1]", /names 'out\/results\.xml'/],

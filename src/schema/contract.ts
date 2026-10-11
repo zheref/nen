@@ -1211,25 +1211,30 @@ export const FOCUSED_RESULTS_DIR = ".nen/focused";
 /** Where moved-aside results live, inside FOCUSED_RESULTS_DIR. Never a results path. */
 export const FOCUSED_PREVIOUS = ".previous";
 
+/** nen's lock for one focused run at a time, inside FOCUSED_RESULTS_DIR. Never a results path. */
+export const FOCUSED_LOCK = ".lock";
+
 /**
  * The declared results path, normalised for the filesystem -- separators to
- * `/`, NFC, `posix.normalize`d, no leading `./` or trailing `/` -- when it sits
- * STRICTLY inside FOCUSED_RESULTS_DIR (case-folded) and outside its
- * FOCUSED_PREVIOUS area; null otherwise. The case is KEPT in the answer: the
- * run proves the real path, and a case variant fails that proof rather than
- * being silently folded onto somebody else's directory.
+ * `/`, `posix.normalize`d, no leading `./` or trailing `/` -- when it sits
+ * STRICTLY inside FOCUSED_RESULTS_DIR, spelled EXACTLY (`.NEN/focused/x` is
+ * refused, not folded onto nen's directory), is already NFC (a decomposed
+ * spelling is a different name on some filesystems and the same on others),
+ * and does not name, in ANY case, nen's own FOCUSED_PREVIOUS area or
+ * FOCUSED_LOCK; null otherwise.
  */
 export function focusedResultsRelative(value: string): string | null {
+  if (value !== value.normalize("NFC")) return null;
   const normalised = posix
-    .normalize(value.normalize("NFC").replace(/\\/g, "/"))
+    .normalize(value.replace(/\\/g, "/"))
     .replace(/^(?:\.\/)+/, "")
     .replace(/\/+$/, "");
-  const folded = normalised.toLowerCase();
   const prefix = `${FOCUSED_RESULTS_DIR}/`;
-  if (!folded.startsWith(prefix) || folded.length === prefix.length) return null;
-  const inside = folded.slice(prefix.length);
-  if (inside === FOCUSED_PREVIOUS || inside.startsWith(`${FOCUSED_PREVIOUS}/`)) return null;
-  if (inside.split("/").some((segment): boolean => segment === "" || segment === "." || segment === "..")) return null;
+  if (!normalised.startsWith(prefix) || normalised.length === prefix.length) return null;
+  const inside = normalised.slice(prefix.length).split("/");
+  if (inside.some((segment): boolean => segment === "" || segment === "." || segment === "..")) return null;
+  const first = (inside[0] ?? "").toLowerCase();
+  if (first === FOCUSED_PREVIOUS || first === FOCUSED_LOCK) return null;
   return normalised;
 }
 
@@ -1381,11 +1386,18 @@ function parseSelectionResults(path: string, pointer: string, value: unknown): S
   );
   const resultsPath = requireStdoutTo(path, `${pointer}.path`, raw["path"]);
   requireRelativeOutput(path, `${pointer}.path`, resultsPath);
+  if (resultsPath !== resultsPath.normalize("NFC")) {
+    throw new SchemaError(
+      path,
+      `${pointer}.path`,
+      `'${resultsPath}' is not NFC-normalised. A decomposed spelling names a different file on some filesystems and the same file on others, and nen will not guess which; write the path in NFC`,
+    );
+  }
   if (focusedResultsRelative(resultsPath) === null) {
     throw new SchemaError(
       path,
       `${pointer}.path`,
-      `'${resultsPath}' is not strictly inside '${FOCUSED_RESULTS_DIR}/'. nen moves the declared results path aside before every focused run, so it may only name something inside the directory nen owns for exactly this -- '${FOCUSED_RESULTS_DIR}/<name>', never the directory itself and never its '${FOCUSED_PREVIOUS}' area. Compared after posix.normalize, NFC-normalised and case-folded. Name e.g. '${FOCUSED_RESULTS_DIR}/results.xml'`,
+      `'${resultsPath}' is not strictly inside '${FOCUSED_RESULTS_DIR}/'. nen moves the declared results path aside before every focused run, so it may only name something inside the directory nen owns for exactly this -- '${FOCUSED_RESULTS_DIR}/<name>', never the directory itself, its '${FOCUSED_PREVIOUS}' area or its '${FOCUSED_LOCK}'. The prefix is matched exactly, after posix.normalize. Name e.g. '${FOCUSED_RESULTS_DIR}/results.xml'`,
     );
   }
   return { path: resultsPath, format: requireEnum(path, `${pointer}.format`, raw["format"], SELECT_RESULT_FORMATS) };

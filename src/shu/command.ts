@@ -447,10 +447,13 @@ flags:
                    zero is exit 6 ("selection resolved to zero executed
                    tests"); results missing, unreadable or in another format
                    are exit 1 -- never a pass. The results path must sit
-                   strictly inside .nen/focused/ (refused at load otherwise);
-                   before every focused run nen MOVES what is there aside
-                   into .nen/focused/.previous/<run-id>/ (keeping the last 2
-                   runs), never deleting, and only after proving every
+                   strictly inside .nen/focused/, spelled exactly and in NFC
+                   (refused at load otherwise); one focused run at a time
+                   holds .nen/focused/.lock (a live holder is exit 2); before
+                   every focused run nen MOVES what is there aside into
+                   .nen/focused/.previous/<run-id>/ (a moved run is deleted
+                   after 2 further focused runs; only nen-minted run ids are
+                   pruned), and only after proving every
                    segment is a real entry (no symlink, junction or case
                    variant), its real path is inside the real .nen/focused,
                    no .git entry is at or below it, and git tracks nothing

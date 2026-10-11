@@ -10,7 +10,7 @@
 // the protected files still exist afterwards.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -118,7 +118,7 @@ describe.skipIf(!HAVE_GIT)("the focused results guard, against a real git", () =
     expect(existsSync(join(dir, "src", "shu", "keep.ts"))).toBe(true);
   });
 
-  it("N3 -- untracked work under the results path is MOVED aside, never deleted", async () => {
+  it("N3 -- untracked work under the results path is moved aside, deleted only after two further focused runs", async () => {
     const dir = repo(".nen/focused/work");
     mkdirSync(join(dir, ".nen", "focused", "work", "wip"), { recursive: true });
     writeFileSync(join(dir, ".nen", "focused", "work", "wip", "notes.txt"), "unsaved thoughts");
@@ -193,5 +193,71 @@ describe.skipIf(!HAVE_GIT)("the focused results guard, against a real git", () =
     expect(runs).toHaveLength(2);
     for (const run of runs) expect(existsSync(join(dir, ".nen", "focused", ".previous", run, "r.xml"))).toBe(true);
     expect(git(dir, ["status", "--porcelain", "--", "src", "nen"])).toBe("");
+    // RELEASED: no run leaves its lock behind.
+    expect(existsSync(join(dir, ".nen", "focused", ".lock"))).toBe(false);
+  });
+
+  it.skipIf(!POSIX)("M1 -- a .previous that is a symlink out of the tree is refused at exit 2; nothing moves outside", async () => {
+    const dir = repo(".nen/focused/r.xml");
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), "nen-focused-outside-")));
+    made.push(outside);
+    mkdirSync(join(dir, ".nen", "focused"), { recursive: true });
+    writeFileSync(join(dir, ".nen", "focused", "r.xml"), JUNIT);
+    symlinkSync(outside, join(dir, ".nen", "focused", ".previous"), "dir");
+    const result = await shu(dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/\.previous' is not a real directory/);
+    expect(readdirSync(outside)).toEqual([]);
+    expect(existsSync(join(dir, ".nen", "focused", "r.xml"))).toBe(true);
+  });
+
+  it("M1 -- a .previous that is a regular file is refused at exit 2, naming it; nothing moves", async () => {
+    const dir = repo(".nen/focused/r.xml");
+    mkdirSync(join(dir, ".nen", "focused"), { recursive: true });
+    writeFileSync(join(dir, ".nen", "focused", "r.xml"), JUNIT);
+    writeFileSync(join(dir, ".nen", "focused", ".previous"), "not a directory");
+    const result = await shu(dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/\.previous' is not a real directory/);
+    expect(existsSync(join(dir, ".nen", "focused", "r.xml"))).toBe(true);
+  });
+
+  it("M6 -- a second focused run while another LIVE run holds the lock is exit 2, naming its pid", async () => {
+    const dir = repo(".nen/focused/r.xml");
+    const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore" });
+    try {
+      mkdirSync(join(dir, ".nen", "focused"), { recursive: true });
+      writeFileSync(join(dir, ".nen", "focused", "r.xml"), JUNIT);
+      writeFileSync(join(dir, ".nen", "focused", ".lock"), JSON.stringify({ pid: holder.pid, startedAt: "2026-01-01T00:00:00.000Z" }));
+      const result = await shu(dir);
+      expect(result.code).toBe(2);
+      expect(result.err).toContain(`pid ${holder.pid}`);
+      expect(existsSync(join(dir, ".nen", "focused", "r.xml"))).toBe(true);
+      expect(existsSync(join(dir, ".nen", "focused", ".lock"))).toBe(true);
+    } finally {
+      holder.kill();
+    }
+  });
+
+  it("M6 -- a stale lock whose pid is gone is reported, removed, and the run proceeds", async () => {
+    const dir = repo(".nen/focused/r.xml");
+    const gone = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+    mkdirSync(join(dir, ".nen", "focused"), { recursive: true });
+    writeFileSync(join(dir, ".nen", "focused", ".lock"), JSON.stringify({ pid: Number(gone.stdout), startedAt: "2026-01-01T00:00:00.000Z" }));
+    const result = await shu(dir);
+    expect(result.code, result.err).toBe(0);
+    expect(result.err).toMatch(/removed a stale focused lock/);
+    expect(existsSync(join(dir, ".nen", "focused", ".lock"))).toBe(false);
+  });
+
+  it.skipIf(!POSIX)("M6 -- a lock that is a symlink is never touched: exit 2", async () => {
+    const dir = repo(".nen/focused/r.xml");
+    mkdirSync(join(dir, ".nen", "focused"), { recursive: true });
+    writeFileSync(join(dir, "src", "shu", "target.txt"), "do not touch");
+    symlinkSync(join(dir, "src", "shu", "target.txt"), join(dir, ".nen", "focused", ".lock"));
+    const result = await shu(dir);
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/not a regular lock file/);
+    expect(existsSync(join(dir, "src", "shu", "target.txt"))).toBe(true);
   });
 });

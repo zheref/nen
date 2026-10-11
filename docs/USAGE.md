@@ -9345,41 +9345,67 @@ executed (total − skipped — a skipped test did not run; for a summary that
 states its counts, a test outside the passed/failed buckets still ran).
 
 <a id="shu-test-select-results"></a>
-**The results path is nen's, and nothing is ever deleted to clear it.** Before
-each focused run nen **moves** whatever is at the declared `results.path` — the
-file, or the directory and everything under it — **aside** into
+**The results path is nen's, and clearing it is a rename.** Before each focused
+run nen **moves** whatever is at the declared `results.path` — the file, or the
+directory and everything under it — **aside** into
 `.nen/focused/.previous/<run-id>/`, so whatever is there afterwards is this
 run's and an earlier run's suite file in a JUnit results directory can never be
-counted. Only that `.previous` area is ever pruned, to the **last 2 runs**, and
-each run it prunes is re-proved first (kept, with a line on stderr, if the
-proof fails). A guard that missed something would cost a rename, not data.
+counted. A guard that missed something costs a rename **now**; the moved run is
+deleted only after **2 further focused runs**, when `.previous` is pruned to the
+run just moved plus the newest earlier one. A run id is
+`<ISO stamp>-<pid>-<6 hex>`, claimed with a non-recursive `mkdir`; **only
+entries of exactly that shape are ever pruned** — anything else in `.previous`
+is named on stderr and never touched. Each pruned run is re-proved first, then
+renamed to a unique `.doomed-<hex>` inside `.previous`, its ancestors and its
+own device/inode re-checked, and only then removed; a run that fails any of it
+is kept, with a line on stderr.
+
+**One focused run at a time.** A focused run takes `.nen/focused/.lock`
+(`O_EXCL`, holding its pid and start time) across the move, the run and the
+read, and releases it however it ends. Another **live** holder is exit `2`,
+naming its pid; a lock whose pid is no longer running is reported, removed —
+only once it is proved a regular file inside the real `.nen/focused` — and
+taken. A lock that is a link or a directory is never touched: exit `2`.
 
 That is safe by construction because the path is an **allowlist**, not a
 denylist:
 
 - **At load** (a malformed declaration: exit `1`), `results.path` must sit
-  **strictly inside `.nen/focused/`** — compared after `posix.normalize`,
-  NFC-normalised and case-folded — and never be `.nen/focused` itself or
-  anything under its `.previous` area. The root, `src`, `SRC`, `.git`, `nen/`,
-  `:(exclude)x` and every other path outside the prefix are refused by name.
-  The focused `stdoutTo` and `artifacts` are never moved, and keep their own
-  rules (inside the tree, never the root, `.git` or `nen/`, never the
-  regression capture).
+  **strictly inside `.nen/focused/`**, the prefix spelled **exactly** after
+  `posix.normalize` (`.NEN/focused/x` is refused, not folded onto it), already
+  **NFC** (a decomposed spelling is refused), and never be `.nen/focused`
+  itself, its `.previous` area or its `.lock` — in any case. The root, `src`,
+  `SRC`, `.git`, `nen/`, `:(exclude)x` and every other path outside the prefix
+  are refused by name. The focused `stdoutTo` and `artifacts` are never moved,
+  and keep their own rules (inside the tree, never the root, `.git` or `nen/`,
+  never the regression capture).
 - **At run time, before anything moves** (exit `2`, nothing moved or run):
   every segment from the real repository root down to the path is a real
-  entry — no symlink, no junction or other reparse point, no case variant of
-  the entry on disk; its real path is strictly inside the real `.nen/focused`,
-  and the real root is not inside that; no `.git` entry (file or directory)
-  exists at or below it, so no nested repository, worktree or submodule; it
-  does not overlap git's own directory as `git rev-parse --git-dir` reports it
-  (a worktree's lives elsewhere), nor the real path of any regression output;
-  and `git --literal-pathspecs ls-files --recurse-submodules -z -- <path>`
-  lists nothing. Outside a git repository the two git reads are skipped
-  ("not a git repository" is the one git failure read as an answer); a git
-  that cannot be started, or answers anything else, refuses.
+  entry — no symlink (Node reports a junction as one), and a native realpath
+  equal to its own path, which catches any other reparse point and any case
+  variant of the entry on disk; its real path is strictly inside the real
+  `.nen/focused`, and the real root is not inside that; no `.git` entry (file
+  or directory) exists at or below it, so no nested repository, worktree or
+  submodule; it does not overlap git's own directory as
+  `git rev-parse --git-dir` reports it (a worktree's lives elsewhere), nor the
+  real path of any regression output; and
+  `git --literal-pathspecs ls-files --recurse-submodules -z -- <path>` lists
+  nothing. Outside a git repository the two git reads are skipped ("not a git
+  repository" is the one git failure read as an answer); a git that cannot be
+  started, or answers anything else, refuses. **`.nen/focused/.previous` is
+  proved the same way** before a run id is chosen in it — absent (then created
+  non-recursively) or a real directory inside the real `.nen/focused`, never a
+  link or a file — and the move re-checks every ancestor's device and inode
+  against the proof immediately before renaming. A failed create or rename
+  (`ENOTDIR`, `EEXIST`, `EXDEV`) is exit `2` naming the path.
 - **`--dry-run` makes every one of those read-only proofs** and refuses with
   the same exit `2`, so a dry run that exits `0` is one the real run will not
-  refuse for its results path — and it moves nothing.
+  refuse for its results path — and it moves nothing and takes no lock.
+
+What remains is a window of microseconds between each last check and the
+syscall it guards. nen assumes a **single user's working copy**, where the only
+other writer is that user's own tooling; a hostile local writer with access to
+the tree is out of scope.
 
 | Outcome | nen exits | `--json` `selection` |
 |---|---|---|
@@ -9472,7 +9498,7 @@ nen shu test --repo . --select src/shu/select.test.ts,src/cli/comma.test.ts
 lane:          nen  (bun-cli)
 verb:          test
 selection:     src/shu/select.test.ts, src/cli/comma.test.ts  (2 identifiers, from project.verbs.nen.test.select; appends: src/shu/select.test.ts src/cli/comma.test.ts)
-results:       .nen/focused/nen.junit.xml (junit)  -- 104 executed
+results:       .nen/focused/nen.junit.xml (junit)  -- 109 executed
 …
 ```
 (run for real against this checkout; no `coverage/` written, no sidecar recorded.)

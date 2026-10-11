@@ -59,7 +59,7 @@ import { regressionOutputs, type DeviceExtraction, type DeviceReadiness, type Pr
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_SELECTION_EMPTY, EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
 import { readSelectionResults } from "./select-results.js";
-import { moveResultsAside, proveResultsClearable } from "./focused-guard.js";
+import { acquireFocusedLock, moveResultsAside, proveResultsClearable } from "./focused-guard.js";
 import { openDeclaration } from "./declaration.js";
 import { appendStepsToOpenPhase, EFFORT_ID, type PhaseStep } from "../phase/ledger.js";
 import {
@@ -1361,6 +1361,27 @@ async function runSelected(
   sink: ReportSink | undefined,
   liveness: Liveness,
 ): Promise<number> {
+  // ONE FOCUSED RUN AT A TIME (M6): the lock is held across the move, the run
+  // and the read, and released however this function leaves.
+  const lock = acquireFocusedLock(context, repoRoot, `${selection.pointer}.results.path`, selection.results.path);
+  try {
+    return await runSelectedLocked(context, project, plan, selection, cwd, repoRoot, preconditions, sink, liveness);
+  } finally {
+    lock.release();
+  }
+}
+
+async function runSelectedLocked(
+  context: CommandContext,
+  project: ProjectBlock,
+  plan: RenderedInvocation,
+  selection: ResolvedSelection,
+  cwd: string,
+  repoRoot: string,
+  preconditions: readonly AssertedPrecondition[],
+  sink: ReportSink | undefined,
+  liveness: Liveness,
+): Promise<number> {
   // PROVED AGAIN IMMEDIATELY BEFORE THE MOVE -- `runVerb` proved it before
   // the dry-run gate too, but the time between is the caller's, and a proof
   // is about the moment it is acted on. Then MOVED ASIDE, never deleted.
@@ -1371,7 +1392,7 @@ async function runSelected(
     `${selection.pointer}.results.path`,
     regressionOutputs(project.verbs),
   );
-  moveResultsAside(context, proof);
+  moveResultsAside(context, proof, `${selection.pointer}.results.path`, selection.results.path);
   const absolute = proof.absolute;
   const held: { report: ShuReport | null } = { report: null };
   const code = await runCaptured(context, plan, cwd, repoRoot, preconditions, (report): void => {
