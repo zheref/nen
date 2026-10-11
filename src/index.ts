@@ -60,7 +60,6 @@ import { checkTaxonomy } from "./schema/taxonomy.js";
 import { WORKFLOW_FILE } from "./schema/workflow.js";
 import { GATES_FILE } from "./schema/source.js";
 import { runSchemaSet, SCHEMA_SET_FLAGS } from "./schema/set.js";
-import { plainLine } from "./cli/plain.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
