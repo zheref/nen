@@ -193,6 +193,45 @@ function readBodyFile(value: string, realBase: string): { readonly body: string;
   }
 }
 
+/** The most bytes a `--from` batch file may hold: far past any real round, short of exhausting memory. */
+export const MAX_BATCH_FILE_BYTES = 4 * 1024 * 1024;
+
+/**
+ * The `--from` file's text, read with `readBodyFile`'s discipline: opened
+ * non-blocking (a FIFO must not hang the verb), `fstat`ed through the
+ * descriptor it is then read from, required to be a regular file, and capped
+ * at `MAX_BATCH_FILE_BYTES` before it is read -- so `/dev/zero`, a FIFO or a
+ * directory given as `--from` is a named refusal (exit 2), never a hang or an
+ * unbounded read.
+ */
+function readBatchFile(fullPath: string, shownPath: string): string {
+  const refuse = (what: string): never => {
+    throw new VerbUsageError(
+      `could not read --from '${shownPath}': ${what}. It is the batch of replies this verb posts, so it is refused before anything is sent.`,
+    );
+  };
+  let fd: number;
+  try {
+    fd = openSync(fullPath, fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NONBLOCK));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return refuse(code === undefined ? "it could not be opened" : `it could not be opened (${code})`);
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile()) return refuse("it is not a regular file (a directory, a device, a FIFO or a socket is never read as a batch)");
+    if (stat.size > MAX_BATCH_FILE_BYTES) return refuse(`it is ${stat.size} bytes, over the ${MAX_BATCH_FILE_BYTES}-byte limit for a batch file; it was not read`);
+    try {
+      return readFileSync(fd, "utf8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return refuse(code === undefined ? "it could not be read" : `it could not be read (${code})`);
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /**
  * The `--from` file, read and validated IN FULL. Every problem is collected
  * and the whole list refused once (exit 2): a caller fixing a batch should not
@@ -206,15 +245,7 @@ function readBodyFile(value: string, realBase: string): { readonly body: string;
  */
 export function readSettleFile(fullPath: string): SettleBatch {
   const shownPath = plainLine(fullPath);
-  let text: string;
-  try {
-    text = readFileSync(fullPath, "utf8");
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    throw new VerbUsageError(
-      `could not read --from '${shownPath}'${code === undefined ? "" : ` (${code})`}. It is the batch of replies this verb posts, so an unreadable one is refused before anything is sent.`,
-    );
-  }
+  const text = readBatchFile(fullPath, shownPath);
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;

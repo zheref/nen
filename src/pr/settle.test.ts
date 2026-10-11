@@ -14,7 +14,7 @@ import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { parseTarget } from "../github/target.js";
 import { prCommand } from "./command.js";
-import { MAX_BODY_CHARS, SETTLE_CONTRACT } from "./settle.js";
+import { MAX_BATCH_FILE_BYTES, MAX_BODY_CHARS, SETTLE_CONTRACT } from "./settle.js";
 import { listArgv, listPageArgv, replyArgv, resolveArgv } from "./threads.js";
 
 const TARGET = parseTarget("zheref/nen");
@@ -389,5 +389,41 @@ describe("nen pr threads settle -- body size and file-controlled text (Feitan F2
     const captured = await capture(args(from), [listCall(pageBody([node("T1", false)]))]);
     expect(captured.code).toBe(2);
     expect(captured.err.join("\n")).toMatch(/carries no review thread with id 'NOPE'/);
+  });
+});
+
+describe("nen pr threads settle -- --from is read with bodyFile's discipline", () => {
+  async function refusedFrom(from: string, pattern: RegExp): Promise<void> {
+    const captured = await capture(args(from), []);
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(pattern);
+    expect(captured.seams.calls).toEqual([]);
+  }
+
+  it.skipIf(process.platform === "win32")("refuses a FIFO without blocking on it", async () => {
+    const fifo = join(mkdtempSync(join(tmpdir(), "nen-settle-")), "batch.fifo");
+    execFileSync("mkfifo", [fifo]);
+    await refusedFrom(fifo, /could not read --from '.*batch\.fifo': it is not a regular file/);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a device", async () => {
+    await refusedFrom("/dev/zero", /could not read --from '\/dev\/zero': it is not a regular file/);
+  });
+
+  it("refuses a directory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-settle-"));
+    await refusedFrom(dir, /could not read --from '.*': it is not a regular file/);
+  });
+
+  it("refuses an oversize file without reading it", async () => {
+    const from = batch(" ".repeat(MAX_BATCH_FILE_BYTES + 1));
+    await refusedFrom(from, new RegExp(`it is ${MAX_BATCH_FILE_BYTES + 1} bytes, over the ${MAX_BATCH_FILE_BYTES}-byte limit`));
+  });
+
+  it("strips control characters from the path it names", async () => {
+    const captured = await capture(args(join(tmpdir(), "nope\u001b[2K.json")), []);
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).not.toContain("\u001b");
+    expect(captured.err.join("\n")).toMatch(/nope\[2K\.json': it could not be opened \(ENOENT\)/);
   });
 });

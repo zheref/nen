@@ -454,7 +454,9 @@ threads:
   path, a symlink that escapes, a device or a FIFO is refused. Its real path
   is reported in bodyFrom and on each entry line. Every body, inline or
   read, is at most 65536 characters.
-  --from <file.json>  Required by 'settle'; relative to --repo.
+  --from <file.json>  Required by 'settle'; relative to --repo. Read like a
+                  bodyFile: a regular file, checked on its descriptor, at
+                  most 4 MiB -- a FIFO, a device or a directory is refused.
   REFUSED AT EXIT 2, ALL PROBLEMS NAMED, NOTHING SENT: a file that is not a
   non-empty JSON array; an entry with an unknown key, no 'thread', a thread
   id carrying a control character, both or neither of 'body'/'bodyFile', a

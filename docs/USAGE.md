@@ -2751,8 +2751,14 @@ reports, and every human entry line names it relative to the batch
 **65536 characters** (GitHub's comment limit; a file too large to fit is
 refused without being read).
 
+The `--from` file itself is read the same way: opened non-blocking,
+`fstat`ed through the descriptor it is read from, required to be a regular
+file and at most **4 MiB** — a FIFO, a device or a directory given as
+`--from` is refused at exit `2`, named, rather than hanging or reading without
+bound.
+
 **Refused at exit `2`, every problem named in one refusal, nothing sent:** a
-file that cannot be read, is not JSON, is not an array or is empty; an entry
+file that cannot be read, is not a regular file, is over 4 MiB, is not JSON, is not an array or is empty; an entry
 that is not an object, carries a key other than those three, has no non-empty
 `thread` or one carrying a control character, has both or neither of
 `body`/`bodyFile`, names a `bodyFile` refused as above or unreadable, or whose
