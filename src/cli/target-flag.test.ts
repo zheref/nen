@@ -41,6 +41,7 @@ const VERBS: readonly (readonly [Command, readonly string[]])[] = [
   [issueCommand, ["issue", "comment", "--issue", "1", "--body", "x"]],
   [issueCommand, ["issue", "chain-position", "--issue", "1"]],
   [issueCommand, ["issue", "terminus", "--issue", "1"]],
+  [issueCommand, ["issue", "reconcile"]],
 ];
 
 // `pr cascade-main` is DELIBERATELY ABSENT. It reaches the same helper and
