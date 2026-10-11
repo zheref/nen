@@ -1226,6 +1226,42 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     }
   });
 
+  it("escapes a hostile target name in the plan, the placeholder pointer, and the unsupported reason (#300 round 2)", async () => {
+    const hostile = "stag\u001b[31m\u202e";
+    const plan = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { [hostile]: {} },
+      }),
+      ["deploy", "--target", hostile],
+    );
+    expect(plan.code).toBe(0);
+    expect(plan.out.join("\n")).toContain('target:        "stag\\u001b[31m\\u202e"');
+    expect([...plan.out, ...plan.err].join("\n")).not.toContain("\u001b");
+
+    const placeholder = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { [hostile]: { args: ["-destination", "{destination}"] } },
+      }),
+      ["deploy", "--target", hostile],
+    );
+    expect(placeholder.code).toBe(2);
+    expect(placeholder.err.join("\n")).toContain('project.targets."stag\\u001b[31m\\u202e".args');
+    expect(placeholder.err.join("\n")).not.toContain("\u001b");
+
+    const seated = await withDeclaration(
+      oneLane({
+        verbs: { only: { deploy: { exe: "placeholder-deploy-tool", argv: ["publish"] } } },
+        targets: { beta: { unsupported: "pushed by\u001b[2J the host\u202e" } },
+      }),
+      ["deploy", "--target", "beta"],
+    );
+    expect(seated.code).toBe(4);
+    expect(seated.err.join("\n")).toContain("pushed by[2J the host");
+    expect(seated.err.join("\n")).not.toContain("\u001b");
+  });
+
   it("refuses a --target that names no declared target, rather than accepting any word", async () => {
     const result = await capture(["deploy", "--lane", "pages", "--target", "anything"]);
     expect(result.code).toBe(2);
@@ -1478,13 +1514,13 @@ describe("nen shu deploy -- the seat, the destination, and which answers first",
     });
     const out = result.out.join("\n");
     expect(out).toMatch(
-      /target: {8}staging {2}\(appends: --env staging\) {2}requires env: PLACEHOLDER_DEPLOY_TOKEN/,
+      /target: {8}'staging' {2}\(appends: --env staging\) {2}requires env: PLACEHOLDER_DEPLOY_TOKEN/,
     );
     expect(out.indexOf("target:")).toBeLessThan(out.indexOf("would run:"));
     // A destination that adds nothing says so rather than printing an empty
     // pair of brackets a reader has to interpret.
     const bare = await capture(["deploy", "--lane", "pages", "--target", "preview", "--dry-run"]);
-    expect(bare.out.join("\n")).toMatch(/target: {8}preview {2}\(appends no argument\)/);
+    expect(bare.out.join("\n")).toMatch(/target: {8}'preview' {2}\(appends no argument\)/);
   });
 
   // THE RISK THIS TEST PINS: `report.target.args.join(" ")` reads back
@@ -1556,7 +1592,7 @@ describe("nen shu deploy --run -- nothing is sent without it", () => {
     // plan, not a template a reader has to finish in their head.
     expect(wouldRun(result.out)).toEqual([PLAN]);
     const out = result.out.join("\n");
-    expect(out).toMatch(/target: {8}staging {2}\(appends: --env staging\)/);
+    expect(out).toMatch(/target: {8}'staging' {2}\(appends: --env staging\)/);
     // The preconditions are ASSERTED, not skipped: the report says ok, which is
     // the fact a reader is checking before they add --run.
     expect(out).toMatch(/ok {4}env {2}PLACEHOLDER_DEPLOY_TOKEN/);

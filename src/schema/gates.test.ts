@@ -11,6 +11,7 @@ import {
   parseRoundCaps,
   parseGatesText,
   findDuplicateKey,
+  findDuplicateKeys,
   GatesDuplicateKeyError,
   visibleKey,
   pointerSegment,
@@ -1039,6 +1040,12 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     expect(parseGatesText(at, '{"a":{"x":1},"b":{"x":"\\"x\\"","y":"x"}}')).toEqual({ a: { x: 1 }, b: { x: '"x"', y: "x" } });
     expect(findDuplicateKey('{"a":1,"b":[{"a":1},{"a":2}]}')).toBeNull();
     expect(findDuplicateKey('{"a":1,"a":2}')).toEqual({ pointer: "$", key: "a" });
+    // EVERY repeat, in document order (zheref/nen#300): the scoped refusals
+    // must not be blinded by an earlier repeat outside their block.
+    expect(findDuplicateKeys('{"a":1,"a":2,"b":{"c":1,"c":2}}')).toEqual([
+      { pointer: "$", key: "a" },
+      { pointer: "b", key: "c" },
+    ]);
     expect(() => parseGatesText(at, "{nope")).toThrow(/is not valid JSON/);
   });
 

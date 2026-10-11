@@ -1201,3 +1201,30 @@ describe("deploy -- the default target a caller's own tooling sends to", () => {
     expect(error.message).toMatch(/one letter away from 'deploy'/);
   });
 });
+
+describe("deploy -- a repeated key is refused, never collapsed (Feitan N1 on #300)", () => {
+  function withPolicyText(text: string): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-workflow-dup-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "workflow.json"), text);
+    return root;
+  }
+
+  it("refuses two defaultTarget keys by pointer -- JSON would keep the last", () => {
+    const root = withPolicyText('{"deploy":{"defaultTarget":"staging","defaultTarget":"production"}}');
+    expect(() => loadWorkflow(root)).toThrow(SchemaError);
+    expect(() => loadWorkflow(root)).toThrow("at deploy, carries the key 'defaultTarget' twice");
+  });
+
+  it("refuses the deploy block declared twice at the root", () => {
+    const root = withPolicyText('{"deploy":{"defaultTarget":null},"deploy":{"defaultTarget":"production"}}');
+    expect(() => loadWorkflow(root)).toThrow("at deploy, carries the key 'deploy' twice");
+  });
+
+  it("leaves a repeat in another block to JSON.parse, as before", () => {
+    const root = withPolicyText('{"monitor":{"maxCycles":3,"maxCycles":4},"deploy":{"defaultTarget":"staging"}}');
+    const loaded = loadWorkflow(root);
+    expect(loaded.workflow.monitor.maxCycles).toBe(4);
+    expect(loaded.workflow.deploy.defaultTarget).toBe("staging");
+  });
+});

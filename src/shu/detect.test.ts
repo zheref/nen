@@ -50,6 +50,7 @@ import {
 // sweeps that forbid it (./purity.test.ts, ../profiles/inertness.test.ts) are
 // about the EXECUTION path and exclude `*.test.ts` by name.
 import { GITIGNORE_ENTRY } from "../scaffold/init.js";
+import { defaultWorkflowDocument } from "../scaffold/templates.js";
 import {
   EMPTY_TREE,
   EXPO_BARE,
@@ -7630,19 +7631,36 @@ describe("detect proposes deploy.defaultTarget only for a DECLARED canonical tar
     }
   });
 
-  it("notes, rather than proposes, when nen/workflow.json already states deploy.defaultTarget -- even null (N7)", () => {
-    for (const [stated, shown] of [[null, "null"], ["staging", "'staging'"]] as const) {
-      const dir = xcodeTree({ testflight: { nonProduction: true }, staging: { nonProduction: true } });
-      try {
-        writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ deploy: { defaultTarget: stated } }));
-        const report = detect(dir);
-        expect(report.workflow, shown).toBeNull();
-        expect(report.notes.join("\n"), shown).toContain(
-          `no deploy.defaultTarget is proposed: nen/workflow.json already declares it as ${shown}, which is this repository's decision.`,
-        );
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
+  it("notes, rather than proposes, when nen/workflow.json already states a NAME (N7)", () => {
+    const dir = xcodeTree({ testflight: { nonProduction: true }, staging: { nonProduction: true } });
+    try {
+      writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify({ deploy: { defaultTarget: "staging" } }));
+      const report = detect(dir);
+      expect(report.workflow).toBeNull();
+      expect(report.notes.join("\n")).toContain(
+        "no deploy.defaultTarget is proposed: nen/workflow.json already declares it as 'staging', which is this repository's decision.",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still PROPOSES over the scaffolded null, saying it would replace it (Nobunaga R1)", () => {
+    // `nen scaffold init` writes this exact document, `"defaultTarget": null`
+    // included -- reading that null as a decision withheld the proposal from
+    // every scaffolded repository and told it something false.
+    const dir = xcodeTree({ testflight: { nonProduction: true } });
+    try {
+      const scaffolded = defaultWorkflowDocument({ lane: "app", allowedAttributionTrailers: [], runTrailer: null });
+      expect((scaffolded["deploy"] as Record<string, unknown>)["defaultTarget"]).toBeNull();
+      writeFileSync(join(dir, "nen", "workflow.json"), JSON.stringify(scaffolded));
+      const report = detect(dir);
+      expect(report.workflow).toEqual({ deploy: { defaultTarget: "testflight" } });
+      const notes = report.notes.join("\n");
+      expect(notes).toContain("would REPLACE that file's \"defaultTarget\": null");
+      expect(notes).not.toContain("already declares it as");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

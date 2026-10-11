@@ -58,7 +58,8 @@ import {
   SchemaError,
 } from "./errors.js";
 import { requireEnum, withinOneEdit } from "./contract.js";
-import { readSchemaJson, resolveSchemaFile, type SchemaLocation } from "./source.js";
+import { readSchemaFile, resolveSchemaFile, type SchemaLocation } from "./source.js";
+import { refuseDuplicateKeyWithin } from "./gates.js";
 import { matchesPattern } from "../report/patterns.js";
 import { CONVENTIONAL_SUBJECT_CASE, parseBodyWidth, parseSubjectCaseTuple, type SubjectCaseSpec } from "../commit/rule.js";
 
@@ -2121,11 +2122,22 @@ export function loadWorkflow(repoRoot: string): LoadedWorkflow {
   // probe exists to catch -- a link at `nen/workflow.json` pointing at nothing
   // -- read as "no policy, defaults apply", which is the fail-open this loader
   // must not have. The probe decides absence; everything after it throws.
-  const read: { path: string; value: unknown; location: SchemaLocation } = readSchemaJson(
+  const read: { path: string; text: string; location: SchemaLocation } = readSchemaFile(
     repoRoot,
     WORKFLOW_FILE,
   );
-  const workflow = parseWorkflow(read.path, read.value);
+  // A REPEATED KEY IN THE `deploy` BLOCK IS REFUSED BEFORE PARSING
+  // (zheref/nen#300, Feitan N1): two `defaultTarget`s read as the last to
+  // `JSON.parse` and as either to a reviewer. Scoped to that block, which is
+  // the one this change adopts the rule for.
+  refuseDuplicateKeyWithin(read.path, read.text, "deploy");
+  let value: unknown;
+  try {
+    value = JSON.parse(read.text) as unknown;
+  } catch (error) {
+    throw new SchemaError(read.path, null, `is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+  }
+  const workflow = parseWorkflow(read.path, value);
   return {
     path: read.path,
     present: true,

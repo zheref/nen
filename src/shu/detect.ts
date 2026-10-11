@@ -6731,8 +6731,12 @@ export function detect(
  * lanes name two different defaults, both proposable, gets no proposal and a
  * note naming both -- the same rule `project.toolchain` follows above.
  *
- * A POLICY THAT ALREADY STATES THE KEY -- a name or `null` -- is a decision,
- * and gets a note saying so instead of a proposal to overwrite it.
+ * A POLICY THAT ALREADY STATES A NAME is a decision, and gets a note saying so
+ * instead of a proposal to overwrite it. A stated `null` is NOT one: `nen
+ * scaffold init` writes `"defaultTarget": null` into every repository it
+ * stands up, so reading it as a choice would withhold the proposal from every
+ * scaffolded tree (Nobunaga R1 on #300). The fragment is proposed, and the
+ * note says it would replace that `null`.
  *
  * A NAME THE PACK HAS AND THE DECLARATION DOES NOT SATISFY IS A NOTE, never a
  * proposal: the sentence says what would make it one.
@@ -6800,25 +6804,31 @@ function proposeDefaultTarget(
   const [only] = proposable;
   if (only === undefined) return null;
   const [target, stacks] = only;
-  // A POLICY THAT ALREADY STATES THE KEY IS ANSWERED, NOT RE-PROPOSED (N7). A
-  // policy that does not load is the policy row's finding, not this verb's;
-  // the fragment is still proposed and merging it is the human's call.
-  let stated: { readonly value: string | null } | null = null;
+  // A POLICY THAT ALREADY STATES A NAME IS ANSWERED, NOT RE-PROPOSED (N7); a
+  // stated `null` is the scaffolded seat, not a decision (R1). A policy that
+  // does not load is the policy row's finding, not this verb's; the fragment
+  // is still proposed and merging it is the human's call.
+  let statedName: string | null = null;
+  let statedNull = false;
   try {
     const loaded = loadWorkflow(repoRoot);
     if (loaded.present && Object.prototype.hasOwnProperty.call(loaded.workflow.deploy.raw, "defaultTarget")) {
-      stated = { value: loaded.workflow.deploy.defaultTarget };
+      statedName = loaded.workflow.deploy.defaultTarget;
+      statedNull = statedName === null;
     }
   } catch {
-    stated = null;
+    statedName = null;
   }
-  if (stated !== null) {
+  if (statedName !== null) {
     notes.push(
-      `no deploy.defaultTarget is proposed: ${WORKFLOW_FILE} already declares it as ${
-        stated.value === null ? "null" : visibleKey(stated.value)
-      }, which is this repository's decision. The reference pack would have proposed ${visibleKey(target)} for ${stacks.join(", ")}.`,
+      `no deploy.defaultTarget is proposed: ${WORKFLOW_FILE} already declares it as ${visibleKey(statedName)}, which is this repository's decision. The reference pack would have proposed ${visibleKey(target)} for ${stacks.join(", ")}.`,
     );
     return null;
+  }
+  if (statedNull) {
+    notes.push(
+      `the proposed ${WORKFLOW_FILE} fragment would REPLACE that file's "defaultTarget": null -- the seat 'nen scaffold init' writes, which reads as "ask". Keep the null if a bare invocation of this repository's tooling should keep asking.`,
+    );
   }
   notes.push(
     `proposed ${WORKFLOW_FILE} → deploy.defaultTarget ${visibleKey(target)}: the reference pack names it the canonical non-production deploy target for ${stacks.join(", ")}, and ${CONTRACT_FILE} already declares project.targets.${target} with "nonProduction": true. It is a default for a caller's OWN tooling (a skill that passes it to --target); 'nen shu deploy' still requires --target and reads no default. --write never writes ${WORKFLOW_FILE} -- merge the fragment by hand.`,

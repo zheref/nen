@@ -27,6 +27,7 @@
 
 import { VerbUsageError } from "../cli/command.js";
 import { pointerSegment, visibleKey } from "../schema/gates.js";
+import { plainLine } from "../cli/plain.js";
 import { EXIT_UNSUPPORTED_HOST, EXIT_UNSUPPORTED_VERB, ShuRefusal } from "./exit.js";
 import {
   LAUNCH_VERBS,
@@ -1065,7 +1066,7 @@ export function resolveTarget(
     // repository's own sentence, exactly as an unsupported verb row answers.
     throw new ShuRefusal(
       EXIT_UNSUPPORTED_VERB,
-      `target ${visibleKey(requested)} has no command line at all, so there is nothing for nen to run on lane '${plan.lane}' (${plan.stack}). The declaration's own reason: ${target.unsupported}`,
+      `target ${visibleKey(requested)} has no command line at all, so there is nothing for nen to run on lane '${plan.lane}' (${plan.stack}). The declaration's own reason: ${plainLine(target.unsupported)}`,
     );
   }
   const steps = appendArgs(plan, target.args, requested);
@@ -1081,7 +1082,7 @@ export function resolveTarget(
   const composed = unsubstituted(steps);
   if (composed.length > 0) {
     throw new VerbUsageError(
-      `target ${visibleKey(requested)} composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this destination needs under project.targets.${requested}.args -- a destination is a fact this repository states, and nen substitutes nothing into it.`,
+      `target ${visibleKey(requested)} composes ${composed.length === 1 ? "a placeholder" : "placeholders"} nen cannot substitute onto '${plan.verb}' on lane '${plan.lane}': ${placeholderRule(composed)} Write the literal argument this destination needs under project.targets.${pointerSegment(requested)}.args -- a destination is a fact this repository states, and nen substitutes nothing into it.`,
     );
   }
   // DE-DUPLICATED FIRST, AND THE REPORT CARRIES THE DE-DUPLICATED LIST. A

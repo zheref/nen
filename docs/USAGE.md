@@ -9312,9 +9312,14 @@ note. Where the name is **not** declared — no declaration, a declaration
 without that key, or one that does not load — or is declared without the
 `nonProduction` mark, or as `unsupported`, nothing is proposed and a note says
 what would make it so. Two lanes naming two different proposable defaults get
-no proposal and a note naming both. A `nen/workflow.json` that already states
-`deploy.defaultTarget` — a name or `null` — is the repository's decision: the
-note says *already declares it as …* and nothing is proposed. `targets` in the contract proposal
+no proposal and a note naming both. A `nen/workflow.json` that already states a
+`deploy.defaultTarget` **name** is the repository's decision: the note says
+*already declares it as …* and nothing is proposed. A stated `null` is not —
+it is the seat [`scaffold init`](#nen-scaffold-init) writes — so the fragment
+is still proposed, with a note that it would replace that `null`. A key
+repeated inside `deploy` (two `defaultTarget`s) or inside `project.targets`
+(two `nonProduction`s, a target name twice) is refused by pointer at load:
+JSON would keep the last, and a reviewer reads the first. `targets` in the contract proposal
 stays the empty seat either way, `--write` **never** writes `nen/workflow.json`,
 and [`nen shu deploy`](#nen-shu-deploy) reads no default: the key is for a
 caller's own tooling, which passes it to `--target` itself.
@@ -10157,7 +10162,7 @@ looks for one. The target contributes the destination:
 `nen shu deploy --lane site --target production` then prints
 
 ```text
-target:        production  (appends: --env production)  requires env: YOUR_DEPLOY_TOKEN
+target:        'production'  (appends: --env production)  requires env: YOUR_DEPLOY_TOKEN
 would run:     your-deploy-tool publish --dir public --env production
 ```
 

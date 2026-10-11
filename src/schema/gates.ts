@@ -1426,6 +1426,18 @@ export class GatesDuplicateKeyError extends SchemaError {
  * not JSON is left for `JSON.parse` to refuse.
  */
 export function findDuplicateKey(text: string): { readonly pointer: string; readonly key: string } | null {
+  return findDuplicateKeys(text)[0] ?? null;
+}
+
+/**
+ * EVERY key repeated within one object of `text`, in document order -- the
+ * same scan as `findDuplicateKey`, which is its first entry. Exported so a
+ * loader that refuses repeats only inside ONE block (`nen/contract.json`'s
+ * `project.targets`, `nen/workflow.json`'s `deploy` -- zheref/nen#300) is not
+ * blinded by an earlier, out-of-scope repeat elsewhere in the same file.
+ */
+export function findDuplicateKeys(text: string): readonly { readonly pointer: string; readonly key: string }[] {
+  const found: { readonly pointer: string; readonly key: string }[] = [];
   interface ObjectFrame {
     readonly kind: "object";
     readonly path: string;
@@ -1458,9 +1470,9 @@ export function findDuplicateKey(text: string): { readonly pointer: string; read
         try {
           key = JSON.parse(text.slice(i, j + 1)) as string;
         } catch {
-          return null;
+          return found;
         }
-        if (top.keys.has(key)) return { pointer: top.path, key };
+        if (top.keys.has(key)) found.push({ pointer: top.path, key });
         top.keys.add(key);
         top.lastKey = key;
         top.expectKey = false;
@@ -1478,7 +1490,31 @@ export function findDuplicateKey(text: string): { readonly pointer: string; read
     }
     i += 1;
   }
-  return null;
+  return found;
+}
+
+/**
+ * Refuse, by pointer, the first key repeated inside one BLOCK of a file
+ * (zheref/nen#300, Feitan N1). `within` names the block's pointer -- a repeat
+ * in the block's own object, in any object below it, or of the block's own
+ * key at the root is refused; every other repeat in the file is left alone,
+ * because that file's other blocks have not adopted the rule. The scan is
+ * `findDuplicateKeys`, the one gates.json goes through.
+ */
+export function refuseDuplicateKeyWithin(path: string, text: string, within: string): void {
+  const dot = within.lastIndexOf(".");
+  const parent = dot === -1 ? "$" : within.slice(0, dot);
+  const own = dot === -1 ? within : within.slice(dot + 1);
+  const hit = findDuplicateKeys(text).find(
+    ({ pointer, key }): boolean =>
+      pointer === within || pointer.startsWith(`${within}.`) || (pointer === parent && key === own),
+  );
+  if (hit === undefined) return;
+  throw new SchemaError(
+    path,
+    hit.pointer === "$" ? hit.key : hit.pointer,
+    `carries the key ${visibleKey(hit.key)} twice. JSON keeps only the last of the two, so the other value would be dropped without a word -- refused, so the file says one thing. Remove one of them.`,
+  );
 }
 
 /**
