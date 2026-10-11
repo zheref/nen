@@ -540,7 +540,8 @@ function suggest(surface: InstallSurface, configDir: string, explicit: boolean, 
 }
 
 export function shellQuote(text: string): string {
-  return /^[A-Za-z0-9_./:@=+,-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
+  // A leading '=' is quoted too: zsh expands `=cmd` to a command's path.
+  return /^[A-Za-z0-9_./:@=+,-]+$/.test(text) && !text.startsWith("=") ? text : `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
 // ---------------------------------------------------------------------------
@@ -730,6 +731,9 @@ function createLink(dest: string, target: string, platform: NodeJS.Platform, ops
   try {
     ops.symlink(target, dest, linkType(platform));
   } catch (error) {
+    // Something took the path between the re-check and this write: not ours,
+    // and nothing of ours was written there.
+    if (code(error) === "EEXIST") throw new Stop("refused", `${safe(dest)} appeared after it was inspected (EEXIST): refusing to replace it; nothing was written`);
     throw new Stop("failed", `could not create the link ${safe(dest)} (${code(error)})`);
   }
 }
@@ -1127,10 +1131,14 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
   const installed = ours !== null && state.recordKeys.includes(ours);
   const known = marketplace !== null && own(state.known, marketplace);
   const pending = claudeActions(state, inputs, marketplace);
-  // The CLI's presence is asked BEFORE the destination is planned, read-only:
-  // a handover it cannot perform must not leave a link behind for the
-  // marketplace copy to keep shadowing, and nothing runs between the plan and
-  // the write.
+  // PLAN, THEN PROBE. Planning only reads, so a destination that is not ours
+  // is refused (exit 3) before a missing CLI is (exit 5); the re-check right
+  // before the write (applyLink) covers whatever the probe's moment allowed.
+  const owner = claudeOwner(plugin);
+  const plan = planLink(dest, root, inspectDestination(dest, owner), plugin);
+  // The CLI's presence is asked before anything is WRITTEN, read-only: a
+  // handover it cannot perform must not leave a link behind for the
+  // marketplace copy to keep shadowing.
   const probe = callTool(inputs.seams, "claude", ["--version"], env);
   const owed = installed || known || pending.length > 0;
   if (probe.spawnFailed && owed) {
@@ -1140,8 +1148,6 @@ function installClaudeCode(inputs: InstallInputs, draft: Draft): void {
     );
   }
   if (!probe.spawnFailed && !probe.ok) throw new Stop("failed", `claude --version failed: ${probe.last}`);
-  const owner = claudeOwner(plugin);
-  const plan = planLink(dest, root, inspectDestination(dest, owner), plugin);
   applyLink(dest, root, plan, draft, inputs, owner);
 
   if (probe.spawnFailed) {

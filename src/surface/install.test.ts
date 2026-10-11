@@ -386,7 +386,8 @@ describe("surface install --surface claude-code", () => {
       expect(String(result.doc()["reason"]), name).toMatch(why);
       expect(lstatSync(dest).ino, name).toBe(before.ino);
       if (before.isSymbolicLink()) expect(readlinkSync(dest)).toBeTruthy();
-      expect(commandsOf(s), name).toEqual(["git rev-parse --show-toplevel", "claude --version"]);
+      // R2: the plan refuses before the CLI is probed.
+      expect(commandsOf(s), name).toEqual(["git rev-parse --show-toplevel"]);
     }
   });
 
@@ -892,7 +893,7 @@ describe("surface install: Nobunaga round 1", () => {
     expect(report.reason).toMatch(/changed after it was inspected .*a file/);
     expect(readFileSync(dest, "utf8")).toBe("the user's own file");
     expect(report.steps.map((step) => step.outcome)).toEqual(["failed"]);
-    // the probe ran BEFORE the plan, so nothing else ran in between
+    // only the read-only probe ran; the write was refused, nothing else ran
     expect(commandsOf(s)).toEqual(["claude --version"]);
 
     const v = world();
@@ -1155,5 +1156,47 @@ describe("surface install: Nobunaga round 1", () => {
     link(x.work, tempX);
     expect(direct(x, seams(x, [ok("claude --version")]), undefined).verdict).toBe("refused");
     expect(lstatSync(tempX).isSymbolicLink()).toBe(true);
+  });
+});
+
+describe("surface install: Nobunaga round 2", () => {
+  it("R2: plans before it probes -- a destination not ours is refused (exit 3) even with claude missing", async () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    mkdirSync(dest, { recursive: true });
+    const result = await capture([...installArgs(w, "claude-code"), "--json"], seams(w, [git(w.root), { match: "claude --version", result: { spawnFailed: true, code: -1 } }]));
+    expect(result.code).toBe(3);
+    expect(String(result.doc()["reason"])).toMatch(/a real directory/);
+    expect(lstatSync(dest).isDirectory()).toBe(true);
+    // ... and it is refused before the CLI is even asked about.
+    const s = seams(w, [git(w.root)]);
+    expect((await capture(installArgs(w, "claude-code"), s)).code).toBe(3);
+    expect(commandsOf(s)).toEqual(["git rev-parse --show-toplevel"]);
+  });
+
+  it("R4: a token starting with '=' is quoted (zsh expands =cmd)", () => {
+    expect(shellQuote("=ls")).toBe("'=ls'");
+    expect(shellQuote("a=b")).toBe("a=b");
+    expect(commandText(["claude", "plugin", "disable", "=x@y"])).toBe("claude plugin disable '=x@y'");
+  });
+
+  it("EEXIST: a destination taken between the re-check and the write is refused (exit 3), nothing written", async () => {
+    const w = world();
+    const dest = join(w.cfg, "skills", PLUGIN);
+    const report = direct(w, seams(w, [ok("claude --version")]), {
+      linkOps: {
+        symlink: (target, path): void => {
+          writeFileSync(path, "raced in");
+          link(target, path);
+        },
+      },
+    });
+    expect(report.verdict).toBe("refused");
+    expect(report.reason).toMatch(/EEXIST/);
+    expect(readFileSync(dest, "utf8")).toBe("raced in");
+    expect(report.steps.map((step) => [step.kind, step.outcome])).toEqual([
+      ["mkdir", "ok"],
+      ["link", "failed"],
+    ]);
   });
 });

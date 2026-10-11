@@ -56,7 +56,7 @@ interface World {
 }
 
 function world(): World {
-  const work = realpathSync(mkdtempSync(join(tmpdir(), "nen-surface-plugin-")));
+  const work = realpathSync.native(mkdtempSync(join(tmpdir(), "nen-surface-plugin-")));
   const src = join(work, "src");
   for (const dir of ["claude/skills/ten", "claude/agents", "hooks", "scripts", "docs", ".claude-plugin"]) {
     mkdirSync(join(src, ...dir.split("/")), { recursive: true });

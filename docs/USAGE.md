@@ -186,8 +186,8 @@ change from a compatible one.
 [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
 here is the ruling rather than the silence. A `contract` field is **earned by a
 shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. Thirty-two shapes
-qualify today and declare one (thirty-four ids: `nen.stop.mark` and
+document half-understood is worse than not reading it at all. Thirty-three shapes
+qualify today and declare one (thirty-five ids: `nen.stop.mark` and
 `nen.runner.plan` each have two versions):
 
 `nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.2` ·
@@ -197,7 +197,7 @@ qualify today and declare one (thirty-four ids: `nen.stop.mark` and
 `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
 `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` ·
 `nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.decisions/v0.1` · `nen.phase.ledger/v0.1` · `nen.repo.classify/v0.1` · `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2` · `nen.surface.capabilities/v0.1` ·
-`nen.surface.install/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.generate/v0.1` ·
+`nen.surface.install/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.generate/v0.1` ·
 `nen.surface.status/v0.1` ·
 `nen.wc.squash/v0.1` · `nen.workflow/v0.1`
 
