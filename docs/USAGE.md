@@ -1147,21 +1147,23 @@ matching, and a name given twice is applied (and warned about) once.
 
 **Naming a check whose name contains a comma (zheref/nen#243).** A GitHub
 Actions matrix job is named `<job> (<v1>, <v2>, ...)` — this repository's own
-CI reports `check (Windows, ["self-hosted","Windows","X64"])` — and through
+CI reports `check (Windows, ["self-hosted","Windows","X64","pool-windows-x64"])`
+(`check (Windows, ["self-hosted","Windows","X64"])` before the pool labels of
+#340) — and through
 v0.15.x `--exclude-check` split its one value on every comma, so such a name
 fragmented into pieces that matched nothing and the verdict stayed
 `not-ready` on a job the maintainer had ruled out
 ([zheref/nen#242](https://github.com/zheref/nen/pull/242)). The flag now
 **repeats** — `--exclude-check readiness --exclude-check 'check (Windows,
-["self-hosted","Windows","X64"])'` is two names — and within one occurrence a
+["self-hosted","Windows","X64","pool-windows-x64"])'` is two names — and within one occurrence a
 comma separates names **only outside brackets**: `(`, `[` and `{` open a
 group, the matching closer ends it, and a comma inside a group belongs to the
 name. So `--exclude-check a,b` is still two names, exactly as before, and a
 matrix name is one name with or without the repeat:
 
 ```bash
-nen pr ready 242 --gh-repo zheref/nen --exclude-check 'check (Windows, ["self-hosted","Windows","X64"])'
-nen pr ready 242 --gh-repo zheref/nen --exclude-check 'compile,check (Windows, ["self-hosted","Windows","X64"])'
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'check (Windows, ["self-hosted","Windows","X64","pool-windows-x64"])'
+nen pr ready 242 --gh-repo zheref/nen --exclude-check 'compile,check (Windows, ["self-hosted","Windows","X64","pool-windows-x64"])'
 ```
 
 Two shapes are stated rather than guessed. A value with an opener that is
@@ -1185,7 +1187,7 @@ a check is out of scope belongs in the declaration the verdict already reads.
 "checks": {
   "excluded": [
     {
-      "name": "check (Windows, [\"self-hosted\",\"Windows\",\"X64\"])",
+      "name": "check (Windows, [\"self-hosted\",\"Windows\",\"X64\",\"pool-windows-x64\"])",
       "reason": "the maintainer ruled Windows out of scope until a runner exists",
       "ruled": "2026-09-22",
       "until": { "condition": "a self-hosted Windows runner is registered" }
@@ -13077,7 +13079,11 @@ label — runner names printed with control characters stripped, raw under
 own `os`, `architecture`, `filename`, `download_url`, `sha256_checksum`),
 `pools[]` (`id`, `labels[]` — the full set, `pool-<id>` last — `runners[]`
 names, `online`, `free` — online and not busy — and, from #340,
-`unlabelled[]`: the runners awaiting the pool's own label) and `unpooled[]`; the last two are `null` when no policy was read.
+`unlabelled[]`: the runners awaiting the pool's own label — and `alsoFit`,
+present only when some of them also fit other pools: runner name → those
+pools' ids; such a runner is left off the relabel command, which is omitted
+when none is left, and named with `<names> also fit <pools>: make the
+declarations differ`) and `unpooled[]`; the last two are `null` when no policy was read.
 Exit 0 when GitHub answered; 1 when it refused — a 403 is worded **"needs
 admin on `<target>`"**, because listing runners is a repository-admin
 operation; 5 when `gh` cannot be started.

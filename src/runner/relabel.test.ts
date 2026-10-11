@@ -48,6 +48,9 @@ describe("relabelPool -- the pool's own label on runners registered before it (#
     const report = relabelPool(seams([{ name: "NZ-NNR1" }, { name: "NZ NNR2" }]), TARGET, POLICY_, windows, null, false);
     expect(renderRelabel(report, TARGET).at(-1)).toBe("then: nen runner relabel --target zheref/nen --pool windows-x64 --runner 'NZ-NNR1,NZ NNR2' --run");
     expect(shellWord("a,b")).toBe("a,b");
+    // N3: a word that STARTS with `=` is quoted (zsh's `=cmd` expansion); one with `=` inside is not.
+    expect(shellWord("=ls")).toBe("'=ls'");
+    expect(shellWord("a=b")).toBe("a=b");
   });
 
   it("names the one write and its read-back; the would-run line is shell-quoted, the argv is not (N4)", () => {

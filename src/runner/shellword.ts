@@ -11,5 +11,6 @@
 
 /** `word` as one shell word: bare when it is plainly safe, single-quoted otherwise. */
 export function shellWord(word: string): string {
-  return /^[A-Za-z0-9_./:=@%+,-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
+  // A word that STARTS with `=` is quoted too (zsh expands `=cmd` to a path).
+  return /^[A-Za-z0-9_./:@%+,-][A-Za-z0-9_./:=@%+,-]*$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`;
 }

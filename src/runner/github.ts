@@ -28,6 +28,7 @@
 // token it was handed, and this family's whole contract is that no token, no
 // password and no registration token is ever printed by nen.
 
+import { plainLine } from "../cli/plain.js";
 import { GH, outputLines, type CommandResult, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 
@@ -50,7 +51,9 @@ export class RunnerFailure extends Error {
 
 /** A subprocess's stderr, redacted and on one line, or its exit code when it said nothing. */
 export function describeFailure(result: CommandResult): string {
-  const lines = outputLines(result.stderr);
+  // Redacted, then made terminal-safe line by line: a `gh` failure can quote
+  // a name or a body GitHub holds, and this sentence is only ever printed.
+  const lines = outputLines(result.stderr).map(plainLine);
   return lines.length === 0 ? `exit ${result.code}, no stderr` : lines.join(" ");
 }
 

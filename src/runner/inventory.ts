@@ -95,6 +95,12 @@ export interface PoolRow {
   readonly free: number;
   /** Runners that carry this pool's declared labels and no pool label yet: what `runner relabel` would add `pool-<id>` to (#340). */
   readonly unlabelled: readonly string[];
+  /**
+   * Present only when some `unlabelled` runner ALSO fits other pools -- two
+   * pools declaring one label set: runner name -> the other pools' ids. Such a
+   * runner is left out of the relabel hint (`runner relabel` refuses it).
+   */
+  readonly alsoFit?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface InventoryReport {
@@ -235,6 +241,17 @@ export function awaitingPools<P extends Pick<RunnerPool, "id" | "labels">>(runne
   return pools.filter((pool): boolean => misfit(runner, pool) === null);
 }
 
+/** The unlabelled runners of `pool` that also fit other pools, as PoolRow's optional `alsoFit`. */
+function alsoFitOf(runners: readonly RunnerRow[], pools: readonly RunnerPool[], pool: RunnerPool): { alsoFit?: Record<string, string[]> } {
+  const shared: Record<string, string[]> = {};
+  for (const runner of runners) {
+    const fits = awaitingPools(runner, pools);
+    if (!fits.includes(pool) || fits.length < 2) continue;
+    shared[runner.name] = fits.filter((other): boolean => other !== pool).map((other): string => other.id);
+  }
+  return Object.keys(shared).length === 0 ? {} : { alsoFit: shared };
+}
+
 export function assembleInventory(
   target: Target,
   runners: readonly RunnerRow[],
@@ -255,6 +272,7 @@ export function assembleInventory(
       online: members.filter((runner): boolean => runner.status === "online").length,
       free: members.filter((runner): boolean => runner.status === "online" && !runner.busy).length,
       unlabelled: runners.filter((runner): boolean => awaitingPools(runner, policy.pools).includes(pool)).map((runner): string => runner.name),
+      ...alsoFitOf(runners, policy.pools, pool),
     };
   });
   // UNPOOLED IS MEASURED AGAINST EVERY DECLARED POOL, not only the one --pool
@@ -276,8 +294,24 @@ export function assembleInventory(
  */
 function unlabelledHint(target: string, pool: PoolRow): string {
   if (pool.unlabelled.length === 0) return "";
-  const names = pool.unlabelled.map(plainLine);
-  return `; without ${poolOwnLabel(pool.id)}: ${names.join(", ")} (nen runner relabel --target ${shellWord(target)} --pool ${shellWord(pool.id)} --runner ${shellWord(names.join(","))} --run)`;
+  const shared = pool.alsoFit ?? {};
+  // A runner two pools fit is never put on the command (Nobunaga N2): relabel
+  // refuses to name it. It is listed, with the fix, and the command is
+  // omitted when no runner is left for it.
+  const nameable = pool.unlabelled.filter((name): boolean => shared[name] === undefined).map(plainLine);
+  const byOthers = new Map<string, string[]>();
+  for (const name of pool.unlabelled) {
+    const others = shared[name];
+    if (others === undefined) continue;
+    const key = others.join(", ");
+    byOthers.set(key, [...(byOthers.get(key) ?? []), plainLine(name)]);
+  }
+  const notes = [...byOthers].map(([others, names]): string => `; ${names.join(", ")} also fit ${others}: make the declarations differ`);
+  const command =
+    nameable.length === 0
+      ? ""
+      : ` (nen runner relabel --target ${shellWord(target)} --pool ${shellWord(pool.id)} --runner ${shellWord(nameable.join(","))} --run)`;
+  return `; without ${poolOwnLabel(pool.id)}: ${pool.unlabelled.map(plainLine).join(", ")}${command}${notes.join("")}`;
 }
 
 export function renderInventory(report: InventoryReport): string[] {
@@ -288,9 +322,9 @@ export function renderInventory(report: InventoryReport): string[] {
         ["name", "status", "busy", "os", "labels", "machine", "consumer", "slot"],
         ...report.runners.map((runner): string[] => [
           plainLine(runner.name),
-          runner.status,
+          plainLine(runner.status),
           runner.busy ? "busy" : "idle",
-          runner.os,
+          plainLine(runner.os),
           runner.labels.map(plainLine).join(","),
           runner.machine ?? "(runner 0)",
           runner.consumer ?? "",

@@ -209,6 +209,44 @@ describe("assembleInventory -- runners grouped by the declared pools", () => {
     expect(line).not.toContain("\u001b");
   });
 
+  it("prints the runner's status and os plain too", () => {
+    const answer = JSON.stringify({
+      total_count: 1,
+      runners: [{ id: 1, name: "NZ-NNR1", os: "Win\u001b[2Kdows", status: "on\u202eline", busy: false, labels: [] }],
+    });
+    const s = new ScriptedSeams(inventoryCalls(answer));
+    const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), null, null);
+    expect(report.runners[0]?.os).toBe("Win\u001b[2Kdows");
+    const text = renderInventory(report).join("\n");
+    expect(text).toContain("| NZ-NNR1 | online | idle | Win[2Kdows |");
+    expect(text).not.toContain("\u001b");
+    expect(text).not.toContain("\u202e");
+  });
+
+  describe("the relabel hint when two pools declare one label set (Nobunaga N2)", () => {
+    const twin = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0], { ...POLICY_BODY.pools[0], id: "windows-two", preflightWorkflow: "two.yml" }] });
+
+    it("lists a runner both pools fit with the fix, and omits the command when no runner is left for it", () => {
+      const s = new ScriptedSeams(inventoryCalls(runnersAnswer([{ name: "NZ-NNR1" }])));
+      const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), twin, null);
+      expect(report.pools?.[0]?.alsoFit).toEqual({ "NZ-NNR1": ["windows-two"] });
+      const lines = renderInventory(report);
+      expect(lines).toContain("pool windows-x64 [self-hosted, Windows, X64, pool-windows-x64]: 0 runner(s), 0 online, 0 free; without pool-windows-x64: NZ-NNR1; NZ-NNR1 also fit windows-two: make the declarations differ");
+      expect(lines.join("\n")).not.toContain("nen runner relabel");
+    });
+
+    it("keeps the command for the runners that fit one pool only", () => {
+      const desktop = parseRunners("<fixture>", { pools: [POLICY_BODY.pools[0], { ...POLICY_BODY.pools[0], id: "windows-two", preflightWorkflow: "two.yml" }, DESKTOP_POOL_BODY] });
+      const answer = runnersAnswer([{ name: "NZ-NNR1" }, { name: "NZ-KWIR1", labels: ["self-hosted", "Windows", "X64", "desktop"] }]);
+      const s = new ScriptedSeams(inventoryCalls(answer));
+      const report = assembleInventory(TARGET, fetchRunners(s, TARGET), fetchDownloads(s, TARGET), desktop, null);
+      expect(report.pools?.[2]?.alsoFit).toBeUndefined();
+      expect(renderInventory(report)).toContain(
+        "pool windows-x64-desktop [self-hosted, Windows, X64, desktop, pool-windows-x64-desktop]: 0 runner(s), 0 online, 0 free; without pool-windows-x64-desktop: NZ-KWIR1 (nen runner relabel --target zheref/nen --pool windows-x64-desktop --runner NZ-KWIR1 --run)",
+      );
+    });
+  });
+
   it("prints every GitHub name and label in the runners table, the pool lists and unpooled plain (R3)", () => {
     const answer = runnersAnswer([
       { name: "NZ-NNR1\u001b[2K", labels: ["self-hosted", "Windows", "X64", "pool-windows-x64"] },
