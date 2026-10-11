@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
-import { canonCommand, CHECK_CONTRACT, describeWriteFailure, GENERATE_CONTRACT, PIN_CONTRACT } from "./command.js";
+import { canonCommand, CHECK_CONTRACT, describeWriteFailure, GENERATE_CONTRACT, PIN_CONTRACT, PIN_WRITE_CONTRACT } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { fileMarker } from "./mirror.js";
 
@@ -895,5 +895,134 @@ describe("Copilot round 1 -- the pin is found whatever the --source case (E)", (
     const pinned = await capture(["canon", "pin", "--source", "OWNER/OTHER"], fx.root);
     expect(pinned.code, pinned.err.join("\n")).toBe(0);
     expect(pinned.out[1]).toBe("ref: v3.0.0");
+  });
+});
+
+// zheref/nen#291: every refusal that needs no git comes BEFORE any git call
+// (this harness throws on one) and before any write -- the file's bytes are
+// compared on every path.
+describe("nen canon pin --write -- the refusals before any git call and any write", () => {
+  const registryBytes = (root: string): string => readFileSync(join(root, "nen", "repos.json"), "utf8");
+
+  it("refuses a tag that fails the tag grammar at exit 2, naming it, before reading the registry", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const before = registryBytes(fx.root);
+    for (const bad of ["main", "1.3.0", "v1", "deadbeef", "v1.3.0 ", "refs/tags/v1.3.0"]) {
+      const result = await capture(["canon", "pin", "--write", bad], fx.root);
+      expect(result.code, bad).toBe(2);
+      expect(result.err.join("\n")).toContain(`--write '${bad}' is not tag-shaped`);
+    }
+    expect(registryBytes(fx.root)).toBe(before);
+  });
+
+  it("refuses an empty --write and an empty or non-slug --source at exit 2", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    expect((await capture(["canon", "pin", "--write", ""], fx.root)).err.join("\n")).toMatch(/--write was given an empty value/);
+    const slug = await capture(["canon", "pin", "--write", "v1.3.0", "--source", "handbooks"], fx.root);
+    expect(slug.code).toBe(2);
+    expect(slug.err.join("\n")).toMatch(/--source 'handbooks' is not an owner\/name slug/);
+  });
+
+  it("refuses an absent nen/repos.json at exit 1, naming the field, and writes nothing", async () => {
+    const fx = fixture();
+    const result = await capture(["canon", "pin", "--write", "v1.3.0"], fx.root);
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/has no nen\/repos\.json, so there is no canon pin to move.*maintained_tools\[\]\.pinned.*nothing was written/);
+    expect(existsSync(join(fx.root, "nen", "repos.json"))).toBe(false);
+  });
+
+  it("refuses a nen/repos.json that does not parse, or does not validate, at exit 2 with the loader's pointer", async () => {
+    const fx = fixture();
+    mkdirSync(join(fx.root, "nen"), { recursive: true });
+    writeFileSync(join(fx.root, "nen", "repos.json"), '{ "consumers": [], "maintained_tools": [ { "repo": "owner/handbooks", "pinned": "v1.2.0" } ');
+    const broken = await capture(["canon", "pin", "--write", "v1.3.0"], fx.root);
+    expect(broken.code).toBe(2);
+    expect(broken.err.join("\n")).toMatch(/is not valid JSON.*Nothing was written/);
+    writeFileSync(join(fx.root, "nen", "repos.json"), '{ "consumers": [], "maintained_tools": [ { "repo": "owner/handbooks", "pinned": 3 } ] }');
+    const invalid = await capture(["canon", "pin", "--write", "v1.3.0"], fx.root);
+    expect(invalid.code).toBe(2);
+    expect(invalid.err.join("\n")).toMatch(/maintained_tools\[0\]\.pinned/);
+  });
+
+  // The parser's message quotes the file's own bytes on some runtimes (Bun's
+  // "Unrecognized token '\u001b'") and the path on every one, so both carry one.
+  it.skipIf(process.platform === "win32")("strips control characters from the parser's refusal, which quotes the path and, on some runtimes, the file's bytes (Feitan F4)", async () => {
+    const base = mkdtempSync(join(tmpdir(), "nen-canon-plain-"));
+    const root = join(base, "consumer\u001b[2K");
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "repos.json"), '{ "consumers": [] \u001b[2K }');
+    const result = await capture(["canon", "pin", "--write", "v1.3.0"], root);
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/is not valid JSON/);
+    expect(err).not.toContain("\u001b");
+  });
+
+  it("refuses several pins without --source, a --source with no pin, and no pin at all -- the read path's disambiguation", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0", "owner/tool": null });
+    const before = registryBytes(fx.root);
+    const ambiguous = await capture(["canon", "pin", "--write", "v1.3.0"], fx.root);
+    expect(ambiguous.code).toBe(1);
+    expect(ambiguous.err.join("\n")).toMatch(/pins 2 maintained tools \(owner\/handbooks, owner\/other\); name the canonical one with --source\. Nothing was written/);
+    const unpinned = await capture(["canon", "pin", "--write", "v1.3.0", "--source", "owner/tool"], fx.root);
+    expect(unpinned.code).toBe(1);
+    expect(unpinned.err.join("\n")).toMatch(/records no 'pinned' tag for owner\/tool under maintained_tools \(pinned there: owner\/handbooks, owner\/other\), so there is no pin to move/);
+    expect(registryBytes(fx.root)).toBe(before);
+    writeRegistry(fx.root, { "owner/tool": null });
+    const none = await capture(["canon", "pin", "--write", "v1.3.0"], fx.root);
+    expect(none.code).toBe(1);
+    expect(none.err.join("\n")).toMatch(/pins no maintained tool, so there is no pin to move/);
+  });
+
+  it("emits { contract, ok: false, failure } under --json on an exit-1 refusal (Nobunaga N5)", async () => {
+    const fx = fixture();
+    const none = await capture(["canon", "pin", "--write", "v1.3.0", "--json"], fx.root);
+    expect(none.code).toBe(1);
+    expect(json(none)).toEqual({ contract: PIN_WRITE_CONTRACT, ok: false, failure: { code: "no-registry", message: expect.stringMatching(/has no nen\/repos\.json/) as unknown } });
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0", "owner/other": "v3.0.0" });
+    const ambiguous = await capture(["canon", "pin", "--write", "v1.3.0", "--json"], fx.root);
+    expect(ambiguous.code).toBe(1);
+    expect(json(ambiguous)).toMatchObject({ contract: PIN_WRITE_CONTRACT, ok: false, failure: { code: "ambiguous-source" } });
+    // An exit-2 usage error carries no document.
+    const usage = await capture(["canon", "pin", "--write", "main", "--json"], fx.root);
+    expect(usage.code).toBe(2);
+    expect(usage.out).toEqual([]);
+  });
+
+  it("refuses an unresolvable canon checkout at exit 1 -- never a pin written on trust -- when nothing declares one", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const before = registryBytes(fx.root);
+    const result = await capture(["canon", "pin", "--write", "v1.3.0"], fx.root);
+    expect(result.code).toBe(1);
+    const err = result.err.join("\n");
+    expect(err).toMatch(/passed over: flag --canon-checkout \(not given\)/);
+    expect(err).toMatch(/refusing to pin owner\/handbooks to v1\.3\.0: unresolvable: .*refs\/tags\/v1\.3\.0.*nothing was written/);
+    expect(registryBytes(fx.root)).toBe(before);
+  });
+
+  it("refuses the flags another canon verb reads, --ref above all, and --write on every other canon verb", async () => {
+    const fx = fixture();
+    writeRegistry(fx.root, { "owner/handbooks": "v1.2.0" });
+    const before = registryBytes(fx.root);
+    const ref = await capture(["canon", "pin", "--write", "v1.3.0", "--ref", "v1.3.0"], fx.root);
+    expect(ref.code).toBe(2);
+    expect(ref.err.join("\n")).toMatch(/--ref is not read by 'canon pin --write'/);
+    const rules = await capture(["canon", "pin", "--write", "v1.3.0", "--rules-dir", "x"], fx.root);
+    expect(rules.err.join("\n")).toMatch(/--rules-dir is not read by 'canon pin --write'/);
+    const dry = await capture(["canon", "pin", "--dry-run"], fx.root);
+    expect(dry.code).toBe(2);
+    expect(dry.err.join("\n")).toMatch(/--dry-run is not read by 'canon pin'/);
+    const checkout = await capture(["canon", "checkout", "--write", "v1.3.0"], fx.root);
+    expect(checkout.err.join("\n")).toMatch(/--write is not read by 'canon checkout'/);
+    const generate = await capture([...unpinnedArgs("generate", fx), "--write", "v1.3.0"], fx.root);
+    expect(generate.code).toBe(2);
+    expect(generate.err.join("\n")).toMatch(/--write is not read by 'canon mirror generate'/);
+    const resolved = await capture([...resolveArgs({ target: "zheref/KroApple", "always-load": "a.md", "stack-dir": "s" }), "--write", "v1.3.0"]);
+    expect(resolved.err.join("\n")).toMatch(/--write is not read by 'canon resolve'/);
+    expect(registryBytes(fx.root)).toBe(before);
   });
 });

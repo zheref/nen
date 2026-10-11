@@ -226,7 +226,8 @@ managed block in `AGENTS.md` for Codex, `.cursor/rules/` for Cursor,
 names which rows in its `canon-values.yml` (`surfaces:`), and every rendered
 file carries a marker naming the tag it came from. That tag is data in the
 consumer's own `nen/repos.json` -- the `pinned` field on the canonical
-repository's `maintained_tools` entry, read back by `nen canon pin` -- and
+repository's `maintained_tools` entry, read back by `nen canon pin` and
+moved by `nen canon pin --write <tag>` (one value, every other byte kept) -- and
 `--source`/`--ref` default to it. A hand-written file where canon must land
 refuses the whole run before anything is written; `check` is the CI half and
 fails on a mirror that is missing, orphaned, stale or hand-edited on any
