@@ -1286,12 +1286,14 @@ What `nen pr ready` does with what it read:
   detail }`.
   - `determination` is `online` (an online runner carries every `runs-on`
     label: slow, not stalled), `offline-only` or `no-runner`, `github-hosted`
-    (a standard hosted image label — ubuntu `latest|slim|22.04|24.04` with
-    `-arm` on the dated ones, windows `latest|2022|2025|11-arm`, macos
-    `latest|14+` with `-large|-xlarge`, and `macos-<n>-intel` on 14+; macOS 13
-    was retired in November 2025 and is not admitted; the list follows the
-    actions/runner-images README as of 2026-10-11 — that no listed runner
-    carries), `started` (picked up, or
+    (a standard hosted image label — ubuntu `latest|slim|22.04|24.04|26.04`
+    with `-arm` on the dated ones, windows `latest|2022|2025|2025-vs2026` and
+    `11-arm|11-vs2026-arm`, macos `latest|14+` with `-large|-xlarge`, and
+    `macos-<n>-intel` on 14+, and `xcode-<n>` with an optional `-xlarge`;
+    macOS 13 was retired in November 2025 and is not admitted, and macOS 14 is
+    deprecated (actions/runner-images#13518) and leaves the list on its next
+    pass; the list follows the actions/runner-images README as of 2026-10-11 —
+    that no listed runner carries), `started` (picked up, or
     completed without a runner, after the rollup was read), `environment-wait`
     (held by an environment protection rule), or `undetermined` (`detail` says
     why).
@@ -1303,11 +1305,20 @@ What `nen pr ready` does with what it read:
     read; a `created_at` up to two minutes ahead of this machine's clock is
     skew and reads as 0. It is also not called when the pull request changes
     anything under `.github/` — its author may have set those labels — which is
-    `undetermined` with `labelsFromPrHead: true`; the changed files are read
+    `undetermined` with `labelsFromPrHead: true`. `labelsFromPrHead: false`
+    means this PR changes nothing under `.github/` — a fact about its files,
+    not a finding about who set the labels; the changed files are read
     paginated and fail closed at GitHub's 3000-file cap. The stall line is
     still hedged *unless this PR changes what computes runs-on*.
-  - The job read back must be this check's at the judged head (`head_sha`,
-    `check_run_url`), or the entry is `undetermined`.
+  - The job is bound to its rollup entry before it is read: the check run's
+    app must be `github-actions` and its id (`databaseId`) the job id in its
+    `detailsUrl` — a third-party check pointing at an Actions job is not that
+    job — and the job read back must be this check's at the judged head
+    (`head_sha`, `check_run_url`). Otherwise, or when the id or app cannot be
+    read, the entry is `undetermined`.
+  - `queuedSince`/`queuedMinutes` are the job's `created_at` and the minutes
+    since; both are `null` on `started` and `environment-wait`, where the job
+    is not queued for a runner.
   - Repository runners are named in `runners` (only the online ones on
     `online`); organization runners are only **counted**, in
     `organizationRunners: { online, offline }`, never named.
@@ -1328,7 +1339,7 @@ What `nen pr ready` does with what it read:
     omitted: `missingPermission` is `null` and `missingPermissions` empty.
   - The runner list is complete only when its distinct runner ids equal a
     `total_count` that did not move between pages, and page 1 read again
-    answers the same `total_count` and the same first runner; a short page, the ten-page
+    answers the same `total_count` and exactly the same runner ids in order; a short page, the ten-page
     cap, or a malformed runner is `undetermined`, never a smaller pool.
     Enterprise runners and GitHub-hosted larger runners are listed by neither
     endpoint, and a `no-runner` detail says so. At most 20 jobs are read.

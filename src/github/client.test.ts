@@ -487,6 +487,8 @@ describe("diagnoseWaitingChecks over a REAL GitHubClient (zheref/nen#224 round 1
             startedAt: "2026-10-11T11:00:01Z",
             completedAt: null,
             detailsUrl: "https://github.com/acme/app/actions/runs/1/job/7",
+            databaseId: 7,
+            appSlug: "github-actions",
           },
         ],
         { prNumber: 9, headSha: "cafebabe", now: "2026-10-11T12:00:00Z", inActions: false },

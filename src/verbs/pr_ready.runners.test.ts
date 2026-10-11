@@ -35,7 +35,7 @@ type RunnerReads = Pick<
 >;
 
 /** A PR whose only blocker is one check QUEUED behind a runner, plus whatever runner reads a case scripts. */
-function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CHECK): PrStateSource {
+function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CHECK, appSlug = "github-actions"): PrStateSource {
   const snapshot: PullRequestSnapshot = {
     pullRequest: {
       number: 9,
@@ -54,7 +54,16 @@ function source(reads: RunnerReads, calls: string[] = [], checkName = WINDOWS_CH
       { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
       // N1: GitHub stamps a real `startedAt` on a check run still QUEUED with
       // no runner -- the shape NN-PR-#217's job 105994605680 had.
-      { name: checkName, status: "QUEUED", conclusion: null, startedAt: "2026-10-11T11:00:01Z", detailsUrl: JOB_URL },
+      {
+        name: checkName,
+        status: "QUEUED",
+        conclusion: null,
+        startedAt: "2026-10-11T11:00:01Z",
+        detailsUrl: JOB_URL,
+        // Round-3 R1: what GraphQL answers for an Actions check run.
+        databaseId: 114543053976,
+        checkSuite: { app: { slug: appSlug } },
+      },
     ],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
@@ -298,6 +307,19 @@ describe("pr ready -- runner availability for a queued required check (zheref/ne
     const line = out.find((each) => each.includes("INFRASTRUCTURE STALL"));
     expect(line).toBeDefined();
     expect(line).not.toMatch(/[\u001b\r\n]/);
+  });
+
+  it("round-3 R1: a third-party check whose details URL names a stalled Actions job is not called stalled", async () => {
+    const calls: string[] = [];
+    const { code, report } = await json(source(SCENARIOS["offline-only match"]?.reads ?? {}, calls, "Some App", "some-app"));
+    expect(code).toBe(1);
+    expect(report.meta.runnerAvailability?.[0]).toMatchObject({
+      check: "Some App",
+      determination: "undetermined",
+      infrastructureStall: null,
+    });
+    expect(report.meta.runnerAvailability?.[0]?.detail).toContain("names a job that is not this check's");
+    expect(calls).toEqual([]);
   });
 
   it("a ready pull request carries no diagnosis and reads no runner", async () => {

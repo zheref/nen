@@ -41,7 +41,16 @@
 // ORGANIZATION RUNNERS ARE COUNTED, NEVER NAMED (Feitan F3). A repository's
 // readiness output is read by anyone who can read the repository; the names of
 // an organization's shared runners are not that audience's to learn. Repository
-// runners are the repository's own and are named.
+// runners are the repository's own and are named. ONE EXCEPTION, stated: a
+// `started` detail names the job's own `runner_name`, which can be an
+// organization runner -- the same name the job's log already shows to anyone
+// who can read this repository's Actions runs, so it reaches no new audience.
+//
+// BOUND TO THE ROLLUP ENTRY (Feitan round-3 R1). A `detailsUrl` is the
+// check's own claim; a third-party check can point it at any Actions job. The
+// job is read only for an entry whose `appSlug` is `github-actions` and whose
+// `databaseId` equals the job id in its URL -- an Actions check run's id IS
+// its job's id -- so a stalled job is never attributed to another app's check.
 
 import { digPath } from "../github/graphql.js";
 import type { PrRef, PrStateSource } from "../github/pr_state.js";
@@ -85,9 +94,13 @@ export interface WaitingCheckDiagnosis {
   readonly jobId: number | null;
   /** The job's `runs-on` labels, as the jobs API answered them; `null` when unread. */
   readonly labels: readonly string[] | null;
-  /** The job's `created_at` -- when it entered the queue; `null` when unread. */
+  /**
+   * The job's `created_at` -- when it entered the queue; `null` when unread, and
+   * ALWAYS `null` on `started` and `environment-wait`, where the job is not
+   * queued for a runner (round-3 R3).
+   */
   readonly queuedSince: string | null;
-  /** Whole minutes from `queuedSince` to the evaluation time; `null` when either is unreadable. */
+  /** Whole minutes from `queuedSince` to the evaluation time; `null` whenever `queuedSince` is, or the time is unreadable. */
   readonly queuedMinutes: number | null;
   readonly determination: RunnerDetermination;
   /**
@@ -106,8 +119,11 @@ export interface WaitingCheckDiagnosis {
   /**
    * Whether the PR changes anything under `.github/` -- workflows, composite
    * actions, the files that compute `runs-on` -- so its author may have set
-   * these labels (Feitan F2, widened by N14). Read only when a stall would otherwise be called;
-   * `null` when not read or unreadable.
+   * these labels (Feitan F2, widened by N14). `true`: the PR changes
+   * something under `.github/`. `false`: this PR changes NOTHING under
+   * `.github/` -- a fact about the PR's files, not a claim about who set the
+   * labels (Feitan round-3 R2). Read only when a stall would otherwise be
+   * called; `null` when not read or unreadable.
    */
   readonly labelsFromPrHead: boolean | null;
   /** The FIRST refused grant -- `missingPermissions[0]` -- kept for compatibility; `null` when none. */
@@ -164,14 +180,18 @@ const PERMISSION_FILES = "pull_requests:read (classic token: repo)";
 //
 // SOURCE, AS OF 2026-10-11: the "Available Images" table of the
 // actions/runner-images README (github.com/actions/runner-images), plus its
-// `ubuntu-slim` and `macos-<n>-intel` labels. macOS 13 was RETIRED in November
-// 2025 (N10): a job still pinned to `macos-13` never starts, so it must not
-// read "always available". Re-check this list against that README when an
-// image is added or retired; a label missing here is looked up among
-// self-hosted runners, which can only make the reading stricter.
+// `ubuntu-slim` and `macos-<n>-intel` labels, the Ubuntu 26.04 and the
+// Windows `-vs2026` images, and the `xcode-<n>` labels (Nobunaga round-3 R1).
+// macOS 13 was RETIRED in November 2025 (N10): a job still pinned to
+// `macos-13` never starts, so it must not read "always available". macOS 14 is
+// DEPRECATED (actions/runner-images#13518): the next pass over this list drops
+// it. Re-check this list against that README when an image is added or
+// retired; a label missing here is looked up among self-hosted runners, which
+// can only make the reading stricter.
 const HOSTED_LABELS: readonly RegExp[] = [
-  /^ubuntu-(?:latest|slim|(?:22|24)\.04(?:-arm)?)$/i,
-  /^windows-(?:latest|2022|2025|11-arm)$/i,
+  /^ubuntu-(?:latest|slim|(?:22|24|26)\.04(?:-arm)?)$/i,
+  /^windows-(?:latest|2022|2025(?:-vs2026)?|11(?:-vs2026)?-arm)$/i,
+  /^xcode-\d+(?:-xlarge)?$/i,
   /^macos-(?:latest(?:-(?:large|xlarge))?|(?:1[4-9]|[2-9]\d)(?:-(?:large|xlarge|intel))?)$/i,
 ];
 const SELF_HOSTED = "self-hosted";
@@ -284,7 +304,9 @@ function refusal(
   if (status === 401) {
     return { reason: `GitHub rejected the token while trying to ${what} (HTTP 401${said})`, missingPermission: null, permission: false };
   }
-  return { reason: `could not ${what} (${errorText(error)}${said})`, missingPermission: null, permission: false };
+  // One account of the failure, never two: GitHub's own message when it sent
+  // one (octokit's error text usually repeats it), the error's text otherwise.
+  return { reason: `could not ${what} (${message ?? errorText(error)})`, missingPermission: null, permission: false };
 }
 
 function parseRunner(raw: unknown): Runner | null {
@@ -320,7 +342,8 @@ export async function readRunnerList(
 ): Promise<RunnerList> {
   const runners = new Map<number, Runner>();
   let total: number | null = null;
-  let firstId: number | null = null;
+  // Page 1's ids, in order, from the FIRST read (Nobunaga round-3 R2).
+  let firstPageIds: number[] = [];
   const incomplete = (why: string): RunnerList => ({ ok: false, reason: `could not ${what}: ${why}`, missingPermission: null, permission: false });
   for (let page = 1; page <= maxPages; page += 1) {
     let data: unknown;
@@ -338,16 +361,18 @@ export async function readRunnerList(
     else if (count !== total) {
       return incomplete(`total_count moved from ${total} to ${count} on page ${page}, so the list is incomplete`);
     }
-    for (const [index, entry] of entries.entries()) {
+    for (const entry of entries) {
       const runner = parseRunner(entry);
       if (runner === null) return incomplete(`a runner on page ${page} carried no readable id, name, status and labels`);
-      if (page === 1 && index === 0) firstId = runner.id;
+      if (page === 1) firstPageIds.push(runner.id);
       runners.set(runner.id, runner);
     }
     if (runners.size === total) {
       // N13: the walk is not atomic -- a runner registered or removed while it
       // ran shifts every later page. Re-read page 1: the same total_count and
-      // the same first id, or the list is not one consistent snapshot.
+      // EXACTLY the same ids in the same order (round-3 R2: a remove-one,
+      // add-one churn keeps both the count and the first id), or the list is
+      // not one consistent snapshot.
       let again: unknown;
       try {
         again = await fetchPage(1);
@@ -356,9 +381,13 @@ export async function readRunnerList(
       }
       const againCount = digPath(again, "total_count");
       const againEntries = digPath(again, "runners");
-      const againFirst = Array.isArray(againEntries) && againEntries.length > 0 ? digPath(againEntries[0], "id") : null;
-      if (againCount !== total || (againFirst ?? null) !== firstId) {
-        return incomplete("page 1 read again did not answer the same total_count and first runner, so the pool changed during the walk and the list is incomplete");
+      const againIds = Array.isArray(againEntries) ? againEntries.map((entry): unknown => digPath(entry, "id")) : null;
+      const samePage =
+        againIds !== null &&
+        againIds.length === firstPageIds.length &&
+        againIds.every((id, index): boolean => id === firstPageIds[index]);
+      if (againCount !== total || !samePage) {
+        return incomplete("page 1 read again did not answer the same total_count and the same runners, so the pool changed during the walk and the list is incomplete");
       }
       return { ok: true, runners: [...runners.values()] };
     }
@@ -581,6 +610,17 @@ export async function diagnoseWaitingChecks(
       out.push(undetermined(withId, `its job runs in ${ref.owner}/${ref.repo}, not ${repo.owner}/${repo.repo}, whose runners this read does not list`));
       continue;
     }
+    // Round-3 R1: the job must be THIS entry's -- an Actions check run whose id
+    // is the job id. Checked before any read, so a third-party check never
+    // costs a call and never borrows a stalled job.
+    if (entry.appSlug === undefined || entry.appSlug === null || entry.databaseId === undefined || entry.databaseId === null) {
+      out.push(undetermined(withId, "the check run's id or app could not be read, so its details URL cannot be bound to an Actions job"));
+      continue;
+    }
+    if (entry.appSlug !== "github-actions" || entry.databaseId !== ref.jobId) {
+      out.push(undetermined(withId, "its details URL names a job that is not this check's"));
+      continue;
+    }
     if (source.actionsJob === undefined) {
       out.push(undetermined(withId, "this transport cannot read Actions jobs"));
       continue;
@@ -620,9 +660,12 @@ export async function diagnoseWaitingChecks(
     const labels =
       Array.isArray(rawLabels) && rawLabels.every((label): boolean => typeof label === "string") ? (rawLabels as string[]) : null;
     const facts: JobFacts = { ...withId, labels, queuedSince, queuedMinutes };
+    // Round-3 R3: on `environment-wait` and `started` the job is not queued for
+    // a runner, so there is no queue age: `queuedSince`/`queuedMinutes` are null.
+    const unqueued: JobFacts = { ...facts, queuedSince: null, queuedMinutes: null };
     if (jobStatus === "waiting") {
       // N7: a deployment environment's protection rule holds it, not a runner.
-      out.push(diagnosis(facts, "environment-wait", false, "waiting on an environment protection rule, not on a runner"));
+      out.push(diagnosis(unqueued, "environment-wait", false, "waiting on an environment protection rule, not on a runner"));
       continue;
     }
     if (typeof jobStatus === "string" && !QUEUED_JOB_STATUSES.has(jobStatus)) {
@@ -631,7 +674,7 @@ export async function diagnoseWaitingChecks(
       const conclusion = digPath(job, "conclusion");
       out.push(
         diagnosis(
-          facts,
+          unqueued,
           "started",
           false,
           jobStatus === "completed" && !hasRunner

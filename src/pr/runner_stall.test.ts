@@ -44,6 +44,10 @@ function queued(name: string, jobId: number | null, repo = "zheref/nen"): CheckR
     startedAt: "2026-10-11T11:00:01Z",
     completedAt: null,
     detailsUrl: jobId === null ? null : `https://github.com/${repo}/actions/runs/38164140114/job/${jobId}`,
+    // Round-3 R1: an Actions check run's id IS its job's id, under the
+    // `github-actions` app -- what GraphQL answers for one (seen live on
+    // NN-PR-#394).
+    ...(jobId === null ? {} : { databaseId: jobId, appSlug: "github-actions" }),
   };
 }
 
@@ -179,6 +183,13 @@ describe("actionsJobRef / githubHostedLabels / runnerCarries / acceptedHeader", 
       "ubuntu-24.04",
       "ubuntu-24.04-arm",
       "ubuntu-22.04-arm",
+      // Nobunaga round-3 R1: the six labels today's runner-images README adds.
+      "ubuntu-26.04",
+      "ubuntu-26.04-arm",
+      "windows-2025-vs2026",
+      "windows-11-vs2026-arm",
+      "xcode-26",
+      "xcode-26-xlarge",
       "windows-latest",
       "windows-2022",
       "windows-2025",
@@ -211,6 +222,10 @@ describe("actionsJobRef / githubHostedLabels / runnerCarries / acceptedHeader", 
       "macos-13-intel",
       "macos-latest-intel",
       "ubuntu-slim-arm",
+      "windows-2022-vs2026",
+      "windows-vs2026",
+      "xcode-latest",
+      "xcode-26-large",
       "macos-latest-arm",
       "macos-15-arm64",
     ]) {
@@ -320,6 +335,8 @@ describe("diagnoseWaitingChecks -- the determinations", () => {
     const { diagnosis, calls } = await one({ jobs: { 7: job(WINDOWS, { status: "in_progress", runner: "NZ-NNR2" }) } });
     expect(diagnosis).toMatchObject({ determination: "started", infrastructureStall: false });
     expect(diagnosis?.detail).toContain("in_progress on runner NZ-NNR2");
+    // Round-3 R3: not queued for a runner, so no queue age.
+    expect(diagnosis).toMatchObject({ queuedSince: null, queuedMinutes: null });
     expect(calls).toEqual(["job 7"]);
   });
 
@@ -331,7 +348,12 @@ describe("diagnoseWaitingChecks -- the determinations", () => {
 
   it("N7: a job WAITING on an environment protection rule is not waiting on a runner", async () => {
     const { diagnosis, calls } = await one({ jobs: { 7: job(WINDOWS, { status: "waiting" }) } });
-    expect(diagnosis).toMatchObject({ determination: "environment-wait", infrastructureStall: false });
+    expect(diagnosis).toMatchObject({
+      determination: "environment-wait",
+      infrastructureStall: false,
+      queuedSince: null,
+      queuedMinutes: null,
+    });
     expect(diagnosis?.detail).toBe("waiting on an environment protection rule, not on a runner");
     expect(calls).toEqual(["job 7"]);
   });
@@ -395,6 +417,32 @@ describe("diagnoseWaitingChecks -- N4: the queue-age floor", () => {
 });
 
 describe("diagnoseWaitingChecks -- F1: the job must be THIS check's at the judged head", () => {
+  it("round-3 R1: a THIRD-PARTY check pointing at a real stalled Actions job is never attributed that stall", async () => {
+    const thirdParty: CheckRun = { ...queued("Cursor Bugbot", 7), databaseId: 114551065677, appSlug: "cursor" };
+    const { diagnosis, calls } = await one({ jobs: { 7: job(WINDOWS) }, repoPages: [pool(MAC_ONLINE_WINDOWS_OFFLINE)] }, thirdParty);
+    expect(diagnosis).toMatchObject({ check: "Cursor Bugbot", determination: "undetermined", infrastructureStall: null });
+    expect(diagnosis?.detail).toContain("its details URL names a job that is not this check's");
+    expect(calls).toEqual([]);
+  });
+
+  it("round-3 R1: an Actions check whose id is not the job id in its URL is not that job", async () => {
+    const other: CheckRun = { ...queued("w", 7), databaseId: 8 };
+    const { diagnosis, calls } = await one({ jobs: { 7: job(WINDOWS) } }, other);
+    expect(diagnosis?.detail).toContain("names a job that is not this check's");
+    expect(calls).toEqual([]);
+  });
+
+  it("round-3 R1: an unreadable check-run id or app is undetermined", async () => {
+    const noApp: CheckRun = { ...queued("w", 7), appSlug: null };
+    const noId: CheckRun = { ...queued("w", 7), databaseId: undefined };
+    for (const entry of [noApp, noId]) {
+      const { diagnosis, calls } = await one({ jobs: { 7: job(WINDOWS) } }, entry);
+      expect(diagnosis?.determination).toBe("undetermined");
+      expect(diagnosis?.detail).toContain("the check run's id or app could not be read");
+      expect(calls).toEqual([]);
+    }
+  });
+
   it("a job at another head is undetermined", async () => {
     const { diagnosis, calls } = await one({ jobs: { 7: job(WINDOWS, { head: "deadbeef" }) }, repoPages: [pool([])] });
     expect(diagnosis).toMatchObject({ determination: "undetermined", infrastructureStall: null });
@@ -632,6 +680,12 @@ describe("diagnoseWaitingChecks -- unreadable reads say so, and name the permiss
     expect(calls).toEqual(["job 7"]);
   });
 
+  it("a generic failure says GitHub's message once, never beside octokit's copy of it", async () => {
+    const { diagnosis } = await one({ jobs: { 7: job(WINDOWS) }, repoError: httpError(500, {}, "Server Error") });
+    expect(diagnosis?.detail).toContain("could not list zheref/nen's self-hosted runners (Server Error)");
+    expect(diagnosis?.detail).not.toContain("HTTP 500");
+  });
+
   it("a network failure is reported as itself, with no permission claimed", async () => {
     const { diagnosis } = await one({ jobs: { 7: job(WINDOWS) }, repoError: new Error("ECONNRESET") });
     expect(diagnosis).toMatchObject({ determination: "undetermined", missingPermission: null });
@@ -702,7 +756,7 @@ describe("readRunnerList -- pagination, and truncation failing closed (N8)", () 
       "perm",
     );
     expect(reads).toBe(2);
-    expect(!list.ok && list.reason).toContain("page 1 read again did not answer the same total_count and first runner");
+    expect(!list.ok && list.reason).toContain("page 1 read again did not answer the same total_count and the same runners");
   });
 
   it("N13: page 1 re-read with a different first runner is an incomplete list", async () => {
@@ -716,6 +770,25 @@ describe("readRunnerList -- pagination, and truncation failing closed (N8)", () 
       "perm",
     );
     expect(list.ok).toBe(false);
+  });
+
+  it("round-3 R2: a 101-runner pool that churns one runner on page 1 keeps the count and first id -- and is still incomplete", async () => {
+    const page1 = Array.from({ length: 100 }, (_, index) => runner(`r${index + 1}`, "offline", WINDOWS, false, index + 1));
+    // Between the walk and the re-read, runner 50 is removed and runner 102
+    // registered: total_count stays 101 and the first id stays 1.
+    const churned = [...page1.slice(0, 49), ...page1.slice(50), runner("r101", "offline", WINDOWS, false, 101)];
+    let page1Reads = 0;
+    const list = await readRunnerList(
+      async (page): Promise<unknown> => {
+        if (page === 2) return { total_count: 101, runners: [runner("r101", "offline", WINDOWS, false, 101)] };
+        page1Reads += 1;
+        return { total_count: 101, runners: page1Reads === 1 ? page1 : churned };
+      },
+      "list runners",
+      "perm",
+    );
+    expect(page1Reads).toBe(2);
+    expect(!list.ok && list.reason).toContain("did not answer the same total_count and the same runners");
   });
 
   it("N13: a re-read that agrees completes the list; an empty pool agrees with itself", async () => {
