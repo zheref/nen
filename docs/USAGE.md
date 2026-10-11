@@ -8729,7 +8729,7 @@ release proposal) is `null` unless the run was
 the focused form is declared, the identifiers in the order named, the declared
 grammar, the per-identifier template, exactly the arguments the expansion
 appended, the declared `{ path, format }` results, the tests those results say
-were **executed** (passed + failed; `null` until a run that exited 0 has had
+were **executed** (total − skipped; `null` until a run that exited 0 has had
 them read), and `zeroMatch` (`true` when that count is 0, `null` with it).
 `steps[0].argv` is still the whole argv; `selection` says which tail of it was
 the selection.
@@ -9317,12 +9317,19 @@ three; a `stall` guard (tests are untimed); `{id}` in `exe`/`argv`, or an
 `.nen/coverage-capture`. A focused run never writes that capture **through its
 declared `results`/`stdoutTo`/`artifacts`, or through an argv element naming
 those paths** (whole, or as the value of a `--flag=`/`-flag:`); nen does not
-interpret other argv. Paths are compared after `posix.normalize`, without a
-leading `./` or trailing `/`, and **case-folded**. The comparison is lexical:
-a symlink cannot be judged at load (the run's own containment check resolves
-the real path of every declared output before writing), and an output a runner
-derives from a config file, an environment variable or its own default is not
-seen.
+interpret other argv; an argv token is compared as a path only when it is
+path-shaped (it contains `/` or ends in an extension) or the output it is
+compared to has more than one segment, so `--reporter=junit` or a bare `test`
+action never collides with an output named `junit` or `test`. Paths are
+compared after `posix.normalize`, without a leading `./` or trailing `/`, and
+**case-folded** — conservative on case-sensitive filesystems, where two paths
+differing only in case are distinct and still refused. The comparison is
+lexical: a symlink cannot be judged at load. At run time real paths are
+resolved only to keep every write inside the tree, not to detect an in-tree
+symlinked overlap — with one exception, `results.path`, whose real path the
+run re-checks against every regression output before it clears it (below). An
+output a runner derives from a config file, an environment variable or its own
+default is not seen.
 
 **The run.** The plan is the focused block's alone: its program, base argv,
 `env`, `stdoutTo` and `artifacts`. The lane's `cwd`, `project.hosts` and
@@ -9335,13 +9342,22 @@ run alone. The argv is a list handed to the child: no shell, no globbing.
 **Zero executed is never a pass.** A runner handed an identifier that matches
 nothing exits `0` and prints *Executed 0 tests*. So after a run that exited `0`
 nen reads `results` with `test-report`'s own parser and counts the tests
-executed (passed + failed — a skipped test did not run):
+executed (total − skipped — a skipped test did not run; for a summary that
+states its counts, a test outside the passed/failed buckets still ran).
+
+**The declared `results.path` is cleared before each focused run** — the file,
+or the directory and everything under it — so whatever is there afterwards is
+this run's, and an earlier run's suite file in a JUnit results directory can
+never be counted. Before it removes anything nen proves the real path is inside
+the tree and disjoint from the real path of every regression output, and
+refuses a `results.path` that is itself a symlink; either refusal is exit `2`
+with nothing removed and nothing run. A dry run removes nothing.
 
 | Outcome | nen exits | `--json` `selection` |
 |---|---|---|
 | ≥ 1 executed | `0` | `executed: <n>, zeroMatch: false` |
 | **0 executed** — stderr says *selection resolved to zero executed tests* | **`6`** | `executed: 0, zeroMatch: true` |
-| results missing, unreadable, in another format than declared, or **not rewritten by this run** (an earlier run's file, unchanged) | `1` | `executed: null, zeroMatch: null` |
+| results missing (the run wrote nothing where it was cleared), unreadable, or in another format than declared | `1` | `executed: null, zeroMatch: null` |
 | the tool itself failed | `1` (results not read) | `executed: null, zeroMatch: null` |
 
 `6` is the code `coverage --touched` uses for the same kind of fact — the tool
@@ -9351,7 +9367,7 @@ passed, its output is sound, and what came back empty is the selection.
 
 - `--select` with no value, an empty value, or an empty entry (`a,,b`, `a,`);
 - an identifier carrying whitespace, a control character or an invisible
-  format character (zero-width, bidi), a shell metacharacter (`"` `%` `^` `&`
+  format character (zero-width, bidi), a cmd/batch metacharacter (`"` `%` `^` `&`
   `|` `<` `>` `!` or a backtick — whatever `pattern` admits), beginning with `-`
   (the runner would read it as an option), carrying `{` or `}`, or named twice;
 - an identifier the declared `pattern` does not match whole — every such one is
@@ -9364,11 +9380,12 @@ identifier containing a comma cannot be named. It is refused on every other
 verb as a flag that verb does not read.
 
 **Adoption — an xcodebuild-shaped lane** (synthetic identifiers). nen reads no
-`.xcresult` bundle, so the focused form hands nen a **test summary**: here the
-runner is assumed to print one on stdout, and `stdoutTo` writes it. A lane whose
-`xcodebuild` cannot do that in one command needs a wrapper of its own that runs
-the tests and extracts the summary — nen runs one focused command, not a step
-list.
+`.xcresult` bundle, and raw `xcodebuild` prints prose, not a summary nen reads —
+so a focused form that spawned `xcodebuild` directly could never pass. The
+focused `exe` is therefore the repository's **own wrapper**: it runs
+`xcodebuild` with the arguments nen appends and then writes a supported summary
+(here the `xcresult-summary` JSON an `xcresulttool` extraction produces) to the
+declared results path. The wrapper is the repository's code, not nen's.
 
 ```json
 "test": {
@@ -9377,14 +9394,15 @@ list.
            "-enableCodeCoverage", "YES", "-resultBundlePath", ".nen/aka/regression.xcresult", "test"],
   "artifacts": [".nen/aka/regression.xcresult"],
   "select": {
-    "exe": "xcodebuild",
-    "argv": ["-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
+    "exe": "scripts/focused-xctest",
+    "argv": ["--summary", ".nen/focused/summary.json", "--",
+             "-scheme", "Kro", "-destination", "platform=iOS Simulator,name=iPhone 17 Pro",
              "-resultBundlePath", ".nen/focused/apple.xcresult", "test"],
     "each": ["-only-testing:{id}"],
     "pattern": "[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*){0,2}",
-    "stdoutTo": ".nen/focused/summary.json",
     "results": { "path": ".nen/focused/summary.json", "format": "xcresult-summary" },
-    "artifacts": [".nen/focused/apple.xcresult"]
+    "artifacts": [".nen/focused/apple.xcresult"],
+    "why": "scripts/focused-xctest runs xcodebuild with everything after '--', then writes the result bundle's test summary to --summary."
   }
 }
 ```
@@ -9398,7 +9416,7 @@ verb:          test
 selection:     KroTests/CaptureTests/testInlinePills, KroTests/InboxTests  (2 identifiers, from project.verbs.apple.test.select; appends: -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests)
 results:       .nen/focused/summary.json (xcresult-summary)  -- not read
 …
-would run:     xcodebuild -scheme Kro -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests  stdout -> .nen/focused/summary.json
+would run:     scripts/focused-xctest --summary .nen/focused/summary.json -- -scheme Kro -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -resultBundlePath .nen/focused/apple.xcresult test -only-testing:KroTests/CaptureTests/testInlinePills -only-testing:KroTests/InboxTests
 …
 ```
 
@@ -9426,7 +9444,7 @@ nen shu test --repo . --select src/shu/select.test.ts,src/cli/comma.test.ts
 lane:          nen  (bun-cli)
 verb:          test
 selection:     src/shu/select.test.ts, src/cli/comma.test.ts  (2 identifiers, from project.verbs.nen.test.select; appends: src/shu/select.test.ts src/cli/comma.test.ts)
-results:       .nen/focused.junit.xml (junit)  -- 76 executed
+results:       .nen/focused.junit.xml (junit)  -- 84 executed
 …
 ```
 (run for real against this checkout; no `coverage/` written, no sidecar recorded.)

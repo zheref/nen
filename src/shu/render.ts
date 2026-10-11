@@ -389,8 +389,8 @@ export interface ResolvedSelection {
   /** The declared results file and format nen reads after the run. */
   readonly results: { readonly path: string; readonly format: string };
   /**
-   * Tests the results file says were EXECUTED (passed + failed; a skipped test
-   * did not run). Null until a run that exited 0 has had its results read --
+   * Tests the results file says were EXECUTED (total - skipped: a skipped
+   * test did not run). Null until a run that exited 0 has had its results read --
    * a dry run, an unmet precondition, a red run, or unreadable results.
    */
   readonly executed: number | null;
@@ -758,7 +758,7 @@ export function renderInvocation(
 const UNPRINTABLE = /[\s\p{Cc}\p{Cf}]/u;
 
 /**
- * Shell and batch metacharacters, refused whatever the lane's `pattern` admits
+ * Cmd/batch metacharacters, refused whatever the lane's `pattern` admits
  * (Nobunaga N6). nen spawns no shell, so none of these is dangerous HERE; but
  * a runner that hands its filter to one (a wrapper script, a `.cmd` shim on
  * Windows, where `%`, `^`, `!` and `"` are live) would read them, and no test
@@ -806,7 +806,7 @@ export function parseSelectionIds(value: string): readonly string[] {
     const at = `entry ${index + 1}`;
     if (id === "") problems.push(`${at} is empty`);
     else if (UNPRINTABLE.test(id)) problems.push(`${at} ${JSON.stringify(id)} carries whitespace, a control character or an invisible format character`);
-    else if (METACHARACTERS.test(id)) problems.push(`${at} ${JSON.stringify(id)} carries a shell metacharacter (one of " % ^ & | < > ! and backtick)`);
+    else if (METACHARACTERS.test(id)) problems.push(`${at} ${JSON.stringify(id)} carries a cmd/batch metacharacter (one of " % ^ & | < > ! and backtick)`);
     else if (id.startsWith("-")) problems.push(`${at} '${id}' begins with '-', which the runner would read as one of its own options`);
     else if (id.includes("{") || id.includes("}")) problems.push(`${at} '${id}' carries a brace, this family's placeholder syntax`);
     else if (seen.has(id)) problems.push(`${at} '${id}' repeats an identifier already named`);

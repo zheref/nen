@@ -9,7 +9,7 @@
 // would be: nen's own code names none of them.
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Io } from "../index.js";
@@ -36,6 +36,7 @@ async function shu(
   script: readonly ScriptedCall[] = [],
   platform: NodeJS.Platform = "darwin",
   seed?: (root: string) => void,
+  inspect?: (root: string) => void,
 ): Promise<Captured> {
   const dir = mkdtempSync(join(tmpdir(), "nen-shu-select-"));
   try {
@@ -51,6 +52,7 @@ async function shu(
       now: (): Date => new Date(Date.UTC(2026, 0, 1)),
     });
     const code = await runFamily(shuCommand, ["shu", ...argv], dir, false, io, seams);
+    inspect?.(dir);
     return { code, out, err, seams };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -273,7 +275,7 @@ describe("a selection nen cannot honour is refused at exit 2 with nothing spawne
     ["a zero-width format character", "Kro\u200bTests", /invisible format character/],
     ["a bidi override", "Kro\u202eTests", /invisible format character/],
     ...['"', "%", "^", "&", "|", "<", ">", "!", "`"].map(
-      (char): readonly [string, string, RegExp] => [`the metacharacter ${char}`, `Kro${char}Tests`, /shell metacharacter/],
+      (char): readonly [string, string, RegExp] => [`the metacharacter ${char}`, `Kro${char}Tests`, /cmd\/batch metacharacter/],
     ),
   ];
   for (const [name, value, message] of malformed) {
@@ -406,20 +408,11 @@ describe("a focused run's declared results decide whether it executed anything",
     expect(result.err.join("\n")).toMatch(/is junit, and the declaration says xcresult-summary/);
   });
 
-  it("an earlier run's results, not rewritten by this one, are exit 1", async () => {
-    const project = appleProject({
-      exe: "xcodebuild",
-      argv: APPLE_FOCUSED,
-      each: ["-only-testing:{id}"],
-      pattern: APPLE_PATTERN,
-      results: { path: APPLE_RESULTS, format: "xcresult-summary" },
-    });
-    const result = await shu(project, select, [{ match: line, result: { code: 0 } }], "darwin", (root): void => {
-      mkdirSync(join(root, ".nen", "focused"), { recursive: true });
-      writeFileSync(join(root, APPLE_RESULTS), appleSummary(5));
-    });
-    expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/did not rewrite/);
+  it("a stated total the passed/failed buckets do not cover still counts as executed (N12)", async () => {
+    const summary = JSON.stringify({ totalTestCount: 5, passedTests: 0, failedTests: 0, skippedTests: 0 });
+    const result = await shu(appleProject(), [...select, "--json"], [{ match: line, result: { code: 0, stdout: summary } }]);
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out.join("\n")) as { selection: { executed: number } }).selection.executed).toBe(5);
   });
 
   it("a red run keeps the tool's exit 1 and reads nothing", async () => {
@@ -427,6 +420,126 @@ describe("a focused run's declared results decide whether it executed anything",
     expect(result.code).toBe(1);
     const report = JSON.parse(result.out.join("\n")) as { selection: { executed: unknown } };
     expect(report.selection.executed).toBeNull();
+  });
+});
+
+// ── (d) the declared results path is cleared before every focused run (N10) ─
+
+describe("the results path is this run's alone", () => {
+  const ids = ["src/a.test.ts"];
+  const focusedLine = ["runner", "focused", ...ids].join(" ");
+
+  /** A junit-DIRECTORY lane whose runner's stdout lands at `stdoutTo`, inside it. */
+  function directoryProject(stdoutTo: string, resultsPath = ".nen/fj"): Record<string, unknown> {
+    return {
+      lanes: { web: { stack: "s", cwd: "." } },
+      defaultLane: "web",
+      verbs: {
+        web: {
+          test: {
+            exe: "runner",
+            argv: ["all"],
+            artifacts: ["coverage"],
+            select: {
+              exe: "runner",
+              argv: ["focused"],
+              each: ["{id}"],
+              pattern: "src/[a-z]+\\.test\\.ts",
+              stdoutTo,
+              results: { path: resultsPath, format: "junit" },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  const seedOld = (root: string): void => {
+    mkdirSync(join(root, ".nen", "fj"), { recursive: true });
+    writeFileSync(join(root, ".nen", "fj", "old.xml"), junit(3));
+  };
+
+  it("an earlier run's file in a results DIRECTORY is not counted: a zero-test run is exit 6", async () => {
+    const result = await shu(
+      directoryProject(".nen/fj/new.xml"),
+      ["test", "--select", ids.join(","), "--json"],
+      [{ match: focusedLine, result: { code: 0, stdout: junit(0) } }],
+      "darwin",
+      seedOld,
+      (root): void => {
+        expect(existsSync(join(root, ".nen", "fj", "old.xml"))).toBe(false);
+        expect(existsSync(join(root, ".nen", "fj", "new.xml"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(6);
+    expect((JSON.parse(result.out.join("\n")) as { selection: { executed: number } }).selection.executed).toBe(0);
+  });
+
+  it("a run that writes only a NESTED file is counted as exactly that file", async () => {
+    const result = await shu(
+      directoryProject(".nen/fj/sub/new.xml"),
+      ["test", "--select", ids.join(","), "--json"],
+      [{ match: focusedLine, result: { code: 0, stdout: junit(2) } }],
+      "darwin",
+      seedOld,
+    );
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out.join("\n")) as { selection: { executed: number } }).selection.executed).toBe(2);
+  });
+
+  it("a results path that is a symlink is refused at exit 2: nothing removed, nothing run", async () => {
+    const result = await shu(
+      directoryProject(".nen/out.xml"),
+      ["test", "--select", ids.join(",")],
+      [{ match: focusedLine, result: { code: 0, stdout: junit(1) } }],
+      "darwin",
+      (root): void => {
+        mkdirSync(join(root, ".nen", "real"), { recursive: true });
+        writeFileSync(join(root, ".nen", "real", "keep.xml"), junit(1));
+        symlinkSync(join(root, ".nen", "real"), join(root, ".nen", "fj"), "dir");
+      },
+      (root): void => {
+        expect(existsSync(join(root, ".nen", "real", "keep.xml"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is a symlink/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("a results path whose REAL path lands on a regression output is refused at exit 2, nothing removed", async () => {
+    const result = await shu(
+      directoryProject("focused/new.xml", "focused/new.xml"),
+      ["test", "--select", ids.join(",")],
+      [{ match: focusedLine, result: { code: 0, stdout: junit(1) } }],
+      "darwin",
+      (root): void => {
+        mkdirSync(join(root, "coverage"), { recursive: true });
+        writeFileSync(join(root, "coverage", "new.xml"), "the regression's own");
+        symlinkSync(join(root, "coverage"), join(root, "focused"), "dir");
+      },
+      (root): void => {
+        expect(existsSync(join(root, "coverage", "new.xml"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/overlapping 'coverage'/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
+  it("a dry run removes nothing", async () => {
+    const result = await shu(
+      directoryProject(".nen/fj/new.xml"),
+      ["test", "--select", ids.join(","), "--dry-run"],
+      [],
+      "darwin",
+      seedOld,
+      (root): void => {
+        expect(existsSync(join(root, ".nen", "fj", "old.xml"))).toBe(true);
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(result.seams.calls).toEqual([]);
   });
 });
 
@@ -515,6 +628,18 @@ describe("project.verbs.<lane>.test.select -- the schema", () => {
         },
       }),
     ).toThrow(/project\.verbs\.a\.test\.select\.results\.path.*overlaps 'b\/report\.xml'/);
+  });
+
+  it("loads --reporter=junit beside a regression artifact named junit (N11)", () => {
+    expect(() => load({ ...GOOD, argv: ["run", "--reporter=junit"] }, "test", { artifacts: ["junit"] })).not.toThrow();
+  });
+
+  it("loads a bare test action beside a regression artifact named test (N11)", () => {
+    expect(() => load({ ...GOOD, argv: ["-scheme", "Kro", "test"] }, "test", { artifacts: ["test"] })).not.toThrow();
+  });
+
+  it("still refuses a path-shaped token naming a single-segment output (N11)", () => {
+    expect(() => load({ ...GOOD, argv: ["run", "--out=junit/"] }, "test", { artifacts: ["junit"] })).toThrow(/names 'junit'/);
   });
 
   it("does not read a bare word in argv as a path (--coverage is not the coverage directory)", () => {

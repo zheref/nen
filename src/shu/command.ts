@@ -437,7 +437,7 @@ flags:
                    flag it carries), not its env, not its outputs, and no
                    capture sidecar is recorded. Exit 2, NOTHING SPAWNED, for no
                    identifier, an empty entry, whitespace, a control or
-                   invisible format character, a shell metacharacter
+                   invisible format character, a cmd/batch metacharacter
                    (" % ^ & | < > ! or a backtick), a leading '-', a brace, a
                    repeat, an identifier the declared 'pattern' does not match
                    whole, or a lane whose test row declares no 'select' --
@@ -445,8 +445,12 @@ flags:
                    exited 0, nen reads the block's REQUIRED 'results' file
                    with test-report's parser and counts the tests EXECUTED:
                    zero is exit 6 ("selection resolved to zero executed
-                   tests"); results missing, unreadable, in another format or
-                   not rewritten by this run are exit 1 -- never a pass.
+                   tests"); results missing, unreadable or in another format
+                   are exit 1 -- never a pass. The declared results path is
+                   CLEARED (file or directory) before every focused run, so
+                   what is there afterwards is this run's; a results path
+                   that is a symlink, or whose real path lands on a regression
+                   output, is exit 2 with nothing removed or run.
                    --dry-run and --json show the expanded argv and a
                    'selection' block naming what was appended, the results,
                    'executed' and 'zeroMatch'.

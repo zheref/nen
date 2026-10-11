@@ -41,7 +41,7 @@
 // rather than resolved in either direction.
 
 import { lstatSync, mkdirSync, writeFileSync, type Stats } from "node:fs";
-import { dirname, relative, sep } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { emit, VerbUsageError, type CommandContext } from "../cli/command.js";
 import { containedPath, realContainment } from "../repo/contain.js";
 import {
@@ -55,10 +55,10 @@ import {
   type StreamedChunk,
   type WatchVerdict,
 } from "../seam/exec.js";
-import type { DeviceExtraction, DeviceReadiness, StallGuard } from "../schema/contract.js";
+import { regressionOutputs, type DeviceExtraction, type DeviceReadiness, type ProjectBlock, type StallGuard } from "../schema/contract.js";
 import { PROOF_VERB, proofRelativePath, removeProof, writeProof, type BuildProof } from "./proof.js";
 import { EXIT_SELECTION_EMPTY, EXIT_TOOL_NOT_INSTALLED, ShuRefusal } from "./exit.js";
-import { readSelectionResults, resultsState } from "./select-results.js";
+import { clearResults, isSymlink, readSelectionResults } from "./select-results.js";
 import { openDeclaration } from "./declaration.js";
 import { appendStepsToOpenPhase, EFFORT_ID, type PhaseStep } from "../phase/ledger.js";
 import {
@@ -597,7 +597,8 @@ export function renderReport(report: ShuReport): readonly string[] {
           argv: selection.appended.slice(1),
         })})`,
       ),
-    );    lines.push(
+    );
+    lines.push(
       labelled(
         "results",
         `${selection.results.path} (${selection.results.format})${
@@ -1318,7 +1319,7 @@ export async function runVerb(
   if (selection === null) {
     return await runCaptured(context, plan, cwd, repoRoot, preconditions, sink, liveness);
   }
-  return await runSelected(context, plan, selection, cwd, repoRoot, preconditions, sink, liveness);
+  return await runSelected(context, project, plan, selection, cwd, repoRoot, preconditions, sink, liveness);
 }
 
 /**
@@ -1337,6 +1338,7 @@ export async function runVerb(
  */
 async function runSelected(
   context: CommandContext,
+  project: ProjectBlock,
   plan: RenderedInvocation,
   selection: ResolvedSelection,
   cwd: string,
@@ -1346,8 +1348,29 @@ async function runSelected(
   liveness: Liveness,
 ): Promise<number> {
   const resultsPointer = `${selection.pointer}.results.path`;
+  // CLEARED BEFORE THE SPAWN, AND ONLY ONCE THREE THINGS HOLD (Nobunaga N10):
+  // the real path is inside the tree (`insideRepo`, symlinked ancestors
+  // resolved), the path itself is not a symlink (never followed, never
+  // removed), and its REAL path is disjoint from the real path of every
+  // regression output -- the loader proved that lexically, and a symlinked
+  // directory inside the tree is how a lexically separate path lands on the
+  // aka capture anyway. Every refusal is exit 2 with nothing removed or run.
   const absolute = insideRepo(repoRoot, selection.results.path, resultsPointer);
-  const before = resultsState(absolute);
+  if (isSymlink(absolute)) {
+    throw new VerbUsageError(
+      `${resultsPointer} names '${selection.results.path}', which is a symlink. nen clears the declared results path before every focused run and never follows or removes a link to do it: declare the real path.`,
+    );
+  }
+  const realResults = realContainment(repoRoot, absolute).real;
+  for (const output of regressionOutputs(project.verbs)) {
+    const realOutput = realContainment(repoRoot, resolve(repoRoot, output)).real;
+    if (realResults === realOutput || realResults.startsWith(`${realOutput}${sep}`) || realOutput.startsWith(`${realResults}${sep}`)) {
+      throw new VerbUsageError(
+        `${resultsPointer} names '${selection.results.path}', which really resolves to '${realResults}' -- overlapping '${output}', which the regression run writes (it really resolves to '${realOutput}'). nen clears the results path before a focused run and will not clear the aka regression capture: declare a separate path.`,
+      );
+    }
+  }
+  clearResults(absolute);
   const held: { report: ShuReport | null } = { report: null };
   const code = await runCaptured(context, plan, cwd, repoRoot, preconditions, (report): void => {
     held.report = report;
@@ -1355,7 +1378,7 @@ async function runSelected(
   let verdict = code;
   let executed: number | null = null;
   if (code === 0) {
-    const read = readSelectionResults(absolute, selection.results.path, selection.results.format, before);
+    const read = readSelectionResults(absolute, selection.results.path, selection.results.format);
     if (!read.ok) {
       verdict = 1;
       context.io.err(`nen shu test --select: ${read.why}.`);

@@ -1425,14 +1425,35 @@ function writtenPaths(invocation: Invocation | undefined): readonly string[] {
  * environment variable, a default) is not seen, and a symlink cannot be judged
  * here -- both are said in USAGE rather than implied away.
  */
-function refuseSelectionOverlap(path: string, verbs: Readonly<Record<string, Readonly<Record<string, Invocation>>>>): void {
-  const regression = [
+/**
+ * Every path the aka regression run writes, across every lane: each `test` and
+ * `coverage` row's `stdoutTo`(s) and `artifacts`, and CAPTURE_DIRECTORY.
+ * Exported for ../shu/run.ts, which re-checks a focused results path against
+ * these REAL paths before it clears it (Nobunaga N10).
+ */
+export function regressionOutputs(verbs: Readonly<Record<string, Readonly<Record<string, Invocation>>>>): readonly string[] {
+  return [
     ...Object.values(verbs).flatMap((rows): readonly string[] => [
       ...writtenPaths(rows[SELECTABLE_VERB]),
       ...writtenPaths(rows["coverage"]),
     ]),
     CAPTURE_DIRECTORY,
   ];
+}
+
+/**
+ * Does an argv token LOOK like a path (Nobunaga N11)? It names a directory
+ * (`/`) or ends in an extension (`.xml`). A bare word -- `junit` in
+ * `--reporter=junit`, the `test` action -- is a word, and comparing it to a
+ * single-segment output of the same spelling would refuse a declaration that
+ * writes nothing there.
+ */
+function pathShaped(token: string): boolean {
+  return token.includes("/") || token.includes("\\") || /[^./\\]\.[A-Za-z0-9]+$/.test(token);
+}
+
+function refuseSelectionOverlap(path: string, verbs: Readonly<Record<string, Readonly<Record<string, Invocation>>>>): void {
+  const regression = regressionOutputs(verbs);
   for (const [lane, rows] of Object.entries(verbs)) {
     const test = rows[SELECTABLE_VERB];
     if (test === undefined || test.kind === "unsupported" || test.select === undefined) continue;
@@ -1460,7 +1481,13 @@ function refuseSelectionOverlap(path: string, verbs: Readonly<Record<string, Rea
     ];
     for (const element of elements) {
       for (const token of argvTokens(element.value)) {
-        const clash = regression.find((other): boolean => namesWrittenPath(token, other));
+        // A BARE WORD IS COMPARED ONLY TO A MULTI-SEGMENT OUTPUT, where a
+        // same-spelled word cannot be an accident of vocabulary; a
+        // path-shaped token is compared to every output.
+        const clash = regression.find(
+          (other): boolean =>
+            (pathShaped(token) || comparablePath(other).includes("/")) && namesWrittenPath(token, other),
+        );
         if (clash === undefined) continue;
         throw new SchemaError(
           path,

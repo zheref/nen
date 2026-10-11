@@ -1,47 +1,41 @@
-// src/shu/select-results.ts -- after a focused run, read the results file its
-// `select` block declares and count the tests it EXECUTED (zheref/nen#207,
-// the maintainer's ruling on the acceptance criterion of 2026-09-27).
+// src/shu/select-results.ts -- before a focused run, clear the results path
+// its `select` block declares; after it, read that path and count the tests
+// the run EXECUTED (zheref/nen#207, the maintainer's ruling on the acceptance
+// criterion of 2026-09-27, and the round-2 ruling on stale results).
 //
 // WHY A RUN THAT EXITED 0 IS NOT ENOUGH. A runner handed an identifier that
 // matches nothing -- typed from memory, one class name off -- prints
 // "Executed 0 tests" and exits 0. Read as a status code that is "ran, passed",
 // and it certifies whatever the caller already believed. So a focused run's
 // verdict is the exit code AND the count: zero executed is exit 6, and a
-// results file that is missing, unreadable, in another format or simply not
-// rewritten by this run is exit 1 -- never a pass.
+// results path that is missing, unreadable or in another format is exit 1 --
+// never a pass.
+//
+// WHY THE PATH IS CLEARED RATHER THAN FINGERPRINTED (Nobunaga N10). A JUnit
+// results DIRECTORY is read whole, one file per suite: a run that matched
+// nothing and wrote one empty `new.xml` beside an earlier run's `old.xml` was
+// counted as the earlier run's three tests. A digest of the directory can say
+// "something changed"; it cannot say which files are this run's. Removing the
+// declared path before the spawn makes the answer structural: whatever is
+// there afterwards, this run wrote. The loader has already proved the path
+// disjoint from every regression output; ../shu/run.ts re-proves it on the
+// REAL path, and refuses a symlink, before anything here deletes.
 //
 // THE PARSERS ARE `nen shu test-report`'s, unchanged: one reader per format,
 // so a focused run and a full report can never count the same file two ways.
 
-import { createHash } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, rmSync } from "node:fs";
 import { readTestReport } from "./test-report/parse.js";
 import { TestReportError } from "./test-report/shape.js";
 
-/** The fingerprint of a results path before the run, to prove the run wrote it. */
-export type ResultsState = string | null;
+/** Is the declared results path itself a symlink? (Never followed, never removed.) */
+export function isSymlink(absolute: string): boolean {
+  return lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink() === true;
+}
 
-/**
- * What is at the path now: null when nothing is; else a digest of the file's
- * bytes, size, mtime and inode -- or, for a directory, of every entry's name,
- * size and mtime. A run that leaves this unchanged did not write its results.
- */
-export function resultsState(absolute: string): ResultsState {
-  const stats = lstatSync(absolute, { throwIfNoEntry: false });
-  if (stats === undefined) return null;
-  const hash = createHash("sha256");
-  if (stats.isDirectory()) {
-    hash.update(`dir:${stats.mtimeMs}`);
-    for (const name of readdirSync(absolute).sort()) {
-      const entry = lstatSync(join(absolute, name), { throwIfNoEntry: false });
-      hash.update(`\0${name}:${entry?.size ?? -1}:${entry?.mtimeMs ?? -1}`);
-    }
-  } else {
-    hash.update(`file:${stats.size}:${stats.mtimeMs}:${stats.ino}:`);
-    if (stats.isFile()) hash.update(readFileSync(absolute));
-  }
-  return hash.digest("hex");
+/** Remove the declared results path -- a file, or a directory recursively. */
+export function clearResults(absolute: string): void {
+  rmSync(absolute, { recursive: true, force: true });
 }
 
 /** The verdict on one focused run's results. */
@@ -52,25 +46,19 @@ export type ResultsVerdict =
 /**
  * Read the declared results and count the executed tests, or say why not.
  *
+ * EXECUTED IS `total - skipped` (Nobunaga N12). A summary format states its
+ * counts, and may state a total the passed/failed buckets do not fully
+ * account for (expected failures, an outcome nen does not bucket) -- those
+ * tests still RAN. For a format whose counts nen tallies from rows, the two
+ * readings are the same number.
+ *
  * `display` is the path as the declaration wrote it; every sentence quotes it.
  */
-export function readSelectionResults(
-  absolute: string,
-  display: string,
-  format: string,
-  before: ResultsState,
-): ResultsVerdict {
-  const after = resultsState(absolute);
-  if (after === null) {
+export function readSelectionResults(absolute: string, display: string, format: string): ResultsVerdict {
+  if (lstatSync(absolute, { throwIfNoEntry: false }) === undefined) {
     return {
       ok: false,
-      why: `the run exited 0 and left no results at '${display}'. nen cannot tell how many tests it executed, so this is not a pass: check that the focused argv writes its results there`,
-    };
-  }
-  if (before !== null && before === after) {
-    return {
-      ok: false,
-      why: `the run exited 0 and did not rewrite '${display}'; what is there is an earlier run's, and counting it would vouch for tests this run may never have executed`,
+      why: `the run exited 0 and left no results at '${display}' (nen cleared that path before the run). nen cannot tell how many tests it executed, so this is not a pass: check that the focused argv writes its results there`,
     };
   }
   let parsed;
@@ -87,5 +75,5 @@ export function readSelectionResults(
     };
   }
   const counts = parsed.parsed.counts;
-  return { ok: true, executed: counts.passed + counts.failed };
+  return { ok: true, executed: counts.total - counts.skipped };
 }
