@@ -58,7 +58,8 @@ import {
   SchemaError,
 } from "./errors.js";
 import { requireEnum, withinOneEdit } from "./contract.js";
-import { readSchemaJson, resolveSchemaFile, type SchemaLocation } from "./source.js";
+import { readSchemaFile, resolveSchemaFile, type SchemaLocation } from "./source.js";
+import { refuseDuplicateKeyWithin } from "./gates.js";
 import { matchesPattern } from "../report/patterns.js";
 import { CONVENTIONAL_SUBJECT_CASE, parseBodyWidth, parseSubjectCaseTuple, type SubjectCaseSpec } from "../commit/rule.js";
 
@@ -179,6 +180,30 @@ export interface LaunchPolicy {
   /** The `project.launch` target name a bare launch uses. No default ever. */
   readonly default: string | null;
   readonly fallback: string | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * `deploy` -- the destination a caller's OWN tooling sends to when it is told
+ * no target (zheref/nen#300; zheref/hatsu#146).
+ *
+ * NEN NEVER READS THIS TO CHOOSE ANYTHING. `nen shu deploy` still requires
+ * `--target` with no default, ever; the reader of `defaultTarget` is a
+ * consumer's skill (Hatsu's `kagutsuchi`), which passes it to `--target`
+ * explicitly. So "nen never chooses where a build goes" stays true of nen, and
+ * the choice lives in a file the maintainer wrote.
+ *
+ * NEN VALIDATES IT ANYWAY, because a value here IS a destination name: a
+ * non-string is refused at load, by pointer, like every other key in this
+ * file; a string naming no key of `nen/contract.json`'s `project.targets` is a
+ * cross-file fact this loader cannot see, so `nen schema check` fails it on its
+ * own pointer row (../schema/taxonomy.ts). `null`, or the key absent, is the
+ * ordinary state and means "ask" -- no default name, ever, for the same reason
+ * `launch.default` has none.
+ */
+export interface DeployPolicy {
+  /** A key of `project.targets`, or null for "none declared". No default ever. */
+  readonly defaultTarget: string | null;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -458,6 +483,8 @@ export interface Workflow {
   readonly tests: TestsPolicy;
   readonly coverage: CoveragePolicy;
   readonly launch: LaunchPolicy;
+  /** `deploy` -- see DeployPolicy. `defaultTarget` is null unless declared. */
+  readonly deploy: DeployPolicy;
   readonly reports: ReportsPolicy;
   readonly notifications: NotificationsPolicy;
   readonly commits: CommitsPolicy;
@@ -540,6 +567,8 @@ export function defaultWorkflow(): Workflow {
       raw: empty,
     },
     launch: { default: null, fallback: null, raw: empty },
+    // NO DEFAULT DESTINATION, EVER -- see DeployPolicy.
+    deploy: { defaultTarget: null, raw: empty },
     reports: {
       dir: DEFAULT_REPORTS_DIR,
       retain: DEFAULT_RETAIN,
@@ -575,6 +604,7 @@ const ROOT_KEYS: readonly string[] = [
   "tests",
   "coverage",
   "launch",
+  "deploy",
   "reports",
   "notifications",
   "commits",
@@ -592,6 +622,7 @@ const ITERATION_KEYS: readonly string[] = ["checks", "lane"];
 const TESTS_KEYS: readonly string[] = ["required", "extra"];
 const COVERAGE_KEYS: readonly string[] = ["minimum", "recommended", "ideal", "scope"];
 const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
+const DEPLOY_KEYS: readonly string[] = ["defaultTarget"];
 const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures", "sections"];
 const REVIEW_KEYS: readonly string[] = ["scopes"];
 const RELEASE_KEYS: readonly string[] = ["unitPaths"];
@@ -820,6 +851,29 @@ function parseLaunch(path: string, value: unknown): LaunchPolicy {
   return {
     default: optionalString(path, "launch.default", raw["default"]),
     fallback: optionalString(path, "launch.fallback", raw["fallback"]),
+    raw,
+  };
+}
+
+/**
+ * `deploy` -- its one key, held to its SHAPE here and to its MEANING by
+ * `nen schema check`, which is the one reader that holds both files.
+ *
+ * A near-miss key (`defaultTaget`) is refused by `block`, naming the key it
+ * was one edit from, for this file's own reason: preserved, it would be read
+ * by nobody and the caller's tooling would keep asking for a target the
+ * maintainer believed was declared. An empty string is refused rather than
+ * read as "none": `null` is how this file says none, and `""` is a name no
+ * `project.targets` key can be.
+ */
+function parseDeploy(path: string, value: unknown): DeployPolicy {
+  const raw = block(path, "deploy", value, DEPLOY_KEYS, "A deploy policy's one key is");
+  const stated = raw["defaultTarget"];
+  return {
+    defaultTarget:
+      stated === undefined || stated === null
+        ? null
+        : requireString(path, "deploy.defaultTarget", stated),
     raw,
   };
 }
@@ -2005,7 +2059,7 @@ function parseProfile(path: string, value: unknown): ProfilePolicy {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's fifteen blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's sixteen blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -2016,6 +2070,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     tests: parseTests(path, raw["tests"]),
     coverage: parseCoverage(path, raw["coverage"]),
     launch: parseLaunch(path, raw["launch"]),
+    deploy: parseDeploy(path, raw["deploy"]),
     reports: parseReports(path, raw["reports"]),
     notifications: parseNotifications(path, raw["notifications"]),
     commits: parseCommits(path, raw["commits"]),
@@ -2067,11 +2122,22 @@ export function loadWorkflow(repoRoot: string): LoadedWorkflow {
   // probe exists to catch -- a link at `nen/workflow.json` pointing at nothing
   // -- read as "no policy, defaults apply", which is the fail-open this loader
   // must not have. The probe decides absence; everything after it throws.
-  const read: { path: string; value: unknown; location: SchemaLocation } = readSchemaJson(
+  const read: { path: string; text: string; location: SchemaLocation } = readSchemaFile(
     repoRoot,
     WORKFLOW_FILE,
   );
-  const workflow = parseWorkflow(read.path, read.value);
+  // A REPEATED KEY IN THE `deploy` BLOCK IS REFUSED BEFORE PARSING
+  // (zheref/nen#300, Feitan N1): two `defaultTarget`s read as the last to
+  // `JSON.parse` and as either to a reviewer. Scoped to that block, which is
+  // the one this change adopts the rule for.
+  refuseDuplicateKeyWithin(read.path, read.text, "deploy");
+  let value: unknown;
+  try {
+    value = JSON.parse(read.text) as unknown;
+  } catch (error) {
+    throw new SchemaError(read.path, null, `is not valid JSON (${error instanceof Error ? error.message : String(error)})`);
+  }
+  const workflow = parseWorkflow(read.path, value);
   return {
     path: read.path,
     present: true,
@@ -2105,6 +2171,13 @@ export function describeSections(workflow: Workflow): string {
     ? "none declared"
     : `${names.length} variant(s): ${names.join(", ")}`;
 }
+
+/**
+ * The `deploy.defaultTarget` row's text when the policy states NO name
+ * (zheref/nen#300). A stated name is described by ../schema/taxonomy.ts, which
+ * holds the contract the name has to be a key of.
+ */
+export const DEFAULT_TARGET_NONE = "none declared (a caller's tooling asks; nen shu deploy still requires --target)";
 
 /** The `profile` row `nen schema check` prints (zheref/nen#227). See `describeSections`. */
 export function describeProfile(workflow: Workflow): string {

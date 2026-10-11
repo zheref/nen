@@ -482,7 +482,10 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
       : check.required
         ? "FAIL"
         : "warn";
-    io.out(`  ${mark}  ${check.file}  ${check.detail}`);
+    // `file` AND `detail` CARRY THE FILE'S TEXT -- a key, a target name, a
+    // parse error quoting either -- so the human line goes through `plainLine`
+    // whatever row it is (Feitan F1 on #300). `--json` keeps the bytes.
+    io.out(`  ${mark}  ${plainLine(check.file)}  ${plainLine(check.detail)}`);
     // The migration sentence goes on its OWN line, under the row it is about.
     // Folding it into `detail` would put it inside the field `--json` publishes
     // as the file's verdict, where a machine reader parsing that string would
@@ -490,9 +493,11 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     if (check.note !== null) io.out(`        ^ ${check.note}`);
   }
   if (!report.ok) {
-    // TWO FAILURES, TWO SENTENCES -- exhaustive, because `report.ok` is false
-    // exactly when some REQUIRED check failed, and `nen/workflow.json` is
-    // never required unless it is present and malformed.
+    // THREE FAILURES, THREE SENTENCES -- exhaustive, because `report.ok` is
+    // false exactly when some REQUIRED check failed: a file that could not be
+    // read, `nen/workflow.json` itself (never required unless present and
+    // malformed), or a policy POINTER row that loaded and failed on what it
+    // names (below).
     //
     // The second exists because `nen/workflow.json` is the one file that DOES
     // have a built-in default. Every sentence below rests on "nen has no
@@ -508,11 +513,21 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     // unreadable taxonomy: the key line below says exactly what is wrong, and
     // "could not be read" beside it would send the reader looking for a
     // broken file that is not broken (N9).
+    //
+    // A POINTER ROW INTO THE POLICY (`nen/workflow.json#…`) that failed is
+    // not an unreadable file either: the policy LOADED, and the row failed on
+    // what it says (today only `#deploy.defaultTarget`, judged against the
+    // contract -- zheref/nen#300, Nobunaga N1). It gets its own sentence.
     const failedChecks = report.checks.filter((check): boolean => !check.ok && check.required);
+    const isPolicyPointer = (file: string): boolean => file.startsWith(`${WORKFLOW_FILE}#`);
     const unreadable = failedChecks.some(
-      (check): boolean => check.file !== WORKFLOW_FILE && !(check.file === GATES_FILE && refusedGates),
+      (check): boolean =>
+        check.file !== WORKFLOW_FILE &&
+        !isPolicyPointer(check.file) &&
+        !(check.file === GATES_FILE && refusedGates),
     );
     const workflowFailed = failedChecks.some((check): boolean => check.file === WORKFLOW_FILE);
+    const pointerFailed = failedChecks.some((check): boolean => isPolicyPointer(check.file));
     if (unreadable) {
       io.err(
         `${PROGRAM}: this repository's taxonomy could not be read. Nen has no built-in copy to fall back on -- a binary that guessed the names would report a taxonomy this repository does not have.`,
@@ -520,6 +535,10 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
     } else if (workflowFailed) {
       io.err(
         `${PROGRAM}: this repository's '${WORKFLOW_FILE}' is present and could not be read -- the pointer is named above. Every parameter in that file HAS a default, and nen is deliberately not applying one: a policy this repository states and nen cannot parse is not a policy nen may quietly replace with its own.`,
+      );
+    } else if (pointerFailed) {
+      io.err(
+        `${PROGRAM}: '${WORKFLOW_FILE}' loaded, and it names a deploy destination nen/contract.json does not declare or mark nonProduction -- the row above says which.`,
       );
     }
     if (report.duplicateKeys.length > 0) {

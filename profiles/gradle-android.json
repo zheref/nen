@@ -177,6 +177,11 @@
     "why": "No coverage plugin is declared -- neither JaCoCo nor Kover is applied -- so there is no report and no path to record. With a plugin applied the location is the plugin's own (a JaCoCo report task writes under the module's `build/reports` tree, and its XML output is off by default), and the declaration states it: this repository's checklist already names a `jacocoTestReport` task that does not exist on a clean checkout, and recording a plausible path here would repeat that mistake in nen's own voice.",
     "source": "this profile's own `coverage` row (KroAndroid/build.gradle.kts:2-15, app/build.gradle.kts:4-13)"
   },
+  "deployDefault": {
+    "target": null,
+    "why": "No canonical non-production destination is observed: no repository in the inventory publishes to a Play testing track or to Firebase App Distribution, and those two are rival conventions rather than one, so the pack names neither.",
+    "source": "KroAndroid (inventory sweep); this profile's own `deploy` row"
+  },
   "notes": [
     "An Android launch target may declare an `adb devices` text extractor with name field 1, identifier field 1 and readiness field 2, targeting the serial exactly and accepting state `device`. The header and daemon notices are nonmatching rows; nen still executes only the consumer-declared probe.",
     "`{gw}` is the ONE host-conditional substitution in this pack: `./gradlew` on POSIX, `gradlew.bat` on Windows.",

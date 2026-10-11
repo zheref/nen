@@ -28,6 +28,10 @@
       "default": null,
       "fallback": null
     },
+    "deploy": {
+      "$comment": "defaultTarget names the project.targets key a caller's own tooling sends to when told no target; it must be declared \"nonProduction\": true. null means ask. nen shu deploy never reads it and still requires --target.",
+      "defaultTarget": null
+    },
     "reports": {
       "dir": "Reports",
       "retain": "final-only",
