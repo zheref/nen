@@ -128,6 +128,14 @@ describe("GitHub Actions runner policy", () => {
     expect(violations(sources)).toEqual([]);
   });
 
+  it("keeps the pool preflight off tag pushes while proving changes to its own file (#341)", () => {
+    const workflow = parse(sources["runner-preflight-windows-x64.yml"]!) as Row;
+    expect(workflow.on).toEqual({
+      workflow_dispatch: null,
+      push: { branches: ["**"], paths: [".github/workflows/runner-preflight-windows-x64.yml"] },
+    });
+  });
+
   it("keeps CI on canonical branch pushes and the declared runner pools", () => {
     const ci = parse(sources["ci.yml"]!) as Row;
     expect(ci.on).toEqual({ push: { branches: ["**"] } });

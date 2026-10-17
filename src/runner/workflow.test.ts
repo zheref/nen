@@ -39,7 +39,7 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     const document = parse(rendered.text) as Row;
     expect(Object.keys(document["on"] as Row).sort()).toEqual(["push", "workflow_dispatch"]);
     expect((document["on"] as Row)["workflow_dispatch"]).toBeNull();
-    expect((document["on"] as Row)["push"]).toEqual({ paths: [".github/workflows/runner-preflight-windows-x64.yml"] });
+    expect((document["on"] as Row)["push"]).toEqual({ branches: ["**"], paths: [".github/workflows/runner-preflight-windows-x64.yml"] });
     expect(document["permissions"]).toEqual({ contents: "read" });
     expect(document["concurrency"]).toEqual({ group: "runner-preflight-windows-x64-${{ github.ref }}", "cancel-in-progress": true });
     const jobs = document["jobs"] as Row;
@@ -51,13 +51,35 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     expect(job["timeout-minutes"]).toBe(5);
     const steps = job["steps"] as Row[];
     const checkout = steps.find((step) => typeof step["uses"] === "string" && (step["uses"] as string).startsWith("actions/checkout@"));
-    expect(checkout?.["uses"]).toBe("actions/checkout@v4");
+    expect(checkout?.["uses"]).toBe("actions/checkout@11d5960a326750d5838078e36cf38b85af677262");
     expect((checkout?.["with"] as Row)["persist-credentials"]).toBe(false);
-    // Every run step pins bash: Actions defaults to pwsh on Windows.
-    for (const step of steps.filter((candidate) => candidate["run"] !== undefined)) expect(step["shell"]).toBe("bash");
+    // Only the service-PATH recording uses cmd; bash would prepend Git's own tools.
+    for (const step of steps.filter((candidate) => candidate["run"] !== undefined)) {
+      expect(step["shell"]).toBe(step["name"] === "Record the PATH the service hands a job (Windows)" ? "cmd" : "bash");
+    }
     const env = steps.map((step) => step["env"] as Row | undefined).filter((value): value is Row => value !== undefined);
     expect(env).toContainEqual({ TOOLS: "git bash gh", MODE: "service" });
     expect(env).toContainEqual({ EXPECTED_OS: "Windows" });
+  });
+
+  it("records Windows service PATH before classifying and executing its first match (#341)", () => {
+    const job = ((parse(rendered.text) as Row)["jobs"] as Row)["preflight"] as Row;
+    const steps = job["steps"] as Row[];
+    const recording = steps.findIndex((step) => step["name"] === "Record the PATH the service hands a job (Windows)");
+    const classifier = steps.findIndex((step) => step["name"] === "Resolution must be machine-wide (Windows)");
+    expect(recording).toBeGreaterThanOrEqual(0);
+    expect(classifier).toBeGreaterThan(recording);
+    expect(steps[recording]?.["if"]).toBe("runner.os == 'Windows'");
+    expect(steps[recording]?.["shell"]).toBe("cmd");
+    expect(steps[recording]?.["run"]).toContain("chcp 65001 >nul");
+    expect(steps[recording]?.["run"]).toContain('(set PATH) > "%RUNNER_TEMP%\\service-path.txt"');
+    const script = String(steps[classifier]?.["run"]);
+    expect(script).toContain('export SERVICE_PATH="$service_path"');
+    expect(script).toContain('where.exe "\\$SERVICE_PATH:$tool"');
+    expect(script).toContain('IFS= read -r first <<< "$resolved"');
+    expect(script).toContain('"$norm" --version >/dev/null 2>&1 || rc=$?');
+    expect(script).toContain('if [ -z "$service_path" ]; then');
+    expect(script).toContain('126) verdict="machine-wide, refused on exec (exit 126)"');
   });
 
   it("renders a macOS pool with its own labels and file, and keeps the Windows-only step gated", () => {
@@ -66,7 +88,7 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     expect(job["runs-on"]).toEqual(["self-hosted", "macOS", "ARM64", "pool-macos-arm64"]);
     expect(mac.text).toContain("'.github/workflows/runner-preflight-macos-arm64.yml'");
     const gated = (job["steps"] as Row[]).filter((step) => step["if"] !== undefined).map((step) => step["if"]);
-    expect(gated).toEqual(["runner.os == 'Windows'", "runner.os == 'Windows' && 'interactive' == 'interactive'", "runner.os != 'Windows'"]);
+    expect(gated).toEqual(["runner.os == 'Windows'", "runner.os == 'Windows'", "runner.os == 'Windows' && 'interactive' == 'interactive'", "runner.os != 'Windows'"]);
   });
 
   it("renders an interactive Windows pool's five labels and switches its desktop-session probe on (#333, #340)", () => {
@@ -80,15 +102,15 @@ describe("renderWorkflow -- the template's eight placeholders, filled from the d
     expect(probe?.["if"]).toBe("runner.os == 'Windows' && 'interactive' == 'interactive'");
     expect(probe?.["shell"]).toBe("bash");
     expect(probe?.["run"]).toMatch(/GetCurrentProcess\(\)\.SessionId/);
-    expect(probe?.["run"]).toMatch(/if \[ -z "\$session" \] \|\| \[ "\$session" = "0" \]; then/);
+    expect(probe?.["run"]).toContain('if [ -z "$session" ] || [ "$((10#$session))" -eq 0 ]; then');
     // Remediation is mode-aware: a logon task is restarted by signing in again, and
     // an AppData hit is a warning for the account the runner runs as.
     const steps = job["steps"] as Row[];
     const toolchain = steps.find((step) => step["name"] === "Host toolchain -- every tool a job on this pool invokes");
     expect(toolchain?.["env"]).toEqual({ TOOLS: "git bash gh", MODE: "interactive" });
-    expect(toolchain?.["run"]).toMatch(/sign the runner's account \(\$acct\) out and back in, which restarts its logon task/);
+    expect(toolchain?.["run"]).toMatch(/sign the runner's account out and back in, which restarts its logon task/);
     const appdata = steps.find((step) => step["name"] === "Resolution must be machine-wide (Windows)");
-    expect(appdata?.["run"]).toMatch(/if \[ "\$MODE" = interactive \]; then\n\s+echo "::warning::/);
+    expect(appdata?.["run"]).toMatch(/if \[ "\$interactive" = yes \]; then\n\s+echo "::warning::/);
   });
 
   it("targets each pool's own label in @@RUNS_ON@@, so two pools of one os and arch never share a job (#340)", () => {
