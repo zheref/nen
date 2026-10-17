@@ -463,6 +463,19 @@ describe("--tiers", () => {
     expect(() => table({ tests: [1] })).toThrow(/is not a list of path patterns/);
   });
 
+  it.each(["=", "= ", "=/README.md", "=../README.md", "=./README.md", "=src//file", "=README.md/", "=src/*.ts", "=src/?.ts", "=src\\file", "=file\nname"])("refuses invalid exact tier path %j at its read-seam pointer", (pattern) => {
+    expect(() => table({ source: ["src/**", pattern] })).toThrow(/tiers\["source"\]\[1\].*exact repo-relative path/);
+  });
+
+  it("reads valid exact tier entries without widening them or changing bare paths", () => {
+    const tiers = table({ exact: ["=README.md", "==literal"], bare: ["src/", "docs/**"] });
+    expect(tierOf("README.md", tiers)).toBe("exact");
+    expect(tierOf("README.md/child", tiers)).toBeNull();
+    expect(tierOf("=literal", tiers)).toBe("exact");
+    expect(tierOf("src/nested/file.ts", tiers)).toBe("bare");
+    expect(tierOf("docs/nested/file.md", tiers)).toBe("bare");
+  });
+
   it("labels the changed files end to end", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-report-tiers-"));
     writeFileSync(join(root, "tiers.json"), JSON.stringify({ tests: ["src/**/*.test.ts"], source: ["src"] }));

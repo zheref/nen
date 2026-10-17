@@ -5,7 +5,9 @@
 
 ### Fixed
 
-- **release** — an `=path` string claims one exact path, so `=README.md` cannot admit `README.md/**`. Nen's own release unit now bounds `src/version.ts`, `README.md` and `docs/USAGE.md` to version/floor literals and fixed install/example lines with numeric pins, and names `=CHANGELOG.md` exactly. Bootstrap destinations and other text changes require the maintainer's merge. Closes [#348](https://github.com/zheref/nen/issues/348).
+- **release** — an `=path` string claims one exact path, so `=README.md` cannot admit `README.md/**`. Nen's own release unit bounds changed lines in `src/version.ts`, `README.md` and `docs/USAGE.md` to version/floor and declared install/example forms, and names `=CHANGELOG.md` exactly. Both removed and added lines are checked independently; allowed lines may be deleted, moved or replaced by another allowed form, including optional fixed command fragments. The bound does not preserve presence, position, pairing or consistent versions. Closes [#348](https://github.com/zheref/nen/issues/348).
+- **release** — line bounds use a release-only bounded state matcher, preserving legacy identity-regex consumers. Unsupported syntax fails schema loading by pointer. Matching never backtracks through PR text; source, nesting, state, class and pattern-count limits bound compilation, and changed-line length plus per-line/per-file operation budgets fail closed with a distinct exhaustion reason. The limits and supported expression subset are documented in USAGE.
+- **schema, report** — exact markers in review scopes and report tiers are validated at their read seams, so an empty `=` or malformed repo-relative exact path cannot silently claim nothing. Bare prefixes and globs retain their existing meaning.
 
 ### Breaking / consumer notes
 
