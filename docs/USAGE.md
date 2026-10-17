@@ -4596,7 +4596,7 @@ pages as it takes, not the accidental 100-row ceiling an earlier version of this
 **Usage**
 
 ```text
-nen backlog fetch --repo-slug <owner/name> [--limit <n>]
+nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>]
 ```
 
 **Arguments**
@@ -4605,13 +4605,18 @@ nen backlog fetch --repo-slug <owner/name> [--limit <n>]
 |---|---|---|---|
 | `--repo-slug <owner/name>` | yes | The owner/name to fetch fresh from over `gh api`. | |
 | `--limit <n>` | no | Caps the TOTAL rows fetched per resource (issues, PRs), across as many pages as it takes to reach it. | Omit for no cap. Must be a positive whole number, or refused (exit 2). A capped fetch is always reported TRUNCATED, never presented as complete. |
+| `--label <name>` | no, **repeatable** | Keep only the efforts carrying EVERY `--label` (AND). An effort's labels are its issue's and all of its pull requests' labels, unioned; a lone PR is its own effort. | Names match exactly. Each must be declared in `--repo`'s `nen/labels.json`, checked **before any GitHub read**: an undeclared label is refused (exit 2), never matched against nothing; a value that is a piece of a declared label containing `&` is refused naming it — labels containing `&` are not supported in selectors (zheref/nen#410). |
+| `--severity <name>[+]` | no | Keep only the efforts carrying that severity's label; with a trailing `+`, that severity or any above it. | Needs `--severity-family <ns>:<family>` (which labels are severities — nen carries no severity vocabulary) and `--severity-order <a,b,..>` (highest first, the spelling `backlog order` takes). A family `nen/labels.json` does not declare, an order naming an undeclared leaf, an unknown severity or more than one `+` is refused (exit 2). ANDs with `--label`. |
 
 **Output and exit codes** — human rendering is `"<n> row(s) -- X issue(s), Y PR(s)"`, an optional
 `TRUNCATED at --limit <n>: ...` or `TRUNCATED at a defensive 200-page ceiling: ...` line, then one line
 per row (`#<issue> [#<pr>, ...]  <title>`, or `PR #<n>  <title>` for an orphan PR). `--json` top-level
-keys: `repo`, `truncated`, `rows`, `issueCount`, `prCount`. Exit 0 whether or not the fetch was
-truncated (truncation is reported, not failed); exit 2 for a missing `--repo-slug` or a malformed
-`--limit`. This verb has no exit-1 path of its own.
+keys: `repo`, `truncated`, `rows`, `issueCount`, `prCount`, plus `filter` (`{ labels, severity: { name,
+orHigher, labels } | null, kept, of }`) **only** when `--label`/`--severity` was given, so an unfiltered
+document is unchanged; a filtered fetch also prints `filter: … -- kept <k> of <n> effort(s)`, and a filter
+that keeps nothing is `0 row(s)` at exit 0. Exit 0 whether or not the fetch was
+truncated (truncation is reported, not failed); exit 2 for a missing `--repo-slug`, a malformed
+`--limit` or a refused filter. This verb has no exit-1 path of its own.
 
 **Example**
 
@@ -12267,7 +12272,9 @@ Parses a skill invocation against the grammar that skill itself publishes, echoe
 
 ### `nen parse <skill>`
 
-The generic engine: any skill name, its `--grammar` template (`<name>` for a slot, `<name:a|b|c>` for an enumerated slot, `word(s) <slot>` for a slot introduced by literal words matched at its LAST whole-word occurrence, `@<slot>`/`#<slot>` for a symbol-separated slot, `[ ... ]` for an optional trailing clause, `[+]` for an optional literal suffix), and `--line`, the invocation to check.
+The generic engine: any skill name, its `--grammar` template (`<name>` for a slot, `<name:a|b|c>` for an enumerated slot, `word(s) <slot>` for a slot introduced by literal words matched at its LAST whole-word occurrence, `@<slot>`/`#<slot>` for a symbol-separated slot, `[ ... ]` for an optional trailing clause, `[+]` for an optional literal suffix, `<slot>{+}` / `<slot>{&}` for a LIST slot — one or more values joined by the literal in the braces, every item of an enumerated list checked, an empty item refused — and `<a:..>{+}|<b:..>[+]|<c>` for an ALTERNATION, one position filled by the first alternative the value fits), and `--line`, the invocation to check.
+
+**Lists and alternations (zheref/nen#410).** An alternation tries its enumerated alternatives in template order — a list fits when every item is one of its values, a single value when it is one of them with its suffix at most once — and only then its **free** alternative (no value set, allowed only last, with no suffix), and only when **no piece** of the value (split at every enumerated joiner and suffix) is an enumerated value. So against `<repo>[@<gate:G1|G1-M|G2|G3|G4|G5|all>{+}|<severity:critical|high|medium|low>[+]|<label>][#<labels>{&}]`, `x@g4+g5` is `gate: G4+G5`, `x@high+` is `severity: high (+)`, `x@model/gpt` and `x@c++` are labels kept as typed, while `x@high+g4` (both enumerations), `x@g4+model/gpt` (a gate list with a non-gate item), `x@high+low`, `x@high++`, `x@g4+` and `x@g9+g5` are refused at exit 2 with the reason. A template the engine could not resolve unambiguously — a free alternative before another, a value in two enumerations, a list that also takes a suffix, a `|` or `{…}` that follows no slot — is refused at template time. `--json` adds `alternative` (which alternative filled the position, on an alternating slot only) and `items` (on a list only) to a slot's value; the position's `name` is its alternatives' names joined by `|`, and a plain slot's shape is unchanged.
 
 **Usage**
 
@@ -12779,6 +12786,7 @@ nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--j
 nen report data … [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog]
 nen report data … --objects-from <file>
 nen report data … [--target … | --objects-from <file>] --register <desk>
+nen report data … [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>]
 nen report data … [--tz <zone>] [--open-stop]
 ```
 
@@ -12795,6 +12803,8 @@ nen report data … [--tz <zone>] [--open-stop]
 | `--issues <n,...>` | no | issues to read, by number | same grammar, same refusal |
 | `--backlog` | no (boolean) | every **open** issue and pull request of `--target` | paginated to completion; a fetch that hits the defensive page ceiling says so on stderr rather than presenting a partial register as whole |
 | `--objects-from <file>` | no | the register, read from a file instead of GitHub | a JSON array of rows already in the published `objects` shape. **Validated at the read seam and refused BY ROW INDEX at exit 2.** Never mixed with the four flags above: a register whose rows came from two authorities says nothing about which row came from which |
+| `--label <name>` | no, **repeatable** | keep only the objects of the EFFORTS carrying every `--label` (AND) | an effort is an issue plus the pull requests linked to it in the set (a link read from either side), or a lone PR; its labels are its members' labels unioned — the rule [`backlog fetch --label`](#nen-backlog-fetch) applies. **Every object of a kept effort is kept**, and every tally and the register count the filtered set. Validated against `--repo`'s `nen/labels.json` before any read: undeclared is exit 2; a piece of a declared label containing `&` is refused naming it. A filter with none of the five register flags is refused at exit 2. A filtered document appends `objectsFilter` (`{ labels, severity, kept, of }`) as its LAST key and says `filter: … -- kept <k> of <n> object(s)` on stderr; an unfiltered document is unchanged (zheref/nen#410) |
+| `--severity <name>[+]` | no | the same severity band `backlog fetch` takes | with `--severity-family <ns>:<family>` and `--severity-order <a,b,..>`, refused as there |
 | `--register <desk>` | no | emit the **register document** a Rikugan page renders from | the judgement half only, as JSON — see *The register document* below. Validated at the read seam and refused at exit 2 naming the field; an empty value is refused too |
 | `--tz <zone>` | no | the IANA zone the local clock is read in | must be a **compiled** zone in this host's zoneinfo database — `$TZDIR`, else `/usr/share/zoneinfo`, `/var/db/timezone/zoneinfo`, `/usr/lib/zoneinfo` — i.e. a **regular file**, whose real path stays inside the database's real directory (a symlink out of it is refused), and whose first four bytes are `TZif` (`UTC`/`Etc/UTC` need none). **Where no such directory exists** (on `win32`, or a `$TZDIR` that is not a directory) the runtime's ICU zone list (`Intl.supportedValuesOf("timeZone")`) answers instead, and stderr names that authority. The zone is printed as ICU's canonical name; a misspelling, a **case mismatch** (`america/bogota`), a metadata file such as `zone.tab`, or a path is **refused at exit 2** naming it, before any GitHub read, rather than stamped in UTC as `date(1)` silently would. Without it: `$TZ`, then the **`/etc/localtime` symlink's target**, then **`/etc/timezone`**, then ICU's own guess; a zone from any of them that fails the same check is `null` with the reason |
 | `--open-stop` | no (boolean) | a G5 stop is open this turn | `effortStage` is `blocked`. The **only** way to `blocked`: a `.nen/last-stop.json` on disk records a stop, not an open one |

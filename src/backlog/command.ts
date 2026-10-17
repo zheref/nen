@@ -11,10 +11,11 @@ import {
 import { readJsonFile, splitList } from "../cli/inputs.js";
 import { describeValue, rowLabel } from "../cli/shape.js";
 import { resolveRepoRoot } from "../repo/root.js";
-import { assembleRows, fetchPaginated, MAX_PAGES, type RawIssue, type RawPr } from "./fetch.js";
+import { assembleRows, fetchPaginated, MAX_PAGES, type BacklogRow, type RawIssue, type RawPr } from "./fetch.js";
+import { describeFilter, effortPasses, FILTER_LIST_FLAGS, FILTER_VALUE_FLAGS, readEffortFilter } from "./filter.js";
 import { orderBacklog, type OrderableRow } from "./order.js";
 
-const USAGE = `nen backlog fetch --repo-slug <owner/name> [--limit <n>]
+const USAGE = `nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>]
 nen backlog order --rows-from <path> --severity-order <a,b,c,d> [--blocks <id|n,...>] [--affects-consumers <id|n,...>]
 
 fetch:
@@ -30,6 +31,26 @@ fetch:
                 as many pages as it takes to reach it. Omit it to fetch every
                 open row with NO CAP. A capped fetch is always reported as
                 TRUNCATED, never presented as complete.
+  --label <name>  REPEATABLE. Keep only the efforts that carry EVERY --label
+                  (AND, never OR), where an effort's labels are its issue's
+                  and all of its pull requests' labels, unioned. Names match
+                  exactly. Each one must be declared in --repo's
+                  nen/labels.json: an undeclared label is refused (exit 2)
+                  rather than matching nothing, and a piece of a declared
+                  label containing '&' is refused naming that label --
+                  labels containing '&' are not supported in selectors.
+  --severity <name>[+]
+                  Keep only the efforts carrying that severity's label, or
+                  with a trailing '+' that severity or any above it. Needs
+                  --severity-family <ns>:<family> (which labels are
+                  severities) and --severity-order <a,b,..> (highest first,
+                  the spelling 'order' takes); nen carries no severity
+                  vocabulary. A family --repo's nen/labels.json does not
+                  declare is refused (exit 2).
+  A filtered fetch names the filter and how many efforts it kept; a filter
+  that keeps nothing reports 0 rows at exit 0. --json adds a 'filter' key
+  ({ labels, severity: { name, orHigher, labels } | null, kept, of }) only
+  when a filter was given, so an unfiltered document is unchanged.
 
 order:
   Applies the backlog-loop §2 priority order to a pre-fetched row set:
@@ -90,6 +111,9 @@ interface RawGhIssue {
 
 function fetch(context: CommandContext): number {
   const repo = requireValue(context.args, "repo-slug", "The owner/name to fetch fresh from.");
+  // THE FILTER IS VALIDATED BEFORE THE NETWORK: an undeclared label costs no
+  // GitHub read.
+  const filter = readEffortFilter(context);
   const limitRaw = context.args.values["limit"];
   const limit = limitRaw === undefined ? null : Number.parseInt(limitRaw, 10);
   if (limitRaw !== undefined && (!/^\d+$/.test(limitRaw) || (limit ?? 0) < 1)) {
@@ -122,9 +146,23 @@ function fetch(context: CommandContext): number {
   }));
 
   const truncated = rawFetch.truncated || prsFetch.truncated;
-  const assembly = assembleRows(issues, prs);
+  const assembled = assembleRows(issues, prs);
+  // A PULL REQUEST'S LABELS come off the same open-object page the issues did
+  // (GitHub's issues endpoint lists PRs too), so the effort's label union
+  // costs no further read.
+  const prLabels = new Map<number, readonly string[]>();
+  for (const item of raw) {
+    if (item.pull_request !== undefined) prLabels.set(item.number, item.labels.map((label): string => label.name));
+  }
+  const effortLabels = (row: BacklogRow): string[] => [
+    ...row.labels,
+    ...row.prNumbers.flatMap((number): readonly string[] => prLabels.get(number) ?? []),
+  ];
+  const rows = filter === null ? assembled.rows : assembled.rows.filter((row): boolean => effortPasses(filter, effortLabels(row)));
+  const assembly = { ...assembled, rows };
 
   const lines = [`${assembly.rows.length} row(s) -- ${assembly.issueCount} issue(s), ${assembly.prCount} PR(s)`];
+  if (filter !== null) lines.push(`${describeFilter(filter)} -- kept ${rows.length} of ${assembled.rows.length} effort(s)`);
   if (truncated) {
     lines.push(
       limit === null
@@ -138,7 +176,11 @@ function fetch(context: CommandContext): number {
     lines.push(`${subject}${prList}  ${row.title}`);
   }
 
-  emit(context.io, context.json, { repo, truncated, ...assembly }, lines);
+  const document =
+    filter === null
+      ? { repo, truncated, ...assembly }
+      : { repo, truncated, ...assembly, filter: { ...filter, kept: rows.length, of: assembled.rows.length } };
+  emit(context.io, context.json, document, lines);
   return 0;
 }
 
@@ -317,6 +359,13 @@ function validateOrderRows(raw: unknown, path: string): readonly InRow[] {
 }
 
 function order(context: CommandContext): number {
+  // THE FILTER FLAGS ARE FETCH'S. 'order' ranks a row set it was handed; a
+  // --label here would be an instruction nothing reads, so it is refused.
+  for (const flag of ["label", "severity", "severity-family"]) {
+    if (context.args.values[flag] !== undefined || (context.args.lists[flag]?.length ?? 0) > 0) {
+      throw new VerbUsageError(`--${flag} filters 'backlog fetch'; 'backlog order' ranks the rows it is given and reads no filter. Filter at the fetch.`);
+    }
+  }
   const path = requireValue(context.args, "rows-from", "The JSON row array to order.");
   const orderRaw = requireValue(context.args, "severity-order", "This repository's own severity vocabulary, in priority order.");
   const severityOrder = splitList(orderRaw);
@@ -349,7 +398,8 @@ export const backlogCommand: Command = {
   summary: "Fetch the backlog fresh, or order a pre-fetched row set.",
   usage: USAGE,
   flags: {
-    values: ["repo-slug", "limit", "rows-from", "severity-order", "blocks", "affects-consumers"],
+    values: ["repo-slug", "limit", "rows-from", "blocks", "affects-consumers", ...FILTER_VALUE_FLAGS],
+    lists: FILTER_LIST_FLAGS,
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("backlog", context.args, ["fetch", "order"]);

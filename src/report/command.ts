@@ -34,7 +34,8 @@ import { loadWorkflow, type ReportSection } from "../schema/workflow.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
 import { assembleContext, deriveClock, type PrLookup, type ReportContext } from "./context.js";
-import { assembleObjects, renderObjects } from "./objects.js";
+import { assembleObjects, filterEfforts, renderObjects } from "./objects.js";
+import { describeFilter, effortPasses, FILTER_LIST_FLAGS, FILTER_VALUE_FLAGS, readEffortFilter } from "../backlog/filter.js";
 import { assembleRegister, parseDesk, renderRegister, type Desk, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
@@ -44,7 +45,7 @@ import { renderReport } from "./render.js";
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
 usage:
-  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
+  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
 
@@ -126,6 +127,22 @@ data      One document describing this branch against --base: the commits, the
                    shape -- the offline path. VALIDATED at the read seam and
                    refused BY ROW INDEX at exit 2; it is never mixed with the
                    live flags.
+  --label <name>   REPEATABLE. Keep only the objects of the EFFORTS carrying
+                   every --label (AND): an effort is an issue plus the pull
+                   requests linked to it in the set, or a lone pull request,
+                   and its labels are its members' labels unioned -- the rule
+                   'nen backlog fetch --label' applies. Every object of a kept
+                   effort is kept, and every tally counts the filtered set.
+                   Validated against --repo's nen/labels.json before any read:
+                   an undeclared label is refused (exit 2); a piece of a
+                   declared label containing '&' is refused naming it.
+  --severity <name>[+] (with --severity-family <ns>:<family> and
+                   --severity-order <a,b,..>)
+                   The same severity band 'nen backlog fetch' takes.
+                   A filter needs objects to filter: given with none of the
+                   five flags above it is refused. A filtered document adds an
+                   'objectsFilter' key ({ labels, severity, kept, of }) at the
+                   end; an unfiltered one is unchanged.
 
   --register <desk>
                    Emit the REGISTER document -- the backlog register shape
@@ -205,10 +222,11 @@ unresolvable flag, a template this language does not have, or a token the data
 has not got.`;
 
 /** Per-subcommand flags, so a flag meant for the other verb is refused, not ignored. */
-const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
+const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[]; lists?: readonly string[] }>> = {
   data: {
-    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz"],
+    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz", ...FILTER_VALUE_FLAGS],
     booleans: ["backlog", "open-stop"],
+    lists: FILTER_LIST_FLAGS,
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
   mermaid: { values: ["graph"], booleans: [] },
@@ -218,6 +236,9 @@ const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid"];
 
 const FAMILY_VALUES = [
   ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values)),
+].sort();
+const FAMILY_LISTS = [
+  ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.lists ?? [])),
 ].sort();
 const FAMILY_BOOLEANS = [
   ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.booleans)),
@@ -234,9 +255,9 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
   const spec = SUBCOMMAND_FLAGS[subcommand];
   /* c8 ignore next -- requireSubcommand already refused an unknown name */
   if (spec === undefined) return;
-  const known = new Set([...FAMILY_VALUES, ...FAMILY_BOOLEANS]);
-  const mine = new Set([...spec.values, ...spec.booleans]);
-  const foreign = [...Object.keys(context.args.values), ...context.args.booleans].filter(
+  const known = new Set([...FAMILY_VALUES, ...FAMILY_BOOLEANS, ...FAMILY_LISTS]);
+  const mine = new Set([...spec.values, ...spec.booleans, ...(spec.lists ?? [])]);
+  const foreign = [...Object.keys(context.args.values), ...context.args.booleans, ...Object.keys(context.args.lists)].filter(
     (flag): boolean => known.has(flag) && !mine.has(flag),
   );
   if (foreign.length === 0) return;
@@ -485,14 +506,27 @@ async function runData(context: CommandContext): Promise<number> {
     warn("timeZone: the register desk set generatedAtLocal, so the desk owns the page's clock; generatedDateLocal and timeZone reported as null.");
   }
   const objectOptions = readObjectOptions(context, root);
+  // THE FILTER BEFORE THE NETWORK (zheref/nen#410): an undeclared label costs
+  // no GitHub read, and a filter with nothing to filter is a mistake to name.
+  const filter = readEffortFilter(context);
+  if (filter !== null && objectOptions === null) {
+    throw new VerbUsageError(
+      "--label/--severity filter the 'objects' register, and none of --target/--prs/--issues/--backlog/--objects-from names any. Name the objects to filter, or drop the filter.",
+    );
+  }
   // `objects` IS APPENDED AT THE END OF THE KEY ORDER, deliberately and once:
   // every consumer reading the twelve v0.11 keys reads the same twelve here,
   // and the thirteenth is new information rather than a reshuffle
   // (./data.test.ts's key-order test pins both halves).
-  const objects =
+  const assembled =
     objectOptions === null
       ? []
       : await assembleObjects(context.seams, objectOptions, warn);
+  const objects =
+    filter === null ? assembled : filterEfforts(assembled, (labels): boolean => effortPasses(filter, labels));
+  const objectsFilter =
+    filter === null ? null : { ...filter, kept: objects.length, of: assembled.length };
+  if (filter !== null) warn(`objects: ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`);
   // THE CONTEXT KEYS (zheref/nen#258) come AFTER `objects` -- new information
   // after everything a v0.13 consumer already reads, on both paths.
   const derived = assembleContext(
@@ -510,8 +544,12 @@ async function runData(context: CommandContext): Promise<number> {
     warn,
   );
   if (desk === null) {
-    const full = { ...document, objects, ...derived };
-    emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects)]);
+    const full = { ...document, objects, ...derived, ...(objectsFilter === null ? {} : { objectsFilter }) };
+    emit(context.io, context.json, full, [
+      ...renderData(document),
+      ...renderObjects(objects),
+      ...(filter === null ? [] : [`  ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`]),
+    ]);
     return 0;
   }
   const register = assembleRegister(desk, {
@@ -748,7 +786,7 @@ export const reportCommand: Command = {
   subcommands: SUBCOMMANDS,
   summary: "Assemble an effort's report data, and fill a template with it.",
   usage: USAGE,
-  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS },
+  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS, lists: FAMILY_LISTS },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("report", context.args, SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);
