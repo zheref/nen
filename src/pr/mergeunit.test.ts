@@ -12,6 +12,7 @@ import type { PrReadyDeps } from "../verbs/pr_ready.js";
 import type { PrRef, PrStateSource } from "../github/pr_state.js";
 import type { PullRequestSnapshot } from "../github/graphql.js";
 import { EXIT_GH_NOT_RUNNABLE, EXIT_GH_REFUSED, MergeUnitUsageError, mergeUnit } from "./mergeunit.js";
+import type { ReleaseUnitEntry } from "../schema/workflow.js";
 
 const HEAD = "cafebabe";
 const BASE = "deadbeef";
@@ -109,7 +110,7 @@ function prOnceCall(overrides: Partial<{ headRefOid: string; baseRefOid: string;
 }
 
 function workflowContentsCall(
-  unitPaths: readonly (string | { readonly path: string; readonly keys: readonly string[] })[] | null = ["src/unit/**"],
+  unitPaths: readonly ReleaseUnitEntry[] | null = ["src/unit/**"],
   base: string = BASE,
 ): ScriptedCall {
   const body = unitPaths === null ? {} : { release: { unitPaths } };
@@ -164,6 +165,48 @@ async function run(
 }
 
 describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
+  it.each([
+    { before: "context\npin 1\n", after: "context\npin 2\n", ok: true },
+    { before: "context\npin 1\n", after: "pin 2\n", ok: false },
+    { before: "context\npin 1\n", after: "context\npin 2\npayload();\n", ok: false },
+    { before: "context\npin 1\n", after: null, ok: false },
+    { before: "pin " + "1".repeat(65_536) + "\n", after: "pin 2\n", ok: false },
+  ])("enforces the BASE's line bound before any merge (ok=$ok)", async ({ before, after, ok }) => {
+    const root = tmpRoot();
+    // A locally widened policy cannot waive the base's content bound.
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ release: { unitPaths: ["README.md"] } }));
+    const script: readonly ScriptedCall[] = [
+      ORIGIN_CALL, prOnceCall(),
+      ...changedFilesCall([{ filename: "README.md" }]),
+      workflowContentsCall([{ path: "README.md", lines: ["pin [0-9]+"] }]),
+      { match: "gh api repos/zheref/example/compare/deadbeef...cafebabe", result: { code: 0, stdout: '{"merge_base_commit":{"sha":"merge-base"}}' } },
+      { match: "gh api repos/zheref/example/contents/README.md?ref=merge-base", result: { code: 0, stdout: JSON.stringify({ content: Buffer.from(before).toString("base64") }) } },
+      { match: "gh api repos/zheref/example/contents/README.md?ref=cafebabe", result: { code: after === null ? 1 : 0, stdout: after === null ? "" : JSON.stringify({ content: Buffer.from(after).toString("base64") }), stderr: after === null ? "not found" : "" } },
+      treeCall([{ path: "README.md", mode: "100644" }]), baseTreeCall([{ path: "README.md", mode: "100644" }]), VIEWER_CALL,
+    ];
+    const seams = new ScriptedSeams(script);
+    const outcome = await run(root, script, { run: !ok, seams });
+    expect(outcome.report.unitOk).toBe(ok);
+    expect(outcome.report.ran).toBe(false);
+    expect(seams.calls.some((call): boolean => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
+    if (!ok) expect(outcome.lines.join("\n")).toContain("outside (line-scoped)");
+    if (before.length > 65_536) expect(outcome.lines.join("\n")).toContain("line matching exceeded its length bound");
+  });
+
+  it("refuses a same-named directory under an exact file string without running gh merge", async () => {
+    const root = tmpRoot();
+    const script = [
+      ORIGIN_CALL, prOnceCall(), ...changedFilesCall([{ filename: "README.md/payload.ts" }]),
+      workflowContentsCall(["=README.md"]),
+      treeCall([{ path: "README.md/payload.ts", mode: "100644" }]), baseTreeCall([]), VIEWER_CALL,
+    ];
+    const seams = new ScriptedSeams(script);
+    const outcome = await run(root, script, { run: true, seams });
+    expect(outcome.report.unitOk).toBe(false);
+    expect(outcome.lines.join("\n")).toContain('outside: "README.md/payload.ts"');
+    expect(seams.calls.some((call): boolean => call.command === "gh" && call.args[1] === "merge")).toBe(false);
+  });
+
   it("refuses a ref it cannot parse", async () => {
     const root = tmpRoot();
     await expect(

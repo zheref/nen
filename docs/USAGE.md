@@ -538,7 +538,7 @@ they assumed instead); they come back empty or `null`.
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
-| `release.unitPaths` | the release-unit entry list a release unit is bounded to. Each entry is either a STRING (a repo-relative prefix or narrow glob, `src/report/patterns.ts`'s grammar) or an OBJECT `{"path": "<exact file>", "keys": ["<json pointer or dotted key>", ...]}` bounding one exact JSON file to a set of its own leaf keys rather than its whole content (item 4) — `path` matched by exact equality, never a pattern; `keys` a non-empty list of non-empty JSON-pointer or dotted leaf paths. `null` (the key absent) means UNDECLARED, never "everything" or "nothing" — [`release unit-check`](#nen-release-unit-check) and [`nen pr merge`](#nen-pr-merge)'s own unit gate both refuse (naming the key) rather than guess a boundary the repository never drew. A STRING pattern the shared matcher proves claims EVERY path (`**`, `**/*`, and any other pattern that matches a repo-relative path no matter its shape) is refused by pointer too: a release unit that bounds nothing is never what declaring this key is meant to say. `*` (one path segment) is NOT refused -- it claims a single top-level entry, never every path -- and a leading `/` (e.g. `/**`) is refused separately as an invalid absolute pattern, since every path this key is compared against is already repo-relative. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (read from the pull request's BASE commit, never this checkout's own file) |
+| `release.unitPaths` | the release-unit bounds: a string `"=README.md"` for one exact path, an existing segment prefix or narrow glob, an object `{"path":"package.json","keys":["version"]}` for JSON leaves, or `{"path":"src/version.ts","lines":["<whole-line regex>"]}` for text. Both removed and added lines must match. Object paths are exact, and `keys` / `lines` are mutually exclusive non-empty lists. See [release unit-check](#nen-release-unit-check) for validation, full-content reads and fail-closed limits. `null` or absent means undeclared and both unit gates refuse; empty lists and universal string globs (`**`, `**/*`) are refused by pointer. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (policy read from the PR's BASE commit); [`schema check`](#nen-schema-check) reports `nen/workflow.json#release` |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
 | `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `mode` (optional, #333: `service` or `interactive` -- how the runners run on their host; absent is `service` for `Windows` and `Linux` and `interactive` for `macOS`, whose runner is always a LaunchAgent in the user's session. `macOS` + `service` and `Linux` + `interactive` are refused, naming why. An interactive `Windows` pool runs inside a signed-in desktop session, for jobs that drive a real UI, which a service in session 0 cannot), `labels` exactly `["self-hosted", os, arch]`, or `["self-hosted", "Windows", arch, "desktop"]` for an interactive Windows pool, optionally followed by the pool's own label written out (any other extra label is refused: nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) admits only the canonical sets plus the pool's own label, and a bare `self-hosted` would match every runner; `desktop` on a service pool is refused naming the missing `"mode": "interactive"`; the refusal names each fault -- a bare `self-hosted`, a missing os or arch, a second extra label, another pool's `pool-*` label, the pool's own label in the wrong case). **From #340 every pool also carries one label of its own, `pool-<id>`, derived from its `id` and appended LAST** -- `["self-hosted", "Windows", "X64", "pool-windows-x64"]`, `["self-hosted", "Windows", "X64", "desktop", "pool-kwi-desktop"]`. It is never declared (a declaration written before it parses unchanged), and it is the set every `runner` verb uses: what the host script registers with, a rendered workflow's `runs-on`, what `runner verify --pool` and `runner enable` require. GitHub gives `self-hosted`, the OS and the arch to every runner of that OS and arch, so without it any later registration would join the pool by accident. The label prevents that accidental join; it is not an authorization boundary -- anyone who can register a runner on the repository can register it with the label. Pool ids are unique, so two pools never share a pool label and need no refusal of their own, `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools of one os and arch are two pools from #340, told apart by their own labels (a repeated `id` is still refused). **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
 
@@ -2993,7 +2993,9 @@ standalone verb would print:
    leaf outside its declared `keys` sets `unitOk: false` with a
    `release unit-check: outside (content-scoped): "<path>" changed at
    "<key>"` line quoted verbatim, exactly as the standalone verb would print
-   it.
+   it. A `{path, lines}` entry instead checks both removed and added lines
+   against its full-line regexes. A violation sets `unitOk: false`, and the
+   `outside (line-scoped)` verdict is quoted from the same engine.
 5. **whose pr** — refused when the pull request is cross-repository (a
    fork's branch), or its author is not the viewer authenticated to `gh`.
    No branch-name rule.
@@ -6969,9 +6971,78 @@ by reading rather than by a nen command": reads the PR's changed files (`gh
 api --paginate repos/{slug}/pulls/{n}/files`, never `gh pr view --json
 files` — that field is itself silently paginated by `gh` with no
 `--paginate` ever offered for it) and compares them to `--repo`'s
-`nen/workflow.json` key `release.unitPaths` (a repo-relative prefix or
-narrow glob list, the same grammar `nen review scopes`/`report data
+`nen/workflow.json` key `release.unitPaths` (exact paths, prefixes,
+narrow globs, or content bounds; path strings share the grammar `nen review scopes`/`report data
 --tiers` read — see `src/report/patterns.ts`).
+
+**Exact paths:** prefix a string with `=` to claim only that file.
+`"=README.md"` never claims `README.md/payload.ts`. A bare `"README.md"`
+retains the existing segment-prefix meaning, including children; use `=`
+when the unit owns one whole file, and `dir/**` for a directory. Exact
+strings and object `path` values are repo-relative and refuse globs, empty,
+`.` or `..` segments, backslashes and control characters.
+
+**Line-bound text files** ([#348](https://github.com/zheref/nen/issues/348)):
+`{"path": "src/version.ts", "lines": ["^export const VERSION = \"[0-9.]+\";$"]}`
+claims that exact file and requires **every removed and every added line**
+to match at least one declared expression. Matches are case-sensitive and
+consume the whole line, even when the expression omits anchors. No regex
+flags are implicit. Unchanged context need not match. `keys` and `lines`
+are mutually exclusive, each list must be non-empty, and unsupported or
+malformed expressions fail schema loading by pointer.
+Use `^$` to allow an empty line. A broad string overlapping a content-bound
+entry never waives that entry's content check.
+
+The release-only expression language supports literals, escaped regex
+punctuation, `\t` / `\n` / `\r` / `\f` / `\v`, `\xHH`, `\uHHHH`, ASCII
+`\d` / `\D` / `\w` / `\W`, dot, positive/negated character classes with
+literal ranges, concatenation, `|`, ordinary/noncapturing groups, and greedy
+`?` / `*` / `+` / `{m}` / `{m,n}` / `{m,}` repetition. Dot excludes CR, LF,
+U+2028 and U+2029. Anchors may appear only at the whole pattern's start/end;
+they are optional because full consumption is mandatory. Captures are not
+returned. Backreferences, lookaround, named groups, inline flags, lazy
+quantifiers, empty classes, internal anchors, property/word-boundary/identity
+escapes and other syntax outside this subset are refused, never reinterpreted.
+Literal regex punctuation must be escaped. Existing hazardous-shape refusals
+remain; the runtime safety bound comes from the state matcher below.
+
+Each expression compiles to a bounded state machine: at most 4,096 UTF-16
+source units, 64 nested groups, 1,024 compiled states and 256 class interval
+terms before merging. A file entry permits at most 64 expressions and 16,384
+compiled states in total; oversized repetitions are refused before expansion.
+Matching uses iterative state sets, never native regex backtracking on PR
+text. Each state is visited once per input boundary, including epsilon cycles:
+for `L` UTF-16 units, `M` states and `R` class intervals, the matching work is
+`O((L+1) M (1+log R))`, with `O(M)` auxiliary memory. Changed lines are limited
+to 65,536 UTF-16 units; across all expressions, at most 1,000,000 charged
+state/edge/predicate/input steps per changed line and 8,000,000 per bounded
+file are allowed. Exhaustion is a distinct content-check refusal, not a
+nonmatching line or a pass. These are computational bounds for this matcher,
+not wall-clock promises or a bound on fetching/decoding the complete blobs.
+
+Both verbs compare complete UTF-8 file content at the PR's **merge base**
+and head with a bounded Myers line diff; the files endpoint's `patch` is
+never trusted as complete. Removed lines carry base line numbers, added
+lines head line numbers. LF separates lines; CR, BOM, whitespace and final
+newline changes are preserved rather than normalized. A missing file,
+invalid UTF-8, NUL, a corrupt/unavailable contents response, or a diff
+exceeding 100,000 lines per file, 2,048 edits or 1,000,000 comparison steps
+fails closed. File additions, deletions and renames without readable content
+at the same exact path at both commits therefore fail this bound.
+
+Nen's own unit bounds the changed lines in `src/version.ts` to version/floor
+literal forms, and those in `README.md` / `docs/USAGE.md` to declared
+install/example forms with numeric pins. Each removed and added line is
+checked independently: the bound does **not** preserve a line's presence,
+position, pairing or consistent versions. Allowed lines may be deleted,
+reordered or replaced by another allowed form; optional fixed command
+fragments may change too. Literal destinations within each form are fixed.
+A changed line outside the allowed set fails the bound; unchanged surrounding
+text is not examined by it.
+`nen schema check` reports its declaration as `nen/workflow.json#release`,
+counting exact, prefix/glob, key-bound and line-bound entries. As with the
+other policy pointer rows, an unreadable policy is diagnosed on the main
+`nen/workflow.json` row; the release row says it was not read.
 
 **A RENAME's previous path is checked too.** A file the unit now owns that
 was renamed IN from outside it is still reported `outside` — its new name
@@ -7033,12 +7104,12 @@ to read base/head content at all (no `keyScoped` context) is ALSO reported
 as a violation ("content not read"), never silently skipped. Both `nen
 release unit-check` and [`nen pr merge --release-unit`](#nen-pr-merge) run
 this same check; `unit-check` fetches the PR's `baseRefOid`/`headRefOid` and
-resolves the merge base itself (only when a keyed entry is declared at
+resolves the merge base itself (only when a keyed or line-bound entry is declared at
 all), and `pr merge` reuses the one `gh pr view` fetch it already made,
 resolving the merge base from the same base/head it read there.
 
 ```json
-{"release": {"unitPaths": ["src/my-unit/**", {"path": "nen/contract.json", "keys": ["version"]}]}}
+{"release": {"unitPaths": ["=CHANGELOG.md", "src/my-unit/**", {"path": "package.json", "keys": ["version"]}, {"path": "src/version.ts", "lines": ["^export const VERSION = \"[0-9.]+\";$"]}]}}
 ```
 
 **Usage**
@@ -7056,20 +7127,23 @@ nen release unit-check --pr <n|owner/name#n|CODE#n> --repo <path> [--json]
 | `--json` | no | machine-readable result | — |
 
 **Output and exit codes** — Exit 0: every changed path is inside the unit,
-and every content-scoped entry stayed inside its declared keys. Exit 1:
+and every content-scoped entry stayed inside its declared keys or lines. Exit 1:
 lists every path outside it (`outside: <path>` lines) and every
 content-scoped violation (`outside (content-scoped): <path> changed at
-<key>` lines). Exit 2: usage, OR `--repo` declares no `release.unitPaths` —
+<key>` lines), plus `outside (line-scoped): <path> removed|added line <n>:
+<text>` lines or the reason complete text could not be checked. Exit 2: usage, OR `--repo` declares no `release.unitPaths` —
 the refusal names the exact key to add
 (`{"release": {"unitPaths": ["src/my-unit/**"]}}`), because "every path is
 outside the unit" and "every path is inside it" are both a guess this verb
 refuses to make about a boundary the repository never drew. `--json`:
 `{ contract: "nen.release.unit-check/v0.1", target, pr, unitPaths,
-keyedPaths, changedFiles, outsideUnit, keyScopedViolations, ok }` — N15:
+keyedPaths, changedFiles, outsideUnit, keyScopedViolations, ok,
+linedPaths, lineScopedViolations }` — N15:
 `unitPaths` stays the STRING (whole-path pattern) entries only, exactly the
 shape it had before content-scoped entries existed; the OBJECT
-(content-scoped) entries are carried in their own `keyedPaths` field rather
-than widening `unitPaths`'s own type.
+(key-bound) entries keep their own `keyedPaths` field. The additive
+`linedPaths` field carries `{path, lines}` entries; `lineScopedViolations`
+contains `{path, ok, offendingLines: [{side, line, text}], reason}` outcomes.
 
 **Example**
 
@@ -12789,7 +12863,7 @@ nen report data … [--tz <zone>] [--open-stop]
 | `--repo <path>` | **yes** | the working tree this report describes | unbracketed in usage; omitted is refused at exit 2 (#28) |
 | `--base <ref>` | **yes** | what this branch is measured against | the trunk, or the commit the effort was cut from; a ref that does not resolve is refused at exit 2 naming it, with nothing read |
 | `--lane <name>` | no | which declared lane's coverage report and build proof to read | defaults to the declaration's own `defaultLane`; with neither, both fields are `null`. A value that would escape the tree through `.nen/proof/<lane>.json` is refused at exit 2 |
-| `--tiers <file>` | no | a JSON object mapping a tier name to its paths | `{ "<tier>": ["<path prefix or glob>", …] }`. The file's **key order is the precedence** — the first tier whose patterns match a path wins. A pattern with no `*`/`?` is a path **prefix** matched on segment boundaries (`src/report` claims `src/report/data.ts`, never `src/reporting.ts`); one with them is a narrow glob (`*` stops at `/`, `**` crosses it, `?` is one character). Without the flag every file's `tier` is `null` |
+| `--tiers <file>` | no | a JSON object mapping a tier name to its paths | `{ "<tier>": ["<path prefix or glob>", …] }`. The file's **key order is the precedence** — the first tier whose patterns match a path wins. A pattern starting `=` names an exact path (`=README.md` never claims `README.md/child`); otherwise a pattern with no `*`/`?` is a path **prefix** matched on segment boundaries (`src/report` claims `src/report/data.ts`, never `src/reporting.ts`); one with them is a narrow glob (`*` stops at `/`, `**` crosses it, `?` is one character). Without the flag every file's `tier` is `null` |
 | `--target <owner/name>` | for the live register | the GitHub side of the register | `--repo` names a checkout on disk and never addresses the API. Required as soon as any of the three below is given |
 | `--prs <n,...>` | no | pull requests to read, by number | a comma-separated list of **positive** whole numbers; a non-numeric entry, or a `0`, is refused at exit 2 naming it, before any call — GitHub numbers issues and pull requests from 1 |
 | `--issues <n,...>` | no | issues to read, by number | same grammar, same refusal |
@@ -13073,7 +13147,7 @@ accident: one file can be both an architecture question and a security one. It
 is the opposite of [`report data --tiers`](#nen-report-data), which is
 first-match-wins, and the difference is the question each answers — a file has
 one tier and any number of readers. The path grammar is the same in both: a
-pattern with no `*`/`?` is a prefix matched on segment boundaries, one with
+pattern starting `=` names an exact path; otherwise one with no `*`/`?` is a prefix matched on segment boundaries, one with
 them is a narrow glob (`*` stops at `/`, `**` crosses it, `?` is one
 character).
 

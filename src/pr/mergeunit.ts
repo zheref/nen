@@ -45,6 +45,7 @@ import {
   assembleUnitCheck,
   fetchChangedFiles,
   fetchJsonAtRef,
+  fetchTextAtRef,
   fetchMergeBaseSha,
   MergeBaseError,
   renderUnitCheck,
@@ -54,6 +55,7 @@ import {
   UnitCheckTruncatedError,
   type ChangedFile,
   type JValue,
+  type KeyScopedContext,
   type ResolvedPrRef,
 } from "../release/unitcheck.js";
 import { parseWorkflow, type ReleaseUnitEntry } from "../schema/workflow.js";
@@ -504,12 +506,12 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
   // the moment GitHub last recomputed it, which drifts forward as that
   // branch moves, so an unrelated commit landing on it after this branch
   // forked would otherwise show up as a "change" this branch never made.
-  // Fetched only when a keyed entry exists at all, and only a ToolError
+  // Fetched only when a content entry exists at all, and only a ToolError
   // aborts THIS gate (F8(a) -- every other gate in the composition still
   // reports).
-  const hasKeyedEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
-  let keyScoped: { readonly baseRef: string; readonly headRef: string; readonly readJson: (filePath: string, ref: string) => JValue | null } | undefined;
-  if (hasKeyedEntry) {
+  const hasContentEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
+  let keyScoped: KeyScopedContext | undefined;
+  if (hasContentEntry) {
     let mergeBaseSha: string;
     try {
       mergeBaseSha = fetchMergeBaseSha(options.seams, options.target, options.prOnce.baseRefOid, options.prOnce.headRefOid);
@@ -523,6 +525,7 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
       baseRef: mergeBaseSha,
       headRef: options.prOnce.headRefOid,
       readJson: (filePath, ref): JValue | null => fetchJsonAtRef(options.seams, options.target, filePath, ref),
+      readText: (filePath, ref): string | null => fetchTextAtRef(options.seams, options.target, filePath, ref),
     };
   }
   const report = assembleUnitCheck(options.target, options.prNumber, unitPaths, changedFiles, keyScoped);

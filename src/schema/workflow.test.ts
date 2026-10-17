@@ -670,6 +670,15 @@ describe("review.scopes", () => {
     );
   });
 
+  it.each(["=", "= ", "=/README.md", "=../README.md", "=./README.md", "=src//file", "=README.md/", "=src/*.ts", "=src/?.ts", "=src\\file", "=file\nname"])("refuses invalid exact review path %j by pointer", (pattern) => {
+    expect(() => parseWorkflow("<doc>", { review: { scopes: { code: { persona: "n", tier: "deep", paths: ["src/**", pattern] } } } })).toThrow(/review\.scopes\.code\.paths\[1\].*exact repo-relative path/);
+  });
+
+  it("retains bare prefix/glob paths and accepts an exact filename beginning '='", () => {
+    const paths = ["src/", "src/**/*.ts", "=README.md", "==literal"];
+    expect(parseWorkflow("<doc>", { review: { scopes: { code: { persona: "n", tier: "deep", paths } } } }).review.scopes["code"]?.paths).toEqual(paths);
+  });
+
   it("validates a persona and a tier as NAMES and never against a list", () => {
     // A tier nen has never heard of is fine: `models` is an open map at both
     // levels, and an enumeration here would be nen inventing a roster.
@@ -731,6 +740,53 @@ describe("release.unitPaths -- a bounded unit, never everything (FEI-3)", () => 
 });
 
 describe("release.unitPaths -- the content-scoped (object) entry form", () => {
+  it("accepts exact strings and a text line bound alongside the existing JSON bound", () => {
+    const entries = ["=CHANGELOG.md", { path: "src/version.ts", lines: ['^export const VERSION = "[0-9.]+";$', "^$"] }, { path: "package.json", keys: ["version"] }];
+    expect(parseWorkflow("<doc>", { release: { unitPaths: entries } }).release.unitPaths).toEqual(entries);
+  });
+
+  it.each(["=", "=/README.md", "=../README.md", "=README.md/", "=./README.md", "=src//file", "=src/*.ts", "=src/?.ts", "=src\\file", "=README.md\nfile"])("refuses invalid exact entry %j by pointer", (entry) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [entry] } })).toThrow(/release\.unitPaths\[0\].*exact repo-relative path/);
+  });
+
+  it.each([
+    { path: "file.txt", lines: [], pointer: "lines" },
+    { path: "file.txt", lines: [""], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["["], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(a+)+$"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(a)\\1"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(?=a)a"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["a".repeat(4097)], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(".repeat(65) + "a" + ")".repeat(65)], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["a{1024}"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["[" + "a".repeat(257) + "]"], pointer: "lines[0]" },
+    { path: "file.txt", lines: Array<string>(65).fill("a"), pointer: "lines[64]" },
+    { path: "file.txt", lines: Array<string>(64).fill("a".repeat(256)), pointer: "lines[63]" },
+    { path: "file.txt", lines: [1], pointer: "lines[0]" },
+    { path: "file.txt", lines: null, pointer: "lines" },
+  ])("refuses malformed or unsafe line bounds: $lines", ({ pointer, ...entry }) => {
+    try {
+      parseWorkflow("<doc>", { release: { unitPaths: [entry] } });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchemaError);
+      expect((error as Error).message).toContain("release.unitPaths[0]." + pointer);
+    }
+  });
+
+  it("accepts ambiguous adjacent repetition only through the bounded release matcher", () => {
+    const lines = ["a+".repeat(10)];
+    expect(parseWorkflow("<doc>", { release: { unitPaths: [{ path: "file.txt", lines }] } }).release.unitPaths).toEqual([{ path: "file.txt", lines }]);
+  });
+
+  it("refuses a mixed keys/lines object instead of choosing one bound silently", () => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: "file.txt", keys: ["version"], lines: ["ok"] }] } })).toThrow(/exactly one of 'keys'.*'lines'/);
+  });
+
+  it.each(["dir/../file", "dir/./file", "dir//file", "dir/*", "dir\\file", "file\nname"])("refuses a non-exact content path %j", (path) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path, lines: ["ok"] }] } })).toThrow(/release\.unitPaths\[0\]\.path/);
+  });
+
   it("accepts a {path, keys} entry alongside a plain string pattern", () => {
     const unitPaths = parseWorkflow("<doc>", {
       release: { unitPaths: ["src/my-unit/**", { path: "nen/contract.json", keys: ["version"] }] },

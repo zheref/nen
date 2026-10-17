@@ -443,6 +443,15 @@ describe("--tiers", () => {
     expect(matchesPattern("src/a.ts", "")).toBe(false);
   });
 
+  it("claims only the exact path with '=', never a same-named directory or a sibling", () => {
+    expect(matchesPattern("README.md", "=README.md")).toBe(true);
+    expect(matchesPattern("README.md/payload.ts", "=README.md")).toBe(false);
+    expect(matchesPattern("README.md.bak", "=README.md")).toBe(false);
+    expect(matchesPattern("src/a.ts", "=src/*.ts")).toBe(false);
+    expect(matchesPattern("src/*.ts", "=src/*.ts")).toBe(true);
+    expect(matchesPattern("README.md/payload.ts", "README.md")).toBe(true);
+  });
+
   it("escapes a regex metacharacter in a glob instead of honouring it", () => {
     expect(matchesPattern("a+b/x.ts", "a+b/*.ts")).toBe(true);
     expect(matchesPattern("aab/x.ts", "a+b/*.ts")).toBe(false);
@@ -452,6 +461,19 @@ describe("--tiers", () => {
     expect(() => table([1, 2])).toThrow(/is not a tier table/);
     expect(() => table({ tests: "src" })).toThrow(/is not a list of path patterns/);
     expect(() => table({ tests: [1] })).toThrow(/is not a list of path patterns/);
+  });
+
+  it.each(["=", "= ", "=/README.md", "=../README.md", "=./README.md", "=src//file", "=README.md/", "=src/*.ts", "=src/?.ts", "=src\\file", "=file\nname"])("refuses invalid exact tier path %j at its read-seam pointer", (pattern) => {
+    expect(() => table({ source: ["src/**", pattern] })).toThrow(/tiers\["source"\]\[1\].*exact repo-relative path/);
+  });
+
+  it("reads valid exact tier entries without widening them or changing bare paths", () => {
+    const tiers = table({ exact: ["=README.md", "==literal"], bare: ["src/", "docs/**"] });
+    expect(tierOf("README.md", tiers)).toBe("exact");
+    expect(tierOf("README.md/child", tiers)).toBeNull();
+    expect(tierOf("=literal", tiers)).toBe("exact");
+    expect(tierOf("src/nested/file.ts", tiers)).toBe("bare");
+    expect(tierOf("docs/nested/file.md", tiers)).toBe("bare");
   });
 
   it("labels the changed files end to end", async () => {
