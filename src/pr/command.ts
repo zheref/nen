@@ -138,7 +138,8 @@ function requirePr(context: CommandContext): number {
   return number;
 }
 
-const USAGE = `nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready options below]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr fetch --target <owner/name> --pr <n>
@@ -173,6 +174,13 @@ ready:
                               LONGEST trailing digit run as the number, so a
                               code that itself ends in a digit needs the '#' --
                               <CODE>#<N> is the unambiguous form.
+  --target <owner/name>       Alias for --gh-repo; may pair with a positional
+                              ref. Must agree with --gh-repo and a coded ref.
+  --pr <n>                   Alias for the positional number; may pair with
+                              --gh-repo or a coded ref. Must agree with an
+                              existing positional number. A missing object
+                              or repository, malformed alias, or conflicting
+                              declarations is exit 2 before any GitHub read.
   --gh-repo <owner/name>      The repository, when the ref is a bare number.
   --explain                   The conjunct table, in evaluation order, plus
                               what the gate does NOT decide. When nen/gates.json

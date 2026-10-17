@@ -1283,6 +1283,34 @@ export const HEAD_MISMATCH_CONTRACT = "nen.pr.ready.head-mismatch/v0.1";
 // a full SHA-1. Anything else is a typo, refused at exit 2 before GitHub is read.
 const SHA_PREFIX = /^[0-9a-f]{7,40}$/i;
 
+/** Normalize only the public ready invocation; readReady's in-process callers
+ * (watch, merge, reports) retain their existing targeting contracts. */
+function readyInvocation(input: PrReadyInput): { typedRef: string; input: PrReadyInput } {
+  const typedRef = input.positionals[2] ?? input.values["pr"];
+  if (typedRef === undefined) throw new RefError("'pr ready' requires a pull-request reference. Try 'pr ready <CODE>#<N>', 'pr ready <N> --gh-repo owner/name', or 'pr ready --target owner/name --pr <N>'.");
+  const target = input.values["target"];
+  const number = input.values["pr"];
+  // The historical --gh-repo override of a coded ref is deliberate. Preserve
+  // it when no new target alias was declared; new aliases must agree.
+  if (target === undefined && number === undefined) return { typedRef, input };
+  if (input.positionals.length > 3) throw new RefError("'pr ready' accepts only one positional reference; --pr must agree with it.");
+  if (number !== undefined && (!/^[0-9]+$/.test(number) || !Number.isSafeInteger(Number(number)) || Number(number) <= 0)) throw new RefError("--pr takes a positive whole pull-request number.");
+  if (target !== undefined && splitSlug(target) === null) throw new RefError(`--target takes an 'owner/name' slug, got '${target}'.`);
+  const legacyRepo = input.values["gh-repo"];
+  if (target !== undefined && legacyRepo !== undefined && target.toLowerCase() !== legacyRepo.toLowerCase()) throw new RefError("--target and --gh-repo name conflicting repositories; nothing was read from GitHub.");
+  const repository = legacyRepo ?? target;
+  const registry = (): ProductCodeRegistry => loadRepoRegistry(assertRepoRoot({ repoFlag: input.repoFlag }));
+  if (repository === undefined && BARE_REF.test(typedRef)) throw new RefError("A bare positional number or --pr needs --target owner/name or --gh-repo owner/name; no repository is inferred from the checkout.");
+  const resolved = resolveRef(typedRef, repository, registry);
+  if (!Number.isSafeInteger(resolved.number) || resolved.number <= 0) throw new RefError("'pr ready' aliases require a positive whole pull-request number.");
+  if (number !== undefined && resolved.number !== Number(number)) throw new RefError("--pr and the positional reference name conflicting pull-request numbers; nothing was read from GitHub.");
+  if (target !== undefined && !BARE_REF.test(typedRef)) {
+    const coded = resolveRef(typedRef, undefined, registry);
+    if (`${coded.owner}/${coded.repo}`.toLowerCase() !== target.toLowerCase()) throw new RefError("--target and the positional code name conflicting repositories; nothing was read from GitHub.");
+  }
+  return { typedRef, input: repository === undefined ? input : { ...input, values: { ...input.values, "gh-repo": repository } } };
+}
+
 /**
  * Exit codes, and why `unevaluated` is not `ready`.
  *
@@ -1304,13 +1332,16 @@ export async function prReady(
   io: Io,
   deps: PrReadyDeps = defaultDeps,
 ): Promise<number> {
-  const [, subcommand, typedRef] = input.positionals;
+  const [, subcommand] = input.positionals;
   if (subcommand !== "ready") {
     io.err(`${PROGRAM}: unknown 'pr' subcommand '${subcommand ?? "(none)"}'. Try 'pr ready <ref>'.`);
     return 2;
   }
-  if (typedRef === undefined) {
-    io.err(`${PROGRAM}: 'pr ready' requires a pull-request reference. Try 'pr ready <CODE>#<N>' or 'pr ready <N> --gh-repo owner/name'.`);
+  let invocation: ReturnType<typeof readyInvocation>;
+  try {
+    invocation = readyInvocation(input);
+  } catch (error) {
+    io.err(`${PROGRAM}: ${error instanceof Error ? error.message : String(error)}`);
     return 2;
   }
 
@@ -1319,7 +1350,7 @@ export async function prReady(
   // The runner-availability diagnosis (zheref/nen#224) costs reads, and only
   // `--explain` and `--json` print it -- so the default output, and every
   // `readReady` caller that does not ask (`nen watch until`), makes none.
-  const read = await readReady(typedRef, input, deps, { diagnoseRunners: json || explain });
+  const read = await readReady(invocation.typedRef, invocation.input, deps, { diagnoseRunners: json || explain });
   switch (read.kind) {
     case "usage":
       io.err(`${PROGRAM}: ${read.message}`);
@@ -1488,7 +1519,7 @@ export async function readReady(
         excludeCheckNames,
         flagWarnings,
         "no usable token, so GitHub could not be read",
-        opened.message,
+        `${opened.message}. Set GH_TOKEN explicitly, or use --token-env <VAR> to name the environment variable holding the token; never use an ambient credential.`,
       ),
     );
   }
