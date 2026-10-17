@@ -360,7 +360,8 @@ request-reviews:
   arrives. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
   named, or a route's gh call failed or answered something unreadable,
   or the round ceiling could not be checked; 2 usage (a missing --pr, an
-  unresolved --add-reviewers login) or a bot past round_policy.maxRounds; 9 every
+  unresolved --add-reviewers or --add-bots login) or a bot past
+  round_policy.maxRounds; 9 every
   call was ACCEPTED but at least one requested bot is not pending review
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
   }], login null for a bot this pull request has never seen). No review

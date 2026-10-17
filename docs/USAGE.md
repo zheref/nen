@@ -2448,8 +2448,8 @@ and `rounds` when a bot is named (a `--dry-run` carries `ok`, `dryRun`,
 `routing`, `message`, and the same two). Exit 0 on success (or a
 `--dry-run`), exit 1 when no reviewers were named, a route's `gh` call
 failed or answered something unreadable, or the round ceiling could not be
-checked, exit 2 on a missing `--pr`, an unresolved `--add-reviewers` login or
-a bot past `round_policy.maxRounds`, and **exit `9` when every call was
+checked, exit 2 on a missing `--pr`, an unresolved `--add-reviewers` or
+`--add-bots` login, or a bot past `round_policy.maxRounds`, and **exit `9` when every call was
 accepted but GitHub did not record at least one requested bot**.
 
 **Exit `9` — a bot request GitHub accepted and never recorded
@@ -15375,10 +15375,13 @@ nen pr fetch --target zheref/nen --pr 112 --json
 # ... then preview where each name would go before requesting anything ...
 nen pr request-reviews --target zheref/nen --pr 112 --add-reviewers sasuke --dry-run
 
-# ... then request the rest. A collaborator's LOGIN resolves on its own; a
-# Bot this pull request has never seen (no prior review, no pending
-# request) needs its node id named directly with --add-bots.
+# ... then request the rest. User and Bot logins resolve through GitHub,
+# including a Bot this pull request has never seen. Preview a bot alias first;
+# an explicit Bot node id remains an alternative. An unresolved bot login
+# refuses at exit 2 before any review request is sent.
 nen pr request-reviews --target zheref/nen --pr 112 --add-reviewers sasuke
+nen pr request-reviews --target zheref/nen --pr 112 --add-bots copilot --dry-run
+nen pr request-reviews --target zheref/nen --pr 112 --add-bots copilot
 nen pr request-reviews --target zheref/nen --pr 112 --add-bots BOT_kgDOCnlnWA
 ```
 
