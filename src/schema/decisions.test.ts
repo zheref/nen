@@ -128,3 +128,40 @@ describe("mergeDecisions -- a consumer narrows, never widens", () => {
     expect(() => mergeDecisions(canon, override)).toThrow(/cannot be widened/);
   });
 });
+
+
+describe("mergeDecisions -- canon owns a human gate's identity (#216)", () => {
+  const matrix = (path: string, rows: unknown[]): ReturnType<typeof parseDecisions> =>
+    parseDecisions(path, { contract: DECISIONS_CONTRACT, rows });
+
+  it.each(["G1", "G1-M", "G2", "G3", "G4", "G5"])("protects %s against every different declared gate, without ranking gates", (gate) => {
+    const canon = matrix("canon", [{ id: "approval", class: "human-gate", gate }]);
+    for (const replacement of ["G1", "G1-M", "G2", "G3", "G4", "G5"]) {
+      if (replacement === gate) continue;
+      const override = matrix("consumer", [{ id: "approval", class: "human-gate", gate: replacement }]);
+      expect(() => mergeDecisions(canon, override)).toThrow(/consumer.*rows\[approval\]\.gate.*gate identity/);
+      expect(canon.row("approval")?.gate).toBe(gate);
+    }
+  });
+
+  it("permits same-gate metadata overrides and leaves other canon rows intact", () => {
+    const canon = matrix("canon", [
+      { id: "approval", class: "human-gate", gate: "G4", surfaces: { codex: { label: "old" } } },
+      { id: "unchanged", class: "autonomous", default: "true" },
+    ]);
+    const override = matrix("consumer", [{
+      id: "approval", class: "human-gate", gate: "G4", proposeIssue: true,
+      preferred: [{ key: "A", label: "continue", command: "nen version", recommended: true }],
+      surfaces: { codex: { label: "new" } },
+    }]);
+    const merged = mergeDecisions(canon, override);
+    expect(merged.row("approval")).toEqual(override.row("approval"));
+    expect(merged.row("unchanged")).toEqual(canon.row("unchanged"));
+  });
+
+  it("preserves nonhuman overrides, including making an ask row a human gate", () => {
+    const canon = matrix("canon", [{ id: "choice", class: "autonomous", default: "true" }]);
+    const override = matrix("consumer", [{ id: "choice", class: "human-gate", gate: "G5" }]);
+    expect(mergeDecisions(canon, override).row("choice")).toEqual(override.row("choice"));
+  });
+});

@@ -6134,8 +6134,17 @@ unopenable `schemas/` copy (a directory, a broken symlink) is still reported as 
 **Usage**
 
 ```text
-nen schema check --repo <path> [--json]
+nen schema check --repo <path> [--ledger] [--json]
 ```
+
+**`--ledger` also validates the generated stop marker (residual #216).** It appends one
+`.nen/last-stop.json` row, using the same validator as `nen stop show`: precisely the v0.1 or v0.2
+key set, field types and rich options/proposed-issue rules. Missing or already consumed is `ok`
+(`absent (optional; may have been consumed)`); malformed JSON, an invalid document or a read error
+other than absence is a required `FAIL` and exits 1. It reads only; it never rings or consumes a
+marker. Without the flag, the existing rows and order are unchanged and the generated file is not
+read. A Stop hook can consume a successfully written marker before a later inspection; absence
+after that does not establish a failed write.
 
 **Exit codes.** `0` every required file loaded and every required row passed; `1` one did not, or a required row failed; `2` from v0.21.0 when
 `nen/gates.json` carries a key this build does not read (zheref/nen#310). The gates row FAILs naming
@@ -6228,14 +6237,17 @@ the row counts by class, and a malformed row FAILs by pointer. Its shape:
 carry a default; a gate row must carry a gate and no default; an ask row must seed at least one option; at
 most one option is `recommended`; an option's `command` is never empty; an option whose label names the
 report is refused. A consumer's own file may add rows and may make an ask row autonomous; it may never
-reclassify a `human-gate` row -- that is the definition of the gate, not a knob -- and a loader merging two
-files refuses the widening by pointer.
+reclassify a `human-gate` row or change its declared `gate` identity. `mergeDecisions` refuses either
+change by its `.class` or `.gate` pointer, without ranking gate IDs: G4 → G2 and G2 → G4 are both
+changes to canon. Same-gate options, surfaces and proposal metadata may still be overridden. This
+protection is enforced by the merge function; `schema check` validates a single declared matrix.
 
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
+| `--ledger` | no (boolean) | Also validate `.nen/last-stop.json`. | Absent/consumed is optional; malformed or unreadable is a required FAIL. |
 | `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }` — `checks[]` carries one row per file, `nen/workflow.json` last. |
 
 **Output and exit codes** — human rendering: `"repository: <root>"` then one line per file:

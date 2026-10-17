@@ -13,8 +13,8 @@
 // `preferred`; `human-gate` is a gate the canon reserves for a person, and it
 // names which. A consumer's own file may make an `ask-once-per-run` row
 // `autonomous`, and may add rows; it may NEVER reclassify a `human-gate` row --
-// that is not a policy knob, it is the definition of the gate -- so a loader
-// asked to merge two files refuses the widening by pointer.
+// its declared gate identity is immutable too. That is the definition of the
+// gate, so a loader asked to merge two files refuses either change by pointer.
 //
 // NOTHING IS DEFAULTED. An absent file is `present: false` and an empty table,
 // which `nen schema check` reports as `absent (none declared)`: a repository
@@ -24,7 +24,7 @@
 // `mergeDecisions` SHIPS AS A FUNCTION, NOT YET AS A VERB. No verb in this
 // release loads two matrices; a consumer that layers its file over a canon's
 // calls the function (or the verb a later release adds). The refusal it makes
-// -- a human-gate row reclassified -- is therefore enforced where the merge
+// -- a human-gate row reclassified or assigned a different gate ID -- is therefore enforced where the merge
 // happens, and this file says so rather than implying a check nobody runs.
 //
 // NO CONDITION NAME IS BUILT IN. The ids are the repository's vocabulary
@@ -213,7 +213,8 @@ export function loadDecisions(repoRoot: string): DecisionMatrix {
 
 /**
  * A consumer's rows over a canon's. Additive and narrowing only: a row the
- * override reclassifies from `human-gate` is refused by pointer, and an
+ * override reclassifies from `human-gate` or assigns a different gate ID is
+ * refused by pointer, and an
  * override that turns any row INTO a `human-gate` is fine (a consumer may be
  * stricter than its canon, never looser).
  */
@@ -225,7 +226,14 @@ export function mergeDecisions(canon: DecisionMatrix, override: DecisionMatrix):
       throw new SchemaError(
         override.path,
         `rows[${row.id}].class`,
-        `reclassifies '${row.id}' from 'human-gate' to '${row.class}'. A human gate is defined by canon and cannot be widened by a consumer; override its options or its surfaces, never its class`,
+        `reclassifies '${row.id}' from 'human-gate' to '${row.class}'. A human gate is defined by canon and cannot be widened by a consumer; override its options or its surfaces, never its class or gate identity`,
+      );
+    }
+    if (base !== undefined && base.class === "human-gate" && row.gate !== base.gate) {
+      throw new SchemaError(
+        override.path,
+        `rows[${row.id}].gate`,
+        `changes '${row.id}' from '${base.gate}' to '${row.gate}'. A human gate is defined by canon; override its options or its surfaces, never its gate identity`,
       );
     }
     merged.set(row.id, row);

@@ -929,3 +929,90 @@ describe("nen schema check -- an unknown nen/gates.json key is exit 2 (zheref/ne
     }
   });
 });
+
+describe("nen schema check --ledger (#216)", () => {
+  function fixture(): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-schema-ledger-"));
+    mkdirSync(join(root, "nen"));
+    for (const file of ["labels.json", "repos.json"]) copyFileSync(join(BANKAI_REPO, "nen", file), join(root, "nen", file));
+    return root;
+  }
+  function rows(result: { out: string[] }): { file: string; ok: boolean; required: boolean; detail: string }[] {
+    return (JSON.parse(result.out.join("\n")) as { checks: { file: string; ok: boolean; required: boolean; detail: string }[] }).checks;
+  }
+
+  it("round-trips real v0.1 and rich v0.2 writes, then accepts the consumed marker", async () => {
+    const root = fixture();
+    for (const rich of [false, true]) {
+      if (rich) {
+        writeFileSync(join(root, "options.json"), JSON.stringify([
+          { key: "A", label: "continue", command: "nen version", recommended: true },
+          { key: "B", label: "inspect", command: "nen schema check" },
+          { key: "C", label: "clear", command: "nen stop clear" },
+        ]));
+        writeFileSync(join(root, "issue.json"), JSON.stringify({ title: "gap", body: "evidence" }));
+      }
+      const marked = await capture(["stop", "--who", "k", "--gate", "G5", "--mark", "--repo", root,
+        ...(rich ? ["--options", "options.json", "--propose-issue", "issue.json"] : []),
+      ]);
+      expect(marked.code).toBe(0);
+      const checked = await capture(["schema", "check", "--ledger", "--repo", root, "--json"]);
+      expect(checked.code).toBe(0);
+      const row = rows(checked).at(-1);
+      expect(row).toMatchObject({ file: ".nen/last-stop.json", ok: true, required: false, detail: `valid nen.stop.mark/v0.${rich ? "2" : "1"}` });
+      expect(Object.keys(row ?? {})).toEqual(CHECK_KEYS);
+      expect((await capture(["stop", "clear", "--repo", root])).code).toBe(0);
+      const consumed = await capture(["schema", "check", "--ledger", "--repo", root, "--json"]);
+      expect(consumed.code).toBe(0);
+      expect(rows(consumed).at(-1)).toMatchObject({ ok: true, required: false, detail: expect.stringContaining("absent (optional") });
+    }
+  });
+
+  it("does not read the generated marker unless --ledger was requested", async () => {
+    const root = fixture();
+    mkdirSync(join(root, ".nen"));
+    writeFileSync(join(root, ".nen", "last-stop.json"), "broken JSON");
+    const ordinary = await capture(["schema", "check", "--repo", root, "--json"]);
+    expect(ordinary.code).toBe(0);
+    expect(rows(ordinary).some((row): boolean => row.file === ".nen/last-stop.json")).toBe(false);
+    const ledger = await capture(["schema", "check", "--ledger", "--repo", root, "--json"]);
+    expect(ledger.code).toBe(1);
+    expect(rows(ledger).at(-1)).toMatchObject({ ok: false, required: true, detail: "not JSON" });
+  });
+
+  it.each([
+    ["schema", "check", "--ledger"], ["schema", "--ledger", "check"], ["schema", "--json", "check", "--ledger"],
+  ])("accepts schema-check flag ordering without a subprocess: %j", async (...args) => {
+    const root = fixture();
+    const result = await captureWithSeams([...args, "--repo", root], (): never => { throw new Error("schema check must not spawn"); });
+    expect(result.code).toBe(0);
+    expect(result.err).toEqual([]);
+  });
+
+  it("reports a present malformed marker as a required FAIL in text and JSON", async () => {
+    const root = fixture();
+    mkdirSync(join(root, ".nen"));
+    writeFileSync(join(root, ".nen", "last-stop.json"), JSON.stringify({ contract: "nen.stop.mark/v0.2" }));
+    const text = await capture(["schema", "check", "--ledger", "--repo", root]);
+    expect(text.code).toBe(1);
+    expect(text.out.join("\n")).toMatch(/FAIL.*\.nen\/last-stop\.json.*missing/);
+    expect((await capture(["schema", "check", "--ledger", "--repo", root, "--json"])).code).toBe(1);
+  });
+
+  it("fails on a directory or an unreadable parent instead of treating every read error as absence", async () => {
+    for (const directory of [true, false]) {
+      const root = fixture();
+      if (directory) mkdirSync(join(root, ".nen", "last-stop.json"), { recursive: true });
+      else writeFileSync(join(root, ".nen"), "not a directory");
+      const result = await capture(["schema", "check", "--ledger", "--repo", root, "--json"]);
+      expect(result.code).toBe(1);
+      expect(rows(result).at(-1)).toMatchObject({ ok: false, required: true, detail: expect.stringContaining("could not read marker") });
+    }
+  });
+
+  it.each([["bootstrap", "--ledger"], ["schema", "set", "--ledger"], ["--ledger", "schema", "check"]])("does not admit --ledger outside schema check: %j", async (...args) => {
+    const result = await capture(args);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("unknown option '--ledger'");
+  });
+});
