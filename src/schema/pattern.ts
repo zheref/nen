@@ -198,6 +198,10 @@
 // alone rather than swept up: widening this guard's blast radius on a hardening
 // change is how a hardening change acquires a regression.
 
+// Release bounds use the separate bounded compiler below. PR line text never
+// reaches the native RegExp consumers served by this legacy identity guard.
+import { compileReleaseLinePattern, RELEASE_PATTERN_LIMITS, type ReleaseLineMatcher } from "./releasepattern.js";
+
 /** What a refused pattern is refused FOR, with the fragment that did it. */
 export interface PatternHazard {
   /** The offending sub-expression, quoted back so the author can find it. */
@@ -482,16 +486,37 @@ export function safePattern(source: string): RegExp {
 }
 
 /**
- * A case-sensitive, whole-line release bound. Unlike an identity pattern,
- * an empty-line match is useful here; the catastrophic-shape guard still
- * applies before any network content is matched. Invalid patterns throw so
- * the policy loader can refuse them by pointer, never silently match less.
+ * A release-only compiler, NOT a native RegExp wrapper. Legacy identity
+ * consumers above keep their own semantics. The bounded state matcher is the
+ * runtime safety argument; retaining the old shape refusals avoids widening
+ * this new policy language's existing refusal contract.
  */
-export function releaseLinePattern(source: string): RegExp {
-  const compiled = new RegExp(`^(?:${source})$`);
+export function releaseLinePattern(source: string): ReleaseLineMatcher {
+  const compiled = compileReleaseLinePattern(source);
   const hazard = catastrophicShape(source);
   if (hazard !== null) throw new Error(`unsafe line pattern: ${hazard.fragment} (${hazard.why})`);
   return compiled;
+}
+
+export class ReleaseLinePatternsError extends Error {
+  constructor(readonly index: number, message: string) { super(message); }
+}
+
+/** The schema loader and both release checks enforce the same list limits. */
+export function releaseLinePatterns(sources: readonly string[]): readonly ReleaseLineMatcher[] {
+  if (sources.length === 0) throw new ReleaseLinePatternsError(0, "no line patterns declared");
+  if (sources.length > RELEASE_PATTERN_LIMITS.patterns) throw new ReleaseLinePatternsError(RELEASE_PATTERN_LIMITS.patterns, `pattern count limit (${RELEASE_PATTERN_LIMITS.patterns}) exceeded`);
+  let states = 0;
+  return sources.map((source, index): ReleaseLineMatcher => {
+    try {
+      const compiled = releaseLinePattern(source);
+      states += compiled.stateCount;
+      if (states > RELEASE_PATTERN_LIMITS.entryStates) throw new Error(`total compiled state limit (${RELEASE_PATTERN_LIMITS.entryStates}) exceeded`);
+      return compiled;
+    } catch (error) {
+      throw new ReleaseLinePatternsError(index, error instanceof Error ? error.message : String(error));
+    }
+  });
 }
 
 /**

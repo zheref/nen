@@ -41,7 +41,7 @@
     }
   },
   "release": {
-    "$comment": "zheref/nen#311, #348: release unit-check reads the LOCAL policy; pr merge --release-unit reads it from the PR's BASE commit, so these bounds govern merges only after landing on main. =CHANGELOG.md names that exact file. Text entries require BOTH removed and added lines to match these full-line expressions: only version/floor literals and fixed install/example lines with numeric release pins. Bootstrap host, source, script, command structure and surrounding prose cannot change under this unit. package.json is bounded to its version key. Any other path/content change goes to the maintainer's merge.",
+    "$comment": "zheref/nen#311, #348: release unit-check reads the LOCAL policy; pr merge --release-unit reads it from the PR's BASE commit, so these bounds govern merges only after landing on main. =CHANGELOG.md names that exact file. Text entries independently test BOTH removed and added lines against allowed version/floor and install/example forms. They do not preserve presence, position, pairing or consistent versions: allowed lines may be deleted, moved or replaced by another allowed form, including optional fixed command fragments. Literal destinations within each allowed form are fixed; changed lines outside the allowed set fail. package.json is bounded to its version key.",
     "unitPaths": [
       "=CHANGELOG.md",
       {

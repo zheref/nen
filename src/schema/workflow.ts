@@ -60,8 +60,9 @@ import {
 import { requireEnum, withinOneEdit } from "./contract.js";
 import { readSchemaFile, resolveSchemaFile, type SchemaLocation } from "./source.js";
 import { refuseDuplicateKeyWithin } from "./gates.js";
-import { matchesPattern } from "../report/patterns.js";
-import { releaseLinePattern } from "./pattern.js";
+import { exactPathProblem, matchesPattern } from "../report/patterns.js";
+import { releaseLinePatterns, ReleaseLinePatternsError } from "./pattern.js";
+import { RELEASE_PATTERN_LIMITS } from "./releasepattern.js";
 import { CONVENTIONAL_SUBJECT_CASE, parseBodyWidth, parseSubjectCaseTuple, type SubjectCaseSpec } from "../commit/rule.js";
 
 /** Where the policy file lives inside the target repository. */
@@ -1108,6 +1109,8 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
           `is empty. An empty pattern matches nothing at all, so it is a path list entry that can never raise this scope`,
         );
       }
+      const problem = exactPathProblem(pattern);
+      if (problem !== null) throw new SchemaError(path, `${pointer}.paths[${index}]`, problem);
       return pattern;
     });
     if (paths.length === 0) {
@@ -1218,17 +1221,19 @@ function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Recor
   if (hasLines) {
     const linesRaw = requireArray(path, `${pointer}.lines`, value["lines"]);
     if (linesRaw.length === 0) throw new SchemaError(path, `${pointer}.lines`, "names no line patterns; name at least one whole-line regular expression");
+    if (linesRaw.length > RELEASE_PATTERN_LIMITS.patterns) throw new SchemaError(path, `${pointer}.lines[${RELEASE_PATTERN_LIMITS.patterns}]`, `pattern count limit (${RELEASE_PATTERN_LIMITS.patterns}) exceeded`);
     const lines = linesRaw.map((item, index): string => {
       const at = `${pointer}.lines[${index}]`;
       const source = requireString(path, at, item);
       if (source === "") throw new SchemaError(path, at, "is empty; write '^$' to allow an empty line");
-      try {
-        releaseLinePattern(source);
-      } catch (error) {
-        throw new SchemaError(path, at, `is not a safe line regular expression: ${error instanceof Error ? error.message : String(error)}`);
-      }
       return source;
     });
+    try {
+      releaseLinePatterns(lines);
+    } catch (error) {
+      const at = error instanceof ReleaseLinePatternsError ? `${pointer}.lines[${error.index}]` : `${pointer}.lines`;
+      throw new SchemaError(path, at, `is not a safe line regular expression: ${error instanceof Error ? error.message : String(error)}`);
+    }
     return { path: filePath, lines };
   }
   const keysRaw = requireArray(path, `${pointer}.keys`, value["keys"]);
@@ -1266,10 +1271,8 @@ function parseReleasePolicy(path: string, value: unknown): ReleasePolicy {
     }
     const pattern = requireString(path, `release.unitPaths[${index}]`, entry);
     if (pattern.startsWith("=")) {
-      const exact = pattern.slice(1);
-      if (exact.trim() === "" || exact.startsWith("/") || exact.split("/").some((segment): boolean => segment === "" || segment === "." || segment === "..") || /[\\*?\u0000-\u001f\u007f]/.test(exact)) {
-        throw new SchemaError(path, pointer, "an '=path' entry must name one exact repo-relative path, with no glob, empty, '.' or '..' segment");
-      }
+      const problem = exactPathProblem(pattern);
+      if (problem !== null) throw new SchemaError(path, pointer, problem);
       return pattern;
     }
     if (pattern.trim() === "") {

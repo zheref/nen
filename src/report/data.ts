@@ -52,7 +52,7 @@ import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
 import type { CoverageMeasure, CoverageTarget } from "../shu/coverage/shape.js";
 import { GIT, normalizeEol, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
-import { matchesPattern } from "./patterns.js";
+import { exactPathProblem, matchesPattern } from "./patterns.js";
 import { plainLine } from "../cli/plain.js";
 import { ownerNameFromRemote, resolveToken } from "../repo/resolve.js";
 import { loadRepoRegistry } from "../schema/repos.js";
@@ -380,7 +380,12 @@ export function parseTiers(document: unknown, display: string): TierTable {
         `'${display}': tier '${tier}' is not a list of path patterns. Each tier names an array of strings -- a path prefix ('src/report'), or a glob ('src/**/*.test.ts').`,
       );
     }
-    table.set(tier, patterns as readonly string[]);
+    const paths = patterns as readonly string[];
+    paths.forEach((pattern, index): void => {
+      const problem = exactPathProblem(pattern);
+      if (problem !== null) throw new VerbUsageError(`'${display}': tiers[${JSON.stringify(tier)}][${index}] ${problem}`);
+    });
+    table.set(tier, paths);
   }
   return table;
 }
