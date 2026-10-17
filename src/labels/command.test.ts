@@ -3,6 +3,7 @@ import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
+import { listLabelsArgv } from "./sync.js";
 import { labelsCommand } from "./command.js";
 import { listLabelNamesArgv, renameArgv } from "./rename.js";
 
@@ -29,11 +30,24 @@ async function capture(
 }
 
 describe("nen labels sync -- CLI wiring", () => {
-  it("dry-run reports every label without calling gh", async () => {
-    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--dry-run"]);
+  it("dry-run reads the remote labels and reports progress without mutations", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--dry-run"], [{ match: `gh ${listLabelsArgv({ owner: "zheref", repo: "nen", slug: "zheref/nen" }).join(" ")}`, result: { stdout: "[[]]" } }]);
     expect(result.code).toBe(0);
     expect(result.out.length).toBeGreaterThan(0);
-    expect(result.seams.calls).toEqual([]);
+    expect(result.seams.calls).toHaveLength(1);
+    expect(result.err[0]).toMatch(/\[0\//);
+    expect(result.err.at(-1)).toMatch(/would-sync/);
+  });
+
+  it("keeps JSON stdout pure while emitting incremental counts to stderr", async () => {
+    const result = await capture(["labels", "sync", "--target", "zheref/nen", "--dry-run", "--json"], [{ match: `gh ${listLabelsArgv({ owner: "zheref", repo: "nen", slug: "zheref/nen" }).join(" ")}`, result: { stdout: "[[]]" } }]);
+    expect(result.code).toBe(0);
+    expect(result.out).toHaveLength(1);
+    const report = JSON.parse(result.out[0]!);
+    expect(report.entries.length).toBeGreaterThan(0);
+    expect(result.err).toHaveLength(report.entries.length + 1);
+    expect(result.err.at(-1)).toContain(`[${report.entries.length}/${report.entries.length}]`);
+    expect(result.seams.calls).toHaveLength(1);
   });
 
   // zheref/nen#93: EXIT 2, not 1. Four families each kept a private

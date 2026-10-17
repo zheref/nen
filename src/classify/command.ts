@@ -90,8 +90,10 @@ it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
       Without --run nothing is written to GitHub (a dry run); with it each
       label is added through 'gh issue edit --add-label'. EVERY application
       writes a ledger line AFTER the mutation resolves, dry run or not, in
-      the same format and default file as 'nen label apply' (--ledger
-      overrides; --reason is recorded after the row's own reason).
+      .nen/label-ledger.jsonl under --repo, shared with 'nen label apply'.
+      The default .nen directory is created; --ledger overrides the path
+      and requires an existing parent. The ledger is opened before edits.
+      --reason is recorded after the row's own reason.
       Exit 0 when nothing failed, 1 when any application failed.
 
   A flag that belongs to another verb of the family (--run on labels, --write

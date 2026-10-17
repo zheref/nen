@@ -335,7 +335,7 @@ verb does by default:
 | [`issue edit-body`](#nen-issue-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number is an issue, not a PR, before printing the byte count, first/last line, `current body sha256:` and a `body check:` line saying what was and was not checked; with `--expect-body-sha256` it also compares, and a mismatch exits **3** (conflict, nothing written) exactly as a real run would; `--current-body-out <path>` writes the read's exact bytes |
 | [`issue attach-sub`](#nen-issue-attach-sub) | no | `--dry-run` | **still reads GitHub** to certify every number is an issue, not a PR |
 | [`issue consolidate-close`](#nen-issue-consolidate-close) | no | `--dry-run` | **still reads GitHub** for the object-class check and the open-PR guard |
-| [`labels sync`](#nen-labels-sync) | no | `--dry-run` | fully offline |
+| [`labels sync`](#nen-labels-sync) | no | `--dry-run` | reads remote labels, without mutations |
 | [`labels rename`](#nen-labels-rename) | no | `--dry-run` | **still calls `gh label list`** to decide idempotence |
 | [`label apply`](#nen-label-apply) | yes | `--run` | the ledger line is written either way, with `outcome: "dry-run"` |
 | [`wake verify`](#nen-wake-verify) | yes | `--run` | despite the name, `--run` reruns workflows and posts comments |
@@ -787,8 +787,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
 | [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command — or, with `--pr`, one pull request's readiness facts through `pr ready`'s own read — until its condition holds, paced and bounded | whatever --command names (typically git or gh); with --pr, GitHub GraphQL + REST (token from --token-env, default GH_TOKEN), as `pr ready` | yes |
-| [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label to one object and appends a durable, after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
-| [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates or updates every taxonomy label on a target repository | nen/labels.json; gh unless --dry-run | yes |
+| [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label or a batch of ref/label pairs and appends an after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
+| [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates missing labels and updates only differing taxonomy labels | nen/labels.json; gh read even with --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
 | [`classify`](#family-classify) | [`nen classify labels`](#nen-classify-labels) | validates a classification taxonomy file and prints the label set it defines (axis prefix + key, colour, description) | local file (--taxonomy) | yes |
 | [`classify`](#family-classify) | [`nen classify install`](#nen-classify-install) | compares the taxonomy's labels with nen/labels.json (present, drift, absent, foreign), rewrites the declaration with --write, or syncs only those labels to GitHub with --sync once the declaration is landed | local file (--taxonomy), nen/labels.json; gh only with --sync | yes |
@@ -5656,7 +5656,7 @@ given — the ledger records the decision either way.
 ### `nen label apply`
 
 Answers "apply this label to this object, and remember that I asked" — a single object * label
-mutation, logged. `--label` is validated against the taxonomy before the ledger is even opened; the
+mutation, or a batch of explicit ref/label pairs, logged. `--label` is validated against the taxonomy before the ledger is even opened; the
 GitHub call (when `--run` is given) is attempted BEFORE the ledger line is written, so the ledger's
 `outcome` always reflects what GitHub actually did, never what the caller merely asked for.
 
@@ -5674,7 +5674,7 @@ nen label apply <object-ref> --label <name> --repo-slug <owner/name> [--reason <
 | `--label <name>` | yes | Checked against `nen/labels.json` before anything is attempted. | Unknown label -> exit 2, naming the declared labels. |
 | `--repo-slug <owner/name>` | yes | The owner/name the mutation runs against. | |
 | `--reason <text>` | no | Recorded in the ledger. | Never sent to GitHub. |
-| `--ledger <path>` | no | Ledger file location. | Defaults to `label-ledger.jsonl` under `--repo`'s root. |
+| `--ledger <path>` | no | Ledger file location. | Defaults to `.nen/label-ledger.jsonl` under `--repo`'s root. The default directory is created; explicit parents must exist. The ledger is opened before any mutation. |
 | `--run` | no (boolean) | Without it, nothing is written to GitHub. | The ledger still records the decision, with `outcome: "dry-run"`. With `--run`, it records `"applied"` or `"failed"`, written AFTER the call resolves. |
 | `--repo <path>` | no | The checkout whose taxonomy is checked, and the ledger's default base directory. | Defaults to cwd. |
 
@@ -5683,6 +5683,23 @@ nen label apply <object-ref> --label <name> --repo-slug <owner/name> [--reason <
 on a dry run or a successful `--run`; exit 1 when `--run` was given and GitHub's own call failed
 (a 404/403/rate-limit — the ledger records `"failed"` either way); exit 2 for a missing/malformed
 object ref, a missing `--label`/`--repo-slug`, or an undeclared label.
+
+**Batch input** — pass `--batch <file>` instead of the positional ref and `--label`:
+
+```text
+nen label apply --batch pairs.json --repo <checkout> --repo-slug <owner/name> [--reason <text>] [--ledger <path>] [--run] [--json]
+```
+
+The file is a non-empty JSON array such as
+`[{"ref":"XX-IS-#1","label":"<declared label>"},{"ref":"XX-PR-#2","label":"<declared label>","reason":"why"}]`.
+Relative files resolve against `--repo`. Every row, ref and declared label is validated
+before state is created or GitHub is called. Unknown fields and mixed single/batch input
+refuse at exit 2. A row's reason overrides the shared `--reason`. Without `--run`, every
+pair is recorded as `dry-run` and no GitHub call occurs. With it, each pair's outcome
+is recorded after its call; failed pairs do not stop later pairs. Human output has one
+numbered result per pair; JSON is `{ results: [{ entry, error }], ledgerPath }`.
+Any failed pair makes exit 1. An unappendable ledger refuses before any mutation.
+`classify apply` shares the same default and ledger preflight.
 
 **Example**
 
@@ -5708,73 +5725,30 @@ mutate GitHub by default — `--dry-run` is what makes either one safe to previe
 
 ### `nen labels sync`
 
-Answers "does the target repository's label set match this repository's own taxonomy": for every
-label in `nen/labels.json`, it creates the label if it is absent or updates it if it already
-exists. One bad label (a description GitHub rejects) never aborts the run — every other good label
-still lands, and the failures are named at the end.
-
-**Usage**
+Answers "which declared labels differ on the target repository?" It reads all remote
+label pages once, creates missing labels and updates only differing colors or
+descriptions. Matching labels are `unchanged`; foreign labels remain untouched.
+Label names and colors compare without case, while descriptions compare exactly
+(a remote null description is empty). Each changed label needs one mutation,
+without a failed-create retry. One label's failure does not prevent later labels.
 
 ```text
-nen labels sync --target <owner/name> --repo <path> [--dry-run]
+nen labels sync --target <owner/name> --repo <path> [--dry-run] [--json]
 ```
 
-**Arguments**
+Both `--target` and `--repo` are required (missing/malformed target or missing repo:
+exit 2). The checkout supplies `nen/labels.json`; the target independently names
+the GitHub repository. `--dry-run` reads remote labels too, but never mutates them.
+A failed or malformed remote read refuses before any mutation.
 
-| Flag | Required | Meaning | Notes |
-|---|---|---|---|
-| `--target <owner/name>` | yes | The repository labels are synced to. | A missing `--target` exits **1**, not 2 — see the note below. |
-| `--repo <path>` | yes | The checkout whose `nen/labels.json` is the taxonomy being synced. | Listed unbracketed in usage; omitting it is refused BY NAME at exit 2 (issue #28) rather than silently defaulting to cwd. |
-| `--dry-run` | no (boolean) | Logs every label ("would sync: ...") without calling `gh` at all. | There is no separate `--run` flag here (unlike `label apply`): omitting `--dry-run` means this verb mutates immediately. |
-
-> **Note:** a missing `--target` exits 1 rather than 2 on **sixteen**
-> verbs. Four families — `labels`, `repo`, `pr` and `issue` — each define
-> their own local `requireTarget()` helper (`src/labels/command.ts:10`,
-> `src/repo/command.ts:13`, `src/pr/command.ts:47`,
-> `src/issue/command.ts:293`) that throws a plain `Error` instead of the
-> `VerbUsageError` every other required flag on the surface throws — so
-> forgetting `--target` reports a usage message but exits with the failure
-> code, not the usage code. The sixteen are `labels sync`,
-> [`labels rename`](#nen-labels-rename),
-> [`repo inventory`](#nen-repo-inventory),
-> [`repo scenario`](#nen-repo-scenario), [`pr fetch`](#nen-pr-fetch),
-> [`pr next-blocker`](#nen-pr-next-blocker),
-> [`pr retarget`](#nen-pr-retarget),
-> [`pr request-reviews`](#nen-pr-request-reviews) and all eight `issue`
-> verbs ([`search`](#nen-issue-search),
-> [`open-pr-check`](#nen-issue-open-pr-check), [`file`](#nen-issue-file),
-> [`comment`](#nen-issue-comment), [`attach-sub`](#nen-issue-attach-sub),
-> [`consolidate-close`](#nen-issue-consolidate-close),
-> [`chain-position`](#nen-issue-chain-position) and
-> [`terminus`](#nen-issue-terminus)). The two verbs that take `--target`
-> and are NOT affected read it through `requireValue` and so exit 2 the
-> ordinary way: [`run rerun-failed`](#nen-run-rerun-failed) and
-> [`idea file`](#nen-idea-file). A caller that branches on `2` to mean "you
-> typed it wrong" will read a forgotten flag as a real failure on the
-> sixteen. Confirmed by `src/labels/command.test.ts`'s `"requires
-> --target"` case, which asserts exit 1, and by running all eighteen.
-> Tracked as [zheref/nen#93](https://github.com/zheref/nen/issues/93).
-
-**Output and exit codes** — human rendering is one line per label (`"would sync: <name> (#<color>) --
-<description>"` in dry-run, or the entry's own message otherwise), then, if any failed, a summary line
-naming them. `--json` prints the full sync report (`entries`, `failed`). Exit 0 when every label
-synced (or, in dry-run, was reported); exit 1 when at least one label failed to sync; exit 2 when
-`--target` is malformed, or `--repo` is omitted.
-
-**Example**
-
-```bash
-nen labels sync --target zheref/bankai-core --repo src/schema/fixtures/bankai-repo --dry-run
-```
-```text
-would sync: bankai:stage/idea (#ededed) -- Raw idea awaiting research
-would sync: bankai:stage/researched (#1d76db) -- Epic drafted, awaiting G1 approval
-would sync: bankai:stage/building (#fbca04) -- Released to a builder
-...
-would sync: bankai:epic (#5319e7) -- An epic, delivered on an integration branch
-```
-(from a real `--dry-run` run against `src/schema/fixtures/bankai-repo` — 13 labels total, truncated
-here for length; `--dry-run` makes no `gh` call at all, so this was safe to run live)
+Progress goes to stderr: `[0/N] reading remote labels`, then `[1/N] created: name`,
+`[2/N] unchanged: name`, and so on as each entry finishes. Stdout remains a single
+JSON report (`entries`, `failed`) with `--json`. Human stdout prints one result per
+label; dry-run differences say `would create` or `would update` and carry the
+`would-sync` status in JSON. Exit 0 includes a complete no-op; exit 1 names failed
+reads or mutations. A no-op uses only the paginated read, independent of how many
+labels are already declared; GitHub response time is outside Nen's control.
+`classify install --sync` uses the same diff after its existing landed-declaration gate.
 
 ### `nen labels rename`
 
@@ -6059,7 +6033,7 @@ nen classify apply --taxonomy <path> --repo <path> --target <owner/name> --plan 
 | `--run` | no (boolean) | Apply for real. | Without it: a dry run; the ledger still records each decision. |
 | `--include-low` | no (boolean) | Apply rows at a confidence level the taxonomy lists rather than applies. | |
 | `--reason <text>` | no | Recorded in each ledger line after the row's own reason. | Never sent to GitHub. |
-| `--ledger <path>` | no | Ledger file. | Defaults to `label-ledger.jsonl` under `--repo`'s root. Opened for append before the first edit; a directory or unwritable file is refused at exit 2. |
+| `--ledger <path>` | no | Ledger file. | Defaults to `.nen/label-ledger.jsonl` under `--repo`'s root. The default directory is created; explicit parents must exist. The ledger is opened before any mutation. Opened for append before the first edit; a directory or unwritable file is refused at exit 2. |
 
 **Output and exit codes** — human rendering is a `(dry run)` banner when there is no `--run`, one line
 per issue (`#12  applied: …  already: …  listed: …`; `would apply:` on a dry run; `failed:` on a

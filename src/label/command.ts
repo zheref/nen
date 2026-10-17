@@ -21,8 +21,10 @@
 // rate limit, or a PR closed since would exit 1 while the ledger kept a
 // permanent claim that the label was applied.
 
-import { appendFileSync } from "node:fs";
-import { isAbsolute, resolve as resolvePath } from "node:path";
+import { closeSync, writeSync } from "node:fs";
+import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { plainLine } from "../cli/plain.js";
+import { isRecord } from "../schema/errors.js";
 import {
   emit,
   parseCallerToken,
@@ -32,15 +34,20 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { ledgerLine, type LedgerEntry } from "./ledger.js";
+import { labelLedgerPath, openLabelLedger, ledgerLine, type LedgerEntry } from "./ledger.js";
 import { parseRef, RefError } from "../ref/notation.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { GH, ToolError } from "../seam/exec.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 
 const USAGE = `nen label apply <object-ref> --label <name> --repo-slug <owner/name> [--reason <text>] [--ledger <path>] [--run]
+nen label apply --batch <file> --repo-slug <owner/name> [--reason <text>] [--ledger <path>] [--run]
 
-Apply a label to one object, logged.
+Apply one label, or a JSON array of {"ref":"<CODE>-IS-#1","label":"<name>","reason":"optional"}
+from --batch <file> (relative to --repo). Batch input replaces the positional
+ref and --label. All pairs are validated and the ledger opened before any
+mutation; a failed pair is logged and reported while later pairs continue.
+--json emits one results array; human output prints one result per pair.
 
   <object-ref>       <CODE>-<IS|PR>-#<N>. Only the number is used against
                      --repo-slug's own numbering; the code is not re-resolved.
@@ -48,9 +55,9 @@ Apply a label to one object, logged.
                      nen/labels.json before anything is attempted.
   --repo-slug <o/n>   The owner/name the mutation runs against.
   --reason <text>      Recorded in the ledger; not sent to GitHub.
-  --ledger <path>      Defaults to changelog.d/../label-ledger.jsonl under the
-                     target repository's root -- state one explicitly for a
-                     durable location.
+  --ledger <path>      Defaults to .nen/label-ledger.jsonl under --repo. The
+                     default .nen directory is created; explicit parents
+                     must exist. An unappendable ledger refuses before gh.
   --run                Without it, nothing is written to GitHub -- the ledger
                      still records the decision, with outcome:"dry-run"
                      (CON-38's dry-run-first convention,
@@ -66,81 +73,75 @@ Apply a label to one object, logged.
                    refusal you would otherwise meet is this flag's
                    absence, not a missing file.`;
 
-export const DEFAULT_LEDGER = "label-ledger.jsonl";
+export { DEFAULT_LEDGER } from "./ledger.js";
 
 export const labelCommand: Command = {
   name: "label",
   subcommands: ["apply"],
   summary: "Apply a label to an object, logged (object * label * time * run).",
   usage: USAGE,
-  flags: { values: ["label", "repo-slug", "reason", "ledger"], booleans: ["run"] },
+  flags: { values: ["label", "repo-slug", "reason", "ledger", "batch"], booleans: ["run"] },
   run(context: CommandContext): number {
     requireSubcommand("label", context.args, ["apply"]);
-    const refToken = context.args.positionals[2];
-    if (refToken === undefined) {
-      throw new VerbUsageError("'label apply' needs an object ref, e.g. 'label apply XX-PR-#12 --label wake'.");
-    }
-    // A MALFORMED REF IS A TYPO (exit 2), not a failure (exit 1). See
-    // ../cli/command.ts's parseCallerToken.
-    //
-    // THE `RefError` HERE IS ../ref/notation.ts's -- the object-notation
-    // parser's own, imported above. There is a SECOND, unrelated class of that
-    // name in ../verbs/pr_ready.ts, and because parseCallerToken's whole
-    // contract is "the predicate is the caller's", importing the wrong one
-    // would not fail to compile: the predicate would simply never match and
-    // this verb would go back to exiting 1 on a typo, silently.
-    const ref = parseCallerToken(
-      (): ReturnType<typeof parseRef> => parseRef(refToken),
-      (error): boolean => error instanceof RefError,
-    );
-
-    const labelName = requireValue(context.args, "label", "The label to apply.");
     const repoSlug = requireValue(context.args, "repo-slug", "The owner/name the mutation runs against.");
-    const reason = context.args.values["reason"] ?? null;
     const run = context.args.booleans.has("run");
-
-    const taxonomy = openTaxonomy({ repoFlag: context.repoFlag });
-    const labels = taxonomy.labels();
-    if (!labels.has(labelName)) {
-      throw new VerbUsageError(
-        `'${labelName}' is not in ${labels.path}. Declared labels: ${labels.names().join(", ") || "(none)"}.`,
-      );
-    }
-
-    const now = context.seams.now().toISOString();
-    const ledgerPathRaw = context.args.values["ledger"] ?? DEFAULT_LEDGER;
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-    const ledgerPath = isAbsolute(ledgerPathRaw) ? ledgerPathRaw : resolvePath(root, ledgerPathRaw);
-
-    // THE MUTATION IS ATTEMPTED BEFORE THE LEDGER IS WRITTEN (review finding:
-    // the ledger used to record `run: true` before this call, so a 404/403/
-    // rate-limit refusal from GitHub left a permanent, append-only record
-    // asserting a label that was never actually applied). `outcome` is
-    // computed from what GitHub actually answered, not from whether --run was
-    // given.
-    let outcome: LedgerEntry["outcome"] = "dry-run";
-    let toolError: ToolError | null = null;
-    if (run) {
-      const kind = ref.kind === "PR" ? "pr" : "issue";
-      const result = context.seams.run(GH, [kind, "edit", String(ref.number), "--repo", repoSlug, "--add-label", labelName]);
-      if (result.spawnFailed || result.code !== 0) {
-        outcome = "failed";
-        toolError = new ToolError(GH, [kind, "edit", String(ref.number), "--repo", repoSlug, "--add-label", labelName], result);
-      } else {
-        outcome = "applied";
-      }
+    const batch = context.args.values["batch"];
+    const refToken = context.args.positionals[2];
+    if (context.args.positionals.length > 3) throw new VerbUsageError("label apply accepts one ref, or --batch <file>.");
+    if (batch !== undefined && (refToken !== undefined || context.args.values["label"] !== undefined)) throw new VerbUsageError("--batch cannot be combined with an object ref or --label.");
+    let pairs: { ref: ReturnType<typeof parseRef>; label: string; reason: string | null }[];
+    const parse = (token: string): ReturnType<typeof parseRef> => parseCallerToken(() => parseRef(token), (error) => error instanceof RefError);
+    const reason = context.args.values["reason"] ?? null;
+    if (batch === undefined) {
+      if (refToken === undefined) throw new VerbUsageError("'label apply' needs an object ref or --batch <file>.");
+      pairs = [{ ref: parse(refToken), label: requireValue(context.args, "label", "The label to apply."), reason }];
+    } else {
+      const file = resolveAgainstRepo(root, batch);
+      let value: unknown;
+      try { value = JSON.parse(readTextFile(file, root, "--batch must name a readable JSON array of ref/label pairs.")) as unknown; }
+      catch (error) { if (error instanceof VerbUsageError) throw error; throw new VerbUsageError(`--batch '${file}' is not valid JSON.`); }
+      if (!Array.isArray(value) || value.length === 0) throw new VerbUsageError("--batch must contain a non-empty JSON array of ref/label pairs.");
+      pairs = value.map((row: unknown, index) => {
+        if (!isRecord(row) || Object.keys(row).some((key) => !["ref", "label", "reason"].includes(key)) || typeof row["ref"] !== "string" || typeof row["label"] !== "string" || row["label"] === "" || (row["reason"] !== undefined && typeof row["reason"] !== "string")) throw new VerbUsageError(`--batch [${index}] needs ref and label strings, and an optional reason string.`);
+        return { ref: parse(row["ref"]), label: row["label"], reason: typeof row["reason"] === "string" ? row["reason"] : reason };
+      });
     }
-
-    const entry: LedgerEntry = { object: ref.ref, label: labelName, time: now, outcome, reason };
-    appendFileSync(ledgerPath, ledgerLine(entry) + "\n", "utf8");
-
-    if (toolError !== null) throw toolError;
-
-    const lines = [
-      `${run ? "applied" : "(dry run) would apply"} '${labelName}' to ${ref.ref}`,
-      `ledger: ${ledgerPath}`,
-    ];
-    emit(context.io, context.json, { entry, ledgerPath }, lines);
+    const labels = openTaxonomy({ repoFlag: context.repoFlag }).labels();
+    for (const pair of pairs) {
+      if (!labels.has(pair.label)) throw new VerbUsageError(`'${pair.label}' is not in ${labels.path}. Declared labels: ${labels.names().join(", ") || "(none)"}.`);
+    }
+    // Validate the entire batch and open the ledger BEFORE the first mutation.
+    const ledgerPath = labelLedgerPath(root, context.args.values["ledger"]);
+    const fd = openLabelLedger(ledgerPath);
+    const results: { entry: LedgerEntry; error: string | null }[] = [];
+    let singleError: ToolError | null = null;
+    try {
+      const now = context.seams.now().toISOString();
+      for (const pair of pairs) {
+        let outcome: LedgerEntry["outcome"] = "dry-run";
+        let error: ToolError | null = null;
+        if (run) {
+          const argv = [pair.ref.kind === "PR" ? "pr" : "issue", "edit", String(pair.ref.number), "--repo", repoSlug, "--add-label", pair.label];
+          const result = context.seams.run(GH, argv);
+          if (result.spawnFailed || result.code !== 0) { outcome = "failed"; error = new ToolError(GH, argv, result); }
+          else outcome = "applied";
+        }
+        const entry: LedgerEntry = { object: pair.ref.ref, label: pair.label, time: now, outcome, reason: pair.reason };
+        writeSync(fd, ledgerLine(entry) + "\n");
+        results.push({ entry, error: error?.message ?? null });
+        if (batch === undefined) singleError = error;
+        if (batch !== undefined && !context.json) context.io.out(plainLine(`${results.length}/${pairs.length} ${entry.outcome}: '${entry.label}' on ${entry.object}${error === null ? "" : ` -- ${error.message}`}`));
+      }
+    } finally { closeSync(fd); }
+    if (singleError !== null) throw singleError;
+    if (batch !== undefined) {
+      if (context.json) context.io.out(JSON.stringify({ results, ledgerPath }, null, 2));
+      else context.io.out(`ledger: ${ledgerPath}`);
+      return results.some(({ entry }) => entry.outcome === "failed") ? 1 : 0;
+    }
+    const entry = results[0]!.entry;
+    emit(context.io, context.json, { entry, ledgerPath }, [plainLine(`${run ? "applied" : "(dry run) would apply"} '${entry.label}' to ${entry.object}`), `ledger: ${ledgerPath}`]);
     return 0;
   },
 };
