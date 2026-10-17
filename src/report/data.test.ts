@@ -443,6 +443,15 @@ describe("--tiers", () => {
     expect(matchesPattern("src/a.ts", "")).toBe(false);
   });
 
+  it("claims only the exact path with '=', never a same-named directory or a sibling", () => {
+    expect(matchesPattern("README.md", "=README.md")).toBe(true);
+    expect(matchesPattern("README.md/payload.ts", "=README.md")).toBe(false);
+    expect(matchesPattern("README.md.bak", "=README.md")).toBe(false);
+    expect(matchesPattern("src/a.ts", "=src/*.ts")).toBe(false);
+    expect(matchesPattern("src/*.ts", "=src/*.ts")).toBe(true);
+    expect(matchesPattern("README.md/payload.ts", "README.md")).toBe(true);
+  });
+
   it("escapes a regex metacharacter in a glob instead of honouring it", () => {
     expect(matchesPattern("a+b/x.ts", "a+b/*.ts")).toBe(true);
     expect(matchesPattern("aab/x.ts", "a+b/*.ts")).toBe(false);

@@ -91,6 +91,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
+      "nen/workflow.json#release",
       "nen/decisions.json",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
@@ -115,6 +116,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
+      "nen/workflow.json#release",
       "nen/colors.yml",
       "nen/decisions.json",
     ];
@@ -584,5 +586,31 @@ describe("checkTaxonomy and deploy.defaultTarget -- the pointer row that reads t
     // says it could not check, rather than failing twice in two voices.
     expect(row?.required).toBe(false);
     expect(row?.detail).toMatch(/^not checked -- names 'testflight', but nen\/contract\.json did not load/);
+  });
+});
+
+describe("nen/workflow.json#release row (zheref/nen#348)", () => {
+  function reportFor(workflow?: unknown): ReturnType<typeof checkTaxonomy> {
+    const root = mkdtempSync(join(tmpdir(), "nen-taxonomy-release-"));
+    if (workflow !== undefined) {
+      mkdirSync(join(root, "nen"));
+      writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify(workflow));
+    }
+    return checkTaxonomy({ repoFlag: root });
+  }
+
+  it("reports the declared exact, pattern, keyed and line-bound entries", () => {
+    const report = reportFor({ release: { unitPaths: ["=CHANGELOG.md", "releases/**", { path: "package.json", keys: ["version"] }, { path: "src/version.ts", lines: ["^VERSION=[0-9]+$"] }] } });
+    const row = report.checks.find((check): boolean => check.file === "nen/workflow.json#release");
+    expect(row).toMatchObject({ ok: true, required: false });
+    expect(row?.detail).toBe("4 entry(s): 1 exact path(s), 1 prefix/glob(s), 1 key-bound, 1 line-bound");
+  });
+
+  it("distinguishes no policy, an undeclared unit and an unreadable policy", () => {
+    expect(reportFor().checks.find((check): boolean => check.file === "nen/workflow.json#release")?.detail).toBe("none declared (no policy file)");
+    expect(reportFor({}).checks.find((check): boolean => check.file === "nen/workflow.json#release")?.detail).toContain("undeclared unit");
+    const report = reportFor({ release: { unitPaths: [{ path: "file", lines: ["["] }] } });
+    expect(report.checks.find((check): boolean => check.file === "nen/workflow.json")).toMatchObject({ ok: false, detail: expect.stringContaining("release.unitPaths[0].lines[0]") });
+    expect(report.checks.find((check): boolean => check.file === "nen/workflow.json#release")?.detail).toContain("not read -- nen/workflow.json did not load");
   });
 });

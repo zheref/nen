@@ -482,6 +482,19 @@ export function safePattern(source: string): RegExp {
 }
 
 /**
+ * A case-sensitive, whole-line release bound. Unlike an identity pattern,
+ * an empty-line match is useful here; the catastrophic-shape guard still
+ * applies before any network content is matched. Invalid patterns throw so
+ * the policy loader can refuse them by pointer, never silently match less.
+ */
+export function releaseLinePattern(source: string): RegExp {
+  const compiled = new RegExp(`^(?:${source})$`);
+  const hazard = catastrophicShape(source);
+  if (hazard !== null) throw new Error(`unsafe line pattern: ${hazard.fragment} (${hazard.why})`);
+  return compiled;
+}
+
+/**
  * The login pattern for a reviewer NAMED ON THE COMMAND LINE (`--reviewers`,
  * `--approvers`) -- the whole login, case-insensitively, with GitHub's
  * optional `[bot]` suffix: `^<escaped name>(\[bot\])?$`, flag `i`.

@@ -25,12 +25,14 @@
 import { matchesPattern } from "../report/patterns.js";
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { GH, must, mustJson, ToolError, type Seams } from "../seam/exec.js";
-import type { ReleaseUnitEntry, ReleaseUnitKeyedPath } from "../schema/workflow.js";
+import type { ReleaseUnitEntry, ReleaseUnitKeyedPath, ReleaseUnitLinedPath } from "../schema/workflow.js";
+import { releaseLinePattern } from "../schema/pattern.js";
+import { changedLines, type ChangedLine } from "./linediff.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
 import { RefError, resolveProductCode } from "../verbs/pr_ready.js";
 
-export type { ReleaseUnitEntry, ReleaseUnitKeyedPath } from "../schema/workflow.js";
+export type { ReleaseUnitEntry, ReleaseUnitKeyedPath, ReleaseUnitLinedPath } from "../schema/workflow.js";
 
 export const UNIT_CHECK_CONTRACT = "nen.release.unit-check/v0.1";
 
@@ -661,14 +663,14 @@ export interface KeyScopedOutcome {
 export type ReadJsonAt = (path: string, ref: string) => JValue | null;
 
 /**
- * `repos/{slug}/contents/<path>?ref=<sha>` decoded and parsed, or `null`
- * on ANY failure along the way -- a missing file, a non-JSON body, an
+ * `repos/{slug}/contents/<path>?ref=<sha>` decoded as complete UTF-8 text, or `null`
+ * on ANY failure along the way -- a missing file, a malformed response, an
  * unparseable base64 payload, or `gh` itself refusing. FAIL CLOSED (this
  * module's own header): a file this function cannot read as JSON is a file
  * whose change nen cannot prove stayed inside its declared keys, which is
  * exactly the same posture ../pr/mergeunit.ts's `fetchBaseReleasePolicy`
- * already takes for `nen/workflow.json` itself. Uses
- * `parseJsonPreservingNumbers`, never `JSON.parse`, for N16's reason.
+ * already takes for `nen/workflow.json` itself. The JSON reader below parses
+ * this same text with `parseJsonPreservingNumbers` for N16's reason.
  *
  * N2: EACH PATH SEGMENT IS PERCENT-ENCODED before it is interpolated into
  * the contents URL -- a segment carrying a `#`, `?`, `%`, or a space would
@@ -679,7 +681,7 @@ export type ReadJsonAt = (path: string, ref: string) => JValue | null;
  * second, independent layer for the segments GitHub's own path grammar could
  * still contain (spaces, non-ASCII).
  */
-export function fetchJsonAtRef(seams: Seams, target: Target, path: string, ref: string): JValue | null {
+export function fetchTextAtRef(seams: Seams, target: Target, path: string, ref: string): string | null {
   const encodedPath = path
     .split("/")
     .map((segment): string => encodeURIComponent(segment))
@@ -691,13 +693,13 @@ export function fetchJsonAtRef(seams: Seams, target: Target, path: string, ref: 
     if (error instanceof ToolError) return null;
     throw error;
   }
-  let contents: { readonly content?: string };
+  let contents: { readonly content?: unknown; readonly encoding?: unknown } | null;
   try {
-    contents = JSON.parse(response.stdout) as { readonly content?: string };
+    contents = JSON.parse(response.stdout) as typeof contents;
   } catch {
     return null;
   }
-  if (contents.content === undefined) return null;
+  if (contents === null || typeof contents.content !== "string" || (contents.encoding !== undefined && contents.encoding !== "base64")) return null;
   // Copilot round, item 4: `Buffer.from(str, "base64")` is LENIENT -- it
   // silently DROPS any byte that is not a base64 alphabet character rather
   // than refusing the string, so a corrupted or truncated payload (or one
@@ -710,12 +712,23 @@ export function fetchJsonAtRef(seams: Seams, target: Target, path: string, ref: 
   // to quietly mangle.
   const base64 = contents.content.replace(/\n/g, "");
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(base64) || base64.length % 4 !== 0) return null;
-  let text: string;
   try {
-    text = Buffer.from(base64, "base64").toString("utf8");
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.toString("base64") !== base64) return null;
+    // Replacement characters could hide a byte edit from the line diff. Fatal
+    // UTF-8 decoding and the NUL refusal make an unreadable/binary blob fail
+    // closed instead of manufacturing text that was never in the commit.
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    return text.includes("\0") ? null : text;
   } catch {
     return null;
   }
+}
+
+/** The same complete, strictly decoded content read, parsed without losing JSON number precision. */
+export function fetchJsonAtRef(seams: Seams, target: Target, path: string, ref: string): JValue | null {
+  const text = fetchTextAtRef(seams, target, path, ref);
+  if (text === null) return null;
   try {
     return parseJsonPreservingNumbers(text);
   } catch {
@@ -749,11 +762,46 @@ export function checkKeyScopedPath(
   return { path: entry.path, ok: offendingKeys.length === 0, offendingKeys };
 }
 
-/** The base/head refs and the JSON reader a content-scoped entry's check runs over -- omitted, N4 applies instead (see `assembleUnitCheck`). */
+/** Shared base/head refs and content readers. A missing reader fails its touched bound closed. */
 export interface KeyScopedContext {
   readonly baseRef: string;
   readonly headRef: string;
   readonly readJson: ReadJsonAt;
+  readonly readText?: ReadTextAt;
+}
+
+export type ReadTextAt = (path: string, ref: string) => string | null;
+
+export interface LineScopedOutcome {
+  readonly path: string;
+  readonly ok: boolean;
+  readonly offendingLines: readonly ChangedLine[];
+  /** Non-null when the complete content/diff could not be checked. */
+  readonly reason: string | null;
+}
+
+/** Both sides of every changed line must match a declared whole-line pattern. */
+export function checkLineScopedPath(entry: ReleaseUnitLinedPath, baseRef: string, headRef: string, readText?: ReadTextAt): LineScopedOutcome {
+  const refuse = (reason: string): LineScopedOutcome => ({ path: entry.path, ok: false, offendingLines: [], reason });
+  if (readText === undefined) return refuse("content not read -- no base/head text reader was available to this check");
+  const base = readText(entry.path, baseRef);
+  const head = readText(entry.path, headRef);
+  if (base === null || head === null || base.includes("\0") || head.includes("\0")) return refuse("whole file -- unreadable or not UTF-8 text at its base or head commit");
+  const diff = changedLines(base, head);
+  if (diff === null) return refuse("complete line diff exceeded its work bound (100000 lines per file, 2048 edits, 1000000 comparison steps)");
+  let patterns: readonly RegExp[];
+  try {
+    patterns = entry.lines.map(releaseLinePattern);
+  } catch {
+    return refuse("invalid or unsafe line regular expression");
+  }
+  const offendingLines = diff.filter((line): boolean => !patterns.some((pattern): boolean => {
+    const match = pattern.exec(line.text);
+    // `$` can match before a final CR: require every character, including
+    // CR, to have been consumed. No implicit flags, trimming or normalization.
+    return match !== null && match[0].length === line.text.length;
+  }));
+  return { path: entry.path, ok: offendingLines.length === 0, offendingLines, reason: null };
 }
 
 export interface UnitCheckReport {
@@ -769,6 +817,9 @@ export interface UnitCheckReport {
   /** Content-scoped entries whose changed file stepped outside its declared 'keys', or (N4) whose content could not be read at all because no `keyScoped` context was available. Empty when none are declared, none changed, or every one stayed in bounds. */
   readonly keyScopedViolations: readonly KeyScopedOutcome[];
   readonly ok: boolean;
+  /** Additive fields: keyedPaths keeps its original JSON-key entry shape. */
+  readonly linedPaths: readonly ReleaseUnitLinedPath[];
+  readonly lineScopedViolations: readonly LineScopedOutcome[];
 }
 
 export function assembleUnitCheck(
@@ -780,14 +831,20 @@ export function assembleUnitCheck(
 ): UnitCheckReport {
   const outsideUnit = outsideReleaseUnit(changedFiles, unitPaths);
   const keyScopedViolations: KeyScopedOutcome[] = [];
+  const lineScopedViolations: LineScopedOutcome[] = [];
   for (const entry of unitPaths) {
     if (typeof entry === "string") continue;
-    // Only a KEYED entry whose declared file was actually touched (as its
+    // Only a CONTENT entry whose declared file was actually touched (as its
     // path, or as a rename's previous path) needs a content read at all --
     // every other one is silently in bounds, the same as an untouched
     // plain-pattern entry never appearing in 'outsideUnit'.
     const touched = changedFiles.some((file): boolean => file.path === entry.path || file.previousPath === entry.path);
     if (!touched) continue;
+    if ("lines" in entry) {
+      const outcome = checkLineScopedPath(entry, keyScoped?.baseRef ?? "", keyScoped?.headRef ?? "", keyScoped?.readText);
+      if (!outcome.ok) lineScopedViolations.push(outcome);
+      continue;
+    }
     // N4: a TOUCHED keyed entry with no keyScoped context is a violation
     // this check COULD NOT EVEN ATTEMPT, never a silent pass -- a caller
     // that declares a keyed entry but supplies no way to read blob content
@@ -808,11 +865,13 @@ export function assembleUnitCheck(
     target: target.slug,
     pr: prNumber,
     unitPaths: unitPaths.filter((entry): entry is string => typeof entry === "string"),
-    keyedPaths: unitPaths.filter((entry): entry is ReleaseUnitKeyedPath => typeof entry !== "string"),
+    keyedPaths: unitPaths.filter((entry): entry is ReleaseUnitKeyedPath => typeof entry !== "string" && "keys" in entry),
     changedFiles: changedFiles.map((file): string => file.path),
     outsideUnit,
     keyScopedViolations,
-    ok: outsideUnit.length === 0 && keyScopedViolations.length === 0,
+    ok: outsideUnit.length === 0 && keyScopedViolations.length === 0 && lineScopedViolations.length === 0,
+    linedPaths: unitPaths.filter((entry): entry is ReleaseUnitLinedPath => typeof entry !== "string" && "lines" in entry),
+    lineScopedViolations,
   };
 }
 
@@ -820,12 +879,13 @@ export function renderUnitCheck(report: UnitCheckReport): readonly string[] {
   const unitDescription = [
     ...report.unitPaths,
     ...report.keyedPaths.map((entry): string => `${entry.path} {keys: ${entry.keys.join(", ")}}`),
+    ...report.linedPaths.map((entry): string => `${entry.path} {lines: ${entry.lines.map((source): string => JSON.stringify(source)).join(", ")}}`),
   ].join(", ");
   const lines = [
     `${report.target}#${report.pr}: ${report.changedFiles.length} changed file(s), unit '${unitDescription}'`,
     report.ok
       ? "every changed path is inside the release unit"
-      : `${report.outsideUnit.length} path(s) outside the release unit, ${report.keyScopedViolations.length} content-scoped violation(s)`,
+      : `${report.outsideUnit.length} path(s) outside the release unit, ${report.keyScopedViolations.length} content-scoped violation(s)${report.lineScopedViolations.length === 0 ? "" : `, ${report.lineScopedViolations.length} line-scoped violation(s)`}`,
   ];
   // FEI-7: each path printed via JSON.stringify, so a path carrying a quote,
   // control character or leading/trailing space is unambiguous in the text
@@ -833,6 +893,12 @@ export function renderUnitCheck(report: UnitCheckReport): readonly string[] {
   for (const path of report.outsideUnit) lines.push(`  outside: ${JSON.stringify(path)}`);
   for (const violation of report.keyScopedViolations) {
     lines.push(`  outside (content-scoped): ${JSON.stringify(violation.path)} changed at ${violation.offendingKeys.map((key): string => JSON.stringify(key)).join(", ")}`);
+  }
+  for (const violation of report.lineScopedViolations) {
+    if (violation.reason !== null) lines.push(`  outside (line-scoped): ${JSON.stringify(violation.path)}: ${violation.reason}`);
+    for (const line of violation.offendingLines) {
+      lines.push(`  outside (line-scoped): ${JSON.stringify(violation.path)} ${line.side} line ${line.line}: ${JSON.stringify(line.text)}`);
+    }
   }
   return lines;
 }

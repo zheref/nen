@@ -590,6 +590,32 @@ describe("nen release unit-check -- CLI wiring", () => {
     return dir;
   }
 
+  it.each([
+    { before: "context\npin 1\n", after: "context\npin 2\n", ok: true },
+    { before: "context\npin 1\n", after: "pin 2\n", ok: false },
+    { before: "context\npin 1\n", after: "context\npin 2\npayload();\n", ok: false },
+    { before: "context\npin 1\n", after: "context\npin 2; payload();\n", ok: false },
+  ])("checks complete text at the merge base, including both diff sides (ok=$ok)", async ({ before, after, ok }) => {
+    const root = workflowRepo([{ path: "README.md", lines: ["pin [0-9]+"] }]);
+    const script: readonly ScriptedCall[] = [
+      // A missing/truncated patch never certifies the blob: the payload can be
+      // outside this apparently harmless patch and must still be caught.
+      { match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files", result: { code: 0, stdout: JSON.stringify([[{ filename: "README.md", patch: "@@ -2 +2 @@\n-pin 1\n+pin 2" }]]) } },
+      { match: "gh api repos/acme/widgets/pulls/9", result: { code: 0, stdout: '{"changed_files":1}' } },
+      { match: "gh pr view 9 --repo acme/widgets --json baseRefOid,headRefOid", result: { code: 0, stdout: '{"baseRefOid":"base-tip","headRefOid":"head"}' } },
+      { match: "gh api repos/acme/widgets/compare/base-tip...head", result: { code: 0, stdout: '{"merge_base_commit":{"sha":"merge-base"}}' } },
+      { match: "gh api repos/acme/widgets/contents/README.md?ref=merge-base", result: { code: 0, stdout: JSON.stringify({ content: Buffer.from(before).toString("base64") }) } },
+      { match: "gh api repos/acme/widgets/contents/README.md?ref=head", result: { code: 0, stdout: JSON.stringify({ content: Buffer.from(after).toString("base64") }) } },
+    ];
+    const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9", "--json"], root, new ScriptedSeams(script).run);
+    expect(result.code).toBe(ok ? 0 : 1);
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; keyedPaths: unknown[]; linedPaths: unknown[]; lineScopedViolations: unknown[] };
+    expect(report.ok).toBe(ok);
+    expect(report.keyedPaths).toEqual([]);
+    expect(report.linedPaths).toEqual([{ path: "README.md", lines: ["pin [0-9]+"] }]);
+    expect(report.lineScopedViolations).toHaveLength(ok ? 0 : 1);
+  });
+
   it("exits 2 and names the key when release.unitPaths is not declared", async () => {
     const result = await capture(
       ["release", "unit-check", "--pr", "acme/widgets#9"],

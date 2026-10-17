@@ -731,6 +731,40 @@ describe("release.unitPaths -- a bounded unit, never everything (FEI-3)", () => 
 });
 
 describe("release.unitPaths -- the content-scoped (object) entry form", () => {
+  it("accepts exact strings and a text line bound alongside the existing JSON bound", () => {
+    const entries = ["=CHANGELOG.md", { path: "src/version.ts", lines: ['^export const VERSION = "[0-9.]+";$', "^$"] }, { path: "package.json", keys: ["version"] }];
+    expect(parseWorkflow("<doc>", { release: { unitPaths: entries } }).release.unitPaths).toEqual(entries);
+  });
+
+  it.each(["=", "=/README.md", "=../README.md", "=README.md/", "=./README.md", "=src//file", "=src/*.ts", "=src/?.ts", "=src\\file", "=README.md\nfile"])("refuses invalid exact entry %j by pointer", (entry) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [entry] } })).toThrow(/release\.unitPaths\[0\].*exact repo-relative path/);
+  });
+
+  it.each([
+    { path: "file.txt", lines: [], pointer: "lines" },
+    { path: "file.txt", lines: [""], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["["], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(a+)+$"], pointer: "lines[0]" },
+    { path: "file.txt", lines: [1], pointer: "lines[0]" },
+    { path: "file.txt", lines: null, pointer: "lines" },
+  ])("refuses malformed or unsafe line bounds: $lines", ({ pointer, ...entry }) => {
+    try {
+      parseWorkflow("<doc>", { release: { unitPaths: [entry] } });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(SchemaError);
+      expect((error as Error).message).toContain("release.unitPaths[0]." + pointer);
+    }
+  });
+
+  it("refuses a mixed keys/lines object instead of choosing one bound silently", () => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: "file.txt", keys: ["version"], lines: ["ok"] }] } })).toThrow(/exactly one of 'keys'.*'lines'/);
+  });
+
+  it.each(["dir/../file", "dir/./file", "dir//file", "dir/*", "dir\\file", "file\nname"])("refuses a non-exact content path %j", (path) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path, lines: ["ok"] }] } })).toThrow(/release\.unitPaths\[0\]\.path/);
+  });
+
   it("accepts a {path, keys} entry alongside a plain string pattern", () => {
     const unitPaths = parseWorkflow("<doc>", {
       release: { unitPaths: ["src/my-unit/**", { path: "nen/contract.json", keys: ["version"] }] },

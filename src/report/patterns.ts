@@ -14,7 +14,9 @@
 // spells it `from "./data.js"`.
 
 /**
- * A PREFIX OR A GLOB, decided by whether the pattern has a metacharacter in it.
+ * An `=` prefix names an EXACT path: `=README.md` claims that file and
+ * never `README.md/child`. Without it, a PREFIX OR A GLOB, decided by
+ * whether the pattern has a metacharacter in it.
  *
  * A pattern with no `*` or `?` is a PATH PREFIX, matched on SEGMENT BOUNDARIES:
  * `src/report` claims `src/report/data.ts` and does not claim `src/reporting.ts`
@@ -31,6 +33,7 @@
  */
 export function matchesPattern(path: string, pattern: string): boolean {
   if (pattern === "") return false;
+  if (pattern.startsWith("=")) return path === pattern.slice(1);
   if (!/[*?]/.test(pattern)) {
     const prefix = pattern.replace(/\/+$/, "");
     return path === prefix || path.startsWith(`${prefix}/`);

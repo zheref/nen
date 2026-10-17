@@ -49,7 +49,8 @@ scopes:
 
   A path may raise SEVERAL scopes -- a file has one tier and any number of
   readers -- so the scope lists overlap by design. Paths are prefixes or
-  globs in the same grammar 'nen report data --tiers' reads: a pattern with
+  globs in the same grammar 'nen report data --tiers' reads: '=path' names
+  one exact path; without '=', a pattern with
   no '*'/'?' is a prefix matched on segment boundaries, one with them is a
   narrow glob ('*' stops at '/', '**' crosses it, '?' is one character).
 

@@ -28,6 +28,7 @@ import { loadRepoRegistry, type RepoRegistry } from "./repos.js";
 import { SchemaError } from "./errors.js";
 import {
   describeReviewScopes,
+  describeRelease,
   describeSections,
   describeProfile,
   describeRunners,
@@ -518,6 +519,8 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // ...and the `deploy.defaultTarget` row (zheref/nen#300): the one pointer
     // row that can FAIL, because it is checked against a second file.
     defaultTargetCheck(root),
+    // The release unit's path/content bounds (zheref/nen#348).
+    pointerCheck(root, "release", describeRelease),
     // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),
