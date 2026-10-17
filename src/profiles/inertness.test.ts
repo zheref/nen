@@ -47,7 +47,7 @@
 // stays true when somebody widens the allowlist without thinking about the seam.
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, relative, sep } from "node:path";
 
@@ -73,14 +73,19 @@ const PACK_DATA_DIRECTORY = "profiles";
  * fails on an edge that is perfectly legitimate. Registering the nodes keeps
  * that assertion about the resolver instead of about this directory.
  */
-const DATA_DIRECTORIES: readonly string[] = [PACK_DATA_DIRECTORY, "templates"];
+// Static JSON imports under src/ are data modules too. Discover them as leaf
+// nodes, without scanning their strings as executable imports or granting them
+// any pack-reader permission. Fixtures stay outside the shipped graph, just as
+// they do in shippedFiles below.
+const DATA_DIRECTORIES: readonly string[] = [PACK_DATA_DIRECTORY, "templates", "src"];
 
 /** Every JSON document under a data directory, `/`-separated and repo-relative. */
-function dataNodes(): readonly string[] {
+function dataNodes(root: string = ROOT): readonly string[] {
   const found: string[] = [];
   const walk = (directory: string, prefix: string): void => {
-    for (const entry of readdirSync(join(ROOT, directory), { withFileTypes: true })) {
+    for (const entry of readdirSync(join(root, directory), { withFileTypes: true })) {
       const name = `${prefix}${entry.name}`;
+      if (directory.split(sep)[0] === "src" && entry.isDirectory() && entry.name === "fixtures") continue;
       if (entry.isDirectory()) walk(join(directory, entry.name), `${name}/`);
       else if (entry.name.endsWith(".json")) found.push(name);
     }
@@ -643,8 +648,8 @@ interface Graph {
 
 function buildGraph(modules: readonly Module[]): Graph {
   // The nodes the graph can resolve TO: every scanned module, plus every JSON
-  // document in the pack's own directory -- which is how a direct data import
-  // becomes an edge rather than an unresolvable string.
+  // document in the shipped data directories -- which is how a direct data
+  // import becomes an edge rather than an unresolvable string.
   const known = new Set<string>(modules.map((module): string => module.name));
   for (const node of dataNodes()) known.add(node);
   const edges = new Map<string, readonly string[]>();
@@ -1352,6 +1357,27 @@ describe("the tokenizer", () => {
 
 describe("the resolver", () => {
   const known = new Set([PACK, SEAM, "profiles/nextjs.json", "src/dev/matrix.ts"]);
+
+  it("discovers nested source JSON as data nodes while excluding source fixtures", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-inertness-data-"));
+    try {
+      for (const directory of ["profiles", "templates", "src/example/data", "src/example/fixtures"]) {
+        mkdirSync(join(root, directory), { recursive: true });
+      }
+      for (const file of ["profiles/catalogue.json", "templates/scaffold.json", "src/example/data/identities.json", "src/example/fixtures/ignored.json"]) {
+        writeFileSync(join(root, file), "{}\n", "utf8");
+      }
+      const nodes = new Set(dataNodes(root));
+      expect([...nodes].sort()).toEqual(["profiles/catalogue.json", "src/example/data/identities.json", "templates/scaffold.json"]);
+      const source = scan("src/example/reader.ts", 'import data from "./data/identities.json";');
+      const edges = source.specifiers.map((specifier) => resolveSpecifier(source.name, specifier, nodes));
+      expect(edges).toEqual(["src/example/data/identities.json"]);
+      expect(edges.every((edge) => nodes.has(edge))).toBe(true);
+      expect(edges.some(isPack)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("maps a `.js` specifier onto the `.ts` file that exists", () => {
     expect(resolveSpecifier("src/dev/matrix.ts", "../profiles/pack.js", known)).toBe(PACK);
