@@ -134,3 +134,21 @@ describe("a plain enumerated list and a plain slot are unaffected", () => {
     expect(parseInvocation("s", enumOnly, "x@nope").problems[0]).toMatch(/<gate> is one or more of|<gate> is one of/);
   });
 });
+
+describe("a free LIST inside an alternation (Nobunaga n1)", () => {
+  const freeList = parseTemplate("<repo>[@<gate:G1|G2>{+}|<labels>{&}]");
+
+  it("fills the free list, items kept as typed", () => {
+    const value = parseInvocation("s", freeList, "x@model/gpt&lang/typescript").slots[1];
+    expect(value).toEqual({ name: "gate|labels", value: "model/gpt&lang/typescript", suffix: false, alternative: "labels", items: ["model/gpt", "lang/typescript"] });
+  });
+
+  it("refuses an empty item in the free list", () => {
+    expect(parseInvocation("s", freeList, "x@a&&b").problems[0]).toMatch(/<labels> is one or more values joined by '&', and 'a&&b' has an empty item/);
+  });
+
+  it("still takes the gate list first", () => {
+    expect(parseInvocation("s", freeList, "x@g1+g2").slots[1]).toMatchObject({ alternative: "gate", items: ["G1", "G2"] });
+  });
+});
+

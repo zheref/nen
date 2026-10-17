@@ -79,14 +79,24 @@ describe("filterEfforts", () => {
   });
 });
 
-async function data(extra: readonly string[]): Promise<{ code: number; out: string[]; err: string[] }> {
+const DESK = {
+  variant: "register",
+  title: "the filtered register",
+  scope: "o/r",
+  gate: "G2",
+  gates: [{ gate: "G2", label: "merge", cleared: "Nothing is owed at G2.", asks: [] }],
+};
+
+async function data(extra: readonly string[], desk: unknown = DESK): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
   const dir = repo();
   const objectsPath = join(dir, "objects.json");
   writeFileSync(objectsPath, JSON.stringify(OBJECTS.map((row): unknown => Object.fromEntries(Object.entries(row).filter(([key]): boolean => key !== "notes")))));
-  const argv = ["report", "data", "--repo", dir, "--base", "main", ...extra.map((part): string => (part === "@objects" ? objectsPath : part))];
+  const deskPath = join(dir, "desk.json");
+  writeFileSync(deskPath, JSON.stringify(desk));
+  const argv = ["report", "data", "--repo", dir, "--base", "main", ...extra.map((part): string => (part === "@objects" ? objectsPath : part === "@desk" ? deskPath : part))];
   const seams = new ScriptedSeams(script(), { now: (): Date => new Date("2026-09-20T12:00:00.000Z"), platform: "linux" });
   const code = await runFamily(reportCommand, argv, null, false, io, seams);
   return { code, out, err };
@@ -139,4 +149,44 @@ describe("nen report data --label / --severity", () => {
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/--label is not read by 'report render'/);
   });
+
+  it("an empty match is an explicit zero at exit 0, and the human line says the filter kept nothing", async () => {
+    const result = await data(["--objects-from", "@objects", "--label", "lang/typescript", "--severity", "low", "--severity-family", "acme:sev", "--severity-order", "high,low", "--json"]);
+    expect(result.code).toBe(0);
+    const document = JSON.parse(result.out.join("\n")) as { objects: unknown[]; objectsFilter: { kept: number; of: number } };
+    expect(document.objects).toEqual([]);
+    expect(document.objectsFilter).toMatchObject({ kept: 0, of: 5 });
+    const human = await data(["--objects-from", "@objects", "--label", "lang/typescript", "--label", "acme:sev/low"]);
+    expect(human.code).toBe(0);
+    expect(human.out.join("\n")).toMatch(/objects: none \(the filter kept 0 of 5 object\(s\)\)/);
+  });
 });
+
+describe("nen report data --label under --register (Nobunaga f1, f2, f4)", () => {
+  it("appends objectsFilter as the LAST key, names the filter, and the tallies count the filtered set", async () => {
+    const result = await data(["--objects-from", "@objects", "--register", "@desk", "--label", "model/gpt", "--json"]);
+    expect(result.code).toBe(0);
+    const document = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    const keys = Object.keys(document);
+    expect(keys[keys.length - 1]).toBe("objectsFilter");
+    expect(document["objectsFilter"]).toMatchObject({ labels: ["model/gpt"], kept: 3, of: 5 });
+    expect((document["objects"] as unknown[]).length).toBe(3);
+    expect(document["tallyScope"]).toBe(3);
+    const human = await data(["--objects-from", "@objects", "--register", "@desk", "--label", "model/gpt"]);
+    expect(human.out.join("\n")).toMatch(/filter: label model\/gpt -- kept 3 of 5 object\(s\)/);
+  });
+
+  it("an empty match under a desk naming nothing is exit 0 with tallyScope 0", async () => {
+    const result = await data(["--objects-from", "@objects", "--register", "@desk", "--label", "lang/typescript", "--label", "acme:sev/low", "--json"]);
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out.join("\n")) as Record<string, unknown>)["tallyScope"]).toBe(0);
+  });
+
+  it("a desk naming an object the filter removed is refused, and the refusal says the filter removed it", async () => {
+    const desk = { ...DESK, rows: { "pr#9": { marks: "", gate: "G2", gateClass: "g2", needs: "a merge", session: "s", lane: "l", thought: "t" } } };
+    const result = await data(["--objects-from", "@objects", "--register", "@desk", "--label", "lang/typescript"], desk);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/names 'pr#9', which is not in this register's objects .* The --label\/--severity filter removed 2 object\(s\) from this register \(issue #3, PR #9\)/);
+  });
+});
+

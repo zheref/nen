@@ -48,7 +48,10 @@ fetch:
                   vocabulary. A family --repo's nen/labels.json does not
                   declare is refused (exit 2).
   A filtered fetch names the filter and how many efforts it kept; a filter
-  that keeps nothing reports 0 rows at exit 0. --json adds a 'filter' key
+  that keeps nothing reports 0 rows at exit 0. issueCount and prCount stay
+  what was FETCHED, before the filter, and the human line says so. The
+  taxonomy is --repo's checkout, which must be the target's: it is not
+  cross-checked against --repo-slug. --json adds a 'filter' key
   ({ labels, severity: { name, orHigher, labels } | null, kept, of }) only
   when a filter was given, so an unfiltered document is unchanged.
 
@@ -161,7 +164,14 @@ function fetch(context: CommandContext): number {
   const rows = filter === null ? assembled.rows : assembled.rows.filter((row): boolean => effortPasses(filter, effortLabels(row)));
   const assembly = { ...assembled, rows };
 
-  const lines = [`${assembly.rows.length} row(s) -- ${assembly.issueCount} issue(s), ${assembly.prCount} PR(s)`];
+  // UNDER A FILTER THE COUNTS ARE SAID TO BE THE FETCH'S. issueCount and
+  // prCount count what was READ, which is what TRUNCATED is a statement
+  // about; beside filtered rows, unlabelled, they read as the rows' own.
+  const lines = [
+    filter === null
+      ? `${assembly.rows.length} row(s) -- ${assembly.issueCount} issue(s), ${assembly.prCount} PR(s)`
+      : `${assembly.rows.length} row(s) after the filter -- ${assembly.issueCount} issue(s), ${assembly.prCount} PR(s) fetched`,
+  ];
   if (filter !== null) lines.push(`${describeFilter(filter)} -- kept ${rows.length} of ${assembled.rows.length} effort(s)`);
   if (truncated) {
     lines.push(

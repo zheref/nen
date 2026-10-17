@@ -59,13 +59,15 @@ export interface EffortFilter {
 export const FILTER_VALUE_FLAGS: readonly string[] = ["severity", "severity-family", "severity-order"];
 export const FILTER_LIST_FLAGS: readonly string[] = ["label"];
 
-/** True when the invocation asked for any filtering at all. */
-export function filterRequested(context: CommandContext): boolean {
-  return (context.args.lists["label"]?.length ?? 0) > 0 || context.args.values["severity"] !== undefined;
-}
-
 /**
  * Read and VALIDATE the filter, or return null when none was asked for.
+ *
+ * THE TAXONOMY IS --repo's, AND --repo MUST BE THE TARGET'S CHECKOUT. It is
+ * not cross-checked against --repo-slug/--target, on the precedent of
+ * `nen issue file` and `nen label apply`, which also take the taxonomy from
+ * --repo and the GitHub side from a separate flag: a consumer may keep its
+ * declaration in a checkout whose origin is a fork or a mirror, and a refusal
+ * keyed on the origin URL would refuse that legitimate case.
  *
  * The taxonomy is loaded from --repo's checkout ONLY when a filter is given, so
  * an unfiltered fetch stays exactly what it always was: network-only, with no

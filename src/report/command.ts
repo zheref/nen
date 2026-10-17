@@ -34,7 +34,7 @@ import { loadWorkflow, type ReportSection } from "../schema/workflow.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
 import { assembleContext, deriveClock, type PrLookup, type ReportContext } from "./context.js";
-import { assembleObjects, filterEfforts, renderObjects } from "./objects.js";
+import { assembleObjects, filterEfforts, renderObjects, type ReportObject } from "./objects.js";
 import { describeFilter, effortPasses, FILTER_LIST_FLAGS, FILTER_VALUE_FLAGS, readEffortFilter } from "../backlog/filter.js";
 import { assembleRegister, parseDesk, renderRegister, type Desk, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
@@ -543,16 +543,15 @@ async function runData(context: CommandContext): Promise<number> {
     clock,
     warn,
   );
+  const filterLines = filter === null ? [] : [`  ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`];
+  const filtered = filter === null ? null : { of: assembled.length };
+  const filterKey = objectsFilter === null ? {} : { objectsFilter };
   if (desk === null) {
-    const full = { ...document, objects, ...derived, ...(objectsFilter === null ? {} : { objectsFilter }) };
-    emit(context.io, context.json, full, [
-      ...renderData(document),
-      ...renderObjects(objects),
-      ...(filter === null ? [] : [`  ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`]),
-    ]);
+    const full = { ...document, objects, ...derived, ...filterKey };
+    emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects, filtered), ...filterLines]);
     return 0;
   }
-  const register = assembleRegister(desk, {
+  const register = withFilterContext(filter === null ? [] : removedBy(assembled, objects), () => assembleRegister(desk, {
     generatedAt: document.generatedAt,
     objects,
     phases: document.phases,
@@ -561,7 +560,7 @@ async function runData(context: CommandContext): Promise<number> {
     codes: notationSource(root, warn),
     // THE FILE'S NAME, NEVER ITS PATH: footerNote is pasted into pull requests.
     verdictFile: objectOptions?.from === null || objectOptions?.from === undefined ? null : basename(objectOptions.from.display),
-  });
+  }));
   // `objects` STAYS WHERE IT WAS -- after `usage` -- and the register keys
   // follow it, so a consumer of the v0.13 document reads the same keys in the
   // same order and the register is new information after them; the derived
@@ -570,13 +569,46 @@ async function runData(context: CommandContext): Promise<number> {
   // page's, so a derived zone and date beside it would describe a clock the
   // page does not show.
   const tail = registerTail(derived);
+  // `objectsFilter` IS THE LAST KEY ON THIS PATH TOO, so one rule describes
+  // both documents (Nobunaga f1 on NN-PR for #410).
   const full = {
     ...document,
     ...register,
     ...(deskOwnsClock ? { ...tail, generatedDateLocal: null, timeZone: null } : tail),
+    ...filterKey,
   };
-  emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects), ...renderRegister(register)]);
+  emit(context.io, context.json, full, [
+    ...renderData(document),
+    ...renderObjects(objects, filtered),
+    ...filterLines,
+    ...renderRegister(register),
+  ]);
   return 0;
+}
+
+/** The objects the filter took out of the register, in order. */
+function removedBy(assembled: readonly ReportObject[], kept: readonly ReportObject[]): readonly ReportObject[] {
+  const stays = new Set(kept);
+  return assembled.filter((object): boolean => !stays.has(object));
+}
+
+/**
+ * A DESK THAT NAMES AN OBJECT THE FILTER REMOVED IS STILL REFUSED (exit 2), and
+ * the refusal now says the filter is why (Nobunaga f2). It is refused rather
+ * than published because the desk's judgement about that object would sit on
+ * a page that no longer shows it -- the register's own rule. A filter that
+ * keeps nothing under a desk naming nothing is an ordinary exit 0.
+ */
+function withFilterContext<T>(removed: readonly ReportObject[], build: () => T): T {
+  try {
+    return build();
+  } catch (error) {
+    if (removed.length === 0 || !(error instanceof VerbUsageError) || !/is not in this register's objects/.test(error.message)) throw error;
+    const shown = removed.map((object): string => `${object.kind === "pr" ? "PR" : "issue"} #${object.number}`).join(", ");
+    throw new VerbUsageError(
+      `${error.message} The --label/--severity filter removed ${removed.length} object(s) from this register (${shown}); a desk entry naming one of them is refused. Drop it from the desk, or widen the filter.`,
+    );
+  }
 }
 
 /**

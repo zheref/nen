@@ -85,7 +85,7 @@ describe("nen backlog fetch --label", () => {
   it("names the filter and the count in the human output, and an empty match is an explicit 0 at exit 0", async () => {
     const result = await fetch(["--label", "enhancement"]);
     expect(result.code).toBe(0);
-    expect(result.out.join("\n")).toMatch(/^0 row\(s\)/);
+    expect(result.out.join("\n")).toMatch(/^0 row\(s\) after the filter -- 3 issue\(s\), 2 PR\(s\) fetched/);
     expect(result.out.join("\n")).toMatch(/filter: label enhancement -- kept 0 of 4 effort\(s\)/);
   });
 

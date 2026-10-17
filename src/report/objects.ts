@@ -1079,8 +1079,14 @@ export function countChecks(entries: readonly RollupEntry[]): ObjectChecks {
 }
 
 /** The human lines `report data` prints under its `objects:` heading. */
-export function renderObjects(objects: readonly ReportObject[]): readonly string[] {
-  const lines = [`objects: ${objects.length === 0 ? "none (no --target/--prs/--issues/--backlog/--objects-from)" : `${objects.length} row(s)`}`];
+export function renderObjects(objects: readonly ReportObject[], filtered: { readonly of: number } | null = null): readonly string[] {
+  // A REGISTER FILTERED TO NOTHING IS NOT A REGISTER NOBODY ASKED FOR
+  // (zheref/nen#410): "no --target/..." beside a --target would be false.
+  const none =
+    filtered === null
+      ? "none (no --target/--prs/--issues/--backlog/--objects-from)"
+      : `none (the filter kept 0 of ${filtered.of} object(s))`;
+  const lines = [`objects: ${objects.length === 0 ? none : `${objects.length} row(s)`}`];
   for (const object of objects) {
     const mark = object.kind === "pr" ? "PR" : "IS";
     const verdict =
