@@ -812,7 +812,7 @@ export function requireArgv(path: string, pointer: string, value: unknown): read
 const STDOUT_TO_GLOB = /[*?[\]]/;
 
 /** An absolute path, in either family's spelling, plus the Windows drive form. */
-const ABSOLUTE_PATH = /^(?:[\\/]|[A-Za-z]:[\\/])/;
+const ABSOLUTE_PATH = /^(?:[\\/]|[A-Za-z]:)/;
 
 /**
  * One `stdoutTo` value, checked. Exported for the profiles pack's own loader,
@@ -982,7 +982,8 @@ function parseLanes(path: string, value: unknown): Record<string, Lane> {
     lanes[name] = {
       name,
       stack: requireString(path, `${pointer}.stack`, raw["stack"]),
-      cwd: requireString(path, `${pointer}.cwd`, raw["cwd"]),
+      // Match stdoutTo's lexical boundary, including Windows paths on POSIX.
+      cwd: requireStdoutTo(path, `${pointer}.cwd`, raw["cwd"]),
       raw,
     };
   }

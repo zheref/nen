@@ -44,6 +44,21 @@ const PROJECT = {
   verbs: { web: { build: { exe: "pnpm", argv: ["run", "build"] } } },
 } as const;
 
+describe("lane cwd is repository-relative (#404)", () => {
+  for (const cwd of ["../..", "app/../outside", "..\\outside", "/abs", "\\rooted", "C:/abs", "C:\\abs", "C:relative", "\\\\server\\share"]) {
+    it("refuses " + JSON.stringify(cwd) + " at the lane pointer", () => {
+      const error = refusal({ project: { ...PROJECT, lanes: { web: { stack: "nextjs", cwd } } } });
+      expect(error.pointer).toBe("project.lanes.web.cwd");
+      expect(error.message).toMatch(/ABSOLUTE path|climbs out of the repository/);
+    });
+  }
+  it("keeps the root, nested directories, spaces and dot-prefixed names", () => {
+    for (const cwd of [".", "apps/web", "app space", "..hidden", ".config/app"]) {
+      expect(parse({ project: { ...PROJECT, lanes: { web: { stack: "nextjs", cwd } } } }).project?.lanes["web"]?.cwd).toBe(cwd);
+    }
+  });
+});
+
 describe("the three blocks, and the empty file", () => {
   it("accepts a dependency-only file", () => {
     const contract = parse({ dependency: DEPENDENCY });

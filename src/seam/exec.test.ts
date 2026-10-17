@@ -75,6 +75,12 @@ describe("outputLines", () => {
 });
 
 describe("redactRemoteCredentials", () => {
+  it("keeps ports with a later @ in the path, query or fragment (#404)", () => {
+    for (const url of ["https://host:8443/path@revision", "https://host:443/?owner=@alice", "https://[::1]:8080/#@tag"]) {
+      expect(redactRemoteCredentials(url)).toBe(url);
+    }
+    expect(redactRemoteCredentials("https://user:443@host/path@tag")).toBe("https://user:***@tag");
+  });
   it("keeps the user and the host, and replaces only the secret", () => {
     expect(redactRemoteCredentials("ssh://git@host/x")).toBe("ssh://git@host/x");
     expect(redactRemoteCredentials("https://a:b@h/ https://c:d@i/")).toBe("https://a:***@h/ https://c:***@i/");

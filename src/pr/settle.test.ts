@@ -468,6 +468,29 @@ describe("nen pr threads settle -- files in the directory nobody meant to name (
     });
   });
 
+  it("refuses cloud keys, private-key headers and entropy inline AND from files before any call (#404)", async () => {
+    for (const [shape, secret] of [
+      ["AWS access key", "AKIA" + "A".repeat(16)],
+      ["Google API key", "AIza" + "b".repeat(35)],
+      ["Azure account key", "AccountKey=" + "C".repeat(86) + "=="],
+      ["private-key block", "-----BEGIN RSA PRIVATE KEY-----"],
+      ["high-entropy token", "aB3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0iL"],
+    ]) {
+      const err = await refused(
+        [{ thread: "T1", body: "found: " + secret }, { thread: "T2", bodyFile: "reply.md" }],
+        { "reply.md": "found: " + secret },
+        [/entry 0:/, /entry 1:/, new RegExp(shape ?? ""), /value redacted/],
+      );
+      expect(err).not.toContain(secret);
+    }
+  });
+
+  it("does not mistake a port and a later @ for a body credential (#404)", async () => {
+    const from = batch([{ thread: "T1", body: "See https://host:8443/repo@main" }]);
+    const captured = await capture(args(from, ["--dry-run"]), [listCall(pageBody([node("T1", false)]))]);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+  });
+
   it("refuses a body carrying a credential's shape, inline or from a file, without echoing it", async () => {
     const token = `ghp_${"A".repeat(36)}`;
     const err = await refused(

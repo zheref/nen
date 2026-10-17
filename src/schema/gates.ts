@@ -437,6 +437,36 @@ function readPattern(
   return compiled;
 }
 
+/**
+ * A review exemption names a finite bot identity, not an arbitrary regex
+ * language. Admit literal [bot] logins, the legacy dependabot/renovate names,
+ * and literal -bot names, optionally followed by [bot]. No alternation,
+ * wildcard or character class can smuggle a human login into this exemption.
+ */
+function readBotAuthorPattern(path: string, raw: unknown): RegExp {
+  const pointer = "dependabot_carve_out.author_pattern";
+  const compiled = readPattern(path, pointer, raw, true);
+  const source = compiled.source;
+  let login = source.startsWith("^") && source.endsWith("$") ? source.slice(1, -1) : "";
+  let requiresBotSuffix = false;
+  if (login.endsWith("(\\[bot\\])?")) login = login.slice(0, -"(\\[bot\\])?".length);
+  else if (login.endsWith("(?:\\[bot\\])?")) login = login.slice(0, -"(?:\\[bot\\])?".length);
+  else if (login.endsWith("\\[bot\\]")) {
+    login = login.slice(0, -"\\[bot\\]".length);
+    requiresBotSuffix = true;
+  }
+  const literal = /^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(login);
+  const legacy = /^(?:dependabot|renovate)$/i.test(login);
+  if (!literal || (!requiresBotSuffix && !legacy && !/-bot$/i.test(login))) {
+    throw new SchemaError(
+      path,
+      pointer + ".pattern",
+      "must name one anchored literal bot account: ^name\\[bot\\]$, ^name-bot$, or legacy ^dependabot$ / ^renovate$ (an optional (\\[bot\\])? suffix is allowed on those legacy or -bot names). Catch-all patterns and patterns admitting human login forms would bypass review.",
+    );
+  }
+  return compiled;
+}
+
 function readFlag(path: string, pointer: string, raw: unknown): boolean {
   if (raw === undefined || raw === null) return false;
   if (typeof raw !== "boolean") {
@@ -511,9 +541,8 @@ function readFlag(path: string, pointer: string, raw: unknown): boolean {
 // minor after this build's VERSION -- today none. A key that HAS shipped
 // carries that release's literal number (`checks.*`, v0.20.0;
 // `round_policy.minRounds` and `.maxRounds`, zheref/nen#240, v0.21.0). The
-// release proposal corrects NEXT_RELEASE if the release is cut under another
-// number, and `gates.test.ts` fails the build while NEXT_RELEASE is not
-// above VERSION, so a release that ships without bumping it cannot pass.
+// next minor is derived from VERSION, so release proposals change only their
+// version-bearing files, never a second hand-moved release constant.
 
 /** One key nen reads, and the release that introduced it. */
 export interface GatesKeySpec {
@@ -527,7 +556,8 @@ export interface GatesKeySpec {
 export type GatesKeyLevel = Readonly<Record<string, GatesKeySpec>>;
 
 /** The release a key tabled in this change ships in: the next minor after VERSION (R1). */
-export const NEXT_RELEASE = "0.22.0";
+const [releaseMajor, releaseMinor] = VERSION.split(".").map(Number);
+export const NEXT_RELEASE = `${releaseMajor}.${(releaseMinor ?? 0) + 1}.0`;
 
 const pattern = (introducedIn: string): GatesKeySpec => ({
   introducedIn,
@@ -1041,12 +1071,7 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
       );
     }
     dependabotCarveOut = {
-      authorPattern: readPattern(
-        path,
-        "dependabot_carve_out.author_pattern",
-        record["author_pattern"],
-        true,
-      ),
+      authorPattern: readBotAuthorPattern(path, record["author_pattern"]),
       satisfiedByContext: contexts,
     };
   }

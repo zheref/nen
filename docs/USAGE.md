@@ -123,9 +123,9 @@ becoming a "could not read" at exit 1 about a file nobody had a path to yet.
 
 ### Containment
 
-Every path a declaration states is repo-root-relative, and nen refuses one that
-leaves the tree `--repo` pointed at — at exit **2**, before anything is spawned,
-read or written, naming the pointer that stated it. The test is against the path
+Every path a declaration states is repo-root-relative. Runtime containment
+refuses a path leaving the tree `--repo` pointed at — at exit **2**, before
+anything is spawned, read or written, naming its pointer. The test is against the path
 the **kernel would actually reach**, `realpath`-resolved, not against its
 spelling: `build/payload` reads as plainly inside the repository and is refused
 just the same when `build/` is a symlink to somewhere else — and the refusal
@@ -138,9 +138,11 @@ lands, never whether a link was involved. It holds for
 coverage and test reports [`shu coverage`](#nen-shu-coverage) and
 [`shu test-report`](#nen-shu-test-report) read back, and — the flag-stated
 member of the same family — [`report render --out`](#nen-report-render).
-`nen schema check` does **not** answer it: the loader has no filesystem, so a
-`cwd` of `../../../../etc` reads as a well-formed declaration and is refused at
-the moment of use instead. Pointers are checked at load; paths at use.
+The loader also rejects lexical escapes in lane cwd and stdoutTo at their own
+pointers (a malformed declaration, exit **1**): absolute or drive-relative paths, parent segments in either slash
+spelling, and globs. A lane may name the root with `.` or a nested directory.
+`nen schema check` cannot resolve symlinks, so the kernel-path check still runs
+at use; a lexical check passing does not prove where a path actually lands.
 
 ### `--target <owner/name>` names the GitHub repository
 
@@ -1426,6 +1428,13 @@ optional `dependabot_carve_out`:
   "satisfied_by_context": ["sasuke / audit", "kakuzu / review"]
 }
 ```
+
+`author_pattern` names one anchored literal bot account: `^name\[bot\]$`,
+`^name-bot$`, or legacy `^dependabot$` / `^renovate$`. A legacy or
+`-bot` name may also carry the optional `(\[bot\])?` suffix shown above.
+Catch-alls, alternation, wildcard bot sets, unanchored patterns and names that
+admit human login forms are refused at
+`dependabot_carve_out.author_pattern.pattern`.
 
 When the pull request's author matches `author_pattern` **and every context in
 `satisfied_by_context` is present in the rollup and green on its latest run**,
@@ -2797,10 +2806,19 @@ reports, and every human entry line names it relative to the batch
 (`[body: replies/declined.md]`). Every body, inline or read, is at most
 **65536 characters** (GitHub's comment limit; a file too large to fit is
 refused without being read). Every body is also checked, by content, for a
-credential's shape — the one content detector nen has, the redactor its own
-stderr echoes go through: a GitHub token (`ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`),
-a fine-grained `github_pat_`, or a URL's `user:secret@` — and refused without
-echoing the match. It is not a general secret scanner.
+credential's shape through the shared `scanContentSecrets` function: GitHub
+tokens and fine-grained PATs, URL passwords, AWS access-key IDs (`AKIA` /
+`ASIA`), Google API keys, Azure `AccountKey` values, and PEM/OpenSSH
+private-key headers. A base64-like run of at least **32 characters**, at least
+**three character classes** (lowercase, uppercase, digits, symbols) and Shannon
+entropy at least **4.5 bits per character** is also refused. The refusal names
+the shape and says `value redacted`; it never echoes the candidate. Hex commit
+hashes cannot reach that entropy threshold. This is a heuristic: low-entropy
+secrets outside the known shapes can pass. A numeric URL port followed by an
+`@` in the path, query or fragment is not a password. The shared function is
+available for other guards; only settle calls it today. Stage triage retains
+its filename secret-shape rule, and the private-name guard retains its own
+repository-name policy.
 
 The `--from` file itself is read the same way: opened non-blocking,
 `fstat`ed through the descriptor it is read from, required to be a regular
