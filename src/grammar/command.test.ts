@@ -447,11 +447,28 @@ describe("generic list CLI contracts (#410)", () => {
       { name: "labels", value: ["a", "b"], suffix: false },
     ]);
   });
-  it.each([false, true])("names the bad item and prints a corrected line on stderr (json=%s)", async (json) => {
+  it.each([false, true])("names an unknown item without inventing a corrected line (json=%s)", async (json) => {
     const result = await capture(["parse", "state", "--grammar", "<repo>[@<gate:G4|G5;join=+>]", "--line", "hatsu@g4+nope"], [], { json });
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("list item 'nope'");
-    expect(result.err.join("\n")).toContain("Corrected line:");
-    expect(result.err.join("\n")).toContain("state hatsu@");
+    expect(result.err.join("\n")).not.toContain("Corrected line:");
+    if (json) expect(JSON.parse(result.out.join("\n")).corrected).toBeNull();
+  });
+});
+
+
+describe("generic structured repairs -- exact CLI contract", () => {
+  const grammar = "<repo>[@<selector;list=phase:Start|End;band=rank:hot|cold;free=term>][#<terms;join=&>]";
+  it.each([false, true])("prints a concrete recoverable line, json=%s", async (json) => {
+    const result = await capture(["parse", "state", "--grammar", grammar, "--line", "project@start+topic/tag"], [], { json });
+    expect(result.code).toBe(2);
+    expect(result.err).toContain("  state project@Start#topic/tag");
+    if (json) expect(JSON.parse(result.out.join("\n")).corrected).toBe("state project@Start#topic/tag");
+  });
+  it.each([false, true])("omits a corrected line when the alternatives conflict, json=%s", async (json) => {
+    const result = await capture(["parse", "state", "--grammar", grammar, "--line", "project@start+hot"], [], { json });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).not.toContain("Corrected line:");
+    if (json) expect(JSON.parse(result.out.join("\n")).corrected).toBeNull();
   });
 });
