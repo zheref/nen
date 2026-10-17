@@ -24,6 +24,7 @@ export interface RawIssue {
 }
 
 export interface RawPr {
+  readonly labels?: readonly string[];
   readonly number: number;
   readonly title: string;
   readonly body: string;

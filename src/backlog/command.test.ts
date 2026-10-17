@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -470,5 +470,49 @@ describe("backlog --help names --blocks/--affects-consumers, never row fields to
 
   it("documents 'createdAt' as an ISO-8601 instant, since ordering compares it as plain text", () => {
     expect(backlogCommand.usage).toMatch(/ISO-8601/);
+  });
+});
+
+
+describe("backlog fetch filters (#410)", () => {
+  function root(): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-filter-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "labels.json"), JSON.stringify({ labels: ["a", "b", "unused", "x&y", "t:severity/high", "t:severity/low"].map((name) => ({ name, color: "123456", description: "fixture" })) }));
+    return root;
+  }
+  const issueRows = [
+    { number: 1, title: "one", labels: [{ name: "a" }, { name: "t:severity/high" }], created_at: "2026-01-01T00:00:00Z" },
+    { number: 2, title: "two", labels: [{ name: "b" }, { name: "t:severity/low" }], created_at: "2026-01-01T00:00:00Z" },
+  ];
+  const pullRows = [
+    { number: 3, title: "serves #1", body: "", labels: [{ name: "b" }], created_at: "2026-01-01T00:00:00Z" },
+    { number: 4, title: "orphan", body: "", labels: [{ name: "a" }, { name: "b" }], created_at: "2026-01-01T00:00:00Z" },
+  ];
+  const reads: Seams["run"] = (_command, args) => ({ code: 0, stdout: JSON.stringify(args.join(" ").includes("/issues?") ? issueRows : pullRows), stderr: "", spawnFailed: false });
+  it("ANDs repeated labels over issue/PR union, includes orphan PR labels and counts the filtered set", async () => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r", "--repo", root(), "--label", "a", "--label", "b", "--json"], reads);
+    expect(result.code).toBe(0);
+    const data = JSON.parse(result.out.join("\n"));
+    expect(data.rows.map((row: { issueNumber: number | null }) => row.issueNumber)).toEqual([1, null]);
+    expect(data.issueCount).toBe(1);
+    expect(data.prCount).toBe(2);
+    expect(data.filter.labels).toEqual(["a", "b"]);
+  });
+  it.each([["high", [1]], ["low+", [1, 2]]])("selects severity %s from declared ordered labels", async (severity, issues) => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r", "--repo", root(), "--severity", severity as string, "--severity-order", "high,low", "--json"], reads);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).rows.map((row: { issueNumber: number }) => row.issueNumber)).toEqual(issues);
+  });
+  it("reports an explicit zero and the applied filter", async () => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r", "--repo", root(), "--label", "unused"], reads);
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain("0 row(s) -- 0 issue(s), 0 PR(s)");
+    expect(result.out.join("\n")).toContain("filter: labels=unused");
+  });
+  it.each(["missing", "x", "x&y"])("refuses undeclared/unsupported %s before fetching", async (label) => {
+    const result = await capture(["backlog", "fetch", "--repo-slug", "o/r", "--repo", root(), "--label", label], () => { throw new Error("must not fetch invalid filter"); });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(label === "missing" ? "not declared" : "labels containing '&' are not supported in selectors");
   });
 });

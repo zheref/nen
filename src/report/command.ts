@@ -35,6 +35,7 @@ import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
 import { assembleContext, deriveClock, type PrLookup, type ReportContext } from "./context.js";
 import { assembleObjects, renderObjects } from "./objects.js";
+import { filterObjects, readEffortFilter, renderFilter } from "../backlog/filter.js";
 import { assembleRegister, parseDesk, renderRegister, type Desk, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
@@ -44,7 +45,7 @@ import { renderReport } from "./render.js";
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
 usage:
-  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
+  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--label <name> ...] [--severity <band>[+] --severity-order <high,...,low>] [--objects-from <file>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
 
@@ -121,6 +122,17 @@ data      One document describing this branch against --base: the commits, the
   --prs <n,...>    Pull requests to read, by number.
   --issues <n,...> Issues to read, by number.
   --backlog        Every OPEN issue and pull request of --target.
+  --label <name>   Repeatable AND over each issue/direct-PR label union; keep
+                   every object of matched efforts, without fetching unseen
+                   companions of explicit --prs/--issues. Orphan PRs stand alone.
+                   Exact declared names only; '&' in labels is unsupported.
+  --severity <band>[+] --severity-order <high,...,low>
+                   Declared severity-family labels, explicit highest-to-lowest
+                   order required. '+' selects the band and higher. ANDs with
+                   labels. No family/mapping is an exit-2 refusal.
+  Filters require --repo to supply the remote TARGET's matching nen/labels.json.
+  Filtered objects feed context/register tallies; stale desk references refuse.
+  --json adds filter and filteredObjectCount; an empty match is exit 0/count 0.
   --objects-from <file>
                    A JSON array of rows already in the published 'objects'
                    shape -- the offline path. VALIDATED at the read seam and
@@ -205,9 +217,10 @@ unresolvable flag, a template this language does not have, or a token the data
 has not got.`;
 
 /** Per-subcommand flags, so a flag meant for the other verb is refused, not ignored. */
-const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
+const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[]; lists?: readonly string[] }>> = {
   data: {
-    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz"],
+    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz", "severity", "severity-order"],
+    lists: ["label"],
     booleans: ["backlog", "open-stop"],
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
@@ -234,9 +247,9 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
   const spec = SUBCOMMAND_FLAGS[subcommand];
   /* c8 ignore next -- requireSubcommand already refused an unknown name */
   if (spec === undefined) return;
-  const known = new Set([...FAMILY_VALUES, ...FAMILY_BOOLEANS]);
-  const mine = new Set([...spec.values, ...spec.booleans]);
-  const foreign = [...Object.keys(context.args.values), ...context.args.booleans].filter(
+  const known = new Set([...FAMILY_VALUES, ...FAMILY_BOOLEANS, "label"]);
+  const mine = new Set([...spec.values, ...spec.booleans, ...(spec.lists ?? [])]);
+  const foreign = [...Object.keys(context.args.values), ...context.args.booleans, ...Object.keys(context.args.lists)].filter(
     (flag): boolean => known.has(flag) && !mine.has(flag),
   );
   if (foreign.length === 0) return;
@@ -456,6 +469,7 @@ async function runData(context: CommandContext): Promise<number> {
   });
   const warn = (line: string): void => context.io.err(line);
   const tz = readTz(context);
+  const filter = readEffortFilter(context);
   const document = assembleData(
     context.seams,
     root,
@@ -489,10 +503,14 @@ async function runData(context: CommandContext): Promise<number> {
   // every consumer reading the twelve v0.11 keys reads the same twelve here,
   // and the thirteenth is new information rather than a reshuffle
   // (./data.test.ts's key-order test pins both halves).
-  const objects =
+  if (filter !== null && (objectOptions === null || objectOptions.from !== null || (!objectOptions.backlog && objectOptions.prs.length === 0 && objectOptions.issues.length === 0))) throw new VerbUsageError("--label/--severity require live --backlog, --prs or --issues object scope; --objects-from is not a remote target.");
+  const allObjects =
     objectOptions === null
       ? []
       : await assembleObjects(context.seams, objectOptions, warn);
+  const objects = filter === null ? allObjects : filterObjects(allObjects, filter);
+  const filterLines = filter === null ? [] : [renderFilter(filter)];
+  const objectLines = filter !== null && objects.length === 0 ? ["objects: 0 row(s) after filtering"] : renderObjects(objects);
   // THE CONTEXT KEYS (zheref/nen#258) come AFTER `objects` -- new information
   // after everything a v0.13 consumer already reads, on both paths.
   const derived = assembleContext(
@@ -510,8 +528,8 @@ async function runData(context: CommandContext): Promise<number> {
     warn,
   );
   if (desk === null) {
-    const full = { ...document, objects, ...derived };
-    emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects)]);
+    const full = { ...document, objects, ...derived, ...(filter === null ? {} : { filter, filteredObjectCount: objects.length }) };
+    emit(context.io, context.json, full, [...renderData(document), ...objectLines, ...filterLines]);
     return 0;
   }
   const register = assembleRegister(desk, {
@@ -535,9 +553,10 @@ async function runData(context: CommandContext): Promise<number> {
   const full = {
     ...document,
     ...register,
+    ...(filter === null ? {} : { filter, filteredObjectCount: objects.length }),
     ...(deskOwnsClock ? { ...tail, generatedDateLocal: null, timeZone: null } : tail),
   };
-  emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects), ...renderRegister(register)]);
+  emit(context.io, context.json, full, [...renderData(document), ...objectLines, ...renderRegister(register), ...filterLines]);
   return 0;
 }
 
@@ -748,7 +767,7 @@ export const reportCommand: Command = {
   subcommands: SUBCOMMANDS,
   summary: "Assemble an effort's report data, and fill a template with it.",
   usage: USAGE,
-  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS },
+  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS, lists: ["label"] },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("report", context.args, SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);

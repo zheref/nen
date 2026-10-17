@@ -12,9 +12,10 @@ import { readJsonFile, splitList } from "../cli/inputs.js";
 import { describeValue, rowLabel } from "../cli/shape.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { assembleRows, fetchPaginated, MAX_PAGES, type RawIssue, type RawPr } from "./fetch.js";
+import { matchesEffort, readEffortFilter, renderFilter } from "./filter.js";
 import { orderBacklog, type OrderableRow } from "./order.js";
 
-const USAGE = `nen backlog fetch --repo-slug <owner/name> [--limit <n>]
+const USAGE = `nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--repo <path> --label <name> ...] [--severity <band>[+] --severity-order <high,...,low>]
 nen backlog order --rows-from <path> --severity-order <a,b,c,d> [--blocks <id|n,...>] [--affects-consumers <id|n,...>]
 
 fetch:
@@ -30,6 +31,18 @@ fetch:
                 as many pages as it takes to reach it. Omit it to fetch every
                 open row with NO CAP. A capped fetch is always reported as
                 TRUNCATED, never presented as complete.
+
+  --label <name> Repeats as AND over each issue and its directly serving PRs'
+                 label union (an orphan PR alone). Every matched effort is
+                 kept whole. Names are exact and must be declared in --repo's
+                 nen/labels.json; labels containing '&' are unsupported.
+  --severity <band>[+]  One declared severity-family band; '+' includes higher
+                 bands. Requires --severity-order, the complete explicit
+                 highest-to-lowest list of declared labels (or unique leaves).
+                 No severity family or mapping is an exit-2 refusal.
+  Filtered remote fetches require explicit --repo with the TARGET's matching
+  taxonomy, even when launched from another repository; nothing is borrowed
+  from a registry owner's labels. Applied filters and zero counts are reported.
 
 order:
   Applies the backlog-loop §2 priority order to a pre-fetched row set:
@@ -96,6 +109,8 @@ function fetch(context: CommandContext): number {
     throw new VerbUsageError(`--limit takes a positive whole number, got '${limitRaw}'.`);
   }
 
+  const filter = readEffortFilter(context);
+
   // `issues?state=open` returns BOTH issues and PRs (GitHub's own API shape);
   // split by the presence of `.pull_request`.
   const rawFetch = fetchPaginated<RawGhIssue>(context.seams, `repos/${repo}/issues?state=open`, limit);
@@ -109,7 +124,7 @@ function fetch(context: CommandContext): number {
       createdAt: item.created_at,
     }));
 
-  const prsFetch = fetchPaginated<{ number: number; title: string; body: string | null; created_at: string }>(
+  const prsFetch = fetchPaginated<{ number: number; title: string; body: string | null; created_at: string; labels?: readonly { name: string }[] }>(
     context.seams,
     `repos/${repo}/pulls?state=open`,
     limit,
@@ -118,13 +133,20 @@ function fetch(context: CommandContext): number {
     number: pr.number,
     title: pr.title,
     body: pr.body ?? "",
+    labels: pr.labels?.map((label) => label.name) ?? raw.find((item) => item.pull_request !== undefined && item.number === pr.number)?.labels.map((label) => label.name) ?? [],
     createdAt: pr.created_at,
   }));
 
   const truncated = rawFetch.truncated || prsFetch.truncated;
-  const assembly = assembleRows(issues, prs);
+  const all = assembleRows(issues, prs);
+  const rows = filter === null ? all.rows : all.rows.filter((row) => matchesEffort(filter, [
+    { labels: row.labels },
+    ...prs.filter((pr) => row.prNumbers.includes(pr.number)).map((pr) => ({ labels: pr.labels ?? [] })),
+  ]));
+  const assembly = filter === null ? all : { rows, issueCount: rows.filter((row) => row.issueNumber !== null).length, prCount: new Set(rows.flatMap((row) => row.prNumbers)).size };
 
   const lines = [`${assembly.rows.length} row(s) -- ${assembly.issueCount} issue(s), ${assembly.prCount} PR(s)`];
+  if (filter !== null) lines.push(renderFilter(filter));
   if (truncated) {
     lines.push(
       limit === null
@@ -138,7 +160,7 @@ function fetch(context: CommandContext): number {
     lines.push(`${subject}${prList}  ${row.title}`);
   }
 
-  emit(context.io, context.json, { repo, truncated, ...assembly }, lines);
+  emit(context.io, context.json, { repo, truncated, ...assembly, ...(filter === null ? {} : { filter }) }, lines);
   return 0;
 }
 
@@ -349,10 +371,12 @@ export const backlogCommand: Command = {
   summary: "Fetch the backlog fresh, or order a pre-fetched row set.",
   usage: USAGE,
   flags: {
-    values: ["repo-slug", "limit", "rows-from", "severity-order", "blocks", "affects-consumers"],
+    values: ["repo-slug", "limit", "rows-from", "severity-order", "severity", "blocks", "affects-consumers"],
+    lists: ["label"],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("backlog", context.args, ["fetch", "order"]);
+    if (subcommand !== "fetch" && ((context.args.lists["label"]?.length ?? 0) > 0 || context.args.values["severity"] !== undefined)) throw new VerbUsageError("--label and --severity are only read by 'backlog fetch'.");
     return subcommand === "fetch" ? fetch(context) : order(context);
   },
 };

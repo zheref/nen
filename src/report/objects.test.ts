@@ -9,7 +9,7 @@
 // is proved by the fixture rather than asserted in a comment.
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -1035,5 +1035,71 @@ describe("redactRoot is separator-agnostic (NN-PR-#365, Windows)", () => {
   it("leaves a POSIX path the same shape, and a line without the root untouched", () => {
     expect(redactRoot("at '/home/u/repo/nen/gates.json'", "/home/u/repo")).toBe("at '<repo>/nen/gates.json'");
     expect(redactRoot("no path here", "/home/u/repo")).toBe("no path here");
+  });
+});
+
+
+describe("report data effort filters (#410)", () => {
+  const desk = { variant: "register", title: "filtered", scope: "target", gate: "G4", gates: [], rows: {} };
+  function root(over: Record<string, unknown> = {}): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-filtered-report-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "labels.json"), JSON.stringify({ labels: ["a", "b", "unused", "x&y", "t:severity/high", "t:severity/low"].map((name) => ({ name, color: "123456", description: "fixture" })) }));
+    writeFileSync(join(root, "desk.json"), JSON.stringify({ ...desk, ...over }));
+    return root;
+  }
+  const issue = { number: 85, title: "scope", html_url: "https://github.com/zheref/nen/issues/85", state: "open", labels: [{ name: "a" }, { name: "t:severity/high" }] };
+  const issueCall: ScriptedCall = { match: `gh ${issueArgv(TARGET, 85).join(" ")}`, result: { stdout: JSON.stringify(issue) } };
+  const prCalls = (): ScriptedCall[] => [viewCall({ title: "deliver #85", body: "Fixes #85", labels: [{ name: "b" }], statusCheckRollup: [PR_VIEW.statusCheckRollup[0]] }), checkRunsCall([readinessRun()]), threadsCall([])];
+  const argv = (root: string, scope: readonly string[], filters: readonly string[]): string[] => ["report", "data", "--repo", root, "--base", "main", "--target", "zheref/nen", ...scope, ...filters, "--json"];
+  it.each(["explicit", "backlog"])("keeps complete matched efforts and filtered register tallies (%s scope)", async (scope) => {
+    const rootDir = root({ gates: [{ gate: "G4", label: "merge", asks: [{ kind: "MERGE", rank: 1, title: "Merge", why: "Ready", pr: 217, options: [{ letter: "A", label: "Merge", command: "gh pr merge 217", consequence: "lands", star: true }] }] }] });
+    const calls = scope === "backlog" ? [{ match: "gh api --method GET repos/zheref/nen/issues?state=open&per_page=100&page=1", result: { stdout: JSON.stringify([issue, { number: 217, pull_request: {} }]) } }, ...prCalls()] : [issueCall, ...prCalls()];
+    const result = await live(argv(rootDir, scope === "backlog" ? ["--backlog"] : ["--issues", "85", "--prs", "217"], ["--label", "a", "--label", "b", "--register", "desk.json"]), calls);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    const data = JSON.parse(result.out.join("\n"));
+    expect(data.objects.map((object: { number: number }) => object.number)).toEqual([85, 217]);
+    expect(data.filter.labels).toEqual(["a", "b"]);
+    expect(data.filteredObjectCount).toBe(2);
+    expect(data).toMatchObject({ tallyScope: 2, tallyNeedsYou: 1, tallyBlockers: 0, tallyReady: 1, tallyInFlight: 0 });
+  });
+  it.each(["prs", "issues"])("does not fetch unseen companions for --%s", async (scope) => {
+    const rootDir = root();
+    const result = await live(argv(rootDir, [scope === "prs" ? "--prs" : "--issues", scope === "prs" ? "217" : "85"], ["--label", scope === "prs" ? "a" : "b"]), scope === "prs" ? prCalls() : [issueCall]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ objects: [], filteredObjectCount: 0 });
+  });
+  it("combines severity and labels, and retains canonical severity expansion metadata", async () => {
+    const result = await live(argv(root(), ["--issues", "85", "--prs", "217"], ["--label", "b", "--severity", "low+", "--severity-order", "high,low"]), [issueCall, ...prCalls()]);
+    expect(result.code).toBe(0);
+    const data = JSON.parse(result.out.join("\n"));
+    expect(data.filteredObjectCount).toBe(2);
+    expect(data.filter.severityLabels).toEqual(["t:severity/high", "t:severity/low"]);
+  });
+  it("keeps every tally at zero for an empty match and emits human count/filter", async () => {
+    const rootDir = root();
+    const args = argv(rootDir, ["--issues", "85"], ["--label", "unused", "--register", "desk.json"]);
+    const result = await live(args, [issueCall]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ objects: [], filteredObjectCount: 0, tallyScope: 0, tallyNeedsYou: 0, tallyBlockers: 0, tallyReady: 0, tallyInFlight: 0 });
+    const human = await live(args.filter((arg) => arg !== "--json"), [issueCall]);
+    expect(human.code).toBe(0);
+    expect(human.out.join("\n")).toContain("objects: 0 row(s) after filtering");
+    expect(human.out.join("\n")).toContain("filter: labels=unused");
+  });
+  it("refuses stale register references instead of silently pruning caller judgments", async () => {
+    const result = await live(argv(root({ rows: { "issue#85": { needs: "do work" } } }), ["--issues", "85"], ["--label", "unused", "--register", "desk.json"]), [issueCall]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("not in this register's objects");
+  });
+  it.each(["unknown", "x", "x&y"])("refuses undeclared/unsupported %s before any live reads", async (label) => {
+    const result = await live(argv(root(), ["--issues", "85"], ["--label", label]), []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain(label === "unknown" ? "not declared" : "labels containing '&' are not supported in selectors");
+  });
+  it("refuses list flags on the wrong report subcommand", async () => {
+    const result = await live(["report", "render", "--label", "a"], []);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("not read by 'report render'");
   });
 });

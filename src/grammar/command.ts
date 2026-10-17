@@ -54,6 +54,14 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
   --grammar <t>      The template, written the way the skill documents it:
                        <name>            a slot
                        <name:a|b|c>      a slot with an enumerated value set
+                       <gate:G4|G5;join=+>  enumerated list, each item checked
+                       <labels;join=&>      free list, no empty items
+                       <selector;list=gate:G4|G5;band=severity:high|low;free=label>
+                         ordered alternatives: enum '+' list, enum with one
+                         optional trailing '+', else a whole free token ONLY
+                         when no '+' segment belongs to either enumeration.
+                         JSON list values are arrays; alternative names and
+                         suffix presence are reported. Existing [+] is unchanged.
                        word(s) <slot>    the words introduce the slot, matched
                                          as the LAST whole-word occurrence
                        @<slot> #<slot>   a symbol separator, last occurrence
@@ -151,7 +159,7 @@ export const parseCommand: Command = {
 
     if (context.json) {
       context.io.out(JSON.stringify(result, null, 2));
-      return result.ok ? 0 : 2;
+      if (result.ok) return 0;
     }
 
     if (result.ok) {

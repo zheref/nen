@@ -4606,6 +4606,39 @@ facts, never inferred from content.
 
 ### `nen backlog fetch`
 
+**Effort filters (#410).** Add repeatable `--label <name>` flags to require
+all names (AND) in the union of an issue’s labels and its directly serving
+PRs’ labels. Each matching issue retains every directly serving PR; a PR
+with no in-scope issue is its own effort. A PR shared by two issues does
+not mix those issues’ labels transitively. Filtered `issueCount`, `prCount`
+and rows describe the retained set, with PR identities counted once.
+
+A filtered fetch requires an explicit `--repo <checkout>` carrying the
+remote target’s matching `nen/labels.json`. A registry owner’s taxonomy is
+not a substitute for another target’s. Labels match exactly; undeclared
+names refuse at exit 2. Labels containing `&` are unsupported: an input
+that names one, or an undeclared split segment of one, reports
+"labels containing '&' are not supported in selectors" and names it.
+An empty match exits 0 with explicit zero counts. JSON adds `filter`;
+human output echoes the applied filter.
+
+`--severity <band>[+]` ANDs with the label filters. It requires a declared
+`<namespace>:severity/<band>` family and `--severity-order <high,...,low>`
+listing **every declared severity label exactly once**, highest to lowest.
+Order entries may be exact label names or unambiguous case-insensitive
+band leaves. The severity input follows the same mapping. A bare band
+selects that band; one trailing `+` includes it and every band above it.
+Missing families, ambiguous or absent mappings, incomplete orders, and
+malformed suffixes refuse at exit 2. No namespace, priority-to-severity
+mapping, or severity order is inferred. For example, for a target that
+declares `acme:severity/high` and `acme:severity/low`:
+
+```text
+nen backlog fetch --repo-slug acme/project --repo /path/to/project --label model/gpt --label lang/typescript
+nen backlog fetch --repo-slug acme/project --repo /path/to/project --severity low+ --severity-order high,low
+```
+
+
 Answers "what does the open backlog of `owner/name` look like right now": it fetches open issues and
 open pull requests fresh over `gh api` — never from a cache — and assembles one row per effort, meaning
 an issue plus the PRs that reference it (via a closing keyword or a bare `#N` in the PR's title/body),
@@ -12359,6 +12392,38 @@ Parses a skill invocation against the grammar that skill itself publishes, echoe
 
 ### `nen parse <skill>`
 
+**Lists and ordered alternatives (#410).** These additive directives live
+inside a slot and do not change the existing `[+]` optional suffix:
+
+| Template slot | Meaning |
+|---|---|
+| `<gate:G1|G4|G5;join=+>` | One or more `+`-separated values, each checked case-insensitively and normalized to the enumeration’s spelling |
+| `<labels;join=&>` | One or more free `&`-separated items; an empty item refuses |
+| `<selector;list=gate:G4|G5;band=severity:high|low;free=label>` | In order: an enumerated `+`-list, one enumerated band with an optional single trailing `+`, or the whole free token verbatim only when no `+` segment belongs to either enumeration |
+
+JSON list-slot `value` fields are arrays; existing scalar slots remain
+strings. The alternation also emits its chosen `alternative` name and
+`suffix` boolean. Human echoes join list items with their delimiter and
+name the selected alternative. Unknown enumerated items, empty list
+segments and reserved/free mixtures refuse at exit 2; diagnostics and the
+corrected line are printed on stderr, including under `--json`. Both
+alternative enumerations must be disjoint and their names distinct.
+A free token such as `c++` stays whole when none of its segments is reserved.
+A band cannot join another band; gates cannot carry a trailing `+`.
+
+```text
+nen parse backlog-state --grammar '<repo>[@<selector;list=gate:G1|G1-M|G2|G3|G4|G5|all;band=severity:critical|high|medium|low;free=label>][#<labels;join=&>]' --line 'hatsu@g4+g5#model/grok&lang/typescript' --json
+```
+
+This grammar accepts `hatsu@g5#model/gpt`, `hatsu#model/claude`,
+`hatsu@g4+g5#model/grok&lang/typescript`, `hatsu@model/gpt`, `hatsu@high+`,
+`hatsu@medium#lang/prose`, `hatsu@c++`, and `context`. It refuses
+`hatsu@g4+model/gpt`, `hatsu@high+g4`, `hatsu@high+low`, `hatsu@g4+`,
+`hatsu@high++`, and `hatsu@g9+g5`. Gate/severity names are reserved after
+`@`; literal labels with those names can be supplied after `#`.
+`nen parse futon` keeps its existing grammar and behavior.
+
+
 The generic engine: any skill name, its `--grammar` template (`<name>` for a slot, `<name:a|b|c>` for an enumerated slot, `word(s) <slot>` for a slot introduced by literal words matched at its LAST whole-word occurrence, `@<slot>`/`#<slot>` for a symbol-separated slot, `[ ... ]` for an optional trailing clause, `[+]` for an optional literal suffix), and `--line`, the invocation to check.
 
 **Usage**
@@ -12859,6 +12924,30 @@ no coverage bar is applied, no readiness is computed, nothing is published.
 `data` gathers what is on a branch against a base — commits, changed files, the artifacts a run left under `.nen/`, the coverage report the lane's declaration names — into one document; `render` fills a template with that document and writes the result. They are two verbs and not one for the same reason [`board build`](#nen-board-build) and [`board render`](#nen-board-render) are: a verb that gathered AND filled would be a verb whose facts exist only inside the rendering that consumed them, so you could neither diff them, store them beside the report, nor re-render from them. `render` takes any JSON, so a caller who assembles their own facts is not locked out of the templating.
 
 ### `nen report data`
+
+**Filtering live object scopes (#410).** `--backlog`, `--prs` and `--issues`
+accept the same repeatable `--label` AND filters and explicit
+`--severity <band>[+] --severity-order <high,...,low>` filter as
+[`backlog fetch`](#nen-backlog-fetch). `--repo` must supply the remote
+target’s matching label taxonomy; cross-repository calls do not borrow
+a registry owner’s labels. Filters on `--objects-from` are refused.
+Only the named scope is fetched: filtering `--prs` does not fetch companion
+issues, and filtering `--issues` does not fetch companion PRs.
+
+The filter tests each issue with its directly serving in-scope PRs, keeps
+every object of matched efforts, and deduplicates the retained object
+identities. A shared PR does not create a transitive label union between
+issues. Filtering precedes context derivation and register assembly, so
+`tallyScope` and readiness/blocker/in-flight tallies count the filtered set.
+A register desk must describe that set: stale row or PR-ask references
+still refuse, and caller-authored unbound asks are not silently removed.
+`tallyNeedsYou` continues to count the supplied desk’s asks.
+
+JSON adds the applied `filter` and explicit `filteredObjectCount`; human
+output echoes the filter and reports zero rows for an empty match. An
+empty match succeeds at exit 0. Undeclared labels, unsupported `&` labels,
+or missing severity mappings refuse at exit 2, as on `backlog fetch`.
+
 
 One document describing this branch against `--base`: the commits (`<base>..HEAD`), the changed files (`<base>...HEAD` — three dots, the merge-base set a pull request shows), the evidence rows (an empty list in this release: `nen shu evidence` owns them), the lane's coverage report **if one is already on disk**, the build proof, and the last recorded stop — then **where the effort is**, derived rather than left to prose: its worktree, its stage and gate, its turn, and the local clock ([#258](https://github.com/zheref/nen/issues/258)). **Read-only**: it runs `git` reads (`rev-parse`, `symbolic-ref`, `remote get-url`, `log`, `diff`), opens files, and has no write path in any flag combination.
 

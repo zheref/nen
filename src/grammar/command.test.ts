@@ -435,3 +435,23 @@ describe("nen parse -- refuses an invocation with no skill named", () => {
     expect((await capture(["parse"])).code).toBe(2);
   });
 });
+
+
+describe("generic list CLI contracts (#410)", () => {
+  it("emits list arrays and the selected alternative in JSON", async () => {
+    const result = await capture(["parse", "state", "--grammar", "<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>][#<labels;join=&>]", "--line", "hatsu@g4+g5#a&b"], [], { json: true });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).slots).toEqual([
+      { name: "repo", value: "hatsu", suffix: false },
+      { name: "selector", value: ["G4", "G5"], suffix: false, alternative: "gate" },
+      { name: "labels", value: ["a", "b"], suffix: false },
+    ]);
+  });
+  it.each([false, true])("names the bad item and prints a corrected line on stderr (json=%s)", async (json) => {
+    const result = await capture(["parse", "state", "--grammar", "<repo>[@<gate:G4|G5;join=+>]", "--line", "hatsu@g4+nope"], [], { json });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("list item 'nope'");
+    expect(result.err.join("\n")).toContain("Corrected line:");
+    expect(result.err.join("\n")).toContain("state hatsu@");
+  });
+});

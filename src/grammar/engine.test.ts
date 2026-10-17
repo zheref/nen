@@ -103,7 +103,7 @@ describe("parseInvocation", () => {
 // swallowed the whole line into that slot and reported ok:true. Every shape the
 // issue names is pinned here so the collapse cannot come back quietly.
 describe("parseInvocation -- single-slot templates with a bracketed clause (zheref/nen#30)", () => {
-  const slot = (result: ReturnType<typeof parseInvocation>, name: string): string | undefined =>
+  const slot = (result: ReturnType<typeof parseInvocation>, name: string): string | readonly string[] | undefined =>
     result.slots.find((s): boolean => s.name === name)?.value;
 
   describe("<repo>[@<gate:...>] -- a bracketed symbol-separated enumerated slot", () => {
@@ -345,4 +345,47 @@ describe("parseInvocation -- single-slot templates with a bracketed clause (zher
       { name: "terminal", value: "tag", suffix: false },
     ]);
   });
+});
+
+
+describe("list slots and three-way alternatives (#410)", () => {
+  const selector = "<repo>[@<selector;list=gate:G1|G1-M|G2|G3|G4|G5|all;band=severity:critical|high|medium|low;free=label>][#<labels;join=&>]";
+  it.each([
+    ["hatsu@g5#model/gpt", "gate", ["G5"], false, ["model/gpt"]],
+    ["hatsu#model/claude", undefined, undefined, undefined, ["model/claude"]],
+    ["hatsu@g4+g5#model/grok&lang/typescript", "gate", ["G4", "G5"], false, ["model/grok", "lang/typescript"]],
+    ["hatsu@model/gpt", "label", "model/gpt", false, undefined],
+    ["hatsu@high+", "severity", "high", true, undefined],
+    ["hatsu@medium#lang/prose", "severity", "medium", false, ["lang/prose"]],
+    ["hatsu@c++", "label", "c++", false, undefined],
+    ["context", undefined, undefined, undefined, undefined],
+  ])("parses %s", (line, alternative, value, suffix, labels) => {
+    const result = parseInvocation("backlog-state", parseTemplate(selector), line as string);
+    expect(result.ok).toBe(true);
+    const choice = result.slots.find((slot) => slot.name === "selector");
+    expect(choice?.alternative).toBe(alternative);
+    expect(choice?.value).toEqual(value);
+    expect(choice?.suffix).toBe(suffix);
+    expect(result.slots.find((slot) => slot.name === "labels")?.value).toEqual(labels);
+  });
+  it.each(["hatsu@g4+model/gpt", "hatsu@high+g4", "hatsu@high+low", "hatsu@g4+", "hatsu@g4++g5", "hatsu@high++", "hatsu@g9+g5", "hatsu#model/gpt&", "hatsu#&model/gpt", "hatsu#x&&y", "hatsu#", "hatsu@"])("refuses %s without falling through to a free label", (line) => {
+    const result = parseInvocation("backlog-state", parseTemplate(selector), line);
+    expect(result.ok).toBe(false);
+    expect(result.problems.length).toBeGreaterThan(0);
+    expect(result.corrected).toContain("backlog-state hatsu");
+  });
+  it("normalizes every enumerated list item and echoes the choice", () => {
+    const result = parseInvocation("state", parseTemplate("<repo>[@<gate:G1|G4|G5;join=+>]"), "hatsu@g4+g5");
+    expect(result.slots[1]?.value).toEqual(["G4", "G5"]);
+    expect(result.echo).toContain("gate: G4+G5");
+    for (const line of ["hatsu@g4+bad", "hatsu@g4+", "hatsu@g4++g5"]) expect(parseInvocation("state", parseTemplate("<repo>[@<gate:G1|G4|G5;join=+>]"), line).ok).toBe(false);
+    const choice = parseInvocation("state", parseTemplate(selector), "hatsu@HIGH+");
+    expect(choice.echo).toContain("selector: high [severity] (+)");
+  });
+  it.each([
+    "<slot;join=x>", "<slot;join=+;join=+>",
+    "<slot;list=a:G4;band=b:G4;free=c>",
+    "<slot;list=a:G4;band=b:high>",
+    "<slot:G4|;join=+>", "<slot:G4;join=+>[+]",
+  ])("refuses malformed template %s", (template) => expect(() => parseTemplate(template)).toThrow());
 });

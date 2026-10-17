@@ -76,6 +76,12 @@ export interface Slot {
   readonly optional: boolean;
   /** A literal suffix the slot may carry, e.g. futon's `[+]`. */
   readonly suffix: string | null;
+  readonly join?: "+" | "&";
+  readonly alternatives?: {
+    readonly list: { readonly name: string; readonly values: readonly string[] };
+    readonly band: { readonly name: string; readonly values: readonly string[] };
+    readonly free: string;
+  };
 }
 
 /**
@@ -133,6 +139,41 @@ const TOKEN = /<([^<>]+)>|\[|\]|[^\s<>[\]]+/g;
 interface PendingWord {
   readonly word: string;
   readonly depth: number;
+}
+
+function slotForm(inner: string): { name: string; values: readonly string[]; join?: "+" | "&"; alternatives?: Slot["alternatives"] } {
+  const [head = "", ...directives] = inner.split(";");
+  const colon = head.indexOf(":");
+  const name = colon === -1 ? head.split("|")[0]?.trim() ?? head : head.slice(0, colon).trim();
+  const source = colon === -1 ? (head.includes("|") ? head : "") : head.slice(colon + 1);
+  const values = source.split("|").map((value) => value.trim()).filter((value) => value !== "");
+  if (directives.length === 0) return { name, values };
+  if (name === "") throw new GrammarError("a list or alternation slot needs a name");
+  if (directives.length === 1 && (directives[0] === "join=+" || directives[0] === "join=&")) {
+    const join = directives[0] === "join=+" ? "+" : "&";
+    if (source !== "" && (source.split("|").some((value) => value.trim() === "" || value.includes(join)) || new Set(values.map((value) => value.toLowerCase())).size !== values.length)) throw new GrammarError(`list <${name}> needs distinct, nonempty enumeration items without '${join}'`);
+    return { name, values, join };
+  }
+  const parts = new Map<string, string>();
+  for (const directive of directives) {
+    const equal = directive.indexOf("=");
+    const key = directive.slice(0, equal);
+    if (equal < 0 || !["list", "band", "free"].includes(key) || parts.has(key)) throw new GrammarError(`unsupported or duplicate slot directive '${directive}'`);
+    parts.set(key, directive.slice(equal + 1));
+  }
+  const enumeration = (key: string): { name: string; values: string[] } => {
+    const value = parts.get(key) ?? "";
+    const colon = value.indexOf(":");
+    const name = value.slice(0, colon).trim();
+    const values = value.slice(colon + 1).split("|").map((item) => item.trim());
+    if (colon < 1 || values.some((item) => item === "" || item.includes("+")) || new Set(values.map((item) => item.toLowerCase())).size !== values.length) throw new GrammarError(`'${key}' needs a named, nonempty enumeration with distinct values`);
+    return { name, values };
+  };
+  const list = enumeration("list");
+  const band = enumeration("band");
+  const free = parts.get("free")?.trim();
+  if (values.length > 0 || !free || new Set([list.name, band.name, free]).size !== 3 || list.values.some((item) => band.values.some((other) => other.toLowerCase() === item.toLowerCase()))) throw new GrammarError(`alternation <${name}> needs disjoint list/band enumerations and three distinct alternative names`);
+  return { name, values: [], alternatives: { list, band, free } };
 }
 
 export function parseTemplate(template: string): Grammar {
@@ -195,6 +236,7 @@ export function parseTemplate(template: string): Grammar {
         const closesImmediately = depth > 0 && /^\s*\]/.test(template.slice(TOKEN.lastIndex));
         if (closesImmediately && slots.length > 0 && pendingWords.length === 0 && pendingSymbol === null) {
           const last = slots[slots.length - 1];
+          if (last?.join !== undefined || last?.alternatives !== undefined) throw new GrammarError("list and alternation slots carry their own suffix rules; do not add [+]");
           if (last !== undefined) slots[slots.length - 1] = { ...last, suffix: raw };
           continue;
         }
@@ -208,13 +250,8 @@ export function parseTemplate(template: string): Grammar {
     }
 
     // A slot.
-    const colon = inner.indexOf(":");
-    const name = colon === -1 ? inner.split("|")[0]?.trim() ?? inner : inner.slice(0, colon).trim();
-    const valueSource = colon === -1 ? (inner.includes("|") ? inner : "") : inner.slice(colon + 1);
-    const values = valueSource
-      .split("|")
-      .map((value): string => value.trim())
-      .filter((value): boolean => value !== "");
+    const form = slotForm(inner);
+    const { name } = form;
 
     if (pendingSymbol === null && new Set(pendingWords.map((pending): number => pending.depth)).size > 1) {
       // `foo [bar <slot>]`: are the introducing words 'foo bar' (with 'bar'
@@ -243,8 +280,7 @@ export function parseTemplate(template: string): Grammar {
       );
     }
     slots.push({
-      name,
-      values,
+      ...form,
       separator,
       separatorKind: separator === null ? null : pendingSymbol !== null ? "symbol" : "word",
       separatorOptional: separatorDepth !== null && separatorDepth > 0,
@@ -320,7 +356,8 @@ function stripLeading(text: string, separator: string, kind: "word" | "symbol" |
 
 export interface SlotValue {
   readonly name: string;
-  readonly value: string;
+  readonly value: string | readonly string[];
+  readonly alternative?: string;
   /** True when the template's `[+]` suffix was present on this slot. */
   readonly suffix: boolean;
 }
@@ -369,6 +406,38 @@ function templateOrder(grammar: Grammar): TemplateEntry[] {
     if (index < grammar.slots.length) entries.push({ kind: "slot", index });
   }
   return entries;
+}
+
+function structuredValue(slot: Slot, text: string): SlotValue {
+  const hit = (values: readonly string[], item: string): string | undefined => values.find((value) => value.toLowerCase() === item.toLowerCase());
+  if (slot.join !== undefined) {
+    const items = text.split(slot.join).map((item) => item.trim());
+    const values = items.map((item) => {
+      if (item === "") throw new GrammarError(`<${slot.name}> has an empty list item (trailing or repeated '${slot.join}')`);
+      if (slot.values.length === 0) return item;
+      const value = hit(slot.values, item);
+      if (value === undefined) throw new GrammarError(`<${slot.name}> list item '${item}' is not one of ${slot.values.join(" | ")}`);
+      return value;
+    });
+    return { name: slot.name, value: values, suffix: false };
+  }
+  const alternatives = slot.alternatives!;
+  const segments = text.split("+");
+  const list = segments.map((item) => hit(alternatives.list.values, item));
+  if (list.every((value) => value !== undefined)) return { name: slot.name, value: list as string[], suffix: false, alternative: alternatives.list.name };
+  const suffix = text.endsWith("+");
+  const band = hit(alternatives.band.values, suffix ? text.slice(0, -1) : text);
+  if (band !== undefined) return { name: slot.name, value: band, suffix, alternative: alternatives.band.name };
+  const hasList = list.some((value) => value !== undefined);
+  const hasBand = segments.some((item) => hit(alternatives.band.values, item) !== undefined);
+  if (!hasList && !hasBand && text !== "") return { name: slot.name, value: text, suffix: false, alternative: alternatives.free };
+  const why = hasList && hasBand ? "mixes both enumerations" : segments.some((item) => item === "") ? "has an empty '+' segment or an unsupported trailing '+'" : hasBand && segments.every((item) => hit(alternatives.band.values, item) !== undefined) ? "joins two band values; use one band, optionally with a single trailing '+'" : "mixes enumerated values with free segments";
+  throw new GrammarError(`<${slot.name}> '${text}' ${why}; choose a ${alternatives.list.name} list, one ${alternatives.band.name}[+], or an unreserved ${alternatives.free}`);
+}
+
+function renderSlot(value: SlotValue, slot: Slot): string {
+  const text = typeof value.value === "string" ? value.value : value.value.join(slot.join ?? "+");
+  return `${text}${value.suffix ? slot.suffix ?? "+" : ""}`;
 }
 
 export function parseInvocation(skill: string, grammar: Grammar, line: string): ParseResult {
@@ -476,7 +545,14 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   for (const slot of grammar.slots) {
     const value = found.get(slot.name);
     if (value === undefined) continue;
-    let text = value.value;
+    let text = typeof value.value === "string" ? value.value : value.value.join(slot.join ?? "+");
+    if (slot.join !== undefined || slot.alternatives !== undefined) {
+      try { slots.push(structuredValue(slot, text)); } catch (error) {
+        if (!(error instanceof GrammarError)) throw error;
+        problems.push(error.message);
+      }
+      continue;
+    }
     let suffix = false;
     if (slot.suffix !== null && text.endsWith(slot.suffix)) {
       text = text.slice(0, text.length - slot.suffix.length).trim();
@@ -514,7 +590,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   // 'BC@<gate: ...>', not to a line that pretends they never typed a gate.
   const attempted = new Set<string>();
   for (const [name, value] of found) {
-    if (value.value.trim() !== "") attempted.add(name);
+    if (typeof value.value !== "string" || value.value.trim() !== "" || grammar.slots.some((slot) => slot.name === name && (slot.join !== undefined || slot.alternatives !== undefined))) attempted.add(name);
   }
   const corrected = correctedLine(skill, grammar, byName, attempted, clausePresent);
 
@@ -532,7 +608,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
     if (slot === undefined) continue;
     const value = byName.get(slot.name);
     if (value !== undefined) {
-      echo.push(`${value.name}: ${value.value}${value.suffix ? " (+)" : ""}`);
+      echo.push(`${value.name}: ${typeof value.value === "string" ? value.value : value.value.join(slot.join ?? "+")}${value.alternative === undefined ? "" : ` [${value.alternative}]`}${value.suffix ? " (+)" : ""}`);
       continue;
     }
     // AN OPTIONAL SLOT NOBODY FILLED IS ECHOED AS ABSENT, rather than left out
@@ -597,7 +673,7 @@ function correctedLine(
     const rendered =
       value === undefined
         ? `<${slot.name}${slot.values.length > 0 ? `: ${slot.values.join(" | ")}` : ""}>`
-        : `${value.value}${value.suffix && slot.suffix !== null ? slot.suffix : ""}`;
+        : renderSlot(value, slot);
     if (slot.separator === null) {
       out += ` ${rendered}`;
     } else if (slot.separatorKind === "symbol") {
