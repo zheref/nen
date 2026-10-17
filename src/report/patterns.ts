@@ -31,6 +31,14 @@
  * a handful of directory patterns and every construct beyond these is one more
  * thing a report's tier column, or a review's scope list, can be wrong about.
  */
+export function exactPathProblem(pattern: string): string | null {
+  if (!pattern.startsWith("=")) return null;
+  const exact = pattern.slice(1);
+  return exact.trim() === "" || exact.startsWith("/") || exact.split("/").some((segment): boolean => segment === "" || segment === "." || segment === "..") || /[\\*?\u0000-\u001f\u007f]/.test(exact)
+    ? "an '=path' entry must name one exact repo-relative path, with no glob, backslash, control character, empty, '.' or '..' segment"
+    : null;
+}
+
 export function matchesPattern(path: string, pattern: string): boolean {
   if (pattern === "") return false;
   if (pattern.startsWith("=")) return path === pattern.slice(1);

@@ -170,6 +170,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     { before: "context\npin 1\n", after: "pin 2\n", ok: false },
     { before: "context\npin 1\n", after: "context\npin 2\npayload();\n", ok: false },
     { before: "context\npin 1\n", after: null, ok: false },
+    { before: "pin " + "1".repeat(65_536) + "\n", after: "pin 2\n", ok: false },
   ])("enforces the BASE's line bound before any merge (ok=$ok)", async ({ before, after, ok }) => {
     const root = tmpRoot();
     // A locally widened policy cannot waive the base's content bound.
@@ -189,6 +190,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     expect(outcome.report.ran).toBe(false);
     expect(seams.calls.some((call): boolean => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
     if (!ok) expect(outcome.lines.join("\n")).toContain("outside (line-scoped)");
+    if (before.length > 65_536) expect(outcome.lines.join("\n")).toContain("line matching exceeded its length bound");
   });
 
   it("refuses a same-named directory under an exact file string without running gh merge", async () => {

@@ -7006,10 +7006,37 @@ claims that exact file and requires **every removed and every added line**
 to match at least one declared expression. Matches are case-sensitive and
 consume the whole line, even when the expression omits anchors. No regex
 flags are implicit. Unchanged context need not match. `keys` and `lines`
-are mutually exclusive, each list must be non-empty, and malformed or
-exponential-backtracking pattern shapes fail schema loading by pointer.
+are mutually exclusive, each list must be non-empty, and unsupported or
+malformed expressions fail schema loading by pointer.
 Use `^$` to allow an empty line. A broad string overlapping a content-bound
 entry never waives that entry's content check.
+
+The release-only expression language supports literals, escaped regex
+punctuation, `\t` / `\n` / `\r` / `\f` / `\v`, `\xHH`, `\uHHHH`, ASCII
+`\d` / `\D` / `\w` / `\W`, dot, positive/negated character classes with
+literal ranges, concatenation, `|`, ordinary/noncapturing groups, and greedy
+`?` / `*` / `+` / `{m}` / `{m,n}` / `{m,}` repetition. Dot excludes CR, LF,
+U+2028 and U+2029. Anchors may appear only at the whole pattern's start/end;
+they are optional because full consumption is mandatory. Captures are not
+returned. Backreferences, lookaround, named groups, inline flags, lazy
+quantifiers, empty classes, internal anchors, property/word-boundary/identity
+escapes and other syntax outside this subset are refused, never reinterpreted.
+Literal regex punctuation must be escaped. Existing hazardous-shape refusals
+remain; the runtime safety bound comes from the state matcher below.
+
+Each expression compiles to a bounded state machine: at most 4,096 UTF-16
+source units, 64 nested groups, 1,024 compiled states and 256 class interval
+terms before merging. A file entry permits at most 64 expressions and 16,384
+compiled states in total; oversized repetitions are refused before expansion.
+Matching uses iterative state sets, never native regex backtracking on PR
+text. Each state is visited once per input boundary, including epsilon cycles:
+for `L` UTF-16 units, `M` states and `R` class intervals, the matching work is
+`O((L+1) M (1+log R))`, with `O(M)` auxiliary memory. Changed lines are limited
+to 65,536 UTF-16 units; across all expressions, at most 1,000,000 charged
+state/edge/predicate/input steps per changed line and 8,000,000 per bounded
+file are allowed. Exhaustion is a distinct content-check refusal, not a
+nonmatching line or a pass. These are computational bounds for this matcher,
+not wall-clock promises or a bound on fetching/decoding the complete blobs.
 
 Both verbs compare complete UTF-8 file content at the PR's **merge base**
 and head with a bounded Myers line diff; the files endpoint's `patch` is
@@ -7021,10 +7048,15 @@ exceeding 100,000 lines per file, 2,048 edits or 1,000,000 comparison steps
 fails closed. File additions, deletions and renames without readable content
 at the same exact path at both commits therefore fail this bound.
 
-Nen's own unit now bounds `src/version.ts` to its version/floor literals
-and `README.md` / `docs/USAGE.md` to fixed install/example lines whose
-numeric pins may change. The bootstrap host, `--source`, script path,
-command structure and surrounding text cannot change under that unit.
+Nen's own unit bounds the changed lines in `src/version.ts` to version/floor
+literal forms, and those in `README.md` / `docs/USAGE.md` to declared
+install/example forms with numeric pins. Each removed and added line is
+checked independently: the bound does **not** preserve a line's presence,
+position, pairing or consistent versions. Allowed lines may be deleted,
+reordered or replaced by another allowed form; optional fixed command
+fragments may change too. Literal destinations within each form are fixed.
+A changed line outside the allowed set fails the bound; unchanged surrounding
+text is not examined by it.
 `nen schema check` reports its declaration as `nen/workflow.json#release`,
 counting exact, prefix/glob, key-bound and line-bound entries. As with the
 other policy pointer rows, an unreadable policy is diagnosed on the main

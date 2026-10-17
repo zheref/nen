@@ -670,6 +670,15 @@ describe("review.scopes", () => {
     );
   });
 
+  it.each(["=", "= ", "=/README.md", "=../README.md", "=./README.md", "=src//file", "=README.md/", "=src/*.ts", "=src/?.ts", "=src\\file", "=file\nname"])("refuses invalid exact review path %j by pointer", (pattern) => {
+    expect(() => parseWorkflow("<doc>", { review: { scopes: { code: { persona: "n", tier: "deep", paths: ["src/**", pattern] } } } })).toThrow(/review\.scopes\.code\.paths\[1\].*exact repo-relative path/);
+  });
+
+  it("retains bare prefix/glob paths and accepts an exact filename beginning '='", () => {
+    const paths = ["src/", "src/**/*.ts", "=README.md", "==literal"];
+    expect(parseWorkflow("<doc>", { review: { scopes: { code: { persona: "n", tier: "deep", paths } } } }).review.scopes["code"]?.paths).toEqual(paths);
+  });
+
   it("validates a persona and a tier as NAMES and never against a list", () => {
     // A tier nen has never heard of is fine: `models` is an open map at both
     // levels, and an enumeration here would be nen inventing a roster.
@@ -745,6 +754,14 @@ describe("release.unitPaths -- the content-scoped (object) entry form", () => {
     { path: "file.txt", lines: [""], pointer: "lines[0]" },
     { path: "file.txt", lines: ["["], pointer: "lines[0]" },
     { path: "file.txt", lines: ["(a+)+$"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(a)\\1"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(?=a)a"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["a".repeat(4097)], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["(".repeat(65) + "a" + ")".repeat(65)], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["a{1024}"], pointer: "lines[0]" },
+    { path: "file.txt", lines: ["[" + "a".repeat(257) + "]"], pointer: "lines[0]" },
+    { path: "file.txt", lines: Array<string>(65).fill("a"), pointer: "lines[64]" },
+    { path: "file.txt", lines: Array<string>(64).fill("a".repeat(256)), pointer: "lines[63]" },
     { path: "file.txt", lines: [1], pointer: "lines[0]" },
     { path: "file.txt", lines: null, pointer: "lines" },
   ])("refuses malformed or unsafe line bounds: $lines", ({ pointer, ...entry }) => {
@@ -755,6 +772,11 @@ describe("release.unitPaths -- the content-scoped (object) entry form", () => {
       expect(error).toBeInstanceOf(SchemaError);
       expect((error as Error).message).toContain("release.unitPaths[0]." + pointer);
     }
+  });
+
+  it("accepts ambiguous adjacent repetition only through the bounded release matcher", () => {
+    const lines = ["a+".repeat(10)];
+    expect(parseWorkflow("<doc>", { release: { unitPaths: [{ path: "file.txt", lines }] } }).release.unitPaths).toEqual([{ path: "file.txt", lines }]);
   });
 
   it("refuses a mixed keys/lines object instead of choosing one bound silently", () => {

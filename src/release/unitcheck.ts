@@ -26,7 +26,8 @@ import { matchesPattern } from "../report/patterns.js";
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { GH, must, mustJson, ToolError, type Seams } from "../seam/exec.js";
 import type { ReleaseUnitEntry, ReleaseUnitKeyedPath, ReleaseUnitLinedPath } from "../schema/workflow.js";
-import { releaseLinePattern } from "../schema/pattern.js";
+import { releaseLinePatterns } from "../schema/pattern.js";
+import { RELEASE_PATTERN_LIMITS, type ReleaseLineMatcher } from "../schema/releasepattern.js";
 import { changedLines, type ChangedLine } from "./linediff.js";
 import { loadRepoRegistry } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
@@ -780,8 +781,13 @@ export interface LineScopedOutcome {
   readonly reason: string | null;
 }
 
+interface LineScopedWork {
+  file: number;
+  readonly lines: Map<string, number>;
+}
+
 /** Both sides of every changed line must match a declared whole-line pattern. */
-export function checkLineScopedPath(entry: ReleaseUnitLinedPath, baseRef: string, headRef: string, readText?: ReadTextAt): LineScopedOutcome {
+export function checkLineScopedPath(entry: ReleaseUnitLinedPath, baseRef: string, headRef: string, readText?: ReadTextAt, work: LineScopedWork = { file: 0, lines: new Map() }): LineScopedOutcome {
   const refuse = (reason: string): LineScopedOutcome => ({ path: entry.path, ok: false, offendingLines: [], reason });
   if (readText === undefined) return refuse("content not read -- no base/head text reader was available to this check");
   const base = readText(entry.path, baseRef);
@@ -789,18 +795,31 @@ export function checkLineScopedPath(entry: ReleaseUnitLinedPath, baseRef: string
   if (base === null || head === null || base.includes("\0") || head.includes("\0")) return refuse("whole file -- unreadable or not UTF-8 text at its base or head commit");
   const diff = changedLines(base, head);
   if (diff === null) return refuse("complete line diff exceeded its work bound (100000 lines per file, 2048 edits, 1000000 comparison steps)");
-  let patterns: readonly RegExp[];
+  let patterns: readonly ReleaseLineMatcher[];
   try {
-    patterns = entry.lines.map(releaseLinePattern);
+    patterns = releaseLinePatterns(entry.lines);
   } catch {
     return refuse("invalid or unsafe line regular expression");
   }
-  const offendingLines = diff.filter((line): boolean => !patterns.some((pattern): boolean => {
-    const match = pattern.exec(line.text);
-    // `$` can match before a final CR: require every character, including
-    // CR, to have been consumed. No implicit flags, trimming or normalization.
-    return match !== null && match[0].length === line.text.length;
-  }));
+  const offendingLines: ChangedLine[] = [];
+  for (const line of diff) {
+    const identity = `${line.side}:${line.line}`;
+    let lineWork = work.lines.get(identity) ?? 0;
+    let matched = false;
+    for (const pattern of patterns) {
+      const result = pattern.match(line.text, Math.min(RELEASE_PATTERN_LIMITS.lineWork - lineWork, RELEASE_PATTERN_LIMITS.fileWork - work.file));
+      lineWork += result.work;
+      work.file += result.work;
+      work.lines.set(identity, lineWork);
+      if (result.kind === "exhausted") {
+        if (result.reason === "line-length") return refuse(`line matching exceeded its length bound (${RELEASE_PATTERN_LIMITS.lineLength} UTF-16 code units per changed line)`);
+        const scope = work.file >= RELEASE_PATTERN_LIMITS.fileWork ? `${RELEASE_PATTERN_LIMITS.fileWork} steps per bounded file` : `${RELEASE_PATTERN_LIMITS.lineWork} steps per changed line`;
+        return refuse(`line matching exceeded its work bound (${scope}); complete content was not checked`);
+      }
+      if (result.kind === "match") { matched = true; break; }
+    }
+    if (!matched) offendingLines.push(line);
+  }
   return { path: entry.path, ok: offendingLines.length === 0, offendingLines, reason: null };
 }
 
@@ -832,6 +851,9 @@ export function assembleUnitCheck(
   const outsideUnit = outsideReleaseUnit(changedFiles, unitPaths);
   const keyScopedViolations: KeyScopedOutcome[] = [];
   const lineScopedViolations: LineScopedOutcome[] = [];
+  // Multiple bounds on the SAME file are all mandatory, and share the file
+  // and changed-line budgets rather than multiplying the work allowance.
+  const matchingWork = new Map<string, LineScopedWork>();
   for (const entry of unitPaths) {
     if (typeof entry === "string") continue;
     // Only a CONTENT entry whose declared file was actually touched (as its
@@ -841,7 +863,9 @@ export function assembleUnitCheck(
     const touched = changedFiles.some((file): boolean => file.path === entry.path || file.previousPath === entry.path);
     if (!touched) continue;
     if ("lines" in entry) {
-      const outcome = checkLineScopedPath(entry, keyScoped?.baseRef ?? "", keyScoped?.headRef ?? "", keyScoped?.readText);
+      const work = matchingWork.get(entry.path) ?? { file: 0, lines: new Map<string, number>() };
+      matchingWork.set(entry.path, work);
+      const outcome = checkLineScopedPath(entry, keyScoped?.baseRef ?? "", keyScoped?.headRef ?? "", keyScoped?.readText, work);
       if (!outcome.ok) lineScopedViolations.push(outcome);
       continue;
     }

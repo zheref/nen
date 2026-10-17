@@ -852,6 +852,45 @@ describe("line-bound release content (zheref/nen#348)", () => {
     }
   });
 
+  it("permits allowed-line deletion, movement, substitution and optional forms without promising pairing", () => {
+    const bound = { path: "file.txt", lines: ["pin [0-9]+", "install(?: --check)?"] };
+    for (const pair of [
+      ["context\npin 1\n", "context\n"],
+      ["pin 1\ncontext\n", "context\npin 1\n"],
+      ["pin 1\n", "install\n"],
+      ["install\n", "install --check\n"],
+    ] as const) expect(checkLineScopedPath(bound, "base", "head", read(pair[0], pair[1])).ok).toBe(true);
+  });
+
+  it("refuses matcher length/work exhaustion distinctly from unmatched changed lines", () => {
+    const bound = { path: "file.txt", lines: ["a+".repeat(10)] };
+    const noMatch = checkLineScopedPath(bound, "base", "head", read("a".repeat(40) + "!\n", "a".repeat(41) + "!\n"));
+    expect(noMatch.reason).toBeNull();
+    expect(noMatch.offendingLines).toHaveLength(2);
+    for (const pair of [
+      ["a".repeat(65_537), "a".repeat(65_538), /length bound/],
+      ["a".repeat(20_000), "a".repeat(20_001), /1000000 steps per changed line/],
+      [("a".repeat(2000) + "\n").repeat(40), ("a".repeat(2001) + "\n").repeat(40), /8000000 steps per bounded file/],
+    ] as const) {
+      const result = checkLineScopedPath(bound, "base", "head", read(pair[0], pair[1]));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(pair[2]);
+      expect(result.offendingLines).toEqual([]);
+    }
+  });
+
+  it("shares matching budgets across multiple mandatory bounds on the same file", () => {
+    const bound = { path: "file.txt", lines: ["a+".repeat(10)] };
+    const context = {
+      baseRef: "base", headRef: "head", readText: read("a".repeat(10_000), "a".repeat(10_001)),
+      readJson: (): never => { throw new Error("not a JSON entry"); },
+    };
+    expect(assembleUnitCheck(TARGET, 42, [bound], [file("file.txt")], context).ok).toBe(true);
+    const repeated = assembleUnitCheck(TARGET, 42, [bound, bound], [file("file.txt")], context);
+    expect(repeated.ok).toBe(false);
+    expect(repeated.lineScopedViolations[0]?.reason).toContain("1000000 steps per changed line");
+  });
+
   it("fails closed on absent readers, missing/deleted/renamed content, invalid patterns and binary content", () => {
     expect(checkLineScopedPath(entry, "base", "head").reason).toMatch(/content not read/);
     for (const pair of [[null, next], [version, null], [version, "\0" + next]] as const) {
