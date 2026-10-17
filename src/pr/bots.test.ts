@@ -6,6 +6,7 @@ import {
   botLoginArgv,
   botLoginKey,
   isReviewerNodeId,
+  isBotLoginAlias,
   resolveBotLogin,
   EXIT_BOT_REQUEST_UNRECORDED,
   collaboratorArgv,
@@ -341,6 +342,13 @@ describe("bot logins resolved without prior PR history (#160)", () => {
     expect(botLoginArgv(login)).toEqual(["api", "--method", "GET", "users/copilot-pull-request-reviewer%5Bbot%5D"]);
     const seams = new ScriptedSeams([{ match: `gh ${botLoginArgv(login).join(" ")}`, result: { stdout: JSON.stringify({ type: "Bot", login: "Copilot", node_id: "BOT_real" }) } }]);
     expect(resolveBotLogin(seams, login)).toEqual({ login: "copilot-pull-request-reviewer", id: "BOT_real" });
+  });
+
+  it("treats only own API data entries as aliases", () => {
+    expect(isBotLoginAlias("COPILOT")).toBe(true);
+    expect(isBotLoginAlias("constructor")).toBe(false);
+    expect(botLoginKey("constructor")).toBe("constructor");
+    expect(botLoginKey("__proto__")).toBe("__proto__");
   });
 
   it("resolves other bot handles and keeps opaque node ids distinguishable", () => {

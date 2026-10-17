@@ -75,6 +75,7 @@
 // a heuristic, and a heuristic is exactly what this verdict must not rest on.
 // The response-by-id check decides; the timeline is left out on purpose.
 
+import apiBotLogins from "./github-bot-login-aliases.json";
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 
@@ -241,10 +242,18 @@ export function fetchPrAndKnownBots(seams: Seams, target: Target, prNumber: numb
   return parsePrAndKnownBots(runOrThrow(seams, prAndKnownBotsArgv(target, prNumber), what), what);
 }
 
-/** Canonical comparison for short, REST [bot], and Copilot alias spellings. */
+// External API spellings are data, not caller-owned reviewer policy. See the
+// table's comment and taxonomy-purity.test.ts's existing shipped-data rule.
+const GITHUB_BOT_LOGIN_ALIASES: Readonly<Record<string, string>> = apiBotLogins.aliases;
+
+export function isBotLoginAlias(login: string): boolean {
+  return Object.hasOwn(GITHUB_BOT_LOGIN_ALIASES, login.toLowerCase());
+}
+
+/** Canonical comparison for short, REST [bot], and API-alias spellings. */
 export function botLoginKey(login: string): string {
   const short = login.toLowerCase().replace(/\[bot\]$/, "");
-  return short === "copilot" ? "copilot-pull-request-reviewer" : short;
+  return isBotLoginAlias(short) ? GITHUB_BOT_LOGIN_ALIASES[short]! : short;
 }
 
 /** Modern GraphQL ids, plus the older base64 global-id encoding. */

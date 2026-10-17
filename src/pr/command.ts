@@ -83,6 +83,7 @@ import {
   EXIT_BOT_REQUEST_UNRECORDED,
   botLoginKey,
   isReviewerNodeId,
+  isBotLoginAlias,
   resolveBotLogin,
   fetchPrAndKnownBots,
   isCollaborator,
@@ -324,11 +325,11 @@ request-reviews:
                          routed to botIds; a collaborator goes through the
                          user route. Other bot logins resolve with GET
                          /users/<login>[bot]; a missing login is refused.
-                         'copilot' and '[bot]' spellings use the bot route.
+                         API aliases and '[bot]' spellings use the bot route.
   --add-bots <login-or-id,...>
-                         Bot logins (short or '[bot]' spelling; 'copilot'
-                         aliases 'copilot-pull-request-reviewer') are read
-                         from GitHub to obtain the Bot node_id. Explicit
+                         Bot logins (short or '[bot]' spelling) and known
+                         GitHub API aliases are resolved through GitHub to
+                         obtain the Bot node_id. Explicit
                          GraphQL node ids remain accepted unchanged.
   --dry-run              Resolution still runs (this verb is not
                          network-free even here) but nothing is
@@ -1276,7 +1277,7 @@ function resolveReviewerLogins(
       routes.push({ name: login, via: "add-reviewers", route: "bot", id: bot.id });
       continue;
     }
-    if (login.toLowerCase() !== "copilot" && !/\[bot\]$/i.test(login) && isCollaborator(seams, target, login)) {
+    if (!isBotLoginAlias(login) && !/\[bot\]$/i.test(login) && isCollaborator(seams, target, login)) {
       userLogins.push(login);
       routes.push({ name: login, via: "add-reviewers", route: "user", id: null });
       continue;
