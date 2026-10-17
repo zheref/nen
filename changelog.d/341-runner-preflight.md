@@ -1,0 +1,1 @@
+- Refresh the runner preflight fixture and Nen’s Windows workflow from Hatsu 0.111.2: branch-only pushes stop release tags waking the pool, and Windows tool resolution uses the runner service’s recorded PATH. Preserve each pool’s own label and SHA-pinned checkout. (#341)

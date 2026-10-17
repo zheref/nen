@@ -1,6 +1,52 @@
-# runner-preflight -- proves the self-hosted windows-x64-desktop pool can RUN a job,
-# not merely that it is registered. Rendered by nen 0.0.0-test runner workflow for
-# zheref/nen; re-render it rather than editing it.
+# runner-preflight.yml — RENDERED BY `nen runner workflow`, which hatsu:jusshin
+# runs, from `templates/runner-preflight.yml` in the Hatsu plugin root. One
+# rendering per pool a consumer's `nen/workflow.json` → `runners.pools[]`
+# declares, landed at `.github/workflows/<the pool's preflightWorkflow>`
+# through mukai. Re-render it; do not hand-edit a rendering.
+#
+# NEN CARRIES THE RENDERER, HATSU THE TEMPLATE -- the split tenkai's
+# `pr-readiness.yml` already has. The whole file is rendered, this block
+# included, so the eight placeholders are named here WITHOUT their two pairs of
+# at-signs; each is filled from the pool's declaration:
+#
+#   REPO_SLUG      the consumer repository (owner/name) the job is bound to
+#   RUNS_ON        the pool's labels, exactly -- never a bare self-hosted, and
+#                  never GitHub's defaults alone (the ruling below)
+#   OS             the pool's OS in GitHub's own case: Windows, Linux, macOS
+#   MODE           the pool's mode: service, or interactive (a runner in a
+#                  signed-in desktop session; nen 0.19, zheref/nen#333)
+#   TOOLS          the pool's tools[], space-separated, each run with --version
+#   POOL_ID        the pool's id
+#   WORKFLOW_FILE  the pool's preflightWorkflow file name
+#   RENDERED_BY    the nen build and verb that rendered it
+#
+# Nen refuses a rendering with any placeholder left standing (exit 1, named)
+# and one that does not parse as YAML. MODE is filled from nen 0.19, so a 0.18
+# binary refuses this template; Hatsu's minimum became 0.19 for that reason (0.21 now).
+#
+# `actions/checkout` is pinned by commit SHA, its EXACT tag as a trailing
+# comment (`# v4.4.0`, never a major alias such as `# v4`, which moves): the job
+# runs on a persistent physical host with a GITHUB_TOKEN, so a movable tag is
+# not acceptable, and a rendering is never hand-edited. A consumer moves the
+# pin by re-rendering after this template is bumped.
+#
+# Its safety properties -- the trigger set and the branch-only push, the
+# repository binding, runs-on, the read-only token, the unpersisted credential,
+# the SHA-pinned checkout with its exact tag, the time bound, the first-match
+# profile/AppData classifier read against the service's own PATH -- are held
+# on this template by zheref/hatsu:scripts/runner_preflight_fixture_check.sh;
+# a consumer's copy carries no such guard, which is why it is re-rendered and
+# never edited. The body is not byte-identical to nen's own test template: no
+# line of the job's OWN prints an account name, a profile, a resolved tool
+# path or the PATH itself. A tool's `--version` output is printed as the tool
+# prints it -- it is the diagnostic the toolchain step exists for -- and on a
+# public repository that log is public, so a tool whose version line names
+# its install path (pip, maven) names a per-user path with the account in it;
+# declare such a tool only where it is installed machine-wide.
+#
+# runner-preflight -- proves that a runner of the self-hosted windows-x64-desktop pool
+# can RUN a job, not merely that it is registered. Rendered by nen 0.0.0-test runner workflow
+# for zheref/nen; re-render it rather than editing it.
 #
 # WHY IT EXISTS. A runner GitHub shows as Idle proves the runner PROCESS works.
 # It says nothing about whether the HOST carries the tools a job invokes, or
@@ -13,7 +59,37 @@
 # Run it green BEFORE the pool's enable variable is set -- enabling first
 # leaves every gated job queued on a pool that cannot run it.
 #
+# AN INTERACTIVE POOL (MODE interactive) is the exception to "service" above.
+# On Windows its runner is a logon task that starts run.cmd in its account's
+# signed-in desktop session, which a job driving a real UI needs; a service in
+# session 0 has no desktop. That runner sees its account's own environment, so
+# a per-user tool resolves for it (a warning here, not a failure). Restarting
+# it means signing that account out and back in. One more step proves the
+# session itself: the job must not be running in session 0.
+#
 #   nen runner preflight --target zheref/nen --workflow runner-preflight-windows-x64-desktop.yml
+#
+# WHAT ONE GREEN RUN PROVES. A run lands on ONE runner -- the `runner name`
+# line in its log -- and proves that runner's service for the declared tools:
+# the PATH that service was started with resolves each one machine-wide, and
+# its account may execute the file each resolves to. Nothing broader. A
+# sibling registered on the same host under the same account shares the
+# stored machine PATH and the files' ACLs, but every service holds the PATH it
+# was STARTED with, so the sibling is covered only once each service on that
+# host was restarted after the last PATH change (hatsu:jusshin § 7's restart
+# line); a runner on another host is proven by nothing until a run lands
+# there; and on Linux and macOS a user-scope hit only warns, so a green run
+# there says nothing about the machine PATH -- nor does one on an interactive
+# Windows pool, where a per-user hit warns too. There a sibling logon task is
+# covered once its account signs out and back in, not after a service restart,
+# and the session step proves the job is not in session 0, not that the
+# session is unlocked (a locked or disconnected session keeps its id).
+# `nen runner enable` reads one
+# green run as the pool's go, so enabling a pool that spans hosts is a claim
+# this job cannot make alone: GitHub hands a dispatched run to ANY idle runner
+# carrying the labels and nothing steers it to a host, so a host may stay
+# unseen however often `nen runner preflight` dispatches -- jusshin § 7 bounds
+# the dispatches and hands the rest to the maintainer.
 #
 # FORK SAFETY. This job runs arbitrary steps on a physical machine, so the
 # trigger set is the control. `push` fires only in the repository the push
@@ -23,13 +99,19 @@
 # canonical repository so a fork that enables Actions on its copy skips before
 # a runner is ever assigned.
 #
-# `push` is path-filtered to this file: it costs nothing on any other change
-# and still proves itself on the branch that changes it.
+# `push` is filtered to BRANCHES and to this file. GitHub does not evaluate
+# `paths` for a tag push, so `paths` alone would wake this job -- and a runner
+# of the pool -- on every tag; `branches: ['**']` beside it admits every branch
+# and no tag, because a push filtered on branches never matches a tag ref. On a
+# branch it costs nothing on any other change and still proves itself on the
+# branch that changes it.
 name: runner-preflight-windows-x64-desktop
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - '**'
     paths:
       - '.github/workflows/runner-preflight-windows-x64-desktop.yml'
 
@@ -44,18 +126,28 @@ jobs:
   preflight:
     if: github.repository == 'zheref/nen'
     # Exactly the pool's labels. A job queues until a runner carrying all of
-    # them is free; it never falls back to another pool.
+    # them is free; it never falls back to another pool. THE RULING OF
+    # 2026-10-02 (zheref/hatsu#198 item 6): one of them is to be the pool's
+    # own, because GitHub's defaults alone -- self-hosted, the OS, the arch --
+    # are what every runner of that OS and arch gets at registration, so a
+    # later registration on the repository joins the pool unproven and can
+    # pick up this preflight and the pool's jobs. Nen 0.21 renders pool-<id>
+    # last for every pool; an interactive Windows pool also carries desktop
+    # before that label. Hatsu's guard and Tenkai require the pool label.
     runs-on: [self-hosted, Windows, X64, desktop, pool-windows-x64-desktop]
-    # Bounds the RUN, not the wait: a job queues indefinitely when every slot
-    # is busy or offline, and a preflight that never starts is itself the
-    # answer ('nen runner preflight' names it).
+    # Bounds the RUN, not the wait: a job waits in the queue for a runner
+    # carrying every label, and GitHub cancels it after 24 hours there. While
+    # it waits, the check it reports on a pushed head stays pending -- not
+    # Ready under CON-32(a) -- and once cancelled it reads CANCELLED, which
+    # `nen pr ready` also reads as not ready. A preflight that never starts is
+    # itself the answer ('nen runner preflight' names it: `queued`).
     timeout-minutes: 5
     steps:
       # Checkout shells out to git, so a host without a working git fails
-      # here -- already a finding. A consumer whose policy requires SHA pins
-      # re-pins this line in the pull request that adds the file.
+      # here -- already a finding. Pinned by SHA (see the header): re-render to
+      # move it, never edit it in place.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -67,7 +159,9 @@ jobs:
         run: |
           echo "runner name : ${RUNNER_NAME:-<unset>}"
           echo "runner os   : ${RUNNER_OS:-<unset>}"
-          echo "service acct: ${USERNAME:-${USER:-${LOGNAME:-unknown}}}"
+          # Whether an account is set, never its name: on a public repository
+          # this log is public.
+          if [ -n "${USERNAME:-${USER:-${LOGNAME:-}}}" ]; then echo "service acct: set"; else echo "service acct: unset"; fi
           if [ "${RUNNER_OS:-}" != "$EXPECTED_OS" ]; then
             echo "::error::Preflight landed on '${RUNNER_OS:-<unset>}', not $EXPECTED_OS -- it proves nothing about the windows-x64-desktop pool. Check runs-on and that a runner of this pool was free."
             exit 1
@@ -76,8 +170,12 @@ jobs:
       # 126 is not 127. 127 = not on the service's PATH (a LOCATION problem);
       # 126 = found, and refused on exec (a PERMISSION problem -- the ACL on the
       # file the PATH entry resolves to). Every PATH-shaped check passes during
-      # a 126, so the two are named apart. Bash built-ins only: this step
-      # diagnoses a broken toolchain and must not depend on one.
+      # a 126, so the two are named apart. Every tool is tried and named; the
+      # step exits with the first non-zero code. Bash built-ins only: this step
+      # diagnoses a broken toolchain and must not depend on one. On Windows this
+      # bash is Git's, with its own usr\bin and mingw64\bin ahead of the
+      # service's PATH, so a 0 here is not yet a machine-wide verdict -- the
+      # Windows step below holds that.
       - name: Host toolchain -- every tool a job on this pool invokes
         shell: bash
         env:
@@ -85,12 +183,11 @@ jobs:
           MODE: 'interactive'
         run: |
           set -uo pipefail
-          acct="${USERNAME:-${USER:-${LOGNAME:-unknown}}}"
           # An interactive Windows runner is a logon task, not a service: it
-          # picks up a changed PATH or ACL when its account signs in again.
+          # takes a changed PATH or ACL when its account signs in again.
           restart="restart the runner services"
-          if [ "$MODE" = interactive ] && [ "${RUNNER_OS:-}" = Windows ]; then
-            restart="sign the runner's account ($acct) out and back in, which restarts its logon task"
+          if [ "${MODE:-service}" = interactive ] && [ "${RUNNER_OS:-}" = Windows ]; then
+            restart="sign the runner's account out and back in, which restarts its logon task"
           fi
           status=0
           for tool in $TOOLS; do
@@ -98,18 +195,63 @@ jobs:
             "$tool" --version || rc=$?
             case "$rc" in
               0) ;;
-              126) echo "::error::'$tool' resolves on the PATH but the runner account ($acct) cannot EXECUTE it (exit 126). An ACL problem, not a PATH problem: grant Users read-and-execute on the file it resolves to, then $restart."; status=$rc ;;
-              127) echo "::error::'$tool' is not on the runner's PATH (exit 127). Install it machine-wide, put its directory on the MACHINE PATH, then $restart."; status=$rc ;;
-              *) echo "::error::'$tool --version' exited $rc -- found and executed, so neither a PATH (127) nor an ACL (126) problem. Read the output above."; status=$rc ;;
+              126) echo "::error::'$tool' resolves on the PATH but the runner's account cannot EXECUTE it (exit 126). An ACL problem, not a PATH problem: grant Users read-and-execute on the file it resolves to, then $restart." ;;
+              127) echo "::error::'$tool' is not on the runner's PATH (exit 127). Install it machine-wide, put its directory on the MACHINE PATH, then $restart." ;;
+              *) echo "::error::'$tool --version' exited $rc -- found and executed, so neither a PATH (127) nor an ACL (126) problem. Read the output above." ;;
             esac
-            if [ "$status" -ne 0 ]; then exit "$status"; fi
+            if [ "$rc" -ne 0 ] && [ "$status" -eq 0 ]; then status=$rc; fi
           done
+          exit "$status"
 
-      # A Windows service runs with the MACHINE environment. A tool installed for
-      # the maintainer's user resolves in their shell and is invisible here, so
-      # an AppData hit fails the run. An interactive pool's logon task runs with
-      # its own account's environment, so there a hit is a WARNING: it works for
-      # this account and would not survive a change of account.
+      # A Windows service runs with the MACHINE environment, and a job's steps
+      # see that environment through cmd.exe and PowerShell. `shell: bash` does
+      # not: it is Git for Windows, whose bash puts its own usr\bin and
+      # mingw64\bin at the front of PATH, so a tool that exists only there --
+      # Git's own curl, tar or ssh -- resolves in a bash step and fails in a
+      # powershell or cmd one. The PATH a job is handed is therefore recorded
+      # from cmd.exe, which inherits the runner's environment unchanged, and
+      # the next step classifies against that recording. `set PATH` prints the
+      # variable as `Path=...` without re-parsing its value, which an `echo
+      # %PATH%` would; it lands in a file under RUNNER_TEMP, never in a step
+      # output, and the value is never printed. cmd.exe writes a redirected
+      # file in the console's OEM code page, in which a non-ASCII directory name
+      # (a localised Program Files, an accented account) comes out as bytes
+      # bash cannot hand back to where.exe, so the tool there would read as not
+      # on the service PATH -- a false red (Phinks on zheref/hatsu#198). The code
+      # page is set to UTF-8 for this cmd process first; it changes nothing
+      # outside the step.
+      - name: Record the PATH the service hands a job (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          chcp 65001 >nul
+          (set PATH) > "%RUNNER_TEMP%\service-path.txt"
+
+      # The recording is read back (bash built-ins only), exported as
+      # SERVICE_PATH, and where.exe is called as `$SERVICE_PATH:<tool>`: the
+      # form searches the directories of the named variable only -- not the
+      # current directory, where the job has just checked the repository out
+      # and a same-named file would become the first match, and not bash's own
+      # PATH, where Git's tools would read machine-wide. where.exe prints every
+      # match in PATH order and a job runs only the FIRST, so only the first is
+      # classified: no match is not on the service PATH; an \AppData\ segment
+      # is per-user (AppData); anywhere else under the service user's profile
+      # ($USERPROFILE -- scoop shims, a profile bin) is per-user (profile); the
+      # rest is machine-wide ONCE THE MATCH ITSELF RUNS: where.exe locates and
+      # never executes, so the match is run with --version, output discarded,
+      # and a 126 (refused to the service account) or any other non-zero exit
+      # (a broken install Git Bash's own copy hid from the step above) fails
+      # it. Every tool is classified before the step fails on any. A missing
+      # recording fails the step: nothing can be classified against a PATH that
+      # was not read.
+      # Each tool's NAME and verdict are printed, never the path it resolved to,
+      # the profile nor the PATH: each carries an account name, and on a public
+      # repository this log is public.
+      # An INTERACTIVE pool's runner is a logon task running with its own
+      # account's environment, so a per-user match works for it: there the
+      # per-user verdicts are a ::warning:: (it would not survive another
+      # account), never a failure, and the restart is signing that account out
+      # and back in. A not-found, refused or broken match fails in either mode.
       - name: Resolution must be machine-wide (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -118,46 +260,108 @@ jobs:
           MODE: 'interactive'
         run: |
           set -uo pipefail
-          resolved="$(where.exe $TOOLS || true)"
-          resolved="${resolved//$'\r'/}"
-          printf '%s\n' "$resolved"
+          interactive=no
+          restart="restart the runner services"
+          if [ "${MODE:-service}" = interactive ]; then
+            interactive=yes
+            restart="sign the runner's account out and back in, which restarts its logon task"
+          fi
           bad=0
           shopt -s nocasematch
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            norm="${line//\\//}"
-            if [[ "$norm" == */appdata/* ]]; then
-              if [ "$MODE" = interactive ]; then
-                echo "::warning::'$line' resolves under AppData -- a per-user install. It works for this runner's account and would not survive another one; prefer a machine-wide install."
-              else
-                echo "::error::'$line' resolves under AppData -- a per-user install the runner service cannot rely on. Reinstall it machine-wide and restart the runner services."
-                bad=1
-              fi
+          recorded="${RUNNER_TEMP:-}/service-path.txt"
+          recorded="${recorded//\\//}"
+          service_path=""
+          if [ -f "$recorded" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+              case "$line" in
+                path=*) service_path="${line#*=}"; break ;;
+              esac
+            done < "$recorded"
+          fi
+          service_path="${service_path//$'\r'/}"
+          if [ -z "$service_path" ]; then
+            echo "::error::The PATH the service hands a job was not recorded (the step before this one did not run, or wrote nothing), so no tool can be classified against it."
+            exit 1
+          fi
+          export SERVICE_PATH="$service_path"
+          profile="${USERPROFILE:-}"
+          profile="${profile//\\//}"
+          profile="${profile%/}"
+          for tool in $TOOLS; do
+            resolved="$(where.exe "\$SERVICE_PATH:$tool" 2>/dev/null || true)"
+            first=""
+            IFS= read -r first <<< "$resolved" || true
+            first="${first//$'\r'/}"
+            norm="${first//\\//}"
+            if [ -z "$norm" ]; then
+              verdict="not on the service PATH"
+            elif [[ "$norm" == */appdata/* ]]; then
+              verdict="per-user (AppData)"
+            elif [ -n "$profile" ] && [[ "$norm" == "$profile"/* ]]; then
+              verdict="per-user (profile)"
+            else
+              # where.exe LOCATES; it never executes. The toolchain step above ran
+              # on Git Bash's PATH, so Git's own copy may have answered there while
+              # the service's match is broken, or refused to the service account
+              # (Copilot on zheref/hatsu#202). The match itself is run, output
+              # discarded, and its exit classified: 126 is the ACL, anything else
+              # non-zero a broken install.
+              rc=0
+              "$norm" --version >/dev/null 2>&1 || rc=$?
+              case "$rc" in
+                0) verdict="machine-wide" ;;
+                126) verdict="machine-wide, refused on exec (exit 126)" ;;
+                *) verdict="machine-wide, exited $rc" ;;
+              esac
             fi
-          done <<< "$resolved"
+            echo "$tool: $verdict"
+            case "$verdict" in
+              "machine-wide") ;;
+              "machine-wide, refused"*)
+                echo "::error::'$tool' resolves machine-wide but the runner's account cannot EXECUTE it (exit 126). An ACL problem, not a PATH problem: grant Users read-and-execute on the file it resolves to, then $restart."
+                bad=1 ;;
+              "machine-wide, exited"*)
+                echo "::error::'$tool' resolves machine-wide and ran, but its --version exited non-zero -- a broken install the runner cannot use, which Git Bash's own copy hid from the step above. Reinstall it machine-wide, put its directory on the MACHINE PATH, then $restart."
+                bad=1 ;;
+              "per-user"*)
+                if [ "$interactive" = yes ]; then
+                  echo "::warning::'$tool' is $verdict -- writable by every job this runner takes, so one job can replace it for the next, and it would not survive another account. Prefer a machine-wide install with its directory on the MACHINE PATH."
+                else
+                  echo "::error::'$tool' is $verdict -- the runner service cannot rely on it. Install it machine-wide, put its directory on the MACHINE PATH, then $restart."
+                  bad=1
+                fi ;;
+              *)
+                echo "::error::'$tool' is $verdict -- the runner cannot rely on it. Install it machine-wide, put its directory on the MACHINE PATH, then $restart."
+                bad=1 ;;
+            esac
+          done
           exit "$bad"
 
-      # An interactive pool (mode interactive) exists for jobs that drive a real UI,
-      # and only a signed-in desktop session can run them. A runner installed as
-      # a service runs in session 0, which has no desktop, and a UI job there
-      # times out. Rendered for every pool; it runs only for an interactive
-      # Windows one.
+      # An interactive pool exists for jobs that drive a real UI, and only a
+      # signed-in desktop session can run them: a runner installed as a service
+      # runs in session 0, which has no desktop, and a UI job there times out
+      # (a consumer repository's run 37021959660). The rendered condition is a
+      # constant -- 'service' == 'interactive' is false, so a service pool never
+      # runs it. The session id is printed, never an account name.
       - name: Desktop session present (interactive Windows pool)
         if: runner.os == 'Windows' && 'interactive' == 'interactive'
         shell: bash
         run: |
           set -uo pipefail
-          session="$(powershell.exe -NoProfile -NonInteractive -Command '[System.Diagnostics.Process]::GetCurrentProcess().SessionId' | tr -d '\r')"
-          echo "session id  : ${session:-<unknown>}"
-          echo "session name: ${SESSIONNAME:-<unset>}"
-          if [ -z "$session" ] || [ "$session" = "0" ]; then
-            echo "::error::This job runs in session ${session:-<unknown>}, not in a signed-in desktop session. A runner installed as a service (session 0) cannot drive a UI. Register the pool's runners from an interactive plan ('nen runner script' renders a logon task), and sign its account in to the desktop."
+          session="$(powershell.exe -NoProfile -NonInteractive -Command '[System.Diagnostics.Process]::GetCurrentProcess().SessionId' 2>/dev/null | tr -d '\r')" || session=""
+          # Digits only: anything else (padding, a BOM, a second line, an error
+          # message) is unknown and fails. Compared as a number, so 00 is 0.
+          case "$session" in ''|*[!0-9]*) session="" ;; esac
+          echo "session id: ${session:-unknown}"
+          if [ -z "$session" ] || [ "$((10#$session))" -eq 0 ]; then
+            echo "::error::This job runs in session ${session:-unknown}, not in a signed-in desktop session, so a job that drives a UI cannot run here. A runner installed as a service lives in session 0: register this pool from an interactive plan ('nen runner script' renders a logon task), and sign its account in to the desktop."
             exit 1
           fi
 
       # A launchd agent (macOS) or a systemd service (Linux) can see a tool in a
       # user-scope directory, so a hit there is a WARNING, not a failure: it
       # works for this account and would not survive a change of service user.
+      # As on Windows, the verdict is printed and the path is not.
       - name: Resolution outside the home directory (Linux, macOS)
         if: runner.os != 'Windows'
         shell: bash
@@ -167,8 +371,11 @@ jobs:
           set -uo pipefail
           for tool in $TOOLS; do
             path="$(command -v "$tool" || true)"
-            echo "$tool -> ${path:-<not found>}"
             case "$path" in
-              "$HOME"/.local/*|"$HOME"/bin/*) echo "::warning::'$tool' resolves to $path, a user-scope directory. It works for this service user and would not survive another one." ;;
+              "") echo "$tool: not found" ;;
+              "$HOME"/.local/*|"$HOME"/bin/*)
+                echo "$tool: user-scope"
+                echo "::warning::'$tool' resolves in a user-scope directory under the service user's home. It works for this service user and would not survive another one." ;;
+              *) echo "$tool: machine-scope" ;;
             esac
           done
