@@ -8,8 +8,10 @@ import { ScriptedSeams } from "../seam/scripted.js";
 import {
   assembleUnitCheck,
   checkKeyScopedPath,
+  checkLineScopedPath,
   fetchChangedFiles,
   fetchJsonAtRef,
+  fetchTextAtRef,
   fetchMergeBaseSha,
   JsonParseError,
   MergeBaseError,
@@ -19,6 +21,7 @@ import {
   resolveUnitCheckTarget,
   UnitCheckRefError,
   type JValue,
+  type ReleaseUnitLinedPath,
 } from "./unitcheck.js";
 import { RefError, resolveProductCode, resolveRef } from "../verbs/pr_ready.js";
 import { loadWorkflow } from "../schema/workflow.js";
@@ -775,7 +778,14 @@ describe("fetchMergeBaseSha -- N6, the merge base rather than baseRefOid directl
 
 describe("this repository's own release.unitPaths (zheref/nen#311)", () => {
   const own = loadWorkflow(process.cwd()).workflow.release.unitPaths;
-  const versionBump = { baseRef: "base", headRef: "head", readJson: (_path: string, ref: string): JValue => jv({ name: "nen", version: ref === "base" ? "0.17.0" : "0.18.0" }) };
+  const versionBump = {
+    baseRef: "base", headRef: "head",
+    readJson: (_path: string, ref: string): JValue => jv({ name: "nen", version: ref === "base" ? "0.17.0" : "0.18.0" }),
+    readText: (path: string, ref: string): string => {
+      const pin = ref === "base" ? "0.17.0" : "0.18.0";
+      return path === "src/version.ts" ? 'export const VERSION = "' + pin + '";\n' : "bash nen-bootstrap.sh --ref v" + pin + "\n";
+    },
+  };
   const check = (paths: readonly string[]): ReturnType<typeof assembleUnitCheck> =>
     assembleUnitCheck(TARGET, 1, own ?? [], paths.map((path): ReturnType<typeof file> => file(path)), versionBump);
 
@@ -808,5 +818,146 @@ describe("this repository's own release.unitPaths (zheref/nen#311)", () => {
     });
     expect(report.ok).toBe(false);
     expect(report.keyScopedViolations[0]?.offendingKeys).toEqual(["private"]);
+  });
+});
+
+describe("line-bound release content (zheref/nen#348)", () => {
+  const entry = { path: "src/version.ts", lines: ['^export const VERSION = "[0-9.]+";$'] };
+  const version = 'export const VERSION = "1.0.0";\n';
+  const next = 'export const VERSION = "1.0.1";\n';
+  const read = (base: string | null, head: string | null) => (_path: string, ref: string): string | null => ref === "base" ? base : head;
+
+  it("accepts a pin-only edit while leaving surrounding unmatched context alone", () => {
+    const result = checkLineScopedPath(entry, "base", "head", read("// fixed\n" + version, "// fixed\n" + next));
+    expect(result.ok).toBe(true);
+    expect(result.offendingLines).toEqual([]);
+  });
+
+  it.each([
+    { base: "must stay\n" + version, head: next, side: "removed", text: "must stay" },
+    { base: version, head: next + "executePayload();\n", side: "added", text: "executePayload();" },
+    { base: 'export const VERSION = computeVersion();\n', head: next, side: "removed", text: "export const VERSION = computeVersion();" },
+    { base: version, head: next.trimEnd() + " executePayload();\n", side: "added", text: next.trimEnd() + " executePayload();" },
+  ])("rejects an unmatched $side line, including when the other side matches", ({ base, head, side, text }) => {
+    const result = checkLineScopedPath(entry, "base", "head", read(base, head));
+    expect(result.ok).toBe(false);
+    expect(result.offendingLines).toContainEqual(expect.objectContaining({ side, text }));
+  });
+
+  it("matches the whole line, case-sensitively, and consumes CR instead of treating it as a '$' boundary", () => {
+    const bound = { path: "file.txt", lines: ["old|new"] };
+    expect(checkLineScopedPath(bound, "base", "head", read("old\n", "new\n")).ok).toBe(true);
+    for (const head of ["xnew\n", "newx\n", "NEW\n", "new\r\n"]) {
+      expect(checkLineScopedPath(bound, "base", "head", read("old\n", head)).ok).toBe(false);
+    }
+  });
+
+  it("permits allowed-line deletion, movement, substitution and optional forms without promising pairing", () => {
+    const bound = { path: "file.txt", lines: ["pin [0-9]+", "install(?: --check)?"] };
+    for (const pair of [
+      ["context\npin 1\n", "context\n"],
+      ["pin 1\ncontext\n", "context\npin 1\n"],
+      ["pin 1\n", "install\n"],
+      ["install\n", "install --check\n"],
+    ] as const) expect(checkLineScopedPath(bound, "base", "head", read(pair[0], pair[1])).ok).toBe(true);
+  });
+
+  it("refuses matcher length/work exhaustion distinctly from unmatched changed lines", () => {
+    const bound = { path: "file.txt", lines: ["a+".repeat(10)] };
+    const noMatch = checkLineScopedPath(bound, "base", "head", read("a".repeat(40) + "!\n", "a".repeat(41) + "!\n"));
+    expect(noMatch.reason).toBeNull();
+    expect(noMatch.offendingLines).toHaveLength(2);
+    for (const pair of [
+      ["a".repeat(65_537), "a".repeat(65_538), /length bound/],
+      ["a".repeat(20_000), "a".repeat(20_001), /1000000 steps per changed line/],
+      [("a".repeat(2000) + "\n").repeat(40), ("a".repeat(2001) + "\n").repeat(40), /8000000 steps per bounded file/],
+    ] as const) {
+      const result = checkLineScopedPath(bound, "base", "head", read(pair[0], pair[1]));
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(pair[2]);
+      expect(result.offendingLines).toEqual([]);
+    }
+  });
+
+  it("shares matching budgets across multiple mandatory bounds on the same file", () => {
+    const bound = { path: "file.txt", lines: ["a+".repeat(10)] };
+    const context = {
+      baseRef: "base", headRef: "head", readText: read("a".repeat(10_000), "a".repeat(10_001)),
+      readJson: (): never => { throw new Error("not a JSON entry"); },
+    };
+    expect(assembleUnitCheck(TARGET, 42, [bound], [file("file.txt")], context).ok).toBe(true);
+    const repeated = assembleUnitCheck(TARGET, 42, [bound, bound], [file("file.txt")], context);
+    expect(repeated.ok).toBe(false);
+    expect(repeated.lineScopedViolations[0]?.reason).toContain("1000000 steps per changed line");
+  });
+
+  it("fails closed on absent readers, missing/deleted/renamed content, invalid patterns and binary content", () => {
+    expect(checkLineScopedPath(entry, "base", "head").reason).toMatch(/content not read/);
+    for (const pair of [[null, next], [version, null], [version, "\0" + next]] as const) {
+      expect(checkLineScopedPath(entry, "base", "head", read(pair[0], pair[1])).reason).toMatch(/whole file/);
+    }
+    expect(checkLineScopedPath({ path: "file.txt", lines: ["["] }, "base", "head", read("a", "b")).reason).toMatch(/invalid/);
+    expect(checkLineScopedPath(entry, "base", "head", read("a\n".repeat(1500), "b\n".repeat(1500))).reason).toMatch(/work bound/);
+  });
+
+  it("keeps line violations mandatory even under an overlapping broad string, and keeps keyedPaths compatible", () => {
+    const report = assembleUnitCheck(TARGET, 42, ["src/**", entry], [file(entry.path)], {
+      baseRef: "base", headRef: "head", readText: read(version, next + "payload();\n"), readJson: (): never => { throw new Error("not a JSON entry"); },
+    });
+    expect(report.outsideUnit).toEqual([]);
+    expect(report.ok).toBe(false);
+    expect(report.keyedPaths).toEqual([]);
+    expect(report.linedPaths).toEqual([entry]);
+    expect(report.lineScopedViolations[0]?.offendingLines[0]?.text).toBe("payload();");
+  });
+
+  it("does not read untouched files, and checks both rename paths and exact string boundaries", () => {
+    expect(assembleUnitCheck(TARGET, 42, ["=CHANGELOG.md", entry], [file("CHANGELOG.md")]).ok).toBe(true);
+    expect(outsideReleaseUnit([file("CHANGELOG.md/payload.ts")], ["=CHANGELOG.md"])).toEqual(["CHANGELOG.md/payload.ts"]);
+    expect(outsideReleaseUnit([file(entry.path + "/payload.ts")], [entry])).toEqual([entry.path + "/payload.ts"]);
+    expect(assembleUnitCheck(TARGET, 42, [entry], [{ path: entry.path, previousPath: "other.ts" }]).ok).toBe(false);
+    const renamed = assembleUnitCheck(TARGET, 42, ["=other.ts", entry], [{ path: "other.ts", previousPath: entry.path }]);
+    expect(renamed.lineScopedViolations).toHaveLength(1);
+  });
+
+  it("bounds Nen's own executable version lines and install destinations without granting other content", () => {
+    const policy = loadWorkflow(process.cwd()).workflow.release.unitPaths ?? [];
+    const textEntry = (path: string): ReleaseUnitLinedPath => {
+      const found = policy.find((value): value is ReleaseUnitLinedPath => typeof value !== "string" && "lines" in value && value.path === path);
+      if (found === undefined) throw new Error("missing line-bound declaration for " + path);
+      return found;
+    };
+    const samples = [
+      { path: "src/version.ts", before: 'export const VERSION = "0.18.2";', after: 'export const VERSION = "0.18.3";' },
+      { path: "src/version.ts", before: 'export const COMPATIBLE_MINOR_FLOOR = "0.18";', after: 'export const COMPATIBLE_MINOR_FLOOR = "0.19";' },
+      { path: "README.md", before: "curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.18.2/bootstrap/nen.sh -o nen-bootstrap.sh", after: "curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.18.3/bootstrap/nen.sh -o nen-bootstrap.sh" },
+      { path: "docs/USAGE.md", before: "nen bootstrap --ref v0.18.2 --source zheref/nen", after: "nen bootstrap --ref v0.18.3 --source zheref/nen" },
+    ];
+    for (const sample of samples) {
+      const bound = textEntry(sample.path);
+      expect(checkLineScopedPath(bound, "base", "head", read(sample.before + "\n", sample.after + "\n")).ok).toBe(true);
+      for (const attack of [sample.after + " payload();", sample.after.replace("zheref/nen", "attacker/nen"), sample.after.replace("https://raw.githubusercontent.com", "https://attacker.example")].filter((attack): boolean => attack !== sample.after)) {
+        expect(checkLineScopedPath(bound, "base", "head", read(sample.before + "\n", attack + "\n")).ok).toBe(false);
+      }
+      expect(checkLineScopedPath(bound, "base", "head", read("do not remove\n" + sample.before + "\n", sample.after + "\n")).ok).toBe(false);
+    }
+    expect(policy).toContain("=CHANGELOG.md");
+  });
+});
+
+describe("complete UTF-8 content reader for JSON and line bounds", () => {
+  function fetch(content: unknown, encoding?: unknown): string | null {
+    const seams = new ScriptedSeams([{ match: "gh api repos/acme/widgets/contents/file.txt?ref=head", result: { code: 0, stdout: JSON.stringify({ content, encoding }) } }]);
+    return fetchTextAtRef(seams, TARGET, "file.txt", "head");
+  }
+
+  it("preserves BOM, CR and final newline without replacement or trimming", () => {
+    const text = "\ufeffhello\r\n";
+    expect(fetch(Buffer.from(text).toString("base64"), "base64")).toBe(text);
+  });
+
+  it("refuses incomplete, malformed, binary, or undecodable content instead of silently comparing substitutes", () => {
+    for (const content of [undefined, 42, "@@@=", "YQ=", "YR==", Buffer.from([0xff]).toString("base64"), Buffer.from("hello\0").toString("base64")]) expect(fetch(content)).toBeNull();
+    expect(fetch("", "none")).toBeNull();
   });
 });

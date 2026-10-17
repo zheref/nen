@@ -30,6 +30,7 @@ import {
   assembleUnitCheck,
   fetchChangedFiles,
   fetchJsonAtRef,
+  fetchTextAtRef,
   fetchMergeBaseSha,
   fetchPrRefs,
   MergeBaseError,
@@ -39,6 +40,7 @@ import {
   UnitCheckRefError,
   UnitCheckTruncatedError,
   type JValue,
+  type KeyScopedContext,
 } from "./unitcheck.js";
 
 /**
@@ -191,7 +193,8 @@ self-check:
 unit-check:
   Reads the pull request's changed files (gh) and compares them to
   --repo's declared release-unit path set (nen/workflow.json's
-  'release.unitPaths' -- a repo-relative prefix or glob list,
+  'release.unitPaths' -- '=path' for one exact file, a prefix/glob string,
+  {path, keys} for JSON leaves, or {path, lines} for text line patterns,
   ../report/patterns.ts's grammar, the same one 'nen review scopes' reads).
   A DETERMINISTIC replacement for a human re-reading the diff: this was one
   of the three things "judged by reading rather than by a nen command"
@@ -212,13 +215,18 @@ unit-check:
                             refuses that). The '#' is required: the no-'#'
                             shorthand 'pr ready' also takes (AB123) is not
                             accepted here.
-  Exit 0: every changed path is inside the unit. Exit 1: lists every path
-  outside it. Exit 2: usage, OR --repo declares no 'release.unitPaths' --
+  A line bound checks BOTH removed and added lines against case-sensitive,
+  whole-line regular expressions, using complete merge-base/head content.
+  Missing/unreadable text or an incomplete diff fails closed.
+  Exit 0: every path and content change is inside its bound. Exit 1: lists
+  outside paths, JSON keys, or removed/added lines. Exit 2: usage, OR
+  --repo declares no 'release.unitPaths' --
   the message names the exact key to add, because "everything is outside
   the unit" and "everything is inside it" are both a guess this verb
   refuses to make about a boundary the repository never drew.
   --json: '{ contract: "nen.release.unit-check/v0.1", target, pr,
-  unitPaths, changedFiles, outsideUnit, ok }'.`;
+  unitPaths, keyedPaths, changedFiles, outsideUnit, keyScopedViolations, ok,
+  linedPaths, lineScopedViolations }'.`;
 
 const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 // DEFAULT_FRAGMENT_DIR now lives in ../changelog/completeness.ts, shared with
@@ -529,12 +537,12 @@ function unitCheck(context: CommandContext): number {
   // A CONTENT-SCOPED ENTRY NEEDS THE PULL REQUEST'S OWN BASE/HEAD COMMITS
   // (not this checkout's working tree) TO READ THE FILE'S CONTENT AT EACH
   // -- fetched only when the declared unit actually names one, so a
-  // repository with no keyed entries pays no extra API call at all. N6: the
+  // repository with no content entries pays no extra API call at all. N6: the
   // content is compared against the MERGE BASE of base/head, not
   // `baseRefOid` directly -- see ../release/unitcheck.ts's `fetchMergeBaseSha`.
-  const hasKeyedEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
-  let keyScoped: { readonly baseRef: string; readonly headRef: string; readonly readJson: (filePath: string, ref_: string) => JValue | null } | undefined;
-  if (hasKeyedEntry) {
+  const hasContentEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
+  let keyScoped: KeyScopedContext | undefined;
+  if (hasContentEntry) {
     const refs = fetchPrRefs(context.seams, target, ref.number);
     let mergeBaseSha: string;
     try {
@@ -550,6 +558,7 @@ function unitCheck(context: CommandContext): number {
       baseRef: mergeBaseSha,
       headRef: refs.headRefOid,
       readJson: (filePath: string, ref_: string): JValue | null => fetchJsonAtRef(context.seams, target, filePath, ref_),
+      readText: (filePath, ref_): string | null => fetchTextAtRef(context.seams, target, filePath, ref_),
     };
   }
   const report = assembleUnitCheck(target, ref.number, unitPaths, changedFiles, keyScoped);

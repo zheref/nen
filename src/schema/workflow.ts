@@ -60,7 +60,9 @@ import {
 import { requireEnum, withinOneEdit } from "./contract.js";
 import { readSchemaFile, resolveSchemaFile, type SchemaLocation } from "./source.js";
 import { refuseDuplicateKeyWithin } from "./gates.js";
-import { matchesPattern } from "../report/patterns.js";
+import { exactPathProblem, matchesPattern } from "../report/patterns.js";
+import { releaseLinePatterns, ReleaseLinePatternsError } from "./pattern.js";
+import { RELEASE_PATTERN_LIMITS } from "./releasepattern.js";
 import { CONVENTIONAL_SUBJECT_CASE, parseBodyWidth, parseSubjectCaseTuple, type SubjectCaseSpec } from "../commit/rule.js";
 
 /** Where the policy file lives inside the target repository. */
@@ -286,11 +288,17 @@ export interface ReleaseUnitKeyedPath {
   readonly keys: readonly string[];
 }
 
-/** One `release.unitPaths` entry: a whole-path pattern (string), or a content-scoped bound (`ReleaseUnitKeyedPath`). */
-export type ReleaseUnitEntry = string | ReleaseUnitKeyedPath;
+/** One exact text file, bounded to the full-line regexes its removed AND added lines must match. */
+export interface ReleaseUnitLinedPath {
+  readonly path: string;
+  readonly lines: readonly string[];
+}
+
+/** A whole-path pattern (`=path` for exact), a keyed JSON file, or a line-bound text file. */
+export type ReleaseUnitEntry = string | ReleaseUnitKeyedPath | ReleaseUnitLinedPath;
 
 /**
- * `release.unitPaths` -- the repo-relative path set (a prefix or a narrow glob,
+ * `release.unitPaths` -- the repo-relative path set (an `=exact` path, a prefix or a narrow glob,
  * ../report/patterns.ts's own grammar -- the same one `review.scopes` above
  * reads, so a maintainer who writes `hooks/**` in one table is entitled to
  * have it claim the same files in the other) a release unit is bounded to.
@@ -1101,6 +1109,8 @@ function parseReview(path: string, value: unknown): ReviewPolicy {
           `is empty. An empty pattern matches nothing at all, so it is a path list entry that can never raise this scope`,
         );
       }
+      const problem = exactPathProblem(pattern);
+      if (problem !== null) throw new SchemaError(path, `${pointer}.paths[${index}]`, problem);
       return pattern;
     });
     if (paths.length === 0) {
@@ -1155,8 +1165,8 @@ function isUniversalPattern(pattern: string): boolean {
   return UNIVERSAL_PROBE_PATHS.every((probe): boolean => matchesPattern(probe, pattern));
 }
 
-/** The two keys a content-scoped `release.unitPaths` entry may carry, in one place. */
-const UNIT_PATH_ENTRY_KEYS: readonly string[] = ["path", "keys"];
+/** A content bound chooses exactly one of `keys` and `lines`. */
+const UNIT_PATH_ENTRY_KEYS: readonly string[] = ["path", "keys", "lines"];
 
 /**
  * One `release.unitPaths[i]` that arrived as an OBJECT rather than a string
@@ -1164,22 +1174,23 @@ const UNIT_PATH_ENTRY_KEYS: readonly string[] = ["path", "keys"];
  * `review.scopes` and the plain-string branch below both already hold to):
  * `path` is a repo-relative path to the ONE exact file this entry bounds
  * (never a pattern -- see `ReleaseUnitKeyedPath`'s own doc comment), `keys`
- * is a non-empty list of non-empty leaf-key strings. Whether the declared
- * file actually IS JSON, and whether its changes stayed inside these keys,
+ * is a non-empty list of leaf-key strings, or `lines` a non-empty list of
+ * safe full-line regexes. Whether the file is readable as JSON/text and its
+ * changes stayed inside these bounds,
  * is ../release/unitcheck.ts's own question, asked against real base/head
  * content this loader has never seen.
  */
-function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Record<string, unknown>>): ReleaseUnitKeyedPath {
+function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Record<string, unknown>>): ReleaseUnitKeyedPath | ReleaseUnitLinedPath {
   for (const key of Object.keys(value)) {
     if (key.startsWith("$") || UNIT_PATH_ENTRY_KEYS.includes(key)) continue;
     throw new SchemaError(
       path,
       `${pointer}.${key}`,
-      `is not a key a content-scoped release-unit entry can carry. The two are 'path' (the exact JSON file this entry bounds) and 'keys' (the leaf keys, JSON-pointer or dotted, that file may change at)`,
+      "is not a key a content-scoped release-unit entry can carry. Use 'path' and exactly one of 'keys' (JSON leaf paths) or 'lines' (whole-line regular expressions)",
     );
   }
   const filePath = requireString(path, `${pointer}.path`, value["path"]);
-  if (filePath.trim() === "" || filePath.startsWith("/") || filePath.split("/").includes("..")) {
+  if (filePath.trim() === "" || filePath.startsWith("/") || filePath.split("/").some((segment): boolean => segment === "" || segment === "." || segment === "..") || /[\\*\u0000-\u001f\u007f]/.test(filePath)) {
     throw new SchemaError(
       path,
       `${pointer}.path`,
@@ -1201,6 +1212,29 @@ function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Recor
       `${pointer}.path`,
       `'${filePath}' carries a '#', '?' or '%' -- refused. This path is interpolated into a GitHub contents API URL (repos/{slug}/contents/<path>?ref=<sha>), and any of the three would change what that URL means (a fragment, a second query string, or a percent-escape) rather than naming the file verbatim. Rename the file, or point this entry at a path that does not need one`,
     );
+  }
+  const hasKeys = Object.hasOwn(value, "keys");
+  const hasLines = Object.hasOwn(value, "lines");
+  if (hasKeys === hasLines) {
+    throw new SchemaError(path, pointer, "must carry exactly one of 'keys' (a JSON bound) or 'lines' (a text bound), never both or neither");
+  }
+  if (hasLines) {
+    const linesRaw = requireArray(path, `${pointer}.lines`, value["lines"]);
+    if (linesRaw.length === 0) throw new SchemaError(path, `${pointer}.lines`, "names no line patterns; name at least one whole-line regular expression");
+    if (linesRaw.length > RELEASE_PATTERN_LIMITS.patterns) throw new SchemaError(path, `${pointer}.lines[${RELEASE_PATTERN_LIMITS.patterns}]`, `pattern count limit (${RELEASE_PATTERN_LIMITS.patterns}) exceeded`);
+    const lines = linesRaw.map((item, index): string => {
+      const at = `${pointer}.lines[${index}]`;
+      const source = requireString(path, at, item);
+      if (source === "") throw new SchemaError(path, at, "is empty; write '^$' to allow an empty line");
+      return source;
+    });
+    try {
+      releaseLinePatterns(lines);
+    } catch (error) {
+      const at = error instanceof ReleaseLinePatternsError ? `${pointer}.lines[${error.index}]` : `${pointer}.lines`;
+      throw new SchemaError(path, at, `is not a safe line regular expression: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return { path: filePath, lines };
   }
   const keysRaw = requireArray(path, `${pointer}.keys`, value["keys"]);
   if (keysRaw.length === 0) {
@@ -1236,6 +1270,11 @@ function parseReleasePolicy(path: string, value: unknown): ReleasePolicy {
       return parseUnitPathEntry(path, pointer, entry as Readonly<Record<string, unknown>>);
     }
     const pattern = requireString(path, `release.unitPaths[${index}]`, entry);
+    if (pattern.startsWith("=")) {
+      const problem = exactPathProblem(pattern);
+      if (problem !== null) throw new SchemaError(path, pointer, problem);
+      return pattern;
+    }
     if (pattern.trim() === "") {
       throw new SchemaError(
         path,
@@ -2192,6 +2231,16 @@ export function describeReviewScopes(workflow: Workflow): string {
     : `${names.length} scope(s): ${names
         .map((name): string => `${name} (${workflow.review.scopes[name]?.persona ?? "?"})`)
         .join(", ")}`;
+}
+
+/** The release pointer row exposes the declared bounds independently of the coverage/branch summary. */
+export function describeRelease(workflow: Workflow): string {
+  const entries = workflow.release.unitPaths;
+  if (entries === null) return "none declared (release unit-check refuses an undeclared unit)";
+  const strings = entries.filter((entry): entry is string => typeof entry === "string");
+  const keyed = entries.filter((entry): boolean => typeof entry !== "string" && "keys" in entry).length;
+  const lined = entries.filter((entry): boolean => typeof entry !== "string" && "lines" in entry).length;
+  return `${entries.length} entry(s): ${strings.filter((entry): boolean => entry.startsWith("=")).length} exact path(s), ${strings.filter((entry): boolean => !entry.startsWith("=")).length} prefix/glob(s), ${keyed} key-bound, ${lined} line-bound`;
 }
 
 /**

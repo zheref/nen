@@ -186,8 +186,18 @@ describe("nen schema check", () => {
       "nen/workflow.json#profile",
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
+      "nen/workflow.json#release",
       "nen/decisions.json",
     ]);
+    expect(checks.find((c): boolean => c["file"] === "nen/workflow.json#release")).toEqual({
+      file: "nen/workflow.json#release",
+      path: join(BANKAI_REPO, "nen", "workflow.json"),
+      ok: true,
+      detail: "none declared (no policy file)",
+      required: false,
+      legacy: false,
+      note: null,
+    });
     expect(checks.every((c): boolean => c["ok"] === true)).toBe(true);
     for (const check of checks) expect(Object.keys(check)).toEqual(CHECK_KEYS);
     // A fully migrated repository says so in the machine-readable output as

@@ -220,6 +220,15 @@ describe("nen review scopes", () => {
     expect(captured.err.join("\n")).toMatch(/review\.scopes\.security\.paths/);
   });
 
+  it("refuses an empty exact marker by pointer before reading any diff", async () => {
+    const root = repoWith({ scopes: { security: { persona: "feitan", tier: "deep", budget: 1, paths: ["="] } } });
+    const captured = await capture(["review", "scopes", "--base", "main", "--repo", root], [
+      { match: "git rev-parse --verify --quiet main^{commit}", result: { code: 0, stdout: "abc123\n" } },
+    ]);
+    expect(captured.code).toBe(2);
+    expect(captured.err.join("\n")).toMatch(/review\.scopes\.security\.paths\[0\].*exact repo-relative path/);
+  });
+
   it("refuses a missing --base by name", async () => {
     const root = repoWith({ scopes: SCOPES });
     const captured = await capture(["review", "scopes", "--repo", root], []);
