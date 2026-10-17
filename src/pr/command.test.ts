@@ -9,7 +9,7 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { defaultSeams, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
-import { collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsArgv } from "./bots.js";
+import { botLoginArgv, collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsArgv } from "./bots.js";
 import { requestReviewsArgv } from "./reviewers.js";
 import { botNodesArgv, commitArgv, gatesAtArgv, requestTimelineArgv } from "./round_ceiling.js";
 import { markReadyArgv, readDraftStateArgv } from "./markready.js";
@@ -1234,6 +1234,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
       ...NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "ghost").join(" ")}`, result: COLLABORATOR_NONE },
+      { match: `gh ${botLoginArgv("ghost").join(" ")}`, result: { code: 1, stderr: "gh: Not Found (HTTP 404)" } },
     ];
     const result = await capture(
       ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "acme/reviewers,ghost"],
@@ -1401,6 +1402,102 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         ],
       ]),
     },
+  });
+
+  const restCopilot: ScriptedCall = {
+    match: `gh ${botLoginArgv("copilot").join(" ")}`,
+    result: { stdout: JSON.stringify({ type: "Bot", login: "Copilot", node_id: "BOT_live" }) },
+  };
+
+  it.each(["copilot", "copilot-pull-request-reviewer", "copilot-pull-request-reviewer[bot]"])("--add-bots resolves unseen %s before its mutation (#160)", async (login) => {
+    const seams = new ScriptedSeams([
+      restCopilot,
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      ...NO_BASE_GATES,
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_live"]).join(" ")}`, result: botMutationOk(["copilot-pull-request-reviewer"], ["BOT_live"]) },
+    ]);
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", login, "--json"], null, seams);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).routing).toEqual([{ name: login, via: "add-bots", route: "bot", id: "BOT_live" }]);
+    expect(seams.calls[0]?.args).toEqual(botLoginArgv(login));
+  });
+
+  it.each(["copilot", "copilot-pull-request-reviewer", "copilot-pull-request-reviewer[bot]"])("--add-reviewers resolves unseen %s as a Bot (#160)", async (login) => {
+    const seams = new ScriptedSeams([
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, login).join(" ")}`, result: COLLABORATOR_NONE },
+      restCopilot,
+      ...NO_BASE_GATES,
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_live"]).join(" ")}`, result: botMutationOk(["copilot-pull-request-reviewer"], ["BOT_live"]) },
+    ]);
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", login, "--json"], null, seams);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).routing).toEqual([{ name: login, via: "add-reviewers", route: "bot", id: "BOT_live" }]);
+  });
+
+  it("deduplicates a bot login and its explicit id into one mutation (#160)", async () => {
+    const seams = new ScriptedSeams([
+      restCopilot,
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      ...NO_BASE_GATES,
+      { match: `gh ${requestBotReviewsArgv("PR_1", ["BOT_live"]).join(" ")}`, result: botMutationOk(["copilot-pull-request-reviewer"], ["BOT_live"]) },
+    ]);
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "copilot,BOT_live"], null, seams);
+    expect(result.code).toBe(0);
+    expect(seams.calls.filter((call) => call.args.some((arg) => arg.startsWith("query=mutation")))).toHaveLength(1);
+  });
+
+  it("refuses an unknown --add-bots login before any mutation (#160)", async () => {
+    const seams = new ScriptedSeams([{ match: "gh api --method GET users/missing%5Bbot%5D", result: { code: 1, stderr: "HTTP 404" } }]);
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "missing"], null, seams);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("'missing' did not resolve to a Bot login");
+  });
+
+  it("previews mixed user, alias and explicit Bot id routes without any mutation (#160)", async () => {
+    const seams = new ScriptedSeams([
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+      restCopilot,
+      ...CEILING_3,
+      timelineWith(1, "BOT_live"),
+    ]);
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "sasuke", "--add-bots", "copilot,BOT_live", "--dry-run", "--json"], null, seams);
+    expect(result.code).toBe(0);
+    const report = JSON.parse(result.out.join("\n"));
+    expect(report.dryRun).toBe(true);
+    expect(report.message).toContain("copilot -> bot (id BOT_live) [add-bots]");
+    expect(report.routing).toEqual([
+      { name: "sasuke", via: "add-reviewers", route: "user", id: null },
+      { name: "copilot", via: "add-bots", route: "bot", id: "BOT_live" },
+      { name: "BOT_live", via: "add-bots", route: "bot", id: "BOT_live" },
+    ]);
+    expect(report.rounds).toEqual([{ id: "BOT_live", login: "copilot-pull-request-reviewer", requested: 1, next: 2, maxRounds: 3, refused: false }]);
+  });
+
+  it.each(["--add-bots", "--add-reviewers"])("keeps canonical-login ceiling fallback when %s receives an alias (#160)", async (flag) => {
+    const seams = new ScriptedSeams([
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      restCopilot,
+      ...CEILING_3,
+      { match: `gh ${requestTimelineArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify([Array.from({ length: 3 }, () => ({ event: "review_requested", requested_reviewer: { type: "Bot", login: "copilot-pull-request-reviewer", node_id: "BOT_old" } }))]) } },
+    ]);
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", flag, "copilot", "--json"], null, seams);
+    expect(result.code).toBe(2);
+    expect(JSON.parse(result.out.join("\n")).rounds[0]).toMatchObject({ requested: 3, next: 4, refused: true });
+  });
+
+  it.each([
+    { code: 1, stderr: "HTTP 403 forbidden" },
+    { stdout: JSON.stringify({ type: "User", login: "Copilot", node_id: "U_1" }) },
+  ])("fails bot resolution before requesting an accompanying user %#", async (result) => {
+    const seams = new ScriptedSeams([
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "sasuke").join(" ")}`, result: collaboratorFound("sasuke", "U_1") },
+      { match: `gh ${botLoginArgv("copilot").join(" ")}`, result },
+    ]);
+    const response = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "sasuke", "--add-bots", "copilot"], null, seams);
+    expect(response.code).toBe(1);
   });
 
   it("refuses the (M+1)th request for a bot at exit 2, naming the count and the ceiling, and requests nothing", async () => {
@@ -1838,6 +1935,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
       ...NO_BASE_GATES,
       { match: `gh ${collaboratorArgv(KNOWN_BOTS_TARGET, "ghost").join(" ")}`, result: COLLABORATOR_NONE },
+      { match: `gh ${botLoginArgv("ghost").join(" ")}`, result: { code: 1, stderr: "gh: Not Found (HTTP 404)" } },
     ];
     const result = await capture(
       ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "ghost"],

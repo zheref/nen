@@ -17,21 +17,13 @@
 // second path; ../pr/reviewers.ts's is unchanged and still owns the
 // user/team route.
 //
-// RESOLVING A LOGIN TO A BOT IS NOT A LOOKUP GITHUB OFFERS DIRECTLY.
-// `search(type: USER)` never returns a Bot node, and `repository.collaborators`
-// -- the read this module uses for the USER half of resolution, below -- never
-// does either: a bot is not a "collaborator" in GitHub's own sense of the
-// word, no matter how many times it has reviewed. The one reliable read is
-// the PULL REQUEST'S OWN HISTORY: a bot that already reviewed appears as the
-// author of a `PullRequestReview` timeline item, and a bot with a review
-// still OWED appears in `reviewRequests`. Between the two, a bot that has
-// ever touched THIS pull request resolves; one that has not must be named by
-// its node id directly, with `--add-bots` -- which is exactly what this
-// verb's usage text says when resolution comes up empty (see
-// unresolvedLoginError below).
+// Login resolution first uses the PR's history. Bots unseen on this PR are
+// resolved through GET /users/<login>[bot], whose type and node_id identify
+// the Bot without a prior review request. `copilot` is an alias for
+// copilot-pull-request-reviewer; no node id is hard-coded.
 //
 // A REFUSAL IS A REFUSAL, NEVER A GUESS: a login this module cannot place as
-// either a known bot OR a collaborator is refused (exit 2, VerbUsageError) --
+// either a bot (PR history or REST) OR a collaborator is refused (exit 2, VerbUsageError) --
 // see ../pr/command.ts's doRequestReviews -- rather than handed to
 // `requestReviewsByLogin` on the chance it resolves. That call's own error
 // already exists and is not friendlier for being deferred to.
@@ -247,6 +239,44 @@ function defaultBranchOf(raw: { name?: unknown; target?: { oid?: unknown } | nul
 export function fetchPrAndKnownBots(seams: Seams, target: Target, prNumber: number): PrAndKnownBots {
   const what = `${target.slug}#${prNumber}`;
   return parsePrAndKnownBots(runOrThrow(seams, prAndKnownBotsArgv(target, prNumber), what), what);
+}
+
+/** Canonical comparison for short, REST [bot], and Copilot alias spellings. */
+export function botLoginKey(login: string): string {
+  const short = login.toLowerCase().replace(/\[bot\]$/, "");
+  return short === "copilot" ? "copilot-pull-request-reviewer" : short;
+}
+
+/** Modern GraphQL ids, plus the older base64 global-id encoding. */
+export function isReviewerNodeId(value: string): boolean {
+  return /^[A-Z]+_/.test(value) || /^\d+:[A-Za-z]+\d+$/.test(Buffer.from(value, "base64").toString("utf8"));
+}
+
+export function botLoginArgv(login: string): readonly string[] {
+  return ["api", "--method", "GET", `users/${encodeURIComponent(`${botLoginKey(login)}[bot]`)}`];
+}
+
+/** A missing bot is null; transport failures and malformed answers are refusals. */
+export function resolveBotLogin(seams: Seams, login: string): KnownBot | null {
+  const key = botLoginKey(login);
+  // One handle only, never an endpoint, team, query or GraphQL node id.
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(key)) return null;
+  const result = seams.run(GH, [...botLoginArgv(login)]);
+  if (result.code !== 0) {
+    if (/HTTP 404/.test(result.stderr)) return null;
+    throw new BotResolutionError(`could not resolve bot '${login}': ${outputLines(result.stderr).join(" ") || `exit ${result.code}`}`);
+  }
+  let raw: { type?: unknown; login?: unknown; node_id?: unknown };
+  try {
+    raw = JSON.parse(result.stdout) as typeof raw;
+  } catch (error) {
+    throw new BotResolutionError(`bot '${login}': gh api did not return JSON (${String(error)})`);
+  }
+  if (raw?.type !== "Bot" || typeof raw.login !== "string" || botLoginKey(raw.login) !== key ||
+      typeof raw.node_id !== "string" || raw.node_id === "") {
+    throw new BotResolutionError(`bot '${login}': GitHub did not return the requested Bot with a login and node_id`);
+  }
+  return { login: botLoginKey(raw.login), id: raw.node_id };
 }
 
 // --- resolving a login as a collaborator (the User half) --------------------

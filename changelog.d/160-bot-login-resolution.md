@@ -1,0 +1,1 @@
+- Resolve `pr request-reviews --add-bots` login inputs through GitHub, including `copilot`, short bot handles and `[bot]` spellings, while retaining explicit node ids. Unseen `--add-reviewers` bot logins use the same lookup; dry runs show resolved routes, and the existing review-round ceiling still gates all mutations. (#160)

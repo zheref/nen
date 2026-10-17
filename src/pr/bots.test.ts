@@ -3,6 +3,10 @@ import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import {
   BotResolutionError,
+  botLoginArgv,
+  botLoginKey,
+  isReviewerNodeId,
+  resolveBotLogin,
   EXIT_BOT_REQUEST_UNRECORDED,
   collaboratorArgv,
   fetchPrAndKnownBots,
@@ -327,5 +331,41 @@ describe("requestBotReviewsArgv / requestBotReviews", () => {
     const result = requestBotReviews(seams, TARGET, 9, "PR_1", ["BOT_1"]);
     expect(result.ok).toBe(false);
     expect(result.pendingBotLogins).toEqual([]);
+  });
+});
+
+
+describe("bot logins resolved without prior PR history (#160)", () => {
+  it.each(["copilot", "COPILOT", "copilot[bot]", "copilot-pull-request-reviewer", "copilot-pull-request-reviewer[bot]"])("resolves %s through the Bot endpoint", (login) => {
+    expect(botLoginKey(login)).toBe("copilot-pull-request-reviewer");
+    expect(botLoginArgv(login)).toEqual(["api", "--method", "GET", "users/copilot-pull-request-reviewer%5Bbot%5D"]);
+    const seams = new ScriptedSeams([{ match: `gh ${botLoginArgv(login).join(" ")}`, result: { stdout: JSON.stringify({ type: "Bot", login: "Copilot", node_id: "BOT_real" }) } }]);
+    expect(resolveBotLogin(seams, login)).toEqual({ login: "copilot-pull-request-reviewer", id: "BOT_real" });
+  });
+
+  it("resolves other bot handles and keeps opaque node ids distinguishable", () => {
+    const seams = new ScriptedSeams([{ match: "gh api --method GET users/review-helper%5Bbot%5D", result: { stdout: JSON.stringify({ type: "Bot", login: "review-helper[bot]", node_id: "BOT_other" }) } }]);
+    expect(resolveBotLogin(seams, "review-helper")).toEqual({ login: "review-helper", id: "BOT_other" });
+    expect(isReviewerNodeId("BOT_kgDOCnlnWA")).toBe(true);
+    expect(isReviewerNodeId(Buffer.from("03:Bot123").toString("base64"))).toBe(true);
+    expect(isReviewerNodeId("review-helper")).toBe(false);
+  });
+
+  it("returns missing only on HTTP 404 and never calls an endpoint-shaped input", () => {
+    const seams = new ScriptedSeams([{ match: "gh api --method GET users/missing%5Bbot%5D", result: { code: 1, stderr: "gh: Not Found (HTTP 404)" } }]);
+    expect(resolveBotLogin(seams, "missing")).toBeNull();
+    expect(resolveBotLogin(new ScriptedSeams([]), "../../users/admin")).toBeNull();
+  });
+
+  it.each([
+    { code: 1, stderr: "HTTP 403 forbidden" },
+    { stdout: "not JSON" },
+    { stdout: "null" },
+    { stdout: JSON.stringify({ type: "User", login: "review-helper", node_id: "U_1" }) },
+    { stdout: JSON.stringify({ type: "Bot", login: "another[bot]", node_id: "BOT_wrong" }) },
+    { stdout: JSON.stringify({ type: "Bot", login: "review-helper[bot]" }) },
+  ])("refuses unreadable, non-Bot or mismatched answers %#", (result) => {
+    const seams = new ScriptedSeams([{ match: "gh api --method GET users/review-helper%5Bbot%5D", result }]);
+    expect(() => resolveBotLogin(seams, "review-helper")).toThrow(BotResolutionError);
   });
 });
