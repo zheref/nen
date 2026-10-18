@@ -1,0 +1,6 @@
+{
+  "$comment": "GitHub API bot-login aliases for pr request-reviews (#160), not the target repository's reviewer policy. REST returns Copilot while GraphQL uses copilot-pull-request-reviewer for the same Bot. This table maps accepted API spellings only; the Bot node id is always read from GitHub and the target's declared round ceiling remains authoritative. Shipped data follows taxonomy-purity.test.ts's existing names-as-data rule without a code or test exemption.",
+  "aliases": {
+    "copilot": "copilot-pull-request-reviewer"
+  }
+}

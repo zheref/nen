@@ -351,7 +351,7 @@ verb does by default:
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, before printing the byte count and first/last line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
-| [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, so it can print which route each name or `--add-bots` id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
+| [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, with REST bot lookup for unseen bot logins, so it can print which route each name or `--add-bots` login/id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
 | [`runner preflight`](#nen-runner-preflight), [`runner enable`](#nen-runner-enable) | no | `--dry-run` | **still reads GitHub** -- the default branch; the run `enable` certifies and the variable's current value -- and dispatches or sets nothing |
 | [`runner relabel`](#nen-runner-relabel) | yes | `--run` | without it, reads the runners list and either lists the candidates (no `--runner`) or prints each label write as `would run:`; with it -- and only with `--runner` naming every runner -- adds the pool's own label and reads each runner's labels back (#340) |
@@ -757,7 +757,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
 | [`pr`](#family-pr) | [`nen pr retarget`](#nen-pr-retarget) | gh pr edit --base, for a stacked PR after its predecessor merges | github (gh) | yes |
-| [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
+| [`pr`](#family-pr) | [`nen pr request-reviews`](#nen-pr-request-reviews) | resolves each `--add-reviewers` login as a Bot or a collaborator, then requests it through `gh pr edit --add-reviewer` (User/Team) or GitHub's `requestReviews` mutation (Bot, `botIds`) — the one route `--add-bots` logins and node ids travel too | github (gh api graphql to resolve + request; gh pr edit for the user route) | yes |
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, resolve one, or settle a batch from one file | github (gh api graphql: one read walk; one mutation for reply/resolve, one reply and one resolve per entry for settle, unless --dry-run) | yes |
@@ -2343,9 +2343,9 @@ zheref/nen#12 now targets 'release/1.0'
 
 ### `nen pr request-reviews`
 
-Two routes, chosen per name. A login this pull request already knows as a
-Bot (its own `reviewRequests` or `timelineItems`) or a raw node id named
-with `--add-bots` is requested through GitHub's `requestReviews` GraphQL
+Two routes, chosen per name. A Bot login resolved from this pull request’s
+history or GitHub’s `GET /users/<login>[bot]` endpoint, or a raw node id named
+with `--add-bots`, is requested through GitHub's `requestReviews` GraphQL
 mutation (`botIds`, one call for every bot named or resolved); a login that
 instead reads as a collaborator of `--target` is requested through `gh pr
 edit --add-reviewer`, unchanged from before. The split exists because `gh pr
@@ -2363,7 +2363,7 @@ usage text.
 **Usage**
 
 ```text
-nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots id,id] [--dry-run]
+nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
 ```
 
 **Arguments**
@@ -2372,14 +2372,22 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 |---|---|---|---|
 | `--target <owner/name>` | yes | the GitHub repository | missing exits 1 |
 | `--pr <n>` | yes | the pull-request number | missing/invalid exits 2 |
-| `--add-reviewers <a,b>` | one of this or `--add-bots` | comma-separated reviewer logins, resolved one by one (see above) | a login that resolves to NEITHER a known bot nor a collaborator is refused at exit 2, naming it and pointing at `--add-bots` |
-| `--add-bots <id,id>` | one of this or `--add-reviewers` | comma-separated Bot **node ids** (GraphQL global ids), routed straight to the mutation's `botIds` | the one way to request a bot this pull request has never seen — nothing short of the id resolves one |
+| `--add-reviewers <a,b>` | one of this or `--add-bots` | comma-separated reviewer logins, resolved one by one (see above) | a login that resolves to neither a bot (PR history or REST lookup) nor a collaborator is refused at exit 2 |
+| `--add-bots <login-or-id,...>` | one of this or `--add-reviewers` | comma-separated Bot logins or GraphQL node ids | accepts short and `[bot]` logins; `copilot` aliases `copilot-pull-request-reviewer`. Logins resolve through GitHub before any mutation; explicit ids remain unchanged |
 | `--dry-run` | no | resolves every `--add-reviewers` login (still reads GitHub) and prints which route each name or id would go to, then requests nothing | not network-free — see the `--dry-run` discipline table above |
 | `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) and an `unrecordedBots` array (`{ id, login }` per requested bot GitHub did not record — see exit `9`) alongside `ok`/`message` |
 
+Explicit Bot IDs accept a nonempty opaque `BOT_` payload of letters, digits,
+`_` and `-`, or canonical base64 decoding to exactly `<digits>:Bot<digits>`.
+User/other node types, empty payloads, invalid characters and malformed legacy
+encodings refuse at exit 2 before any GitHub read for the batch. REST login
+resolution applies the same Bot-ID check to `node_id`; a malformed API answer
+is a tool failure at exit 1. Valid explicit IDs remain unchanged. Ordinary
+human collaborator and team routes are unchanged.
+
 Both flags absent (or both empty) is refused at exit 1, naming both:
 `no reviewers named -- --add-reviewers takes a comma-separated list of
-logins, or --add-bots a comma-separated list of node ids` — the wording
+logins, or --add-bots a comma-separated list of bot logins or node ids` — the wording
 `--add-reviewers` itself always carried; a prior version of this same
 refusal named `--reviewers`, this verb's SIBLING flag on `pr ready` and `pr
 next-blocker` rather than its own
@@ -2448,8 +2456,8 @@ and `rounds` when a bot is named (a `--dry-run` carries `ok`, `dryRun`,
 `routing`, `message`, and the same two). Exit 0 on success (or a
 `--dry-run`), exit 1 when no reviewers were named, a route's `gh` call
 failed or answered something unreadable, or the round ceiling could not be
-checked, exit 2 on a missing `--pr`, an unresolved `--add-reviewers` login or
-a bot past `round_policy.maxRounds`, and **exit `9` when every call was
+checked, exit 2 on a missing `--pr`, an unresolved `--add-reviewers` or
+`--add-bots` login, or a bot past `round_policy.maxRounds`, and **exit `9` when every call was
 accepted but GitHub did not record at least one requested bot**.
 
 **Exit `9` — a bot request GitHub accepted and never recorded
@@ -15308,10 +15316,13 @@ nen pr fetch --target zheref/nen --pr 112 --json
 # ... then preview where each name would go before requesting anything ...
 nen pr request-reviews --target zheref/nen --pr 112 --add-reviewers sasuke --dry-run
 
-# ... then request the rest. A collaborator's LOGIN resolves on its own; a
-# Bot this pull request has never seen (no prior review, no pending
-# request) needs its node id named directly with --add-bots.
+# ... then request the rest. User and Bot logins resolve through GitHub,
+# including a Bot this pull request has never seen. Preview a bot alias first;
+# an explicit Bot node id remains an alternative. An unresolved bot login
+# refuses at exit 2 before any review request is sent.
 nen pr request-reviews --target zheref/nen --pr 112 --add-reviewers sasuke
+nen pr request-reviews --target zheref/nen --pr 112 --add-bots copilot --dry-run
+nen pr request-reviews --target zheref/nen --pr 112 --add-bots copilot
 nen pr request-reviews --target zheref/nen --pr 112 --add-bots BOT_kgDOCnlnWA
 ```
 

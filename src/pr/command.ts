@@ -81,9 +81,15 @@ import {
 } from "./round_ceiling.js";
 import {
   EXIT_BOT_REQUEST_UNRECORDED,
+  botLoginKey,
+  isReviewerNodeId,
+  isBotLoginInput,
+  isBotLoginAlias,
+  resolveBotLogin,
   fetchPrAndKnownBots,
   isCollaborator,
   requestBotReviews,
+  type KnownBot,
   type PrAndKnownBots,
   type UnrecordedBot,
 } from "./bots.js";
@@ -140,7 +146,7 @@ nen pr fetch --target <owner/name> --pr <n>
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
-nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots id,id] [--dry-run]
+nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
 nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
@@ -316,19 +322,16 @@ request-reviews:
   --add-reviewers <a,b>  Logins, resolved one by one: an entry containing
                          a '/' (an 'org/team' slug) is a TEAM and goes
                          straight to 'gh pr edit --add-reviewer', no
-                         lookup; a bare login this pull request already
-                         knows as a Bot (its own reviewRequests or
-                         timelineItems) is routed to the bot mutation; a
-                         bare login that reads as a collaborator of
-                         --target is routed to 'gh pr edit --add-reviewer';
-                         a bare login that resolves to NEITHER is refused
-                         (exit 2), naming it, and pointing at --add-bots.
-  --add-bots <id,id>     Bot NODE IDS (GraphQL global ids, e.g.
-                         'BOT_xxxxxxxxxxxx'), passed straight through to
-                         the mutation's botIds -- the one way to request
-                         a bot this pull request has never seen, since
-                         nothing short of the id resolves one (see
-                         ./bots.ts's header).
+                         lookup; a bare login already known as a Bot is
+                         routed to botIds; a collaborator goes through the
+                         user route. Other bot logins resolve with GET
+                         /users/<login>[bot]; a missing login is refused.
+                         API aliases and '[bot]' spellings use the bot route.
+  --add-bots <login-or-id,...>
+                         Bot logins (short or '[bot]' spelling) and known
+                         GitHub API aliases are resolved through GitHub to
+                         obtain the Bot node_id. Explicit
+                         GraphQL node ids remain accepted unchanged.
   --dry-run              Resolution still runs (this verb is not
                          network-free even here) but nothing is
                          requested; prints which route -- bot, user or
@@ -358,7 +361,9 @@ request-reviews:
   arrives. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
   named, or a route's gh call failed or answered something unreadable,
   or the round ceiling could not be checked; 2 usage (a missing --pr, an
-  unresolved --add-reviewers login) or a bot past round_policy.maxRounds; 9 every
+  unresolved --add-reviewers or --add-bots login, or an invalid explicit
+  Bot node id) or a bot past
+  round_policy.maxRounds; 9 every
   call was ACCEPTED but at least one requested bot is not pending review
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
   }], login null for a bot this pull request has never seen). No review
@@ -1207,11 +1212,8 @@ interface ReviewerRoute {
 function routeDetail(route: ReviewerRoute): string {
   switch (route.route) {
     case "bot": {
-      // The id is shown only when it is NEW information -- resolved from a
-      // --add-reviewers LOGIN. On an --add-bots route `route.id` is always
-      // the same string as `route.name`; repeating it would tell the reader
-      // nothing `--add-bots BOT_x -> bot [add-bots]` does not already say.
-      const showId = route.id !== null && route.via === "add-reviewers";
+      // A resolved login adds information; an explicit id already names it.
+      const showId = route.id !== null && route.name !== route.id;
       return `bot${showId ? ` (id ${route.id})` : ""}`;
     }
     case "team":
@@ -1272,15 +1274,22 @@ function resolveReviewerLogins(
       continue;
     }
     known ??= fetchPrAndKnownBots(seams, target, prNumber);
-    const bot = known.bots.find((candidate): boolean => candidate.login.toLowerCase() === login.toLowerCase());
+    const bot = known.bots.find((candidate): boolean => botLoginKey(candidate.login) === botLoginKey(login));
     if (bot !== undefined) {
       resolvedBotIds.push(bot.id);
       routes.push({ name: login, via: "add-reviewers", route: "bot", id: bot.id });
       continue;
     }
-    if (isCollaborator(seams, target, login)) {
+    if (!isBotLoginAlias(login) && !/\[bot\]$/i.test(login) && isCollaborator(seams, target, login)) {
       userLogins.push(login);
       routes.push({ name: login, via: "add-reviewers", route: "user", id: null });
+      continue;
+    }
+    const resolved = resolveBotLogin(seams, login);
+    if (resolved !== null) {
+      known = { ...known, bots: [...known.bots, resolved] };
+      resolvedBotIds.push(resolved.id);
+      routes.push({ name: login, via: "add-reviewers", route: "bot", id: resolved.id });
       continue;
     }
     unresolved.push(login);
@@ -1288,13 +1297,7 @@ function resolveReviewerLogins(
 
   if (unresolved.length > 0) {
     throw new VerbUsageError(
-      `${unresolved.map((login): string => `'${login}'`).join(", ")} ${
-        unresolved.length === 1 ? "does" : "do"
-      } not resolve to a Bot already known to ${target.slug}#${prNumber} (its own reviewRequests or timelineItems) or a collaborator of ${
-        target.slug
-      }. A login this pull request has never requested a review from, or received one from, cannot be told apart from a genuine typo -- if ${
-        unresolved.length === 1 ? "it is a bot's" : "any of these is a bot's"
-      } login, name it by its node id with --add-bots instead.`,
+      `${unresolved.map((login): string => `'${login}'`).join(", ")} did not resolve to a Bot by login or PR history, or a collaborator of ${target.slug}. Check the spelling or use --add-bots with an explicit Bot node id.`,
     );
   }
 
@@ -1305,14 +1308,22 @@ function doRequestReviews(context: CommandContext): number {
   const target = requireTarget(context);
   const prNumber = requirePr(context);
   const reviewerLogins = commaList(context.args.values["add-reviewers"]);
-  const explicitBotIds = commaList(context.args.values["add-bots"]);
+  const explicitBots = commaList(context.args.values["add-bots"]);
   const dryRun = context.args.booleans.has("dry-run");
 
-  if (reviewerLogins.length === 0 && explicitBotIds.length === 0) {
+  if (reviewerLogins.length === 0 && explicitBots.length === 0) {
     const message =
-      "no reviewers named -- --add-reviewers takes a comma-separated list of logins, or --add-bots a comma-separated list of node ids";
+      "no reviewers named -- --add-reviewers takes a comma-separated list of logins, or --add-bots a comma-separated list of bot logins or node ids";
     emit(context.io, context.json, { ok: false, message }, [message]);
     return 1;
+  }
+
+  // Invalid explicit identities are invocation faults, before any lookup for
+  // this batch's otherwise valid bot, user or team entries.
+  for (const name of explicitBots) {
+    if (!isReviewerNodeId(name) && !isBotLoginInput(name)) {
+      throw new VerbUsageError(`'${name}' is not a valid Bot node id or bot login for --add-bots.`);
+    }
   }
 
   // RESOLUTION RUNS EVEN UNDER --dry-run -- the same "not network-free"
@@ -1326,7 +1337,17 @@ function doRequestReviews(context: CommandContext): number {
     prNumber,
     reviewerLogins,
   );
-  const botRoutes: ReviewerRoute[] = explicitBotIds.map((id): ReviewerRoute => ({ name: id, via: "add-bots", route: "bot", id }));
+  const explicitBotIds: string[] = [];
+  const resolvedBots: KnownBot[] = [];
+  const botRoutes: ReviewerRoute[] = explicitBots.map((name): ReviewerRoute => {
+    const nodeId = isReviewerNodeId(name);
+    const bot = nodeId ? null : resolveBotLogin(context.seams, name);
+    if (bot === null && !nodeId) throw new VerbUsageError(`'${name}' did not resolve to a Bot login; check the spelling or pass an explicit Bot node id with --add-bots.`);
+    const id = bot?.id ?? name;
+    if (bot !== null) resolvedBots.push(bot);
+    explicitBotIds.push(id);
+    return { name, via: "add-bots", route: "bot", id };
+  });
   const routes = [...reviewerRoutes, ...botRoutes];
   // Deduped by id: an id named twice (once via --add-bots, once resolved
   // from a --add-reviewers login the mutation already knows by that same
@@ -1354,6 +1375,7 @@ function doRequestReviews(context: CommandContext): number {
   };
   if (botIds.length > 0) {
     knownBots ??= fetchPrAndKnownBots(context.seams, target, prNumber);
+    knownBots = { ...knownBots, bots: [...knownBots.bots, ...resolvedBots] };
     const read =
       knownBots.defaultBranch === null
         ? ({ kind: "failed", message: "GitHub answered no default branch for the repository" } as const)
@@ -1373,8 +1395,8 @@ function doRequestReviews(context: CommandContext): number {
       // request's known bots where it came from GraphQL already, else one
       // `nodes(ids:)` read for the --add-bots ids nothing else named.
       const knownLogin = (id: string): string | null =>
-        reviewerRoutes.find((route): boolean => route.route === "bot" && route.id === id)?.name ??
         knownBots?.bots.find((bot): boolean => bot.id === id)?.login ??
+        reviewerRoutes.find((route): boolean => route.route === "bot" && route.id === id)?.name ??
         null;
       try {
         canonical = canonicalBotLogins(context.seams, botIds.filter((id): boolean => knownLogin(id) === null));
