@@ -54,20 +54,28 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
   --grammar <t>      The template, written the way the skill documents it:
                        <name>            a slot
                        <name:a|b|c>      a slot with an enumerated value set
-                       <gate:G4|G5;join=+>  enumerated list, each item checked
-                       <labels;join=&>      free list, no empty items
-                       <selector;list=gate:G4|G5;band=severity:high|low;free=label>
-                         ordered alternatives: enum '+' list, enum with one
-                         optional trailing '+', else a whole free token ONLY
-                         when no '+' segment belongs to either enumeration.
-                         JSON list values are arrays; alternative names and
-                         suffix presence are reported. Existing [+] is unchanged.
                        word(s) <slot>    the words introduce the slot, matched
                                          as the LAST whole-word occurrence
                        @<slot> #<slot>   a symbol separator, last occurrence
                        [ ... ]           an optional trailing clause
                        [+]               an optional literal suffix on the
                                          slot just declared
+                       <slot>{+}         a LIST slot: one or more values
+                                         joined by the literal in the braces
+                                         ('{+}', '{&}'); every item of an
+                                         enumerated list is checked, and an
+                                         empty item is refused
+                       <a:..>{+}|<b:..>[+]|<c>
+                                         an ALTERNATION: one position, filled
+                                         by the first alternative the value
+                                         fits, in template order. A free
+                                         alternative comes last and is taken
+                                         only when no piece of the value is
+                                         an enumerated value, so '@g4+model/gpt'
+                                         is refused, never read as free text;
+                                         '@c++' is free text. --json names the
+                                         'alternative' that filled it and a
+                                         list's 'items'
   --line <text>      The invocation to parse. MAY BE EMPTY when every clause
                      of the grammar is optional: 'at [<gate>]' accepts
                      --line "" and --line "at" identically, both reporting
@@ -81,8 +89,8 @@ slot as '<name>: <value>', one nobody filled as '<name>: (clause absent)', and
 a literal-only clause the line carried as '[<literal>]: present'.
 
 Exit 0 when the line parses, 2 when it does not -- a refusal is a usage error,
-and a deterministic corrected line is printed on stderr where one exists;
-ambiguous structured input has corrected:null and offers no invented rewrite.
+and a deterministic corrected line is printed on stderr where one exists.
+Ambiguous or incomplete structured repairs have corrected:null and no heading.
 
 futon:
   Parses the futon invocation grammar and resolves its repo token against
@@ -160,7 +168,7 @@ export const parseCommand: Command = {
 
     if (context.json) {
       context.io.out(JSON.stringify(result, null, 2));
-      if (result.ok) return 0;
+      return result.ok ? 0 : 2;
     }
 
     if (result.ok) {
