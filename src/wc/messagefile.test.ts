@@ -171,6 +171,43 @@ describe("messageFileRefusals -- the same shape 'nen commit format' enforces", (
     expect(messageFileRefusals(root, "feat: add a thing\n\nAkatsuki-Agent: kurapika\n")).toEqual([]);
   });
 
+  it("requires an admitted agent key only for squash, naming the policy source", () => {
+    const root = repoWithPolicy({ allowedAttributionTrailers: ["X-Agent", "Y-Agent"] });
+    const message = "feat: add a thing\n\nCloses: #12\n";
+    expect(messageFileRefusals(root, message)).toEqual([]);
+    const refusals = messageFileRefusals(root, message, undefined, { requireAgentTrailer: true });
+    expect(refusals).toHaveLength(1);
+    expect(refusals[0]).toContain("X-Agent: <value>");
+    expect(refusals[0]).toContain("Y-Agent: <value>");
+    expect(refusals[0]).toContain(join(root, "nen", "workflow.json"));
+    expect(refusals[0]).toContain("commits.allowedAttributionTrailers");
+  });
+
+  it.each([
+    "feat: add a thing\n",
+    "feat: add a thing\n\nX-Agent: \n",
+    "feat: add a thing\n\nX-Agent:  \n",
+    "feat: add a thing\n\nX-Agent: \t\t\n",
+    "feat: add a thing\n\nX-Agent: author\nordinary prose\n",
+    "feat: add a thing\n\nOther-Agent: author\n",
+  ])("refuses a squash message without an admitted trailer: %j", (message) => {
+    const root = repoWithPolicy({ allowedAttributionTrailers: ["X-Agent"] });
+    expect(messageFileRefusals(root, message, undefined, { requireAgentTrailer: true }).join(" "))
+      .toContain("missing a required agent trailer");
+  });
+
+  it("accepts any admitted agent key case-insensitively, including CRLF", () => {
+    const root = repoWithPolicy({ allowedAttributionTrailers: ["X-Agent", "Y-Agent"] });
+    expect(messageFileRefusals(root, "feat: add a thing\r\n\r\ny-agent: author\r\n", undefined,
+      { requireAgentTrailer: true })).toEqual([]);
+  });
+
+  it("requires no agent trailer when the policy is absent or admits none", () => {
+    for (const root of [tempRoot(), repoWithPolicy({ allowedAttributionTrailers: [] })]) {
+      expect(messageFileRefusals(root, "feat: add a thing\n", undefined, { requireAgentTrailer: true })).toEqual([]);
+    }
+  });
+
   it("never opens the workflow file at all when the message carries no trailers", () => {
     // A malformed workflow.json would throw on load; passing with one on disk
     // that IS malformed proves this path never reads it.
