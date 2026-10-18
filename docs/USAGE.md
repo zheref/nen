@@ -3470,6 +3470,15 @@ paragraph, and any attribution trailer this repository's
 [`nen/workflow.json`](#nenworkflowjson) does not admit). Fewer than two
 commits to fold is **not** a refusal: exit 0, one line (ending `base check: NOT performed.`, since the base is not read), nothing moves.
 
+When `commits.allowedAttributionTrailers` lists agent keys, the squash message
+must contain at least one of those keys with a nonempty value in its final
+trailer paragraph (case-insensitive). A missing agent trailer is exit **2**,
+naming the required keys and policy file, before reset or commit; branch,
+index and working tree are preserved. An absent policy or empty list adds no
+requirement. This squash-only check is separate from forbidden trailers and
+the post-commit injection check; `nen commit format` and `nen commit write`
+keep their existing optional-trailer behavior.
+
 **Why the base is guarded on its own.** The fold set is `git merge-base
 <onto> HEAD`..`HEAD`, so on a published branch that was caught up with a
 **merge** of its base, `--onto <upstream sha>` reaches back through that
