@@ -1079,8 +1079,14 @@ export function countChecks(entries: readonly RollupEntry[]): ObjectChecks {
 }
 
 /** The human lines `report data` prints under its `objects:` heading. */
-export function renderObjects(objects: readonly ReportObject[]): readonly string[] {
-  const lines = [`objects: ${objects.length === 0 ? "none (no --target/--prs/--issues/--backlog/--objects-from)" : `${objects.length} row(s)`}`];
+export function renderObjects(objects: readonly ReportObject[], filtered: { readonly of: number } | null = null): readonly string[] {
+  // A REGISTER FILTERED TO NOTHING IS NOT A REGISTER NOBODY ASKED FOR
+  // (zheref/nen#410): "no --target/..." beside a --target would be false.
+  const none =
+    filtered === null
+      ? "none (no --target/--prs/--issues/--backlog/--objects-from)"
+      : `none (the filter kept 0 of ${filtered.of} object(s))`;
+  const lines = [`objects: ${objects.length === 0 ? none : `${objects.length} row(s)`}`];
   for (const object of objects) {
     const mark = object.kind === "pr" ? "PR" : "IS";
     const verdict =
@@ -1106,4 +1112,52 @@ export function renderObjects(objects: readonly ReportObject[]): readonly string
     for (const entry of object.notes) lines.push(`      note: ${plainLine(entry)}`);
   }
   return lines;
+}
+
+/**
+ * Keep only the objects of the EFFORTS `passes` accepts (zheref/nen#410).
+ *
+ * An effort is an issue plus the pull requests linked to it in this set, or a
+ * pull request linked to no issue in the set. Its labels are the union of its
+ * members' labels -- the same rule `nen backlog fetch --label` applies
+ * (../backlog/filter.ts) -- so the register and the board keep the same
+ * efforts. EVERY object of a kept effort is kept: a register that showed the
+ * issue and dropped the PR delivering it would be a register of half an
+ * effort. A PR linked to two issues stays when either effort is kept.
+ *
+ * Order is preserved, so the stated issues-then-PRs order of
+ * `assembleObjects` survives the filter.
+ */
+export function filterEfforts(
+  objects: readonly ReportObject[],
+  passes: (labels: readonly string[]) => boolean,
+): readonly ReportObject[] {
+  const issues = new Map<number, IssueObject>();
+  const prs = new Map<number, PrObject>();
+  for (const object of objects) {
+    if (object.kind === "issue") issues.set(object.number, object);
+    else prs.set(object.number, object);
+  }
+  const keptIssues = new Set<number>();
+  for (const issue of issues.values()) {
+    const labels = [...issue.labels];
+    for (const pr of prs.values()) if (pr.linked.includes(issue.number)) labels.push(...pr.labels);
+    for (const number of issue.linked) {
+      const pr = prs.get(number);
+      if (pr !== undefined && !pr.linked.includes(issue.number)) labels.push(...pr.labels);
+    }
+    if (passes(labels)) keptIssues.add(issue.number);
+  }
+  const keptPrs = new Set<number>();
+  for (const pr of prs.values()) {
+    const owners = [...issues.values()].filter(
+      (issue): boolean => pr.linked.includes(issue.number) || issue.linked.includes(pr.number),
+    );
+    if (owners.length === 0 ? passes(pr.labels) : owners.some((issue): boolean => keptIssues.has(issue.number))) {
+      keptPrs.add(pr.number);
+    }
+  }
+  return objects.filter((object): boolean =>
+    object.kind === "issue" ? keptIssues.has(object.number) : keptPrs.has(object.number),
+  );
 }

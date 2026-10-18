@@ -11,6 +11,9 @@
     "dir": "Reports", "retain": "final-only", "template": "rikugan", "captures": "Reports/captures",
     "$comment": "Hatsu owns templates/rikugan.html and its Markdown twin. Nen supplies the register document through report data --register; these variants declare the blocks that template renders.",
     "sections": {
+      "turn": { "template": "spiritual-message", "blocks": ["masthead", "tally", "desk", "lastTurn", "landed", "delta", "evidence", "launch", "decisions"] },
+      "turn-fast": { "template": "spiritual-message", "blocks": ["masthead", "tally", "desk", "lastTurn"] },
+      "landing": { "template": "spiritual-message", "blocks": ["masthead", "tally", "desk", "lastTurn", "landed", "delta", "evidence", "launch", "decisions", "spend", "prBody"] },
       "final": { "template": "rikugan", "blocks": ["masthead", "tally", "desk", "register", "spend", "legend"] },
       "register": { "template": "rikugan", "blocks": ["masthead", "tally", "desk", "register", "spend", "legend"] }
     }

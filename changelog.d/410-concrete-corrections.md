@@ -1,0 +1,2 @@
+- Retain concrete structured invocation corrections on the merged list/alternation grammar, preserving string values with list items and canonical slot names. Ambiguous or incomplete structured repairs return `corrected: null` without a pasteable-line heading; legacy scalar refusals keep their placeholders.
+- Validate the meaning of the complete correction in a separate parser pass; refuse boundary-changing relocations and incomplete required structured positions, and normalize malformed free-list alternatives without changing the chosen alternative.
