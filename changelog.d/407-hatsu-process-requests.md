@@ -13,3 +13,4 @@
 - #407 item 16: permission-only mirror drift is reported separately from edited content.
 - #407 item 18: published updates support a six-gate, proof-pinned `wc publish --gated` with explicit persona and no force or first-publish route.
 - #407 item 19: `canon check` composes registry, phase-aware classification and bidirectional dry-run label parity with one read-only verdict.
+Read archive tag identities through `nen tag announce --repo`: two CR-stripped lines, explicit no-declaration exit 3, bounded nonsymlink regular-file reads and distinct declaration/wiring faults; no tag is created (item 20).

@@ -1090,6 +1090,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`changelog`](#family-changelog) | [`nen changelog fragment-required`](#nen-changelog-fragment-required) | whether a change owes a changelog.d/ fragment (CON-33(a)) | git diff/caller files, CHANGELOG.md at base+head, optional nen/repos.json-shaped --base-repos/--head-repos | yes |
 | [`changelog`](#family-changelog) | [`nen changelog collate`](#nen-changelog-collate) | collate every changelog.d/ fragment into a new dated CHANGELOG.md section (CON-33(b)) | changelog.d/, CHANGELOG.md | yes |
 | [`changelog`](#family-changelog) | [`nen changelog completeness`](#nen-changelog-completeness) | every PR merged in a range has a CHANGELOG entry or an (un)collated fragment (CON-33(c)), except the range's terminal PR when its merge introduced the dated section | git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance), CHANGELOG.md, changelog.d/ | yes |
+| [`tag`](#family-tag) | [`nen tag announce`](#nen-tag-announce) | read the archive identity and built SHA without creating a tag | nen/workflow.json tags.identity.nameFrom; bounded regular-file reads | yes |
 | [`tag`](#family-tag) | [`nen tag cut`](#nen-tag-cut) | cut an annotated git tag pinned at an explicit SHA, never auto-pushed | git (tag/ls-remote/merge-base; --push also reaches origin) | yes |
 | [`fanout`](#family-fanout) | [`nen fanout compute`](#nen-fanout-compute) | which registered consumers (nen/repos.json) are affected by workflows changed in a release range | nen/repos.json, git diff, .github/workflows/ | yes |
 | [`fanout`](#family-fanout) | [`nen fanout record`](#nen-fanout-record) | the same computation, appended to an audit ledger file | nen/repos.json, git diff, .github/workflows/, ledger file | yes |
@@ -9632,10 +9633,56 @@ exit 0
 
 **`nen tag`**
 
-Cuts one annotated git tag pinned at an explicit SHA — getsuga §4's
-mechanical follow-through once a release PR merges. It never resolves "the
+Announces an archive's declared identity without Git operations, or cuts one annotated
+git tag pinned at an explicit SHA — getsuga §4's mechanical follow-through once a release PR merges. It never resolves "the
 cut point" itself (`nen release resolve-target` does that), and it never
 pushes unless `--push` is given.
+
+### `nen tag announce`
+
+Reads `nen/workflow.json` → `tags.identity.nameFrom` as data. It never creates a tag,
+resolves a commit, checks an archive or contacts GitHub. This is an announcement of
+what the repository's archive wrote, without inventing tag-name or SHA validation.
+
+**Usage**
+
+```text
+nen tag announce --repo <path> [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The checkout containing the workflow and identity file. | Explicit; never inferred from cwd. |
+| `--json` | no | Emit the announcement report instead of two plain lines. | The exit code is unchanged. |
+
+`nameFrom` is a nonempty repo-relative path. Absolute/drive-relative paths, any `..`
+segment, symlinked files or parents, and nonregular files refuse. Nonblocking opened
+file descriptors are checked against the named regular file, with post-read checks;
+FIFOs do not wait for a writer. Reads are bounded to 1 MiB for the workflow and 64 KiB
+for the first two identity lines. Additional identity-file lines are ignored.
+
+**Output and exit codes** — plain success prints exactly the first two file lines:
+the tag identity, then the SHA recorded by the archive. Every CR byte in those lines
+is removed; a final LF is optional, and a trailing LF alone does not supply another
+line. Extra lines are ignored. No tag prefix, diagnostic or success heading is added.
+With `--json`, the top-level keys are `contract` (`nen.tag.announce/v0.1`), `status`,
+`identity`, `archiveSha`, `nameFrom`, `error` and `exitCode`. Status is `announced`,
+`undeclared` or `invalid`; undeclared/invalid reports have null identity and archiveSha.
+`nameFrom` is the declared path when available, otherwise null; `error` is null except
+for an invalid declaration/read. Declaration errors also print a diagnostic on stderr.
+
+| Exit | Meaning |
+|---|---|
+| `0` | The first two lines were read. |
+| `3` | `tags` or `tags.identity` is absent or null; plain output is `no tag declared`. |
+| `1` | Malformed/missing/unreadable workflow or declaration, invalid/nonregular/symlinked identity path, too few lines, changed file or read limit exceeded. Plain stdout is empty. |
+| `2` | Wiring: missing/invalid `--repo`, extra arguments, unknown flags or flags belonging to `tag cut`. |
+
+A missing tag declaration is a no-op announcement; it does not change the completed
+archive's result. The workflow's existing `tags` extension is read directly; unrelated
+workflow settings do not decide this announcement.
 
 ### `nen tag cut`
 
