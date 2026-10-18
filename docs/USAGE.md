@@ -5749,11 +5749,21 @@ the GitHub repository. `--dry-run` reads remote labels too, but never mutates th
 A failed or malformed remote read refuses before any mutation.
 
 Progress goes to stderr: `[0/N] reading remote labels`, then `[1/N] created: name`,
-`[2/N] unchanged: name`, and so on as each entry finishes. Stdout remains a single
-JSON report (`entries`, `failed`) with `--json`. Human stdout prints one result per
-label; dry-run differences say `would create` or `would update` and carry the
-`would-sync` status in JSON. Exit 0 includes a complete no-op; exit 1 names failed
-reads or mutations. A no-op uses only the paginated read, independent of how many
+`[2/N] unchanged: name`, and so on as each entry finishes, including with `--json`.
+With `--json`, stdout contains the full `SyncReport`: `{ entries, failed }`.
+`entries` contains one `{ name, status, message }` per declared taxonomy label,
+in taxonomy order. `status` is `created`, `updated`, `unchanged`, `would-sync`
+or `failed`. `message` is null for created, updated and unchanged entries; a
+would-sync entry describes the proposed create or update, and a failed entry
+carries the last nonempty stderr line or an `exit <code>` fallback. `failed`
+is an array of failed label names, in entry order; it is empty when none failed.
+There are no timing or progress fields in this document. A failed remote read
+produces no report; its error goes to stderr.
+
+Human stdout prints one result per label; dry-run differences say `would create`
+or `would update` and carry the `would-sync` status in JSON. Exit 0 includes a
+complete no-op; exit 1 names failed reads or mutations. A no-op uses only the
+paginated read, independent of how many
 labels are already declared; GitHub response time is outside Nen's control.
 `classify install --sync` uses the same diff after its existing landed-declaration gate.
 
