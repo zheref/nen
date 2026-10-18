@@ -87,8 +87,9 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
   const rawStdout = (result: CommandResult): string => {
     try {
       // The real runner supplies bytes; mock seams may supply text only. Do
-      // not normalize CRLF or silently replace invalid endpoint/config bytes.
-      return new TextDecoder("utf-8", { fatal: true }).decode(result.stdoutBytes ?? new TextEncoder().encode(result.stdout));
+      // not normalize CRLF, strip a pathname BOM, or replace invalid bytes.
+      // ignoreBOM means treat U+FEFF as data, rather than consume a signature.
+      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(result.stdoutBytes ?? new TextEncoder().encode(result.stdout));
     } catch { throw new Refused("Git endpoint/config records must be valid UTF-8"); }
   };
   const endpointRecord = (value: string): void => {

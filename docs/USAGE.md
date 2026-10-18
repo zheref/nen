@@ -4019,7 +4019,7 @@ leased deletion to that literal endpoint. Relative filesystem URLs become absolu
 transport context has no remotes, URL rewrites or live config includes, so a second rewrite
 or a later source config change cannot redirect the push or delete unlisted tracking refs.
 A moved remote tip fails its exact OID lease. Endpoint records preserve leading/trailing
-spaces exactly, including after URL rewriting. CR, LF or NUL in raw endpoints, rewrite
+spaces and leading U+FEFF (BOM) pathname data exactly, including after URL rewriting. CR, LF or NUL in raw endpoints, rewrite
 records or decoded file-URL paths refuse before remote observation; only Git's output
 record terminator is removed. Git endpoint/config records must be valid UTF-8; non-UTF-8 Git endpoints/configuration are unsupported and refuse.
 

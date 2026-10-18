@@ -465,4 +465,17 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
   });
 
+  it.each([false, true])("preserves a leading BOM in a relative endpoint pathname, rewritten=%s", async (rewrite) => {
+    const w = world(); const name = "\uFEFFbom.git";
+    const intended = join(w.repo, name); const other = join(w.repo, "bom.git");
+    for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
+    const raw = rewrite ? "fixture-alias" : name;
+    git(w.repo, "remote", "set-url", "--push", "origin", raw);
+    if (rewrite) git(w.repo, "config", `url.${name}.insteadOf`, raw);
+    const preview = await run(w, [remoteItem]); expect(preview.code).toBe(0); expect(preview.report?.items[0]?.status).toBe("would-remove");
+    const result = await run(w, [remoteItem], ["--run"]); expect(result.code).toBe(0);
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+
 });
