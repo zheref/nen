@@ -156,6 +156,47 @@ function messageFile(content: string): string {
 }
 
 describe.skipIf(!HAVE_GIT)("nen wc squash, against the real git", () => {
+  it("refuses a missing agent trailer before changing branch, index or worktree, then accepts it", async () => {
+    const work = freshBranch("agent-trailer", ["feat: first", "feat: second"]);
+    mkdirSync(join(work, "nen"));
+    writeFileSync(join(work, "nen", "workflow.json"), JSON.stringify({
+      commits: { allowedAttributionTrailers: ["X-Agent"] },
+    }));
+    mustGit(work, ["add", "nen/workflow.json"]);
+    mustGit(work, [...WHO, "commit", "--quiet", "-m", "chore: declare agent policy"]);
+    const state = (): string[] => [
+      mustGit(work, ["symbolic-ref", "HEAD"]),
+      mustGit(work, ["rev-parse", "HEAD"]),
+      mustGit(work, ["write-tree"]),
+      mustGit(work, ["diff", "--binary", "HEAD"]),
+      mustGit(work, ["status", "--porcelain=v1", "-uall"]),
+    ];
+    const before = state();
+    const msg = messageFile("feat: fold with provenance\n\nKeep both changes.\n");
+    for (const flags of [[], ["--dry-run"], ["--json"]]) {
+      const result = await squash(["squash", "--repo", work, "--onto", "main", "--message-file", msg, ...flags]);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("X-Agent: <value>");
+      expect(result.err.join("\n")).toContain(join(work, "nen", "workflow.json"));
+      expect(result.err.join("\n")).toContain("commits.allowedAttributionTrailers");
+      expect(state()).toEqual(before);
+    }
+    for (const value of [" ", "\t\t"]) {
+      writeFileSync(msg, `feat: fold with provenance\n\nX-Agent: ${value}\n`);
+      const refused = await squash(["squash", "--repo", work, "--onto", "main", "--message-file", msg]);
+      expect(refused.code).toBe(2);
+      expect(refused.err.join("\n")).toContain("missing a required agent trailer");
+      expect(state()).toEqual(before);
+    }
+    writeFileSync(msg, "feat: fold with provenance\n\nKeep both changes.\n\nX-Agent: tester\n");
+    const result = await squash(["squash", "--repo", work, "--onto", "main", "--message-file", msg]);
+    expect(result.code).toBe(0);
+    expect(mustGit(work, ["rev-list", "--count", "main..HEAD"])).toBe("1");
+    expect(mustGit(work, ["log", "-1", "--format=%b"])).toContain("X-Agent: tester");
+    expect(mustGit(work, ["write-tree"])).toBe(before[2]);
+    expect(mustGit(work, ["status", "--porcelain=v1", "-uall"])).toBe("");
+  });
+
   it("folds three real commits into one, and the total diff survives unchanged", async () => {
     const work = freshBranch("fold-three", ["feat: first", "feat: second", "feat: third"]);
     expect(mustGit(work, ["rev-list", "--count", "main..HEAD"])).toBe("3");

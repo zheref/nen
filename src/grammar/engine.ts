@@ -51,7 +51,25 @@
 // documents, and a silent mis-parse is strictly worse than a refusal that names
 // the unsupported shape and the rewrite that avoids it.
 
+/**
+ * One way a slot may be filled (zheref/nen#410). A slot written
+ * `<gate:G1|G2>{+}|<severity:high|low>[+]|<label>` has three; a plain `<repo>`
+ * has exactly one, itself. Tried in template order, see `resolveSlot`.
+ */
+export interface Alternative {
+  readonly name: string;
+  readonly values: readonly string[];
+  /** A literal suffix this alternative may carry once, e.g. `[+]`. */
+  readonly suffix: string | null;
+  /** `{+}` / `{&}`: ONE OR MORE values joined by this literal, each checked. */
+  readonly joiner: string | null;
+}
+
 export interface Slot {
+  /**
+   * The position's name: its one alternative's name, or every alternative's
+   * name joined by '|' (`gate|severity|label`) when the template alternates.
+   */
   readonly name: string;
   /** Allowed values, case-insensitively, when the template enumerates them. */
   readonly values: readonly string[];
@@ -76,12 +94,10 @@ export interface Slot {
   readonly optional: boolean;
   /** A literal suffix the slot may carry, e.g. futon's `[+]`. */
   readonly suffix: string | null;
-  readonly join?: "+" | "&";
-  readonly alternatives?: {
-    readonly list: { readonly name: string; readonly values: readonly string[] };
-    readonly band: { readonly name: string; readonly values: readonly string[] };
-    readonly free: string;
-  };
+  /** The list joiner of a `{+}`/`{&}` slot, or null. */
+  readonly joiner: string | null;
+  /** Every way to fill this position, in template order; length 1 unless it alternates. */
+  readonly alternatives: readonly Alternative[];
 }
 
 /**
@@ -127,8 +143,20 @@ export class GrammarError extends Error {
 //                       absent -- zheref/nen#170
 //   [+]                 an optional literal suffix on the slot just declared,
 //                       recognised by its bracket group holding NOTHING ELSE
+//   <slot>{+}           a LIST slot (zheref/nen#410): one or more values joined
+//                       by the literal inside the braces ('+', '&', ...). An
+//                       enumerated list checks EVERY item; an empty item (a
+//                       trailing or doubled joiner) is refused
+//   <a:..>|<b:..>[+]|<c>
+//                       an ALTERNATION: one position, filled by the first
+//                       alternative the value fits, in template order. A free
+//                       alternative (no value set) may only come LAST, and it
+//                       is taken only when NO piece of the value is a value of
+//                       an enumerated alternative -- so a token that mixes
+//                       them is refused, never read as free text. It is the
+//                       generic form of futon's '<severity>[+]|<label>'
 
-const TOKEN = /<([^<>]+)>|\[|\]|[^\s<>[\]]+/g;
+const TOKEN = /<([^<>]+)>|\[|\]|\{[^{}\s<>[\]|]+\}|\||[^\s<>[\]{}|]+/g;
 
 /**
  * A literal word waiting for the slot it will introduce, TAGGED WITH THE BRACKET
@@ -141,47 +169,24 @@ interface PendingWord {
   readonly depth: number;
 }
 
-function slotForm(inner: string): { name: string; values: readonly string[]; join?: "+" | "&"; alternatives?: Slot["alternatives"] } {
-  const [head = "", ...directives] = inner.split(";");
-  const colon = head.indexOf(":");
-  const name = colon === -1 ? head.split("|")[0]?.trim() ?? head : head.slice(0, colon).trim();
-  const source = colon === -1 ? (head.includes("|") ? head : "") : head.slice(colon + 1);
-  const values = source.split("|").map((value) => value.trim()).filter((value) => value !== "");
-  if (directives.length === 0) return { name, values };
-  if (name === "") throw new GrammarError("a list or alternation slot needs a name");
-  if (directives.length === 1 && (directives[0] === "join=+" || directives[0] === "join=&")) {
-    const join = directives[0] === "join=+" ? "+" : "&";
-    if (source !== "" && (source.split("|").some((value) => value.trim() === "" || value.includes(join)) || new Set(values.map((value) => value.toLowerCase())).size !== values.length)) throw new GrammarError(`list <${name}> needs distinct, nonempty enumeration items without '${join}'`);
-    return { name, values, join };
-  }
-  const parts = new Map<string, string>();
-  for (const directive of directives) {
-    const equal = directive.indexOf("=");
-    const key = directive.slice(0, equal);
-    if (equal < 0 || !["list", "band", "free"].includes(key) || parts.has(key)) throw new GrammarError(`unsupported or duplicate slot directive '${directive}'`);
-    parts.set(key, directive.slice(equal + 1));
-  }
-  const enumeration = (key: string): { name: string; values: string[] } => {
-    const value = parts.get(key) ?? "";
-    const colon = value.indexOf(":");
-    const name = value.slice(0, colon).trim();
-    const values = value.slice(colon + 1).split("|").map((item) => item.trim());
-    if (colon < 1 || values.some((item) => item === "" || item.includes("+")) || new Set(values.map((item) => item.toLowerCase())).size !== values.length) throw new GrammarError(`'${key}' needs a named, nonempty enumeration with distinct values`);
-    return { name, values };
-  };
-  const list = enumeration("list");
-  const band = enumeration("band");
-  const free = parts.get("free")?.trim();
-  if (values.length > 0 || !free || new Set([list.name, band.name, free]).size !== 3 || list.values.some((item) => band.values.some((other) => other.toLowerCase() === item.toLowerCase()))) throw new GrammarError(`alternation <${name}> needs disjoint list/band enumerations and three distinct alternative names`);
-  return { name, values: [], alternatives: { list, band, free } };
-}
-
 export function parseTemplate(template: string): Grammar {
   const slots: Slot[] = [];
   const clauses: OptionalClause[] = [];
   let pendingWords: PendingWord[] = [];
   let pendingSymbol: { readonly symbol: string; readonly depth: number } | null = null;
   let depth = 0;
+  // `|` seen after a slot: the NEXT slot is another way to fill that position
+  // (zheref/nen#410), not a new position.
+  let alternationPending = false;
+  const amendLast = (change: Partial<Alternative>): void => {
+    const last = slots[slots.length - 1];
+    if (last === undefined) return;
+    const alternatives = last.alternatives.map((alternative, index): Alternative =>
+      index === last.alternatives.length - 1 ? { ...alternative, ...change } : alternative,
+    );
+    const first = alternatives[0] as Alternative;
+    slots[slots.length - 1] = { ...last, alternatives, suffix: first.suffix, joiner: first.joiner };
+  };
 
   TOKEN.lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -193,6 +198,9 @@ export function parseTemplate(template: string): Grammar {
     }
     if (raw === "]") {
       if (depth === 0) throw new GrammarError(`template '${template}' closes a '[' that was never opened`);
+      if (alternationPending) {
+        throw new GrammarError(`template '${template}' is refused: a '|' alternation ends at ']' with no <slot> after it. Put the alternative's <slot> after the '|', or drop it.`);
+      }
       if (pendingSymbol !== null && pendingSymbol.depth >= depth) {
         // `[@]`-shapes reach the suffix rule below; this is `[x @<eof-of-group>`:
         // a symbol that introduces nothing. Refuse the TEMPLATE rather than
@@ -223,6 +231,33 @@ export function parseTemplate(template: string): Grammar {
     }
 
     const inner = match[1];
+    if (inner === undefined && raw === "|") {
+      const last = slots[slots.length - 1];
+      if (last === undefined || pendingWords.length > 0 || pendingSymbol !== null || alternationPending) {
+        throw new GrammarError(
+          `template '${template}' is refused: '|' alternates one <slot> with the next, and here it follows no <slot>. Write '<a:..>|<b>' -- the alternation joins two slots directly.`,
+        );
+      }
+      alternationPending = true;
+      continue;
+    }
+    if (inner === undefined && raw.startsWith("{") && raw.endsWith("}")) {
+      const last = slots[slots.length - 1];
+      const joiner = raw.slice(1, -1);
+      const alternative = last?.alternatives[last.alternatives.length - 1];
+      if (alternative === undefined || pendingWords.length > 0 || pendingSymbol !== null || alternationPending) {
+        throw new GrammarError(
+          `template '${template}' is refused: '${raw}' makes the <slot> just declared a list, and here it follows no <slot>. Write '<name>${raw}' with nothing between.`,
+        );
+      }
+      if (alternative.joiner !== null || alternative.suffix !== null) {
+        throw new GrammarError(
+          `template '${template}' is refused: <${alternative.name}> already carries ${alternative.joiner !== null ? `the list joiner '{${alternative.joiner}}'` : `the suffix '[${alternative.suffix}]'`}, and a slot takes one or the other, once. A list whose last item may carry a suffix cannot be split unambiguously.`,
+        );
+      }
+      amendLast({ joiner });
+      continue;
+    }
     if (inner === undefined) {
       // A literal.
       if (/^[^A-Za-z0-9]+$/.test(raw)) {
@@ -234,10 +269,15 @@ export function parseTemplate(template: string): Grammar {
         // PREVIOUS slot, and left <gate> with no separator at all -- which is
         // exactly how the whole line ended up inside the first slot.
         const closesImmediately = depth > 0 && /^\s*\]/.test(template.slice(TOKEN.lastIndex));
-        if (closesImmediately && slots.length > 0 && pendingWords.length === 0 && pendingSymbol === null) {
+        if (closesImmediately && slots.length > 0 && pendingWords.length === 0 && pendingSymbol === null && !alternationPending) {
           const last = slots[slots.length - 1];
-          if (last?.join !== undefined || last?.alternatives !== undefined) throw new GrammarError("list and alternation slots carry their own suffix rules; do not add [+]");
-          if (last !== undefined) slots[slots.length - 1] = { ...last, suffix: raw };
+          const alternative = last?.alternatives[last.alternatives.length - 1];
+          if (alternative !== undefined && alternative.joiner !== null) {
+            throw new GrammarError(
+              `template '${template}' is refused: <${alternative.name}> is a '{${alternative.joiner}}' list, and a list whose last item may carry the suffix '[${raw}]' cannot be split unambiguously. Give the slot one or the other.`,
+            );
+          }
+          amendLast({ suffix: raw });
           continue;
         }
         // A symbol like `@` or `#` glued to the next slot arrives as its own
@@ -250,8 +290,30 @@ export function parseTemplate(template: string): Grammar {
     }
 
     // A slot.
-    const form = slotForm(inner);
-    const { name } = form;
+    const colon = inner.indexOf(":");
+    const name = colon === -1 ? inner.split("|")[0]?.trim() ?? inner : inner.slice(0, colon).trim();
+    const valueSource = colon === -1 ? (inner.includes("|") ? inner : "") : inner.slice(colon + 1);
+    const values = valueSource
+      .split("|")
+      .map((value): string => value.trim())
+      .filter((value): boolean => value !== "");
+
+    if (alternationPending) {
+      // ANOTHER WAY TO FILL THE POSITION JUST DECLARED (zheref/nen#410). It
+      // shares that slot's separator and brackets, so nothing may introduce it.
+      if (pendingWords.length > 0 || pendingSymbol !== null) {
+        throw new GrammarError(
+          `template '${template}' is refused: the alternative <${name}> is introduced by its own separator, but an alternative shares the separator of the slot it alternates with. Write '<a>|<${name}>' with nothing between.`,
+        );
+      }
+      const last = slots[slots.length - 1] as Slot;
+      slots[slots.length - 1] = {
+        ...last,
+        alternatives: [...last.alternatives, { name, values, suffix: null, joiner: null }],
+      };
+      alternationPending = false;
+      continue;
+    }
 
     if (pendingSymbol === null && new Set(pendingWords.map((pending): number => pending.depth)).size > 1) {
       // `foo [bar <slot>]`: are the introducing words 'foo bar' (with 'bar'
@@ -280,20 +342,61 @@ export function parseTemplate(template: string): Grammar {
       );
     }
     slots.push({
-      ...form,
+      name,
+      values,
       separator,
       separatorKind: separator === null ? null : pendingSymbol !== null ? "symbol" : "word",
       separatorOptional: separatorDepth !== null && separatorDepth > 0,
       optional,
       suffix: null,
+      joiner: null,
+      alternatives: [{ name, values, suffix: null, joiner: null }],
     });
     pendingWords = [];
     pendingSymbol = null;
   }
 
   if (depth !== 0) throw new GrammarError(`template '${template}' has an unclosed '['`);
+  if (alternationPending) {
+    throw new GrammarError(`template '${template}' is refused: it ends with a '|' that alternates with nothing. Put the alternative's <slot> after it, or drop it.`);
+  }
   if (slots.length === 0) throw new GrammarError(`template '${template}' declares no <slot>`);
-  return { template, slots, clauses };
+  return { template, slots: slots.map((slot): Slot => checkAlternation(template, slot)), clauses };
+}
+
+/**
+ * An alternation the engine could not resolve UNAMBIGUOUSLY is refused at
+ * template time, on the file header's rule: a free alternative only LAST (a
+ * free one earlier would take every value), with no suffix (a free value
+ * already keeps its trailing characters), and no value in two enumerations.
+ */
+function checkAlternation(template: string, slot: Slot): Slot {
+  if (slot.alternatives.length === 1) return slot;
+  const names = slot.alternatives.map((alternative): string => alternative.name);
+  if (new Set(names).size !== names.length) {
+    throw new GrammarError(`template '${template}' is refused: the alternation <${names.join("|")}> names one alternative twice, so the echo could not say which one a value filled.`);
+  }
+  slot.alternatives.forEach((alternative, index): void => {
+    if (alternative.values.length > 0) return;
+    if (index !== slot.alternatives.length - 1) {
+      throw new GrammarError(`template '${template}' is refused: the free alternative <${alternative.name}> takes any value, so every alternative after it could never be reached. Put it last.`);
+    }
+    if (alternative.suffix !== null) {
+      throw new GrammarError(`template '${template}' is refused: the free alternative <${alternative.name}> keeps a value exactly as typed, trailing characters included, so a '[${alternative.suffix}]' suffix on it means nothing. Drop the suffix.`);
+    }
+  });
+  const owner = new Map<string, string>();
+  for (const alternative of slot.alternatives) {
+    for (const value of alternative.values) {
+      const key = value.toLowerCase();
+      const previous = owner.get(key);
+      if (previous !== undefined) {
+        throw new GrammarError(`template '${template}' is refused: '${value}' is a value of both <${previous}> and <${alternative.name}>, so a line carrying it could fill either. Give each value to one alternative.`);
+      }
+      owner.set(key, alternative.name);
+    }
+  }
+  return { ...slot, name: names.join("|") };
 }
 
 // --- the split ---------------------------------------------------------------
@@ -356,10 +459,16 @@ function stripLeading(text: string, separator: string, kind: "word" | "symbol" |
 
 export interface SlotValue {
   readonly name: string;
-  readonly value: string | readonly string[];
-  readonly alternative?: string;
+  readonly value: string;
   /** True when the template's `[+]` suffix was present on this slot. */
   readonly suffix: boolean;
+  /**
+   * Which alternative filled the slot -- present ONLY on a slot that
+   * alternates (zheref/nen#410), so a plain slot's JSON is what it always was.
+   */
+  readonly alternative?: string;
+  /** The items of a `{+}`/`{&}` list, normalised -- present only on a list. */
+  readonly items?: readonly string[];
 }
 
 /** One literal-only `[ ... ]` clause and whether the line carried it. */
@@ -380,7 +489,7 @@ export interface ParseResult {
   readonly missing: readonly string[];
   /** One line per problem, in the order they were found. */
   readonly problems: readonly string[];
-  /** A deterministic rewrite, or null when structured input has no unique repair. */
+  /** A deterministic rewrite, or null when structured input has no unique complete repair. */
   readonly corrected: string | null;
   /** The echo: the parse restated, one clause per line. */
   readonly echo: readonly string[];
@@ -406,75 +515,6 @@ function templateOrder(grammar: Grammar): TemplateEntry[] {
     if (index < grammar.slots.length) entries.push({ kind: "slot", index });
   }
   return entries;
-}
-
-function structuredValue(slot: Slot, text: string): SlotValue {
-  const hit = (values: readonly string[], item: string): string | undefined => values.find((value) => value.toLowerCase() === item.toLowerCase());
-  if (slot.join !== undefined) {
-    const items = text.split(slot.join).map((item) => item.trim());
-    const values = items.map((item) => {
-      if (item === "") throw new GrammarError(`<${slot.name}> has an empty list item (trailing or repeated '${slot.join}')`);
-      if (slot.values.length === 0) return item;
-      const value = hit(slot.values, item);
-      if (value === undefined) throw new GrammarError(`<${slot.name}> list item '${item}' is not one of ${slot.values.join(" | ")}`);
-      return value;
-    });
-    return { name: slot.name, value: values, suffix: false };
-  }
-  const alternatives = slot.alternatives!;
-  const segments = text.split("+");
-  const list = segments.map((item) => hit(alternatives.list.values, item));
-  if (list.every((value) => value !== undefined)) return { name: slot.name, value: list as string[], suffix: false, alternative: alternatives.list.name };
-  const suffix = text.endsWith("+");
-  const band = hit(alternatives.band.values, suffix ? text.slice(0, -1) : text);
-  if (band !== undefined) return { name: slot.name, value: band, suffix, alternative: alternatives.band.name };
-  const hasList = list.some((value) => value !== undefined);
-  const hasBand = segments.some((item) => hit(alternatives.band.values, item) !== undefined);
-  if (!hasList && !hasBand && text !== "") return { name: slot.name, value: text, suffix: false, alternative: alternatives.free };
-  const why = hasList && hasBand ? "mixes both enumerations" : segments.some((item) => item === "") ? "has an empty '+' segment or an unsupported trailing '+'" : hasBand && segments.every((item) => hit(alternatives.band.values, item) !== undefined) ? "joins two band values; use one band, optionally with a single trailing '+'" : "mixes enumerated values with free segments";
-  throw new GrammarError(`<${slot.name}> '${text}' ${why}; choose a ${alternatives.list.name} list, one ${alternatives.band.name}[+], or an unreserved ${alternatives.free}`);
-}
-
-interface StructuredRepair {
-  readonly own: SlotValue | null;
-  readonly following?: SlotValue;
-}
-
-/** Recover syntax, never choose an unknown enumeration or discard a token.
- * A free suffix can move only into the immediately following free-list slot;
- * its separator/vocabulary are the caller's grammar, not a skill convention. */
-function repairStructured(slot: Slot, text: string, next: Slot | undefined): StructuredRepair | undefined {
-  const hit = (values: readonly string[], item: string): string | undefined => values.find((value) => value.toLowerCase() === item.toLowerCase());
-  if (slot.join !== undefined) {
-    const items = text.split(slot.join).map((item) => item.trim()).filter((item) => item !== "");
-    if (items.length === 0) return slot.optional ? { own: null } : undefined;
-    if (slot.values.length > 0 && items.some((item) => hit(slot.values, item) === undefined)) return undefined;
-    return { own: structuredValue(slot, items.join(slot.join)) };
-  }
-  const alternatives = slot.alternatives!;
-  const parts = text.split("+").map((item) => item.trim());
-  const items = parts.filter((item) => item !== "");
-  if (items.length === 0) return slot.optional ? { own: null } : undefined;
-  const lists = items.filter((item) => hit(alternatives.list.values, item) !== undefined);
-  const bands = items.filter((item) => hit(alternatives.band.values, item) !== undefined);
-  if (lists.length > 0 && bands.length > 0) return undefined;
-  if (lists.length === items.length) return { own: structuredValue(slot, items.join("+")) };
-  if (bands.length === 1 && items.length === 1) return { own: structuredValue(slot, `${items[0]}${text.endsWith("+") ? "+" : ""}`) };
-  if (bands.length > 1 || lists.length + bands.length === 0) return undefined;
-  const enumeration = lists.length > 0 ? alternatives.list.values : alternatives.band.values;
-  const firstFree = parts.findIndex((item) => item !== "" && hit(enumeration, item) === undefined);
-  if (firstFree <= 0 || parts.slice(firstFree).some((item) => hit(enumeration, item) !== undefined)) return undefined;
-  const prefix = parts.slice(0, firstFree).filter((item) => item !== "");
-  if (prefix.length === 0 || (bands.length > 0 && firstFree !== 1)) return undefined;
-  if (next?.join === undefined || next.values.length !== 0 || next.separator === null) return undefined;
-  const following = repairStructured(next, parts.slice(firstFree).join("+"), undefined)?.own;
-  if (following === undefined || following === null) return undefined;
-  return { own: structuredValue(slot, prefix.join("+")), following };
-}
-
-function renderSlot(value: SlotValue, slot: Slot): string {
-  const text = typeof value.value === "string" ? value.value : value.value.join(slot.join ?? "+");
-  return `${text}${value.suffix ? slot.suffix ?? "+" : ""}`;
 }
 
 export function parseInvocation(skill: string, grammar: Grammar, line: string): ParseResult {
@@ -583,15 +623,21 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   for (const slot of grammar.slots) {
     const value = found.get(slot.name);
     if (value === undefined) continue;
-    let text = typeof value.value === "string" ? value.value : value.value.join(slot.join ?? "+");
-    if (slot.join !== undefined || slot.alternatives !== undefined) {
-      try { slots.push(structuredValue(slot, text)); } catch (error) {
-        if (!(error instanceof GrammarError)) throw error;
-        problems.push(error.message);
+    if (slot.alternatives.length > 1 || slot.joiner !== null) {
+      const text = value.value.trim();
+      if (text === "") {
+        if (!slot.optional) missing.push(slot.name);
+        continue;
+      }
+      const resolved = resolveSlot(slot, text);
+      if (typeof resolved === "string") {
+        problems.push(resolved);
         structuredFailures.push({ slot, text });
       }
+      else slots.push(resolved);
       continue;
     }
+    let text = value.value;
     let suffix = false;
     if (slot.suffix !== null && text.endsWith(slot.suffix)) {
       text = text.slice(0, text.length - slot.suffix.length).trim();
@@ -629,25 +675,24 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   // 'BC@<gate: ...>', not to a line that pretends they never typed a gate.
   const attempted = new Set<string>();
   for (const [name, value] of found) {
-    if (typeof value.value !== "string" || value.value.trim() !== "" || grammar.slots.some((slot) => slot.name === name && (slot.join !== undefined || slot.alternatives !== undefined))) attempted.add(name);
+    if (value.value.trim() !== "") attempted.add(name);
   }
   const correctionValues = new Map(byName);
   const additions = new Map<string, SlotValue>();
-  // Each structured failure contributes one problem and is repaired below.
-  // With any other problem (missing/scalar/literal/separator), that repair
-  // alone cannot make the whole invocation concrete. Legacy-only refusals
-  // retain their published placeholder behavior.
+  // Repairing one structured slot does not repair missing/scalar/literal or
+  // separator problems elsewhere. Pure legacy refusals keep their placeholders.
   let canCorrect = structuredFailures.length === 0 || problems.length === structuredFailures.length;
   for (const { slot, text } of structuredFailures) {
     const repair = repairStructured(slot, text, grammar.slots[grammar.slots.indexOf(slot) + 1]);
     if (repair === undefined) { canCorrect = false; continue; }
-    if (repair.own === null) { correctionValues.delete(slot.name); attempted.delete(slot.name); }
-    else correctionValues.set(slot.name, repair.own);
+    correctionValues.set(slot.name, repair.own);
     if (repair.following !== undefined) additions.set(repair.following.name, repair.following);
   }
   for (const [name, addition] of additions) {
     const existing = correctionValues.get(name);
-    correctionValues.set(name, { ...addition, value: [...(addition.value as readonly string[]), ...(existing?.value as readonly string[] | undefined ?? [])] });
+    const items = [...addition.items!, ...(existing?.items ?? [])];
+    const next = grammar.slots.find((slot) => slot.name === name)!;
+    correctionValues.set(name, { ...addition, value: items.join(next.joiner!), items });
     attempted.add(name);
   }
   const corrected = canCorrect ? correctedLine(skill, grammar, correctionValues, attempted, clausePresent) : null;
@@ -666,7 +711,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
     if (slot === undefined) continue;
     const value = byName.get(slot.name);
     if (value !== undefined) {
-      echo.push(`${value.name}: ${typeof value.value === "string" ? value.value : value.value.join(slot.join ?? "+")}${value.alternative === undefined ? "" : ` [${value.alternative}]`}${value.suffix ? " (+)" : ""}`);
+      echo.push(`${value.alternative ?? value.name}: ${value.value}${value.suffix ? ` (${slotSuffix(slot, value) ?? "+"})` : ""}`);
       continue;
     }
     // AN OPTIONAL SLOT NOBODY FILLED IS ECHOED AS ABSENT, rather than left out
@@ -728,10 +773,11 @@ function correctedLine(
       }
       continue;
     }
+    const suffixText = value === undefined ? null : slotSuffix(slot, value);
     const rendered =
       value === undefined
-        ? `<${slot.name}${slot.values.length > 0 ? `: ${slot.values.join(" | ")}` : ""}>`
-        : renderSlot(value, slot);
+        ? placeholder(slot)
+        : `${value.value}${value.suffix && suffixText !== null ? suffixText : ""}`;
     if (slot.separator === null) {
       out += ` ${rendered}`;
     } else if (slot.separatorKind === "symbol") {
@@ -741,4 +787,160 @@ function correctedLine(
     }
   }
   return out;
+}
+
+// --- lists and alternations (zheref/nen#410) ---------------------------------
+
+/** The suffix literal of whichever alternative filled `value`. */
+function slotSuffix(slot: Slot, value: SlotValue): string | null {
+  if (value.alternative === undefined) return slot.suffix;
+  return slot.alternatives.find((alternative): boolean => alternative.name === value.alternative)?.suffix ?? null;
+}
+
+/** The placeholder a corrected line shows for a slot nobody filled correctly. */
+function placeholder(slot: Slot): string {
+  return slot.alternatives
+    .map((alternative): string => {
+      const set = alternative.values.length > 0 ? `: ${alternative.values.join(" | ")}` : "";
+      const tail = alternative.joiner !== null ? `{${alternative.joiner}}` : alternative.suffix !== null ? `[${alternative.suffix}]` : "";
+      return `<${alternative.name}${set}>${tail}`;
+    })
+    .join("|");
+}
+
+function matchValue(alternative: Alternative, text: string): string | undefined {
+  return alternative.values.find((candidate): boolean => candidate.toLowerCase() === text.toLowerCase());
+}
+
+function splitAll(text: string, separators: readonly string[]): string[] {
+  let pieces = [text];
+  for (const separator of separators) pieces = pieces.flatMap((piece): string[] => piece.split(separator));
+  return pieces;
+}
+
+interface StructuredRepair {
+  readonly own: SlotValue;
+  readonly following?: SlotValue;
+}
+
+/** Recover only concrete syntax using the caller's alternatives and separators.
+ * Unknown enumerations and mixed alternatives remain unresolved. A free tail
+ * can move only into an immediately following, independently declared free list. */
+function repairStructured(slot: Slot, text: string, next: Slot | undefined): StructuredRepair | undefined {
+  const resolved = (candidate: string): SlotValue | undefined => {
+    const value = resolveSlot(slot, candidate);
+    return typeof value === "string" ? undefined : value;
+  };
+  const enumerated = slot.alternatives.filter((alternative) => alternative.values.length > 0);
+  if (enumerated.length === 0) {
+    if (slot.joiner === null) return undefined;
+    const items = text.split(slot.joiner).map((item) => item.trim()).filter((item) => item !== "");
+    const own = items.length === 0 ? undefined : resolved(items.join(slot.joiner));
+    return own === undefined ? undefined : { own };
+  }
+  const separators = [...new Set(enumerated.flatMap((alternative) => [alternative.joiner, alternative.suffix].filter((part): part is string => part !== null)))];
+  const touched = enumerated.filter((alternative) => splitAll(text, separators).some((piece) => matchValue(alternative, piece.trim()) !== undefined));
+  if (touched.length !== 1) return undefined;
+  const alternative = touched[0]!;
+  const separator = alternative.joiner ?? alternative.suffix;
+  if (separator === null) return undefined;
+  const parts = text.split(separator).map((item) => item.trim());
+  const items = parts.filter((item) => item !== "");
+  const isKnown = (item: string): boolean => matchValue(alternative, item) !== undefined;
+  if (items.every(isKnown)) {
+    if (alternative.joiner === null && items.length !== 1) return undefined;
+    const candidate = alternative.joiner === null ? `${items[0]}${text.endsWith(separator) ? separator : ""}` : items.join(separator);
+    const own = resolved(candidate);
+    return own === undefined ? undefined : { own };
+  }
+  const firstFree = parts.findIndex((item) => item !== "" && !isKnown(item));
+  if (firstFree <= 0 || parts.slice(firstFree).some(isKnown)) return undefined;
+  const prefix = parts.slice(0, firstFree).filter((item) => item !== "");
+  if (prefix.length === 0 || (alternative.joiner === null && firstFree !== 1)) return undefined;
+  if (next === undefined || next.separator === null || next.alternatives.length !== 1 || next.values.length !== 0 || next.joiner === null) return undefined;
+  const following = repairStructured(next, parts.slice(firstFree).join(separator), undefined)?.own;
+  const own = resolved(prefix.join(separator));
+  return own === undefined || following === undefined ? undefined : { own, following };
+}
+
+/**
+ * Fill a list or alternating slot, or return the problem that refuses it.
+ *
+ * THE ORDER IS THE TEMPLATE'S. Each ENUMERATED alternative is tried in turn: a
+ * list fits when every item is one of its values; a single value fits when it
+ * is one of them, with its suffix at most once. Only when none fits is the
+ * FREE alternative considered -- and only when no piece of the value (split at
+ * every enumerated joiner and suffix) is an enumerated value. That last rule is
+ * what keeps 'g4+model/gpt' from reading as one free label: a value that
+ * plainly MEANT an enumerated alternative and got it wrong is refused with the
+ * reason, never re-read as free text (the engine's rule 4: never guess).
+ * 'c++' has no enumerated piece, so it IS free text, kept as typed.
+ */
+function resolveSlot(slot: Slot, text: string): SlotValue | string {
+  const alternates = slot.alternatives.length > 1;
+  const tag = (alternative: Alternative): { alternative?: string } => (alternates ? { alternative: alternative.name } : {});
+  const enumerated = slot.alternatives.filter((alternative): boolean => alternative.values.length > 0);
+
+  for (const alternative of enumerated) {
+    if (alternative.joiner !== null) {
+      const items = text.split(alternative.joiner).map((item): string => item.trim());
+      const hits = items.map((item): string | undefined => matchValue(alternative, item));
+      if (hits.every((hit): boolean => hit !== undefined)) {
+        const normalised = hits as string[];
+        return { name: slot.name, value: normalised.join(alternative.joiner), suffix: false, ...tag(alternative), items: normalised };
+      }
+      continue;
+    }
+    let candidate = text;
+    let suffix = false;
+    if (alternative.suffix !== null && candidate.endsWith(alternative.suffix)) {
+      candidate = candidate.slice(0, candidate.length - alternative.suffix.length).trim();
+      suffix = true;
+    }
+    const hit = matchValue(alternative, candidate);
+    if (hit !== undefined) return { name: slot.name, value: hit, suffix, ...tag(alternative) };
+  }
+
+  // Nothing enumerated fits. Which enumerated alternatives does the value TOUCH?
+  const separators = [
+    ...new Set(
+      enumerated.flatMap((alternative): string[] =>
+        [alternative.joiner, alternative.suffix].filter((part): part is string => part !== null),
+      ),
+    ),
+  ];
+  const pieces = splitAll(text, separators).map((piece): string => piece.trim());
+  const touched = enumerated.filter((alternative): boolean =>
+    pieces.some((piece): boolean => matchValue(alternative, piece) !== undefined),
+  );
+  const free = slot.alternatives.find((alternative): boolean => alternative.values.length === 0);
+
+  if (touched.length === 0 && free !== undefined) {
+    if (free.joiner === null) return { name: slot.name, value: text, suffix: false, ...tag(free) };
+    const items = text.split(free.joiner).map((item): string => item.trim());
+    if (items.some((item): boolean => item === "")) {
+      return `<${free.name}> is one or more values joined by '${free.joiner}', and '${text}' has an empty item (a leading, trailing or doubled '${free.joiner}').`;
+    }
+    return { name: slot.name, value: items.join(free.joiner), suffix: false, ...tag(free), items };
+  }
+
+  if (touched.length > 1) {
+    return `'${text}' mixes ${touched.map((alternative): string => `<${alternative.name}>`).join(" and ")} values in one token. Give one or the other: <${slot.name}> takes exactly one of its alternatives.`;
+  }
+  const alternative = touched[0] ?? enumerated[0];
+  /* c8 ignore next -- an all-free slot is a plain slot and never reaches here */
+  if (alternative === undefined) return `'${text}' fills no alternative of <${slot.name}>.`;
+  const setText = `${alternative.values.join(" | ")} (case-insensitively)`;
+  if (alternative.joiner !== null) {
+    const items = text.split(alternative.joiner).map((item): string => item.trim());
+    if (items.some((item): boolean => item === "")) {
+      return `<${alternative.name}> is one or more of ${setText} joined by '${alternative.joiner}', and '${text}' has an empty item (a leading, trailing or doubled '${alternative.joiner}').`;
+    }
+    const wrong = items.filter((item): boolean => matchValue(alternative, item) === undefined);
+    return `<${alternative.name}> is one or more of ${setText} joined by '${alternative.joiner}', and ${wrong.map((item): string => `'${item}'`).join(", ")} ${wrong.length === 1 ? "is" : "are"} none of them. It is resolved, never guessed at: the closest match is not the answer.`;
+  }
+  if (alternative.suffix !== null) {
+    return `<${alternative.name}> is ONE of ${setText}, optionally followed by one '${alternative.suffix}', and '${text}' is not that.`;
+  }
+  return `<${alternative.name}> is one of ${setText}, and '${text}' is none of them. It is resolved, never guessed at: the closest match is not the answer.`;
 }

@@ -1,0 +1,1 @@
+- Retain concrete structured invocation corrections on the merged list/alternation grammar, preserving string values with list items and canonical slot names. Ambiguous or incomplete structured repairs return `corrected: null` without a pasteable-line heading; legacy scalar refusals keep their placeholders.
