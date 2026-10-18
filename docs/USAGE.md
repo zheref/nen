@@ -911,6 +911,19 @@ file, or a reduced `--reviewers` set with no default); `ready`'s ref
 resolution also reads `nen/repos.json`'s `product_codes`. This family
 never merges, labels, or comments on a pull request.
 
+**Authentication for every `nen pr` verb**
+
+| Verb | Credential source |
+|---|---|
+| `ready` | Nen's direct GitHub client reads the explicitly selected environment variable: `GH_TOKEN` by default, or `--token-env <VAR>`. It never imports `gh`'s stored credential or discovers a token from the checkout. An unset/unusable token produces `unevaluated`, exit 1, with both token spellings in the remedy. |
+| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls. `open` and `merge` also use Git's configured transport where they perform Git operations. |
+| `cascade-main` | Git's configured transport credentials for fetch/push; no direct Nen API token. |
+| `staleness`, `body-check` | Local inputs and files; no GitHub authentication. |
+
+Choosing a target or a PR through either reference spelling does not change authentication,
+token grants, gate predicates, or the policy source. A caller using `ready` must explicitly
+supply its token variable even when `gh` is already authenticated.
+
 ### `nen pr ready`
 
 Reports one pull request's CON-32 readiness: the deterministic gate's
@@ -920,7 +933,9 @@ read-only: it never labels, merges or comments, and it holds no readiness
 *authority* today (the shell gate still does; see the verb's own header for
 the shadow-window position). A `<CODE>#<N>` ref is resolved through the
 target repository's `nen/repos.json` `product_codes`; a bare number needs
-`--gh-repo`. Reviewer identities come from exactly one of `--gates <path>`,
+`--gh-repo` or its `--target` alias. `--pr <n>` is an additive alias for the
+positional number, so `ready --target owner/name --pr 334` is accepted too.
+Reviewer identities come from exactly one of `--gates <path>`,
 the target repo's `nen/gates.json`, or `--reviewers a,b,c` — there is no
 built-in default set, and with none of the three the verb refuses rather than
 guessing.
@@ -1148,6 +1163,7 @@ commit. Three things make that visible:
 **Usage**
 
 ```text
+nen pr ready --target <owner/name> --pr <n> [the same ready options below]
 nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
 ```
 
@@ -1155,8 +1171,10 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `<ref>` | yes | `<CODE>#<N>` (the `#` optional) or a bare `<N>` with `--gh-repo` | the shorthand splits at the LONGEST trailing digit run; a code ending in a digit needs the `#` |
-| `--gh-repo <owner/name>` | no | the repository, when `<ref>` is a bare number | wins over a code if both are given |
+| `<ref>` | unless `--pr` | `<CODE>#<N>` (the `#` optional) or a bare `<N>` with `--gh-repo`/`--target` | the shorthand splits at the LONGEST trailing digit run; a code ending in a digit needs the `#` |
+| `--gh-repo <owner/name>` | no | the repository, when `<ref>` is a bare number | the existing coded-ref override remains valid when `--target` is absent |
+| `--target <owner/name>` | no | alias for `--gh-repo` | may pair with a positional ref; must agree with `--gh-repo` and a coded ref's registry repository (case-insensitive); an unknown code with this new alias is refused |
+| `--pr <n>` | no | alias for the positional number | positive safe whole number; may pair with `--gh-repo` or a coded ref; must agree with any positional number |
 | `--explain` | no | print the full conjunct table plus what the gate does not decide, and — when `nen/gates.json` states `round_policy.minRounds` or `.maxRounds` — each reviewer's requested and posted rounds against both ([#240](https://github.com/zheref/nen/issues/240)); and, for each check still queued at the judged head, whether an online runner carries its `runs-on` labels ([#224](https://github.com/zheref/nen/issues/224)) | suppressed by `--json` (the JSON already carries the table, and `meta.roundCounts`) |
 | `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies. On that flags path each name (and each `--approvers` name) matches the **whole** login, case-insensitively, with an optional `[bot]` suffix — `^<name>(\[bot\])?$`, the name taken literally — never a substring or a regex, so `sasuke` is not `Not-Sasuke-Fan` ([#264](https://github.com/zheref/nen/issues/264), Feitan F1). A repository that needs a pattern declares `login_pattern` in `nen/gates.json`. The same exact reading now applies wherever a reviewer name has no declared identity (a `--reviewers` name a gates file does not declare): the name is the login |
 | `--reviewer-login <name>=<login>` | no, repeatable | the exact login a `--reviewers` name posts under | flags path only ([#264](https://github.com/zheref/nen/issues/264)). Whole login, case-insensitive, optional `[bot]` suffix, taken literally; repeat a name for alternative logins. **Nothing is built in** — which login a bot posts under is data (§3), so without this flag the name must equal the login, e.g. `--reviewers copilot --reviewer-login copilot=copilot-pull-request-reviewer[bot]`. Split at the first `=`; an empty half is exit `2`, and so is a name `--reviewers` does not list. Beside a gates file it is ignored with a warning in `meta.warnings` — declare `login_pattern` there instead |
@@ -1169,6 +1187,13 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--require-head <sha>` | no | judge only this commit: 7–40 hex digits, a case-insensitive prefix of GitHub's head | any other head is exit `8` (`head-mismatch`), both SHAs printed, no verdict; malformed is exit `2` |
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
+
+Mixed consistent forms are accepted: `ready 334 --target owner/name`,
+`ready --pr 334 --gh-repo owner/name`, and redundant agreeing declarations.
+A missing object/repository pair, malformed alias, or conflicting declaration is
+exit 2 before any API transport is opened. No repository is guessed from the checkout.
+The legacy coded-ref plus `--gh-repo` override remains unchanged when no new
+`--target` is present. Aliases change no JSON keys or readiness conjuncts.
 
 **`--exclude-check`, and why it exists (zheref/hatsu#81).** `--exclude-run`
 carves out every check one Actions *run* produced, by `detailsUrl` — the right

@@ -96,6 +96,37 @@ describe("nen pr ready (registry wiring onto ../verbs/pr_ready.ts)", () => {
     expect(result.out.join("\n")).toMatch(/nen pr body-check/);
   });
 
+  it("passes target/pr aliases through the family parser with unchanged JSON shape", async () => {
+    const tokenEnv = "NEN_TEST_DEFINITELY_UNSET_TOKEN";
+    delete process.env[tokenEnv];
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: Io = { out: (line) => void out.push(line), err: (line) => void err.push(line) };
+    const code = await run(["--json", "pr", "ready", "--target", "o/r", "--pr", "5", "--reviewers", "alice", "--token-env", tokenEnv, "--repo", SHU_REPO], io);
+    expect(code).toBe(1);
+    const report = JSON.parse(out.join("\n"));
+    expect(report).toMatchObject({ contract: "nen.pr.ready/v0.1", verdict: "unevaluated", meta: { ref: "5", repo: "o/r", pr: 5 } });
+    expect(report.remedy).toContain("--token-env");
+    expect(report.remedy).toContain("GH_TOKEN");
+    expect(err).toEqual([]);
+  });
+
+  it("refuses malformed, missing or conflicting alias declarations through the parser", async () => {
+    for (const flags of [
+      ["--target", "o/r"], ["--pr", "5"], ["--target", "o/r", "--pr"],
+      ["--target", "o/r", "--pr", "bad"], ["--target", "bad", "--pr", "5"],
+      ["5", "--target", "o/r", "--pr", "6"],
+      ["--target", "o/r", "--gh-repo", "o/other", "--pr", "5"],
+    ]) {
+      const result = await capture(["pr", "ready", ...flags], null, new ScriptedSeams([]));
+      expect(result.code, flags.join(" ")).toBe(2);
+      expect(result.out).toEqual([]);
+    }
+    const help = await capture(["pr", "--help"], null);
+    expect(help.out.join("\n")).toContain("nen pr ready --target <owner/name> --pr <n>");
+    expect(help.out.join("\n")).toContain("Alias for --gh-repo");
+  });
+
   // zheref/nen#26(a): the help never mentioned the no-# shorthand at all --
   // the only place it surfaced was the refusal thrown at an unparseable ref.
   it("'nen pr --help' documents the no-# shorthand and its longest-trailing-digits rule", async () => {

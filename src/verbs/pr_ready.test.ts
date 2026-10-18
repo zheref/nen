@@ -794,6 +794,80 @@ describe("prReady -- usage errors (exit 2, never a verdict)", () => {
   });
 });
 
+describe("prReady -- additive target/pr aliases", () => {
+  it("gives the same decided JSON report for aliases, mixed forms and the existing bare form", async () => {
+    const source = stubSource();
+    const cases: Partial<PrReadyInput>[] = [
+      {},
+      { positionals: ["pr", "ready"], values: { gates: schemaPath(BANKAI_REPO, GATES_FILE), target: "zheref/example", pr: "9" } },
+      { values: { gates: schemaPath(BANKAI_REPO, GATES_FILE), target: "zheref/example" } },
+      { positionals: ["pr", "ready"], values: { ...input().values, pr: "9" } },
+      { values: { ...input().values, target: "ZHEREF/EXAMPLE", pr: "9" } },
+    ];
+    let expected: unknown;
+    for (const form of cases) {
+      const { io, out } = capture();
+      const code = await prReady(input(form), io, stubDeps(source));
+      expect(code).toBe(0);
+      const report: unknown = JSON.parse(out.join("\n"));
+      if (expected === undefined) expected = report;
+      else expect(report).toEqual(expected);
+    }
+  });
+
+  it("accepts agreeing coded refs and preserves the explicit legacy override without new target", async () => {
+    const forms: readonly Readonly<Record<string, string>>[] = [
+      { target: "ZHEREF/KROAPPLE", pr: "9" },
+      { pr: "9" },
+      { "gh-repo": "zheref/elsewhere" },
+      { "gh-repo": "zheref/elsewhere", pr: "9" },
+    ];
+    for (const values of forms) {
+      const { io, out } = capture();
+      expect(await prReady(input({ positionals: ["pr", "ready", "KP#9"], values: { gates: schemaPath(BANKAI_REPO, GATES_FILE), ...values }, repoFlag: BANKAI_REPO }), io, stubDeps(null))).toBe(1);
+      const report = JSON.parse(out.join("\n"));
+      expect(report.verdict).toBe("unevaluated");
+      expect(report.meta.repo.toLowerCase()).toBe((values["gh-repo"] ?? "zheref/KroApple").toLowerCase());
+    }
+  });
+
+  it("refuses malformed, missing and conflicting aliases before opening a transport", async () => {
+    const invalid: Partial<PrReadyInput>[] = [
+      { positionals: ["pr", "ready"], values: { target: "o/r" } },
+      { positionals: ["pr", "ready"], values: { pr: "9" } },
+      ...["0", "-1", "1.5", "NaN", "9tail", "9007199254740992", ""].map((pr) => ({ positionals: ["pr", "ready"], values: { target: "o/r", pr } })),
+      { values: { target: "bad", pr: "9" } },
+      { values: { target: "o/r", pr: "10" } },
+      { values: { target: "o/r", "gh-repo": "o/other", pr: "9" } },
+      { positionals: ["pr", "ready", "KP#9"], values: { target: "o/r", pr: "9" }, repoFlag: BANKAI_REPO },
+      { positionals: ["pr", "ready", "ZZ#9"], values: { target: "o/r", pr: "9" }, repoFlag: BANKAI_REPO },
+      { positionals: ["pr", "ready", "KP#9"], values: { target: "zheref/KroApple", pr: "10" }, repoFlag: BANKAI_REPO },
+      { positionals: ["pr", "ready", "9", "10"], values: { target: "o/r", pr: "9" } },
+    ];
+    for (const form of invalid) {
+      const { io, out, err } = capture();
+      let opened = 0;
+      const deps: PrReadyDeps = { ...stubDeps(null), openSource: () => { opened++; throw new Error("API must not be opened"); } };
+      expect(await prReady(input(form), io, deps), JSON.stringify(form)).toBe(2);
+      expect(opened).toBe(0);
+      expect(out).toEqual([]);
+      expect(err.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps token selection explicit and names both token spellings in the remedy", async () => {
+    const { io, out } = capture();
+    const selected: string[] = [];
+    const deps: PrReadyDeps = { ...stubDeps(null), openSource: (name) => { selected.push(name); return { ok: false, message: "token absent" }; } };
+    expect(await prReady(input({ positionals: ["pr", "ready"], values: { target: "o/r", pr: "9", gates: schemaPath(BANKAI_REPO, GATES_FILE), "token-env": "CUSTOM_REVIEW_TOKEN" } }), io, deps)).toBe(1);
+    expect(selected).toEqual(["CUSTOM_REVIEW_TOKEN"]);
+    const report = JSON.parse(out.join("\n"));
+    expect(report.verdict).toBe("unevaluated");
+    expect(report.remedy).toContain("GH_TOKEN");
+    expect(report.remedy).toContain("--token-env <VAR>");
+  });
+});
+
 describe("prReady -- unevaluated is never mistaken for a verdict", () => {
   it("no usable token -> verdict 'unevaluated', exit 1, remedy present", async () => {
     const { io, out } = capture();
