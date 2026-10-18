@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { runFamily, type Io } from "../index.js";
 import { defaultSeams, type Seams } from "../seam/exec.js";
 import { wcCommand } from "./command.js";
@@ -364,15 +365,19 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     const w = world(); const intended = join(w.root, "intended.git"); const other = join(w.root, "other.git");
     for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
     const global = join(w.root, "fixture-global"); const included = join(w.root, "fixture-include");
-    writeFileSync(global, `[include]\n path = ${included}\n`);
-    writeFileSync(included, `[url "${intended}"]\n insteadOf = fixture-alias\n[http]\n extraHeader = X-Fixture: private-test-value\n`);
+    // Let Git serialize native path escaping (Windows backslashes are not
+    // valid unescaped config text). These are disposable explicit files only.
+    git(w.root, "config", "--file", global, "include.path", included);
+    git(w.root, "config", "--file", included, `url.${intended}.insteadOf`, "fixture-alias");
+    git(w.root, "config", "--file", included, "http.extraHeader", "X-Fixture: private-test-value");
     git(w.repo, "remote", "set-url", "--push", "origin", "fixture-alias");
     const real = defaultSeams(); let observed = false; let pushed = false;
     const captured: { entries: (string | undefined)[][]; config: string }[] = [];
     const seams: Seams = { ...real, env: { ...real.env, GIT_CONFIG_GLOBAL: global }, run: (command, args, options) => {
       if (command === "git" && args[0] === "ls-remote" && args.includes("--heads")) {
         observed = true;
-        writeFileSync(included, `[url "${other}"]\n insteadOf = ${intended}\n`);
+        writeFileSync(included, "");
+        git(w.root, "config", "--file", included, `url.${other}.insteadOf`, intended);
       }
       if (command === "git" && (args[0] === "push" || args[0] === "ls-remote" && args.includes("--heads"))) {
         const entries = Number(options?.env?.["GIT_CONFIG_COUNT"] ?? 0);
@@ -424,20 +429,36 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
   it.each(["trailing-space", "leading-space", "rewritten-space"])("preserves exact endpoint bytes for %s rather than deleting a whitespace-trimmed peer", async (variant) => {
     const w = world(); const intended = variant === "leading-space" ? join(w.repo, " leading.git") : join(w.root, "trailing ");
     const other = variant === "leading-space" ? join(w.repo, "leading.git") : join(w.root, "trailing");
-    for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
+    const windowsUnsupported = process.platform === "win32" && variant !== "leading-space";
+    if (windowsUnsupported) {
+      const capability = spawnSync("git", ["init", "--bare", intended], { cwd: w.root, env, encoding: "utf8" });
+      expect(capability.status).not.toBe(0); expect(capability.stderr).toMatch(/invalid argument/i); expect(existsSync(intended)).toBe(false);
+    }
+    for (const endpoint of windowsUnsupported ? [other] : [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
     const raw = variant === "leading-space" ? " leading.git" : variant === "rewritten-space" ? "fixture-alias" : intended;
     git(w.repo, "remote", "set-url", "--push", "origin", raw);
     if (variant === "rewritten-space") git(w.repo, "config", `url.${intended}.insteadOf`, raw);
-    const preview = await run(w, [remoteItem]); expect(preview.code).toBe(0); expect(preview.report?.items[0]?.status).toBe("would-remove");
-    const result = await run(w, [remoteItem], ["--run"]); expect(result.code).toBe(0);
+    const remoteCalls: string[][] = []; const real = defaultSeams();
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      if (command === "git" && (args[0] === "push" || args[0] === "ls-remote" && args.includes("--heads"))) remoteCalls.push([...args]);
+      return real.run(command, args, options);
+    } };
+    const preview = await run(w, [remoteItem], [], seams);
+    const result = await run(w, [remoteItem], ["--run"], seams);
+    if (windowsUnsupported) {
+      expect(preview.code).toBe(2); expect(result.code).toBe(2);
+      expect(preview.report?.items[0]?.message).toMatch(/path normalization/); expect(remoteCalls).toEqual([]);
+    } else {
+      expect(preview.code).toBe(0); expect(preview.report?.items[0]?.status).toBe("would-remove"); expect(result.code).toBe(0);
+      expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
+    }
     expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
-    expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
   });
   it.each(["raw-LF", "raw-CR", "rewrite-encoded-LF", "encoded-LF"])("refuses record-ambiguous endpoint bytes before remote observation: %s", async (variant) => {
     const w = world(); const bad = w.remote + (variant === "raw-CR" ? "\r" : "\n");
-    const raw = variant === "rewrite-encoded-LF" ? "fixture-alias" : variant === "encoded-LF" ? `file://${w.remote}%0A` : bad;
+    const raw = variant === "rewrite-encoded-LF" ? "fixture-alias" : variant === "encoded-LF" ? `${pathToFileURL(w.remote).href}%0A` : bad;
     git(w.repo, "remote", "set-url", "--push", "origin", raw);
-    if (variant === "rewrite-encoded-LF") git(w.repo, "config", `url.file://${w.remote}%0A.insteadOf`, raw);
+    if (variant === "rewrite-encoded-LF") git(w.repo, "config", `url.${pathToFileURL(w.remote).href}%0A.insteadOf`, raw);
     const real = defaultSeams(); const remoteCalls: string[][] = [];
     const seams: Seams = { ...real, run: (command, args, options) => {
       if (command === "git" && (args[0] === "push" || args[0] === "ls-remote" && args.includes("--heads"))) remoteCalls.push([...args]);
@@ -450,14 +471,16 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     }
   });
 
-  it("removes only a Windows Git output terminator while retaining the endpoint's trailing space", async () => {
-    const w = world(); const intended = join(w.root, "trailing "); const other = join(w.root, "trailing");
+  it("removes only a Windows Git output terminator while retaining a portable leading-space pathname", async () => {
+    const w = world(); const intended = join(w.repo, " leading.git"); const other = join(w.repo, "leading.git");
     for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
-    git(w.repo, "remote", "set-url", "--push", "origin", intended);
+    git(w.repo, "remote", "set-url", "--push", "origin", " leading.git");
     const real = defaultSeams(); const seams: Seams = { ...real, platform: "win32", run: (command, args, options) => {
       const result = real.run(command, args, options);
       if (command !== "git" || !args.includes("--get-url")) return result;
-      const text = result.stdout.slice(0, -1) + "\r\n";
+      expect(result.stdout.endsWith("\n")).toBe(true);
+      const payload = result.stdout.endsWith("\r\n") ? result.stdout.slice(0, -2) : result.stdout.slice(0, -1);
+      const text = payload + "\r\n";
       return { ...result, stdout: text, stdoutBytes: new TextEncoder().encode(text) };
     } };
     const result = await run(w, [remoteItem], ["--run"], seams); expect(result.code).toBe(0);
