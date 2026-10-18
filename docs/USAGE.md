@@ -769,7 +769,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path, its class (manifest / changelog / mirror / other, by `nen/contract.json`'s `mechanical` block) and the abort line, never picking one -- exit 3 when every path is mechanical, with the commands to run printed and none run; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort), nen/contract.json's `mechanical` block under --repo (only on a conflict) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
-| [`wc`](#family-wc) | [`nen wc prune`](#nen-wc-prune) | validate an explicit cleanup plan and remove named remote branches/stale tracking refs; worktree/local-branch removals refuse; host links are read-only | plan file, local Git refs/worktrees, exact configured remote branch reads | yes |
+| [`wc`](#family-wc) | [`nen wc prune`](#nen-wc-prune) | validate an explicit cleanup plan and remove named remote branches; worktree/local-branch/tracking-ref removals refuse; host links are read-only | plan file, local Git refs/worktrees, exact configured remote branch reads | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
@@ -4012,21 +4012,34 @@ checks pass, worktree and local-branch rows refuse in both preview and execution
 No local-branch ref or configuration deletion occurs, so a later same-name branch cannot
 inherit stale routing from a deletion this verb claimed to perform. Nothing is force-removed.
 
-Remote branch deletion reads the exact single configured push URL and leases the observed
-object ID, so a moved tip cannot be deleted. It preserves unlisted local tracking refs.
-A `remote-ref` row requires an explicit configured `remote`; its local namespace never
-identifies the remote authority. Its fetch refspecs must reverse the local destination to
-exactly one full `refs/heads/...` source. Exact and single-wildcard mappings are supported;
-negative-excluded sources, ambiguous mappings and unsupported refspecs refuse. A successful
-read of that remote's exact single configured fetch URL must prove the source branch absent.
-The local tracking ref is then deleted with its expected old OID. Remote HEAD and mappings
-to protected source branches are retained.
+Remote branch deletion snapshots effective Git configuration (including expanded includes)
+in memory, resolves one configured push endpoint once, and binds both observation and the
+leased deletion to that literal endpoint. Relative filesystem URLs become absolute against
+`--repo`; they cannot be mistaken for another configured remote name. The isolated bare Git
+transport context has no remotes, URL rewrites or live config includes, so a second rewrite
+or a later source config change cannot redirect the push or delete unlisted tracking refs.
+A moved remote tip fails its exact OID lease.
 
-Duplicate destructive targets refuse the whole plan before any write, for canonical
-worktree paths, local refs, and exact push-URL/source-ref pairs (including remote aliases).
-Repeated read-only host-link rows are allowed. Ordered previews simulate prior remote
-removals only for the same exact endpoint URL and source ref: deleting a split push
-endpoint's branch does not make a still-live fetch-side tracking ref stale.
+The transport supports filesystem paths/file URLs, HTTP(S), SSH (including SCP-style URLs)
+and Git URLs; tilde paths, remote-helper URLs and embedded URL credentials refuse. Effective `http.*`, `https.*`,
+`credential.*`, `protocol.*`, `ssh.*`, `core.sshCommand`, `core.askPass` and `core.gitProxy`
+settings are frozen in process environment entries, never copied to scratch files. Other Git
+configuration is not inherited by the transport. Credential helpers, configured key/certificate
+files and SSH tooling remain external dependencies; this does not freeze their file contents.
+A private empty bare context is created and removed even during remote previews; no caller
+refs, config or remote resources are changed by a preview.
+
+A `remote-ref` row still explicitly names its configured remote and reverses fetch refspecs
+to one unexcluded `refs/heads/...` source. Exact/single-wildcard mappings are recognized;
+ambiguous, excluded or protected mappings refuse. Even after a source-absence observation,
+existing tracking refs refuse in both preview and execution: no supported transaction binds
+mutable fetch configuration to local ref deletion. Ref contents and configuration are retained;
+absent local tracking refs report `missing`. This capability remains outstanding alongside
+worktree and local-branch removal (Refs #409).
+
+Duplicate destructive targets refuse the entire plan before writes, including remote aliases
+that resolve to the same literal endpoint/source ref. Remote branch previews use that same
+endpoint and source identity; tracking-ref previews never claim `would-remove`.
 No global `worktree prune` or `remote prune` runs. `host-link` reports the raw readlink
 target without following or removing the link, including with `--run`.
 
@@ -4034,7 +4047,7 @@ target without following or removing the link, including with `--run`.
 bytesBasis: "logical-file-bytes", physicalFreedBytes: null, freedBytes, items[] }`.
 Each item carries its original `item`, `status` (`would-remove`, `removed`, `missing`,
 `refused`, `failed`, or `read-link`), `message`, `measuredBytes`, `freedBytes` and
-`linkTarget`. Unsupported local removals report zero freed bytes and null measured bytes;
+`linkTarget`. Unsupported local and tracking-ref removals report zero freed bytes and null measured bytes;
 no directory measurement is claimed. Supported ref deletion and previews report zero;
 an uncertain remote/ref write reports `null`, including in the total. This does not claim physical
 capacity reclaimed, and shared Git objects are never measured as freed. Human output

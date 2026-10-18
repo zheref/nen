@@ -94,12 +94,13 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     expect(git(pushRemote, "rev-parse", "refs/heads/topic")).toBe(tip);
     expect(git(w.remote, "rev-parse", "refs/heads/topic")).toBe(git(w.repo, "rev-parse", "main"));
   });
-  it("removes only an explicitly named stale tracking ref, never a live one or remote HEAD", async () => {
+  it("retains existing stale tracking refs as well as live refs and remote HEAD", async () => {
     const w = world(); const live = await run(w, [tracking], ["--run"]);
     expect(live.code).toBe(2); expect(live.report?.items[0]?.message).toMatch(/still exists/);
     git(w.remote, "update-ref", "-d", "refs/heads/topic");
-    const result = await run(w, [tracking], ["--run"]); expect(result.code).toBe(0);
-    expect(git(w.repo, "for-each-ref", "--format=%(refname)", "refs/remotes/origin/topic")).toBe("");
+    const result = await run(w, [tracking], ["--run"]); expect(result.code).toBe(2);
+    expect(result.report?.items[0]?.message).toMatch(/fetch-authority serialization/);
+    expect(git(w.repo, "show-ref", "refs/remotes/origin/topic")).toContain("topic");
     const head = await run(w, [{ ...tracking, ref: "refs/remotes/origin/HEAD" }], ["--run"]); expect(head.code).toBe(2);
   });
   it("refuses current/primary, checked-out, locked, dirty, ignored and unmerged worktrees", async () => {
@@ -232,7 +233,8 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     expect(live.code).toBe(2); expect(live.report?.items[0]?.message).toMatch(/still exists/);
     expect(git(w.repo, "rev-parse", tracking.ref)).toBe(tip);
     git(w.remote, "update-ref", "-d", "refs/heads/source");
-    expect((await run(w, [tracking], ["--run"])).code).toBe(0);
+    expect((await run(w, [tracking], ["--run"])).report?.items[0]?.message).toMatch(/fetch-authority serialization/);
+    expect(git(w.repo, "rev-parse", tracking.ref)).toBe(tip);
     expect(git(w.remote, "rev-parse", "refs/heads/topic")).toBe(tip);
   });
   it("uses the explicitly named remote under a custom destination namespace with an unrelated same-name remote", async () => {
@@ -244,7 +246,8 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     expect((await run(w, [item], ["--run"])).code).toBe(2);
     expect(git(w.repo, "rev-parse", ref)).toBe(tip);
     git(w.remote, "update-ref", "-d", "refs/heads/topic");
-    expect((await run(w, [item], ["--run"])).code).toBe(0);
+    expect((await run(w, [item], ["--run"])).report?.items[0]?.message).toMatch(/fetch-authority serialization/);
+    expect(git(w.repo, "rev-parse", ref)).toBe(tip);
     expect(git(unrelated, "for-each-ref")).toBe("");
   });
   it.each(["ambiguous", "negative-exact", "negative-wildcard", "unmapped"])("retains a tracking ref with %s fetch authority", async (mode) => {
@@ -267,9 +270,10 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     if (!split) git(w.repo, "update-ref", trackingItem.ref, git(w.repo, "rev-parse", "topic"));
     const preview = await run(w, [remoteItem, trackingItem]);
     const actual = await run(w, [remoteItem, trackingItem], ["--run"]);
-    expect(preview.report?.items.map((i) => i.status)).toEqual(split ? ["would-remove", "refused"] : ["would-remove", "would-remove"]);
+    expect(preview.report?.items.map((i) => i.status)).toEqual(["would-remove", "refused"]);
     expect(actual.report?.items.map((i) => i.status)).toEqual(preview.report?.items.map((i) => i.status === "would-remove" ? "removed" : i.status));
-    expect(actual.code).toBe(split ? 2 : 0);
+    expect(actual.code).toBe(2);
+    expect(git(w.repo, "show-ref", trackingItem.ref)).toContain(trackingItem.ref);
     if (split) expect(git(w.repo, "rev-parse", tracking.ref)).toBe(git(w.remote, "rev-parse", "refs/heads/topic"));
   });
   it("rejects duplicate destructive identities whole-plan, including aliases, in preview and execution", async () => {
@@ -299,4 +303,122 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
   it("plan validation does not silently accept nulls or empty fields", () => {
     for (const value of [[null], [{ kind: "worktree", path: "", base }], [{ kind: "host-link", path: "a\nb" }]]) expect(() => parsePrunePlan(value)).toThrow();
   });
+  it("literalizes a relative push path that collides with a configured remote name", async () => {
+    const w = world(); const intended = join(w.repo, "target"); const other = join(w.root, "other.git");
+    for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
+    git(w.repo, "remote", "add", "target", other); git(w.repo, "fetch", "target");
+    git(w.repo, "remote", "set-url", "--push", "origin", "target");
+    const before = git(w.repo, "show-ref", "refs/remotes/target/topic");
+    expect((await run(w, [remoteItem])).report?.items[0]?.status).toBe("would-remove");
+    const result = await run(w, [remoteItem], ["--run"]);
+    expect(result.code).toBe(0);
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(w.repo, "show-ref", "refs/remotes/target/topic")).toBe(before);
+    expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+  it("resolves a chained rewrite once and never redirects the leased push a second time", async () => {
+    const w = world(); const intended = join(w.root, "intended.git"); const other = join(w.root, "other.git");
+    for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
+    const alias = "prune-test-alias";
+    git(w.repo, "remote", "set-url", "--push", "origin", alias);
+    git(w.repo, "config", `url.${intended}.insteadOf`, alias);
+    git(w.repo, "config", `url.${other}.pushInsteadOf`, intended);
+    const result = await run(w, [remoteItem], ["--run"]);
+    expect(result.code).toBe(0);
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+  it("retains the proved endpoint when a URL rewrite is added immediately before push", async () => {
+    const w = world(); const other = join(w.root, "other.git");
+    git(w.root, "init", "--bare", other); git(w.repo, "push", other, "topic");
+    const real = defaultSeams(); let changed = false;
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      if (command === "git" && args[0] === "push") {
+        git(w.repo, "config", `url.${other}.insteadOf`, w.remote); changed = true;
+      }
+      return real.run(command, args, options);
+    } };
+    const result = await run(w, [remoteItem], ["--run"], seams);
+    expect(changed).toBe(true); expect(result.code).toBe(0);
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(w.remote, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+  it.each([false, true])("refuses tracking deletion even after an absence proof whose fetch authority changes, run=%s", async (execute) => {
+    const w = world(); git(w.repo, "push", w.remote, "topic:live"); git(w.remote, "update-ref", "-d", "refs/heads/topic");
+    const tip = git(w.repo, "rev-parse", tracking.ref); const real = defaultSeams(); let changed = false; const writes: string[][] = [];
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      const result = real.run(command, args, options);
+      if (command === "git" && args[0] === "ls-remote" && args.includes("--heads")) {
+        git(w.repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/live:refs/remotes/origin/topic"); changed = true;
+      }
+      if (command === "git" && args[0] === "update-ref") writes.push([...args]);
+      return result;
+    } };
+    const result = await run(w, [tracking], execute ? ["--run"] : [], seams);
+    expect(changed).toBe(true); expect(result.code).toBe(2);
+    expect(result.report?.items[0]?.status).toBe("refused"); expect(result.report?.items[0]?.message).toMatch(/fetch-authority serialization/);
+    expect(writes).toEqual([]); expect(git(w.repo, "rev-parse", tracking.ref)).toBe(tip);
+  });
+
+  it("freezes inherited include/rewrite/auth configuration in memory without copying secrets into scratch files", async () => {
+    const w = world(); const intended = join(w.root, "intended.git"); const other = join(w.root, "other.git");
+    for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
+    const global = join(w.root, "fixture-global"); const included = join(w.root, "fixture-include");
+    writeFileSync(global, `[include]\n path = ${included}\n`);
+    writeFileSync(included, `[url "${intended}"]\n insteadOf = fixture-alias\n[http]\n extraHeader = X-Fixture: private-test-value\n`);
+    git(w.repo, "remote", "set-url", "--push", "origin", "fixture-alias");
+    const real = defaultSeams(); let observed = false; let pushed = false;
+    const captured: { entries: (string | undefined)[][]; config: string }[] = [];
+    const seams: Seams = { ...real, env: { ...real.env, GIT_CONFIG_GLOBAL: global }, run: (command, args, options) => {
+      if (command === "git" && args[0] === "ls-remote" && args.includes("--heads")) {
+        observed = true;
+        writeFileSync(included, `[url "${other}"]\n insteadOf = ${intended}\n`);
+      }
+      if (command === "git" && (args[0] === "push" || args[0] === "ls-remote" && args.includes("--heads"))) {
+        const entries = Number(options?.env?.["GIT_CONFIG_COUNT"] ?? 0);
+        const values = Array.from({ length: entries }, (_, n) => [options?.env?.[`GIT_CONFIG_KEY_${n}`], options?.env?.[`GIT_CONFIG_VALUE_${n}`]]);
+        expect(args.join(" ")).not.toContain("private-test-value");
+        captured.push({ entries: values, config: readFileSync(join(options!.cwd!, "config"), "utf8") });
+        if (args[0] === "push") pushed = true;
+      }
+      return real.run(command, args, options);
+    } };
+    const result = await run(w, [remoteItem], ["--run"], seams);
+    expect(result.report?.items[0]?.message).toBe("only the named merged ref; no object GC");
+    expect(observed && pushed).toBe(true); expect(result.code).toBe(0);
+    for (const call of captured) {
+      expect(call.entries).toContainEqual(["http.extraheader", "X-Fixture: private-test-value"]);
+      expect(call.entries.some(([key]) => /^(url|remote|include)\./i.test(key ?? ""))).toBe(false);
+      expect(call.config).not.toContain("private-test-value");
+    }
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+
+  it.each(["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"])("does not let inherited %s redirect source or transport authority", async (name) => {
+    const w = world(); const other = join(w.root, "other.git");
+    git(w.root, "init", "--bare", other); git(w.repo, "push", other, "topic");
+    const real = defaultSeams(); const seams: Seams = { ...real, env: { ...real.env,
+      [name]: name === "GIT_CONFIG_PARAMETERS" ? `'url.${other}.insteadOf'='${w.remote}'` : name === "GIT_CONFIG_COUNT" ? "1" : other,
+      GIT_CONFIG_KEY_0: `url.${other}.insteadOf`, GIT_CONFIG_VALUE_0: w.remote,
+    } };
+    const result = await run(w, [remoteItem], ["--run"], seams);
+    expect(result.code).toBe(0);
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(w.remote, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+
+  it.each(["https://fixture-private-value@host.invalid/repo", "ssh://fixture:fixture-private-value@host.invalid/repo"])("refuses embedded URL credentials without exposing them to subprocess argv: %s", async (url) => {
+    const w = world(); git(w.repo, "remote", "set-url", "--push", "origin", url);
+    const real = defaultSeams(); const argsSeen: string[][] = [];
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      if (command === "git") argsSeen.push([...args]);
+      return real.run(command, args, options);
+    } };
+    const result = await run(w, [remoteItem], ["--run"], seams);
+    expect(result.code).toBe(2); expect(result.report?.items[0]?.message).toMatch(/embedded URL credentials/);
+    expect(argsSeen.flat().join(" ")).not.toContain("fixture-private-value");
+    expect(argsSeen.some((args) => args[0] === "push")).toBe(false);
+  });
+
 });

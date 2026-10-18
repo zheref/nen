@@ -1,6 +1,10 @@
 // Explicit-plan cleanup only. No discovery grants permission to remove a target.
-// Dry runs make only reads; no fetch, global prune, reset, force removal or GC.
-import { lstatSync, readlinkSync, realpathSync } from "node:fs";
+// Dry runs never mutate caller resources; transport uses private scratch only.
+// No fetch, global prune, reset, force removal or GC.
+import { lstatSync, mkdtempSync, readlinkSync, realpathSync, rmSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { VerbUsageError, requireRepoFlag, requireValue, type CommandContext } from "../cli/command.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { plainLine } from "../cli/plain.js";
@@ -63,13 +67,86 @@ function registrations(text: string): Registration[] {
 }
 
 export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dryRun: boolean, trunk: string): PruneReport {
-  const env = scrubbedGitEnv(seams.env);
+  const env = { ...seams.env, ...scrubbedGitEnv(seams.env) };
   const call = (args: readonly string[], cwd: string = root): CommandResult => seams.run(GIT, [...args], { cwd, env });
   const git = (args: readonly string[], cwd: string = root): string => {
     const result = call(args, cwd);
     if (result.spawnFailed || result.code !== 0) throw new Error(`git ${args[0] ?? ""} failed (${result.code}): ${redactRemoteCredentials(result.stderr.trim())}`);
     return result.stdout.trim();
   };
+  // Freeze the effective Git configuration once, in memory. Transport runs in
+  // a private bare context with no remotes, rewrite rules, includes or ambient
+  // config files. Passing a resolved URL back to the caller's repository would
+  // apply URL rewriting again and could update unlisted tracking refs.
+  let transportRoot: string | null = null;
+  let snapshot: readonly [string, string][] | null = null;
+  const frozenEnv: Record<string, string | undefined> = { ...seams.env, ...env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG: undefined };
+  // Ask the installed Git for its complete local-environment inventory rather
+  // than assume --git-dir alone excludes common-dir/worktree/config redirects.
+  for (const name of git(["rev-parse", "--local-env-vars"]).split(/\r?\n/)) frozenEnv[name] = undefined;
+  const readSnapshot = (): readonly [string, string][] => {
+    if (snapshot === null) {
+      const result = seams.run(GIT, ["config", "--null", "--list", "--includes"], { cwd: root, env: { ...env, GIT_CONFIG: undefined } });
+      if (result.spawnFailed || result.code !== 0) throw new Refused("cannot snapshot Git transport configuration");
+      snapshot = result.stdout.split("\0").filter((row) => row !== "").map((row): [string, string] => {
+        const end = row.indexOf("\n");
+        return end === -1 ? [row, "true"] : [row.slice(0, end), row.slice(end + 1)];
+      });
+    }
+    return snapshot;
+  };
+  const transportConfig = (key: string): boolean => /^(?:https?|credential|protocol|ssh)\./i.test(key) || ["core.sshcommand", "core.askpass", "core.gitproxy"].includes(key.toLowerCase());
+  const transportGit = (args: readonly string[], rewrite: "insteadof" | "pushinsteadof" | null = null): string => {
+    const settings = readSnapshot();
+    if (transportRoot === null) {
+      transportRoot = mkdtempSync(join(tmpdir(), "nen-prune-transport-"));
+      const result = seams.run(GIT, ["init", "--bare", "--template=", transportRoot], { cwd: transportRoot, env: { ...frozenEnv, GIT_CONFIG_COUNT: "0" } });
+      if (result.spawnFailed || result.code !== 0) throw new Refused("cannot initialize isolated Git transport context");
+    }
+    const entries = settings.flatMap(([key, value]): [string, string][] => {
+      if (transportConfig(key)) return [[key, value]];
+      if (rewrite !== null && /^url\./i.test(key) && key.toLowerCase().endsWith(`.${rewrite}`)) return [[key.slice(0, -rewrite.length) + "insteadof", value]];
+      return [];
+    });
+    const configEnv: Record<string, string | undefined> = { ...frozenEnv, GIT_CONFIG_COUNT: String(entries.length) };
+    entries.forEach(([key, value], index) => { configEnv[`GIT_CONFIG_KEY_${index}`] = key; configEnv[`GIT_CONFIG_VALUE_${index}`] = value; });
+    const result = seams.run(GIT, [...args], { cwd: transportRoot, env: configEnv });
+    if (result.spawnFailed || result.code !== 0) throw new Error(`isolated git ${args[0] ?? ""} failed (${result.code}); transport stderr withheld because authentication configuration may contain secrets`);
+    return result.stdout.trim();
+  };
+  const endpoints = new Map<string, string>();
+  const remoteUrl = (remote: string, push: boolean): string => {
+    const key = JSON.stringify([remote, push]); const cached = endpoints.get(key);
+    if (cached !== undefined) return cached;
+    const settings = readSnapshot();
+    const declared = (name: string): string[] => settings.filter(([key]) => key === `remote.${remote}.${name}`).map(([, value]) => value);
+    const pushUrls = push ? declared("pushurl") : [];
+    const urls = pushUrls.length > 0 ? pushUrls : declared("url");
+    if (urls.length !== 1 || urls[0] === "") throw new Refused(`remote must have exactly one configured ${push ? "push" : "fetch"} URL`);
+    const raw = urls[0]!;
+    const noEmbeddedCredentials = (value: string): void => {
+      if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return;
+      let url: URL;
+      try { url = new URL(value); } catch { throw new Refused("malformed transport URL"); }
+      if (url.password !== "" || /https?:/.test(url.protocol) && url.username !== "") throw new Refused("embedded URL credentials are unsupported; configure a credential helper or SSH authentication instead");
+    };
+    noEmbeddedCredentials(raw); // Never put raw credentials in --get-url argv.
+    const rewrite = push && pushUrls.length === 0 && settings.some(([key, value]) => /^url\./i.test(key) && key.toLowerCase().endsWith(".pushinsteadof") && raw.startsWith(value)) ? "pushinsteadof" : "insteadof";
+    // Git's --get-url resolves insteadOf without contacting a server. Explicit
+    // pushurl ignores pushInsteadOf; otherwise matching pushInsteadOf wins.
+    let endpoint = transportGit(["ls-remote", "--get-url", "--", raw], rewrite);
+    noEmbeddedCredentials(endpoint);
+    if (/^file:/i.test(endpoint)) {
+      try { endpoint = fileURLToPath(endpoint); } catch { throw new Refused("unsupported file URL endpoint"); }
+    } else if (!isAbsolute(endpoint) && !/^[^/]+:/.test(endpoint)) {
+      if (endpoint.startsWith("~")) throw new Refused("tilde filesystem endpoints cannot be bound; configure an absolute path");
+      endpoint = resolve(root, endpoint);
+    }
+    // Helpers are executable routing, not a literal URL this boundary supports.
+    if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(endpoint) || /^(?!https?:|ssh:|git:)[A-Za-z][A-Za-z0-9+.-]*:\/\//i.test(endpoint)) throw new Refused("unsupported transport endpoint; use a filesystem path, file URL, HTTP(S), SSH or Git URL");
+    endpoints.set(key, endpoint); return endpoint;
+  };
+  try {
   const fullRef = (ref: string): boolean => ref.startsWith("refs/") && call(["check-ref-format", ref]).code === 0;
   // Refname/namespace validation is whole-plan, and never calls a write command.
   for (const item of plan) {
@@ -88,10 +165,10 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     let key: string;
     if (item.kind === "worktree") key = JSON.stringify(["worktree", comparable(resolveAgainstRepo(root, item.path), seams.platform)]);
     else if (item.kind === "remote-branch") {
-      const result = call(["remote", "get-url", "--push", "--all", item.remote]);
-      const urls = result.stdout.trim().split(/\r?\n/);
-      // An unreadable/ambiguous endpoint is refused by its per-item guard.
-      key = JSON.stringify(["remote", result.code === 0 && !result.spawnFailed && urls.length === 1 && urls[0] !== "" ? urls[0] : item.remote, item.ref]);
+      let endpoint: string;
+      try { endpoint = remoteUrl(item.remote, true); }
+      catch { endpoint = item.remote; } // The per-item guard reports the refusal.
+      key = JSON.stringify(["remote", endpoint, item.ref]);
     } else key = JSON.stringify(["local-ref", item.ref]);
     if (targets.has(key)) throw new VerbUsageError("--plan contains a duplicate destructive target; list each worktree, local ref or exact remote endpoint/source ref only once.");
     targets.add(key);
@@ -124,20 +201,13 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     if (result.spawnFailed || result.code !== 0) throw new Refused(`cannot prove ${sha} merged into '${base}'; fetch missing objects explicitly before cleanup`);
   };
   const remoteSha = (remote: string, ref: string, destination: string = remote): string | null => {
-    if (!git(["remote"]).split(/\r?\n/).includes(remote)) throw new Refused(`'${remote}' is not a configured remote`);
-    const text = git(["ls-remote", "--heads", "--", destination, ref]);
+    const text = transportGit(["ls-remote", "--heads", "--", destination, ref]);
     const rows = text === "" ? [] : text.split(/\r?\n/);
     const match = rows.find((row) => row.split(/\s+/)[1] === ref);
     if (match === undefined) { if (rows.length !== 0) throw new Error("remote answered an unexpected ref"); return null; }
     const sha = match.split(/\s+/)[0] ?? "";
     if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error("remote answered an invalid object id");
     return sha;
-  };
-  const remoteUrl = (remote: string, push: boolean): string => {
-    if (!git(["remote"]).split(/\r?\n/).includes(remote)) throw new Refused(`'${remote}' is not a configured remote`);
-    const urls = git(["remote", "get-url", ...(push ? ["--push"] : []), "--all", remote]).split(/\r?\n/);
-    if (urls.length !== 1 || urls[0] === "") throw new Refused(`remote must have exactly one configured ${push ? "push" : "fetch"} URL`);
-    return urls[0]!;
   };
   const endpointRef = (url: string, ref: string): string => JSON.stringify([url, ref]);
   const trackingSource = (remote: string, destination: string): string => {
@@ -228,13 +298,15 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
         // A push by configured remote NAME would also delete its unlisted
         // local tracking ref. Use its one configured push URL so that only
         // the explicitly named remote branch is touched.
-        if (!dryRun) { writeStarted = true; git(["push", "--no-follow-tags", "--recurse-submodules=no", `--force-with-lease=${item.ref}:${sha}`, "--", pushUrl!, `:${item.ref}`]); }
+        if (!dryRun) { writeStarted = true; transportGit(["push", "--no-follow-tags", "--recurse-submodules=no", `--force-with-lease=${item.ref}:${sha}`, "--", pushUrl!, `:${item.ref}`]); }
         simulatedRemoteRemoved.add(endpointRef(pushUrl!, item.ref));
       } else {
         const fetchUrl = remoteUrl(item.remote, false);
         const source = trackingSource(item.remote, item.ref);
         if (remoteSha(item.remote, source, fetchUrl) !== null && !(dryRun && simulatedRemoteRemoved.has(endpointRef(fetchUrl, source)))) throw new Refused("remote branch still exists at the configured fetch URL; tracking ref is not stale");
-        if (!dryRun) { writeStarted = true; git(["update-ref", "--no-deref", "-d", item.ref, sha]); }
+        // An expected OID does not bind the ref's mutable fetch authority. Git
+        // offers no transaction spanning config remaps and local ref deletion.
+        throw new Refused("remote-ref removal is unsupported without fetch-authority serialization; tracking ref and configuration retained");
       }
       record(dryRun ? "would-remove" : "removed", "only the named merged ref; no object GC", 0);
     } catch (error) {
@@ -242,6 +314,10 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     }
   }
   return { contract: PRUNE_CONTRACT, dryRun, bytesBasis: "logical-file-bytes", physicalFreedBytes: null, freedBytes: outcome.some((item) => item.freedBytes === null) ? null : outcome.reduce((sum, item) => sum + (item.freedBytes ?? 0), 0), items: outcome };
+  } finally {
+    // Only the private empty transport context, never any caller resource.
+    if (transportRoot !== null) rmSync(transportRoot, { recursive: true, force: true });
+  }
 }
 
 export function runPrune(context: CommandContext): number {

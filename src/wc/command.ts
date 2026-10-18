@@ -56,15 +56,21 @@ const USAGE = `nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--j
   Relative plan/worktree/link paths resolve against --repo. Host links are
   readlink-only, never removed. Current/primary, locked, dirty (ignored too),
   unmerged and protected-base resources refuse at exit 2. Never force-remove
-  a worktree or branch. Worktree and local-branch removals are unsupported:
+  a worktree or branch. Worktree, local-branch and tracking-ref removals are unsupported:
   preview and --run both refuse existing targets (absent refs report missing),
   retaining directories, registrations, refs and branch configuration. No writer-quiescence or checkout-serialization
   boundary is available; a snapshot or reversible move is not that guarantee.
-  Remote branch deletion leases its exact observed object id; a moved tip
-  refuses. A remote-ref names its configured remote, reverses fetch refspecs
-  to one unexcluded source branch and proves absence at its exact fetch URL.
-  Ambiguous mappings refuse. Duplicate destructive targets refuse the whole
-  plan before writes; preview dependencies use exact endpoint/source identity.
+  Remote branch deletion freezes one configured endpoint and supported auth/
+  transport settings in memory; relative filesystem URLs become absolute.
+  Observation and leased deletion use an isolated bare context with no live
+  remotes, URL rewrites or includes. Helpers/tilde paths/embedded URL credentials refuse; filesystem,
+  file, HTTP(S), SSH and Git URLs are supported. No auth secrets are copied
+  into scratch files. Other Git settings are not inherited by transport.
+  A moved tip fails its exact observed OID lease. A remote-ref names its
+  configured remote and validates fetch mappings, but existing refs refuse:
+  no fetch-authority serialization boundary exists. Duplicate destructive
+  targets refuse the whole plan before writes; previews never promise an
+  unsupported removal.
   --json: nen.wc.prune/v0.1 with dryRun, items (one status/message per item),
   measuredBytes and freedBytes (logical file bytes), bytesBasis, and
   physicalFreedBytes:null. Supported ref removals reclaim zero measured file
