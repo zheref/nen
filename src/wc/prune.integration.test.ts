@@ -421,4 +421,48 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     expect(argsSeen.some((args) => args[0] === "push")).toBe(false);
   });
 
+  it.each(["trailing-space", "leading-space", "rewritten-space"])("preserves exact endpoint bytes for %s rather than deleting a whitespace-trimmed peer", async (variant) => {
+    const w = world(); const intended = variant === "leading-space" ? join(w.repo, " leading.git") : join(w.root, "trailing ");
+    const other = variant === "leading-space" ? join(w.repo, "leading.git") : join(w.root, "trailing");
+    for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
+    const raw = variant === "leading-space" ? " leading.git" : variant === "rewritten-space" ? "fixture-alias" : intended;
+    git(w.repo, "remote", "set-url", "--push", "origin", raw);
+    if (variant === "rewritten-space") git(w.repo, "config", `url.${intended}.insteadOf`, raw);
+    const preview = await run(w, [remoteItem]); expect(preview.code).toBe(0); expect(preview.report?.items[0]?.status).toBe("would-remove");
+    const result = await run(w, [remoteItem], ["--run"]); expect(result.code).toBe(0);
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+  it.each(["raw-LF", "raw-CR", "rewrite-encoded-LF", "encoded-LF"])("refuses record-ambiguous endpoint bytes before remote observation: %s", async (variant) => {
+    const w = world(); const bad = w.remote + (variant === "raw-CR" ? "\r" : "\n");
+    const raw = variant === "rewrite-encoded-LF" ? "fixture-alias" : variant === "encoded-LF" ? `file://${w.remote}%0A` : bad;
+    git(w.repo, "remote", "set-url", "--push", "origin", raw);
+    if (variant === "rewrite-encoded-LF") git(w.repo, "config", `url.file://${w.remote}%0A.insteadOf`, raw);
+    const real = defaultSeams(); const remoteCalls: string[][] = [];
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      if (command === "git" && (args[0] === "push" || args[0] === "ls-remote" && args.includes("--heads"))) remoteCalls.push([...args]);
+      return real.run(command, args, options);
+    } };
+    for (const flags of [[], ["--run"]]) {
+      const result = await run(w, [remoteItem], flags, seams);
+      expect(result.code).toBe(2); expect(result.report?.items[0]?.message).toMatch(/endpoint.*record|record.*endpoint/);
+      expect(remoteCalls).toEqual([]); expect(git(w.remote, "show-ref", "refs/heads/topic")).toContain("topic");
+    }
+  });
+
+  it("removes only a Windows Git output terminator while retaining the endpoint's trailing space", async () => {
+    const w = world(); const intended = join(w.root, "trailing "); const other = join(w.root, "trailing");
+    for (const endpoint of [intended, other]) { git(w.root, "init", "--bare", endpoint); git(w.repo, "push", endpoint, "topic"); }
+    git(w.repo, "remote", "set-url", "--push", "origin", intended);
+    const real = defaultSeams(); const seams: Seams = { ...real, platform: "win32", run: (command, args, options) => {
+      const result = real.run(command, args, options);
+      if (command !== "git" || !args.includes("--get-url")) return result;
+      const text = result.stdout.slice(0, -1) + "\r\n";
+      return { ...result, stdout: text, stdoutBytes: new TextEncoder().encode(text) };
+    } };
+    const result = await run(w, [remoteItem], ["--run"], seams); expect(result.code).toBe(0);
+    expect(git(other, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(git(intended, "for-each-ref", "refs/heads/topic")).toBe("");
+  });
+
 });

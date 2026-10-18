@@ -3987,7 +3987,7 @@ nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
 |---|---|---|---|
 | `--repo <path>` | yes | The checkout whose resources the plan names. | Must name its root. |
 | `--plan <file>` | yes | A JSON array of closed-shape rows, processed in order. | Relative paths resolve against `--repo`; unknown fields/kinds, malformed refs and missing strings refuse the whole plan before any deletion. |
-| `--dry-run` | no | Validate and preview without writes. | The default; conflicts with `--run`. No fetch, ref deletion or directory removal. |
+| `--dry-run` | no | Validate and preview without caller-resource mutation. | The default; conflicts with `--run`. No fetch or removal of caller refs/directories; a private transport scratch context is created and removed. |
 | `--run` | no | Execute only supported listed remote removals. | Unsupported local rows and other operational refusals/failures are reported; later items still run. |
 | `--json` | no | Emit one outcome document. | No progress text on stdout. |
 
@@ -4018,7 +4018,10 @@ leased deletion to that literal endpoint. Relative filesystem URLs become absolu
 `--repo`; they cannot be mistaken for another configured remote name. The isolated bare Git
 transport context has no remotes, URL rewrites or live config includes, so a second rewrite
 or a later source config change cannot redirect the push or delete unlisted tracking refs.
-A moved remote tip fails its exact OID lease.
+A moved remote tip fails its exact OID lease. Endpoint records preserve leading/trailing
+spaces exactly, including after URL rewriting. CR, LF or NUL in raw endpoints, rewrite
+records or decoded file-URL paths refuse before remote observation; only Git's output
+record terminator is removed. Git endpoint/config records must be valid UTF-8; non-UTF-8 Git endpoints/configuration are unsupported and refuse.
 
 The transport supports filesystem paths/file URLs, HTTP(S), SSH (including SCP-style URLs)
 and Git URLs; tilde paths, remote-helper URLs and embedded URL credentials refuse. Effective `http.*`, `https.*`,

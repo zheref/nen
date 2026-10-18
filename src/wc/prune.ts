@@ -84,11 +84,21 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
   // Ask the installed Git for its complete local-environment inventory rather
   // than assume --git-dir alone excludes common-dir/worktree/config redirects.
   for (const name of git(["rev-parse", "--local-env-vars"]).split(/\r?\n/)) frozenEnv[name] = undefined;
+  const rawStdout = (result: CommandResult): string => {
+    try {
+      // The real runner supplies bytes; mock seams may supply text only. Do
+      // not normalize CRLF or silently replace invalid endpoint/config bytes.
+      return new TextDecoder("utf-8", { fatal: true }).decode(result.stdoutBytes ?? new TextEncoder().encode(result.stdout));
+    } catch { throw new Refused("Git endpoint/config records must be valid UTF-8"); }
+  };
+  const endpointRecord = (value: string): void => {
+    if (value === "" || /[\r\n\0]/.test(value)) throw new Refused("endpoint record must be nonempty and contain no CR, LF or NUL bytes");
+  };
   const readSnapshot = (): readonly [string, string][] => {
     if (snapshot === null) {
-      const result = seams.run(GIT, ["config", "--null", "--list", "--includes"], { cwd: root, env: { ...env, GIT_CONFIG: undefined } });
+      const result = seams.run(GIT, ["config", "--null", "--list", "--includes"], { cwd: root, env: { ...env, GIT_CONFIG: undefined }, bytes: true });
       if (result.spawnFailed || result.code !== 0) throw new Refused("cannot snapshot Git transport configuration");
-      snapshot = result.stdout.split("\0").filter((row) => row !== "").map((row): [string, string] => {
+      snapshot = rawStdout(result).split("\0").filter((row) => row !== "").map((row): [string, string] => {
         const end = row.indexOf("\n");
         return end === -1 ? [row, "true"] : [row.slice(0, end), row.slice(end + 1)];
       });
@@ -105,14 +115,18 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     }
     const entries = settings.flatMap(([key, value]): [string, string][] => {
       if (transportConfig(key)) return [[key, value]];
-      if (rewrite !== null && /^url\./i.test(key) && key.toLowerCase().endsWith(`.${rewrite}`)) return [[key.slice(0, -rewrite.length) + "insteadof", value]];
+      if (rewrite !== null && /^url\./i.test(key) && key.toLowerCase().endsWith(`.${rewrite}`)) {
+        endpointRecord(key); // A rewrite base/prefix cannot introduce a record separator.
+        if (/[\r\n\0]/.test(value)) throw new Refused("endpoint rewrite record contains CR, LF or NUL bytes");
+        return [[key.slice(0, -rewrite.length) + "insteadof", value]];
+      }
       return [];
     });
     const configEnv: Record<string, string | undefined> = { ...frozenEnv, GIT_CONFIG_COUNT: String(entries.length) };
     entries.forEach(([key, value], index) => { configEnv[`GIT_CONFIG_KEY_${index}`] = key; configEnv[`GIT_CONFIG_VALUE_${index}`] = value; });
-    const result = seams.run(GIT, [...args], { cwd: transportRoot, env: configEnv });
+    const result = seams.run(GIT, [...args], { cwd: transportRoot, env: configEnv, bytes: true });
     if (result.spawnFailed || result.code !== 0) throw new Error(`isolated git ${args[0] ?? ""} failed (${result.code}); transport stderr withheld because authentication configuration may contain secrets`);
-    return result.stdout.trim();
+    return rawStdout(result);
   };
   const endpoints = new Map<string, string>();
   const remoteUrl = (remote: string, push: boolean): string => {
@@ -124,6 +138,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     const urls = pushUrls.length > 0 ? pushUrls : declared("url");
     if (urls.length !== 1 || urls[0] === "") throw new Refused(`remote must have exactly one configured ${push ? "push" : "fetch"} URL`);
     const raw = urls[0]!;
+    endpointRecord(raw);
     const noEmbeddedCredentials = (value: string): void => {
       if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return;
       let url: URL;
@@ -134,10 +149,17 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     const rewrite = push && pushUrls.length === 0 && settings.some(([key, value]) => /^url\./i.test(key) && key.toLowerCase().endsWith(".pushinsteadof") && raw.startsWith(value)) ? "pushinsteadof" : "insteadof";
     // Git's --get-url resolves insteadOf without contacting a server. Explicit
     // pushurl ignores pushInsteadOf; otherwise matching pushInsteadOf wins.
-    let endpoint = transportGit(["ls-remote", "--get-url", "--", raw], rewrite);
+    const output = transportGit(["ls-remote", "--get-url", "--", raw], rewrite);
+    if (!output.endsWith("\n")) throw new Refused("Git endpoint record is missing its output terminator");
+    let endpoint = output.slice(0, -1); // Exactly one Git-added LF, never trim spaces.
+    // Windows text output may add CRLF. Raw inputs and rewrite records above
+    // have no CR/LF, so this CR cannot be part of the configured endpoint.
+    if (seams.platform === "win32" && endpoint.endsWith("\r")) endpoint = endpoint.slice(0, -1);
+    endpointRecord(endpoint);
     noEmbeddedCredentials(endpoint);
     if (/^file:/i.test(endpoint)) {
       try { endpoint = fileURLToPath(endpoint); } catch { throw new Refused("unsupported file URL endpoint"); }
+      endpointRecord(endpoint); // Includes percent-encoded record separators.
     } else if (!isAbsolute(endpoint) && !/^[^/]+:/.test(endpoint)) {
       if (endpoint.startsWith("~")) throw new Refused("tilde filesystem endpoints cannot be bound; configure an absolute path");
       endpoint = resolve(root, endpoint);
