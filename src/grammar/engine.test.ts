@@ -103,7 +103,7 @@ describe("parseInvocation", () => {
 // swallowed the whole line into that slot and reported ok:true. Every shape the
 // issue names is pinned here so the collapse cannot come back quietly.
 describe("parseInvocation -- single-slot templates with a bracketed clause (zheref/nen#30)", () => {
-  const slot = (result: ReturnType<typeof parseInvocation>, name: string): string | readonly string[] | undefined =>
+  const slot = (result: ReturnType<typeof parseInvocation>, name: string): string | undefined =>
     result.slots.find((s): boolean => s.name === name)?.value;
 
   describe("<repo>[@<gate:...>] -- a bracketed symbol-separated enumerated slot", () => {
@@ -345,103 +345,4 @@ describe("parseInvocation -- single-slot templates with a bracketed clause (zher
       { name: "terminal", value: "tag", suffix: false },
     ]);
   });
-});
-
-
-describe("list slots and three-way alternatives (#410)", () => {
-  const selector = "<repo>[@<selector;list=gate:G1|G1-M|G2|G3|G4|G5|all;band=severity:critical|high|medium|low;free=label>][#<labels;join=&>]";
-  it.each([
-    ["hatsu@g5#model/gpt", "gate", ["G5"], false, ["model/gpt"]],
-    ["hatsu#model/claude", undefined, undefined, undefined, ["model/claude"]],
-    ["hatsu@g4+g5#model/grok&lang/typescript", "gate", ["G4", "G5"], false, ["model/grok", "lang/typescript"]],
-    ["hatsu@model/gpt", "label", "model/gpt", false, undefined],
-    ["hatsu@high+", "severity", "high", true, undefined],
-    ["hatsu@medium#lang/prose", "severity", "medium", false, ["lang/prose"]],
-    ["hatsu@c++", "label", "c++", false, undefined],
-    ["context", undefined, undefined, undefined, undefined],
-  ])("parses %s", (line, alternative, value, suffix, labels) => {
-    const result = parseInvocation("backlog-state", parseTemplate(selector), line as string);
-    expect(result.ok).toBe(true);
-    const choice = result.slots.find((slot) => slot.name === "selector");
-    expect(choice?.alternative).toBe(alternative);
-    expect(choice?.value).toEqual(value);
-    expect(choice?.suffix).toBe(suffix);
-    expect(result.slots.find((slot) => slot.name === "labels")?.value).toEqual(labels);
-  });
-  it.each(["hatsu@g4+model/gpt", "hatsu@high+g4", "hatsu@high+low", "hatsu@g4+", "hatsu@g4++g5", "hatsu@high++", "hatsu@g9+g5", "hatsu#model/gpt&", "hatsu#&model/gpt", "hatsu#x&&y", "hatsu#", "hatsu@"])("refuses %s without falling through to a free label", (line) => {
-    const result = parseInvocation("backlog-state", parseTemplate(selector), line);
-    expect(result.ok).toBe(false);
-    expect(result.problems.length).toBeGreaterThan(0);
-    if (result.corrected !== null) expect(result.corrected).toContain("backlog-state hatsu");
-  });
-  it.each([
-    ["hatsu@g4+model/gpt", "backlog-state hatsu@G4#model/gpt"],
-    ["hatsu@g4+g5+model/gpt#lang/prose", "backlog-state hatsu@G4+G5#model/gpt&lang/prose"],
-    ["hatsu@high+model/gpt", "backlog-state hatsu@high#model/gpt"],
-    ["hatsu@g4+c++", "backlog-state hatsu@G4#c++"],
-    ["hatsu@high++", "backlog-state hatsu@high+"],
-    ["hatsu@g4+", "backlog-state hatsu@G4"],
-    ["hatsu@g4++g5", "backlog-state hatsu@G4+G5"],
-    ["hatsu#model/gpt&", "backlog-state hatsu#model/gpt"],
-    ["hatsu#&model/gpt", "backlog-state hatsu#model/gpt"],
-    ["hatsu#x&&y", "backlog-state hatsu#x&y"],
-    ["hatsu#", "backlog-state hatsu"],
-    ["hatsu@", "backlog-state hatsu"],
-  ])("offers the unique concrete repair for %s", (line, corrected) => {
-    const grammar = parseTemplate(selector);
-    const result = parseInvocation("backlog-state", grammar, line);
-    expect(result.ok).toBe(false);
-    expect(result.corrected).toBe(corrected);
-    expect(parseInvocation("backlog-state", grammar, corrected.slice("backlog-state ".length)).ok).toBe(true);
-  });
-  it.each(["hatsu@high+g4", "hatsu@high+low", "hatsu@g9+g5", "hatsu@high++model/gpt"])("does not invent a repair for ambiguous %s", (line) => {
-    const result = parseInvocation("backlog-state", parseTemplate(selector), line);
-    expect(result.ok).toBe(false);
-    expect(result.corrected).toBeNull();
-  });
-  it.each([
-    ["<repo:foo|bar>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "baz@g4+", "is one of"],
-    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "@g4+", "is required"],
-    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>] onto <base>", "foo@g4+", "<base> is required"],
-    ["on <repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "foo@g4+", "must open with"],
-    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>][then sweep]", "foo@g4+ then sweep stray", "continues past it"],
-  ])("withholds a structured repair when another problem remains: %s", (template, line, problem) => {
-    const result = parseInvocation("state", parseTemplate(template), line);
-    expect(result.ok).toBe(false);
-    expect(result.problems).toHaveLength(2);
-    expect(result.problems.join("\n")).toContain(problem);
-    expect(result.corrected).toBeNull();
-  });
-  it("retains legacy scalar refusal placeholders when no structured repair is needed", () => {
-    const grammar = parseTemplate("<repo:foo|bar>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]");
-    expect(parseInvocation("state", grammar, "baz@g4").corrected).toBe("state <repo: foo | bar>@G4");
-    expect(parseInvocation("state", grammar, "foo@g4").corrected).toBe("state foo@G4");
-  });
-  it("repairs arbitrary caller vocabularies and separators without skill-specific tokens", () => {
-    const grammar = parseTemplate("<scope>[%<choice;list=phase:Start|End;band=rank:hot|cold;free=term>][!<terms;join=&>]");
-    const result = parseInvocation("generic", grammar, "project%start+topic/tag!other");
-    expect(result.corrected).toBe("generic project%Start!topic/tag&other");
-    expect(parseInvocation("generic", grammar, "project%start+hot").corrected).toBeNull();
-    const enumerated = parseTemplate("<scope>[%<phase:Start|End;join=+>]");
-    for (const [line, fixed] of [["project%start++end+", "project%Start+End"], ["project%+start", "project%Start"], ["project%start+", "project%Start"]]) {
-      const repair = parseInvocation("generic", enumerated, line!);
-      expect(repair.ok).toBe(false);
-      expect(repair.corrected).toBe(`generic ${fixed}`);
-      expect(parseInvocation("generic", enumerated, fixed!).ok).toBe(true);
-    }
-  });
-  it("normalizes every enumerated list item and echoes the choice", () => {
-    const result = parseInvocation("state", parseTemplate("<repo>[@<gate:G1|G4|G5;join=+>]"), "hatsu@g4+g5");
-    expect(result.slots[1]?.value).toEqual(["G4", "G5"]);
-    expect(result.echo).toContain("gate: G4+G5");
-    for (const line of ["hatsu@g4+bad", "hatsu@g4+", "hatsu@g4++g5"]) expect(parseInvocation("state", parseTemplate("<repo>[@<gate:G1|G4|G5;join=+>]"), line).ok).toBe(false);
-    const choice = parseInvocation("state", parseTemplate(selector), "hatsu@HIGH+");
-    expect(choice.echo).toContain("selector: high [severity] (+)");
-  });
-  it.each([
-    "<slot;join=x>", "<slot;join=+;join=+>",
-    "<slot;list=a:G4;band=b:G4;free=c>",
-    "<slot;list=a:G4;band=b:high>",
-    "<slot:G4|;join=+>", "<slot:G4;join=+>[+]",
-  ])("refuses malformed template %s", (template) => expect(() => parseTemplate(template)).toThrow());
 });

@@ -256,9 +256,21 @@ export function botLoginKey(login: string): string {
   return isBotLoginAlias(short) ? GITHUB_BOT_LOGIN_ALIASES[short]! : short;
 }
 
-/** Modern GraphQL ids, plus the older base64 global-id encoding. */
+/** Bot reviewer IDs only. Modern payloads stay opaque; legacy IDs must be
+ * canonical base64 of the exact Bot form, never a User or another node type. */
 export function isReviewerNodeId(value: string): boolean {
-  return /^[A-Z]+_/.test(value) || /^\d+:[A-Za-z]+\d+$/.test(Buffer.from(value, "base64").toString("utf8"));
+  if (/^BOT_[A-Za-z0-9_-]+$/.exec(value)?.[0] === value) return true;
+  const decoded = Buffer.from(value, "base64");
+  const legacy = decoded.toString("utf8");
+  return decoded.toString("base64") === value && /^\d+:Bot\d+$/.exec(legacy)?.[0] === legacy;
+}
+
+/** A handle can be resolved, but a malformed/global-node-shaped token must
+ * not fall back to a login lookup. Validate the whole batch before GH reads. */
+export function isBotLoginInput(value: string): boolean {
+  const key = botLoginKey(value);
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.exec(key)?.[0] === key &&
+    !/^\d+:/.test(Buffer.from(value, "base64").toString("utf8"));
 }
 
 export function botLoginArgv(login: string): readonly string[] {
@@ -282,7 +294,7 @@ export function resolveBotLogin(seams: Seams, login: string): KnownBot | null {
     throw new BotResolutionError(`bot '${login}': gh api did not return JSON (${String(error)})`);
   }
   if (raw?.type !== "Bot" || typeof raw.login !== "string" || botLoginKey(raw.login) !== key ||
-      typeof raw.node_id !== "string" || raw.node_id === "") {
+      typeof raw.node_id !== "string" || !isReviewerNodeId(raw.node_id)) {
     throw new BotResolutionError(`bot '${login}': GitHub did not return the requested Bot with a login and node_id`);
   }
   return { login: botLoginKey(raw.login), id: raw.node_id };

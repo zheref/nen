@@ -145,11 +145,16 @@ export function parseCommitMessageFile(raw: string): ParseResult {
  * loaded (`wc squash` loads it once, before anything else; zheref/nen#273,
  * hanten N8) and is used instead of a second read -- which then cannot throw.
  */
-export function messageFileRefusals(root: string, raw: string, policy?: LoadedWorkflow): readonly string[] {
+export function messageFileRefusals(
+  root: string,
+  raw: string,
+  policy?: LoadedWorkflow,
+  options: { readonly requireAgentTrailer?: boolean } = {},
+): readonly string[] {
   const parsed = parseCommitMessageFile(raw);
   if (!parsed.ok) return parsed.reasons;
   const refusals: string[] = [...validateCommitMessage(parsed.value.input)];
-  if (parsed.value.input.trailers.length > 0) {
+  if (parsed.value.input.trailers.length > 0 || options.requireAgentTrailer === true) {
     const loaded = policy ?? loadWorkflow(root); // throws SchemaError on a malformed file
     refusals.push(
       ...attributionRefusalMessages(
@@ -157,6 +162,18 @@ export function messageFileRefusals(root: string, raw: string, policy?: LoadedWo
         parsed.value.input.trailers.map((trailer): string => trailer.key),
       ),
     );
+    // Squash replaces this branch's provenance, so its supplied message must
+    // retain an admitted agent trailer. Other message-file callers keep their
+    // existing optional-trailer behavior; an empty allow-list requires none.
+    const allowed = loaded.workflow.commits.allowedAttributionTrailers;
+    if (options.requireAgentTrailer === true && loaded.present && allowed.length > 0 &&
+      !parsed.value.input.trailers.some((trailer): boolean =>
+        trailer.value.trim() !== "" &&
+        allowed.some((key): boolean => key.toLowerCase() === trailer.key.toLowerCase()))) {
+      refusals.push(
+        `the squash message is missing a required agent trailer: expected one of ${allowed.map((key): string => `'${key}: <value>'`).join(", ")} from '${loaded.path}' commits.allowedAttributionTrailers`,
+      );
+    }
   }
   return refusals;
 }
