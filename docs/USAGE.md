@@ -5785,7 +5785,7 @@ nen labels rename --target <owner/name> --map from=to,from2=to2 [--dry-run]
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--target <owner/name>` | yes | The repository whose labels are renamed. | Missing -> exit 1 (same `requireTarget` inconsistency noted under `labels sync`). |
+| `--target <owner/name>` | yes | The repository whose labels are renamed. | Missing or malformed -> exit 2. |
 | `--map from=to,from2=to2` | yes | Rename mapping, applied in the order given. | A chain (`a=b,b=c`) applies in one invocation; missing or naming no mappings -> exit 2. |
 | `--dry-run` | no (boolean) | Logs the `gh label edit` call it would make, per mapping. | This verb accepts the global `--repo` and never reads it — the rename map comes from `--map`, not from a local taxonomy. Even in `--dry-run`, it still calls `gh label list` live (to decide idempotence) before deciding what it "would" do — dry-run here is not fully side-effect-free of network access, only of mutation. |
 
@@ -6074,7 +6074,7 @@ nen classify apply --taxonomy tax.json --repo . --target zheref/nen --plan plan.
 #2  applied: lang/beta, job/test
 #3  listed: lang/alpha, job/build
 3 issue(s): 3 applied, 0 would apply, 0 already, 0 failed, 2 listed
-ledger: /work/nen/label-ledger.jsonl
+ledger: /work/nen/.nen/label-ledger.jsonl
 ```
 (the plan's third row carries `"confidence": "low"`, so it is listed and no ledger line is written
 for it. The `ledger:` path prints absolute; `/work/nen` stands in for the checkout `--repo` named)
