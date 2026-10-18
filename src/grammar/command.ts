@@ -60,6 +60,22 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
                        [ ... ]           an optional trailing clause
                        [+]               an optional literal suffix on the
                                          slot just declared
+                       <slot>{+}         a LIST slot: one or more values
+                                         joined by the literal in the braces
+                                         ('{+}', '{&}'); every item of an
+                                         enumerated list is checked, and an
+                                         empty item is refused
+                       <a:..>{+}|<b:..>[+]|<c>
+                                         an ALTERNATION: one position, filled
+                                         by the first alternative the value
+                                         fits, in template order. A free
+                                         alternative comes last and is taken
+                                         only when no piece of the value is
+                                         an enumerated value, so '@g4+model/gpt'
+                                         is refused, never read as free text;
+                                         '@c++' is free text. --json names the
+                                         'alternative' that filled it and a
+                                         list's 'items'
   --line <text>      The invocation to parse. MAY BE EMPTY when every clause
                      of the grammar is optional: 'at [<gate>]' accepts
                      --line "" and --line "at" identically, both reporting
