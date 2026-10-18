@@ -97,17 +97,15 @@ describe("parseInvocation: the selector's refusals", () => {
     ["hatsu@high++", /<severity> is ONE of/],
     ["hatsu@g9+g5", /'g9' is none of them/],
     ["hatsu#a&&b", /<labels> is one or more values joined by '&'/],
-  ])("%s exits 2 with the reason and a corrected line", (line, message) => {
+  ])("%s exits 2 with the reason and no invented correction", (line, message) => {
     const result = parse(line);
     expect(result.ok).toBe(false);
     expect(result.problems.join("\n")).toMatch(message);
-    expect(result.corrected).toContain("backlog-state hatsu");
+    if (result.corrected !== null) expect(result.corrected).toContain("backlog-state hatsu");
   });
 
-  it("names the alternation in the corrected line", () => {
-    expect(parse("hatsu@high+g4").corrected).toBe(
-      "backlog-state hatsu@<gate: G1 | G1-M | G2 | G3 | G4 | G5 | all>{+}|<severity: critical | high | medium | low>[+]|<label>",
-    );
+  it("withholds the corrected line for a mixture of alternatives", () => {
+    expect(parse("hatsu@high+g4").corrected).toBeNull();
   });
 });
 
