@@ -4968,7 +4968,9 @@ in declaration order on `iteration.lane` (`--lane` supplies it only when left op
 The chain requires no-op catch-up, exact proved HEAD, an upstream whose branch name
 exactly equals the current branch, green checks, matching repository author/committer
 identity and explicit responsible `Hatsu-Agent` provenance over the outgoing range
-excluding base history, then another HEAD equality check before ordinary publish.
+excluding base history, then another HEAD equality check before publishing the
+proved commit object to that branch's same-name destination. The non-force ancestry
+check and push source both use that object, even if the branch moves afterward.
 A trailerless clean two-parent base merge is exempt only when its tree exactly equals
 Git's clean merge result. A changed catch-up returns to the caller without publishing.
 No squash, force or `--set-upstream` is permitted. `--dry-run` previews catch-up/push
@@ -18501,7 +18503,7 @@ the source's own layout.
 
 ### `nen surface mirror generate`
 
-`--plan <file>` generates all explicitly declared surfaces in one call. Its nonempty JSON array contains per-surface string flag objects, each naming `source`, `surface`, `out` and any ordinary generation inputs (`agents`, `models`, `hooks`, `hooks-root`, `manifest`, `rules`, `permissions`, `source-surface`, `invocation-prefix`, `stamp`). Relative paths resolve against `--repo`. No surface or path is inferred. All declarations preflight before writing; duplicate surfaces, unknown fields/surfaces and overlapping output directories refuse at exit 2. Do not combine the plan with individual input flags. `--dry-run` writes nothing. JSON is `{contract: "nen.surface.mirror.batch/v0.1", dryRun, surfaces: [<ordinary generation report>, ...]}`.
+`--plan <file>` generates all explicitly declared surfaces in one call. Its nonempty JSON array contains per-surface string flag objects, each naming `source`, `surface`, `out` and any ordinary generation inputs (`agents`, `models`, `hooks`, `hooks-root`, `manifest`, `rules`, `permissions`, `source-surface`, `invocation-prefix`, `stamp`). Relative file paths resolve against `--repo`; `hooks-root` remains a literal root or shell expression, exactly as with the ordinary flag. No surface or path is inferred. All declarations preflight before writing; duplicate surfaces, unknown fields/surfaces and overlapping output directories refuse at exit 2. Do not combine the plan with individual input flags. `--dry-run` writes nothing. JSON is `{contract: "nen.surface.mirror.batch/v0.1", dryRun, surfaces: [<ordinary generation report>, ...]}`.
 
 Reads every `<name>/SKILL.md` under `--source` and writes `<out>/<name>/SKILL.md`
 — `<out>/skills/<name>/SKILL.md` on the two plugin-shaped rows, `antigravity`

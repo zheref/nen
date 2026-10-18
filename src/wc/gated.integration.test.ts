@@ -82,4 +82,37 @@ describe("gated published update", () => {
     w.proved = git(w.repo, "rev-parse", "HEAD"); expect((await run(w, ["--set-upstream"])).code).toBe(2);
     expect((await run(w, ["--copy-from-core", "owned.txt"])).code).toBe(2);
   });
+  it.each([false, true])("pins publication to the proved object after the final HEAD read (dryRun=%s)", async (dryRun) => {
+    const w = world(); const real = defaultSeams(); let provenanceRead = false; let moved = "";
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      const result = real.run(command, args, options);
+      if (command === "git" && args[0] === "rev-list" && args[1] === "HEAD" && args[2]?.startsWith("^")) provenanceRead = true;
+      if (provenanceRead && moved === "" && command === "git" && args.join(" ") === "rev-parse HEAD") {
+        git(w.repo, "commit", "--allow-empty", "-m", "unproved replacement");
+        moved = git(w.repo, "rev-parse", "HEAD");
+      }
+      return result;
+    } };
+    const result = await run(w, dryRun ? ["--dry-run"] : [], seams);
+    expect(moved).not.toBe(""); expect(moved).not.toBe(w.proved);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    expect(git(w.remote, "rev-parse", "refs/heads/feature")).toBe(dryRun ? w.published : w.proved);
+    expect(git(w.repo, "rev-parse", "HEAD")).toBe(moved);
+  });
+  it("judges non-force safety against the proved object when the remote advances after the final read", async () => {
+    const w = world(); const real = defaultSeams(); let provenanceRead = false; let moved = "";
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      const result = real.run(command, args, options);
+      if (command === "git" && args[0] === "rev-list" && args[1] === "HEAD" && args[2]?.startsWith("^")) provenanceRead = true;
+      if (provenanceRead && moved === "" && command === "git" && args.join(" ") === "rev-parse HEAD") {
+        git(w.repo, "commit", "--allow-empty", "-m", "concurrent published advance");
+        moved = git(w.repo, "rev-parse", "HEAD"); git(w.repo, "push", "origin", "feature");
+      }
+      return result;
+    } };
+    const result = await run(w, [], seams);
+    expect(moved).not.toBe(""); expect(result.code).toBe(1); expect(result.report.pushed).toBe(false);
+    expect(result.report.gates.at(-1)?.gate).toBe(6);
+    expect(git(w.remote, "rev-parse", "refs/heads/feature")).toBe(moved);
+  });
 });

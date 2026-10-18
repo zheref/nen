@@ -728,6 +728,16 @@ describe("check --installed", () => {
 });
 
 describe("explicit all-surface generation plan", () => {
+  it.each(["${HATSU_PLUGIN_ROOT:-$HOME/.gemini/config/plugins/demo}", "relative/demo", "/opt/demo"])("preserves ordinary hooks-root semantics in a plan: %s", async (hooksRoot) => {
+    const root = tempDir(); const ordinary = join(root, "ordinary"); const planned = join(root, "planned");
+    const flags = ["--hooks", join(PACKS, "hooks.json"), "--hooks-root", hooksRoot];
+    expect((await capture(generateArgv("antigravity", ordinary, flags))).code).toBe(0);
+    const plan = join(root, "plan.json");
+    writeFileSync(plan, JSON.stringify([{ source: SKILLS, surface: "antigravity", out: planned, hooks: join(PACKS, "hooks.json"), "hooks-root": hooksRoot }]));
+    const result = await capture(["surface", "mirror", "generate", "--plan", plan]);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    expect(readFileSync(join(planned, "hooks.json"), "utf8")).toBe(readFileSync(join(ordinary, "hooks.json"), "utf8"));
+  });
   it("generates exactly the declared surfaces in one result and previews without writes", async () => {
     const root = tempDir(); const plan = join(root, "plan.json");
     const rows = ["codex", "cursor"].map((surface) => ({ surface, source: SKILLS, out: join(root, surface), "invocation-prefix": "demo:" }));

@@ -525,7 +525,7 @@ function runGeneratePlan(context: CommandContext): number {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const value = readJsonFile<unknown>(context.args.values["plan"]!, root, "The surface generation plan must explicitly declare every destination.");
   if (!Array.isArray(value) || value.length === 0) throw new VerbUsageError("--plan must be a nonempty array of per-surface flag objects.");
-  const paths = new Set(["source", "agents", "hooks", "hooks-root", "models", "rules", "permissions", "manifest", "out"]);
+  const paths = new Set(["source", "agents", "hooks", "models", "rules", "permissions", "manifest", "out"]);
   const prepared = value.map((row: unknown, index) => {
     if (!isRecord(row) || Object.entries(row).some(([key, entry]) => ![...INPUT_VALUES, "out"].includes(key) || typeof entry !== "string" || entry.trim() === "")) throw new VerbUsageError(`--plan[${index}] must contain only nonempty per-surface string flags.`);
     const values = Object.fromEntries(Object.entries(row).map(([key, entry]) => [key, paths.has(key) ? resolveAgainstRepo(root, entry as string) : entry as string]));

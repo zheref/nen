@@ -102,7 +102,7 @@ export async function runGatedPublish(context: CommandContext): Promise<number> 
     ok(`${upstream}..HEAD excluding origin/${base}`);
     current = 6; label = "HEAD re-read and publish";
     if (git(["rev-parse", "HEAD"]) !== proved) throw new GateFailure("HEAD moved during the gates; nothing pushed");
-    const outcome = publish(seams, root, { base: workflow.branch.base, setUpstream: false, dryRun });
+    const outcome = publish(seams, root, { base: workflow.branch.base, setUpstream: false, dryRun, provedSource: { oid: proved, branch } });
     if (outcome.kind !== "done" || outcome.report.needsForce) throw new GateFailure(outcome.kind === "refused" ? outcome.reason : "the update would require a force");
     pushed = outcome.report.pushed;
     ok(dryRun ? "would publish" : "published");
