@@ -11586,11 +11586,14 @@ nen canon check --repo <path> --registry <file> --taxonomy <file> [--json]
 | `--registry <file>` | yes | Independent model/phase registry. | Relative to `--repo`; no built-in path or vocabulary. |
 | `--taxonomy <file>` | yes | Classification taxonomy. | Relative to `--repo`; all inputs must stay inside the root without symlinked files/parents. |
 
-**Output and exit codes** — JSON `{contract: "nen.canon.check/v0.1", checks[], parity,
-exitCode}` carries each read's name, boolean verdict and detail; `parity` carries the same
-`entries`/`foreign` plan as `classify install --dry-run`, or null if unavailable. Human
-output prints one verdict per read. Exit 0 when all pass, 1 for invalid contracts or
-parity, 2 for missing/unreadable/nonregular/symlinked inputs or invalid invocation.
+**Output and exit codes** — with `--json`, the top-level keys are `contract`
+(`nen.canon.check/v0.1`), `checks`, `parity` and `exitCode`. Each `checks` entry is
+`{ name, ok, detail }`: the read's name, boolean verdict and explanation. `parity` is
+`{ entries, foreign }`, the same plan as `classify install --dry-run`, or null when
+unavailable. Its entries are `{ name, status }` with status `present`, `drift` or
+`absent`; `foreign` lists declared axis-prefixed label names outside the taxonomy.
+Human output prints one verdict per read. Exit 0 when all pass, 1 for invalid contracts
+or parity, 2 for missing/unreadable/nonregular/symlinked inputs or invalid invocation.
 No Hatsu wrapper or CI file is removed; consumer repinning and wrapper retirement are external.
 
 ### `nen canon resolve`
