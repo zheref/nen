@@ -19,8 +19,8 @@
 // times a verb happened to ask, and a schema file does not become valid by being
 // re-read.
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
@@ -475,8 +475,18 @@ function stopMarkerCheck(root: string): SchemaCheck {
       text = readFileSync(fd, "utf8");
     } finally { closeSync(fd); }
   } catch (error) {
-    // A consumed marker is ordinary absence. Every other read failure is a defect.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return row(true, false, "absent (optional; may have been consumed)");
+    // Windows may report ENOENT for a child of a present FILE, where POSIX
+    // reports ENOTDIR. Only an absent marker or absent parent is optional.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        if (!statSync(dirname(path)).isDirectory()) return row(false, true, "could not read marker: parent is not a directory");
+      } catch (parentError) {
+        if ((parentError as NodeJS.ErrnoException).code !== "ENOENT") {
+          return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
+        }
+      }
+      return row(true, false, "absent (optional; may have been consumed)");
+    }
     return row(false, true, `could not read marker: ${error instanceof Error ? error.message : String(error)}`);
   }
   let document: unknown;
