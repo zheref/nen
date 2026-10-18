@@ -631,15 +631,15 @@ describe("nothing steps outside the tree --repo names", () => {
   // otherwise be a verb quietly running somewhere else, and both paths a
   // declaration can state are checked. Neither had a test.
 
-  it("refuses a lane whose cwd escapes the repository, before anything spawns", async () => {
+  it("refuses a lane escape at schema load, before anything spawns (#404)", async () => {
     const result = await withDeclaration(
       { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: "../.." } } },
       ["build"],
     );
-    expect(result.code).toBe(2);
+    expect(result.code).toBe(1); // malformed declaration, before runtime containment
     expect(result.seams.calls).toEqual([]);
-    expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.\/\.\.'/);
-    expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
+    expect(result.err.join("\n")).toMatch(/at project\.lanes\.only\.cwd, names '\.\.\/\.\.'/);
+    expect(result.err.join("\n")).toMatch(/climbs out of the repository with '\.\.'/);
   });
 
   it("refuses a precondition path that escapes it, and asserts nothing", async () => {
@@ -685,10 +685,10 @@ describe("nothing steps outside the tree --repo names", () => {
       { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: ".." } } },
       ["build"],
     );
-    expect(result.code).toBe(2);
+    expect(result.code).toBe(1); // malformed declaration, before runtime containment
     expect(result.seams.calls).toEqual([]);
-    expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.'/);
-    expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
+    expect(result.err.join("\n")).toMatch(/at project\.lanes\.only\.cwd, names '\.\.'/);
+    expect(result.err.join("\n")).toMatch(/climbs out of the repository with '\.\.'/);
   });
 
   it("still refuses a lane cwd of '../x'", async () => {
@@ -696,10 +696,10 @@ describe("nothing steps outside the tree --repo names", () => {
       { ...oneLane(), lanes: { only: { stack: "placeholder-stack", cwd: "../x" } } },
       ["build"],
     );
-    expect(result.code).toBe(2);
+    expect(result.code).toBe(1); // malformed declaration, before runtime containment
     expect(result.seams.calls).toEqual([]);
-    expect(result.err.join("\n")).toMatch(/project\.lanes\.only\.cwd names '\.\.\/x'/);
-    expect(result.err.join("\n")).toMatch(/will not step outside the tree/);
+    expect(result.err.join("\n")).toMatch(/at project\.lanes\.only\.cwd, names '\.\.\/x'/);
+    expect(result.err.join("\n")).toMatch(/climbs out of the repository with '\.\.'/);
   });
 
   // ── the same boundary, asked of the FILESYSTEM (zheref/nen#157) ───────────

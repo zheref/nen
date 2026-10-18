@@ -374,6 +374,14 @@ export function redactRemoteCredentials(text: string): string {
     .replace(/:\/\/(\S+)/g, (whole: string, run: string): string => {
       const at = run.lastIndexOf("@");
       if (at === -1) return whole;
+      const authorityEnd = run.search(/[/?#]/);
+      // A port belongs to the authority; an @ in a later path/query/fragment
+      // is not userinfo. Keep the older fail-closed treatment of malformed
+      // passwords containing slashes when no numeric port explains the colon.
+      if (authorityEnd !== -1 && at > authorityEnd) {
+        const authority = run.slice(0, authorityEnd);
+        if (!authority.includes("@") && /:\d+$/.test(authority)) return whole;
+      }
       const userinfo = run.slice(0, at);
       const colon = userinfo.indexOf(":");
       if (colon === -1) return whole;

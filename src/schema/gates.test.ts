@@ -279,6 +279,33 @@ describe("parseGateIdentities -- validation", () => {
     expect(identities.dependabotCarveOut?.authorPattern.test("alice")).toBe(false);
   });
 
+  it("refuses broad or human-shaped carve-out authors by pointer (#404)", () => {
+    for (const pattern of ["^.+$", "^.*$", "^[a-z0-9-]+$", "^alice$", "dependabot", "^dependabot.*$", "^.*\\[bot\\]$", "^(dependabot|alice)$", "^alice(\\[bot\\])?$"]) {
+      expect(() => parseGateIdentities(at, {
+        ...minimal,
+        dependabot_carve_out: { author_pattern: { pattern, ignoreCase: true }, satisfied_by_context: ["audit"] },
+      }), pattern).toThrow(/dependabot_carve_out\.author_pattern\.pattern/);
+    }
+  });
+
+  it("admits literal bot forms and still excludes human logins (#404)", () => {
+    for (const [pattern, login] of [
+      ["^dependabot$", "dependabot"],
+      ["^renovate$", "renovate"],
+      ["^release-bot$", "release-bot"],
+      ["^release-bot(?:\\[bot\\])?$", "release-bot[bot]"],
+      ["^acme-app\\[bot\\]$", "acme-app[bot]"],
+    ]) {
+      const compiled = parseGateIdentities(at, {
+        ...minimal,
+        dependabot_carve_out: { author_pattern: { pattern, ignoreCase: true }, satisfied_by_context: ["audit"] },
+      }).dependabotCarveOut?.authorPattern;
+      expect(compiled?.test(login ?? ""), pattern).toBe(true);
+      expect(compiled?.test("alice"), pattern).toBe(false);
+      expect(compiled?.test("release-bot-maintainer"), pattern).toBe(false);
+    }
+  });
+
   it("leaves the carve-out NULL when the file declares none -- it is optional", () => {
     // A repository with no dependency bot says nothing and the gate behaves
     // exactly as it always has. `nen schema check` reported `ok` on a file
@@ -1049,7 +1076,7 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     expect(() => parseGatesText(at, "{nope")).toThrow(/is not valid JSON/);
   });
 
-  it("R1: NEXT_RELEASE is above VERSION, and is VERSION's next minor -- a release cut without bumping it fails here", () => {
+  it("R1: NEXT_RELEASE is derived as VERSION's next minor without a release edit", () => {
     const [major, minor] = VERSION.split(".").map(Number);
     expect(NEXT_RELEASE).toBe(`${major ?? 0}.${(minor ?? 0) + 1}.0`);
   });

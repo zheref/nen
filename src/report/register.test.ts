@@ -408,6 +408,24 @@ describe("the desk is judgement only -- refusals at exit 2", () => {
 });
 
 describe("render, without a builder (AC 2)", () => {
+  it("renders a generated register using Nen's own declared report policy (#404)", async () => {
+    const root = repo();
+    writeFileSync(join(root, "nen", "workflow.json"), readFileSync(join(process.cwd(), "nen", "workflow.json")));
+    const { captured, document } = await registerDocument(root);
+    expect(captured.code, captured.err.join("\n")).toBe(0);
+    writeFileSync(join(root, "data.json"), JSON.stringify(document));
+    const rendered = await capture([
+      "report", "render", "--variant", "register",
+      "--template", join(FIXTURES, "rikugan.html"), "--data", "data.json", "--out", "register.html",
+    ], root, []);
+    expect(rendered.code, rendered.err.join("\n")).toBe(0);
+    const page = readFileSync(join(root, "register.html"), "utf8");
+    expect(page).toContain("rikugan &middot; register");
+    expect(page).toContain(PR_READY.readiness.reason);
+    expect(page).toContain(PR_BLOCKED.readiness.reason);
+    expect(page).toContain("Rebase or close #90");
+  });
+
   for (const variant of ["register", "final"]) {
     it(`fills Hatsu's rikugan body at --variant ${variant} from the verb's document alone`, async () => {
       const root = repo({ workflow: true, desk: { ...DESK, variant } });

@@ -50,7 +50,7 @@ import { closeSync, constants as fsConstants, fstatSync, lstatSync, openSync, re
 import { dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
-import { redactRemoteCredentials } from "../seam/exec.js";
+import { scanContentSecrets } from "../security/secrets.js";
 import type { Target } from "../github/target.js";
 import type { Seams } from "../seam/exec.js";
 import {
@@ -138,19 +138,6 @@ export type Realpath = (path: string) => string;
 /** The `open` flags every file this verb reads is opened with: never blocking, never following a final symlink. */
 function readFlags(): number {
   return process.platform === "win32" ? fsConstants.O_RDONLY : fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOFOLLOW;
-}
-
-/**
- * Whether a body carries a credential's shape, by CONTENT. This is the one
- * content-based shape nen already has -- ../seam/exec.ts's
- * `redactRemoteCredentials` (a GitHub token, a fine-grained PAT, a URL's
- * `user:secret@`) -- reused rather than duplicated: a body it would redact is
- * a body that would publish a credential. It is NOT a general secret scanner
- * (no cloud keys, no private-key blocks); that is a separate tool nen does
- * not have.
- */
-function carriesCredential(body: string): boolean {
-  return redactRemoteCredentials(body) !== body;
 }
 
 /** A character a terminal or a GraphQL id has no business carrying. */
@@ -401,10 +388,10 @@ export function readSettleFile(fullPath: string, realpath: Realpath = realpathSy
     } else if (body !== null && body.length > MAX_BODY_CHARS) {
       problems.push(`${at}: the body${where} is ${body.length} characters, over the ${MAX_BODY_CHARS}-character limit GitHub puts on a comment.`);
       body = null;
-    } else if (body !== null && carriesCredential(body)) {
+    } else if (body !== null && scanContentSecrets(body).length > 0) {
       // THE MATCH IS NEVER ECHOED: naming the entry is enough, and printing it
       // would put the credential in a terminal and a log.
-      problems.push(`${at}: the body${where} carries a credential's shape (a GitHub token, a fine-grained PAT, or a URL's user:secret@); it would be posted publicly, so it is refused.`);
+      problems.push(`${at}: the body${where} carries a credential's shape (${scanContentSecrets(body).join(", ")}; value redacted); it would be posted publicly, so it is refused.`);
       body = null;
     }
     if (threadOk && body !== null) entries.push({ thread: thread as string, body, bodyFrom });
