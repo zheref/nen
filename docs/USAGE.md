@@ -6150,7 +6150,8 @@ key set, field types and rich options/proposed-issue rules. Missing or already c
 (`absent (optional; may have been consumed)`); malformed JSON, an invalid document or a read error
 other than absence is a required `FAIL` and exits 1. It reads only; it never rings or consumes a
 marker. Without the flag, the existing rows and order are unchanged and the generated file is not
-read. A Stop hook can consume a successfully written marker before a later inspection; absence
+read. The marker must be a regular file; directories, symlinks and special files such as FIFOs
+are refused before reading. A Stop hook can consume a successfully written marker before a later inspection; absence
 after that does not establish a failed write.
 
 **Exit codes.** `0` every required file loaded and every required row passed; `1` one did not, or a required row failed; `2` from v0.21.0 when

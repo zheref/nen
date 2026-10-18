@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exitCodeFor, reportUnhandled, run, runFamily, type Io } from "./index.js";
@@ -1008,6 +1009,37 @@ describe("nen schema check --ledger (#216)", () => {
       expect(result.code).toBe(1);
       expect(rows(result).at(-1)).toMatchObject({ ok: false, required: true, detail: expect.stringContaining("could not read marker") });
     }
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a FIFO and a FIFO symlink without blocking; the no-flag route never opens either", () => {
+    const root = fixture();
+    try {
+      mkdirSync(join(root, ".nen"));
+      const fifo = join(root, ".nen", "last-stop.json");
+      expect(spawnSync("mkfifo", [fifo], { timeout: 2_000 }).status).toBe(0);
+      for (const linked of [false, true]) {
+        if (linked) {
+          rmSync(fifo);
+          const target = join(root, "pipe");
+          expect(spawnSync("mkfifo", [target], { timeout: 2_000 }).status).toBe(0);
+          symlinkSync(target, fifo);
+        }
+        for (const ledger of [false, true]) {
+          // In a child with a timeout: a regression must fail instead of hanging Vitest.
+          const child = spawnSync("bun", [join(process.cwd(), "src", "index.ts"),
+            "schema", "check", "--repo", root, "--json", ...(ledger ? ["--ledger"] : []),
+          ], { encoding: "utf8", timeout: 5_000 });
+          expect(child.error).toBeUndefined();
+          expect(child.signal).toBeNull();
+          expect(child.status).toBe(ledger ? 1 : 0);
+          const result = JSON.parse(child.stdout) as { checks: { file: string; ok: boolean; required: boolean; detail: string }[] };
+          if (ledger) expect(result.checks.at(-1)).toMatchObject({
+            file: ".nen/last-stop.json", ok: false, required: true, detail: "could not read marker: not a regular file",
+          });
+          else expect(result.checks.some((row): boolean => row.file === ".nen/last-stop.json")).toBe(false);
+        }
+      }
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
   it.each([["bootstrap", "--ledger"], ["schema", "set", "--ledger"], ["--ledger", "schema", "check"]])("does not admit --ledger outside schema check: %j", async (...args) => {

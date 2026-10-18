@@ -19,7 +19,7 @@
 // times a verb happened to ask, and a schema file does not become valid by being
 // re-read.
 
-import { readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
@@ -464,8 +464,17 @@ function stopMarkerCheck(root: string): SchemaCheck {
     file: MARKER_FILE, path, ok, detail, required, legacy: false, note: null,
   });
   let text: string;
-  try { text = readFileSync(path, "utf8"); }
-  catch (error) {
+  try {
+    // Refuse special files before opening: a FIFO read can wait forever for a writer.
+    if (!lstatSync(path).isFile()) return row(false, true, "could not read marker: not a regular file");
+    // NONBLOCK also bounds a POSIX FIFO swapped in after lstat; NOFOLLOW refuses
+    // a swapped final symlink where supported. Check the opened descriptor too.
+    const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    try {
+      if (!fstatSync(fd).isFile()) return row(false, true, "could not read marker: not a regular file");
+      text = readFileSync(fd, "utf8");
+    } finally { closeSync(fd); }
+  } catch (error) {
     // A consumed marker is ordinary absence. Every other read failure is a defect.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return row(true, false, "absent (optional; may have been consumed)");
     return row(false, true, `could not read marker: ${error instanceof Error ? error.message : String(error)}`);
