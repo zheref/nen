@@ -32,15 +32,13 @@
 // would assert a label a 403 never applied. `listed` and `already` are not
 // applications and write none. The object is spelled `<owner/name>#<N>`.
 
-import { closeSync, openSync, statSync, writeSync } from "node:fs";
-import { dirname } from "node:path";
-import { requireValue, VerbUsageError, type CommandContext } from "../cli/command.js";
+import { closeSync, writeSync } from "node:fs";
+import { requireValue, type CommandContext } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import type { Target } from "../github/target.js";
 import { readIssue } from "../issue/subissue.js";
-import { DEFAULT_LEDGER } from "../label/command.js";
-import { ledgerLine, type LedgerEntry } from "../label/ledger.js";
+import { labelLedgerPath, openLabelLedger, ledgerLine, type LedgerEntry } from "../label/ledger.js";
 import { isRecord } from "../schema/errors.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { GH, outputLines } from "../seam/exec.js";
@@ -206,11 +204,7 @@ export function runApply(context: CommandContext): number {
 
   // The ledger's directory is checked BEFORE the first mutation: a line that
   // cannot be written after gh has answered is a mutation with no record.
-  const ledgerPath = resolveAgainstRepo(root, context.args.values["ledger"] ?? DEFAULT_LEDGER);
-  const ledgerDir = dirname(ledgerPath);
-  if (statSync(ledgerDir, { throwIfNoEntry: false })?.isDirectory() !== true) {
-    throw new VerbUsageError(`--ledger '${ledgerPath}' cannot be written: '${ledgerDir}' is not a directory.`);
-  }
+  const ledgerPath = labelLedgerPath(root, context.args.values["ledger"]);
 
   // Every number is certified an ISSUE, and its labels read, before any write.
   const current = rows.map((row) => ({ row, issue: readIssue(context.seams, target, row.issue) }));
@@ -235,21 +229,7 @@ export function runApply(context: CommandContext): number {
       row.labels.some((label): boolean => !issue.labels.includes(label)),
   );
   let ledgerFd: number | null = null;
-  if (recorded) {
-    const notAppendable = (code: string | undefined): VerbUsageError =>
-      new VerbUsageError(
-        `--ledger '${ledgerPath}' cannot be appended to${code === undefined ? "" : ` (${code})`}: a label applied with no ledger line is the one outcome this verb refuses, so nothing was written to GitHub.`,
-      );
-    // A directory is refused by its own stat, not by the open: Windows opens a
-    // directory for append without complaint and fails only on the first write,
-    // which is exactly the half-applied state this guard exists to prevent.
-    if (statSync(ledgerPath, { throwIfNoEntry: false })?.isDirectory() === true) throw notAppendable("EISDIR");
-    try {
-      ledgerFd = openSync(ledgerPath, "a");
-    } catch (error) {
-      throw notAppendable((error as NodeJS.ErrnoException).code);
-    }
-  }
+  if (recorded) ledgerFd = openLabelLedger(ledgerPath);
 
   try {
     return finishApply();

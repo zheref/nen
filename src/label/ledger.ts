@@ -30,6 +30,44 @@
 // or a PR closed since would exit 1 while the ledger kept a permanent record
 // claiming the label was applied.
 
+import { closeSync, constants, fstatSync, mkdirSync, openSync, statSync } from "node:fs";
+import { dirname } from "node:path";
+import { resolveAgainstRepo } from "../cli/inputs.js";
+import { VerbUsageError } from "../cli/command.js";
+
+export const DEFAULT_LEDGER = ".nen/label-ledger.jsonl";
+
+/** Only the default state directory is created; explicit ledger parents must exist. */
+export function labelLedgerPath(root: string, explicit?: string): string {
+  const path = resolveAgainstRepo(root, explicit ?? DEFAULT_LEDGER);
+  const directory = dirname(path);
+  try {
+    if (explicit === undefined) mkdirSync(directory, { recursive: true });
+    if (statSync(directory, { throwIfNoEntry: false })?.isDirectory() !== true) throw new Error("not a directory");
+  } catch {
+    throw new VerbUsageError(`--ledger '${path}' cannot be written: '${directory}' is not a directory or cannot be created.`);
+  }
+  return path;
+}
+
+/** Open before GitHub writes, so a refused ledger cannot leave an unlogged mutation. */
+export function openLabelLedger(path: string): number {
+  let fd: number | undefined;
+  try {
+    const existing = statSync(path, { throwIfNoEntry: false });
+    if (existing !== undefined && !existing.isFile()) throw Object.assign(new Error("not a regular file"), { code: existing.isDirectory() ? "EISDIR" : "EINVAL" });
+    // Follow legitimate file symlinks, but never block if the path becomes a FIFO
+    // between stat and open. Validate the opened object, not just the earlier path.
+    fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NONBLOCK);
+    if (!fstatSync(fd).isFile()) throw Object.assign(new Error("not a regular file"), { code: "EINVAL" });
+    return fd;
+  } catch (error) {
+    if (fd !== undefined) closeSync(fd);
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new VerbUsageError(`--ledger '${path}' cannot be appended to${code === undefined ? "" : ` (${code})`}: nothing was written to GitHub.`);
+  }
+}
+
 export type LedgerOutcome = "dry-run" | "applied" | "failed";
 
 export interface LedgerEntry {

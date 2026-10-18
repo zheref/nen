@@ -4,6 +4,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext, requireTargetFlag, parseCallerToken } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { syncLabels } from "./sync.js";
 import { parseRenameMap, renameLabels } from "./rename.js";
 
@@ -22,8 +23,10 @@ const USAGE = `nen labels -- create-or-update sync, and rename-in-place migratio
 
 usage:
   nen labels sync --target <owner/name> --repo <path> [--dry-run]
-      Ported from scripts/sync-labels.sh: create each label, or update it if
-      it already exists. One bad label (a description GitHub rejects) never
+      Read every page of remote labels once; create missing labels and update
+      only differing colors/descriptions. Identical labels are unchanged.
+      --dry-run still reads GitHub but mutates nothing. Progress counts go
+      to stderr as labels finish, including with --json. One bad label (a description GitHub rejects) never
       aborts the run -- every other good label still lands. The <=100-char
       description guard is enforced earlier, at schema load
       (../schema/labels.ts), so a taxonomy that violates it never reaches
@@ -58,17 +61,19 @@ function sync(context: CommandContext): number {
     repoFlag: requireRepoFlag(context, "It is the checkout whose nen/labels.json is the taxonomy being synced."),
   });
   const taxonomy = loadLabelTaxonomy(root);
-  const report = syncLabels(context.seams, target, taxonomy, context.args.booleans.has("dry-run"));
+  context.io.err(`[0/${taxonomy.labels.length}] reading remote labels`);
+  const report = syncLabels(context.seams, target, taxonomy, context.args.booleans.has("dry-run"),
+    (entry, completed, total): void => context.io.err(plainLine(`[${completed}/${total}] ${entry.status}: ${entry.name}`)));
 
   if (context.json) {
     context.io.out(JSON.stringify(report, null, 2));
     return report.failed.length === 0 ? 0 : 1;
   }
   for (const entry of report.entries) {
-    context.io.out(entry.message ?? `${entry.status}: ${entry.name}`);
+    context.io.out(plainLine(entry.message ?? `${entry.status}: ${entry.name}`));
   }
   if (report.failed.length > 0) {
-    context.io.err(`nen: ${report.failed.length} label(s) failed to sync: ${report.failed.join(", ")}`);
+    context.io.err(plainLine(`nen: ${report.failed.length} label(s) failed to sync: ${report.failed.join(", ")}`));
     return 1;
   }
   return 0;

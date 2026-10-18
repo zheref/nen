@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -13,7 +13,7 @@ import { noPortProbe } from "../seam/scripted.js";
 // error-to-exit-code mapping (review finding: a hand-copy can silently drift
 // from the real one). This also exercises the real re-parse against
 // `mergeFlags(family.flags)`.
-async function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "", stderr: "", spawnFailed: false })): Promise<{
+async function capture(argv: readonly string[], run: Seams["run"] = (): CommandResult => ({ code: 0, stdout: "", stderr: "", spawnFailed: false }), repoFlag: string = BANKAI_REPO): Promise<{
   code: number;
   out: string[];
   err: string[];
@@ -41,7 +41,7 @@ async function capture(argv: readonly string[], run: Seams["run"] = (): CommandR
     },
     platform: "linux",
   };
-  const code = await runFamily(labelCommand, argv, BANKAI_REPO, false, io, seams);
+  const code = await runFamily(labelCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -129,5 +129,91 @@ describe("nen label apply", () => {
     expect(result.err.join("\n")).toMatch(/<CODE>-<IS\|PR>-#<N>/);
     // The exit-2 path also earns the "Run --help" line a usage error gets.
     expect(result.err.join("\n")).toMatch(/Run 'nen label --help'/);
+  });
+});
+
+
+describe("nen label apply -- batch and shared state ledger", () => {
+  function repo(): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-label-batch-"));
+    mkdirSync(join(root, "nen"));
+    copyFileSync(join(BANKAI_REPO, "nen", "labels.json"), join(root, "nen", "labels.json"));
+    return root;
+  }
+  const ok: CommandResult = { code: 0, stdout: "", stderr: "", spawnFailed: false };
+  function batch(root: string, value: unknown): string[] {
+    writeFileSync(join(root, "pairs.json"), JSON.stringify(value));
+    return ["label", "apply", "--batch", "pairs.json", "--repo-slug", "o/r"];
+  }
+  const rows = [{ ref: "XX-IS-#1", label: "bankai:stage/idea" }, { ref: "XX-PR-#2", label: "bankai:stage/idea", reason: "second" }];
+  it("creates the default .nen ledger and records every dry-run pair without gh", async () => {
+    const root = repo();
+    let calls = 0;
+    const result = await capture(batch(root, rows), () => { calls++; return ok; }, root);
+    expect(result.code).toBe(0);
+    expect(calls).toBe(0);
+    expect(result.out.filter((line) => /dry-run:/.test(line))).toHaveLength(2);
+    expect(existsSync(join(root, "label-ledger.jsonl"))).toBe(false);
+    expect(parseLedger(readFileSync(join(root, ".nen", "label-ledger.jsonl"), "utf8")).entries.map((e) => [e.object, e.outcome, e.reason])).toEqual([["XX-IS-#1", "dry-run", null], ["XX-PR-#2", "dry-run", "second"]]);
+  });
+  it("opens the ledger before gh, continues failures and emits one JSON result per pair", async () => {
+    const root = repo();
+    const calls: string[][] = [];
+    const result = await capture([...batch(root, rows), "--run", "--json"], (command, args) => {
+      expect(existsSync(join(root, ".nen", "label-ledger.jsonl"))).toBe(true);
+      calls.push([command, ...args]);
+      return calls.length === 1 ? { ...ok, code: 1, stderr: "HTTP 403" } : ok;
+    }, root);
+    expect(result.code).toBe(1);
+    expect(calls.map((c) => c.slice(0, 4))).toEqual([["gh", "issue", "edit", "1"], ["gh", "pr", "edit", "2"]]);
+    const json = JSON.parse(result.out.join("\n"));
+    expect(json.results.map((r: { entry: { outcome: string } }) => r.entry.outcome)).toEqual(["failed", "applied"]);
+    expect(parseLedger(readFileSync(json.ledgerPath, "utf8")).entries.map((e) => e.outcome)).toEqual(["failed", "applied"]);
+  });
+  it("validates the whole batch before creating state or mutating", async () => {
+    for (const bad of [[], {}, [rows[0], { ref: "bad", label: "bankai:stage/idea" }], [rows[0], { ref: "XX-IS-#2", label: "unknown" }], [{ ...rows[0], typo: "ignored?" }]]) {
+      const root = repo();
+      let calls = 0;
+      const result = await capture([...batch(root, bad), "--run"], () => { calls++; return ok; }, root);
+      expect(result.code).toBe(2);
+      expect(calls).toBe(0);
+      expect(existsSync(join(root, ".nen"))).toBe(false);
+    }
+  });
+  it("refuses mixed single/batch input, unreadable files and malformed JSON", async () => {
+    const root = repo();
+    expect((await capture([...batch(root, rows), "XX-IS-#3"], undefined, root)).code).toBe(2);
+    writeFileSync(join(root, "bad.json"), "{");
+    for (const file of ["missing.json", "bad.json"]) expect((await capture(["label", "apply", "--batch", file, "--repo-slug", "o/r"], undefined, root)).code).toBe(2);
+  });
+  it("refuses unappendable default and explicit ledgers before any mutation", async () => {
+    for (const mode of ["default-parent-file", "ledger-directory", "missing-explicit-parent"]) {
+      const root = repo();
+      const argv = [...batch(root, rows), "--run"];
+      if (mode === "default-parent-file") writeFileSync(join(root, ".nen"), "blocked");
+      if (mode === "ledger-directory") { mkdirSync(join(root, ".nen", "label-ledger.jsonl"), { recursive: true }); }
+      if (mode === "missing-explicit-parent") argv.push("--ledger", "missing/l.jsonl");
+      let calls = 0;
+      expect((await capture(argv, () => { calls++; return ok; }, root)).code).toBe(2);
+      expect(calls).toBe(0);
+    }
+  });
+  it.skipIf(process.platform === "win32")("refuses non-regular ledgers before single or batch GitHub edits", async () => {
+    const root = repo();
+    const single = ["label", "apply", "XX-IS-#7", "--label", "bankai:stage/idea", "--repo-slug", "o/r"];
+    for (const argv of [single, batch(root, rows)]) {
+      let calls = 0;
+      const result = await capture([...argv, "--ledger", "/dev/null", "--run", "--json"], () => { calls++; return ok; }, root);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("cannot be appended to (EINVAL)");
+      expect(calls).toBe(0);
+      expect(result.out).toEqual([]);
+    }
+  });
+  it("the single form shares the new default and preflight", async () => {
+    const root = repo();
+    const result = await capture(["label", "apply", "XX-IS-#7", "--label", "bankai:stage/idea", "--repo-slug", "o/r"], undefined, root);
+    expect(result.code).toBe(0);
+    expect(existsSync(join(root, ".nen", "label-ledger.jsonl"))).toBe(true);
   });
 });

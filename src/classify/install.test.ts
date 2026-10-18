@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createArgv, editArgv } from "../labels/sync.js";
+import { createArgv, editArgv, listLabelsArgv } from "../labels/sync.js";
 import type { Target } from "../github/target.js";
 import { compareDeclaration } from "./install.js";
 import { loadClassifyTaxonomy } from "./taxonomy.js";
@@ -221,39 +221,39 @@ describe("nen classify install --sync", () => {
       match: gh(...createArgv(TARGET, label)),
       result: {},
     }));
-    const result = await capture(install(repo, "--sync", "--target", SLUG), [...landedCalls({ labels: MINI_LABELS }), ...script]);
+    const result = await capture(install(repo, "--sync", "--target", SLUG), [...landedCalls({ labels: MINI_LABELS }), { match: gh(...listLabelsArgv(TARGET)), result: { stdout: "[[]]" } }, ...script]);
     expect(result.code).toBe(0);
     expect(result.seams.calls.filter((call): boolean => call.args[0] === "label").map((call): string => call.args[2] ?? "")).toEqual(["lang/alpha", "lang/beta", "job/build", "job/test"]);
     expect(result.out).toEqual(["created: lang/alpha", "created: lang/beta", "created: job/build", "created: job/test"]);
   });
 
-  it("falls back to update when create fails, and names a failing label at exit 1", async () => {
+  it("updates existing drift directly and names a failing label at exit 1", async () => {
     const repo = landedRepo();
     const [alpha, beta, build, test] = MINI_LABELS;
     const script = [
-      { match: gh(...createArgv(TARGET, alpha!)), result: { code: 1, stderr: "already exists" } },
+
       { match: gh(...editArgv(TARGET, alpha!)), result: {} },
       { match: gh(...createArgv(TARGET, beta!)), result: {} },
       { match: gh(...createArgv(TARGET, build!)), result: { code: 1, stderr: "bad" } },
-      { match: gh(...editArgv(TARGET, build!)), result: { code: 1, stderr: "still bad" } },
+
       { match: gh(...createArgv(TARGET, test!)), result: {} },
     ];
-    const result = await capture(install(repo, "--sync", "--target", SLUG, "--json"), [...landedCalls({ labels: MINI_LABELS }), ...script]);
+    const result = await capture(install(repo, "--sync", "--target", SLUG, "--json"), [...landedCalls({ labels: MINI_LABELS }), { match: gh(...listLabelsArgv(TARGET)), result: { stdout: JSON.stringify([[{ ...alpha, description: "old" }]]) } }, ...script]);
     expect(result.code).toBe(1);
     const json = JSON.parse(result.out.join("\n")) as { sync: { entries: { status: string }[]; failed: string[] } };
     expect(json.sync.entries.map((entry): string => entry.status)).toEqual(["updated", "created", "failed", "created"]);
     expect(json.sync.failed).toEqual(["job/build"]);
 
-    const human = await capture(install(repo, "--sync", "--target", SLUG), [...landedCalls({ labels: MINI_LABELS }), ...script]);
+    const human = await capture(install(repo, "--sync", "--target", SLUG), [...landedCalls({ labels: MINI_LABELS }), { match: gh(...listLabelsArgv(TARGET)), result: { stdout: JSON.stringify([[{ ...alpha, description: "old" }]]) } }, ...script]);
     expect(human.code).toBe(1);
     expect(human.err.join("\n")).toMatch(/1 label\(s\) failed to sync: job\/build/);
   });
 
-  it("--dry-run reports would-sync and never calls gh", async () => {
-    const result = await capture(install(landedRepo(), "--sync", "--target", SLUG, "--dry-run"), landedCalls({ labels: MINI_LABELS }));
+  it("--dry-run reports differences after read-only GitHub calls", async () => {
+    const result = await capture(install(landedRepo(), "--sync", "--target", SLUG, "--dry-run"), [...landedCalls({ labels: MINI_LABELS }), { match: gh(...listLabelsArgv(TARGET)), result: { stdout: "[[]]" } }]);
     expect(result.code).toBe(0);
     expect(result.out).toHaveLength(4);
-    expect(result.out[0]).toBe("would sync: lang/alpha (#1d76db) -- Needs alpha");
+    expect(result.out[0]).toBe("would create: lang/alpha (#1d76db) -- Needs alpha");
     // Only the two reads of the landed declaration: no label call at all.
     expect(result.seams.calls.every((call): boolean => call.args[0] === "api")).toBe(true);
   });
@@ -284,14 +284,14 @@ describe("nen classify install --sync -- the LANDED declaration is the gate", ()
   });
 
   it("reads the branch GitHub names, not a literal one", async () => {
-    const result = await capture(sync("--dry-run"), landedCalls({ labels: MINI_LABELS }, "trunk"));
+    const result = await capture(sync("--dry-run"), [...landedCalls({ labels: MINI_LABELS }, "trunk"), { match: gh(...listLabelsArgv(TARGET)), result: { stdout: "[[]]" } }]);
     expect(result.code).toBe(0);
     expect(result.seams.calls.map((call): string => call.args.join(" "))).toContain(`api repos/${SLUG}/contents/nen/labels.json?ref=trunk`);
   });
 
   it("syncs when both the local and the landed declaration carry every label", async () => {
     const script = MINI_LABELS.map((label) => ({ match: gh(...createArgv(TARGET, label)), result: {} }));
-    const result = await capture(sync(), [...landedCalls({ labels: MINI_LABELS }), ...script]);
+    const result = await capture(sync(), [...landedCalls({ labels: MINI_LABELS }), { match: gh(...listLabelsArgv(TARGET)), result: { stdout: "[[]]" } }, ...script]);
     expect(result.code).toBe(0);
   });
 
@@ -343,10 +343,10 @@ describe("nen classify install -- human output is plain text", () => {
       install(landedRepo(), "--sync", "--target", SLUG),
       [
         ...landedCalls({ labels: MINI_LABELS }),
-        ...MINI_LABELS.flatMap((label) => [
-          { match: gh(...createArgv(TARGET, label)), result: { code: 1, stderr: "x" } },
-          { match: gh(...editArgv(TARGET, label)), result: { code: 1, stderr: `boom${ESC}[31m` } },
-        ]),
+        { match: gh(...listLabelsArgv(TARGET)), result: { stdout: "[[]]" } },
+        ...MINI_LABELS.map((label) => (
+          { match: gh(...createArgv(TARGET, label)), result: { code: 1, stderr: `boom${ESC}[31m` } }
+        )),
       ],
     );
     expect(failing.code).toBe(1);

@@ -54,7 +54,7 @@ describe("validatePlan -- every refusal named, nothing partial", () => {
     const run = await capture(apply(repo, plan(repo, [{ issue: 6, lang: [], job: [] }]), "--run"), [issueCall(6, [])]);
     expect(run.code).toBe(0);
     expect(run.out[0]).toBe("#6  nothing to apply");
-    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".nen", "label-ledger.jsonl"))).toBe(false);
   });
 
   it("refuses a plan that is not an array, and a row that is not an object", () => {
@@ -120,7 +120,7 @@ describe("nen classify apply -- a plan with any invalid row is refused whole", (
     expect(result.err.join("\n")).toMatch(/\[2\]\.confidence/);
     expect(result.err.join("\n")).toMatch(/refused whole \(3 refusal/);
     expect(result.seams.calls).toEqual([]);
-    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".nen", "label-ledger.jsonl"))).toBe(false);
   });
 
   it("exits 2 for plan text that is not JSON, and for a plan file that is not there", async () => {
@@ -169,9 +169,9 @@ describe("nen classify apply -- dry run (no --run)", () => {
       "(dry run) nothing was written to GitHub; pass --run to apply.",
       "#12  would apply: lang/alpha, job/build, job/test",
       "1 issue(s): 0 applied, 3 would apply, 0 already, 0 failed, 0 listed",
-      `ledger: ${join(repo, "label-ledger.jsonl")}`,
+      `ledger: ${join(repo, ".nen", "label-ledger.jsonl")}`,
     ]);
-    expect(ledgerOf(join(repo, "label-ledger.jsonl"))).toEqual([
+    expect(ledgerOf(join(repo, ".nen", "label-ledger.jsonl"))).toEqual([
       "lang/alpha", "job/build", "job/test",
     ].map((label): Record<string, unknown> => ({
       object: "zheref/nen#12",
@@ -223,7 +223,7 @@ describe("nen classify apply -- low confidence is listed, not applied", () => {
       "#3  listed: lang/alpha, job/build",
     ]);
     expect(result.seams.calls.filter((call): boolean => call.args[0] === "issue")).toHaveLength(3);
-    expect(ledgerOf(join(repo, "label-ledger.jsonl")).map((entry): unknown => entry["object"])).toEqual([
+    expect(ledgerOf(join(repo, ".nen", "label-ledger.jsonl")).map((entry): unknown => entry["object"])).toEqual([
       "zheref/nen#1", "zheref/nen#2", "zheref/nen#2",
     ]);
   });
@@ -243,7 +243,7 @@ describe("nen classify apply -- low confidence is listed, not applied", () => {
     const repo = landedRepo();
     const result = await capture(apply(repo, plan(repo, [rows[2]]), "--run"), [issueCall(3, [])]);
     expect(result.code).toBe(0);
-    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".nen", "label-ledger.jsonl"))).toBe(false);
   });
 });
 
@@ -256,7 +256,7 @@ describe("nen classify apply -- already, and the pull request refusal", () => {
     ]);
     expect(result.code).toBe(0);
     expect(result.out[0]).toBe("#4  applied: job/build  already: lang/alpha");
-    expect(ledgerOf(join(repo, "label-ledger.jsonl")).map((entry): unknown => entry["label"])).toEqual(["job/build"]);
+    expect(ledgerOf(join(repo, ".nen", "label-ledger.jsonl")).map((entry): unknown => entry["label"])).toEqual(["job/build"]);
   });
 
   it("refuses a pull request's number at exit 1 before ANY write, even when the other rows are fine", async () => {
@@ -268,7 +268,7 @@ describe("nen classify apply -- already, and the pull request refusal", () => {
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/#2 names a pull request in zheref\/nen/);
     expect(result.seams.calls.filter((call): boolean => call.args[0] === "issue")).toEqual([]);
-    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".nen", "label-ledger.jsonl"))).toBe(false);
   });
 
   it("refuses a pull request even on a row that would only be listed", async () => {
@@ -285,14 +285,14 @@ describe("nen classify apply -- already, and the pull request refusal", () => {
       { match: gh("api", `repos/${SLUG}/issues/9`), result: { code: 1, stderr: "HTTP 404" } },
     ]);
     expect(result.code).toBe(1);
-    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".nen", "label-ledger.jsonl"))).toBe(false);
   });
 });
 
 describe("nen classify apply --run", () => {
   it("writes each ledger line AFTER its gh edit resolved, never before", async () => {
     const repo = landedRepo();
-    const ledger = join(repo, "label-ledger.jsonl");
+    const ledger = join(repo, ".nen", "label-ledger.jsonl");
     const seen: number[] = [];
     await capture(
       apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"], job: ["build"] }]), "--run"),
@@ -320,7 +320,7 @@ describe("nen classify apply --run", () => {
     expect(result.out[1]).toBe("#2  applied: lang/beta");
     expect(result.err.join("\n")).toMatch(/could not apply lang\/alpha on #1: HTTP 403: forbidden/);
     expect(result.err.join("\n")).toMatch(/1 application\(s\) failed/);
-    expect(ledgerOf(join(repo, "label-ledger.jsonl")).map((entry): unknown => entry["outcome"])).toEqual(["failed", "applied", "applied"]);
+    expect(ledgerOf(join(repo, ".nen", "label-ledger.jsonl")).map((entry): unknown => entry["outcome"])).toEqual(["failed", "applied", "applied"]);
   });
 
   it("a gh that cannot be started is a failed application, not an unhandled throw", async () => {
@@ -330,7 +330,7 @@ describe("nen classify apply --run", () => {
       { match: edit(1, "lang/alpha"), result: { spawnFailed: true, code: -1, stderr: "ENOENT" } },
     ]);
     expect(result.code).toBe(1);
-    expect(ledgerOf(join(repo, "label-ledger.jsonl"))[0]?.["outcome"]).toBe("failed");
+    expect(ledgerOf(join(repo, ".nen", "label-ledger.jsonl"))[0]?.["outcome"]).toBe("failed");
   });
 
   it("--json: contract, target, run, ledger, per-issue buckets and totals", async () => {
@@ -347,7 +347,7 @@ describe("nen classify apply --run", () => {
       contract: "nen.classify.apply/v0.1",
       target: SLUG,
       run: true,
-      ledger: join(repo, "label-ledger.jsonl"),
+      ledger: join(repo, ".nen", "label-ledger.jsonl"),
       issues: [
         { number: 1, applied: ["lang/alpha"], wouldApply: [], already: ["job/build"], failed: [], listed: [] },
         { number: 2, applied: [], wouldApply: [], already: [], failed: [], listed: ["lang/beta"] },
@@ -368,6 +368,15 @@ describe("nen classify apply --run", () => {
 describe("nen classify apply -- the ledger must be appendable BEFORE the first edit", () => {
   const edits = (calls: readonly { args: readonly string[] }[]): number => calls.filter((call): boolean => call.args[0] === "issue").length;
 
+  it("creates the shared default directory, but refuses a blocked .nen before GitHub reads", async () => {
+    const repo = landedRepo();
+    writeFileSync(join(repo, ".nen"), "blocked");
+    const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run"));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/cannot be written/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
   it("refuses a directory named as the ledger at exit 2, with no gh edit and the plan not aborted half way", async () => {
     const repo = landedRepo();
     mkdirSync(join(repo, "nen-ledger-dir"));
@@ -377,6 +386,14 @@ describe("nen classify apply -- the ledger must be appendable BEFORE the first e
     ]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/cannot be appended to \(EISDIR\)/);
+    expect(edits(result.seams.calls)).toBe(0);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses a non-regular shared ledger before any GitHub edit", async () => {
+    const repo = landedRepo();
+    const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run", "--ledger", "/dev/null"), [issueCall(1, [])]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("cannot be appended to (EINVAL)");
     expect(edits(result.seams.calls)).toBe(0);
   });
 
@@ -399,7 +416,7 @@ describe("nen classify apply -- the ledger must be appendable BEFORE the first e
     const repo = landedRepo();
     const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run"), [issueCall(1, ["lang/alpha"])]);
     expect(result.code).toBe(0);
-    expect(existsSync(join(repo, "label-ledger.jsonl"))).toBe(false);
+    expect(existsSync(join(repo, ".nen", "label-ledger.jsonl"))).toBe(false);
   });
 
   it("strips control bytes from gh's diagnostics in the human output, keeping the ledger and --json raw", async () => {

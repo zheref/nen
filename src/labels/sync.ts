@@ -8,11 +8,9 @@
 // triples) is exactly what ../schema/labels.ts's loadLabelTaxonomy() already
 // does, through a real validating parser rather than jq over raw JSON, and
 // re-deriving the same validation a second way here is how the two would
-// quietly drift. `sync_label` and the per-entry loop are ported behaviourally
-// intact: create() first, edit() as the fallback -- gh's own
-// fails-on-duplicate idiom for create IS the create-or-update logic, not a
-// special case of it -- and a label's failure is isolated to that label,
-// never aborting the run.
+// quietly drift. Issue #391 replaces create-then-edit retries with a remote
+// diff: fetch all pages once, skip identical labels, and make one mutation per
+// difference. A failed label remains isolated; no remote label is deleted.
 // ============================================================================
 // sync-labels.sh — install/update the Bankai label taxonomy on a GitHub repo.
 //
@@ -32,7 +30,7 @@
 // (CON-38; bankai-core#333: one bad entry previously killed the whole sync).
 // ============================================================================
 
-import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { GH, mustJson, outputLines, type Seams } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import type { Label, LabelTaxonomy } from "../schema/labels.js";
 
@@ -44,7 +42,7 @@ export function editArgv(target: Target, label: Label): readonly string[] {
   return ["label", "edit", label.name, "--repo", target.slug, "--color", label.color, "--description", label.description];
 }
 
-export type SyncStatus = "created" | "updated" | "would-sync" | "failed";
+export type SyncStatus = "created" | "updated" | "unchanged" | "would-sync" | "failed";
 
 export interface SyncEntry {
   readonly name: string;
@@ -57,22 +55,48 @@ export interface SyncReport {
   readonly failed: readonly string[];
 }
 
-function syncOne(seams: Seams, target: Target, label: Label, dryRun: boolean): SyncEntry {
-  if (dryRun) {
-    return { name: label.name, status: "would-sync", message: `would sync: ${label.name} (#${label.color}) -- ${label.description}` };
-  }
-  const create = seams.run(GH, [...createArgv(target, label)]);
-  if (create.code === 0) return { name: label.name, status: "created", message: null };
-
-  const edit = seams.run(GH, [...editArgv(target, label)]);
-  if (edit.code === 0) return { name: label.name, status: "updated", message: null };
-
-  const reason = outputLines(edit.stderr).at(-1) ?? outputLines(create.stderr).at(-1) ?? `create and edit both failed`;
-  return { name: label.name, status: "failed", message: reason };
+/** Slurping paginated arrays avoids both truncation and concatenated JSON. */
+export function listLabelsArgv(target: Target): readonly string[] {
+  return ["api", `repos/${target.slug}/labels?per_page=100`, "--paginate", "--slurp"];
 }
 
-export function syncLabels(seams: Seams, target: Target, taxonomy: LabelTaxonomy, dryRun: boolean): SyncReport {
-  const entries = taxonomy.labels.map((label): SyncEntry => syncOne(seams, target, label, dryRun));
-  const failed = entries.filter((entry): boolean => entry.status === "failed").map((entry): string => entry.name);
-  return { entries, failed };
+function readLabels(seams: Seams, target: Target): ReadonlyMap<string, Label> {
+  const pages = mustJson<unknown>(seams, GH, [...listLabelsArgv(target)]);
+  if (!Array.isArray(pages) || !pages.every(Array.isArray)) throw new Error("could not read remote labels: expected paginated label arrays; nothing was synced.");
+  const labels = new Map<string, Label>();
+  for (const value of pages.flat() as unknown[]) {
+    if (typeof value !== "object" || value === null) throw new Error("could not read remote labels: malformed label; nothing was synced.");
+    const row = value as Record<string, unknown>;
+    if (typeof row["name"] !== "string" || row["name"] === "" || typeof row["color"] !== "string" || (row["description"] !== null && typeof row["description"] !== "string")) throw new Error("could not read remote labels: malformed label; nothing was synced.");
+    const key = row["name"].toLowerCase();
+    if (labels.has(key)) throw new Error("could not read remote labels: duplicate label name; nothing was synced.");
+    labels.set(key, { name: row["name"], color: row["color"], description: row["description"] ?? "" });
+  }
+  return labels;
+}
+
+export function syncLabels(
+  seams: Seams, target: Target, taxonomy: LabelTaxonomy, dryRun: boolean,
+  progress: (entry: SyncEntry, completed: number, total: number) => void = (): void => {},
+): SyncReport {
+  const existing = readLabels(seams, target);
+  const entries: SyncEntry[] = [];
+  for (const label of taxonomy.labels) {
+    const remote = existing.get(label.name.toLowerCase());
+    let entry: SyncEntry;
+    if (remote !== undefined && remote.color.toLowerCase() === label.color.toLowerCase() && remote.description === label.description) {
+      entry = { name: label.name, status: "unchanged", message: null };
+    } else if (dryRun) {
+      entry = { name: label.name, status: "would-sync", message: `would ${remote === undefined ? "create" : "update"}: ${label.name} (#${label.color}) -- ${label.description}` };
+    } else {
+      const argv = remote === undefined ? createArgv(target, label) : editArgv(target, label);
+      const result = seams.run(GH, [...argv]);
+      entry = result.code === 0 && !result.spawnFailed
+        ? { name: label.name, status: remote === undefined ? "created" : "updated", message: null }
+        : { name: label.name, status: "failed", message: outputLines(result.stderr).at(-1) ?? `exit ${result.code}` };
+    }
+    entries.push(entry);
+    progress(entry, entries.length, taxonomy.labels.length);
+  }
+  return { entries, failed: entries.filter((entry) => entry.status === "failed").map((entry) => entry.name) };
 }
