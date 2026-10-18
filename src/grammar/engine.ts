@@ -51,7 +51,25 @@
 // documents, and a silent mis-parse is strictly worse than a refusal that names
 // the unsupported shape and the rewrite that avoids it.
 
+/**
+ * One way a slot may be filled (zheref/nen#410). A slot written
+ * `<gate:G1|G2>{+}|<severity:high|low>[+]|<label>` has three; a plain `<repo>`
+ * has exactly one, itself. Tried in template order, see `resolveSlot`.
+ */
+export interface Alternative {
+  readonly name: string;
+  readonly values: readonly string[];
+  /** A literal suffix this alternative may carry once, e.g. `[+]`. */
+  readonly suffix: string | null;
+  /** `{+}` / `{&}`: ONE OR MORE values joined by this literal, each checked. */
+  readonly joiner: string | null;
+}
+
 export interface Slot {
+  /**
+   * The position's name: its one alternative's name, or every alternative's
+   * name joined by '|' (`gate|severity|label`) when the template alternates.
+   */
   readonly name: string;
   /** Allowed values, case-insensitively, when the template enumerates them. */
   readonly values: readonly string[];
@@ -76,6 +94,10 @@ export interface Slot {
   readonly optional: boolean;
   /** A literal suffix the slot may carry, e.g. futon's `[+]`. */
   readonly suffix: string | null;
+  /** The list joiner of a `{+}`/`{&}` slot, or null. */
+  readonly joiner: string | null;
+  /** Every way to fill this position, in template order; length 1 unless it alternates. */
+  readonly alternatives: readonly Alternative[];
 }
 
 /**
@@ -121,8 +143,20 @@ export class GrammarError extends Error {
 //                       absent -- zheref/nen#170
 //   [+]                 an optional literal suffix on the slot just declared,
 //                       recognised by its bracket group holding NOTHING ELSE
+//   <slot>{+}           a LIST slot (zheref/nen#410): one or more values joined
+//                       by the literal inside the braces ('+', '&', ...). An
+//                       enumerated list checks EVERY item; an empty item (a
+//                       trailing or doubled joiner) is refused
+//   <a:..>|<b:..>[+]|<c>
+//                       an ALTERNATION: one position, filled by the first
+//                       alternative the value fits, in template order. A free
+//                       alternative (no value set) may only come LAST, and it
+//                       is taken only when NO piece of the value is a value of
+//                       an enumerated alternative -- so a token that mixes
+//                       them is refused, never read as free text. It is the
+//                       generic form of futon's '<severity>[+]|<label>'
 
-const TOKEN = /<([^<>]+)>|\[|\]|[^\s<>[\]]+/g;
+const TOKEN = /<([^<>]+)>|\[|\]|\{[^{}\s<>[\]|]+\}|\||[^\s<>[\]{}|]+/g;
 
 /**
  * A literal word waiting for the slot it will introduce, TAGGED WITH THE BRACKET
@@ -141,6 +175,18 @@ export function parseTemplate(template: string): Grammar {
   let pendingWords: PendingWord[] = [];
   let pendingSymbol: { readonly symbol: string; readonly depth: number } | null = null;
   let depth = 0;
+  // `|` seen after a slot: the NEXT slot is another way to fill that position
+  // (zheref/nen#410), not a new position.
+  let alternationPending = false;
+  const amendLast = (change: Partial<Alternative>): void => {
+    const last = slots[slots.length - 1];
+    if (last === undefined) return;
+    const alternatives = last.alternatives.map((alternative, index): Alternative =>
+      index === last.alternatives.length - 1 ? { ...alternative, ...change } : alternative,
+    );
+    const first = alternatives[0] as Alternative;
+    slots[slots.length - 1] = { ...last, alternatives, suffix: first.suffix, joiner: first.joiner };
+  };
 
   TOKEN.lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -152,6 +198,9 @@ export function parseTemplate(template: string): Grammar {
     }
     if (raw === "]") {
       if (depth === 0) throw new GrammarError(`template '${template}' closes a '[' that was never opened`);
+      if (alternationPending) {
+        throw new GrammarError(`template '${template}' is refused: a '|' alternation ends at ']' with no <slot> after it. Put the alternative's <slot> after the '|', or drop it.`);
+      }
       if (pendingSymbol !== null && pendingSymbol.depth >= depth) {
         // `[@]`-shapes reach the suffix rule below; this is `[x @<eof-of-group>`:
         // a symbol that introduces nothing. Refuse the TEMPLATE rather than
@@ -182,6 +231,33 @@ export function parseTemplate(template: string): Grammar {
     }
 
     const inner = match[1];
+    if (inner === undefined && raw === "|") {
+      const last = slots[slots.length - 1];
+      if (last === undefined || pendingWords.length > 0 || pendingSymbol !== null || alternationPending) {
+        throw new GrammarError(
+          `template '${template}' is refused: '|' alternates one <slot> with the next, and here it follows no <slot>. Write '<a:..>|<b>' -- the alternation joins two slots directly.`,
+        );
+      }
+      alternationPending = true;
+      continue;
+    }
+    if (inner === undefined && raw.startsWith("{") && raw.endsWith("}")) {
+      const last = slots[slots.length - 1];
+      const joiner = raw.slice(1, -1);
+      const alternative = last?.alternatives[last.alternatives.length - 1];
+      if (alternative === undefined || pendingWords.length > 0 || pendingSymbol !== null || alternationPending) {
+        throw new GrammarError(
+          `template '${template}' is refused: '${raw}' makes the <slot> just declared a list, and here it follows no <slot>. Write '<name>${raw}' with nothing between.`,
+        );
+      }
+      if (alternative.joiner !== null || alternative.suffix !== null) {
+        throw new GrammarError(
+          `template '${template}' is refused: <${alternative.name}> already carries ${alternative.joiner !== null ? `the list joiner '{${alternative.joiner}}'` : `the suffix '[${alternative.suffix}]'`}, and a slot takes one or the other, once. A list whose last item may carry a suffix cannot be split unambiguously.`,
+        );
+      }
+      amendLast({ joiner });
+      continue;
+    }
     if (inner === undefined) {
       // A literal.
       if (/^[^A-Za-z0-9]+$/.test(raw)) {
@@ -193,9 +269,15 @@ export function parseTemplate(template: string): Grammar {
         // PREVIOUS slot, and left <gate> with no separator at all -- which is
         // exactly how the whole line ended up inside the first slot.
         const closesImmediately = depth > 0 && /^\s*\]/.test(template.slice(TOKEN.lastIndex));
-        if (closesImmediately && slots.length > 0 && pendingWords.length === 0 && pendingSymbol === null) {
+        if (closesImmediately && slots.length > 0 && pendingWords.length === 0 && pendingSymbol === null && !alternationPending) {
           const last = slots[slots.length - 1];
-          if (last !== undefined) slots[slots.length - 1] = { ...last, suffix: raw };
+          const alternative = last?.alternatives[last.alternatives.length - 1];
+          if (alternative !== undefined && alternative.joiner !== null) {
+            throw new GrammarError(
+              `template '${template}' is refused: <${alternative.name}> is a '{${alternative.joiner}}' list, and a list whose last item may carry the suffix '[${raw}]' cannot be split unambiguously. Give the slot one or the other.`,
+            );
+          }
+          amendLast({ suffix: raw });
           continue;
         }
         // A symbol like `@` or `#` glued to the next slot arrives as its own
@@ -215,6 +297,23 @@ export function parseTemplate(template: string): Grammar {
       .split("|")
       .map((value): string => value.trim())
       .filter((value): boolean => value !== "");
+
+    if (alternationPending) {
+      // ANOTHER WAY TO FILL THE POSITION JUST DECLARED (zheref/nen#410). It
+      // shares that slot's separator and brackets, so nothing may introduce it.
+      if (pendingWords.length > 0 || pendingSymbol !== null) {
+        throw new GrammarError(
+          `template '${template}' is refused: the alternative <${name}> is introduced by its own separator, but an alternative shares the separator of the slot it alternates with. Write '<a>|<${name}>' with nothing between.`,
+        );
+      }
+      const last = slots[slots.length - 1] as Slot;
+      slots[slots.length - 1] = {
+        ...last,
+        alternatives: [...last.alternatives, { name, values, suffix: null, joiner: null }],
+      };
+      alternationPending = false;
+      continue;
+    }
 
     if (pendingSymbol === null && new Set(pendingWords.map((pending): number => pending.depth)).size > 1) {
       // `foo [bar <slot>]`: are the introducing words 'foo bar' (with 'bar'
@@ -250,14 +349,54 @@ export function parseTemplate(template: string): Grammar {
       separatorOptional: separatorDepth !== null && separatorDepth > 0,
       optional,
       suffix: null,
+      joiner: null,
+      alternatives: [{ name, values, suffix: null, joiner: null }],
     });
     pendingWords = [];
     pendingSymbol = null;
   }
 
   if (depth !== 0) throw new GrammarError(`template '${template}' has an unclosed '['`);
+  if (alternationPending) {
+    throw new GrammarError(`template '${template}' is refused: it ends with a '|' that alternates with nothing. Put the alternative's <slot> after it, or drop it.`);
+  }
   if (slots.length === 0) throw new GrammarError(`template '${template}' declares no <slot>`);
-  return { template, slots, clauses };
+  return { template, slots: slots.map((slot): Slot => checkAlternation(template, slot)), clauses };
+}
+
+/**
+ * An alternation the engine could not resolve UNAMBIGUOUSLY is refused at
+ * template time, on the file header's rule: a free alternative only LAST (a
+ * free one earlier would take every value), with no suffix (a free value
+ * already keeps its trailing characters), and no value in two enumerations.
+ */
+function checkAlternation(template: string, slot: Slot): Slot {
+  if (slot.alternatives.length === 1) return slot;
+  const names = slot.alternatives.map((alternative): string => alternative.name);
+  if (new Set(names).size !== names.length) {
+    throw new GrammarError(`template '${template}' is refused: the alternation <${names.join("|")}> names one alternative twice, so the echo could not say which one a value filled.`);
+  }
+  slot.alternatives.forEach((alternative, index): void => {
+    if (alternative.values.length > 0) return;
+    if (index !== slot.alternatives.length - 1) {
+      throw new GrammarError(`template '${template}' is refused: the free alternative <${alternative.name}> takes any value, so every alternative after it could never be reached. Put it last.`);
+    }
+    if (alternative.suffix !== null) {
+      throw new GrammarError(`template '${template}' is refused: the free alternative <${alternative.name}> keeps a value exactly as typed, trailing characters included, so a '[${alternative.suffix}]' suffix on it means nothing. Drop the suffix.`);
+    }
+  });
+  const owner = new Map<string, string>();
+  for (const alternative of slot.alternatives) {
+    for (const value of alternative.values) {
+      const key = value.toLowerCase();
+      const previous = owner.get(key);
+      if (previous !== undefined) {
+        throw new GrammarError(`template '${template}' is refused: '${value}' is a value of both <${previous}> and <${alternative.name}>, so a line carrying it could fill either. Give each value to one alternative.`);
+      }
+      owner.set(key, alternative.name);
+    }
+  }
+  return { ...slot, name: names.join("|") };
 }
 
 // --- the split ---------------------------------------------------------------
@@ -323,6 +462,13 @@ export interface SlotValue {
   readonly value: string;
   /** True when the template's `[+]` suffix was present on this slot. */
   readonly suffix: boolean;
+  /**
+   * Which alternative filled the slot -- present ONLY on a slot that
+   * alternates (zheref/nen#410), so a plain slot's JSON is what it always was.
+   */
+  readonly alternative?: string;
+  /** The items of a `{+}`/`{&}` list, normalised -- present only on a list. */
+  readonly items?: readonly string[];
 }
 
 /** One literal-only `[ ... ]` clause and whether the line carried it. */
@@ -476,6 +622,17 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   for (const slot of grammar.slots) {
     const value = found.get(slot.name);
     if (value === undefined) continue;
+    if (slot.alternatives.length > 1 || slot.joiner !== null) {
+      const text = value.value.trim();
+      if (text === "") {
+        if (!slot.optional) missing.push(slot.name);
+        continue;
+      }
+      const resolved = resolveSlot(slot, text);
+      if (typeof resolved === "string") problems.push(resolved);
+      else slots.push(resolved);
+      continue;
+    }
     let text = value.value;
     let suffix = false;
     if (slot.suffix !== null && text.endsWith(slot.suffix)) {
@@ -532,7 +689,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
     if (slot === undefined) continue;
     const value = byName.get(slot.name);
     if (value !== undefined) {
-      echo.push(`${value.name}: ${value.value}${value.suffix ? " (+)" : ""}`);
+      echo.push(`${value.alternative ?? value.name}: ${value.value}${value.suffix ? ` (${slotSuffix(slot, value) ?? "+"})` : ""}`);
       continue;
     }
     // AN OPTIONAL SLOT NOBODY FILLED IS ECHOED AS ABSENT, rather than left out
@@ -594,10 +751,11 @@ function correctedLine(
       }
       continue;
     }
+    const suffixText = value === undefined ? null : slotSuffix(slot, value);
     const rendered =
       value === undefined
-        ? `<${slot.name}${slot.values.length > 0 ? `: ${slot.values.join(" | ")}` : ""}>`
-        : `${value.value}${value.suffix && slot.suffix !== null ? slot.suffix : ""}`;
+        ? placeholder(slot)
+        : `${value.value}${value.suffix && suffixText !== null ? suffixText : ""}`;
     if (slot.separator === null) {
       out += ` ${rendered}`;
     } else if (slot.separatorKind === "symbol") {
@@ -607,4 +765,115 @@ function correctedLine(
     }
   }
   return out;
+}
+
+// --- lists and alternations (zheref/nen#410) ---------------------------------
+
+/** The suffix literal of whichever alternative filled `value`. */
+function slotSuffix(slot: Slot, value: SlotValue): string | null {
+  if (value.alternative === undefined) return slot.suffix;
+  return slot.alternatives.find((alternative): boolean => alternative.name === value.alternative)?.suffix ?? null;
+}
+
+/** The placeholder a corrected line shows for a slot nobody filled correctly. */
+function placeholder(slot: Slot): string {
+  return slot.alternatives
+    .map((alternative): string => {
+      const set = alternative.values.length > 0 ? `: ${alternative.values.join(" | ")}` : "";
+      const tail = alternative.joiner !== null ? `{${alternative.joiner}}` : alternative.suffix !== null ? `[${alternative.suffix}]` : "";
+      return `<${alternative.name}${set}>${tail}`;
+    })
+    .join("|");
+}
+
+function matchValue(alternative: Alternative, text: string): string | undefined {
+  return alternative.values.find((candidate): boolean => candidate.toLowerCase() === text.toLowerCase());
+}
+
+function splitAll(text: string, separators: readonly string[]): string[] {
+  let pieces = [text];
+  for (const separator of separators) pieces = pieces.flatMap((piece): string[] => piece.split(separator));
+  return pieces;
+}
+
+/**
+ * Fill a list or alternating slot, or return the problem that refuses it.
+ *
+ * THE ORDER IS THE TEMPLATE'S. Each ENUMERATED alternative is tried in turn: a
+ * list fits when every item is one of its values; a single value fits when it
+ * is one of them, with its suffix at most once. Only when none fits is the
+ * FREE alternative considered -- and only when no piece of the value (split at
+ * every enumerated joiner and suffix) is an enumerated value. That last rule is
+ * what keeps 'g4+model/gpt' from reading as one free label: a value that
+ * plainly MEANT an enumerated alternative and got it wrong is refused with the
+ * reason, never re-read as free text (the engine's rule 4: never guess).
+ * 'c++' has no enumerated piece, so it IS free text, kept as typed.
+ */
+function resolveSlot(slot: Slot, text: string): SlotValue | string {
+  const alternates = slot.alternatives.length > 1;
+  const tag = (alternative: Alternative): { alternative?: string } => (alternates ? { alternative: alternative.name } : {});
+  const enumerated = slot.alternatives.filter((alternative): boolean => alternative.values.length > 0);
+
+  for (const alternative of enumerated) {
+    if (alternative.joiner !== null) {
+      const items = text.split(alternative.joiner).map((item): string => item.trim());
+      const hits = items.map((item): string | undefined => matchValue(alternative, item));
+      if (hits.every((hit): boolean => hit !== undefined)) {
+        const normalised = hits as string[];
+        return { name: slot.name, value: normalised.join(alternative.joiner), suffix: false, ...tag(alternative), items: normalised };
+      }
+      continue;
+    }
+    let candidate = text;
+    let suffix = false;
+    if (alternative.suffix !== null && candidate.endsWith(alternative.suffix)) {
+      candidate = candidate.slice(0, candidate.length - alternative.suffix.length).trim();
+      suffix = true;
+    }
+    const hit = matchValue(alternative, candidate);
+    if (hit !== undefined) return { name: slot.name, value: hit, suffix, ...tag(alternative) };
+  }
+
+  // Nothing enumerated fits. Which enumerated alternatives does the value TOUCH?
+  const separators = [
+    ...new Set(
+      enumerated.flatMap((alternative): string[] =>
+        [alternative.joiner, alternative.suffix].filter((part): part is string => part !== null),
+      ),
+    ),
+  ];
+  const pieces = splitAll(text, separators).map((piece): string => piece.trim());
+  const touched = enumerated.filter((alternative): boolean =>
+    pieces.some((piece): boolean => matchValue(alternative, piece) !== undefined),
+  );
+  const free = slot.alternatives.find((alternative): boolean => alternative.values.length === 0);
+
+  if (touched.length === 0 && free !== undefined) {
+    if (free.joiner === null) return { name: slot.name, value: text, suffix: false, ...tag(free) };
+    const items = text.split(free.joiner).map((item): string => item.trim());
+    if (items.some((item): boolean => item === "")) {
+      return `<${free.name}> is one or more values joined by '${free.joiner}', and '${text}' has an empty item (a leading, trailing or doubled '${free.joiner}').`;
+    }
+    return { name: slot.name, value: items.join(free.joiner), suffix: false, ...tag(free), items };
+  }
+
+  if (touched.length > 1) {
+    return `'${text}' mixes ${touched.map((alternative): string => `<${alternative.name}>`).join(" and ")} values in one token. Give one or the other: <${slot.name}> takes exactly one of its alternatives.`;
+  }
+  const alternative = touched[0] ?? enumerated[0];
+  /* c8 ignore next -- an all-free slot is a plain slot and never reaches here */
+  if (alternative === undefined) return `'${text}' fills no alternative of <${slot.name}>.`;
+  const setText = `${alternative.values.join(" | ")} (case-insensitively)`;
+  if (alternative.joiner !== null) {
+    const items = text.split(alternative.joiner).map((item): string => item.trim());
+    if (items.some((item): boolean => item === "")) {
+      return `<${alternative.name}> is one or more of ${setText} joined by '${alternative.joiner}', and '${text}' has an empty item (a leading, trailing or doubled '${alternative.joiner}').`;
+    }
+    const wrong = items.filter((item): boolean => matchValue(alternative, item) === undefined);
+    return `<${alternative.name}> is one or more of ${setText} joined by '${alternative.joiner}', and ${wrong.map((item): string => `'${item}'`).join(", ")} ${wrong.length === 1 ? "is" : "are"} none of them. It is resolved, never guessed at: the closest match is not the answer.`;
+  }
+  if (alternative.suffix !== null) {
+    return `<${alternative.name}> is ONE of ${setText}, optionally followed by one '${alternative.suffix}', and '${text}' is not that.`;
+  }
+  return `<${alternative.name}> is one of ${setText}, and '${text}' is none of them. It is resolved, never guessed at: the closest match is not the answer.`;
 }

@@ -487,6 +487,9 @@ function resolveReference(raw: string | number, scope: readonly Scoped[], codes:
     candidates = scope.filter((entry): boolean => entry.object.number === ref.number && (kind === null || entry.object.kind === kind));
   }
   if (candidates.length === 0) {
+    // COUPLED: ../report/command.ts's withFilterContext matches this message's
+    // "is not in this register's objects" to add the --label/--severity
+    // context (zheref/nen#410). Change the wording there too.
     throw new VerbUsageError(
       `the register desk's ${what} names ${shown}, which is not in this register's objects (${scope.map((entry): string => entry.notation).join(", ") || "none"}). Name it with --prs/--issues, or drop it: judgement about an object the page does not show is judgement nobody reads.`,
     );
