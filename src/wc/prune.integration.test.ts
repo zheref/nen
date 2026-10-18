@@ -40,7 +40,7 @@ async function run(w: ReturnType<typeof world>, items: unknown, flags: string[] 
 const base = "refs/remotes/origin/main";
 const local = { kind: "local-branch", ref: "refs/heads/topic", base };
 const remoteItem = { kind: "remote-branch", remote: "origin", ref: "refs/heads/topic", base };
-const tracking = { kind: "remote-ref", ref: "refs/remotes/origin/topic", base };
+const tracking = { kind: "remote-ref", remote: "origin", ref: "refs/remotes/origin/topic", base };
 
 describe("wc prune -- explicit targets, real disposable repositories", () => {
   it("defaults to a dry run with no write commands, refs or directories changed", async () => {
@@ -110,7 +110,7 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
   });
   it("rejects malformed plans/refs and conflicting flags whole before any deletion", async () => {
     const w = world();
-    for (const value of [{}, [{ kind: "anything", ref: "topic" }], [{ ...local, typo: true }], [local, { ...local, ref: "refs/heads/bad..ref" }], [{ ...remoteItem, remote: "--force" }]]) {
+    for (const value of [{}, [{ kind: "anything", ref: "topic" }], [{ ...local, typo: true }], [local, { ...local, ref: "refs/heads/bad..ref" }], [{ ...remoteItem, remote: "--force" }], [{ kind: "remote-ref", ref: tracking.ref, base }]]) {
       const result = await run(w, value, ["--run"]); expect(result.code).toBe(2); expect(result.report).toBeNull(); expect(git(w.repo, "branch", "--list", "topic")).toContain("topic");
     }
     expect((await run(w, [local], ["--run", "--dry-run"])).code).toBe(2);
@@ -141,9 +141,96 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
     git(w.repo, "push", "origin", "other");
     const result = await run(w, [remoteItem], ["--run"], seams); expect(result.code).toBe(1); expect(result.report?.items[0]?.status).toBe("failed"); expect(git(w.remote, "rev-parse", "refs/heads/topic")).toBe(newer);
   });
+  it("retains a local tip moved after ancestry proof even when HEAD contains its replacement", async () => {
+    const w = world(); git(w.repo, "switch", "-c", "other");
+    writeFileSync(join(w.repo, "replacement"), "unmerged into plan base"); git(w.repo, "add", "replacement"); git(w.repo, "commit", "-m", "replacement");
+    const replacement = git(w.repo, "rev-parse", "HEAD");
+    expect(spawnSync("git", ["merge-base", "--is-ancestor", replacement, base], { cwd: w.repo, env }).status).toBe(1);
+    const real = defaultSeams(); let moved = false;
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      const result = real.run(command, args, options);
+      if (!moved && command === "git" && args[0] === "merge-base" && args[1] === "--is-ancestor") {
+        moved = true; git(w.repo, "update-ref", local.ref, replacement);
+      }
+      return result;
+    } };
+    const result = await run(w, [local], ["--run"], seams);
+    expect(moved).toBe(true); expect(result.code).toBe(1); expect(result.report?.items[0]?.status).toBe("failed");
+    expect(git(w.repo, "rev-parse", local.ref)).toBe(replacement);
+  });
+  it("retains the upstream-or-HEAD non-force guard in addition to the explicit plan base", async () => {
+    const w = world(); git(w.repo, "switch", "topic");
+    writeFileSync(join(w.repo, "later"), "later"); git(w.repo, "add", "later"); git(w.repo, "commit", "-m", "later");
+    const tip = git(w.repo, "rev-parse", "HEAD"); git(w.repo, "switch", "main"); git(w.repo, "update-ref", base, tip);
+    expect((await run(w, [local], ["--run"])).report?.items[0]?.message).toMatch(/non-force deletion refused/);
+    expect(git(w.repo, "rev-parse", local.ref)).toBe(tip);
+    git(w.repo, "branch", "--set-upstream-to=origin/main", "topic");
+    expect((await run(w, [local], ["--run"])).code).toBe(0);
+  });
+  it("reverses a nonidentity fetch refspec instead of deriving its source from the tracking name", async () => {
+    const w = world(); const tip = git(w.repo, "rev-parse", "topic");
+    git(w.remote, "update-ref", "refs/heads/source", tip);
+    git(w.repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/source:refs/remotes/origin/topic");
+    const live = await run(w, [tracking], ["--run"]);
+    expect(live.code).toBe(2); expect(live.report?.items[0]?.message).toMatch(/still exists/);
+    expect(git(w.repo, "rev-parse", tracking.ref)).toBe(tip);
+    git(w.remote, "update-ref", "-d", "refs/heads/source");
+    expect((await run(w, [tracking], ["--run"])).code).toBe(0);
+    expect(git(w.remote, "rev-parse", "refs/heads/topic")).toBe(tip);
+  });
+  it("uses the explicitly named remote under a custom destination namespace with an unrelated same-name remote", async () => {
+    const w = world(); const unrelated = join(w.root, "cache.git"); git(w.root, "init", "--bare", unrelated);
+    git(w.repo, "remote", "add", "cache", unrelated);
+    git(w.repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/cache/*");
+    const ref = "refs/remotes/cache/topic"; const tip = git(w.repo, "rev-parse", "topic"); git(w.repo, "update-ref", ref, tip);
+    const item = { ...tracking, ref };
+    expect((await run(w, [item], ["--run"])).code).toBe(2);
+    expect(git(w.repo, "rev-parse", ref)).toBe(tip);
+    git(w.remote, "update-ref", "-d", "refs/heads/topic");
+    expect((await run(w, [item], ["--run"])).code).toBe(0);
+    expect(git(unrelated, "for-each-ref")).toBe("");
+  });
+  it.each(["ambiguous", "negative-exact", "negative-wildcard", "unmapped"])("retains a tracking ref with %s fetch authority", async (mode) => {
+    const w = world(); const tip = git(w.repo, "rev-parse", tracking.ref);
+    if (mode === "ambiguous") git(w.repo, "config", "--add", "remote.origin.fetch", "+refs/heads/source:refs/remotes/origin/topic");
+    if (mode === "negative-exact") git(w.repo, "config", "--add", "remote.origin.fetch", "^refs/heads/topic");
+    if (mode === "negative-wildcard") git(w.repo, "config", "--add", "remote.origin.fetch", "^refs/heads/top*");
+    if (mode === "unmapped") git(w.repo, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/*:refs/remotes/cache/*");
+    const result = await run(w, [tracking], ["--run"]);
+    expect(result.code).toBe(2); expect(result.report?.items[0]?.status).toBe("refused");
+    expect(result.report?.items[0]?.message).toMatch(/exactly one source|negative fetch refspec/);
+    expect(git(w.repo, "rev-parse", tracking.ref)).toBe(tip);
+  });
+  it.each([false, true])("previews ordered remote removals by exact endpoint, split push/fetch=%s", async (split) => {
+    const w = world(); const pushRemote = join(w.root, "push.git");
+    if (split) { git(w.root, "init", "--bare", pushRemote); git(w.repo, "push", pushRemote, "topic"); git(w.repo, "remote", "set-url", "--push", "origin", pushRemote); }
+    else git(w.repo, "remote", "add", "alias", w.remote);
+    // A different remote NAME can still mean the very same endpoint.
+    const trackingItem = split ? tracking : { ...tracking, remote: "alias", ref: "refs/remotes/alias/topic" };
+    if (!split) git(w.repo, "update-ref", trackingItem.ref, git(w.repo, "rev-parse", "topic"));
+    const preview = await run(w, [remoteItem, trackingItem]);
+    const actual = await run(w, [remoteItem, trackingItem], ["--run"]);
+    expect(preview.report?.items.map((i) => i.status)).toEqual(split ? ["would-remove", "refused"] : ["would-remove", "would-remove"]);
+    expect(actual.report?.items.map((i) => i.status)).toEqual(preview.report?.items.map((i) => i.status === "would-remove" ? "removed" : i.status));
+    expect(actual.code).toBe(split ? 2 : 0);
+    if (split) expect(git(w.repo, "rev-parse", tracking.ref)).toBe(git(w.remote, "rev-parse", "refs/heads/topic"));
+  });
+  it("rejects duplicate destructive identities whole-plan, including aliases, in preview and execution", async () => {
+    const w = world(); git(w.repo, "branch", "keep"); git(w.repo, "worktree", "add", w.tree, "topic"); git(w.repo, "remote", "add", "alias", w.remote);
+    const worktree = { kind: "worktree", path: w.tree, base };
+    const keep = { ...local, ref: "refs/heads/keep" };
+    for (const duplicates of [[local, local], [tracking, { ...tracking, remote: "alias" }], [remoteItem, { ...remoteItem, remote: "alias" }], [worktree, { ...worktree, path: join(w.tree, ".") }]]) {
+      for (const flags of [[], ["--run"]]) {
+        const result = await run(w, [keep, ...duplicates], flags);
+        expect(result.code).toBe(2); expect(result.report).toBeNull(); expect(result.err).toContain("duplicate destructive target");
+        expect(git(w.repo, "branch", "--list", "keep")).toContain("keep");
+        expect(existsSync(w.tree)).toBe(true); expect(git(w.remote, "rev-parse", "refs/heads/topic")).toBe(git(w.repo, "rev-parse", "topic"));
+      }
+    }
+  });
   it("records failures per item and continues, never claiming bytes for an uncertain write", async () => {
     const w = world(); git(w.repo, "branch", "keep");
-    const real = defaultSeams(); const seams: Seams = { ...real, run: (command, args, options) => command === "git" && args[0] === "branch" ? { code: 1, stdout: "", stderr: "refused", spawnFailed: false } : real.run(command, args, options) };
+    const real = defaultSeams(); const seams: Seams = { ...real, run: (command, args, options) => command === "git" && args[0] === "update-ref" ? { code: 1, stdout: "", stderr: "refused", spawnFailed: false } : real.run(command, args, options) };
     const result = await run(w, [local, { ...local, ref: "refs/heads/keep" }], ["--run"], seams);
     expect(result.code).toBe(1); expect(result.report?.items.map((i) => i.status)).toEqual(["failed", "failed"]); expect(result.report?.freedBytes).toBeNull();
   });

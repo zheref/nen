@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { VerbUsageError, requireRepoFlag, requireValue, type CommandContext } from "../cli/command.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { plainLine } from "../cli/plain.js";
-import { samePath } from "../canon/paths.js";
+import { comparable, samePath } from "../canon/paths.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { isRecord } from "../schema/errors.js";
 import { loadWorkflow } from "../schema/workflow.js";
@@ -16,8 +16,8 @@ import { scrubbedGitEnv } from "./worktree.js";
 export const PRUNE_CONTRACT = "nen.wc.prune/v0.1";
 export type PruneItem =
   | { readonly kind: "worktree"; readonly path: string; readonly base: string }
-  | { readonly kind: "local-branch" | "remote-ref"; readonly ref: string; readonly base: string }
-  | { readonly kind: "remote-branch"; readonly remote: string; readonly ref: string; readonly base: string }
+  | { readonly kind: "local-branch"; readonly ref: string; readonly base: string }
+  | { readonly kind: "remote-branch" | "remote-ref"; readonly remote: string; readonly ref: string; readonly base: string }
   | { readonly kind: "host-link"; readonly path: string };
 export interface PruneOutcome {
   readonly item: PruneItem;
@@ -41,10 +41,10 @@ class Refused extends Error {}
 export function parsePrunePlan(value: unknown): readonly PruneItem[] {
   if (!Array.isArray(value)) throw new VerbUsageError("--plan must be a JSON array of explicit cleanup items.");
   return value.map((row: unknown, index): PruneItem => {
-    const fail = (): never => { throw new VerbUsageError(`--plan [${index}] has an unknown kind, field, or missing non-empty string. Expected worktree{path,base}, local-branch{ref,base}, remote-branch{remote,ref,base}, remote-ref{ref,base}, or host-link{path}.`); };
+    const fail = (): never => { throw new VerbUsageError(`--plan [${index}] has an unknown kind, field, or missing non-empty string. Expected worktree{path,base}, local-branch{ref,base}, remote-branch{remote,ref,base}, remote-ref{remote,ref,base}, or host-link{path}.`); };
     if (!isRecord(row)) return fail();
     const kind = row["kind"];
-    const fields = kind === "worktree" ? ["path", "base"] : kind === "host-link" ? ["path"] : kind === "remote-branch" ? ["ref", "base", "remote"] : kind === "local-branch" || kind === "remote-ref" ? ["ref", "base"] : null;
+    const fields = kind === "worktree" ? ["path", "base"] : kind === "host-link" ? ["path"] : (kind === "remote-branch" || kind === "remote-ref") ? ["ref", "base", "remote"] : kind === "local-branch" ? ["ref", "base"] : null;
     if (fields === null || Object.keys(row).some((key) => key !== "kind" && !fields.includes(key)) || fields.some((key) => typeof row[key] !== "string" || row[key] === "" || /[\r\n\0]/.test(row[key]))) return fail();
     return row as unknown as PruneItem;
   });
@@ -86,7 +86,23 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     if (item.kind === "worktree") continue;
     const prefix = item.kind === "remote-ref" ? "refs/remotes/" : "refs/heads/";
     if (!item.ref.startsWith(prefix) || !fullRef(item.ref)) throw new VerbUsageError(`invalid ${item.kind} ref '${item.ref}': expected ${prefix}<name>.`);
-    if (item.kind === "remote-branch" && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(item.remote)) throw new VerbUsageError(`invalid configured remote name '${item.remote}'.`);
+    if ((item.kind === "remote-branch" || item.kind === "remote-ref") && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(item.remote)) throw new VerbUsageError(`invalid configured remote name '${item.remote}'.`);
+  }
+  // Reject duplicate destructive identities before the first write. Different
+  // configured names may still address the same push endpoint and source ref.
+  const targets = new Set<string>();
+  for (const item of plan) {
+    if (item.kind === "host-link") continue;
+    let key: string;
+    if (item.kind === "worktree") key = JSON.stringify(["worktree", comparable(resolveAgainstRepo(root, item.path), seams.platform)]);
+    else if (item.kind === "remote-branch") {
+      const result = call(["remote", "get-url", "--push", "--all", item.remote]);
+      const urls = result.stdout.trim().split(/\r?\n/);
+      // An unreadable/ambiguous endpoint is refused by its per-item guard.
+      key = JSON.stringify(["remote", result.code === 0 && !result.spawnFailed && urls.length === 1 && urls[0] !== "" ? urls[0] : item.remote, item.ref]);
+    } else key = JSON.stringify(["local-ref", item.ref]);
+    if (targets.has(key)) throw new VerbUsageError("--plan contains a duplicate destructive target; list each worktree, local ref or exact remote endpoint/source ref only once.");
+    targets.add(key);
   }
   if (!samePath(git(["rev-parse", "--show-toplevel"]), root, seams.platform)) throw new VerbUsageError("--repo must name this checkout's root.");
   const readRegistrations = (): Registration[] => registrations(git(["worktree", "list", "--porcelain", "-z"]));
@@ -125,6 +141,45 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     const sha = match.split(/\s+/)[0] ?? "";
     if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error("remote answered an invalid object id");
     return sha;
+  };
+  const remoteUrl = (remote: string, push: boolean): string => {
+    if (!git(["remote"]).split(/\r?\n/).includes(remote)) throw new Refused(`'${remote}' is not a configured remote`);
+    const urls = git(["remote", "get-url", ...(push ? ["--push"] : []), "--all", remote]).split(/\r?\n/);
+    if (urls.length !== 1 || urls[0] === "") throw new Refused(`remote must have exactly one configured ${push ? "push" : "fetch"} URL`);
+    return urls[0]!;
+  };
+  const endpointRef = (url: string, ref: string): string => JSON.stringify([url, ref]);
+  const trackingSource = (remote: string, destination: string): string => {
+    const result = call(["config", "--get-all", `remote.${remote}.fetch`]);
+    if (result.spawnFailed || result.code !== 0 || result.stdout.trim() === "") throw new Refused("remote-ref requires configured fetch refspecs");
+    const sources = new Set<string>();
+    const excluded: string[] = [];
+    const capture = (pattern: string, value: string): string | null => {
+      const parts = pattern.split("*");
+      if (parts.length > 2 || !fullRef(pattern.replace("*", "wildcard"))) throw new Refused("unsupported fetch refspec pattern");
+      if (parts.length === 1) return pattern === value ? "" : null;
+      return value.startsWith(parts[0]!) && value.endsWith(parts[1]!) && value.length >= parts[0]!.length + parts[1]!.length ? value.slice(parts[0]!.length, value.length - parts[1]!.length) : null;
+    };
+    for (const raw of result.stdout.trim().split(/\r?\n/)) {
+      if (raw.startsWith("^")) {
+        const pattern = raw.slice(1);
+        capture(pattern, ""); // validate even when no candidate eventually matches
+        excluded.push(pattern);
+        continue;
+      }
+      const spec = raw.startsWith("+") ? raw.slice(1) : raw;
+      const parts = spec.split(":");
+      if (parts.length !== 2 || (parts[0]!.includes("*") !== parts[1]!.includes("*"))) throw new Refused("unsupported fetch refspec; a source and destination with matching wildcard shape are required");
+      capture(parts[0]!, "");
+      const middle = capture(parts[1]!, destination);
+      if (middle !== null) sources.add(parts[0]!.replace("*", middle));
+    }
+    if (sources.size !== 1) throw new Refused("tracking ref must reverse to exactly one source through the named remote's fetch refspecs");
+    const source = [...sources][0]!;
+    if (!source.startsWith("refs/heads/") || !fullRef(source)) throw new Refused("tracking ref source must be one full refs/heads branch");
+    if (excluded.some((pattern) => capture(pattern, source) !== null)) throw new Refused("tracking ref source is excluded by a negative fetch refspec");
+    if (isTrunk(source.slice("refs/heads/".length), trunk) || source === "refs/heads/HEAD") throw new Refused("tracking ref maps to a protected base branch or HEAD");
+    return source;
   };
   for (const item of plan) {
     let measured: number | null = null;
@@ -168,9 +223,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
       if (branch === "" || isTrunk(branch, trunk) || branch === "HEAD" || item.ref === item.base) throw new Refused("protected base branch or HEAD ref");
       let pushUrl: string | undefined;
       if (item.kind === "remote-branch") {
-        const urls = git(["remote", "get-url", "--push", "--all", item.remote]).split(/\r?\n/);
-        if (urls.length !== 1 || urls[0] === "") throw new Refused("remote must have exactly one configured push URL");
-        pushUrl = urls[0]!;
+        pushUrl = remoteUrl(item.remote, true);
       }
       let sha: string | null;
       // Observe and lease the actual push destination, which can differ from
@@ -182,18 +235,29 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
       if (item.kind === "local-branch") {
         const held = readRegistrations().find((row) => row.branch === item.ref && !(dryRun && simulatedRemoved.has(row.path)));
         if (held !== undefined) throw new Refused(`branch is checked out at '${held.path}'`);
-        if (!dryRun) { writeStarted = true; git(["branch", "-d", "--", branch]); }
+        // Keep the non-force merge guard in addition to the explicit plan base.
+        // Unlike branch -d, delete exactly the OID whose ancestry was proved.
+        const upstream = git(["for-each-ref", "--format=%(refname)%09%(upstream)", item.ref]).split(/\r?\n/).find((row) => row.split("\t")[0] === item.ref)?.split("\t")[1] ?? "";
+        const safetySha = upstream === "" ? git(["rev-parse", "--verify", "HEAD^{commit}"]) : refSha(upstream);
+        if (safetySha === null) throw new Refused("branch upstream is absent; non-force deletion refused");
+        const safety = call(["merge-base", "--is-ancestor", sha, safetySha]);
+        if (safety.spawnFailed || safety.code !== 0) throw new Refused("branch is not merged into its readable upstream (or HEAD when no upstream); non-force deletion refused");
+        if (!dryRun) {
+          if (readRegistrations().some((row) => row.branch === item.ref)) throw new Refused("branch became checked out before deletion");
+          writeStarted = true;
+          git(["update-ref", "--no-deref", "-d", item.ref, sha]);
+        }
       } else if (item.kind === "remote-branch") {
         // A push by configured remote NAME would also delete its unlisted
         // local tracking ref. Use its one configured push URL so that only
         // the explicitly named remote branch is touched.
         if (!dryRun) { writeStarted = true; git(["push", "--no-follow-tags", "--recurse-submodules=no", `--force-with-lease=${item.ref}:${sha}`, "--", pushUrl!, `:${item.ref}`]); }
-        simulatedRemoteRemoved.add(`${item.remote}/${item.ref}`);
+        simulatedRemoteRemoved.add(endpointRef(pushUrl!, item.ref));
       } else {
-        const parts = item.ref.split("/");
-        const remote = parts[2] ?? "";
-        if (remoteSha(remote, `refs/heads/${branch}`) !== null && !(dryRun && simulatedRemoteRemoved.has(`${remote}/refs/heads/${branch}`))) throw new Refused("remote branch still exists; tracking ref is not stale");
-        if (!dryRun) { writeStarted = true; git(["update-ref", "-d", item.ref, sha]); }
+        const fetchUrl = remoteUrl(item.remote, false);
+        const source = trackingSource(item.remote, item.ref);
+        if (remoteSha(item.remote, source, fetchUrl) !== null && !(dryRun && simulatedRemoteRemoved.has(endpointRef(fetchUrl, source)))) throw new Refused("remote branch still exists at the configured fetch URL; tracking ref is not stale");
+        if (!dryRun) { writeStarted = true; git(["update-ref", "--no-deref", "-d", item.ref, sha]); }
       }
       record(dryRun ? "would-remove" : "removed", "only the named merged ref; no object GC", 0);
     } catch (error) {

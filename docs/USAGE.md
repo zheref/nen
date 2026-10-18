@@ -3975,7 +3975,7 @@ A plan may contain these rows (all named fields are required):
   {"kind":"worktree", "path":"../finished-tree", "base":"refs/remotes/origin/main"},
   {"kind":"local-branch", "ref":"refs/heads/finished", "base":"refs/remotes/origin/main"},
   {"kind":"remote-branch", "remote":"origin", "ref":"refs/heads/finished", "base":"refs/remotes/origin/main"},
-  {"kind":"remote-ref", "ref":"refs/remotes/origin/finished", "base":"refs/remotes/origin/main"},
+  {"kind":"remote-ref", "remote":"origin", "ref":"refs/remotes/origin/finished", "base":"refs/remotes/origin/main"},
   {"kind":"host-link", "path":"../host-link"}
 ]
 ```
@@ -3984,13 +3984,27 @@ A plan may contain these rows (all named fields are required):
 objects must be fetched separately. A base itself listed for removal refuses. Worktrees
 must belong to this repository, be real directories, clean including ignored files,
 unlocked and merged into the base. Current/primary worktrees, checked-out local branches,
-configured protected base branches and symbolic refs are retained. Native `branch -d`
-also retains its HEAD/upstream merge guard; nothing is force-removed.
+configured protected base branches and symbolic refs are retained. Local branches must
+also be merged into their readable configured upstream, or HEAD when no upstream is
+configured. An absent configured upstream refuses. Deletion uses an atomic expected-old-OID
+ref operation, so a tip moved after proof is retained; branch configuration is left intact.
+Nothing is force-removed.
 
 Remote branch deletion reads the exact single configured push URL and leases the observed
 object ID, so a moved tip cannot be deleted. It preserves unlisted local tracking refs.
-A `remote-ref` row removes only that local tracking ref after a successful read of its
-configured fetch remote proves the corresponding branch absent. Remote HEAD is protected.
+A `remote-ref` row requires an explicit configured `remote`; its local namespace never
+identifies the remote authority. Its fetch refspecs must reverse the local destination to
+exactly one full `refs/heads/...` source. Exact and single-wildcard mappings are supported;
+negative-excluded sources, ambiguous mappings and unsupported refspecs refuse. A successful
+read of that remote's exact single configured fetch URL must prove the source branch absent.
+The local tracking ref is then deleted with its expected old OID. Remote HEAD and mappings
+to protected source branches are retained.
+
+Duplicate destructive targets refuse the whole plan before any write, for canonical
+worktree paths, local refs, and exact push-URL/source-ref pairs (including remote aliases).
+Repeated read-only host-link rows are allowed. Ordered previews simulate prior remote
+removals only for the same exact endpoint URL and source ref: deleting a split push
+endpoint's branch does not make a still-live fetch-side tracking ref stale.
 No global `worktree prune` or `remote prune` runs. `host-link` reports the raw readlink
 target without following or removing the link, including with `--run`.
 

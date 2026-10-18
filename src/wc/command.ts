@@ -49,17 +49,21 @@ const USAGE = `nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--j
   An explicit JSON array, processed in order. Default: dry run, no fetch,
   deletion, global prune or GC. --run acts ONLY on listed targets.
   Items: worktree{path,base}, local-branch{ref,base},
-  remote-branch{remote,ref,base}, remote-ref{ref,base}, host-link{path},
+  remote-branch{remote,ref,base}, remote-ref{remote,ref,base}, host-link{path},
   each with its named kind field. Refs and bases are full refs/heads/... or
   refs/remotes/...; remote-ref means a stale LOCAL tracking ref, never HEAD.
   Bases must already be available locally; fetch missing objects separately.
   Relative plan/worktree/link paths resolve against --repo. Host links are
   readlink-only, never removed. Current/primary, locked, dirty (ignored too),
   unmerged and protected-base resources refuse at exit 2. Never force-remove
-  a worktree or branch. Native branch -d may also refuse its HEAD/upstream
-  merge guard even when the plan base contains the branch.
+  a worktree or branch. Local branches also need their upstream (or HEAD
+  without one) to contain the proved tip; atomic expected-OID deletion retains
+  moved tips and leaves branch configuration intact.
   Remote branch deletion leases its exact observed object id; a moved tip
-  refuses. A remote-ref requires a successful live read proving remote absence.
+  refuses. A remote-ref names its configured remote, reverses fetch refspecs
+  to one unexcluded source branch and proves absence at its exact fetch URL.
+  Ambiguous mappings refuse. Duplicate destructive targets refuse the whole
+  plan before writes; preview dependencies use exact endpoint/source identity.
   --json: nen.wc.prune/v0.1 with dryRun, items (one status/message per item),
   measuredBytes and freedBytes (logical file bytes), bytesBasis, and
   physicalFreedBytes:null. Bytes are nonzero only after a worktree directory
