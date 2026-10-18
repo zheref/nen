@@ -4022,7 +4022,10 @@ A moved remote tip fails its exact OID lease. Endpoint records preserve leading/
 spaces and leading U+FEFF (BOM) pathname data exactly, including after URL rewriting. CR, LF or NUL in raw endpoints, rewrite
 records or decoded file-URL paths refuse before remote observation; only Git's output
 record terminator is removed. Git endpoint/config records must be valid UTF-8; non-UTF-8 Git endpoints/configuration are unsupported and refuse.
-On Windows, filesystem endpoint components ending in a space or period also refuse in both
+On Windows, drive-relative endpoints such as `C:peer.git` refuse before URL/path
+classification and again after rewriting; per-drive working directories cannot supply authority.
+Drive-absolute and UNC endpoints use Windows-aware absolute-path classification.
+Filesystem endpoint components ending in a space or period also refuse on Windows in both
 preview and execution before remote observation: the native path layer cannot bind them
 without normalization. Leading-space components and BOM pathname data remain supported.
 

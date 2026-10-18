@@ -78,4 +78,33 @@ describe("isolated prune Git initialization portability", () => {
     expect(remoteCalls).toEqual([]); expect(git(peer, "for-each-ref", "--format=%(refname)", "refs/heads/topic")).toBe("refs/heads/topic");
   });
 
+  it.each(["C:peer.git", "C:peer.git ", "C:peer.git."].flatMap((endpoint) => [false, true].map((rewrite) => ({ endpoint, rewrite }))))("refuses drive-relative authority before remote access: $endpoint rewritten=$rewrite", ({ endpoint, rewrite }) => {
+    const path = root(); const repo = join(path, "repo");
+    git(path, "init", "--initial-branch=main", repo);
+    git(repo, "config", "user.name", "fixture"); git(repo, "config", "user.email", "fixture@example.invalid");
+    git(repo, "config", "commit.gpgsign", "false"); git(repo, "config", "core.hooksPath", "/dev/null");
+    writeFileSync(join(repo, "seed"), "fixture"); git(repo, "add", "seed"); git(repo, "commit", "-m", "seed");
+    git(repo, "remote", "add", "origin", rewrite ? "fixture-alias" : endpoint);
+    if (rewrite) git(repo, "config", `url.${endpoint}.insteadOf`, "fixture-alias");
+    const real = defaultSeams(); const remoteCalls: string[][] = [];
+    const oid = git(repo, "rev-parse", "HEAD");
+    const seams = { ...real, platform: "win32" as const, run: (command: string, args: readonly string[], options?: RunOptions): CommandResult => {
+      if (command === "git" && args[0] === "ls-remote" && args.includes("--heads")) {
+        remoteCalls.push([...args]);
+        // No native access: expose the classification gap without a network
+        // or a destructive endpoint. Both modes must refuse before this seam.
+        const stdout = `${oid}\trefs/heads/topic\n`;
+        return { code: 0, stdout, stdoutBytes: new TextEncoder().encode(stdout), stderr: "", spawnFailed: false };
+      }
+      if (command === "git" && args[0] === "push") {
+        remoteCalls.push([...args]); return { code: 0, stdout: "", stderr: "", spawnFailed: false };
+      }
+      return real.run(command, args, options);
+    } };
+    const plan = [{ kind: "remote-branch" as const, remote: "origin", ref: "refs/heads/topic", base: "refs/heads/main" }];
+    const reports = [prune(seams, repo, plan, true, "main"), prune(seams, repo, plan, false, "main")];
+    for (const report of reports) { expect(report.items[0]?.status).toBe("refused"); expect(report.items[0]?.message).toMatch(/drive-relative/); }
+    expect(remoteCalls).toEqual([]);
+  });
+
 });

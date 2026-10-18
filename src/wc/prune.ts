@@ -3,7 +3,7 @@
 // No fetch, global prune, reset, force removal or GC.
 import { lstatSync, mkdtempSync, readlinkSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VerbUsageError, requireRepoFlag, requireValue, type CommandContext } from "../cli/command.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
@@ -132,6 +132,10 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     return rawStdout(result);
   };
   const endpoints = new Map<string, string>();
+  const refuseDriveRelative = (value: string): void => {
+    if (seams.platform === "win32" && /^[A-Za-z]:(?![\\/])/.test(value)) throw new Refused("Windows drive-relative endpoints cannot be bound independently of per-drive working directories");
+  };
+  const endpointAbsolute = (value: string): boolean => seams.platform === "win32" ? win32.isAbsolute(value) : isAbsolute(value);
   const remoteUrl = (remote: string, push: boolean): string => {
     const key = JSON.stringify([remote, push]); const cached = endpoints.get(key);
     if (cached !== undefined) return cached;
@@ -142,6 +146,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     if (urls.length !== 1 || urls[0] === "") throw new Refused(`remote must have exactly one configured ${push ? "push" : "fetch"} URL`);
     const raw = urls[0]!;
     endpointRecord(raw);
+    refuseDriveRelative(raw); // Before Git can classify a DOS prefix as local.
     const noEmbeddedCredentials = (value: string): void => {
       if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return;
       let url: URL;
@@ -159,13 +164,15 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     // have no CR/LF, so this CR cannot be part of the configured endpoint.
     if (seams.platform === "win32" && endpoint.endsWith("\r")) endpoint = endpoint.slice(0, -1);
     endpointRecord(endpoint);
+    refuseDriveRelative(endpoint); // Rewrites must not reintroduce C:relative authority.
     noEmbeddedCredentials(endpoint);
-    let filesystem = isAbsolute(endpoint);
+    let filesystem = endpointAbsolute(endpoint);
     if (/^file:/i.test(endpoint)) {
       filesystem = true;
       try { endpoint = fileURLToPath(endpoint); } catch { throw new Refused("unsupported file URL endpoint"); }
       endpointRecord(endpoint); // Includes percent-encoded record separators.
-    } else if (!isAbsolute(endpoint) && !/^[^/]+:/.test(endpoint)) {
+      refuseDriveRelative(endpoint);
+    } else if (!endpointAbsolute(endpoint) && !/^[^/]+:/.test(endpoint)) {
       if (endpoint.startsWith("~")) throw new Refused("tilde filesystem endpoints cannot be bound; configure an absolute path");
       endpoint = resolve(root, endpoint);
       filesystem = true;
