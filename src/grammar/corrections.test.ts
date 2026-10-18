@@ -13,6 +13,8 @@ const REPAIRS = [
   ["hatsu@g4+g5+model/gpt#lang/prose", "hatsu@G4+G5#model/gpt&lang/prose"],
   ["hatsu@high+model/gpt", "hatsu@high#model/gpt"],
   ["hatsu@g4+c++", "hatsu@G4#c++"],
+  ["hatsu@high+low", "hatsu@low+"],
+  ["hatsu@low+HIGH", "hatsu@low+"],
   ["hatsu@high++", "hatsu@high+"],
   ["hatsu@g4+", "hatsu@G4"],
   ["hatsu@g4++g5", "hatsu@G4+G5"],
@@ -41,7 +43,7 @@ describe("concrete corrections on the canonical list/alternation contract", () =
     expect(result.ok).toBe(false); expect(result.corrected).toBe(`state ${corrected}`);
     expect(parse(corrected).ok).toBe(true);
   });
-  it.each(["hatsu@high+g4", "hatsu@high+low", "hatsu@g9+g5", "hatsu@high++model/gpt"])("withholds an ambiguous correction for %s", (line) => {
+  it.each(["hatsu@high+g4", "hatsu@high+low+high", "hatsu@g9+g5", "hatsu@high++model/gpt"])("withholds an ambiguous correction for %s", (line) => {
     const result = parse(line); expect(result.ok).toBe(false); expect(result.corrected).toBeNull();
   });
   it.each(COMBINED)("withholds the whole-line correction when another problem remains: %s", (template, line, problem) => {
@@ -143,4 +145,10 @@ describe("whole-invocation correction boundaries", () => {
     ]);
     expect(repaired.clauses).toEqual([{ literal: "then sweep", present: true }]);
   });
+});
+
+it("publishes the concrete severity repair in JSON while refusing the input", async () => {
+  const result = await cli(TEMPLATE, "hatsu@high+low#model/gpt", true);
+  expect(result.code).toBe(2);
+  expect(JSON.parse(result.out.join("\n")).corrected).toBe("state hatsu@low+#model/gpt");
 });

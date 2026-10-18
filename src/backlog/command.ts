@@ -1,3 +1,4 @@
+import { refuseExtraPositionals } from "../cli/command.js";
 // src/backlog/command.ts -- `nen backlog fetch` and `nen backlog order`.
 
 import {
@@ -44,8 +45,8 @@ fetch:
                   with a trailing '+' that severity or any above it. Needs
                   --severity-family <ns>:<family> (which labels are
                   severities) and --severity-order <a,b,..> (highest first,
-                  the spelling 'order' takes); nen carries no severity
-                  vocabulary. A family --repo's nen/labels.json does not
+                  the spelling 'order' takes), or workflow.severity's family
+                  and order. Explicit flags override each declared field. A family --repo's nen/labels.json does not
                   declare is refused (exit 2).
   A filtered fetch names the filter and how many efforts it kept; a filter
   that keeps nothing reports 0 rows at exit 0. issueCount and prCount stay
@@ -113,6 +114,7 @@ interface RawGhIssue {
 // about when a fetch is complete.
 
 function fetch(context: CommandContext): number {
+  refuseExtraPositionals(context.args, 2);
   const repo = requireValue(context.args, "repo-slug", "The owner/name to fetch fresh from.");
   // THE FILTER IS VALIDATED BEFORE THE NETWORK: an undeclared label costs no
   // GitHub read.

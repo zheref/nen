@@ -302,6 +302,12 @@ function decisionsCheck(root: string): SchemaCheck {
 function workflowCheck(root: string): SchemaCheck {
   return run(WORKFLOW_FILE, root, false, (): string => {
     const loaded = loadWorkflow(root);
+    const severity = loaded.workflow.severity;
+    if (severity !== null) {
+      const labels = loadLabelTaxonomy(root);
+      const missing = severity.order.filter((leaf) => !labels.has(severity.labels?.[leaf] ?? `${severity.family}/${leaf}`));
+      if (missing.length > 0) throw new SchemaError(loaded.path, "severity.order", `not declared in ${labels.path}: ${missing.map((leaf) => severity.labels?.[leaf] ?? `${severity.family}/${leaf}`).join(", ")}`);
+    }
     return loaded.present ? describeWorkflow(loaded.workflow) : "absent (defaults apply)";
   });
 }

@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
@@ -97,4 +100,47 @@ describe("nen ref parse", () => {
     expect(result.err.join("\n")).toMatch(/is not object notation/);
     expect(result.err.join("\n")).toMatch(/Run 'nen ref --help'/);
   });
+});
+
+describe("GitHub object subjects (#427)", () => {
+  it.each([
+    ["https://github.com/zheref/KroApple/issues/460", "IS"],
+    ["https://github.com/zheref/KroApple/pull/460", "PR"],
+    ["zheref/KroApple#460", null],
+  ])("parses %s without GitHub calls", async (token, kind) => {
+    const result = await capture(["ref", "parse", token!, "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ slug: "zheref/KroApple", code: "KP", kind, number: 460 });
+  });
+  it("accepts an unregistered slug without inventing a code", async () => {
+    const result = await capture(["ref", "parse", "outside/repository#12", "--json"]);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ slug: "outside/repository", kind: null, number: 12 });
+  });
+  it.each([
+    "https://other.example/o/r/issues/1", "https://github.com.evil.example/o/r/pull/1",
+    "https://github.com@evil.example/o/r/issues/1", "https://user@github.com/o/r/issues/1",
+    "http://github.com/o/r/issues/1", "https://github.com:443/o/r/issues/1",
+    "https://github.com/o/r/issues/1/extra", "https://github.com/o/r/issues/1?x=1",
+    "https://github.com/o/r/issues/1#fragment", "https://github.com/o/r/pulls/1",
+    "https://github.com/o/r/../r/issues/1", "https://github.com/o/r/issues/%31",
+    "https://github.com/o/r/issues/0", "o/r#0", "o/r#9007199254740992", "o/r/extra#1", "o/r#1\n", "https://github.com/o/r/issues/1\n",
+  ])("refuses other authorities and path shapes: %s", async (token) => {
+    const result = await capture(["ref", "parse", token]);
+    expect(result.code).toBe(2); expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/refused|safe positive/);
+  });
+  it("names an unsupported host", async () => {
+    const result = await capture(["ref", "parse", "https://elsewhere.example/o/r/pull/1"]);
+    expect(result.err.join("\n")).toContain("elsewhere.example");
+  });
+});
+
+it("parses a GitHub subject with no local registry", async () => {
+  const root = mkdtempSync(join(tmpdir(), "nen-ref-no-registry-"));
+  const result = await capture(["ref", "parse", "o/r#1", "--json"], root);
+  expect(result.code).toBe(0); expect(JSON.parse(result.out.join("\n"))).toEqual({ slug: "o/r", kind: null, number: 1 });
+});
+it("refuses an invalid URL without guessing", async () => {
+  const result = await capture(["ref", "parse", "https://["]);
+  expect(result.code).toBe(2); expect(result.err.join("\n")).toContain("not a valid GitHub object URL");
 });

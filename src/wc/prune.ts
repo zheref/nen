@@ -1,3 +1,4 @@
+import { refuseExtraPositionals } from "../cli/command.js";
 // Explicit-plan cleanup only. No discovery grants permission to remove a target.
 // Dry runs never mutate caller resources; transport uses private scratch only.
 // No fetch, global prune, reset, force removal or GC.
@@ -358,7 +359,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
 
 export function runPrune(context: CommandContext): number {
   const root = assertRepoRoot({ repoFlag: requireRepoFlag(context, "It is the repository whose explicitly listed resources may be removed.") });
-  if (context.args.positionals.length !== 2) throw new VerbUsageError("wc prune takes no positional arguments; pass --plan <file>.");
+  refuseExtraPositionals(context.args, 2);
   if (context.args.booleans.has("run") && context.args.booleans.has("dry-run")) throw new VerbUsageError("--run and --dry-run conflict.");
   const allowed = new Set(["plan", "repo"]);
   for (const flag of Object.keys(context.args.values)) if (!allowed.has(flag)) throw new VerbUsageError(`--${flag} is not read by wc prune; targets and bases belong in --plan.`);

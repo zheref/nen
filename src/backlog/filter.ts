@@ -30,12 +30,12 @@
 // label containing '&', the refusal says THAT, naming the label -- never a
 // plain "unknown label" that would send the caller hunting for a typo.
 //
-// THE SEVERITY VOCABULARY IS THE CALLER'S. This binary carries no label name
-// (src/taxonomy-purity.test.ts): the family is named by `--severity-family
-// <ns>:<family>` and its priority order by `--severity-order`, the same
-// spelling `nen backlog order` already takes.
+// THE SEVERITY VOCABULARY IS THE TARGET'S. workflow.severity declares its
+// family, highest-first order and optional mapping to full label names. Each
+// explicit family/order flag overrides that field; no vocabulary is invented.
 
 import { VerbUsageError, type CommandContext } from "../cli/command.js";
+import { loadWorkflow } from "../schema/workflow.js";
 import { splitList } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
@@ -89,7 +89,9 @@ export function readEffortFilter(context: CommandContext): EffortFilter | null {
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const taxonomy = loadLabelTaxonomy(root);
   const labels = validateLabels(labelValues, taxonomy);
-  const severity = severityRaw === undefined ? null : readSeverity(severityRaw, familyRaw, orderRaw, taxonomy);
+  const declared = severityRaw !== undefined ? loadWorkflow(root).workflow.severity : null;
+  const family = familyRaw ?? declared?.family;
+  const severity = severityRaw === undefined ? null : readSeverity(severityRaw, family, orderRaw ?? declared?.order.join(","), taxonomy, family === declared?.family ? declared?.labels ?? undefined : undefined);
   return { labels, severity };
 }
 
@@ -132,30 +134,32 @@ function readSeverity(
   familyRaw: string | undefined,
   orderRaw: string | undefined,
   taxonomy: LabelTaxonomy,
+  mapping?: Readonly<Record<string, string>>,
 ): SeverityBand {
   if (familyRaw === undefined || orderRaw === undefined) {
     throw new VerbUsageError(
-      `--severity needs --severity-family <ns>:<family> (which labels ARE severities) and --severity-order <a,b,...> (highest first). nen carries no severity vocabulary of its own; it is the target repository's.`,
+      `--severity needs --severity-family <ns>:<family> (which labels ARE severities) and --severity-order <a,b,...> (highest first), or a declared workflow.severity. nen carries no severity vocabulary of its own; it is the target repository's.`,
     );
   }
   const family = /^([^:/\s]+):([^:/\s]+)$/.exec(familyRaw);
-  if (family === null) {
+  if (family === null && mapping === undefined) {
     throw new VerbUsageError(`--severity-family takes '<namespace>:<family>', e.g. 'acme:severity', got '${familyRaw}'.`);
   }
-  const namespace = family[1] as string;
-  const familyName = family[2] as string;
+  const namespace = family?.[1] ?? "";
+  const familyName = family?.[2] ?? "";
+  const labelFor = (leaf: string): string => mapping?.[leaf] ?? `${namespace}:${familyName}/${leaf}`;
   const declared = taxonomy.inFamily(namespace, familyName);
-  if (declared.length === 0) {
+  if (mapping === undefined && declared.length === 0) {
     throw new VerbUsageError(
       `${taxonomy.path} declares no '${namespace}:${familyName}/*' labels, so there is no severity family to select a band from. Declare the family, or drop --severity.`,
     );
   }
   const order = splitList(orderRaw);
   if (order.length === 0) throw new VerbUsageError("--severity-order names no severity.");
-  const undeclared = order.filter((leaf): boolean => !taxonomy.has(`${namespace}:${familyName}/${leaf}`));
+  const undeclared = order.filter((leaf): boolean => !taxonomy.has(labelFor(leaf)));
   if (undeclared.length > 0) {
     throw new VerbUsageError(
-      `--severity-order names ${undeclared.map((leaf): string => `'${leaf}'`).join(", ")}, which ${taxonomy.path} does not declare as '${namespace}:${familyName}/<leaf>'.`,
+      `--severity-order names ${undeclared.map((leaf): string => `'${leaf}'`).join(", ")}, which ${taxonomy.path} does not declare ${mapping === undefined ? `as '${namespace}:${familyName}/<leaf>'` : `in the '${familyRaw}' full-label mapping`}.`,
     );
   }
 
@@ -174,7 +178,7 @@ function readSeverity(
   return {
     name: order[index] as string,
     orHigher,
-    labels: leaves.map((leaf): string => `${namespace}:${familyName}/${leaf}`),
+    labels: leaves.map(labelFor),
   };
 }
 

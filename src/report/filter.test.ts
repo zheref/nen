@@ -87,11 +87,15 @@ const DESK = {
   gates: [{ gate: "G2", label: "merge", cleared: "Nothing is owed at G2.", asks: [] }],
 };
 
-async function data(extra: readonly string[], desk: unknown = DESK): Promise<{ code: number; out: string[]; err: string[] }> {
+async function data(extra: readonly string[], desk: unknown = DESK, severity?: unknown): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
   const dir = repo();
+  if (severity !== undefined) {
+    const path = join(dir, "nen/workflow.json");
+    writeFileSync(path, JSON.stringify({ severity }));
+  }
   const objectsPath = join(dir, "objects.json");
   writeFileSync(objectsPath, JSON.stringify(OBJECTS.map((row): unknown => Object.fromEntries(Object.entries(row).filter(([key]): boolean => key !== "notes")))));
   const deskPath = join(dir, "desk.json");
@@ -190,3 +194,18 @@ describe("nen report data --label under --register (Nobunaga f1, f2, f4)", () =>
   });
 });
 
+
+it.each([{ extra: ["fix"] }, { extra: ["--", "fix"] }])("report data refuses extra positionals before reading its repository: %s", async ({ extra }) => {
+  const out: string[] = []; const err: string[] = [];
+  const result = await runFamily(reportCommand, ["report", "data", "--label", "bug", ...extra], null, false,
+    { out: (line) => void out.push(line), err: (line) => void err.push(line) }, new ScriptedSeams([]));
+  expect(result).toBe(2); expect(out).toEqual([]);
+  expect(err.join("\n")).toContain('"fix"');
+  expect(err.join("\n")).toContain("a value with spaces is one quoted argument");
+});
+
+it("report data reads the same severity declaration as backlog fetch", async () => {
+  const result = await data(["--objects-from", "@objects", "--severity", "low+", "--json"], DESK, { family: "acme:sev", order: ["high", "low"] });
+  expect(result.code).toBe(0);
+  expect(numbers(JSON.parse(result.out.join("\n")).objects)).toEqual([2, 3]);
+});

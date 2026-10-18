@@ -2,6 +2,15 @@
   "$schema": "nen.workflow/v0.1",
   "$comment": "Hatsu policy for this repository. Validated by `nen schema check` from 0.4.0 (zheref/nen#146 added the schema and loader); `nen shu coverage` reads the ladder, `nen commit format` the trailer policy, and hatsu's skills (breath, rasengan, kokusen, gyo, ...) read the rest directly.",
 
+  "severity": {
+    "family": "priority",
+    "order": ["p1", "p2", "p3"],
+    "labels": {
+      "p1": "priority: p1 (next patch)",
+      "p2": "priority: p2 (next minor)",
+      "p3": "priority: p3 (backlog)"
+    }
+  },
   "branch": { "template": "{model}/{persona}/{descriptor}", "base": "main" },
   "iteration": { "checks": ["build", "lint"], "lane": "nen" },
   "tests": { "required": ["test"], "extra": [] },

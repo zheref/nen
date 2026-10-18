@@ -14,6 +14,12 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
+import { refuseExtraPositionals } from "../cli/command.js";
+import { resolveRepoRoot } from "../repo/root.js";
+import { loadRepoRegistry } from "../schema/repos.js";
+import { REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
+import { codeFor } from "../repo/resolve.js";
+import { parseGithubRef } from "./github.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { formatRef, KNOWN_STATES, parseRef, RefError, type ObjectKind } from "./notation.js";
 
@@ -33,7 +39,9 @@ format:
   --no-glyphs      Emit the bare notation without the kind glyph and state mark.
 
 parse:
-  <token>          A token in object notation. Refused, never guessed at.
+  <token>          Object notation, owner/name#N, or an exact github.com
+                   https issue/pull URL. Short refs have kind null; URLs
+                   have IS/PR. code is included when the registry records it.
 
   --repo <path>    The checkout whose nen/repos.json --code is checked
                    against. Defaults to the current directory, so a call
@@ -56,6 +64,16 @@ export const refCommand: Command = {
       const token = context.args.positionals[2];
       if (token === undefined) {
         throw new VerbUsageError("'ref parse' needs a token, e.g. 'ref parse XX-PR-#12'.");
+      }
+      refuseExtraPositionals(context.args, 3);
+      if (token.includes("/") || token.includes("://")) {
+        const parsed = parseCallerToken(() => parseGithubRef(token), (error) => error instanceof RefError);
+        const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+        const registry = resolveSchemaFile(root, REPOS_FILE).canonical.present ? loadRepoRegistry(root) : null;
+        const code = registry === null ? null : codeFor(registry, parsed.slug);
+        const result = code === null ? parsed : { ...parsed, code };
+        emit(context.io, context.json, result, [`slug:   ${parsed.slug}`, `code:   ${code ?? "(unrecorded)"}`, `kind:   ${parsed.kind ?? "(unknown)"}`, `number: ${parsed.number}`]);
+        return 0;
       }
       // Same boundary rule as ../label/command.ts: a token that is not object
       // notation is a typo, exit 2, not a run that failed. The `RefError` is
