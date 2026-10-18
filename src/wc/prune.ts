@@ -2,8 +2,8 @@
 // Dry runs never mutate caller resources; transport uses private scratch only.
 // No fetch, global prune, reset, force removal or GC.
 import { lstatSync, mkdtempSync, readlinkSync, realpathSync, rmSync } from "node:fs";
-import { devNull, tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { VerbUsageError, requireRepoFlag, requireValue, type CommandContext } from "../cli/command.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
@@ -80,7 +80,9 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
   // apply URL rewriting again and could update unlisted tracking refs.
   let transportRoot: string | null = null;
   let snapshot: readonly [string, string][] | null = null;
-  const frozenEnv: Record<string, string | undefined> = { ...seams.env, ...env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG: undefined };
+  // Git documents /dev/null for config suppression on every supported host;
+  // Node's Windows \\.\\nul device spelling is not Git's config-path API.
+  const frozenEnv: Record<string, string | undefined> = { ...seams.env, ...env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG: undefined };
   // Ask the installed Git for its complete local-environment inventory rather
   // than assume --git-dir alone excludes common-dir/worktree/config redirects.
   for (const name of git(["rev-parse", "--local-env-vars"]).split(/\r?\n/)) frozenEnv[name] = undefined;
@@ -130,6 +132,10 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     return rawStdout(result);
   };
   const endpoints = new Map<string, string>();
+  const refuseDriveRelative = (value: string): void => {
+    if (seams.platform === "win32" && /^[A-Za-z]:(?![\\/])/.test(value)) throw new Refused("Windows drive-relative endpoints cannot be bound independently of per-drive working directories");
+  };
+  const endpointAbsolute = (value: string): boolean => seams.platform === "win32" ? win32.isAbsolute(value) : isAbsolute(value);
   const remoteUrl = (remote: string, push: boolean): string => {
     const key = JSON.stringify([remote, push]); const cached = endpoints.get(key);
     if (cached !== undefined) return cached;
@@ -140,6 +146,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     if (urls.length !== 1 || urls[0] === "") throw new Refused(`remote must have exactly one configured ${push ? "push" : "fetch"} URL`);
     const raw = urls[0]!;
     endpointRecord(raw);
+    refuseDriveRelative(raw); // Before Git can classify a DOS prefix as local.
     const noEmbeddedCredentials = (value: string): void => {
       if (!/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) return;
       let url: URL;
@@ -157,14 +164,20 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     // have no CR/LF, so this CR cannot be part of the configured endpoint.
     if (seams.platform === "win32" && endpoint.endsWith("\r")) endpoint = endpoint.slice(0, -1);
     endpointRecord(endpoint);
+    refuseDriveRelative(endpoint); // Rewrites must not reintroduce C:relative authority.
     noEmbeddedCredentials(endpoint);
+    let filesystem = endpointAbsolute(endpoint);
     if (/^file:/i.test(endpoint)) {
+      filesystem = true;
       try { endpoint = fileURLToPath(endpoint); } catch { throw new Refused("unsupported file URL endpoint"); }
       endpointRecord(endpoint); // Includes percent-encoded record separators.
-    } else if (!isAbsolute(endpoint) && !/^[^/]+:/.test(endpoint)) {
+      refuseDriveRelative(endpoint);
+    } else if (!endpointAbsolute(endpoint) && !/^[^/]+:/.test(endpoint)) {
       if (endpoint.startsWith("~")) throw new Refused("tilde filesystem endpoints cannot be bound; configure an absolute path");
       endpoint = resolve(root, endpoint);
+      filesystem = true;
     }
+    if (seams.platform === "win32" && filesystem && endpoint.split(/[\\/]/).some((component) => /[ .]$/.test(component))) throw new Refused("Windows filesystem endpoint components ending in space or period cannot be bound without path normalization");
     // Helpers are executable routing, not a literal URL this boundary supports.
     if (/^[A-Za-z][A-Za-z0-9+.-]*::/.test(endpoint) || /^(?!https?:|ssh:|git:)[A-Za-z][A-Za-z0-9+.-]*:\/\//i.test(endpoint)) throw new Refused("unsupported transport endpoint; use a filesystem path, file URL, HTTP(S), SSH or Git URL");
     endpoints.set(key, endpoint); return endpoint;
