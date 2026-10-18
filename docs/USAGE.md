@@ -916,7 +916,7 @@ never merges, labels, or comments on a pull request.
 | Verb | Credential source |
 |---|---|
 | `ready` | Nen's direct GitHub client reads the explicitly selected environment variable: `GH_TOKEN` by default, or `--token-env <VAR>`. It never imports `gh`'s stored credential or discovers a token from the checkout. An unset/unusable token produces `unevaluated`, exit 1, with both token spellings in the remedy. |
-| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls. `open` and `merge` also use Git's configured transport where they perform Git operations. |
+| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls. `open` and `merge` also use Git's configured transport where they perform Git operations. |
 | `cascade-main` | Git's configured transport credentials for fetch/push; no direct Nen API token. |
 | `staleness`, `body-check` | Local inputs and files; no GitHub authentication. |
 
