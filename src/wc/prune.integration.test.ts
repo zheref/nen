@@ -1,7 +1,7 @@
 // Every write/deletion here is inside a fresh throwaway clone and bare remote.
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -43,24 +43,36 @@ const remoteItem = { kind: "remote-branch", remote: "origin", ref: "refs/heads/t
 const tracking = { kind: "remote-ref", remote: "origin", ref: "refs/remotes/origin/topic", base };
 
 describe("wc prune -- explicit targets, real disposable repositories", () => {
-  it("defaults to a dry run with no write commands, refs or directories changed", async () => {
+  it("honestly refuses unsupported local removals in the default dry run without writes", async () => {
     const w = world(); git(w.repo, "worktree", "add", w.tree, "topic");
     const before = git(w.repo, "show-ref"); const calls: string[][] = [];
     const real = defaultSeams(); const seams: Seams = { ...real, run: (command, args, options) => { if (command === "git") calls.push([...args]); return real.run(command, args, options); } };
     const result = await run(w, [{ kind: "worktree", path: w.tree, base }, local], [], seams);
-    expect(result.code).toBe(0); expect(result.report?.dryRun).toBe(true);
-    expect(result.report?.items.map((i) => i.status)).toEqual(["would-remove", "would-remove"]);
+    expect(result.code).toBe(2); expect(result.report?.dryRun).toBe(true);
+    expect(result.report?.items.map((i) => i.status)).toEqual(["refused", "refused"]);
     expect(result.report?.freedBytes).toBe(0); expect(existsSync(w.tree)).toBe(true); expect(git(w.repo, "show-ref")).toBe(before);
     expect(calls.some((a) => ["push", "fetch", "update-ref", "branch"].includes(a[0] ?? "") || a[0] === "worktree" && a[1] !== "list")).toBe(false);
   });
-  it("removes only listed worktree and local branch, and measures logical bytes truthfully", async () => {
+  it("retains clean worktrees, branches and configuration with zero bytes reclaimed", async () => {
     const w = world(); git(w.repo, "worktree", "add", w.tree, "topic"); git(w.repo, "branch", "keep");
-    const expectedBytes = lstatSync(join(w.tree, ".git")).size + readFileSync(join(w.tree, "seed.txt")).length;
+    const before = git(w.repo, "show-ref"); const config = readFileSync(join(w.repo, ".git", "config"), "utf8");
     const result = await run(w, [{ kind: "worktree", path: w.tree, base }, local], ["--run"]);
-    expect(result.code).toBe(0); expect(result.report?.items.map((i) => i.status)).toEqual(["removed", "removed"]);
-    expect(result.report?.freedBytes).toBe(expectedBytes); expect(result.report?.physicalFreedBytes).toBeNull();
-    expect(existsSync(w.tree)).toBe(false); expect(git(w.repo, "branch", "--list", "topic")).toBe("");
-    expect(git(w.repo, "branch", "--list", "keep")).toContain("keep"); expect(git(w.remote, "show-ref", "refs/heads/topic")).toContain("topic");
+    expect(result.code).toBe(2); expect(result.report?.items.map((i) => i.status)).toEqual(["refused", "refused"]);
+    expect(result.report?.freedBytes).toBe(0); expect(result.report?.physicalFreedBytes).toBeNull();
+    expect(result.report?.items.every((i) => i.measuredBytes === null)).toBe(true);
+    expect(existsSync(w.tree)).toBe(true); expect(git(w.repo, "show-ref")).toBe(before);
+    expect(readFileSync(join(w.repo, ".git", "config"), "utf8")).toBe(config);
+  });
+  it("continues supported remote cleanup after refusing unsupported local rows, with preview parity", async () => {
+    const w = world(); git(w.repo, "worktree", "add", w.tree, "topic");
+    const plan = [{ kind: "worktree", path: w.tree, base }, local, remoteItem];
+    const preview = await run(w, plan);
+    expect(preview.code).toBe(2); expect(preview.report?.items.map((i) => i.status)).toEqual(["refused", "refused", "would-remove"]);
+    const actual = await run(w, plan, ["--run"]);
+    expect(actual.code).toBe(2); expect(actual.report?.items.map((i) => i.status)).toEqual(["refused", "refused", "removed"]);
+    expect(existsSync(w.tree)).toBe(true); expect(git(w.tree, "rev-parse", "HEAD")).toBe(git(w.repo, "rev-parse", local.ref));
+    expect(git(w.repo, "ls-remote", "--heads", "origin", remoteItem.ref)).toBe("");
+    expect(actual.report?.freedBytes).toBe(0);
   });
   it("deletes only a named remote branch, preserving an unlisted remote branch and tracking ref", async () => {
     const w = world(); git(w.repo, "branch", "keep"); git(w.repo, "push", "origin", "keep");
@@ -155,17 +167,62 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
       return result;
     } };
     const result = await run(w, [local], ["--run"], seams);
-    expect(moved).toBe(true); expect(result.code).toBe(1); expect(result.report?.items[0]?.status).toBe("failed");
+    expect(moved).toBe(true); expect(result.code).toBe(2); expect(result.report?.items[0]?.status).toBe("refused");
     expect(git(w.repo, "rev-parse", local.ref)).toBe(replacement);
   });
-  it("retains the upstream-or-HEAD non-force guard in addition to the explicit plan base", async () => {
-    const w = world(); git(w.repo, "switch", "topic");
-    writeFileSync(join(w.repo, "later"), "later"); git(w.repo, "add", "later"); git(w.repo, "commit", "-m", "later");
-    const tip = git(w.repo, "rev-parse", "HEAD"); git(w.repo, "switch", "main"); git(w.repo, "update-ref", base, tip);
-    expect((await run(w, [local], ["--run"])).report?.items[0]?.message).toMatch(/non-force deletion refused/);
-    expect(git(w.repo, "rev-parse", local.ref)).toBe(tip);
-    git(w.repo, "branch", "--set-upstream-to=origin/main", "topic");
-    expect((await run(w, [local], ["--run"])).code).toBe(0);
+  it("preserves a two-remote branch's exact routing and prevents unforced recreation after refusal", async () => {
+    const w = world(); const upstream = join(w.root, "upstream.git"); git(w.root, "init", "--bare", upstream);
+    git(w.repo, "remote", "add", "upstream", upstream); git(w.repo, "push", "upstream", "topic");
+    git(w.repo, "branch", "--set-upstream-to=upstream/topic", "topic");
+    git(w.repo, "config", "branch.topic.description", "retained authority");
+    const config = readFileSync(join(w.repo, ".git", "config"), "utf8"); const tip = git(w.repo, "rev-parse", local.ref);
+    for (const flags of [[], ["--run"]]) {
+      const result = await run(w, [local], flags);
+      expect(result.code).toBe(2); expect(result.report?.items[0]?.message).toMatch(/configuration retained/);
+      expect(git(w.repo, "rev-parse", local.ref)).toBe(tip);
+      expect(readFileSync(join(w.repo, ".git", "config"), "utf8")).toBe(config);
+    }
+    expect(spawnSync("git", ["branch", "topic", "main"], { cwd: w.repo, env }).status).not.toBe(0);
+    // No deleted/recreated identity inherits leftover settings: the original
+    // branch and its legitimate routing remain together, byte-for-byte.
+    git(w.repo, "switch", "topic"); const out: string[] = [];
+    const code = await runFamily(wcCommand, ["wc", "publish", "--dry-run", "--json"], w.repo, false, { out: (s) => void out.push(s), err: () => {} }, defaultSeams());
+    expect(code).toBe(0); expect(JSON.parse(out.join("\n"))).toMatchObject({ remote: "upstream", destination: "topic", pushed: false });
+  });
+  it.each(["add", "no-checkout", "switch"])("retains a branch activated after the final registration read by %s", async (variant) => {
+    const w = world(); if (variant === "switch") git(w.repo, "worktree", "add", "--detach", w.tree, "main");
+    const real = defaultSeams(); let reads = 0; let activated = false; const writes: string[][] = [];
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      const result = real.run(command, args, options);
+      if (command === "git" && args[0] === "update-ref") writes.push([...args]);
+      if (command === "git" && args[0] === "worktree" && args[1] === "list" && ++reads === 2) {
+        if (variant === "switch") git(w.tree, "switch", "topic");
+        else git(w.repo, "worktree", "add", ...(variant === "no-checkout" ? ["--no-checkout"] : []), w.tree, "topic");
+        activated = true;
+      }
+      return result;
+    } };
+    const result = await run(w, [local], ["--run"], seams);
+    expect(activated).toBe(true); expect(result.code).toBe(2); expect(result.report?.items[0]?.status).toBe("refused");
+    expect(writes).toEqual([]); expect(git(w.tree, "rev-parse", "HEAD")).toBe(git(w.repo, "rev-parse", local.ref));
+  });
+  it("preserves 4096 late ignored bytes after the clean observation, without destructive Git calls", async () => {
+    const w = world(); git(w.repo, "worktree", "add", w.tree, "topic");
+    writeFileSync(join(w.repo, ".git", "info", "exclude"), "late-ignored\n");
+    const real = defaultSeams(); const destructive: string[][] = []; let wrote = false;
+    const seams: Seams = { ...real, run: (command, args, options) => {
+      const result = real.run(command, args, options);
+      if (command === "git" && args[0] === "status" && options?.cwd !== undefined && realpathSync.native(options.cwd) === realpathSync.native(w.tree)) {
+        expect(result.stdout).toBe(""); writeFileSync(join(w.tree, "late-ignored"), Buffer.alloc(4096, 65)); wrote = true;
+      }
+      if (command === "git" && (args[0] === "update-ref" || args[0] === "worktree" && args[1] === "remove")) destructive.push([...args]);
+      return result;
+    } };
+    const result = await run(w, [{ kind: "worktree", path: w.tree, base }], ["--run"], seams);
+    expect(wrote).toBe(true); expect(result.code).toBe(2); expect(result.report?.items[0]).toMatchObject({ status: "refused", measuredBytes: null, freedBytes: 0 });
+    expect(result.report?.items[0]?.message).toMatch(/writer-quiescence/); expect(destructive).toEqual([]);
+    expect(readFileSync(join(w.tree, "late-ignored"))).toEqual(Buffer.alloc(4096, 65));
+    expect(git(w.tree, "rev-parse", "HEAD")).toBe(git(w.repo, "rev-parse", "topic"));
   });
   it("reverses a nonidentity fetch refspec instead of deriving its source from the tracking name", async () => {
     const w = world(); const tip = git(w.repo, "rev-parse", "topic");
@@ -228,10 +285,10 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
       }
     }
   });
-  it("records failures per item and continues, never claiming bytes for an uncertain write", async () => {
-    const w = world(); git(w.repo, "branch", "keep");
-    const real = defaultSeams(); const seams: Seams = { ...real, run: (command, args, options) => command === "git" && args[0] === "update-ref" ? { code: 1, stdout: "", stderr: "refused", spawnFailed: false } : real.run(command, args, options) };
-    const result = await run(w, [local, { ...local, ref: "refs/heads/keep" }], ["--run"], seams);
+  it("records supported remote failures per item and continues without claiming uncertain bytes", async () => {
+    const w = world(); git(w.repo, "branch", "keep"); git(w.repo, "push", "origin", "keep");
+    const real = defaultSeams(); const seams: Seams = { ...real, run: (command, args, options) => command === "git" && args[0] === "push" ? { code: 1, stdout: "", stderr: "refused", spawnFailed: false } : real.run(command, args, options) };
+    const result = await run(w, [remoteItem, { ...remoteItem, ref: "refs/heads/keep" }], ["--run"], seams);
     expect(result.code).toBe(1); expect(result.report?.items.map((i) => i.status)).toEqual(["failed", "failed"]); expect(result.report?.freedBytes).toBeNull();
   });
   it.skipIf(process.platform === "win32")("reads host links without following or removing them, and refuses symlink worktree roots", async () => {

@@ -1,7 +1,6 @@
 // Explicit-plan cleanup only. No discovery grants permission to remove a target.
 // Dry runs make only reads; no fetch, global prune, reset, force removal or GC.
-import { lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { VerbUsageError, requireRepoFlag, requireValue, type CommandContext } from "../cli/command.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { plainLine } from "../cli/plain.js";
@@ -63,13 +62,6 @@ function registrations(text: string): Registration[] {
   return rows;
 }
 
-/** Count logical file/link bytes without following links; this is not disk capacity. */
-function fileBytes(path: string): number {
-  const stat = lstatSync(path);
-  if (stat.isDirectory()) return readdirSync(path).reduce((sum, name) => sum + fileBytes(join(path, name)), 0);
-  return stat.size;
-}
-
 export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dryRun: boolean, trunk: string): PruneReport {
   const env = scrubbedGitEnv(seams.env);
   const call = (args: readonly string[], cwd: string = root): CommandResult => seams.run(GIT, [...args], { cwd, env });
@@ -108,7 +100,6 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
   const readRegistrations = (): Registration[] => registrations(git(["worktree", "list", "--porcelain", "-z"]));
   const initial = readRegistrations();
   const primary = initial[0]?.path;
-  const simulatedRemoved = new Set<string>();
   const simulatedRemoteRemoved = new Set<string>();
   const outcome: PruneOutcome[] = [];
   const refSha = (ref: string): string | null => {
@@ -182,7 +173,7 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
     return source;
   };
   for (const item of plan) {
-    let measured: number | null = null;
+    const measured: number | null = null;
     let writeStarted = false;
     const record = (status: PruneOutcome["status"], message: string, freedBytes: number | null = 0, linkTarget: string | null = null): void => { outcome.push({ item, status, message, freedBytes, measuredBytes: measured, linkTarget }); };
     try {
@@ -208,16 +199,10 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
         if (row.head === null) throw new Refused("worktree has no readable HEAD");
         if (row.branch !== null && isTrunk(row.branch.slice("refs/heads/".length), trunk)) throw new Refused("worktree holds a protected base branch");
         merged(row.head, item.base);
-        measured = fileBytes(canonical);
-        if (!Number.isSafeInteger(measured)) throw new Refused("worktree byte measurement is not a safe integer");
-        if (!dryRun) {
-          writeStarted = true;
-          git(["worktree", "remove", "--", canonical]);
-          if (lstatSync(canonical, { throwIfNoEntry: false }) !== undefined) throw new Error("worktree remove returned success but its directory remains");
-        }
-        simulatedRemoved.add(row.path);
-        record(dryRun ? "would-remove" : "removed", "named clean merged worktree", dryRun ? 0 : measured);
-        continue;
+        // Neither a status/size snapshot nor moving the directory prevents an
+        // already-open writer from adding ignored bytes before recursive removal.
+        // Refuse in both preview and execution; no discarded bytes are guessed.
+        throw new Refused("worktree removal is unsupported without a safe writer-quiescence boundary; directory and registration retained");
       }
       const branch = item.kind === "remote-ref" ? item.ref.split("/").slice(3).join("/") : item.ref.slice("refs/heads/".length);
       if (branch === "" || isTrunk(branch, trunk) || branch === "HEAD" || item.ref === item.base) throw new Refused("protected base branch or HEAD ref");
@@ -233,20 +218,12 @@ export function prune(seams: Seams, root: string, plan: readonly PruneItem[], dr
       if (sha === null) { record("missing", "named ref is absent"); continue; }
       merged(sha, item.base);
       if (item.kind === "local-branch") {
-        const held = readRegistrations().find((row) => row.branch === item.ref && !(dryRun && simulatedRemoved.has(row.path)));
+        const held = readRegistrations().find((row) => row.branch === item.ref);
         if (held !== undefined) throw new Refused(`branch is checked out at '${held.path}'`);
-        // Keep the non-force merge guard in addition to the explicit plan base.
-        // Unlike branch -d, delete exactly the OID whose ancestry was proved.
-        const upstream = git(["for-each-ref", "--format=%(refname)%09%(upstream)", item.ref]).split(/\r?\n/).find((row) => row.split("\t")[0] === item.ref)?.split("\t")[1] ?? "";
-        const safetySha = upstream === "" ? git(["rev-parse", "--verify", "HEAD^{commit}"]) : refSha(upstream);
-        if (safetySha === null) throw new Refused("branch upstream is absent; non-force deletion refused");
-        const safety = call(["merge-base", "--is-ancestor", sha, safetySha]);
-        if (safety.spawnFailed || safety.code !== 0) throw new Refused("branch is not merged into its readable upstream (or HEAD when no upstream); non-force deletion refused");
-        if (!dryRun) {
-          if (readRegistrations().some((row) => row.branch === item.ref)) throw new Refused("branch became checked out before deletion");
-          writeStarted = true;
-          git(["update-ref", "--no-deref", "-d", item.ref, sha]);
-        }
+        // Ref transactions cannot serialize all native checkout variants, and
+        // post-delete repair would expose an unborn HEAD/configuration window.
+        // Preserve both the ref and its routing configuration without mutation.
+        throw new Refused("local-branch removal is unsupported without a safe checkout-serialization boundary; ref and branch configuration retained");
       } else if (item.kind === "remote-branch") {
         // A push by configured remote NAME would also delete its unlisted
         // local tracking ref. Use its one configured push URL so that only

@@ -769,7 +769,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path, its class (manifest / changelog / mirror / other, by `nen/contract.json`'s `mechanical` block) and the abort line, never picking one -- exit 3 when every path is mechanical, with the commands to run printed and none run; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort), nen/contract.json's `mechanical` block under --repo (only on a conflict) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
-| [`wc`](#family-wc) | [`nen wc prune`](#nen-wc-prune) | execute only an explicit cleanup plan; preview by default, preserve dirt/unmerged work, report per-item outcomes and logical freed bytes; host links are read-only | plan file, local Git refs/worktrees, exact configured remote branch reads | yes |
+| [`wc`](#family-wc) | [`nen wc prune`](#nen-wc-prune) | validate an explicit cleanup plan and remove named remote branches/stale tracking refs; worktree/local-branch removals refuse; host links are read-only | plan file, local Git refs/worktrees, exact configured remote branch reads | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
@@ -3950,7 +3950,13 @@ Acts only on caller-listed resources in a JSON plan. It never discovers a deleti
 fetches objects, globally prunes registrations or remote refs, or runs object GC. The
 caller supplies each item's explicit base; a branch or worktree whose commit is not
 already an ancestor of that local base is retained. Picker, marker and billed-resource
-cleanup remain outside this verb.
+cleanup remain outside this verb. **Worktree and local-branch removal are currently
+unsupported**: both preview and execution report `refused` for existing targets,
+retaining the directory, registration, ref and branch configuration. An already-absent
+ref reports `missing`. Ordinary Git primitives do not serialize
+ignored-file writers or every checkout variant with deletion. Moving a directory and
+rechecking it does not prevent writes through already-open descriptors. This is partial
+cleanup support; the verb makes no safe-removal claim for those targets.
 
 **Usage**
 
@@ -3965,7 +3971,7 @@ nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
 | `--repo <path>` | yes | The checkout whose resources the plan names. | Must name its root. |
 | `--plan <file>` | yes | A JSON array of closed-shape rows, processed in order. | Relative paths resolve against `--repo`; unknown fields/kinds, malformed refs and missing strings refuse the whole plan before any deletion. |
 | `--dry-run` | no | Validate and preview without writes. | The default; conflicts with `--run`. No fetch, ref deletion or directory removal. |
-| `--run` | no | Execute only the listed removals. | Each operational refusal/failure is reported and later items still run. |
+| `--run` | no | Execute only supported listed remote removals. | Unsupported local rows and other operational refusals/failures are reported; later items still run. |
 | `--json` | no | Emit one outcome document. | No progress text on stdout. |
 
 A plan may contain these rows (all named fields are required):
@@ -3984,11 +3990,10 @@ A plan may contain these rows (all named fields are required):
 objects must be fetched separately. A base itself listed for removal refuses. Worktrees
 must belong to this repository, be real directories, clean including ignored files,
 unlocked and merged into the base. Current/primary worktrees, checked-out local branches,
-configured protected base branches and symbolic refs are retained. Local branches must
-also be merged into their readable configured upstream, or HEAD when no upstream is
-configured. An absent configured upstream refuses. Deletion uses an atomic expected-old-OID
-ref operation, so a tip moved after proof is retained; branch configuration is left intact.
-Nothing is force-removed.
+configured protected base branches and symbolic refs are retained. Even when static
+checks pass, worktree and local-branch rows refuse in both preview and execution.
+No local-branch ref or configuration deletion occurs, so a later same-name branch cannot
+inherit stale routing from a deletion this verb claimed to perform. Nothing is force-removed.
 
 Remote branch deletion reads the exact single configured push URL and leases the observed
 object ID, so a moved tip cannot be deleted. It preserves unlisted local tracking refs.
@@ -4012,9 +4017,9 @@ target without following or removing the link, including with `--run`.
 bytesBasis: "logical-file-bytes", physicalFreedBytes: null, freedBytes, items[] }`.
 Each item carries its original `item`, `status` (`would-remove`, `removed`, `missing`,
 `refused`, `failed`, or `read-link`), `message`, `measuredBytes`, `freedBytes` and
-`linkTarget`. Only a successfully removed worktree whose directory is confirmed absent
-contributes measured logical file/link bytes. Ref deletion and previews report zero;
-an uncertain write reports `null`, including in the total. This does not claim physical
+`linkTarget`. Unsupported local removals report zero freed bytes and null measured bytes;
+no directory measurement is claimed. Supported ref deletion and previews report zero;
+an uncertain remote/ref write reports `null`, including in the total. This does not claim physical
 capacity reclaimed, and shared Git objects are never measured as freed. Human output
 prints one outcome per item plus the total. Exit 0 for success/preview/absence, 2 for a
 refusal or invalid plan, and 1 if any operation failed (even alongside refusals).
