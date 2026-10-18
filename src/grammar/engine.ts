@@ -633,7 +633,11 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   }
   const correctionValues = new Map(byName);
   const additions = new Map<string, SlotValue>();
-  let canCorrect = true;
+  // Each structured failure contributes one problem and is repaired below.
+  // With any other problem (missing/scalar/literal/separator), that repair
+  // alone cannot make the whole invocation concrete. Legacy-only refusals
+  // retain their published placeholder behavior.
+  let canCorrect = structuredFailures.length === 0 || problems.length === structuredFailures.length;
   for (const { slot, text } of structuredFailures) {
     const repair = repairStructured(slot, text, grammar.slots[grammar.slots.indexOf(slot) + 1]);
     if (repair === undefined) { canCorrect = false; continue; }

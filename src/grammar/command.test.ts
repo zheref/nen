@@ -472,3 +472,23 @@ describe("generic structured repairs -- exact CLI contract", () => {
     if (json) expect(JSON.parse(result.out.join("\n")).corrected).toBeNull();
   });
 });
+
+// A concrete repair for one slot must not advertise a partial whole-line fix.
+describe("combined structured and unresolved invocation errors", () => {
+  const selector = "[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]";
+  it.each([
+    ["<repo:foo|bar>" + selector, "baz@g4+"],
+    ["<repo>" + selector, "@g4+"],
+    ["<repo>" + selector + " onto <base>", "foo@g4+"],
+    ["on <repo>" + selector, "foo@g4+"],
+    ["<repo>" + selector + "[then sweep]", "foo@g4+ then sweep stray"],
+  ])("offers no corrected line for %s", async (grammar, line) => {
+    for (const json of [false, true]) {
+      const result = await capture(["parse", "state", "--grammar", grammar, "--line", line], [], { json });
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).not.toContain("Corrected line:");
+      if (json) expect((JSON.parse(result.out.join("\n")) as { corrected: unknown }).corrected).toBeNull();
+      else expect(result.out).toEqual([]);
+    }
+  });
+});

@@ -12437,7 +12437,11 @@ structured clause is omitted. A free suffix can move only into the immediately
 following free-list slot using that grammar's separator. Mixed enumerations
 (`high+g4`), two bands (`high+low`) and an unknown prefix (`g9+g5`) are ambiguous:
 `corrected` is `null`, never an invented valid line. Successful and legacy scalar
-parses keep their existing correction strings.
+parses keep their existing correction strings. A structured repair is offered only
+when every reported problem has a concrete structured repair: if a scalar enumeration,
+required slot, introducing literal or literal-only clause still has an unresolved error,
+`corrected` is `null` and no heading is printed. Legacy refusals without a structured
+error retain their existing placeholder behavior.
 `nen parse futon` keeps its existing grammar and behavior.
 
 

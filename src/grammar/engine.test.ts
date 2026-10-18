@@ -399,6 +399,24 @@ describe("list slots and three-way alternatives (#410)", () => {
     expect(result.ok).toBe(false);
     expect(result.corrected).toBeNull();
   });
+  it.each([
+    ["<repo:foo|bar>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "baz@g4+", "is one of"],
+    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "@g4+", "is required"],
+    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>] onto <base>", "foo@g4+", "<base> is required"],
+    ["on <repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "foo@g4+", "must open with"],
+    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>][then sweep]", "foo@g4+ then sweep stray", "continues past it"],
+  ])("withholds a structured repair when another problem remains: %s", (template, line, problem) => {
+    const result = parseInvocation("state", parseTemplate(template), line);
+    expect(result.ok).toBe(false);
+    expect(result.problems).toHaveLength(2);
+    expect(result.problems.join("\n")).toContain(problem);
+    expect(result.corrected).toBeNull();
+  });
+  it("retains legacy scalar refusal placeholders when no structured repair is needed", () => {
+    const grammar = parseTemplate("<repo:foo|bar>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]");
+    expect(parseInvocation("state", grammar, "baz@g4").corrected).toBe("state <repo: foo | bar>@G4");
+    expect(parseInvocation("state", grammar, "foo@g4").corrected).toBe("state foo@G4");
+  });
   it("repairs arbitrary caller vocabularies and separators without skill-specific tokens", () => {
     const grammar = parseTemplate("<scope>[%<choice;list=phase:Start|End;band=rank:hot|cold;free=term>][!<terms;join=&>]");
     const result = parseInvocation("generic", grammar, "project%start+topic/tag!other");
