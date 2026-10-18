@@ -81,7 +81,8 @@ slot as '<name>: <value>', one nobody filled as '<name>: (clause absent)', and
 a literal-only clause the line carried as '[<literal>]: present'.
 
 Exit 0 when the line parses, 2 when it does not -- a refusal is a usage error,
-and the corrected line is printed on stderr so a caller can paste it.
+and a deterministic corrected line is printed on stderr where one exists;
+ambiguous structured input has corrected:null and offers no invented rewrite.
 
 futon:
   Parses the futon invocation grammar and resolves its repo token against
@@ -171,9 +172,11 @@ export const parseCommand: Command = {
     }
 
     for (const problem of result.problems) context.io.err(`nen parse: ${problem}`);
-    context.io.err("");
-    context.io.err("Corrected line:");
-    context.io.err(`  ${result.corrected}`);
+    if (result.corrected !== null) {
+      context.io.err("");
+      context.io.err("Corrected line:");
+      context.io.err(`  ${result.corrected}`);
+    }
     return 2;
   },
 };
