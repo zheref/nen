@@ -28,7 +28,12 @@ import { runInstall } from "./install.js";
 import { runLabels } from "./labels.js";
 import { runStatus } from "./status.js";
 
-const USAGE = `nen classify -- the mechanical half of issue classification on two axes.
+const USAGE = `labels --phase-inventory <file> accepts an independent JSON array of document phase IDs;
+--phase-registry <file> instead reads the independent registry phases object keys.
+Phase-aware jobs must all carry a phase; supplied inventory must be fully covered.
+Bare legacy taxonomies retain their behavior. Choose only one phase source.
+
+nen classify -- the mechanical half of issue classification on two axes.
 
 usage:
   nen classify labels  --taxonomy <path> [--repo <path>] [--json]
@@ -115,7 +120,7 @@ it. A relative --taxonomy, --plan or --ledger resolves against --repo's root.
 // `install --target` without `--sync`, and exits 2 naming both. The global
 // flags (--repo, --json, --help) are every verb's and are not listed.
 const VERB_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  labels: ["taxonomy"],
+  labels: ["taxonomy", "phase-inventory", "phase-registry"],
   install: ["taxonomy", "write", "sync", "target", "dry-run"],
   status: ["taxonomy", "target", "issue", "open", "with-body"],
   apply: ["taxonomy", "target", "plan", "run", "include-low", "reason", "ledger"],
@@ -142,7 +147,7 @@ export const classifyCommand: Command = {
   summary: "Classify issues on two axes: validate the taxonomy, install its labels, report status, apply a plan.",
   usage: USAGE,
   flags: {
-    values: ["taxonomy", "target", "issue", "plan", "reason", "ledger"],
+    values: ["taxonomy", "phase-inventory", "phase-registry", "target", "issue", "plan", "reason", "ledger"],
     booleans: ["write", "sync", "dry-run", "open", "run", "include-low", "with-body"],
   },
   run(context: CommandContext): number {

@@ -163,3 +163,9 @@ describe("a declared list flag repeats, in order; an undeclared one still does n
     expect(() => parseArgs(["--bogus"], LISTED)).toThrow(/--trailer <value> \(repeatable\)/);
   });
 });
+
+it("accepts a lone stream dash only for a declared value flag", () => {
+  expect(parseArgs(["--out", "-"], { values: ["out"], dashValues: ["out"] }).values["out"]).toBe("-");
+  expect(() => parseArgs(["--out", "-"], { values: ["out"] })).toThrow(/requires a value/);
+  expect(() => parseArgs(["--out", "--force"], { values: ["out"], dashValues: ["out"] })).toThrow(/requires a value/);
+});

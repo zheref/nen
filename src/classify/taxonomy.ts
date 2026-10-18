@@ -552,3 +552,19 @@ export function axisOfLabel(taxonomy: ClassifyTaxonomy, name: string): AxisLabel
   }
   return null;
 }
+
+/** Expected phases come from an independent caller inventory, never this union. */
+export function validatePhaseCoverage(taxonomy: ClassifyTaxonomy, expected?: readonly string[]): void {
+  const jobs = taxonomy.axes.job.keys;
+  if (expected === undefined && jobs.every((job) => job.phases === null)) return;
+  const covered = new Set<string>();
+  for (const [index, job] of jobs.entries()) {
+    const phases = Object.values(job.phases ?? {}).flat();
+    if (phases.length === 0) throw new SchemaError(taxonomy.path, `axes.job.keys[${index}].phases`, "a phase-aware taxonomy must assign at least one phase to every job");
+    for (const phase of phases) covered.add(phase);
+  }
+  if (expected !== undefined) {
+    for (const phase of expected) if (!covered.has(phase)) throw new SchemaError(taxonomy.path, "axes.job", `document phase '${phase}' is uncovered by every job`);
+    for (const phase of covered) if (!expected.includes(phase)) throw new SchemaError(taxonomy.path, "axes.job", `mapped phase '${phase}' is absent from the independent phase inventory`);
+  }
+}

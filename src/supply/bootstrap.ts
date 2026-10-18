@@ -35,7 +35,8 @@
 // as a mysterious spawn failure.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRepoRoot, type RepoRootOptions } from "../repo/root.js";
 
@@ -83,6 +84,8 @@ export interface BootstrapOptions extends RepoRootOptions {
    * compiled binary invoked outside any checkout.
    */
   readonly script?: string | undefined;
+  /** Caller-trusted expected digest of the script, distinct from binary checksums. */
+  readonly scriptSha256?: string | undefined;
   readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
@@ -155,6 +158,11 @@ export function runBootstrap(options: BootstrapOptions): BootstrapResult {
   let script: string;
   try {
     script = resolveScript(options);
+    if (options.scriptSha256 !== undefined) {
+      if (!/^[0-9a-fA-F]{64}$/.test(options.scriptSha256)) throw new Error("--script-sha256 must be exactly 64 hexadecimal characters");
+      const actual = createHash("sha256").update(readFileSync(script)).digest("hex");
+      if (actual !== options.scriptSha256.toLowerCase()) throw new Error("bootstrap script SHA256 mismatch; bash was not spawned");
+    }
   } catch (error) {
     return {
       code: BootstrapExit.WRAPPER,

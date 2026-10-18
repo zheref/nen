@@ -42,7 +42,11 @@ import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
 import { graphInjection, graphToMermaid, parseGraph, type GraphDocument } from "./graph.js";
 import { renderReport } from "./render.js";
 
-const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
+const USAGE = `render --out - prints only the filled document on stdout; --json conflicts.
+render --language html|markdown selects ordinary-token escaping (default html).
+Raw triple-brace tokens remain raw; file output containment is unchanged.
+
+nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
 usage:
   nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--label <name> ...] [--severity <band>[+] --severity-order <high,...,low>] [--objects-from <file>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
@@ -223,7 +227,7 @@ const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; boo
     lists: ["label"],
     booleans: ["backlog", "open-stop"],
   },
-  render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
+  render: { values: ["template", "data", "out", "variant", "graph", "language"], booleans: ["dry-run"] },
   mermaid: { values: ["graph"], booleans: [] },
 };
 
@@ -747,8 +751,12 @@ function runRender(context: CommandContext): number {
   const graph = readGraph(context, root);
   const template = required(context, "template", "It names the file whose tokens are filled.");
   if (variant !== null) assertVariantTemplate(variant.name, variant.section.template, template);
+  const language = context.args.values["language"] ?? "html";
+  if (language !== "html" && language !== "markdown") throw new VerbUsageError("--language must be html or markdown.");
+  if (context.args.values["out"] === "-" && context.json) throw new VerbUsageError("--out - prints the rendered document; it conflicts with --json metadata output.");
   const result = renderReport(root, {
     template,
+    language,
     data: required(context, "data", "It names the JSON document every token is answered from."),
     out: required(context, "out", "It names where the filled report is written, inside --repo."),
     dryRun: context.args.booleans.has("dry-run"),
@@ -758,7 +766,8 @@ function runRender(context: CommandContext): number {
       ...(graph === null ? {} : graphInjection(graph)),
     },
   });
-  emit(context.io, context.json, result.report, result.lines);
+  if (result.content !== undefined) context.io.out(result.content);
+  else emit(context.io, context.json, result.report, result.lines);
   return 0;
 }
 
@@ -767,7 +776,7 @@ export const reportCommand: Command = {
   subcommands: SUBCOMMANDS,
   summary: "Assemble an effort's report data, and fill a template with it.",
   usage: USAGE,
-  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS, lists: ["label"] },
+  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS, lists: ["label"], dashValues: ["out"] },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("report", context.args, SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);

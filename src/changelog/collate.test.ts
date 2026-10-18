@@ -63,7 +63,10 @@ describe("collateIntoChangelog", () => {
     expect(() => collateIntoChangelog(base, "v1.1.0", "theme", [])).toThrow(CollateError);
   });
 
-  it("refuses with no Unreleased header", () => {
-    expect(() => collateIntoChangelog("no header here", "v1.1.0", "theme", [{ name: "1-a.md", content: "x\n" }])).toThrow(CollateError);
+  it("adds an absent Unreleased anchor while preserving the preamble and old release", () => {
+    const out = collateIntoChangelog("# Changelog\n\n### v1.0.0 — prior\n- old\n", "v1.1.0", "theme", [{ name: "1-a.md", content: "x\n" }]);
+    expect(out).toContain("# Changelog\n\n### Unreleased");
+    expect(out.indexOf("### v1.1.0")).toBeLessThan(out.indexOf("### v1.0.0"));
+    expect(out).toContain("- old");
   });
 });

@@ -1079,7 +1079,7 @@ export function writeSurfaceMirror(
     if (existsSync(path) && readFileSync(path, "utf8") === file.content) {
       // Unchanged BYTES; the mode is still applied when the file declares one
       // (Nobunaga N6), because a script somebody chmod'ed to 0644 is a hook
-      // the surface cannot run, and `check` calls that hand-edited.
+      // the surface cannot run, and `check` calls that permission drift.
       if (file.mode !== undefined && modeOf(path) !== hostMode(file.mode)) {
         if (!dryRun) chmodSync(path, file.mode);
         written.push(file.path);
@@ -1127,6 +1127,7 @@ export interface MirrorReport {
   readonly extra: readonly string[];
   readonly stale: readonly string[];
   readonly handEdited: readonly string[];
+  readonly permissionDrift: readonly string[];
   /**
    * The part of `stale` that is stale ONLY because its links out of the mirror
    * were aimed from another location, for the text report's reason line.
@@ -1152,6 +1153,7 @@ export function checkSurfaceMirror(
   const missing: string[] = [];
   const stale: string[] = [];
   const handEdited: string[] = [];
+  const permissionDrift: string[] = [];
   const relocated: string[] = [];
   const inside = mirrorPathsOf(generated.map((file): string => file.path));
   /** The two texts, equal once every link out of the mirror is masked on both sides. */
@@ -1206,9 +1208,9 @@ export function checkSurfaceMirror(
       stale.push(file.path);
       relocated.push(file.path);
     } else if (withoutStamp(existing) !== withoutStamp(file.content)) handEdited.push(file.path);
-    // The same bytes under a different mode is a hand edit too (N6): a hook
+    // The same bytes under a different mode is permission drift (N6): a hook
     // script at 0644 is one the surface cannot run.
-    else if (file.mode !== undefined && modeOf(path) !== hostMode(file.mode)) handEdited.push(file.path);
+    else if (file.mode !== undefined && modeOf(path) !== hostMode(file.mode)) permissionDrift.push(file.path);
     else ok.push(file.path);
   }
 
@@ -1222,15 +1224,16 @@ export function checkSurfaceMirror(
     extra: extra.sort(),
     stale: stale.sort(),
     handEdited: handEdited.sort(),
+    permissionDrift: permissionDrift.sort(),
     relocated: relocated.sort(),
   };
 }
 
-export function mirrorReportOk(report: Pick<MirrorReport, "missing" | "extra" | "stale" | "handEdited">): boolean {
+export function mirrorReportOk(report: Pick<MirrorReport, "missing" | "extra" | "stale" | "handEdited" | "permissionDrift">): boolean {
   return (
     report.missing.length === 0 &&
     report.extra.length === 0 &&
     report.stale.length === 0 &&
-    report.handEdited.length === 0
+    report.handEdited.length === 0 && report.permissionDrift.length === 0
   );
 }

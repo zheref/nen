@@ -30,6 +30,8 @@
 // declared.
 
 export interface FlagSpec {
+  /** Value flags explicitly permitting a lone dash as a stream destination/source. */
+  readonly dashValues?: readonly string[];
   /** Flags that take a value: `--repo <path>` or `--repo=<path>`. */
   readonly values?: readonly string[];
   /** Flags that are present-or-absent: `--json`. */
@@ -142,7 +144,7 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
       } else {
         const next = argv[index];
         if (next === undefined) throw new UsageError(`--${name} requires a value.`);
-        if (next.startsWith("-")) {
+        if (next.startsWith("-") && !(next === "-" && spec.dashValues?.includes(name))) {
           throw new UsageError(
             `--${name} requires a value, and the next token '${next}' begins with '-' -- which is how a flag is spelled, so it is not read as this flag's value. Give one, or spell it --${name}='${next}' if that really is the value.`,
           );
@@ -213,7 +215,7 @@ export function parseArgs(argv: readonly string[], spec: FlagSpec): ParsedArgs {
       // suggestion carries the QUOTES because the values that reach that case
       // are prose: `--body='-1 on this'` is the spelling that survives a shell,
       // and one a caller can paste.
-      if (next.startsWith("-")) {
+      if (next.startsWith("-") && !(next === "-" && spec.dashValues?.includes(name))) {
         throw new UsageError(
           `--${name} requires a value, and the next token '${next}' begins with '-' -- which is how a flag is spelled, so it is not read as this flag's value. Most often that means the value was simply left out: give one. If '${next}' really IS the value, spell it --${name}='${next}'.`,
         );

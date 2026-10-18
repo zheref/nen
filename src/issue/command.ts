@@ -11,11 +11,13 @@
 // first. A dry run prints the exact call it would have made, so the thing the
 // caller approves is the thing that runs.
 
+import { isAbsolute, join } from "node:path";
+import redactionDefaults from "./redaction-defaults.json";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
 import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
-import { statSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, writeFileSync } from "node:fs";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import type { FlagSpec } from "../cli/args.js";
 import {
@@ -132,7 +134,7 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   search: { values: ["target", "subject", "files", "rule-ids", "lane-labels"] },
   "open-pr-check": { values: ["target", "issues"] },
   file: {
-    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", "private-names-ignore-file"],
+    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", "private-names-ignore-file"],
     booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"],
   },
   comment: {
@@ -342,7 +344,11 @@ function requireTarget(context: CommandContext): Target {
   );
 }
 
-const USAGE = `nen issue -- reconcile the backlog, then file into it.
+const USAGE = `file --title-file <path> reads the title instead of --title; supplying both refuses.
+Private-name checks default only to ~/${redactionDefaults.ignoreFile} when it exists;
+--private-names-ignore-file explicitly replaces it. No broader ignore discovery.
+
+nen issue -- reconcile the backlog, then file into it.
 
 usage:
   nen issue search --target <owner/name> --subject <text>
@@ -487,7 +493,8 @@ usage:
       --private-names-ignore-file <path> exempts names the caller ruled too
       generic to police: one per line, '#' comments and blank lines ignored,
       case-insensitive; a bare 'name' exempts that name under every owner,
-      an 'owner/name' line that slug only. No default path is ever read, and
+      an 'owner/name' line that slug only. An explicit path replaces the owner default;
+      absent files at the default are ignored, but
       a missing file is a usage error (exit 2). An ignore file that exempts
       EVERY private name refuses (exit 1, "every private name is ignored")
       unless --allow-all-ignored is given. An ignored hit never blocks
@@ -849,12 +856,15 @@ function guardPrivateNames(
 
 /**
  * `--private-names-ignore-file <path>`, read BEFORE any `gh` call: absent or
- * unreadable when given is a usage error (exit 2), and with the flag omitted
- * nothing is read -- there is no default path. Resolved against --repo's root
+ * unreadable when given is a usage error (exit 2). Omitted: only the exact
+ * owner config default is read when present. Explicit paths use --repo's root
  * like every other own-path flag (zheref/nen#100).
  */
 function readIgnoreFlag(context: CommandContext): IgnoreList | null {
-  const raw = context.args.values["private-names-ignore-file"];
+  const explicit = context.args.values["private-names-ignore-file"];
+  const home = context.seams.env["HOME"] ?? context.seams.env["USERPROFILE"];
+  const defaultPath = home === undefined || !isAbsolute(home) || context.args.booleans.has("skip-private-name-check") ? undefined : join(home, redactionDefaults.ignoreFile);
+  const raw = explicit ?? (defaultPath !== undefined && existsSync(defaultPath) ? defaultPath : undefined);
   if (raw === undefined) {
     if (context.args.booleans.has("allow-all-ignored")) {
       throw new VerbUsageError(
@@ -893,8 +903,9 @@ function file(context: CommandContext): number {
   // private-name guard reads the file below, and the guard and `gh` must agree
   // about which file it is, or the check vouches for bytes nobody sends.
   const rawBodyFile = context.args.values["body-file"] ?? "";
+  if (context.args.values["title-file"] !== undefined && context.args.values["title"] !== undefined) throw new VerbUsageError("--title and --title-file conflict; supply one title source.");
   const request: FileRequest = {
-    title: context.args.values["title"] ?? "",
+    title: context.args.values["title-file"] === undefined ? context.args.values["title"] ?? "" : readTextFile(context.args.values["title-file"], root, "The title is read before any filing mutation.").trim(),
     bodyFile: rawBodyFile === "" ? "" : resolveAgainstRepo(root, rawBodyFile),
     labels: commaList(context.args.values["label"]),
     assignee: context.args.values["assignee"] ?? "",

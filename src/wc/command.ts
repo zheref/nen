@@ -1,3 +1,4 @@
+import { runGatedPublish } from "./gated.js";
 // src/wc/command.ts -- `nen wc classify` (tensho §2's working-copy table),
 // `nen wc squash` (aka's residue: fold a branch's commits into one before it
 // is pushed), and -- zheref/nen#227 -- `nen wc catch-up` (./catchup.ts) and
@@ -45,7 +46,19 @@ import { copyPathRefusal, foldName, KEY_FILE, manageWorktree, MANIFEST_CONTRACT,
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
-const USAGE = `nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
+const USAGE = `nen wc publish --gated --repo <path> --proved <40-hex> --persona <token>
+               [--base <branch>] [--lane <name>] [--dry-run] [--json]
+  Updates only an already-published same-name branch, never first-publishes.
+  Gates: no-op catch-up; exact proved HEAD; same-name upstream; every declared
+  iteration check in order; outgoing author/committer and explicit persona;
+  HEAD re-read, then ordinary non-force publish. Stops on the first refusal.
+  --base defaults to workflow branch.base. Lane comes from iteration.lane;
+  --lane supplies it only when the policy leaves it open. No --set-upstream.
+  --dry-run previews catch-up/publish but DOES run iteration checks.
+  Exit 0 all gates pass; 1 a gate fails; 2 missing/invalid invocation or wiring.
+  JSON: nen.wc.publish-gated/v0.1, proved, dryRun, pushed, gates[], exitCode.
+
+nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
   An explicit JSON array, processed in order. Default: dry run, no fetch,
   deletion, global prune or GC. --run acts ONLY on listed targets.
   Items: worktree{path,base}, local-branch{ref,base},
@@ -891,12 +904,14 @@ export const wcCommand: Command = {
   summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, or keep one at a fixed path.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan"],
-    booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "proved", "persona", "lane"],
+    booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run", "gated"],
     lists: ["copy-from-core"],
   },
-  run(context: CommandContext): number {
+  run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune"]);
+    if (subcommand === "publish" && context.args.booleans.has("gated")) return runGatedPublish(context);
+    if (context.args.booleans.has("gated") || ["proved", "persona", "lane"].some((flag) => context.args.values[flag] !== undefined)) throw new VerbUsageError("--gated, --proved, --persona and --lane belong only to wc publish --gated.");
     if (subcommand === "prune") return runPrune(context);
     if (context.args.values["plan"] !== undefined || context.args.booleans.has("run")) throw new VerbUsageError("--plan and --run are only read by wc prune.");
     // `--remote` IS PUBLISH'S ALONE; accepted and ignored elsewhere it would be

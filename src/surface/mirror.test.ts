@@ -455,6 +455,7 @@ describe("checking -- the four drift classes", () => {
     expect(report).toEqual({
       surface: "codex",
       ok: ["AGENTS.md", "alpha/SKILL.md", "beta/SKILL.md"],
+      permissionDrift: [],
       missing: [],
       extra: [],
       stale: [],
@@ -713,7 +714,7 @@ describe("hook scripts: symlinks and modes (S4, N6)", () => {
   const declared = WIN32 ? 0o666 : 0o755;
   const wrong = WIN32 ? 0o444 : 0o644;
 
-  it("re-applies a declared mode on unchanged bytes, and check calls a wrong mode hand-edited", () => {
+  it("re-applies a declared mode on unchanged bytes, and check distinguishes permission-only drift", () => {
     const out = tempDir();
     const files = withHooks();
     writeSurfaceMirror(out, files, row("antigravity"));
@@ -726,7 +727,9 @@ describe("hook scripts: symlinks and modes (S4, N6)", () => {
     try {
       chmodSync(script, wrong);
       const drifted = checkSurfaceMirror(out, files, row("antigravity"));
-      expect(drifted.handEdited).toEqual(["hooks/bell.hook"]);
+      expect(drifted.handEdited).toEqual([]);
+      expect(drifted.permissionDrift).toEqual(["hooks/bell.hook"]);
+      expect(mirrorReportOk(drifted)).toBe(false);
       // A regenerate repairs the mode without rewriting the bytes, and reports the file written.
       const repaired = writeSurfaceMirror(out, files, row("antigravity"));
       expect(repaired.written).toEqual(["hooks/bell.hook"]);

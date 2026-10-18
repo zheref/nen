@@ -1,0 +1,4 @@
+{
+  "$comment": "External provenance protocol data from the frozen Hatsu publish/branch-authorship wrappers (#407 item 18). This is the canonical trailer key those wrappers require, not a repository taxonomy value or an inferred persona. The caller must still name the responsible persona explicitly.",
+  "provenanceTrailer": "Hatsu-Agent"
+}

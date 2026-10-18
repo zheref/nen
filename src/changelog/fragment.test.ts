@@ -149,3 +149,11 @@ describe("fragmentRequired", () => {
     ).toBe(false);
   });
 });
+
+describe("opt-out is visible prose, never an example or hidden instruction", () => {
+  it.each(["<!-- no CHANGELOG entry: example -->", "<!--\nno CHANGELOG entry: hidden\n-->", "```md\nno CHANGELOG entry: sample\n```", "~~~~\nno CHANGELOG entry: sample\n~~~~", "```\nno CHANGELOG entry: unclosed"])("ignores %s", (body) => expect(bodyHasOptOut(body)).toBe(false));
+  it("recognizes prose after comments and a closed longer fence", () => {
+    expect(bodyHasOptOut("<!-- hidden --> no CHANGELOG entry: real")).toBe(true);
+    expect(bodyHasOptOut("````\n```\nno CHANGELOG entry: hidden\n````\nno CHANGELOG entry: real")).toBe(true);
+  });
+});

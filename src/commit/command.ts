@@ -40,7 +40,7 @@
 // a guard that fired without the repository having asked for it would be this
 // module deciding somebody's commit convention for them.
 
-import { assertRepoRoot } from "../repo/root.js";
+import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { emit, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { SchemaError } from "../schema/errors.js";
 import { attributionRefusalMessages, loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
@@ -80,7 +80,7 @@ build-proof check that says whether this tree is the one a build proved.
 
 usage:
   nen commit format --type feat --subject "a short imperative subject"
-                    [--scope <scope>] [--breaking] [--body "paragraph one"]
+                    [--scope <scope>] [--breaking] [--body "paragraph one" | --body-file <path>]
                     [--trailer key=value,key2=value2] [--repo <path>]
   nen commit check  --repo <path> --require-proof <lane> [--json]
   nen commit write  --repo <path> --message-file <path> [--trailer <Key: value>]...
@@ -268,13 +268,13 @@ function policyFailure(error: SchemaError, act: "shape a message" | "commit"): s
  * the instruction somebody gave.
  */
 const COMMIT_SUBCOMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
-  format: ["type", "scope", "subject", "body", "trailer", "breaking"],
+  format: ["type", "scope", "subject", "body", "body-file", "trailer", "breaking"],
   check: ["require-proof"],
   write: ["message-file", "trailer", "require-proof", "dry-run"],
 };
 
 const COMMIT_FLAGS = {
-  values: ["type", "scope", "subject", "body", "require-proof", "message-file"],
+  values: ["type", "scope", "subject", "body", "body-file", "require-proof", "message-file"],
   lists: ["trailer"],
   booleans: ["breaking", "dry-run"],
 };
@@ -370,12 +370,15 @@ export const commitCommand: Command = {
     const subject = context.args.values["subject"];
     if (subject === undefined) throw new VerbUsageError("--subject is required.");
 
+    const bodyFile = context.args.values["body-file"];
+    if (bodyFile !== undefined && context.args.values["body"] !== undefined) throw new VerbUsageError("--body and --body-file conflict; supply one body source.");
+    const body = bodyFile === undefined ? context.args.values["body"] : readTextFile(bodyFile, resolveRepoRoot({ repoFlag: context.repoFlag }), "The commit body must be read before its message is formatted.");
     const input: CommitMessageInput = {
       type,
       scope: context.args.values["scope"] ?? null,
       breaking: context.args.booleans.has("breaking"),
       subject,
-      body: context.args.values["body"] === undefined ? [] : [context.args.values["body"]],
+      body: body === undefined ? [] : [body],
       trailers: parseTrailers(context.args.lists["trailer"]),
     };
 

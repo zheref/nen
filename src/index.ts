@@ -113,7 +113,7 @@ global options:
 // way a registry family's `command.usage` does -- these two are it, read by
 // `run()` below rather than by ../cli/command.ts's mergeFlags path a
 // registered family goes through.
-export const BOOTSTRAP_USAGE = `${PROGRAM} bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script <path>] [--repo <path>]
+export const BOOTSTRAP_USAGE = `${PROGRAM} bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script <path>] [--script-sha256 <hex>] [--repo <path>]
 
 Fetch, checksum-verify and cache a pinned ${PROGRAM} binary. There is
 deliberately no default and no 'latest': a bootstrap that picked the newest
@@ -338,7 +338,7 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
     // --ledger belongs only to schema check, never bootstrap or schema set.
     const flags = head.rest[0] === "schema" && schemaSubcommand(head.rest) === "check"
       ? { ...GLOBAL_FLAGS, booleans: [...GLOBAL_FLAGS.booleans, "ledger"] }
-      : GLOBAL_FLAGS;
+      : head.rest[0] === "bootstrap" ? { ...GLOBAL_FLAGS, values: [...GLOBAL_FLAGS.values, "script-sha256"] } : GLOBAL_FLAGS;
     parsed = parseArgs(head.rest, flags);
   } catch (error) {
     if (error instanceof UsageError) {
@@ -545,6 +545,7 @@ function bootstrap(
     source: values["source"],
     cacheDir: values["cache-dir"],
     script: values["script"],
+    scriptSha256: values["script-sha256"],
   });
   // stderr first, so a failure's explanation is on screen before the (empty)
   // stdout line is not.

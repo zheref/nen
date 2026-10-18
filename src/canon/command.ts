@@ -1,3 +1,4 @@
+import { runCanonCheck } from "./check.js";
 // src/canon/command.ts -- `nen canon resolve`, and `nen canon mirror
 // generate|check`: a consumer's canon mirror, rendered into every agent
 // surface it declares (CON-13).
@@ -82,7 +83,13 @@ const SURFACE_LIST = canonSurfaces()
   })
   .join("\n");
 
-const USAGE = `nen canon -- resolve a repo's handbook set, read its canon pin, or render/check its
+const USAGE = `nen canon check --repo <path> --registry <file> --taxonomy <file> [--json]
+  Reads the explicit registry, taxonomy with independent registry phase coverage,
+  and nen/labels.json dry-run install parity in both directions. Writes nothing.
+  Inputs must be readable regular files inside --repo without symlinked paths.
+  Exit 0 all three reads pass; 1 invalid contracts/parity; 2 invalid wiring.
+
+nen canon -- resolve a repo's handbook set, read its canon pin, or render/check its
             canon mirror on every surface it uses.
 
 usage:
@@ -312,11 +319,12 @@ ${SURFACE_LIST}
 
 export const canonCommand: Command = {
   name: "canon",
-  subcommands: ["resolve", "mirror", "pin", "checkout"],
+  subcommands: ["resolve", "mirror", "pin", "checkout", "check"],
   summary: "Resolve a repo's handbook set, read its canon pin, or render/check its canon-rule mirror on every surface it uses.",
   usage: USAGE,
   flags: {
     values: [
+      "registry", "taxonomy",
       "target",
       "always-load",
       "stack-dir",
@@ -346,7 +354,9 @@ export const canonCommand: Command = {
     "--header-pattern": "the marker is read back by nen itself now; there is no pattern to give. Pass --source and --ref, and 'check' tells stale from hand-edited on its own.",
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin", "checkout"]);
+    const subcommand = requireSubcommand("canon", context.args, ["resolve", "mirror", "pin", "checkout", "check"]);
+    if (subcommand === "check") return runCanonCheck(context);
+    if (context.args.values["registry"] !== undefined || context.args.values["taxonomy"] !== undefined) throw new VerbUsageError("--registry and --taxonomy belong only to canon check.");
     if (subcommand === "resolve") return resolveVerb(context);
     if (subcommand === "pin") return pinVerb(context);
     if (subcommand === "checkout") return checkoutVerb(context);

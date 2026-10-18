@@ -1,3 +1,4 @@
+import { stripComments } from "../pr/template.js";
 // src/changelog/fragment.ts -- "does this change owe a changelog fragment?",
 // ported from bankai-core's `scripts/changelog_unreleased_check.sh`.
 //
@@ -111,7 +112,22 @@ export function isFragmentPath(path: string, dir: string): boolean {
 const OPT_OUT = /no CHANGELOG entry:[ \t]*[^ \t\r\n]/i;
 
 export function bodyHasOptOut(body: string | null): boolean {
-  return body !== null && OPT_OUT.test(body);
+  if (body === null) return false;
+  let comment = false;
+  let fence: string | null = null;
+  for (const line of body.replace(/\r\n?/g, "\n").split("\n")) {
+    if (fence !== null) {
+      const close = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if (close !== null && close[1] !== undefined && close[1][0] === fence[0] && close[1].length >= fence.length) fence = null;
+      continue;
+    }
+    const visible = stripComments(line, comment);
+    comment = visible.open;
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(visible.text);
+    if (open?.[1] !== undefined) { fence = open[1]; continue; }
+    if (OPT_OUT.test(visible.text)) return true;
+  }
+  return false;
 }
 
 /** `### Unreleased` entries: top-level `- **...` before the next `### ` header. */

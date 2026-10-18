@@ -81,7 +81,7 @@ export class CollateError extends Error {
 
 /**
  * Rewrite a CHANGELOG's text: empty `### Unreleased`, insert the new dated
- * section immediately below it. Requires an ALREADY-EMPTY `### Unreleased`
+ * section immediately below it. Adds an absent anchor; an existing `### Unreleased` must be empty
  * (see the header) and at least one fragment.
  */
 export function collateIntoChangelog(
@@ -96,7 +96,9 @@ export function collateIntoChangelog(
   const lines = changelog.split("\n");
   const unreleasedIndex = lines.findIndex((line): boolean => /^### Unreleased/.test(line));
   if (unreleasedIndex === -1) {
-    throw new CollateError("the changelog has no '### Unreleased' header to anchor the collation on.");
+    const firstRelease = lines.findIndex((line) => /^### v\d/.test(line));
+    const at = firstRelease === -1 ? lines.length : firstRelease;
+    return collateIntoChangelog([...lines.slice(0, at), "### Unreleased", "", ...lines.slice(at)].join("\n"), version, theme, fragments);
   }
   const existing = unreleasedEntryCount(changelog);
   if (existing > 0) {

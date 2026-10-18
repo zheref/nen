@@ -78,6 +78,7 @@ export const GLOBAL_FLAGS: FlagSpec = {
 
 export function mergeFlags(spec: FlagSpec): FlagSpec {
   return {
+    dashValues: spec.dashValues,
     values: [...(GLOBAL_FLAGS.values ?? []), ...(spec.values ?? [])],
     booleans: [...(GLOBAL_FLAGS.booleans ?? []), ...(spec.booleans ?? [])],
     lists: [...(GLOBAL_FLAGS.lists ?? []), ...(spec.lists ?? [])],

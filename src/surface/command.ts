@@ -18,6 +18,8 @@
 // mirrored into. `check --installed` reads a copy somebody else installed and
 // says whether it is still the source's image; it copies nothing back.
 
+import { readJsonFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { isRecord } from "../schema/errors.js";
 import { join, resolve } from "node:path";
 import {
   emit,
@@ -85,7 +87,14 @@ export const DEFAULT_SOURCE_SURFACE = "claude";
 
 const SURFACE_LIST = SURFACES.map((row): string => `    ${row.surface.padEnd(12)} ${row.summary}`).join("\n");
 
-const USAGE = `nen surface -- mirror a skills directory into another agent surface's own layout,
+const USAGE = `mirror generate --plan <file> generates every explicitly declared surface in one call.
+The plan is a nonempty JSON array of per-surface string flag objects, each with
+source, surface, out and any ordinary generation inputs. Relative paths use --repo.
+All rows preflight before writing; duplicate surfaces and overlapping outputs refuse.
+Do not mix --plan with individual input flags. --dry-run previews without writes.
+Check distinguishes permission-drift from hand-edited content.
+
+nen surface -- mirror a skills directory into another agent surface's own layout,
                say what each surface can do, and make or report a host's
                first-party install of a plugin.
 
@@ -330,7 +339,7 @@ const MIRROR_ONLY_VALUES = ["agents", "invocation-prefix", "hooks", "hooks-root"
 const INPUT_VALUES = ["source", "agents", "surface", "source-surface", "invocation-prefix", "hooks", "hooks-root", "manifest", "models", "rules", "permissions", "stamp"];
 
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
-  generate: { values: [...INPUT_VALUES, "out"], booleans: ["dry-run"] },
+  generate: { values: [...INPUT_VALUES, "out", "plan"], booleans: ["dry-run"] },
   check: { values: [...INPUT_VALUES, "out", "installed", ...PLUGIN_VALUES], booleans: [] },
 };
 
@@ -508,8 +517,35 @@ function readInputs(context: CommandContext, allowInstalled: boolean): Inputs {
 
 const listOr = (items: readonly string[]): string => (items.length === 0 ? "(none)" : items.join(", "));
 
+/** Every row explicitly declares its surface, paths and own overrides. */
+function runGeneratePlan(context: CommandContext): number {
+  if (context.args.positionals.length !== 3 || context.args.passthrough.length > 0) throw new VerbUsageError("surface generation plans take no extra positional arguments.");
+  const foreign = Object.keys(context.args.values).filter((flag) => !["plan", "repo"].includes(flag));
+  if (foreign.length > 0) throw new VerbUsageError("--plan carries every surface's inputs; do not combine it with per-surface flags.");
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  const value = readJsonFile<unknown>(context.args.values["plan"]!, root, "The surface generation plan must explicitly declare every destination.");
+  if (!Array.isArray(value) || value.length === 0) throw new VerbUsageError("--plan must be a nonempty array of per-surface flag objects.");
+  const paths = new Set(["source", "agents", "hooks", "hooks-root", "models", "rules", "permissions", "manifest", "out"]);
+  const prepared = value.map((row: unknown, index) => {
+    if (!isRecord(row) || Object.entries(row).some(([key, entry]) => ![...INPUT_VALUES, "out"].includes(key) || typeof entry !== "string" || entry.trim() === "")) throw new VerbUsageError(`--plan[${index}] must contain only nonempty per-surface string flags.`);
+    const values = Object.fromEntries(Object.entries(row).map(([key, entry]) => [key, paths.has(key) ? resolveAgainstRepo(root, entry as string) : entry as string]));
+    return readInputs({ ...context, args: { ...context.args, values } }, false);
+  });
+  for (const [index, input] of prepared.entries()) for (const other of prepared.slice(index + 1)) {
+    if (input.row.surface === other.row.surface || isContained(input.outDir, other.outDir) || isContained(other.outDir, input.outDir)) throw new VerbUsageError("--plan repeats a surface or overlaps output directories; no surface was written.");
+  }
+  for (const input of prepared) writeSurfaceMirror(input.outDir, input.report.files, input.row, true);
+  const reports: unknown[] = [];
+  for (const inputs of prepared) generateInputs({ ...context, json: true, io: { out: (line) => void reports.push(JSON.parse(line) as unknown), err: context.io.err } }, inputs);
+  emit(context.io, context.json, { contract: "nen.surface.mirror.batch/v0.1", dryRun: context.args.booleans.has("dry-run"), surfaces: reports }, prepared.map((input) => `${input.row.surface}: ${input.outDir}`));
+  return 0;
+}
+
 function runGenerate(context: CommandContext): number {
-  const inputs = readInputs(context, false);
+  if (context.args.values["plan"] !== undefined) return runGeneratePlan(context);
+  return generateInputs(context, readInputs(context, false));
+}
+function generateInputs(context: CommandContext, inputs: Inputs): number {
   const dryRun = context.args.booleans.has("dry-run");
   const report = inputs.report;
   const result = writeSurfaceMirror(inputs.outDir, report.files, inputs.row, dryRun);
@@ -611,16 +647,17 @@ function runCheck(context: CommandContext): number {
     );
   }
   const inputs = readInputs(context, true);
-  const { relocated, ...report } = checkSurfaceMirror(inputs.outDir, inputs.report.files, inputs.row, inputs.stamp);
+  const { relocated, permissionDrift, ...rest } = checkSurfaceMirror(inputs.outDir, inputs.report.files, inputs.row, inputs.stamp);
   const contract = inputs.installed ? CHECK_INSTALLED_CONTRACT : CHECK_CONTRACT;
+  const report = { ...rest, permissionDrift };
   // `relocated` is a reason, not a drift class: it reaches the text report
   // only, so the --json shape (and its contract) is exactly what it was.
   emit(
     context.io,
     context.json,
     inputs.installed
-      ? { contract, ...report, installed: inputs.outDir, stamp: inputs.stamp }
-      : { contract, ...report, stamp: inputs.stamp },
+      ? { contract, ...(permissionDrift.length === 0 ? rest : report), installed: inputs.outDir, stamp: inputs.stamp }
+      : { contract, ...(permissionDrift.length === 0 ? rest : report), stamp: inputs.stamp },
     [
       `surface: ${report.surface}`,
       ...(inputs.installed ? [`installed: ${inputs.outDir}`] : []),
@@ -635,6 +672,7 @@ function runCheck(context: CommandContext): number {
             `stale because their links out of the mirror are aimed from another location (a copied install, or a generate run from another root or --repo; regenerate here to heal): ${relocated.join(", ")}`,
           ]),
       `hand-edited: ${listOr(report.handEdited)}`,
+      ...(report.permissionDrift.length === 0 ? [] : [`permission-drift: ${listOr(report.permissionDrift)}`]),
     ],
   );
   return mirrorReportOk(report) ? 0 : 1;

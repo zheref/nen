@@ -85,7 +85,7 @@ export const SHU_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   // `--select` IS `test`'s ALONE (zheref/nen#207): the lane's one declared
   // focused form, expanded per identifier. Refused everywhere else by the
   // foreign-flag rule below rather than ignored.
-  test: { values: ["lane", "effort", "heartbeat", "select"], booleans: ["dry-run", "stream"] },
+  test: { values: ["lane", "lanes", "effort", "heartbeat", "select"], booleans: ["dry-run", "stream"] },
   "ui-test": { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   lint: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
   archive: { values: ["lane", "effort", "heartbeat"], booleans: ["dry-run", "stream"] },
@@ -162,7 +162,10 @@ export const EXECUTING_VERBS: readonly string[] = [
  */
 const ENABLED_INSTALLER_IDS = ENABLED_INSTALLERS.join(", ");
 
-const USAGE = `${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
+const USAGE = `test --lanes <a,b,...> runs an explicit ordered lane set with one aggregate report.
+Cannot combine with --lane. All lanes preflight before any test runs; --dry-run runs none.
+
+${PROGRAM} shu <verb> [--repo <path>] [--lane <name>] [--dry-run] [--json]
                   [--stream] [--heartbeat <s>]   (the nine verbs that run a step)
 
 --repo is bracketed there because fourteen of the fifteen verbs default it to the
@@ -1422,6 +1425,33 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
   return exitCode;
 }
 
+/** One explicit ordered lane set, preflighted whole before any test executes. */
+async function runTestLanes(context: CommandContext): Promise<number> {
+  if (context.args.values["lane"] !== undefined) throw new VerbUsageError("--lane and --lanes conflict.");
+  const lanes = (context.args.values["lanes"] ?? "").split(",").map((name) => name.trim());
+  if (lanes.some((name) => name === "") || new Set(lanes).size !== lanes.length) throw new VerbUsageError("--lanes requires unique nonempty comma-separated lane names.");
+  const once = async (lane: string, dry: boolean): Promise<{ lane: string; executed: boolean; exitCode: number; report: unknown; stdout: string[]; stderr: string[] }> => {
+    const values: Record<string, string> = { ...context.args.values, lane };
+    delete values["lanes"];
+    const booleans = new Set(context.args.booleans);
+    if (dry) booleans.add("dry-run"); else booleans.delete("dry-run");
+    const stdout: string[] = []; const stderr: string[] = [];
+    const exitCode = await shuCommand.run({ ...context, json: true, args: { ...context.args, values, booleans }, io: { out: (line) => void stdout.push(line), err: (line) => void stderr.push(line) } });
+    let report: unknown = null;
+    try { report = JSON.parse(stdout.join("\n")) as unknown; } catch { /* retain non-JSON diagnostics below */ }
+    return { lane, executed: !dry, exitCode, report, stdout, stderr };
+  };
+  const preview = [];
+  for (const lane of lanes) preview.push(await once(lane, true));
+  const dryRun = context.args.booleans.has("dry-run");
+  const results = [];
+  if (dryRun || preview.some((row) => row.exitCode !== 0)) results.push(...preview);
+  else for (const lane of lanes) results.push(await once(lane, false));
+  const exitCode = results.find((row) => row.exitCode !== 0)?.exitCode ?? 0;
+  emit(context.io, context.json, { contract: "nen.shu.test-batch/v0.1", dryRun, preflightPassed: preview.every((row) => row.exitCode === 0), lanes: results, exitCode }, results.flatMap((row) => [`lane ${row.lane}: ${row.executed ? "executed" : "preview"}, exit ${row.exitCode}`, ...row.stdout, ...row.stderr]));
+  return exitCode;
+}
+
 export const shuCommand: Command = {
   name: "shu",
   subcommands: SHU_SUBCOMMANDS,
@@ -1442,6 +1472,7 @@ export const shuCommand: Command = {
     const subcommand = requireSubcommand("shu", context.args, SHU_SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);
     const repoRoot = resolveRepoRoot({ repoFlag: context.repoFlag });
+    if (subcommand === "test" && context.args.values["lanes"] !== undefined) return runTestLanes(context);
 
     try {
       if (subcommand === "detect") return runDetect(context, repoRoot);

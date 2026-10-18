@@ -36,6 +36,11 @@ export interface Effort {
   readonly ready: boolean;
   /** The human has been prompted for this PR. Only meaningful on the local plane. */
   readonly prompted: boolean;
+  /** Caller-proven stacked PR targets its stacked base, with Hanten settled. */
+  readonly stacked?: boolean;
+  readonly hantenSettled?: boolean;
+  readonly stackedBase?: string | null;
+  readonly prBase?: string | null;
 }
 
 export interface Caps {
@@ -91,6 +96,7 @@ export function occupancy(effort: Effort): { occupied: boolean; why: string } {
     return { occupied: true, why: "released, but no PR yet" };
   }
   if (!effort.prOpen) return { occupied: true, why: "authored locally, no PR yet" };
+  if (effort.stacked === true && effort.hantenSettled === true && typeof effort.stackedBase === "string" && effort.stackedBase.trim() !== "" && effort.prBase === effort.stackedBase) return { occupied: false, why: "stacked PR open on its stacked base and Hanten settled -- local slot handed over" };
   if (!effort.ready) {
     return {
       occupied: true,
@@ -170,6 +176,10 @@ export function parseEfforts(json: string): ParsedEfforts {
       prOpen: record["prOpen"] === true,
       ready: record["ready"] === true,
       prompted: record["prompted"] === true,
+      stacked: record["stacked"] === true,
+      hantenSettled: record["hantenSettled"] === true,
+      stackedBase: typeof record["stackedBase"] === "string" ? record["stackedBase"] : null,
+      prBase: typeof record["prBase"] === "string" ? record["prBase"] : null,
     });
   });
   return { efforts, errors };

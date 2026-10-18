@@ -1,3 +1,5 @@
+import { readJsonFile } from "../cli/inputs.js";
+import { requireArray, requireRecord, requireString, SchemaError } from "../schema/errors.js";
 // src/classify/labels.ts -- `nen classify labels`.
 //
 // The cheapest question a skill asks of the taxonomy: "is this file valid, and
@@ -8,7 +10,7 @@
 
 import { requireValue, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
-import { AXES, loadClassifyTaxonomy, taxonomyLabels } from "./taxonomy.js";
+import { AXES, loadClassifyTaxonomy, taxonomyLabels, validatePhaseCoverage } from "./taxonomy.js";
 
 export function runLabels(context: CommandContext): number {
   const flag = requireValue(
@@ -18,6 +20,17 @@ export function runLabels(context: CommandContext): number {
   );
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   const taxonomy = loadClassifyTaxonomy(root, flag);
+  const inventory = context.args.values["phase-inventory"];
+  const registry = context.args.values["phase-registry"];
+  if (inventory !== undefined && registry !== undefined) throw new SchemaError(taxonomy.path, "phase-inventory", "choose one independent inventory or registry");
+  let expected: string[] | undefined;
+  if (inventory !== undefined) expected = requireArray(inventory, "phases", readJsonFile<unknown>(inventory, root, "The independent document phase inventory is required.")).map((entry, index) => requireString(inventory, `phases[${index}]`, entry));
+  if (registry !== undefined) {
+    const document = requireRecord(registry, "registry", readJsonFile<unknown>(registry, root, "The independent registry phase universe is required."));
+    expected = Object.keys(requireRecord(registry, "phases", document["phases"])).filter((key) => !key.startsWith("$"));
+  }
+  if (expected !== undefined && (expected.length === 0 || new Set(expected).size !== expected.length)) throw new SchemaError(taxonomy.path, "phases", "the independent inventory must be nonempty and unique");
+  validatePhaseCoverage(taxonomy, expected);
   const labels = taxonomyLabels(taxonomy);
 
   if (context.json) {
