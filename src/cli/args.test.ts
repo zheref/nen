@@ -172,4 +172,11 @@ describe("parseArgs -- a repeated boolean is collapsed and counted (zheref/nen#5
     expect(parsed.booleanCounts?.get("json")).toBe(1);
     expect(parsed.booleanCounts?.get("idle")).toBeUndefined();
   });
+
+});
+
+it("accepts a lone stream dash only for a declared value flag", () => {
+  expect(parseArgs(["--out", "-"], { values: ["out"], dashValues: ["out"] }).values["out"]).toBe("-");
+  expect(() => parseArgs(["--out", "-"], { values: ["out"] })).toThrow(/requires a value/);
+  expect(() => parseArgs(["--out", "--force"], { values: ["out"], dashValues: ["out"] })).toThrow(/requires a value/);
 });

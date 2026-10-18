@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { SchemaError } from "../schema/errors.js";
-import { axisOfLabel, loadClassifyTaxonomy, parseClassifyTaxonomy, taxonomyLabels } from "./taxonomy.js";
+import { axisOfLabel, loadClassifyTaxonomy, parseClassifyTaxonomy, taxonomyLabels, validatePhaseCoverage } from "./taxonomy.js";
 import { MINI, REAL, readJson, type Json } from "./fixtures/harness.js";
 
 function parse(edit: (value: Json) => void): unknown {
@@ -331,4 +331,15 @@ describe("parseClassifyTaxonomy -- metadata keys inside phases", () => {
     });
     expect(error.pointer).toBe("axes.job.keys[0].phases.elsewhere");
   });
+});
+
+it("checks phase-aware jobs against an independent document universe, retaining bare legacy taxonomies", () => {
+  const legacy = parseClassifyTaxonomy("legacy", readJson(MINI)); expect(() => validatePhaseCoverage(legacy)).not.toThrow();
+  const value = readJson(MINI); value.axes.job.keys.forEach((job: Json, index: number) => { job.phases = { one: [`P${index}`] }; });
+  const mapped = parseClassifyTaxonomy("mapped", value);
+  expect(() => validatePhaseCoverage(mapped, ["P0", "P1"])).not.toThrow();
+  expect(() => validatePhaseCoverage(mapped, ["P0", "P1", "UNASSIGNED"])).toThrow(/uncovered/);
+  expect(() => validatePhaseCoverage(mapped, ["P0"])).toThrow(/absent.*inventory/);
+  value.axes.job.keys[0].phases = {};
+  expect(() => validatePhaseCoverage(parseClassifyTaxonomy("empty", value))).toThrow(/at least one phase/);
 });

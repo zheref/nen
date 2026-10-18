@@ -793,3 +793,14 @@ describe("nen commit format -- cannot end its message in a whitespace-only line,
     }
   });
 });
+
+it("formats a relative body file with the same wrapping/policy as --body and refuses mixed sources", async () => {
+  const root = repoWithPolicy({}); const body = "a long body ".repeat(20) + "\n\nsecond paragraph";
+  writeFileSync(join(root, "body.md"), body);
+  const args = ["commit", "format", "--type", "fix", "--subject", "read a body"];
+  const fromFile = await capture([...args, "--body-file", "body.md"], false, root);
+  const fromValue = await capture([...args, "--body", body], false, root);
+  expect(fromFile.code).toBe(0); expect(fromFile.out).toEqual(fromValue.out);
+  expect((await capture([...args, "--body", "x", "--body-file", "body.md"], false, root)).code).toBe(2);
+  expect((await capture([...args, "--body-file", "missing.md"], false, root)).code).toBe(2);
+});

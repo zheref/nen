@@ -11,6 +11,8 @@
 // first. A dry run prints the exact call it would have made, so the thing the
 // caller approves is the thing that runs.
 
+import { isAbsolute, join } from "node:path";
+import redactionDefaults from "./redaction-defaults.json";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { decomposeLabelName, loadLabelTaxonomy, type LabelTaxonomy } from "../schema/labels.js";
 import { commaList } from "../cli/comma.js";
@@ -362,7 +364,11 @@ function requireTarget(context: CommandContext): Target {
   );
 }
 
-const USAGE = `nen issue -- reconcile the backlog, then file into it.
+const USAGE = `file --title-file <path> reads the title instead of --title; supplying both refuses.
+Private-name checks default only to ~/${redactionDefaults.ignoreFile} when it exists;
+--private-names-ignore-file explicitly replaces it. No broader ignore discovery.
+
+nen issue -- reconcile the backlog, then file into it.
 
 usage:
   nen issue search --target <owner/name> --subject <text>
@@ -1047,6 +1053,7 @@ function file(context: CommandContext): number {
   // private-name guard reads the file below, and the guard and `gh` must agree
   // about which file it is, or the check vouches for bytes nobody sends.
   const rawBodyFile = context.args.values["body-file"] ?? "";
+  if (context.args.values["title-file"] !== undefined && context.args.values["title"] !== undefined) throw new VerbUsageError("--title and --title-file conflict; supply one title source.");
   const request: FileRequest = {
     title: readTitleFile(context, root) ?? context.args.values["title"] ?? "",
     bodyFile: rawBodyFile === "" ? "" : resolveAgainstRepo(root, rawBodyFile),

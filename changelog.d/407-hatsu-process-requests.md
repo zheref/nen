@@ -1,0 +1,15 @@
+- #407 item 1: changelog opt-outs ignore HTML comments and fenced examples.
+- #407 item 2: commit formatting accepts a policy-checked `--body-file`.
+- #407 item 3: issue filing accepts a checked `--title-file` with conflicting-source refusal.
+- #407 item 4: `shu test --lanes` preflights an explicit lane set and emits one truthful aggregate report.
+- #407 item 5: report rendering accepts stdout `--out -` while preserving file containment.
+- #407 item 6: report rendering has explicit HTML/Markdown escaping, preserving HTML defaults and raw tokens.
+- #407 item 7: surface generation accepts an explicit all-surface plan, preflighted before writes.
+- #407 item 8 (Nen runtime half): bootstrap optionally verifies a caller-trusted `--script-sha256` before Bash; Hatsu pin rendering remains external.
+- #407 item 9: stacked local slot handover requires an open PR, explicit matching bases and settled Hanten.
+- #407 item 10: private-name checks use only the exact owner redaction-ignore default, with explicit overrides and existing guard rules retained.
+- #407 item 13: phase-aware classification validates every job and an optional independent phase inventory/registry.
+- #407 item 15: collation adds an absent Unreleased anchor without overwriting old content.
+- #407 item 16: permission-only mirror drift is reported separately from edited content.
+- #407 item 18: published updates support a six-gate, proof-pinned `wc publish --gated` with explicit persona and no force or first-publish route.
+- #407 item 19: `canon check` composes registry, phase-aware classification and bidirectional dry-run label parity with one read-only verdict.

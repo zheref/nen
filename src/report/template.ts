@@ -221,11 +221,16 @@ interface Resolved {
  * TemplateError, so the caller has one class to catch and one exit code to
  * return, whether the template was malformed or merely disagreed with the data.
  */
-export function renderTemplate(parsed: ParsedTemplate, data: unknown): string {
-  return renderNodes(parsed.nodes, [{ value: data, index: null }]);
+export type OutputLanguage = "html" | "markdown";
+export function escapeMarkdown(text: string): string {
+  const punctuation = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+  return Array.from(text, (char) => punctuation.includes(char) ? `\\${char}` : char).join("");
+}
+export function renderTemplate(parsed: ParsedTemplate, data: unknown, language: OutputLanguage = "html"): string {
+  return renderNodes(parsed.nodes, [{ value: data, index: null }], language);
 }
 
-function renderNodes(nodes: readonly TemplateNode[], scopes: readonly Scope[]): string {
+function renderNodes(nodes: readonly TemplateNode[], scopes: readonly Scope[], language: OutputLanguage): string {
   let out = "";
   for (const node of nodes) {
     switch (node.kind) {
@@ -233,7 +238,7 @@ function renderNodes(nodes: readonly TemplateNode[], scopes: readonly Scope[]): 
         out += node.text;
         break;
       case "value":
-        out += renderValue(node.token, node.raw, scopes);
+        out += renderValue(node.token, node.raw, scopes, language);
         break;
       case "each": {
         const list = mustResolve(node.token, scopes, "{{#each}}");
@@ -243,13 +248,13 @@ function renderNodes(nodes: readonly TemplateNode[], scopes: readonly Scope[]): 
           );
         }
         list.forEach((item, index): void => {
-          out += renderNodes(node.body, [...scopes, { value: item, index }]);
+          out += renderNodes(node.body, [...scopes, { value: item, index }], language);
         });
         break;
       }
       case "if": {
         const value = mustResolve(node.token, scopes, "{{#if}}");
-        if (truthy(value)) out += renderNodes(node.body, scopes);
+        if (truthy(value)) out += renderNodes(node.body, scopes, language);
         break;
       }
     }
@@ -271,10 +276,10 @@ export function truthy(value: unknown): boolean {
   return value !== null && value !== undefined && value !== false && value !== "";
 }
 
-function renderValue(token: string, raw: boolean, scopes: readonly Scope[]): string {
+function renderValue(token: string, raw: boolean, scopes: readonly Scope[], language: OutputLanguage): string {
   const value = mustResolve(token, scopes, raw ? "{{{ }}}" : "{{ }}");
   const text = stringify(token, value);
-  return raw ? text : escapeHtml(text);
+  return raw ? text : language === "markdown" ? escapeMarkdown(text) : escapeHtml(text);
 }
 
 /**
