@@ -89,3 +89,58 @@ describe("concrete corrections on the canonical list/alternation contract", () =
     }
   });
 });
+
+describe("whole-invocation correction boundaries", () => {
+  const unsafe = [
+    [TEMPLATE, "hatsu@g4+model#one#two"],
+    ["<repo>[@<gate:G4|G5>{+}][then <labels>{&}]", "repo@G4+then x then y"],
+    ["<repo>[%<phase:Start|End>{+}|<term>][!<terms>{&}]", "repo%start+model!one!two"],
+  ] as const;
+  it.each(unsafe)("withholds a delimiter relocation that changes meaning or stays invalid: %s", async (template, line) => {
+    expect(parse(line, template).ok).toBe(false);
+    expect(parse(line, template).corrected).toBeNull();
+    for (const json of [false, true]) {
+      const result = await cli(template, line, json); expect(result.code).toBe(2);
+      expect(result.err.join("\n")).not.toContain("Corrected line:");
+      if (json) expect(JSON.parse(result.out.join("\n")).corrected).toBeNull();
+    }
+  });
+  it.each([
+    ["<repo>@<gates:G4|G5>{+}", "hatsu@"],
+    ["<repo>@<gates:G4|G5>{+}", "hatsu"],
+    ["<gates:G4|G5>{+}", ""],
+    ["<repo>@<gate:G4|G5>{+}|<terms>{&}", "hatsu@"],
+    ["<repo>#<terms>{&}", "hatsu#"],
+  ])("withholds placeholders for an incomplete required structured position: %s", async (template, line) => {
+    expect(parse(line, template).ok).toBe(false); expect(parse(line, template).corrected).toBeNull();
+    for (const json of [false, true]) {
+      const result = await cli(template, line, json); expect(result.code).toBe(2);
+      expect(result.err.join("\n")).not.toContain("Corrected line:");
+      if (json) expect(JSON.parse(result.out.join("\n")).corrected).toBeNull();
+    }
+  });
+  it.each(["x&&y", "&x&y", "x&y&"])("normalizes a malformed free-list alternative without changing its chosen alternative: %s", async (value) => {
+    const template = "<repo>[@<gate:G4|G5>{+}|<terms>{&}]";
+    const result = parse(`hatsu@${value}`, template); expect(result.ok).toBe(false);
+    expect(result.corrected).toBe("state hatsu@x&y");
+    const repaired = parse("hatsu@x&y", template); expect(repaired.ok).toBe(true);
+    expect(repaired.slots[1]).toEqual({ name: "gate|terms", value: "x&y", suffix: false, alternative: "terms", items: ["x", "y"] });
+    const json = await cli(template, `hatsu@${value}`, true); expect(JSON.parse(json.out.join("\n")).corrected).toBe(result.corrected);
+  });
+  it("does not turn a malformed free list into an enumerated alternative", () => {
+    expect(parse("hatsu@&g4&", "<repo>[@<gate:G4|G5>{+}|<terms>{&}]").corrected).toBeNull();
+  });
+  it("retains intended normalized slots, suffixes, list items and literal clauses after relocation", () => {
+    const template = `${TEMPLATE}[then sweep]`;
+    const result = parse("hatsu@g4+model#one&two then sweep", template);
+    expect(result.corrected).toBe("state hatsu@G4#model&one&two then sweep");
+    const repaired = parse(result.corrected!.slice("state ".length), template);
+    expect(repaired.ok).toBe(true);
+    expect(repaired.slots).toEqual([
+      { name: "repo", value: "hatsu", suffix: false },
+      { name: "gate|severity|label", value: "G4", suffix: false, alternative: "gate", items: ["G4"] },
+      { name: "labels", value: "model&one&two", suffix: false, items: ["model", "one", "two"] },
+    ]);
+    expect(repaired.clauses).toEqual([{ literal: "then sweep", present: true }]);
+  });
+});

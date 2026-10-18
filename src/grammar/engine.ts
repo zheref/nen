@@ -517,7 +517,67 @@ function templateOrder(grammar: Grammar): TemplateEntry[] {
   return entries;
 }
 
+interface InvocationParse {
+  readonly result: ParseResult;
+  readonly values: ReadonlyMap<string, SlotValue>;
+  readonly attempted: ReadonlySet<string>;
+  readonly clausePresent: readonly boolean[];
+  readonly structuredFailures: readonly { readonly slot: Slot; readonly text: string }[];
+}
+
 export function parseInvocation(skill: string, grammar: Grammar, line: string): ParseResult {
+  const parsed = parseInvocationOnce(skill, grammar, line);
+  const { result, structuredFailures, clausePresent } = parsed;
+  const incomplete = grammar.slots.some((slot) =>
+    !slot.optional && (slot.alternatives.length > 1 || slot.joiner !== null) &&
+    !parsed.values.has(slot.name) && !structuredFailures.some((failure) => failure.slot === slot),
+  );
+  if (incomplete) return { ...result, corrected: null };
+  // Legacy-only refusals keep their placeholders. Structured recovery must
+  // account for every problem before it can offer a concrete whole line.
+  if (structuredFailures.length === 0) return result;
+  if (result.problems.length !== structuredFailures.length) return { ...result, corrected: null };
+  const correctionValues = new Map(parsed.values);
+  const attempted = new Set(parsed.attempted);
+  const additions = new Map<string, SlotValue>();
+  for (const { slot, text } of structuredFailures) {
+    const repair = repairStructured(slot, text, grammar.slots[grammar.slots.indexOf(slot) + 1]);
+    if (repair === undefined) return { ...result, corrected: null };
+    correctionValues.set(slot.name, repair.own);
+    if (repair.following !== undefined) additions.set(repair.following.name, repair.following);
+  }
+  for (const [name, addition] of additions) {
+    const existing = correctionValues.get(name);
+    const items = [...addition.items!, ...(existing?.items ?? [])];
+    const next = grammar.slots.find((slot) => slot.name === name)!;
+    correctionValues.set(name, { ...addition, value: items.join(next.joiner!), items });
+    attempted.add(name);
+  }
+  const corrected = correctedLine(skill, grammar, correctionValues, attempted, clausePresent);
+  // The validation pass never generates repairs or calls this wrapper again.
+  // A syntactically valid rewrite can still move a separator and silently
+  // choose another alternative: compare the intended normalized meaning too.
+  const roundTrip = parseInvocationOnce(skill, grammar, corrected.slice(skill.length).trimStart()).result;
+  const expected = grammar.slots.flatMap((slot) => {
+    const value = correctionValues.get(slot.name);
+    return value === undefined ? [] : [value];
+  });
+  const preserved = roundTrip.ok && roundTrip.slots.length === expected.length &&
+    roundTrip.slots.every((value, index) => sameSlotValue(value, expected[index]!)) &&
+    roundTrip.clauses.length === result.clauses.length &&
+    roundTrip.clauses.every((clause, index) => clause.literal === result.clauses[index]?.literal && clause.present === result.clauses[index]?.present);
+  return { ...result, corrected: preserved ? corrected : null };
+}
+
+function sameSlotValue(actual: SlotValue, expected: SlotValue): boolean {
+  const items = actual.items === undefined ? expected.items === undefined :
+    expected.items !== undefined && actual.items.length === expected.items.length && actual.items.every((item, index) => item === expected.items?.[index]);
+  return actual.name === expected.name && actual.value === expected.value && actual.suffix === expected.suffix &&
+    actual.alternative === expected.alternative && items;
+}
+
+/** Parse only: no correction generation beyond legacy placeholders, no recovery. */
+function parseInvocationOnce(skill: string, grammar: Grammar, line: string): InvocationParse {
   const found = new Map<string, SlotValue>();
   const missing: string[] = [];
   const problems: string[] = [];
@@ -677,25 +737,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   for (const [name, value] of found) {
     if (value.value.trim() !== "") attempted.add(name);
   }
-  const correctionValues = new Map(byName);
-  const additions = new Map<string, SlotValue>();
-  // Repairing one structured slot does not repair missing/scalar/literal or
-  // separator problems elsewhere. Pure legacy refusals keep their placeholders.
-  let canCorrect = structuredFailures.length === 0 || problems.length === structuredFailures.length;
-  for (const { slot, text } of structuredFailures) {
-    const repair = repairStructured(slot, text, grammar.slots[grammar.slots.indexOf(slot) + 1]);
-    if (repair === undefined) { canCorrect = false; continue; }
-    correctionValues.set(slot.name, repair.own);
-    if (repair.following !== undefined) additions.set(repair.following.name, repair.following);
-  }
-  for (const [name, addition] of additions) {
-    const existing = correctionValues.get(name);
-    const items = [...addition.items!, ...(existing?.items ?? [])];
-    const next = grammar.slots.find((slot) => slot.name === name)!;
-    correctionValues.set(name, { ...addition, value: items.join(next.joiner!), items });
-    attempted.add(name);
-  }
-  const corrected = canCorrect ? correctedLine(skill, grammar, correctionValues, attempted, clausePresent) : null;
+  const corrected = correctedLine(skill, grammar, byName, attempted, clausePresent);
 
   const clauses = grammar.clauses.map(
     (clause, index): ClauseValue => ({ literal: clause.literal, present: clausePresent[index] === true }),
@@ -727,16 +769,22 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   }
 
   return {
-    skill,
-    template: grammar.template,
-    line,
-    ok: problems.length === 0,
-    slots,
-    clauses,
-    missing,
-    problems,
-    corrected,
-    echo,
+    result: {
+      skill,
+      template: grammar.template,
+      line,
+      ok: problems.length === 0,
+      slots,
+      clauses,
+      missing,
+      problems,
+      corrected,
+      echo,
+    },
+    values: byName,
+    attempted,
+    clausePresent,
+    structuredFailures,
   };
 }
 
@@ -823,6 +871,17 @@ interface StructuredRepair {
   readonly following?: SlotValue;
 }
 
+/** Normalize a free list using its own joiner without changing alternatives. */
+function repairFreeList(slot: Slot, text: string): SlotValue | undefined {
+  const free = slot.alternatives.find((alternative) => alternative.values.length === 0);
+  if (free === undefined || free.joiner === null) return undefined;
+  const items = text.split(free.joiner).map((item) => item.trim()).filter((item) => item !== "");
+  if (items.length === 0) return undefined;
+  const own = resolveSlot(slot, items.join(free.joiner));
+  if (typeof own === "string" || (slot.alternatives.length > 1 && own.alternative !== free.name)) return undefined;
+  return own;
+}
+
 /** Recover only concrete syntax using the caller's alternatives and separators.
  * Unknown enumerations and mixed alternatives remain unresolved. A free tail
  * can move only into an immediately following, independently declared free list. */
@@ -832,14 +891,12 @@ function repairStructured(slot: Slot, text: string, next: Slot | undefined): Str
     return typeof value === "string" ? undefined : value;
   };
   const enumerated = slot.alternatives.filter((alternative) => alternative.values.length > 0);
-  if (enumerated.length === 0) {
-    if (slot.joiner === null) return undefined;
-    const items = text.split(slot.joiner).map((item) => item.trim()).filter((item) => item !== "");
-    const own = items.length === 0 ? undefined : resolved(items.join(slot.joiner));
-    return own === undefined ? undefined : { own };
-  }
   const separators = [...new Set(enumerated.flatMap((alternative) => [alternative.joiner, alternative.suffix].filter((part): part is string => part !== null)))];
   const touched = enumerated.filter((alternative) => splitAll(text, separators).some((piece) => matchValue(alternative, piece.trim()) !== undefined));
+  if (touched.length === 0) {
+    const own = repairFreeList(slot, text);
+    return own === undefined ? undefined : { own };
+  }
   if (touched.length !== 1) return undefined;
   const alternative = touched[0]!;
   const separator = alternative.joiner ?? alternative.suffix;
@@ -858,7 +915,7 @@ function repairStructured(slot: Slot, text: string, next: Slot | undefined): Str
   const prefix = parts.slice(0, firstFree).filter((item) => item !== "");
   if (prefix.length === 0 || (alternative.joiner === null && firstFree !== 1)) return undefined;
   if (next === undefined || next.separator === null || next.alternatives.length !== 1 || next.values.length !== 0 || next.joiner === null) return undefined;
-  const following = repairStructured(next, parts.slice(firstFree).join(separator), undefined)?.own;
+  const following = repairFreeList(next, parts.slice(firstFree).join(separator));
   const own = resolved(prefix.join(separator));
   return own === undefined || following === undefined ? undefined : { own, following };
 }
