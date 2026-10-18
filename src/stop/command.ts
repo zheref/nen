@@ -67,29 +67,13 @@ import { parsePipeTable, renderPipeTable } from "../cli/table.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { normalizeEol } from "../seam/exec.js";
 
-/**
- * Where `--mark` writes, repo-relative and forward-slashed.
- *
- * `.nen/`, NOT `nen/`, and the one-character difference is ../schema/source.ts's
- * rule rather than a preference: `nen/` is committed configuration and `.nen/`
- * is generated output, so a `git add nen/` after a stop cannot stage this file.
- */
-export const MARKER_FILE = ".nen/last-stop.json";
-
-/** `nen.stop.mark/v0.1` -- the marker's own versioned contract string. */
-export const STOP_MARK_CONTRACT = "nen.stop.mark/v0.1";
-/**
- * `nen.stop.mark/v0.2` -- written INSTEAD of v0.1 whenever the stop carries
- * any of the new fields (zheref/nen#216): a title, a body, a report link, the
- * lettered options, a proposed process issue. A stop that carries none keeps
- * writing v0.1, so a hook reading the old shape sees nothing change until its
- * caller starts saying more.
- */
-export const STOP_MARK_CONTRACT_V2 = "nen.stop.mark/v0.2";
-/** The v0.1 marker's keys, in written order. */
-const MARKER_KEYS_V1: readonly string[] = ["contract", "who", "gate", "notified", "at"];
-/** What v0.2 adds, in written order; every one present, null when empty. */
-const MARKER_KEYS_V2_EXTRA: readonly string[] = ["title", "body", "reportUrl", "options", "proposedIssue"];
+import {
+  GATE_NAMES, MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2,
+  parseMarker, parseOptions as validateOptions, parseProposedIssue as validateProposedIssue,
+  type StopOption, type ProposedIssue,
+} from "./marker.js";
+export { MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2, parseMarker } from "./marker.js";
+export type { StopOption, ProposedIssue } from "./marker.js";
 
 const USAGE = `nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
          [--title <line>] [--body <text>] [--report-url <url>]
@@ -140,7 +124,7 @@ show:
   reportUrl, options[] (each executable, one starred, none naming the report)
   and proposedIssue. Exit 0 and print it; exit 1 naming the first defect; a
   missing marker is exit 0 with 'no marker'. This is the validator a hook or a
-  report can rely on: nothing else reads the marker back.
+  report can rely on; schema check --ledger uses the same validator.
 
 clear:
   Remove '${MARKER_FILE}' when it exists. A surface with no Stop hook consumes
@@ -161,15 +145,6 @@ still fires nothing. The file lives under the dot-prefixed, gitignored '.nen/'
 (generated output), never under the committed 'nen/'; the directory is created
 if it is absent, and an existing marker is replaced, because the latest stop is
 the one a hook should ring for.`;
-
-const GATE_NAMES: Readonly<Record<string, string>> = {
-  G1: "epic approval",
-  "G1-M": "release into build",
-  G2: "merge",
-  G3: "release go/no-go",
-  G4: "policy/spec change",
-  G5: "decision / human-only action",
-};
 
 const TEMPLATE_TABLE = [
   ["Effort", "Open issues & PRs", "Status (gate)", "Thought flow", "Session / lane"],
@@ -299,20 +274,6 @@ export const stopCommand: Command = {
   },
 };
 
-export interface StopOption {
-  readonly key: string;
-  readonly label: string;
-  readonly command: string;
-  readonly consequence: string | null;
-  readonly recommended: boolean;
-}
-
-export interface ProposedIssue {
-  readonly title: string;
-  readonly body: string;
-  readonly labels: readonly string[];
-}
-
 interface StopMarker {
   /** The absolute path written. */
   readonly path: string;
@@ -331,41 +292,10 @@ interface StopMarker {
   readonly proposedPath: string | null;
 }
 
-const REPORT_AS_OPTION = /\b(open|read|view|see)\b.*\breport\b/i;
-
-/** The options file: a JSON array, every entry executable, one star. */
+/** Keep the command's usage-error contract around the shared pure validator. */
 export function parseOptions(document: unknown, display: string): StopOption[] {
-  if (!Array.isArray(document) || document.length === 0) {
-    throw new VerbUsageError(`--options ${display}: expected a non-empty JSON array of { key, label, command, consequence?, recommended? }.`);
-  }
-  const options = document.map((raw, index): StopOption => {
-    const at = `--options ${display}[${index}]`;
-    if (typeof raw !== "object" || raw === null) throw new VerbUsageError(`${at}: not an object.`);
-    const entry = raw as Record<string, unknown>;
-    const key = entry["key"];
-    const label = entry["label"];
-    const command = entry["command"];
-    if (typeof key !== "string" || key.trim() === "") throw new VerbUsageError(`${at}.key: a non-empty string is required.`);
-    if (typeof label !== "string" || label.trim() === "") throw new VerbUsageError(`${at}.label: a non-empty string is required.`);
-    if (typeof command !== "string" || command.trim() === "") {
-      throw new VerbUsageError(`${at}.command: a non-empty command line is required. An option nothing executes is a suggestion, not an option.`);
-    }
-    if (REPORT_AS_OPTION.test(label)) {
-      throw new VerbUsageError(`${at}.label reads '${label}'. The report is linked with every stop (--report-url) and is never one of the decisions; drop this option.`);
-    }
-    const consequence = entry["consequence"];
-    if (consequence !== undefined && consequence !== null && typeof consequence !== "string") throw new VerbUsageError(`${at}.consequence: a string when present.`);
-    const recommended = entry["recommended"];
-    if (recommended !== undefined && typeof recommended !== "boolean") throw new VerbUsageError(`${at}.recommended: a boolean when present.`);
-    return { key, label, command, consequence: (consequence as string | undefined) ?? null, recommended: recommended === true };
-  });
-  const starred = options.filter((option): boolean => option.recommended).length;
-  if (starred !== 1) {
-    throw new VerbUsageError(`--options ${display}: exactly one option must be 'recommended' (found ${starred}). A stop with no star, or two, has not made a recommendation.`);
-  }
-  const keys = new Set(options.map((option): string => option.key));
-  if (keys.size !== options.length) throw new VerbUsageError(`--options ${display}: option keys must be distinct.`);
-  return options;
+  try { return validateOptions(document, display); }
+  catch (error) { throw new VerbUsageError(error instanceof Error ? error.message : String(error)); }
 }
 
 const OPTIONS_WHY = "A stop with no options renders no decisions; the file named here IS the ask, so an unreadable one is refused rather than rendered as a stop with nothing to pick.";
@@ -383,19 +313,8 @@ function readOptions(file: string, cwd: string): StopOption[] {
 }
 
 export function parseProposedIssue(document: unknown, display: string): ProposedIssue {
-  if (typeof document !== "object" || document === null || Array.isArray(document)) {
-    throw new VerbUsageError(`--propose-issue ${display}: expected a JSON object { title, body, labels? }.`);
-  }
-  const entry = document as Record<string, unknown>;
-  const title = entry["title"];
-  const body = entry["body"];
-  if (typeof title !== "string" || title.trim() === "") throw new VerbUsageError(`--propose-issue ${display}.title: a non-empty string is required.`);
-  if (typeof body !== "string" || body.trim() === "") throw new VerbUsageError(`--propose-issue ${display}.body: a non-empty string is required -- a draft with no body is not a draft.`);
-  const labels = entry["labels"] ?? [];
-  if (!Array.isArray(labels) || labels.some((label): boolean => typeof label !== "string")) {
-    throw new VerbUsageError(`--propose-issue ${display}.labels: an array of strings when present.`);
-  }
-  return { title, body, labels: labels as string[] };
+  try { return validateProposedIssue(document, display); }
+  catch (error) { throw new VerbUsageError(error instanceof Error ? error.message : String(error)); }
 }
 
 function readProposedIssue(file: string, cwd: string): ProposedIssue {
@@ -407,52 +326,6 @@ function readProposedIssue(file: string, cwd: string): ProposedIssue {
     throw new VerbUsageError(`--propose-issue ${file}: not JSON (${error instanceof Error ? error.message : String(error)}).`);
   }
   return parseProposedIssue(parsed, file);
-}
-
-/**
- * The marker read back and validated -- v0.1 or v0.2 -- or a one-line reason
- * it is not a marker. Exported for the report assembler and for tests.
- */
-export function parseMarker(document: unknown): { ok: true; marker: Record<string, unknown> } | { ok: false; reason: string } {
-  if (typeof document !== "object" || document === null || Array.isArray(document)) return { ok: false, reason: "not a JSON object" };
-  const m = document as Record<string, unknown>;
-  const contract = m["contract"];
-  if (contract !== STOP_MARK_CONTRACT && contract !== STOP_MARK_CONTRACT_V2) {
-    return { ok: false, reason: `contract is ${JSON.stringify(contract)}; expected '${STOP_MARK_CONTRACT}' or '${STOP_MARK_CONTRACT_V2}'` };
-  }
-  // THE KEY SET IS THE CONTRACT. v0.1 is exactly its five keys and v0.2 is
-  // exactly those plus its five, every one PRESENT (null where the stop
-  // carried nothing) -- an absent key is a defect, not a null, and a key
-  // neither contract names is a marker written by something else (Copilot
-  // review on zheref/nen#217).
-  const expected = contract === STOP_MARK_CONTRACT_V2 ? [...MARKER_KEYS_V1, ...MARKER_KEYS_V2_EXTRA] : MARKER_KEYS_V1;
-  const str = (key: string): string | null => {
-    if (!Object.hasOwn(m, key)) throw new Error(`${key} is missing`);
-    const v = m[key];
-    if (v !== null && typeof v !== "string") throw new Error(`${key} must be a string or null`);
-    return v as string | null;
-  };
-  try {
-    for (const key of expected) if (!Object.hasOwn(m, key)) throw new Error(`${key} is missing`);
-    const extra = Object.keys(m).filter((key): boolean => !expected.includes(key));
-    if (extra.length > 0) throw new Error(`unexpected key(s) ${extra.join(", ")} for ${String(contract)}`);
-    str("who");
-    const gate = str("gate");
-    if (gate !== null && !Object.hasOwn(GATE_NAMES, gate)) throw new Error(`gate '${gate}' is not one of ${Object.keys(GATE_NAMES).join(", ")}`);
-    if (typeof m["notified"] !== "boolean") throw new Error("notified must be a boolean");
-    const at = str("at");
-    if (at === null || Number.isNaN(Date.parse(at))) throw new Error("at must be an ISO-8601 instant");
-    if (contract === STOP_MARK_CONTRACT_V2) {
-      str("title");
-      str("body");
-      str("reportUrl");
-      if (m["options"] !== null && m["options"] !== undefined) parseOptions(m["options"], "marker");
-      if (m["proposedIssue"] !== null && m["proposedIssue"] !== undefined) parseProposedIssue(m["proposedIssue"], "marker");
-    }
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-  }
-  return { ok: true, marker: m };
 }
 
 /** `nen stop show` -- the marker, validated. */

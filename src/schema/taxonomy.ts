@@ -19,6 +19,9 @@
 // times a verb happened to ask, and a schema file does not become valid by being
 // re-read.
 
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
 import { describeContract, loadContract, withinOneEdit, type DeployTarget } from "./contract.js";
@@ -90,7 +93,7 @@ export function openTaxonomy(options: RepoRootOptions = {}): Taxonomy {
 }
 
 export interface SchemaCheck {
-  /** The repo-relative `nen/…` path -- the only one anything ever reads. */
+  /** The repo-relative declaration path, or optional generated ledger path. */
   readonly file: string;
   readonly path: string;
   /** `true` when the file loaded and validated. */
@@ -450,7 +453,58 @@ function defaultTargetCheck(root: string): SchemaCheck {
 // first failure. Reporting one problem at a time is how a repository adopting
 // nen makes four round trips to learn four things it could have been told at
 // once.
-export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
+export interface CheckOptions extends RepoRootOptions {
+  /** Opt in to the generated stop marker; ordinary schema checks never read it. */
+  readonly ledger?: boolean;
+}
+
+function stopMarkerCheck(root: string): SchemaCheck {
+  const path = join(root, MARKER_FILE);
+  const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
+    file: MARKER_FILE, path, ok, detail, required, legacy: false, note: null,
+  });
+  let text: string;
+  try {
+    // Refuse special files before opening: a FIFO read can wait forever for a writer.
+    if (!lstatSync(path).isFile()) return row(false, true, "could not read marker: not a regular file");
+    // NONBLOCK also bounds a POSIX FIFO swapped in after lstat; NOFOLLOW refuses
+    // a swapped final symlink where supported. Check the opened descriptor too.
+    const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    try {
+      if (!fstatSync(fd).isFile()) return row(false, true, "could not read marker: not a regular file");
+      text = readFileSync(fd, "utf8");
+    } finally { closeSync(fd); }
+  } catch (error) {
+    // Windows may report ENOENT for a child of a present FILE, where POSIX
+    // reports ENOTDIR. Only an absent marker or absent parent is optional.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        // Establish entry absence without following a dangling parent symlink.
+        lstatSync(dirname(path));
+      } catch (parentError) {
+        if ((parentError as NodeJS.ErrnoException).code === "ENOENT") return row(true, false, "absent (optional; may have been consumed)");
+        return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
+      }
+      try {
+        // A present parent may be a directory symlink; its target must resolve.
+        if (!statSync(dirname(path)).isDirectory()) return row(false, true, "could not read marker: parent is not a directory");
+      } catch (parentError) {
+        return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
+      }
+      return row(true, false, "absent (optional; may have been consumed)");
+    }
+    return row(false, true, `could not read marker: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let document: unknown;
+  try { document = JSON.parse(text); }
+  catch { return row(false, true, "not JSON"); }
+  const verdict = parseMarker(document);
+  return verdict.ok
+    ? row(true, false, `valid ${String(verdict.marker["contract"])}`)
+    : row(false, true, `invalid marker: ${verdict.reason}`);
+}
+
+export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
   const root = assertRepoRoot(options);
   const unknownKeys: string[] = [];
   const duplicateKeys: string[] = [];
@@ -524,6 +578,7 @@ export function checkTaxonomy(options: RepoRootOptions = {}): CheckReport {
     // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),
+    ...(options.ledger === true ? [stopMarkerCheck(root)] : []),
   ];
   return {
     root,

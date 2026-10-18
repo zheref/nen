@@ -145,7 +145,7 @@ them does not have to discover any of these empirically:
      1: "the bootstrap failed" and "the bootstrap never ran" are different
      facts, and only the first says anything about the release you asked for.`;
 
-const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--json]
+const SCHEMA_USAGE = `${PROGRAM} schema check --repo <path> [--ledger] [--json]
 ${PROGRAM} schema set --repo <path> --file <nen/...json> --pointer <JSON pointer> --value <JSON> [--dry-run] [--json]
 
 '$'-PREFIXED KEYS ARE METADATA, in every declaration file nen reads
@@ -190,6 +190,8 @@ key this build does not read.
 
   --repo <path>    The target repository's working-tree root. Defaults to the
                    current directory.
+  --ledger         Also validate .nen/last-stop.json as nen.stop.mark/v0.1 or
+                   v0.2. Absent or consumed is optional; malformed is exit 1.
   --json           Machine-readable output:
                    { root, ok, checks: [...], deprecations: [...],
                      unknownKeys: [...] }.
@@ -333,7 +335,11 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
 
   let parsed;
   try {
-    parsed = parseArgs(head.rest, GLOBAL_FLAGS);
+    // --ledger belongs only to schema check, never bootstrap or schema set.
+    const flags = head.rest[0] === "schema" && schemaSubcommand(head.rest) === "check"
+      ? { ...GLOBAL_FLAGS, booleans: [...GLOBAL_FLAGS.booleans, "ledger"] }
+      : GLOBAL_FLAGS;
+    parsed = parseArgs(head.rest, flags);
   } catch (error) {
     if (error instanceof UsageError) {
       io.err(`${PROGRAM}: ${error.message}`);
@@ -415,7 +421,7 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
           io.err(`${PROGRAM}: unknown 'schema' subcommand '${subcommand ?? "(none)"}'. Try 'schema check' or 'schema set'.`);
           return 2;
         }
-        return schemaCheck(repoFlag, json, io);
+        return schemaCheck(repoFlag, json, io, parsed.booleans.has("ledger"));
 
       default:
         io.err(`${PROGRAM}: unknown command '${command}'.`);
@@ -588,8 +594,8 @@ function schemaSet(argv: readonly string[], headRepo: string | null, headJson: b
   }
 }
 
-function schemaCheck(repoFlag: string | null, json: boolean, io: Io): number {
-  const report = checkTaxonomy({ repoFlag });
+function schemaCheck(repoFlag: string | null, json: boolean, io: Io, ledger: boolean): number {
+  const report = checkTaxonomy({ repoFlag, ledger });
   // An unknown gates.json key is exit 2 (zheref/nen#310), as it is in
   // `nen pr ready`: the file asks for a gate this binary cannot apply.
   // A repeated key (Feitan F3) is refused the same way.
