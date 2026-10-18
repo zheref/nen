@@ -684,8 +684,8 @@ retryable exit `4` ([#228](https://github.com/zheref/nen/issues/228)). Fetch
 the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.21.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.21.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.22.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.22.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -693,7 +693,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.21.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.22.0)"
 "$nen" --version
 ```
 
@@ -2403,6 +2403,14 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 | `--dry-run` | no | resolves every `--add-reviewers` login (still reads GitHub) and prints which route each name or id would go to, then requests nothing | not network-free — see the `--dry-run` discipline table above |
 | `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) and an `unrecordedBots` array (`{ id, login }` per requested bot GitHub did not record — see exit `9`) alongside `ok`/`message` |
 
+Explicit Bot IDs accept a nonempty opaque `BOT_` payload of letters, digits,
+`_` and `-`, or canonical base64 decoding to exactly `<digits>:Bot<digits>`.
+User/other node types, empty payloads, invalid characters and malformed legacy
+encodings refuse at exit 2 before any GitHub read for the batch. REST login
+resolution applies the same Bot-ID check to `node_id`; a malformed API answer
+is a tool failure at exit 1. Valid explicit IDs remain unchanged. Ordinary
+human collaborator and team routes are unchanged.
+
 Both flags absent (or both empty) is refused at exit 1, naming both:
 `no reviewers named -- --add-reviewers takes a comma-separated list of
 logins, or --add-bots a comma-separated list of bot logins or node ids` — the wording
@@ -3495,6 +3503,15 @@ header ≤ 72 characters, trailers as `Key: value` lines in the final
 paragraph, and any attribution trailer this repository's
 [`nen/workflow.json`](#nenworkflowjson) does not admit). Fewer than two
 commits to fold is **not** a refusal: exit 0, one line (ending `base check: NOT performed.`, since the base is not read), nothing moves.
+
+When `commits.allowedAttributionTrailers` lists agent keys, the squash message
+must contain at least one of those keys with a nonempty value in its final
+trailer paragraph (case-insensitive). A missing agent trailer is exit **2**,
+naming the required keys and policy file, before reset or commit; branch,
+index and working tree are preserved. An absent policy or empty list adds no
+requirement. This squash-only check is separate from forbidden trailers and
+the post-commit injection check; `nen commit format` and `nen commit write`
+keep their existing optional-trailer behavior.
 
 **Why the base is guarded on its own.** The fold set is `git merge-base
 <onto> HEAD`..`HEAD`, so on a published branch that was caught up with a
@@ -4712,39 +4729,6 @@ facts, never inferred from content.
 
 ### `nen backlog fetch`
 
-**Effort filters (#410).** Add repeatable `--label <name>` flags to require
-all names (AND) in the union of an issue’s labels and its directly serving
-PRs’ labels. Each matching issue retains every directly serving PR; a PR
-with no in-scope issue is its own effort. A PR shared by two issues does
-not mix those issues’ labels transitively. Filtered `issueCount`, `prCount`
-and rows describe the retained set, with PR identities counted once.
-
-A filtered fetch requires an explicit `--repo <checkout>` carrying the
-remote target’s matching `nen/labels.json`. A registry owner’s taxonomy is
-not a substitute for another target’s. Labels match exactly; undeclared
-names refuse at exit 2. Labels containing `&` are unsupported: an input
-that names one, or an undeclared split segment of one, reports
-"labels containing '&' are not supported in selectors" and names it.
-An empty match exits 0 with explicit zero counts. JSON adds `filter`;
-human output echoes the applied filter.
-
-`--severity <band>[+]` ANDs with the label filters. It requires a declared
-`<namespace>:severity/<band>` family and `--severity-order <high,...,low>`
-listing **every declared severity label exactly once**, highest to lowest.
-Order entries may be exact label names or unambiguous case-insensitive
-band leaves. The severity input follows the same mapping. A bare band
-selects that band; one trailing `+` includes it and every band above it.
-Missing families, ambiguous or absent mappings, incomplete orders, and
-malformed suffixes refuse at exit 2. No namespace, priority-to-severity
-mapping, or severity order is inferred. For example, for a target that
-declares `acme:severity/high` and `acme:severity/low`:
-
-```text
-nen backlog fetch --repo-slug acme/project --repo /path/to/project --label model/gpt --label lang/typescript
-nen backlog fetch --repo-slug acme/project --repo /path/to/project --severity low+ --severity-order high,low
-```
-
-
 Answers "what does the open backlog of `owner/name` look like right now": it fetches open issues and
 open pull requests fresh over `gh api` — never from a cache — and assembles one row per effort, meaning
 an issue plus the PRs that reference it (via a closing keyword or a bare `#N` in the PR's title/body),
@@ -4755,7 +4739,7 @@ pages as it takes, not the accidental 100-row ceiling an earlier version of this
 **Usage**
 
 ```text
-nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--repo <path>] [--label <name>]... [--severity <band>[+] --severity-order <high,...,low>] [--json]
+nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>]
 ```
 
 **Arguments**
@@ -4763,21 +4747,22 @@ nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--repo <path>] [--labe
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo-slug <owner/name>` | yes | The owner/name to fetch fresh from over `gh api`. | |
-| `--repo <path>` | with any filter | The checkout supplying the target's declared `nen/labels.json`. | Must supply the matching taxonomy even when the remote target differs from the checkout's own repository; no registry-owner defaults. |
-| `--label <name>` | no, repeatable | Exact label-name AND over each issue/direct-PR effort's union. | Every name must be declared; unsupported ampersand labels refuse at exit 2. |
-| `--severity <band>[+]` | no | Select one declared severity band, or with `+` that band and higher. | ANDed with labels; requires a declared severity family and explicit complete `--severity-order`. |
-| `--severity-order <high,...,low>` | with `--severity` | Every declared severity label exactly once, highest to lowest. | Exact full labels or unambiguous case-insensitive leaves; no inferred namespace, priority mapping, or order. |
 | `--limit <n>` | no | Caps the TOTAL rows fetched per resource (issues, PRs), across as many pages as it takes to reach it. | Omit for no cap. Must be a positive whole number, or refused (exit 2). A capped fetch is always reported TRUNCATED, never presented as complete. |
+| `--label <name>` | no, **repeatable** | Keep only the efforts carrying EVERY `--label` (AND). An effort's labels are its issue's and all of its pull requests' labels, unioned; a lone PR is its own effort. | Names match exactly. Each must be declared in `--repo`'s `nen/labels.json`, checked **before any GitHub read**: an undeclared label is refused (exit 2), never matched against nothing; a value that is a piece of a declared label containing `&` is refused naming it — labels containing `&` are not supported in selectors (zheref/nen#410). |
+| `--severity <name>[+]` | no | Keep only the efforts carrying that severity's label; with a trailing `+`, that severity or any above it. | Needs `--severity-family <ns>:<family>` (which labels are severities — nen carries no severity vocabulary) and `--severity-order <a,b,..>` (highest first, the spelling `backlog order` takes). A family `nen/labels.json` does not declare, an order naming an undeclared leaf, an unknown severity or more than one `+` is refused (exit 2). ANDs with `--label`. |
 
 **Output and exit codes** — human rendering is `"<n> row(s) -- X issue(s), Y PR(s)"`, an optional
 `TRUNCATED at --limit <n>: ...` or `TRUNCATED at a defensive 200-page ceiling: ...` line, then one line
 per row (`#<issue> [#<pr>, ...]  <title>`, or `PR #<n>  <title>` for an orphan PR). `--json` top-level
-keys: `repo`, `truncated`, `rows`, `issueCount`, `prCount`, plus `filter` only when active
-(`labels[]`, canonical `severity` or `null`, expanded `severityLabels[]`). Counts describe the
-retained effort set; an empty match prints an explicit zero count and exits 0. Exit 0 whether or not the fetch was
-truncated (truncation is reported, not failed); exit 2 for a missing `--repo-slug` or a malformed
-`--limit`, an undeclared or unsupported label, or a missing/malformed severity mapping or order.
-A remote API failure remains exit 1.
+keys: `repo`, `truncated`, `rows`, `issueCount`, `prCount`, plus `filter` (`{ labels, severity: { name,
+orHigher, labels } | null, kept, of }`) **only** when `--label`/`--severity` was given, so an unfiltered
+document is unchanged; a filtered fetch also prints `filter: … -- kept <k> of <n> effort(s)`, its first line
+reads `<k> row(s) after the filter -- X issue(s), Y PR(s) fetched` because `issueCount` and `prCount` stay what
+was **fetched**, before the filter, and a filter that keeps nothing is `0 row(s)` at exit 0. The labels file is
+`--repo`'s, which must be the target's own checkout: it is not cross-checked against `--repo-slug`, as
+[`issue file`](#nen-issue-file) does not cross-check `--target`. Exit 0 whether or not the fetch was
+truncated (truncation is reported, not failed); exit 2 for a missing `--repo-slug`, a malformed
+`--limit` or a refused filter. This verb has no exit-1 path of its own.
 
 **Example**
 
@@ -12503,53 +12488,9 @@ Parses a skill invocation against the grammar that skill itself publishes, echoe
 
 ### `nen parse <skill>`
 
-**Lists and ordered alternatives (#410).** These additive directives live
-inside a slot and do not change the existing `[+]` optional suffix:
+The generic engine: any skill name, its `--grammar` template (`<name>` for a slot, `<name:a|b|c>` for an enumerated slot, `word(s) <slot>` for a slot introduced by literal words matched at its LAST whole-word occurrence, `@<slot>`/`#<slot>` for a symbol-separated slot, `[ ... ]` for an optional trailing clause, `[+]` for an optional literal suffix, `<slot>{+}` / `<slot>{&}` for a LIST slot — one or more values joined by the literal in the braces, every item of an enumerated list checked, an empty item refused — and `<a:..>{+}|<b:..>[+]|<c>` for an ALTERNATION, one position filled by the first alternative the value fits), and `--line`, the invocation to check.
 
-| Template slot | Meaning |
-|---|---|
-| `<gate:G1|G4|G5;join=+>` | One or more `+`-separated values, each checked case-insensitively and normalized to the enumeration’s spelling |
-| `<labels;join=&>` | One or more free `&`-separated items; an empty item refuses |
-| `<selector;list=gate:G4|G5;band=severity:high|low;free=label>` | In order: an enumerated `+`-list, one enumerated band with an optional single trailing `+`, or the whole free token verbatim only when no `+` segment belongs to either enumeration |
-
-JSON list-slot `value` fields are arrays; existing scalar slots remain
-strings. The alternation also emits its chosen `alternative` name and
-`suffix` boolean. Human echoes join list items with their delimiter and
-name the selected alternative. Unknown enumerated items, empty list
-segments and reserved/free mixtures refuse at exit 2. Diagnostics go to stderr,
-including under `--json`; a deterministic corrected line is printed only when one
-exists. Ambiguous structured input has `corrected: null` and no rewrite is offered. Both
-alternative enumerations must be disjoint and their names distinct.
-A free token such as `c++` stays whole when none of its segments is reserved.
-A band cannot join another band; gates cannot carry a trailing `+`.
-
-```text
-nen parse backlog-state --grammar '<repo>[@<selector;list=gate:G1|G1-M|G2|G3|G4|G5|all;band=severity:critical|high|medium|low;free=label>][#<labels;join=&>]' --line 'hatsu@g4+g5#model/grok&lang/typescript' --json
-```
-
-This grammar accepts `hatsu@g5#model/gpt`, `hatsu#model/claude`,
-`hatsu@g4+g5#model/grok&lang/typescript`, `hatsu@model/gpt`, `hatsu@high+`,
-`hatsu@medium#lang/prose`, `hatsu@c++`, and `context`. It refuses
-`hatsu@g4+model/gpt`, `hatsu@high+g4`, `hatsu@high+low`, `hatsu@g4+`,
-`hatsu@high++`, and `hatsu@g9+g5`. Gate/severity names are reserved after
-`@`; literal labels with those names can be supplied after `#`.
-Deterministic repairs preserve recoverable content: `hatsu@g4+model/gpt` becomes
-`backlog-state hatsu@G4#model/gpt`, `hatsu@high++` becomes
-`backlog-state hatsu@high+`, and `hatsu@g4++g5` becomes
-`backlog-state hatsu@G4+G5`. Empty list separators are removed; an empty optional
-structured clause is omitted. A free suffix can move only into the immediately
-following free-list slot using that grammar's separator. Mixed enumerations
-(`high+g4`), two bands (`high+low`) and an unknown prefix (`g9+g5`) are ambiguous:
-`corrected` is `null`, never an invented valid line. Successful and legacy scalar
-parses keep their existing correction strings. A structured repair is offered only
-when every reported problem has a concrete structured repair: if a scalar enumeration,
-required slot, introducing literal or literal-only clause still has an unresolved error,
-`corrected` is `null` and no heading is printed. Legacy refusals without a structured
-error retain their existing placeholder behavior.
-`nen parse futon` keeps its existing grammar and behavior.
-
-
-The generic engine: any skill name, its `--grammar` template (`<name>` for a slot, `<name:a|b|c>` for an enumerated slot, `word(s) <slot>` for a slot introduced by literal words matched at its LAST whole-word occurrence, `@<slot>`/`#<slot>` for a symbol-separated slot, `[ ... ]` for an optional trailing clause, `[+]` for an optional literal suffix), and `--line`, the invocation to check.
+**Lists and alternations (zheref/nen#410).** An alternation tries its enumerated alternatives in template order — a list fits when every item is one of its values, a single value when it is one of them with its suffix at most once — and only then its **free** alternative (no value set, allowed only last, with no suffix), and only when **no piece** of the value (split at every enumerated joiner and suffix) is an enumerated value. So against `<repo>[@<gate:G1|G1-M|G2|G3|G4|G5|all>{+}|<severity:critical|high|medium|low>[+]|<label>][#<labels>{&}]`, `x@g4+g5` is `gate: G4+G5`, `x@high+` is `severity: high (+)`, `x@model/gpt` and `x@c++` are labels kept as typed, while `x@high+g4` (both enumerations), `x@g4+model/gpt` (a gate list with a non-gate item), `x@high+low`, `x@high++`, `x@g4+` and `x@g9+g5` are refused at exit 2 with the reason. A template the engine could not resolve unambiguously — a free alternative before another, a value in two enumerations, a list that also takes a suffix, a `|` or `{…}` that follows no slot — is refused at template time. Since this release `{`, `}` and `|` written OUTSIDE a `<…>` carry meaning in a template (a list joiner and an alternation), so a template that used them as literal text must move them inside a slot's value set. `--json` adds `alternative` (which alternative filled the position, on an alternating slot only) and `items` (on a list only) to a slot's value; the position's `name` is its alternatives' names joined by `|`, and a plain slot's shape is unchanged.
 
 **Usage**
 
@@ -12575,7 +12516,9 @@ brackets (`[onto <slot>]`) or outside them (`at [<gate>]`). A grammar carrying a
 **required** clause is unaffected: an empty line still refuses at exit 2, naming
 the slot, with the corrected line to paste.
 
-**Output and exit codes** -- on a match, echoes the parse one clause per line: a supplied slot as `<slot>: <value>[ (+)]`, an optional slot nobody filled as `<slot>: (clause absent)`, and a literal-only clause the line carried as `[<clause>]: present`. On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite only when `corrected` is non-null. Ambiguous structured refusals carry `corrected: null` and omit that heading. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`; `slots[]` still carries only what the line supplied, so the `(clause absent)` line is the report rather than the data. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
+**Concrete correction follow-up.** The merged list/alternation grammar remains the baseline. For example, `hatsu@g4+model/gpt` against `<repo>[@<gate:G4|G5>{+}|<severity:high|low>[+]|<label>][#<labels>{&}]` refuses but offers `hatsu@G4#model/gpt`. `hatsu@high++` offers `hatsu@high+`; malformed lists with empty items retain their concrete, normalized items. Mixed alternatives such as `hatsu@high+g4` offer no invented rewrite. Recovery uses the caller's vocabulary and joiners, and a free tail can move only into an immediately following declared free list. Every offered structured correction must reparse with the intended normalized slot names, values, alternatives, suffixes, list items and literal-clause presence unchanged. If relocating a symbol or whole-word separator changes those boundaries, no correction is offered. Missing or empty required structured positions also yield `corrected: null`. Malformed free-list alternatives normalize empty items only when the same free alternative remains selected. Accepted optional empty segments and successful parse shapes remain unchanged.
+
+**Output and exit codes** -- on a match, echoes the parse one clause per line: a supplied slot as `<slot>: <value>[ (+)]`, an optional slot nobody filled as `<slot>: (clause absent)`, and a literal-only clause the line carried as `[<clause>]: present`. On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite only when the structured input has a unique complete repair. JSON retains the canonical string `value`, optional list `items` and joined alternative position names. `corrected` is a string or `null`: unknown/mixed alternatives or an unresolved scalar, required slot, literal or separator alongside a structured failure yield `null`, without a corrected-line heading. Legacy scalar-only refusals keep their placeholders. JSON mode emits only the result document, as before. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`; `slots[]` still carries only what the line supplied, so the `(clause absent)` line is the report rather than the data. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
 
 **Example**
 
@@ -12830,10 +12773,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.21.0 --source zheref/nen
+nen bootstrap --ref v0.22.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/zheref_nen/v0.21.0/nen-linux-x64
+/home/me/.cache/nen/zheref_nen/v0.22.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -13050,30 +12993,6 @@ no coverage bar is applied, no readiness is computed, nothing is published.
 
 ### `nen report data`
 
-**Filtering live object scopes (#410).** `--backlog`, `--prs` and `--issues`
-accept the same repeatable `--label` AND filters and explicit
-`--severity <band>[+] --severity-order <high,...,low>` filter as
-[`backlog fetch`](#nen-backlog-fetch). `--repo` must supply the remote
-target’s matching label taxonomy; cross-repository calls do not borrow
-a registry owner’s labels. Filters on `--objects-from` are refused.
-Only the named scope is fetched: filtering `--prs` does not fetch companion
-issues, and filtering `--issues` does not fetch companion PRs.
-
-The filter tests each issue with its directly serving in-scope PRs, keeps
-every object of matched efforts, and deduplicates the retained object
-identities. A shared PR does not create a transitive label union between
-issues. Filtering precedes context derivation and register assembly, so
-`tallyScope` and readiness/blocker/in-flight tallies count the filtered set.
-A register desk must describe that set: stale row or PR-ask references
-still refuse, and caller-authored unbound asks are not silently removed.
-`tallyNeedsYou` continues to count the supplied desk’s asks.
-
-JSON adds the applied `filter` and explicit `filteredObjectCount`; human
-output echoes the filter and reports zero rows for an empty match. An
-empty match succeeds at exit 0. Undeclared labels, unsupported `&` labels,
-or missing severity mappings refuse at exit 2, as on `backlog fetch`.
-
-
 One document describing this branch against `--base`: the commits (`<base>..HEAD`), the changed files (`<base>...HEAD` — three dots, the merge-base set a pull request shows), the evidence rows (an empty list in this release: `nen shu evidence` owns them), the lane's coverage report **if one is already on disk**, the build proof, and the last recorded stop — then **where the effort is**, derived rather than left to prose: its worktree, its stage and gate, its turn, and the local clock ([#258](https://github.com/zheref/nen/issues/258)). **Read-only**: it runs `git` reads (`rev-parse`, `symbolic-ref`, `remote get-url`, `log`, `diff`), opens files, and has no write path in any flag combination.
 
 Every absence is `null` and no absence is a failure — a repository with no coverage report, no build proof and no recorded stop still produces the whole document, with the reason for each null on stderr. What is *not* folded into a null is a git command that FAILS: an unresolvable `--base` is refused by name at exit 2 before anything is read, and a failed `git log`/`git diff` is refused rather than reported as a branch with nothing on it. `repo` carries the project's **`owner/name`**, read from a **hosted** `origin` remote (`user@host:path` or `scheme://host/path`; a local path or `file://` clone names a directory, not a project, and is `null`), spelled as the registry records it when listed — only the URL's **path** is read, so its userinfo, query and fragment (an `?access_token=`) never reach the document — (unlike [`repo resolve --from`](#nen-repo-resolve), an unlisted origin is not refused) — and **never** the checkout's directory name (which in a git worktree is the worktree's, not the project's) nor its path: this document gets filled into a report that gets pasted into a pull request. No readable origin is `null`, with the reason on stderr. *(Before [#258](https://github.com/zheref/nen/issues/258) it was the directory's name.)*
@@ -13082,9 +13001,10 @@ Every absence is `null` and no absence is a failure — a repository with no cov
 
 ```text
 nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--json]
-nen report data … [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--label <name>]... [--severity <band>[+] --severity-order <high,...,low>]
+nen report data … [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog]
 nen report data … --objects-from <file>
 nen report data … [--target … | --objects-from <file>] --register <desk>
+nen report data … [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>]
 nen report data … [--tz <zone>] [--open-stop]
 ```
 
@@ -13100,10 +13020,9 @@ nen report data … [--tz <zone>] [--open-stop]
 | `--prs <n,...>` | no | pull requests to read, by number | a comma-separated list of **positive** whole numbers; a non-numeric entry, or a `0`, is refused at exit 2 naming it, before any call — GitHub numbers issues and pull requests from 1 |
 | `--issues <n,...>` | no | issues to read, by number | same grammar, same refusal |
 | `--backlog` | no (boolean) | every **open** issue and pull request of `--target` | paginated to completion; a fetch that hits the defensive page ceiling says so on stderr rather than presenting a partial register as whole |
-| `--label <name>` | no, repeatable | Exact label-name AND over each issue/direct-PR effort's union. | Live `--backlog`, `--prs` or `--issues` scope only; requires the matching target taxonomy under `--repo`. Whole matched efforts are retained, with no companion fetch beyond the explicit scope. |
-| `--severity <band>[+]` | no | One declared severity band, or that band and higher. | ANDed with labels; requires a declared severity family and complete explicit `--severity-order`. No priority mapping is inferred. |
-| `--severity-order <high,...,low>` | with `--severity` | Every declared severity label once, highest to lowest. | Exact full label names or unambiguous case-insensitive leaves; invalid or absent mappings refuse at exit 2. |
 | `--objects-from <file>` | no | the register, read from a file instead of GitHub | a JSON array of rows already in the published `objects` shape. **Validated at the read seam and refused BY ROW INDEX at exit 2.** Never mixed with the four flags above: a register whose rows came from two authorities says nothing about which row came from which |
+| `--label <name>` | no, **repeatable** | keep only the objects of the EFFORTS carrying every `--label` (AND) | an effort is an issue plus the pull requests linked to it in the set (a link read from either side), or a lone PR; its labels are its members' labels unioned — the rule [`backlog fetch --label`](#nen-backlog-fetch) applies. **Every object of a kept effort is kept**, and every tally and the register count the filtered set. Validated against `--repo`'s `nen/labels.json` before any read: undeclared is exit 2; a piece of a declared label containing `&` is refused naming it. A filter with none of the five register flags is refused at exit 2. A filtered document appends `objectsFilter` (`{ labels, severity, kept, of }`) as its LAST key — with or without `--register` — and says `filter: … -- kept <k> of <n> object(s)` in the human output and on stderr; a register filtered to nothing reads `objects: none (the filter kept 0 of <n> object(s))` at exit 0. A `--register` desk naming an object the filter removed is refused at exit 2, and the refusal names the objects the filter removed. An unfiltered document is unchanged (zheref/nen#410) |
+| `--severity <name>[+]` | no | the same severity band `backlog fetch` takes | with `--severity-family <ns>:<family>` and `--severity-order <a,b,..>`, refused as there |
 | `--register <desk>` | no | emit the **register document** a Rikugan page renders from | the judgement half only, as JSON — see *The register document* below. Validated at the read seam and refused at exit 2 naming the field; an empty value is refused too |
 | `--tz <zone>` | no | the IANA zone the local clock is read in | must be a **compiled** zone in this host's zoneinfo database — `$TZDIR`, else `/usr/share/zoneinfo`, `/var/db/timezone/zoneinfo`, `/usr/lib/zoneinfo` — i.e. a **regular file**, whose real path stays inside the database's real directory (a symlink out of it is refused), and whose first four bytes are `TZif` (`UTC`/`Etc/UTC` need none). **Where no such directory exists** (on `win32`, or a `$TZDIR` that is not a directory) the runtime's ICU zone list (`Intl.supportedValuesOf("timeZone")`) answers instead, and stderr names that authority. The zone is printed as ICU's canonical name; a misspelling, a **case mismatch** (`america/bogota`), a metadata file such as `zone.tab`, or a path is **refused at exit 2** naming it, before any GitHub read, rather than stamped in UTC as `date(1)` silently would. Without it: `$TZ`, then the **`/etc/localtime` symlink's target**, then **`/etc/timezone`**, then ICU's own guess; a zone from any of them that fails the same check is `null` with the reason |
 | `--open-stop` | no (boolean) | a G5 stop is open this turn | `effortStage` is `blocked`. The **only** way to `blocked`: a `.nen/last-stop.json` on disk records a stop, not an open one |
@@ -13172,14 +13091,6 @@ publishing the two as one word is the false-red twin of a false green. Under
 `--objects-from` none of this runs: `readiness` is the caller's file's,
 validated for shape (`source` must still be `check` or `computed`) and never
 re-derived, so it is only as good as whatever wrote the file.
-
-**Optional filter output keys** — when a filter is active, both plain data and register
-JSON append `filter` (`labels[]`, canonical `severity` or `null`, expanded
-`severityLabels[]`) and `filteredObjectCount`. Without a filter those keys are absent.
-`objects[]`, derived context and every register tally use the filtered set; an empty
-match is an explicit count of zero at exit 0. A stale desk reference outside that set
-refuses rather than being silently pruned. Filters with `--objects-from`, no live scope,
-undeclared/unsupported labels, or missing severity mappings refuse at exit 2.
 
 **Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]` (each entry flattened with its `effort`; since v0.13.0 also its `note` and the `steps[]` a `shu` run left under it), then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), `objects[]` — **appended at the end of the key order** in v0.12.0 — and then the derived context, `worktree`, `effortStage`, `gate`, `stageClass`, `turnNumber`, `generatedAtLocal`, `generatedDateLocal`, `timeZone`, appended after it ([#258](https://github.com/zheref/nen/issues/258)), so a consumer reading the keys before them reads the same document it always did. The human rendering is unchanged apart from the `repo:` line's value (`(no owner/name)` when there is none). Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, a `--lane` that escapes the tree, or a `--tz` that is not a compiled zone.
 
@@ -15908,8 +15819,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.21.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.21.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.22.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.22.0)"
 "$nen" --version
 ```
 
@@ -15920,7 +15831,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.21.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.22.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash

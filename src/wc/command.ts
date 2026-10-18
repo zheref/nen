@@ -128,7 +128,10 @@ squash:
                     message's final paragraph. An attribution trailer this
                     repository's ${WORKFLOW_FILE} does not admit is refused,
                     exactly as 'nen commit format' refuses one typed on the
-                    command line.
+                    command line. When commits.allowedAttributionTrailers
+                    lists agent keys, the message must carry at least one
+                    of them (case-insensitive); missing it is exit 2 before
+                    reset or commit, naming the keys and policy source.
   --dry-run         print the commits that would fold and the message; spawns
                     neither 'git reset' nor 'git commit'.
 
@@ -595,7 +598,7 @@ function squash(context: CommandContext): number {
     );
     return 1;
   }
-  const shapeRefusals = messageFileRefusals(root, messageText, policy);
+  const shapeRefusals = messageFileRefusals(root, messageText, policy, { requireAgentTrailer: true });
   if (shapeRefusals.length > 0) {
     throw new VerbUsageError(
       [

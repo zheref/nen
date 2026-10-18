@@ -34,8 +34,8 @@ import { loadWorkflow, type ReportSection } from "../schema/workflow.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { assembleData, parseTiers, renderData, type TierTable } from "./data.js";
 import { assembleContext, deriveClock, type PrLookup, type ReportContext } from "./context.js";
-import { assembleObjects, renderObjects } from "./objects.js";
-import { filterObjects, readEffortFilter, renderFilter } from "../backlog/filter.js";
+import { assembleObjects, filterEfforts, renderObjects, type ReportObject } from "./objects.js";
+import { describeFilter, effortPasses, FILTER_LIST_FLAGS, FILTER_VALUE_FLAGS, readEffortFilter } from "../backlog/filter.js";
 import { assembleRegister, parseDesk, renderRegister, type Desk, type NotationSource } from "./register.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { codeFor as productCodeFor, recordedRepoFor } from "../repo/resolve.js";
@@ -45,7 +45,7 @@ import { renderReport } from "./render.js";
 const USAGE = `nen report -- the facts an effort's report is made of, and the fill that turns them into one.
 
 usage:
-  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--label <name> ...] [--severity <band>[+] --severity-order <high,...,low>] [--objects-from <file>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
+  nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--objects-from <file>] [--label <name>]... [--severity <name>[+] --severity-family <ns>:<family> --severity-order <a,b,..>] [--register <desk>] [--tz <zone>] [--open-stop] [--json]
   nen report render --template <file> --data <file> --out <file> [--variant <name>] [--graph <file>] [--dry-run] [--repo <path>] [--json]
   nen report mermaid --graph <file>
 
@@ -122,22 +122,27 @@ data      One document describing this branch against --base: the commits, the
   --prs <n,...>    Pull requests to read, by number.
   --issues <n,...> Issues to read, by number.
   --backlog        Every OPEN issue and pull request of --target.
-  --label <name>   Repeatable AND over each issue/direct-PR label union; keep
-                   every object of matched efforts, without fetching unseen
-                   companions of explicit --prs/--issues. Orphan PRs stand alone.
-                   Exact declared names only; '&' in labels is unsupported.
-  --severity <band>[+] --severity-order <high,...,low>
-                   Declared severity-family labels, explicit highest-to-lowest
-                   order required. '+' selects the band and higher. ANDs with
-                   labels. No family/mapping is an exit-2 refusal.
-  Filters require --repo to supply the remote TARGET's matching nen/labels.json.
-  Filtered objects feed context/register tallies; stale desk references refuse.
-  --json adds filter and filteredObjectCount; an empty match is exit 0/count 0.
   --objects-from <file>
                    A JSON array of rows already in the published 'objects'
                    shape -- the offline path. VALIDATED at the read seam and
                    refused BY ROW INDEX at exit 2; it is never mixed with the
                    live flags.
+  --label <name>   REPEATABLE. Keep only the objects of the EFFORTS carrying
+                   every --label (AND): an effort is an issue plus the pull
+                   requests linked to it in the set, or a lone pull request,
+                   and its labels are its members' labels unioned -- the rule
+                   'nen backlog fetch --label' applies. Every object of a kept
+                   effort is kept, and every tally counts the filtered set.
+                   Validated against --repo's nen/labels.json before any read:
+                   an undeclared label is refused (exit 2); a piece of a
+                   declared label containing '&' is refused naming it.
+  --severity <name>[+] (with --severity-family <ns>:<family> and
+                   --severity-order <a,b,..>)
+                   The same severity band 'nen backlog fetch' takes.
+                   A filter needs objects to filter: given with none of the
+                   five flags above it is refused. A filtered document adds an
+                   'objectsFilter' key ({ labels, severity, kept, of }) at the
+                   end; an unfiltered one is unchanged.
 
   --register <desk>
                    Emit the REGISTER document -- the backlog register shape
@@ -219,9 +224,9 @@ has not got.`;
 /** Per-subcommand flags, so a flag meant for the other verb is refused, not ignored. */
 const SUBCOMMAND_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[]; lists?: readonly string[] }>> = {
   data: {
-    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz", "severity", "severity-order"],
-    lists: ["label"],
+    values: ["base", "lane", "tiers", "target", "prs", "issues", "objects-from", "register", "tz", ...FILTER_VALUE_FLAGS],
     booleans: ["backlog", "open-stop"],
+    lists: FILTER_LIST_FLAGS,
   },
   render: { values: ["template", "data", "out", "variant", "graph"], booleans: ["dry-run"] },
   mermaid: { values: ["graph"], booleans: [] },
@@ -231,6 +236,9 @@ const SUBCOMMANDS: readonly string[] = ["data", "render", "mermaid"];
 
 const FAMILY_VALUES = [
   ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.values)),
+].sort();
+const FAMILY_LISTS = [
+  ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.lists ?? [])),
 ].sort();
 const FAMILY_BOOLEANS = [
   ...new Set(Object.values(SUBCOMMAND_FLAGS).flatMap((spec): readonly string[] => spec.booleans)),
@@ -247,7 +255,7 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
   const spec = SUBCOMMAND_FLAGS[subcommand];
   /* c8 ignore next -- requireSubcommand already refused an unknown name */
   if (spec === undefined) return;
-  const known = new Set([...FAMILY_VALUES, ...FAMILY_BOOLEANS, "label"]);
+  const known = new Set([...FAMILY_VALUES, ...FAMILY_BOOLEANS, ...FAMILY_LISTS]);
   const mine = new Set([...spec.values, ...spec.booleans, ...(spec.lists ?? [])]);
   const foreign = [...Object.keys(context.args.values), ...context.args.booleans, ...Object.keys(context.args.lists)].filter(
     (flag): boolean => known.has(flag) && !mine.has(flag),
@@ -469,7 +477,6 @@ async function runData(context: CommandContext): Promise<number> {
   });
   const warn = (line: string): void => context.io.err(line);
   const tz = readTz(context);
-  const filter = readEffortFilter(context);
   const document = assembleData(
     context.seams,
     root,
@@ -499,18 +506,27 @@ async function runData(context: CommandContext): Promise<number> {
     warn("timeZone: the register desk set generatedAtLocal, so the desk owns the page's clock; generatedDateLocal and timeZone reported as null.");
   }
   const objectOptions = readObjectOptions(context, root);
+  // THE FILTER BEFORE THE NETWORK (zheref/nen#410): an undeclared label costs
+  // no GitHub read, and a filter with nothing to filter is a mistake to name.
+  const filter = readEffortFilter(context);
+  if (filter !== null && objectOptions === null) {
+    throw new VerbUsageError(
+      "--label/--severity filter the 'objects' register, and none of --target/--prs/--issues/--backlog/--objects-from names any. Name the objects to filter, or drop the filter.",
+    );
+  }
   // `objects` IS APPENDED AT THE END OF THE KEY ORDER, deliberately and once:
   // every consumer reading the twelve v0.11 keys reads the same twelve here,
   // and the thirteenth is new information rather than a reshuffle
   // (./data.test.ts's key-order test pins both halves).
-  if (filter !== null && (objectOptions === null || objectOptions.from !== null || (!objectOptions.backlog && objectOptions.prs.length === 0 && objectOptions.issues.length === 0))) throw new VerbUsageError("--label/--severity require live --backlog, --prs or --issues object scope; --objects-from is not a remote target.");
-  const allObjects =
+  const assembled =
     objectOptions === null
       ? []
       : await assembleObjects(context.seams, objectOptions, warn);
-  const objects = filter === null ? allObjects : filterObjects(allObjects, filter);
-  const filterLines = filter === null ? [] : [renderFilter(filter)];
-  const objectLines = filter !== null && objects.length === 0 ? ["objects: 0 row(s) after filtering"] : renderObjects(objects);
+  const objects =
+    filter === null ? assembled : filterEfforts(assembled, (labels): boolean => effortPasses(filter, labels));
+  const objectsFilter =
+    filter === null ? null : { ...filter, kept: objects.length, of: assembled.length };
+  if (filter !== null) warn(`objects: ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`);
   // THE CONTEXT KEYS (zheref/nen#258) come AFTER `objects` -- new information
   // after everything a v0.13 consumer already reads, on both paths.
   const derived = assembleContext(
@@ -527,12 +543,15 @@ async function runData(context: CommandContext): Promise<number> {
     clock,
     warn,
   );
+  const filterLines = filter === null ? [] : [`  ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`];
+  const filtered = filter === null ? null : { of: assembled.length };
+  const filterKey = objectsFilter === null ? {} : { objectsFilter };
   if (desk === null) {
-    const full = { ...document, objects, ...derived, ...(filter === null ? {} : { filter, filteredObjectCount: objects.length }) };
-    emit(context.io, context.json, full, [...renderData(document), ...objectLines, ...filterLines]);
+    const full = { ...document, objects, ...derived, ...filterKey };
+    emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects, filtered), ...filterLines]);
     return 0;
   }
-  const register = assembleRegister(desk, {
+  const register = withFilterContext(filter === null ? [] : removedBy(assembled, objects), () => assembleRegister(desk, {
     generatedAt: document.generatedAt,
     objects,
     phases: document.phases,
@@ -541,7 +560,7 @@ async function runData(context: CommandContext): Promise<number> {
     codes: notationSource(root, warn),
     // THE FILE'S NAME, NEVER ITS PATH: footerNote is pasted into pull requests.
     verdictFile: objectOptions?.from === null || objectOptions?.from === undefined ? null : basename(objectOptions.from.display),
-  });
+  }));
   // `objects` STAYS WHERE IT WAS -- after `usage` -- and the register keys
   // follow it, so a consumer of the v0.13 document reads the same keys in the
   // same order and the register is new information after them; the derived
@@ -550,14 +569,46 @@ async function runData(context: CommandContext): Promise<number> {
   // page's, so a derived zone and date beside it would describe a clock the
   // page does not show.
   const tail = registerTail(derived);
+  // `objectsFilter` IS THE LAST KEY ON THIS PATH TOO, so one rule describes
+  // both documents (Nobunaga f1 on NN-PR for #410).
   const full = {
     ...document,
     ...register,
-    ...(filter === null ? {} : { filter, filteredObjectCount: objects.length }),
     ...(deskOwnsClock ? { ...tail, generatedDateLocal: null, timeZone: null } : tail),
+    ...filterKey,
   };
-  emit(context.io, context.json, full, [...renderData(document), ...objectLines, ...renderRegister(register), ...filterLines]);
+  emit(context.io, context.json, full, [
+    ...renderData(document),
+    ...renderObjects(objects, filtered),
+    ...filterLines,
+    ...renderRegister(register),
+  ]);
   return 0;
+}
+
+/** The objects the filter took out of the register, in order. */
+function removedBy(assembled: readonly ReportObject[], kept: readonly ReportObject[]): readonly ReportObject[] {
+  const stays = new Set(kept);
+  return assembled.filter((object): boolean => !stays.has(object));
+}
+
+/**
+ * A DESK THAT NAMES AN OBJECT THE FILTER REMOVED IS STILL REFUSED (exit 2), and
+ * the refusal now says the filter is why (Nobunaga f2). It is refused rather
+ * than published because the desk's judgement about that object would sit on
+ * a page that no longer shows it -- the register's own rule. A filter that
+ * keeps nothing under a desk naming nothing is an ordinary exit 0.
+ */
+function withFilterContext<T>(removed: readonly ReportObject[], build: () => T): T {
+  try {
+    return build();
+  } catch (error) {
+    if (removed.length === 0 || !(error instanceof VerbUsageError) || !/is not in this register's objects/.test(error.message)) throw error;
+    const shown = removed.map((object): string => `${object.kind === "pr" ? "PR" : "issue"} #${object.number}`).join(", ");
+    throw new VerbUsageError(
+      `${error.message} The --label/--severity filter removed ${removed.length} object(s) from this register (${shown}); a desk entry naming one of them is refused. Drop it from the desk, or widen the filter.`,
+    );
+  }
 }
 
 /**
@@ -767,7 +818,7 @@ export const reportCommand: Command = {
   subcommands: SUBCOMMANDS,
   summary: "Assemble an effort's report data, and fill a template with it.",
   usage: USAGE,
-  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS, lists: ["label"] },
+  flags: { values: FAMILY_VALUES, booleans: FAMILY_BOOLEANS, lists: FAMILY_LISTS },
   run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("report", context.args, SUBCOMMANDS);
     refuseForeignFlags(subcommand, context);
