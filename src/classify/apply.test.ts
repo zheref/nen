@@ -389,6 +389,14 @@ describe("nen classify apply -- the ledger must be appendable BEFORE the first e
     expect(edits(result.seams.calls)).toBe(0);
   });
 
+  it.skipIf(process.platform === "win32")("refuses a non-regular shared ledger before any GitHub edit", async () => {
+    const repo = landedRepo();
+    const result = await capture(apply(repo, plan(repo, [{ issue: 1, lang: ["alpha"] }]), "--run", "--ledger", "/dev/null"), [issueCall(1, [])]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("cannot be appended to (EINVAL)");
+    expect(edits(result.seams.calls)).toBe(0);
+  });
+
   it("refuses an existing ledger that is not writable at exit 2, before any edit", async () => {
     if (process.platform === "win32" || process.getuid?.() === 0) return; // modes mean nothing there
     const repo = landedRepo();

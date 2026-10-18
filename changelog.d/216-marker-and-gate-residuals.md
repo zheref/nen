@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **schema** — ledger validation refuses non-regular marker paths before opening them. POSIX opens also use nonblocking/no-follow flags and check the descriptor, so a swapped FIFO cannot block the read. A bounded FIFO subprocess test preserves the ordinary no-flag route. An ENOENT result also probes the marker parent, so Windows cannot report a present non-directory parent as optional absence. Parent existence is established with lstat: dangling directory symlinks fail, while valid directory symlinks retain regular marker and consumed-marker behavior.
+
 - **decisions** — `mergeDecisions` protects a canon human gate's declared gate ID as well as its class. A consumer cannot change G4 to G2, G2 to G4 or any other identity; no ordering of gates is inferred. Same-gate metadata overrides and nonhuman/additive behavior remain supported.
 
 ### Breaking / consumer notes

@@ -380,8 +380,8 @@ export interface ParseResult {
   readonly missing: readonly string[];
   /** One line per problem, in the order they were found. */
   readonly problems: readonly string[];
-  /** The line the caller should paste instead. */
-  readonly corrected: string;
+  /** A deterministic rewrite, or null when structured input has no unique repair. */
+  readonly corrected: string | null;
   /** The echo: the parse restated, one clause per line. */
   readonly echo: readonly string[];
 }
@@ -433,6 +433,43 @@ function structuredValue(slot: Slot, text: string): SlotValue {
   if (!hasList && !hasBand && text !== "") return { name: slot.name, value: text, suffix: false, alternative: alternatives.free };
   const why = hasList && hasBand ? "mixes both enumerations" : segments.some((item) => item === "") ? "has an empty '+' segment or an unsupported trailing '+'" : hasBand && segments.every((item) => hit(alternatives.band.values, item) !== undefined) ? "joins two band values; use one band, optionally with a single trailing '+'" : "mixes enumerated values with free segments";
   throw new GrammarError(`<${slot.name}> '${text}' ${why}; choose a ${alternatives.list.name} list, one ${alternatives.band.name}[+], or an unreserved ${alternatives.free}`);
+}
+
+interface StructuredRepair {
+  readonly own: SlotValue | null;
+  readonly following?: SlotValue;
+}
+
+/** Recover syntax, never choose an unknown enumeration or discard a token.
+ * A free suffix can move only into the immediately following free-list slot;
+ * its separator/vocabulary are the caller's grammar, not a skill convention. */
+function repairStructured(slot: Slot, text: string, next: Slot | undefined): StructuredRepair | undefined {
+  const hit = (values: readonly string[], item: string): string | undefined => values.find((value) => value.toLowerCase() === item.toLowerCase());
+  if (slot.join !== undefined) {
+    const items = text.split(slot.join).map((item) => item.trim()).filter((item) => item !== "");
+    if (items.length === 0) return slot.optional ? { own: null } : undefined;
+    if (slot.values.length > 0 && items.some((item) => hit(slot.values, item) === undefined)) return undefined;
+    return { own: structuredValue(slot, items.join(slot.join)) };
+  }
+  const alternatives = slot.alternatives!;
+  const parts = text.split("+").map((item) => item.trim());
+  const items = parts.filter((item) => item !== "");
+  if (items.length === 0) return slot.optional ? { own: null } : undefined;
+  const lists = items.filter((item) => hit(alternatives.list.values, item) !== undefined);
+  const bands = items.filter((item) => hit(alternatives.band.values, item) !== undefined);
+  if (lists.length > 0 && bands.length > 0) return undefined;
+  if (lists.length === items.length) return { own: structuredValue(slot, items.join("+")) };
+  if (bands.length === 1 && items.length === 1) return { own: structuredValue(slot, `${items[0]}${text.endsWith("+") ? "+" : ""}`) };
+  if (bands.length > 1 || lists.length + bands.length === 0) return undefined;
+  const enumeration = lists.length > 0 ? alternatives.list.values : alternatives.band.values;
+  const firstFree = parts.findIndex((item) => item !== "" && hit(enumeration, item) === undefined);
+  if (firstFree <= 0 || parts.slice(firstFree).some((item) => hit(enumeration, item) !== undefined)) return undefined;
+  const prefix = parts.slice(0, firstFree).filter((item) => item !== "");
+  if (prefix.length === 0 || (bands.length > 0 && firstFree !== 1)) return undefined;
+  if (next?.join === undefined || next.values.length !== 0 || next.separator === null) return undefined;
+  const following = repairStructured(next, parts.slice(firstFree).join("+"), undefined)?.own;
+  if (following === undefined || following === null) return undefined;
+  return { own: structuredValue(slot, prefix.join("+")), following };
 }
 
 function renderSlot(value: SlotValue, slot: Slot): string {
@@ -542,6 +579,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   // Suffixes and enumerations, in template order, so problems read in the order
   // the caller typed them.
   const slots: SlotValue[] = [];
+  const structuredFailures: { slot: Slot; text: string }[] = [];
   for (const slot of grammar.slots) {
     const value = found.get(slot.name);
     if (value === undefined) continue;
@@ -550,6 +588,7 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
       try { slots.push(structuredValue(slot, text)); } catch (error) {
         if (!(error instanceof GrammarError)) throw error;
         problems.push(error.message);
+        structuredFailures.push({ slot, text });
       }
       continue;
     }
@@ -592,7 +631,26 @@ export function parseInvocation(skill: string, grammar: Grammar, line: string): 
   for (const [name, value] of found) {
     if (typeof value.value !== "string" || value.value.trim() !== "" || grammar.slots.some((slot) => slot.name === name && (slot.join !== undefined || slot.alternatives !== undefined))) attempted.add(name);
   }
-  const corrected = correctedLine(skill, grammar, byName, attempted, clausePresent);
+  const correctionValues = new Map(byName);
+  const additions = new Map<string, SlotValue>();
+  // Each structured failure contributes one problem and is repaired below.
+  // With any other problem (missing/scalar/literal/separator), that repair
+  // alone cannot make the whole invocation concrete. Legacy-only refusals
+  // retain their published placeholder behavior.
+  let canCorrect = structuredFailures.length === 0 || problems.length === structuredFailures.length;
+  for (const { slot, text } of structuredFailures) {
+    const repair = repairStructured(slot, text, grammar.slots[grammar.slots.indexOf(slot) + 1]);
+    if (repair === undefined) { canCorrect = false; continue; }
+    if (repair.own === null) { correctionValues.delete(slot.name); attempted.delete(slot.name); }
+    else correctionValues.set(slot.name, repair.own);
+    if (repair.following !== undefined) additions.set(repair.following.name, repair.following);
+  }
+  for (const [name, addition] of additions) {
+    const existing = correctionValues.get(name);
+    correctionValues.set(name, { ...addition, value: [...(addition.value as readonly string[]), ...(existing?.value as readonly string[] | undefined ?? [])] });
+    attempted.add(name);
+  }
+  const corrected = canCorrect ? correctedLine(skill, grammar, correctionValues, attempted, clausePresent) : null;
 
   const clauses = grammar.clauses.map(
     (clause, index): ClauseValue => ({ literal: clause.literal, present: clausePresent[index] === true }),
