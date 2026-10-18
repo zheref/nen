@@ -1435,6 +1435,42 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(JSON.parse(result.out.join("\n")).routing).toEqual([{ name: login, via: "add-reviewers", route: "bot", id: "BOT_live" }]);
   });
 
+  it.each([
+    "U_123", "PR_123", "ANYTHING_not-a-bot", "BOT_", "BOT_bad!", "BOT_a=b", "BOT_a/", "BOT_a b",
+    Buffer.from("04:User123").toString("base64"), Buffer.from("03:Bot").toString("base64"),
+    Buffer.from("03:Bot1extra").toString("base64"), Buffer.from("03:Bot1\n").toString("base64"),
+    Buffer.from("03:Bot1").toString("base64").slice(0, -1), Buffer.from("03:Bot1").toString("base64").replace("MQ==", "MR=="),
+  ])("preflights invalid explicit Bot identity %s before any mixed-batch GitHub read", async (id) => {
+    for (const dryRun of [false, true]) {
+      const seams = new ScriptedSeams([]);
+      const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-reviewers", "sasuke,org/team", "--add-bots", `copilot,${id}`, ...(dryRun ? ["--dry-run"] : []), "--json"], null, seams);
+      expect(result.code).toBe(2); expect(result.err.join("\n")).toContain("not a valid Bot node id or bot login");
+      expect(seams.calls).toEqual([]); expect(result.out).toEqual([]);
+    }
+  });
+
+  it.each(["BOT_a-b_C9", Buffer.from("03:Bot1").toString("base64")])("preserves valid explicit Bot identity %s in dry-run routing", async (id) => {
+    const seams = new ScriptedSeams([
+      { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
+      ...NO_BASE_GATES,
+    ]);
+    const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", id, "--dry-run", "--json"], null, seams);
+    expect(result.code).toBe(0); expect(JSON.parse(result.out.join("\n")).routing).toEqual([{ name: id, via: "add-bots", route: "bot", id }]);
+    expect(seams.calls.some((call) => call.args.some((arg) => arg.startsWith("query=mutation")))).toBe(false);
+  });
+
+  it.each(["--add-bots", "--add-reviewers"])("refuses malformed REST Bot ids on %s without subsequent reads or mutation", async (flag) => {
+    for (const id of ["U_not_a_bot", "BOT_", "not-an-id", Buffer.from("04:User123").toString("base64")]) {
+      const seams = new ScriptedSeams([
+        ...(flag === "--add-reviewers" ? [{ match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS }] : []),
+        { match: `gh ${botLoginArgv("copilot").join(" ")}`, result: { stdout: JSON.stringify({ type: "Bot", login: "Copilot", node_id: id }) } },
+      ]);
+      const result = await capture(["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", flag, "copilot", "--dry-run", "--json"], null, seams);
+      expect(result.code).toBe(1); expect(result.err.join("\n")).toContain("GitHub did not return the requested Bot");
+      expect(result.out).toEqual([]); expect(seams.calls).toHaveLength(flag === "--add-reviewers" ? 2 : 1);
+    }
+  });
+
   it("deduplicates a bot login and its explicit id into one mutation (#160)", async () => {
     const seams = new ScriptedSeams([
       restCopilot,
@@ -1814,22 +1850,22 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     expect(result.out.join("\n")).toContain("copilot-pull-request-reviewer (BOT_kgDOCnlnWA) has been requested 2 times");
   });
 
-  it("N5: an --add-bots id that is not a Bot cannot be counted, so the request is refused at exit 1", async () => {
+  it("N5: a Bot-shaped --add-bots id GitHub resolves as a User cannot be counted, so the request is refused at exit 1", async () => {
     const script: readonly ScriptedCall[] = [
       { match: `gh ${prAndKnownBotsArgv(KNOWN_BOTS_TARGET, 9).join(" ")}`, result: NO_KNOWN_BOTS },
       ...CEILING_3,
       {
-        match: `gh ${botNodesArgv(["U_1"]).join(" ")}`,
+        match: `gh ${botNodesArgv(["BOT_2"]).join(" ")}`,
         result: { stdout: JSON.stringify({ data: { nodes: [{ __typename: "User" }] } }) },
       },
     ];
     const result = await capture(
-      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "U_1"],
+      ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "9", "--add-bots", "BOT_2"],
       null,
       new ScriptedSeams(script),
     );
     expect(result.code).toBe(1);
-    expect(result.out.join("\n")).toContain("U_1 does not resolve to a Bot");
+    expect(result.out.join("\n")).toContain("BOT_2 does not resolve to a Bot");
   });
 
   it("R2: an --add-bots id GitHub answers under a different canonical id is refused at exit 1, naming that id", async () => {

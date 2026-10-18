@@ -2377,6 +2377,14 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 | `--dry-run` | no | resolves every `--add-reviewers` login (still reads GitHub) and prints which route each name or id would go to, then requests nothing | not network-free — see the `--dry-run` discipline table above |
 | `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) and an `unrecordedBots` array (`{ id, login }` per requested bot GitHub did not record — see exit `9`) alongside `ok`/`message` |
 
+Explicit Bot IDs accept a nonempty opaque `BOT_` payload of letters, digits,
+`_` and `-`, or canonical base64 decoding to exactly `<digits>:Bot<digits>`.
+User/other node types, empty payloads, invalid characters and malformed legacy
+encodings refuse at exit 2 before any GitHub read for the batch. REST login
+resolution applies the same Bot-ID check to `node_id`; a malformed API answer
+is a tool failure at exit 1. Valid explicit IDs remain unchanged. Ordinary
+human collaborator and team routes are unchanged.
+
 Both flags absent (or both empty) is refused at exit 1, naming both:
 `no reviewers named -- --add-reviewers takes a comma-separated list of
 logins, or --add-bots a comma-separated list of bot logins or node ids` — the wording

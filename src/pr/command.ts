@@ -83,6 +83,7 @@ import {
   EXIT_BOT_REQUEST_UNRECORDED,
   botLoginKey,
   isReviewerNodeId,
+  isBotLoginInput,
   isBotLoginAlias,
   resolveBotLogin,
   fetchPrAndKnownBots,
@@ -360,7 +361,8 @@ request-reviews:
   arrives. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
   named, or a route's gh call failed or answered something unreadable,
   or the round ceiling could not be checked; 2 usage (a missing --pr, an
-  unresolved --add-reviewers or --add-bots login) or a bot past
+  unresolved --add-reviewers or --add-bots login, or an invalid explicit
+  Bot node id) or a bot past
   round_policy.maxRounds; 9 every
   call was ACCEPTED but at least one requested bot is not pending review
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
@@ -1314,6 +1316,14 @@ function doRequestReviews(context: CommandContext): number {
       "no reviewers named -- --add-reviewers takes a comma-separated list of logins, or --add-bots a comma-separated list of bot logins or node ids";
     emit(context.io, context.json, { ok: false, message }, [message]);
     return 1;
+  }
+
+  // Invalid explicit identities are invocation faults, before any lookup for
+  // this batch's otherwise valid bot, user or team entries.
+  for (const name of explicitBots) {
+    if (!isReviewerNodeId(name) && !isBotLoginInput(name)) {
+      throw new VerbUsageError(`'${name}' is not a valid Bot node id or bot login for --add-bots.`);
+    }
   }
 
   // RESOLUTION RUNS EVEN UNDER --dry-run -- the same "not network-free"

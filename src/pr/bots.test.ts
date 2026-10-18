@@ -6,6 +6,7 @@ import {
   botLoginArgv,
   botLoginKey,
   isReviewerNodeId,
+  isBotLoginInput,
   isBotLoginAlias,
   resolveBotLogin,
   EXIT_BOT_REQUEST_UNRECORDED,
@@ -375,5 +376,29 @@ describe("bot logins resolved without prior PR history (#160)", () => {
   ])("refuses unreadable, non-Bot or mismatched answers %#", (result) => {
     const seams = new ScriptedSeams([{ match: "gh api --method GET users/review-helper%5Bbot%5D", result }]);
     expect(() => resolveBotLogin(seams, "review-helper")).toThrow(BotResolutionError);
+  });
+});
+
+
+describe("Bot reviewer identity syntax", () => {
+  const legacy = Buffer.from("03:Bot1").toString("base64");
+  it.each(["BOT_1", "BOT_kgDOCnlnWA", "BOT_a-b_C9", legacy, Buffer.from("03:Bot123").toString("base64")])("retains valid modern and canonical legacy Bot ids: %s", (id) => {
+    expect(isReviewerNodeId(id)).toBe(true);
+    const seams = new ScriptedSeams([{ match: "gh api --method GET users/review-helper%5Bbot%5D", result: { stdout: JSON.stringify({ type: "Bot", login: "review-helper[bot]", node_id: id }) } }]);
+    expect(resolveBotLogin(seams, "review-helper")?.id).toBe(id);
+  });
+  it.each([
+    "U_123", "PR_123", "ANYTHING_not-a-bot", "BOT_", "BOT_bad!", "BOT_a=b", "BOT_a b", "BOT_a/", "BOT_a\n",
+    "not-an-id", "", Buffer.from("04:User123").toString("base64"), Buffer.from("03:Bot").toString("base64"),
+    Buffer.from("03:Bot1extra").toString("base64"), Buffer.from("03:Bot1\n").toString("base64"),
+    legacy.slice(0, -1), legacy.replace("MQ==", "MR=="), `!${legacy}`, `${legacy}junk`,
+  ])("refuses non-Bot or malformed ids from explicit and REST identity boundaries: %s", (id) => {
+    expect(isReviewerNodeId(id)).toBe(false);
+    const seams = new ScriptedSeams([{ match: "gh api --method GET users/review-helper%5Bbot%5D", result: { stdout: JSON.stringify({ type: "Bot", login: "review-helper[bot]", node_id: id }) } }]);
+    expect(() => resolveBotLogin(seams, "review-helper")).toThrow(BotResolutionError);
+  });
+  it("keeps handles resolvable without treating a global-node shape as a login", () => {
+    for (const login of ["review-helper", "review-helper[bot]", "copilot"]) expect(isBotLoginInput(login)).toBe(true);
+    for (const input of ["U_123", "BOT_", "org/team", Buffer.from("04:User123").toString("base64"), legacy.slice(0, -1)]) expect(isBotLoginInput(input)).toBe(false);
   });
 });
