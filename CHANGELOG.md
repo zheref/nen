@@ -2,6 +2,16 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## Unreleased
+
+### Fixed
+
+- **wc** — `wc squash --message-file` refuses a message missing every agent trailer admitted by `commits.allowedAttributionTrailers`, at exit 2 before reset or commit, naming the keys and policy source (closes [#405](https://github.com/zheref/nen/issues/405)).
+
+### Breaking / consumer notes
+
+- **wc squash** — repositories with a nonempty `commits.allowedAttributionTrailers` must include one of those trailer keys with a value in the squash message's final paragraph. Previously an otherwise valid message without an agent trailer could be squashed. Empty or absent policy is unchanged; forbidden-trailer and post-commit injection checks remain separate.
+
 ## v0.21.0 — 2026-10-11
 
 Release unit for `v0.20.0..v0.21.0`. It brings declared focused tests, live `shu` output, the refusal of unread `nen/gates.json` keys with nen's own round caps, per-pool runner labels, and six additions that retire Hatsu shell (`canon checkout`, `canon pin --write`, `surface install`/`status`, `wc worktree`, `schema set`, `pr threads settle`):
