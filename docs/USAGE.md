@@ -4674,7 +4674,7 @@ pages as it takes, not the accidental 100-row ceiling an earlier version of this
 **Usage**
 
 ```text
-nen backlog fetch --repo-slug <owner/name> [--limit <n>]
+nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--repo <path>] [--label <name>]... [--severity <band>[+] --severity-order <high,...,low>] [--json]
 ```
 
 **Arguments**
@@ -4682,14 +4682,21 @@ nen backlog fetch --repo-slug <owner/name> [--limit <n>]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo-slug <owner/name>` | yes | The owner/name to fetch fresh from over `gh api`. | |
+| `--repo <path>` | with any filter | The checkout supplying the target's declared `nen/labels.json`. | Must supply the matching taxonomy even when the remote target differs from the checkout's own repository; no registry-owner defaults. |
+| `--label <name>` | no, repeatable | Exact label-name AND over each issue/direct-PR effort's union. | Every name must be declared; unsupported ampersand labels refuse at exit 2. |
+| `--severity <band>[+]` | no | Select one declared severity band, or with `+` that band and higher. | ANDed with labels; requires a declared severity family and explicit complete `--severity-order`. |
+| `--severity-order <high,...,low>` | with `--severity` | Every declared severity label exactly once, highest to lowest. | Exact full labels or unambiguous case-insensitive leaves; no inferred namespace, priority mapping, or order. |
 | `--limit <n>` | no | Caps the TOTAL rows fetched per resource (issues, PRs), across as many pages as it takes to reach it. | Omit for no cap. Must be a positive whole number, or refused (exit 2). A capped fetch is always reported TRUNCATED, never presented as complete. |
 
 **Output and exit codes** — human rendering is `"<n> row(s) -- X issue(s), Y PR(s)"`, an optional
 `TRUNCATED at --limit <n>: ...` or `TRUNCATED at a defensive 200-page ceiling: ...` line, then one line
 per row (`#<issue> [#<pr>, ...]  <title>`, or `PR #<n>  <title>` for an orphan PR). `--json` top-level
-keys: `repo`, `truncated`, `rows`, `issueCount`, `prCount`. Exit 0 whether or not the fetch was
+keys: `repo`, `truncated`, `rows`, `issueCount`, `prCount`, plus `filter` only when active
+(`labels[]`, canonical `severity` or `null`, expanded `severityLabels[]`). Counts describe the
+retained effort set; an empty match prints an explicit zero count and exits 0. Exit 0 whether or not the fetch was
 truncated (truncation is reported, not failed); exit 2 for a missing `--repo-slug` or a malformed
-`--limit`. This verb has no exit-1 path of its own.
+`--limit`, an undeclared or unsupported label, or a missing/malformed severity mapping or order.
+A remote API failure remains exit 1.
 
 **Example**
 
@@ -5767,11 +5774,21 @@ the GitHub repository. `--dry-run` reads remote labels too, but never mutates th
 A failed or malformed remote read refuses before any mutation.
 
 Progress goes to stderr: `[0/N] reading remote labels`, then `[1/N] created: name`,
-`[2/N] unchanged: name`, and so on as each entry finishes. Stdout remains a single
-JSON report (`entries`, `failed`) with `--json`. Human stdout prints one result per
-label; dry-run differences say `would create` or `would update` and carry the
-`would-sync` status in JSON. Exit 0 includes a complete no-op; exit 1 names failed
-reads or mutations. A no-op uses only the paginated read, independent of how many
+`[2/N] unchanged: name`, and so on as each entry finishes, including with `--json`.
+With `--json`, stdout contains the full `SyncReport`: `{ entries, failed }`.
+`entries` contains one `{ name, status, message }` per declared taxonomy label,
+in taxonomy order. `status` is `created`, `updated`, `unchanged`, `would-sync`
+or `failed`. `message` is null for created, updated and unchanged entries; a
+would-sync entry describes the proposed create or update, and a failed entry
+carries the last nonempty stderr line or an `exit <code>` fallback. `failed`
+is an array of failed label names, in entry order; it is empty when none failed.
+There are no timing or progress fields in this document. A failed remote read
+produces no report; its error goes to stderr.
+
+Human stdout prints one result per label; dry-run differences say `would create`
+or `would update` and carry the `would-sync` status in JSON. Exit 0 includes a
+complete no-op; exit 1 names failed reads or mutations. A no-op uses only the
+paginated read, independent of how many
 labels are already declared; GitHub response time is outside Nen's control.
 `classify install --sync` uses the same diff after its existing landed-declaration gate.
 
@@ -5793,7 +5810,7 @@ nen labels rename --target <owner/name> --map from=to,from2=to2 [--dry-run]
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--target <owner/name>` | yes | The repository whose labels are renamed. | Missing -> exit 1 (same `requireTarget` inconsistency noted under `labels sync`). |
+| `--target <owner/name>` | yes | The repository whose labels are renamed. | Missing or malformed -> exit 2. |
 | `--map from=to,from2=to2` | yes | Rename mapping, applied in the order given. | A chain (`a=b,b=c`) applies in one invocation; missing or naming no mappings -> exit 2. |
 | `--dry-run` | no (boolean) | Logs the `gh label edit` call it would make, per mapping. | This verb accepts the global `--repo` and never reads it — the rename map comes from `--map`, not from a local taxonomy. Even in `--dry-run`, it still calls `gh label list` live (to decide idempotence) before deciding what it "would" do — dry-run here is not fully side-effect-free of network access, only of mutation. |
 
@@ -6082,7 +6099,7 @@ nen classify apply --taxonomy tax.json --repo . --target zheref/nen --plan plan.
 #2  applied: lang/beta, job/test
 #3  listed: lang/alpha, job/build
 3 issue(s): 3 applied, 0 would apply, 0 already, 0 failed, 2 listed
-ledger: /work/nen/label-ledger.jsonl
+ledger: /work/nen/.nen/label-ledger.jsonl
 ```
 (the plan's third row carries `"confidence": "low"`, so it is listed and no ledger line is written
 for it. The `ledger:` path prints absolute; `/work/nen` stands in for the checkout `--repo` named)
@@ -6142,7 +6159,8 @@ key set, field types and rich options/proposed-issue rules. Missing or already c
 (`absent (optional; may have been consumed)`); malformed JSON, an invalid document or a read error
 other than absence is a required `FAIL` and exits 1. It reads only; it never rings or consumes a
 marker. Without the flag, the existing rows and order are unchanged and the generated file is not
-read. A Stop hook can consume a successfully written marker before a later inspection; absence
+read. The marker must be a regular file; directories, symlinks and special files such as FIFOs
+are refused before reading. A Stop hook can consume a successfully written marker before a later inspection; absence
 after that does not establish a failed write.
 
 **Exit codes.** `0` every required file loaded and every required row passed; `1` one did not, or a required row failed; `2` from v0.21.0 when
@@ -12416,8 +12434,9 @@ JSON list-slot `value` fields are arrays; existing scalar slots remain
 strings. The alternation also emits its chosen `alternative` name and
 `suffix` boolean. Human echoes join list items with their delimiter and
 name the selected alternative. Unknown enumerated items, empty list
-segments and reserved/free mixtures refuse at exit 2; diagnostics and the
-corrected line are printed on stderr, including under `--json`. Both
+segments and reserved/free mixtures refuse at exit 2. Diagnostics go to stderr,
+including under `--json`; a deterministic corrected line is printed only when one
+exists. Ambiguous structured input has `corrected: null` and no rewrite is offered. Both
 alternative enumerations must be disjoint and their names distinct.
 A free token such as `c++` stays whole when none of its segments is reserved.
 A band cannot join another band; gates cannot carry a trailing `+`.
@@ -12432,6 +12451,19 @@ This grammar accepts `hatsu@g5#model/gpt`, `hatsu#model/claude`,
 `hatsu@g4+model/gpt`, `hatsu@high+g4`, `hatsu@high+low`, `hatsu@g4+`,
 `hatsu@high++`, and `hatsu@g9+g5`. Gate/severity names are reserved after
 `@`; literal labels with those names can be supplied after `#`.
+Deterministic repairs preserve recoverable content: `hatsu@g4+model/gpt` becomes
+`backlog-state hatsu@G4#model/gpt`, `hatsu@high++` becomes
+`backlog-state hatsu@high+`, and `hatsu@g4++g5` becomes
+`backlog-state hatsu@G4+G5`. Empty list separators are removed; an empty optional
+structured clause is omitted. A free suffix can move only into the immediately
+following free-list slot using that grammar's separator. Mixed enumerations
+(`high+g4`), two bands (`high+low`) and an unknown prefix (`g9+g5`) are ambiguous:
+`corrected` is `null`, never an invented valid line. Successful and legacy scalar
+parses keep their existing correction strings. A structured repair is offered only
+when every reported problem has a concrete structured repair: if a scalar enumeration,
+required slot, introducing literal or literal-only clause still has an unresolved error,
+`corrected` is `null` and no heading is printed. Legacy refusals without a structured
+error retain their existing placeholder behavior.
 `nen parse futon` keeps its existing grammar and behavior.
 
 
@@ -12461,7 +12493,7 @@ brackets (`[onto <slot>]`) or outside them (`at [<gate>]`). A grammar carrying a
 **required** clause is unaffected: an empty line still refuses at exit 2, naming
 the slot, with the corrected line to paste.
 
-**Output and exit codes** -- on a match, echoes the parse one clause per line: a supplied slot as `<slot>: <value>[ (+)]`, an optional slot nobody filled as `<slot>: (clause absent)`, and a literal-only clause the line carried as `[<clause>]: present`. On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`; `slots[]` still carries only what the line supplied, so the `(clause absent)` line is the report rather than the data. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
+**Output and exit codes** -- on a match, echoes the parse one clause per line: a supplied slot as `<slot>: <value>[ (+)]`, an optional slot nobody filled as `<slot>: (clause absent)`, and a literal-only clause the line carried as `[<clause>]: present`. On a refusal, prints each problem as `nen parse: <problem>` to stderr, then `Corrected line:` and the suggested rewrite only when `corrected` is non-null. Ambiguous structured refusals carry `corrected: null` and omit that heading. `--json`: the full `ParseResult` -- `{ skill, template, line, ok, slots, clauses, missing, problems, corrected, echo }`; `slots[]` still carries only what the line supplied, so the `(clause absent)` line is the report rather than the data. Exit 0 when the line parses; exit 2 when it does not, or when `--grammar` itself is malformed.
 
 **Example**
 
@@ -12968,7 +13000,7 @@ Every absence is `null` and no absence is a failure — a repository with no cov
 
 ```text
 nen report data --repo <path> --base <ref> [--lane <name>] [--tiers <file>] [--json]
-nen report data … [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog]
+nen report data … [--target <owner/name>] [--prs <n,...>] [--issues <n,...>] [--backlog] [--label <name>]... [--severity <band>[+] --severity-order <high,...,low>]
 nen report data … --objects-from <file>
 nen report data … [--target … | --objects-from <file>] --register <desk>
 nen report data … [--tz <zone>] [--open-stop]
@@ -12986,6 +13018,9 @@ nen report data … [--tz <zone>] [--open-stop]
 | `--prs <n,...>` | no | pull requests to read, by number | a comma-separated list of **positive** whole numbers; a non-numeric entry, or a `0`, is refused at exit 2 naming it, before any call — GitHub numbers issues and pull requests from 1 |
 | `--issues <n,...>` | no | issues to read, by number | same grammar, same refusal |
 | `--backlog` | no (boolean) | every **open** issue and pull request of `--target` | paginated to completion; a fetch that hits the defensive page ceiling says so on stderr rather than presenting a partial register as whole |
+| `--label <name>` | no, repeatable | Exact label-name AND over each issue/direct-PR effort's union. | Live `--backlog`, `--prs` or `--issues` scope only; requires the matching target taxonomy under `--repo`. Whole matched efforts are retained, with no companion fetch beyond the explicit scope. |
+| `--severity <band>[+]` | no | One declared severity band, or that band and higher. | ANDed with labels; requires a declared severity family and complete explicit `--severity-order`. No priority mapping is inferred. |
+| `--severity-order <high,...,low>` | with `--severity` | Every declared severity label once, highest to lowest. | Exact full label names or unambiguous case-insensitive leaves; invalid or absent mappings refuse at exit 2. |
 | `--objects-from <file>` | no | the register, read from a file instead of GitHub | a JSON array of rows already in the published `objects` shape. **Validated at the read seam and refused BY ROW INDEX at exit 2.** Never mixed with the four flags above: a register whose rows came from two authorities says nothing about which row came from which |
 | `--register <desk>` | no | emit the **register document** a Rikugan page renders from | the judgement half only, as JSON — see *The register document* below. Validated at the read seam and refused at exit 2 naming the field; an empty value is refused too |
 | `--tz <zone>` | no | the IANA zone the local clock is read in | must be a **compiled** zone in this host's zoneinfo database — `$TZDIR`, else `/usr/share/zoneinfo`, `/var/db/timezone/zoneinfo`, `/usr/lib/zoneinfo` — i.e. a **regular file**, whose real path stays inside the database's real directory (a symlink out of it is refused), and whose first four bytes are `TZif` (`UTC`/`Etc/UTC` need none). **Where no such directory exists** (on `win32`, or a `$TZDIR` that is not a directory) the runtime's ICU zone list (`Intl.supportedValuesOf("timeZone")`) answers instead, and stderr names that authority. The zone is printed as ICU's canonical name; a misspelling, a **case mismatch** (`america/bogota`), a metadata file such as `zone.tab`, or a path is **refused at exit 2** naming it, before any GitHub read, rather than stamped in UTC as `date(1)` silently would. Without it: `$TZ`, then the **`/etc/localtime` symlink's target**, then **`/etc/timezone`**, then ICU's own guess; a zone from any of them that fails the same check is `null` with the reason |
@@ -13055,6 +13090,14 @@ publishing the two as one word is the false-red twin of a false green. Under
 `--objects-from` none of this runs: `readiness` is the caller's file's,
 validated for shape (`source` must still be `check` or `computed`) and never
 re-derived, so it is only as good as whatever wrote the file.
+
+**Optional filter output keys** — when a filter is active, both plain data and register
+JSON append `filter` (`labels[]`, canonical `severity` or `null`, expanded
+`severityLabels[]`) and `filteredObjectCount`. Without a filter those keys are absent.
+`objects[]`, derived context and every register tally use the filtered set; an empty
+match is an explicit count of zero at exit 0. A stale desk reference outside that set
+refuses rather than being silently pruned. Filters with `--objects-from`, no live scope,
+undeclared/unsupported labels, or missing severity mappings refuse at exit 2.
 
 **Output and exit codes** — human lines: a `repo:`/`generated:` header, then `commits:` and one line per commit, `files:` and one line per file (status, path, tier), then `evidence:`, `coverage:`, `proof:` and `last stop:`. `--json` keys, in this order: `contract` (`nen.report.data/v0.1`), `repo`, `branch` (`null` on a detached HEAD), `base`, `generatedAt`, `commits[]` (`sha`, `subject`, `author`, `date`), `files[]` (`path` — a rename's **destination** — `status` (git's own token, `R096` and all), `tier`), `evidence[]` (empty; see below), `coverage` (`lane`, `format`, `path`, `total`, `targets[]` — the same shape [`shu coverage`](#nen-shu-coverage) parses, from the same parser — or `null`), `proof` (`.nen/proof/<lane>.json` verbatim, or `null`), `lastStop` (`.nen/last-stop.json` verbatim, or `null`), `phases[]` (each entry flattened with its `effort`; since v0.13.0 also its `note` and the `steps[]` a `shu` run left under it), then `usage[]` (every `.nen/usage/<effort>.json` entry, flattened with its `effort` — **appended after `lastStop`** in v0.13.0, [#227](https://github.com/zheref/nen/issues/227); the human rendering carries one `usage: N entries, M not reported` line), `objects[]` — **appended at the end of the key order** in v0.12.0 — and then the derived context, `worktree`, `effortStage`, `gate`, `stageClass`, `turnNumber`, `generatedAtLocal`, `generatedDateLocal`, `timeZone`, appended after it ([#258](https://github.com/zheref/nen/issues/258)), so a consumer reading the keys before them reads the same document it always did. The human rendering is unchanged apart from the `repo:` line's value (`(no owner/name)` when there is none). Exit 0 on any document; exit 1 when `git log`/`git diff` fails for a reason other than the flags — git could not be run at all, or ran and refused (no repository, an unreadable object) — with `--base` already known to resolve; exit 2 on a missing `--repo`/`--base`, an unresolvable `--base`, a `--tiers` file that is not a tier table, a `--lane` that escapes the tree, or a `--tz` that is not a compiled zone.
 

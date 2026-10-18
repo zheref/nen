@@ -19,8 +19,8 @@
 // times a verb happened to ask, and a schema file does not become valid by being
 // re-read.
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { MARKER_FILE, parseMarker } from "../stop/marker.js";
 import { assertRepoRoot, type RepoRootOptions } from "../repo/root.js";
 import { loadColorVocabulary, type ColorVocabulary } from "./colors.js";
@@ -464,10 +464,35 @@ function stopMarkerCheck(root: string): SchemaCheck {
     file: MARKER_FILE, path, ok, detail, required, legacy: false, note: null,
   });
   let text: string;
-  try { text = readFileSync(path, "utf8"); }
-  catch (error) {
-    // A consumed marker is ordinary absence. Every other read failure is a defect.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return row(true, false, "absent (optional; may have been consumed)");
+  try {
+    // Refuse special files before opening: a FIFO read can wait forever for a writer.
+    if (!lstatSync(path).isFile()) return row(false, true, "could not read marker: not a regular file");
+    // NONBLOCK also bounds a POSIX FIFO swapped in after lstat; NOFOLLOW refuses
+    // a swapped final symlink where supported. Check the opened descriptor too.
+    const fd = openSync(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0) | (constants.O_NOFOLLOW ?? 0));
+    try {
+      if (!fstatSync(fd).isFile()) return row(false, true, "could not read marker: not a regular file");
+      text = readFileSync(fd, "utf8");
+    } finally { closeSync(fd); }
+  } catch (error) {
+    // Windows may report ENOENT for a child of a present FILE, where POSIX
+    // reports ENOTDIR. Only an absent marker or absent parent is optional.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        // Establish entry absence without following a dangling parent symlink.
+        lstatSync(dirname(path));
+      } catch (parentError) {
+        if ((parentError as NodeJS.ErrnoException).code === "ENOENT") return row(true, false, "absent (optional; may have been consumed)");
+        return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
+      }
+      try {
+        // A present parent may be a directory symlink; its target must resolve.
+        if (!statSync(dirname(path)).isDirectory()) return row(false, true, "could not read marker: parent is not a directory");
+      } catch (parentError) {
+        return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
+      }
+      return row(true, false, "absent (optional; may have been consumed)");
+    }
     return row(false, true, `could not read marker: ${error instanceof Error ? error.message : String(error)}`);
   }
   let document: unknown;

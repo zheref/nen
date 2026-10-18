@@ -372,7 +372,63 @@ describe("list slots and three-way alternatives (#410)", () => {
     const result = parseInvocation("backlog-state", parseTemplate(selector), line);
     expect(result.ok).toBe(false);
     expect(result.problems.length).toBeGreaterThan(0);
-    expect(result.corrected).toContain("backlog-state hatsu");
+    if (result.corrected !== null) expect(result.corrected).toContain("backlog-state hatsu");
+  });
+  it.each([
+    ["hatsu@g4+model/gpt", "backlog-state hatsu@G4#model/gpt"],
+    ["hatsu@g4+g5+model/gpt#lang/prose", "backlog-state hatsu@G4+G5#model/gpt&lang/prose"],
+    ["hatsu@high+model/gpt", "backlog-state hatsu@high#model/gpt"],
+    ["hatsu@g4+c++", "backlog-state hatsu@G4#c++"],
+    ["hatsu@high++", "backlog-state hatsu@high+"],
+    ["hatsu@g4+", "backlog-state hatsu@G4"],
+    ["hatsu@g4++g5", "backlog-state hatsu@G4+G5"],
+    ["hatsu#model/gpt&", "backlog-state hatsu#model/gpt"],
+    ["hatsu#&model/gpt", "backlog-state hatsu#model/gpt"],
+    ["hatsu#x&&y", "backlog-state hatsu#x&y"],
+    ["hatsu#", "backlog-state hatsu"],
+    ["hatsu@", "backlog-state hatsu"],
+  ])("offers the unique concrete repair for %s", (line, corrected) => {
+    const grammar = parseTemplate(selector);
+    const result = parseInvocation("backlog-state", grammar, line);
+    expect(result.ok).toBe(false);
+    expect(result.corrected).toBe(corrected);
+    expect(parseInvocation("backlog-state", grammar, corrected.slice("backlog-state ".length)).ok).toBe(true);
+  });
+  it.each(["hatsu@high+g4", "hatsu@high+low", "hatsu@g9+g5", "hatsu@high++model/gpt"])("does not invent a repair for ambiguous %s", (line) => {
+    const result = parseInvocation("backlog-state", parseTemplate(selector), line);
+    expect(result.ok).toBe(false);
+    expect(result.corrected).toBeNull();
+  });
+  it.each([
+    ["<repo:foo|bar>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "baz@g4+", "is one of"],
+    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "@g4+", "is required"],
+    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>] onto <base>", "foo@g4+", "<base> is required"],
+    ["on <repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]", "foo@g4+", "must open with"],
+    ["<repo>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>][then sweep]", "foo@g4+ then sweep stray", "continues past it"],
+  ])("withholds a structured repair when another problem remains: %s", (template, line, problem) => {
+    const result = parseInvocation("state", parseTemplate(template), line);
+    expect(result.ok).toBe(false);
+    expect(result.problems).toHaveLength(2);
+    expect(result.problems.join("\n")).toContain(problem);
+    expect(result.corrected).toBeNull();
+  });
+  it("retains legacy scalar refusal placeholders when no structured repair is needed", () => {
+    const grammar = parseTemplate("<repo:foo|bar>[@<selector;list=gate:G4|G5;band=severity:high|low;free=label>]");
+    expect(parseInvocation("state", grammar, "baz@g4").corrected).toBe("state <repo: foo | bar>@G4");
+    expect(parseInvocation("state", grammar, "foo@g4").corrected).toBe("state foo@G4");
+  });
+  it("repairs arbitrary caller vocabularies and separators without skill-specific tokens", () => {
+    const grammar = parseTemplate("<scope>[%<choice;list=phase:Start|End;band=rank:hot|cold;free=term>][!<terms;join=&>]");
+    const result = parseInvocation("generic", grammar, "project%start+topic/tag!other");
+    expect(result.corrected).toBe("generic project%Start!topic/tag&other");
+    expect(parseInvocation("generic", grammar, "project%start+hot").corrected).toBeNull();
+    const enumerated = parseTemplate("<scope>[%<phase:Start|End;join=+>]");
+    for (const [line, fixed] of [["project%start++end+", "project%Start+End"], ["project%+start", "project%Start"], ["project%start+", "project%Start"]]) {
+      const repair = parseInvocation("generic", enumerated, line!);
+      expect(repair.ok).toBe(false);
+      expect(repair.corrected).toBe(`generic ${fixed}`);
+      expect(parseInvocation("generic", enumerated, fixed!).ok).toBe(true);
+    }
   });
   it("normalizes every enumerated list item and echoes the choice", () => {
     const result = parseInvocation("state", parseTemplate("<repo>[@<gate:G1|G4|G5;join=+>]"), "hatsu@g4+g5");

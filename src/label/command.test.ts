@@ -198,6 +198,18 @@ describe("nen label apply -- batch and shared state ledger", () => {
       expect(calls).toBe(0);
     }
   });
+  it.skipIf(process.platform === "win32")("refuses non-regular ledgers before single or batch GitHub edits", async () => {
+    const root = repo();
+    const single = ["label", "apply", "XX-IS-#7", "--label", "bankai:stage/idea", "--repo-slug", "o/r"];
+    for (const argv of [single, batch(root, rows)]) {
+      let calls = 0;
+      const result = await capture([...argv, "--ledger", "/dev/null", "--run", "--json"], () => { calls++; return ok; }, root);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("cannot be appended to (EINVAL)");
+      expect(calls).toBe(0);
+      expect(result.out).toEqual([]);
+    }
+  });
   it("the single form shares the new default and preflight", async () => {
     const root = repo();
     const result = await capture(["label", "apply", "XX-IS-#7", "--label", "bankai:stage/idea", "--repo-slug", "o/r"], undefined, root);
