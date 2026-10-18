@@ -820,7 +820,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`report`](#family-report) | [`nen report data`](#nen-report-data) | one document describing a branch against a base: commits, changed files (with a caller-supplied tier), the evidence seam, the lane's coverage report if it is on disk, the build proof, the last recorded stop, and -- only when one of the five register flags is given -- the issues and pull requests the effort is about; then where the effort is (worktree, stage, gate, turn, local clock), derived | git (rev-parse/symbolic-ref/remote get-url/log/diff), the zoneinfo file the zone names, nen/repos.json for the gate, nen/contract.json for the lane, .nen/proof/&lt;lane&gt;.json, .nen/last-stop.json, the declared coverage artifact, a caller-supplied --tiers file; under --target/--prs/--issues/--backlog also github (gh api, gh pr view) and nen's own in-process readiness gate; under --objects-from a caller-supplied file instead | yes |
 | [`report`](#family-report) | [`nen report render`](#nen-report-render) | fill a template with a data document and write the result: {{token}}, {{{token}}}, {{#each}}, {{#if}} and nothing else, refusing an unknown token by name; --variant injects a declared variant's section flags and --graph injects a validated architecture-delta graph | caller-named --template + --data (+ --graph) files, nen/workflow.json's reports.sections under --variant; writes --out, inside --repo, unless --dry-run | yes |
 | [`report`](#family-report) | [`nen report mermaid`](#nen-report-mermaid) | print the mermaid text for a graph document and nothing else | a caller-named --graph file; writes nothing; no git/gh | no |
-| [`review`](#family-review) | [`nen review scopes`](#nen-review-scopes) | which review scopes a branch diff raises, off the repository's own review.scopes block, plus the changed paths no scope claims | nen/workflow.json's review block, git diff --name-only; writes nothing; no gh | yes |
+| [`review`](#family-review) | [`scopes`](#nen-review-scopes), [`ledger`](#nen-review-ledger) | classify diff scopes; maintain per-effort review budgets | target review.scopes and local cycle ledgers; ledger writes a Nen mutex and cycle state; no gh | scopes only |
 | [`surface`](#family-surface) | [`nen surface mirror generate`](#nen-surface-mirror-generate) | render every &lt;name&gt;/SKILL.md under a skills directory into another agent surface's own layout (codex, cursor, antigravity): the body verbatim but for its relative links, re-aimed for the depth each copy lands at, the frontmatter reduced to the keys that surface documents, invocation mentions respelled, personas written where the surface keeps them — plus, per flag, the surface's hook manifest (`--hooks`), rules file (`--rules`), permission pack (`--permissions`) and model aliases (`--models`), and a `--stamp` in the marker | caller-named --source + --agents directories and pack files; writes --out; no git/gh | yes |
 | [`surface`](#family-surface) | [`nen surface mirror check`](#nen-surface-mirror-check) | regenerate that mirror in memory and diff it against the committed --out: missing / extra / stale (generated for another surface, with `--stamp` for another version, or by a build before relative links were re-aimed) / hand-edited — or, with [`--installed`](#nen-surface-mirror-check---installed) in place of --out, against an INSTALLED copy on this host (a plugin cache directory, a consumer's .codex/, .cursor/, .agents/) under its own contract, so a warm-up copies only on drift; `--surface claude-code` compares a plugin tree verbatim — and, with [`--plugin <name>`](#nen-surface-mirror-check---plugin), judges a Claude Code plugin cache or skills-directory install in the plugin's own layout against an independent source, six verdicts on six exits | caller-named --source + --agents + --out or --installed; with --plugin: --source's trees, the copy, `<config>/plugins/*.json` and `<config>/skills/<name>`, plus read-only `git rev-parse`/`symbolic-ref` probes of the stand-in and served checkouts; writes nothing at all; no gh | yes |
 | [`runner`](#family-runner) | [`nen runner inventory`](#nen-runner-inventory) | every self-hosted runner a repository has, each name parsed as `<machine>-<consumer>R<slot>` or runner 0, grouped by the pools `--repo`'s `runners` block declares (online, free, and the runners still without the pool's own label) plus the unpooled, and the runner package GitHub offers with its SHA-256 | github (gh api GET runners, every page, and runners/downloads); nen/workflow.json with --repo or --pool | yes |
@@ -13385,7 +13385,7 @@ one.
 
 **`nen review`**
 
-One verb. `scopes` diffs `<base>...HEAD` and reports which rows of
+`ledger` maintains local review-cycle history and budgets. `scopes` diffs `<base>...HEAD` and reports which rows of
 [`nen/workflow.json`](#nenworkflowjson)'s `review.scopes` block the changed
 paths raise, and which paths no row claims at all.
 
@@ -13443,6 +13443,100 @@ only, in the declaration's order**, never the diff's) and `unclaimed[]`.
 ```bash
 nen review scopes --base origin/main --repo ../hatsu --json
 ```
+
+### `nen review ledger`
+
+Maintain the target repository's local `hatsu.hanten.cycle/v0.1` review ledger.
+The key is the branch with `/` replaced by `-`, plus exactly `-pr<N>` when a
+positive PR number is supplied. A new PR on the same branch is a new effort;
+reopening the same key never resets its counts. Files stay at
+`.nen/hanten/<key>.cycle.json`, with a persistent `<key>.cycle.lock` witness.
+
+```text
+nen review ledger init --branch <name> [--pr <n>] [--repo <path>] [--json]
+nen review ledger ensure --branch <name> [--pr <n>] [--base <trunk>] [--repo <path>] [--json]
+nen review ledger decide --branch <name> [--applicable <csv>] [--pr <n>] [--repo <path>] [--json]
+nen review ledger record --branch <name> --persona <id> --outcome ran|skipped-exhausted [--pr <n>] [--repo <path>] [--json]
+nen review ledger show --branch <name> [--pr <n>] [--repo <path>] [--json]
+nen review ledger recover-first --branch <name> --confirmed-first-cycle [--pr <n>] [--repo <path>] [--json]
+nen review ledger migrate --branch <name> --confirmed-no-legacy-writers [--pr <n>] [--repo <path>] [--json]
+```
+
+The roster comes entirely from `nen/workflow.json` → `review.scopes`. Persona
+names are normalized to lower case. A persona claimed by several scopes gets
+their **minimum** budget and a `budgetSource` naming every contributing scope.
+An omitted scope budget uses the schema's default of `1`; `0` is exhausted at
+opening. Missing review policy or an empty roster exits `1`; malformed policy
+exits `2`. Nen has no built-in reviewer names or fallback roster.
+
+`init` opens one new exact key. `decide` returns each declared reviewer's
+`applicable`, `used`, `max`, `remaining`, and `action` (`raise`,
+`skip-exhausted`, `not-applicable`), plus `raise[]` and `skippedExhausted[]`.
+An empty or omitted applicability CSV means no reviewers apply. `record ran` increments
+used exactly once and appends the invocation; `skipped-exhausted` appends
+without spending, and refuses while budget remains. Recording a run beyond
+the cap refuses. Reads reflect current maxima without saving a policy-only
+change. All retained reviewer rows, including retired personas, must have
+nonnegative integer used counts equal to their `ran` invocation count.
+Unknown document, row and invocation metadata is retained across saves.
+
+`ensure` returns `opened` or `present` at exit `0`; present ledgers remain
+byte-identical. It refuses trunk, detached `HEAD`, empty or `refs/` names at
+exit `3`. Trunk precedence is explicit `--base`, declared `branch.base`,
+`origin/HEAD`, then `main`. The current PR ledger takes precedence over the
+branch ledger. Without either, opened markers under
+`<git-common-dir>/hatsu/hanten/<key>.opened`, exact other PR keys, another
+worktree's ledger/lock, or a local lock older than 30 seconds mean **lost**
+at exit `4`. Sibling branches such as `topic-pr2-notes` are separate keys.
+The lock age is sampled before waiting and retained; taking/releasing a lock
+never deletes or refreshes that witness. Common-dir markers survive deletion
+of `.nen/` or a worktree. A fresh clone has no such local evidence; a no-git
+opening explicitly reports that no durable marker could be written.
+
+Restore a lost or inconsistent ledger from its original history. Only when
+the maintainer confirms **no review ran under that exact effort key** may
+`recover-first --confirmed-first-cycle` create an audited first cycle; it
+never overwrites an existing ledger. Missing reviewer rows always refuse,
+including unstamped legacy documents: Nen never reconstructs uncertain zero
+counts, hydrates late personas or treats a re-cased key as new history.
+
+**Migration boundary and coordination.** Stop **all legacy Python writers**
+before explicitly running `migrate --confirmed-no-legacy-writers`; do not
+resume Python writers on that key afterward. Nen's mutex does **not**
+coordinate with their OS file locks. Migration validates existing counts,
+keeps an exact byte backup at `<ledger>.legacy`, preserves timestamps and
+unknown metadata, then stamps `nenCoordination` with protocol
+`nen.review.ledger.mutex/v0.1`. Other operations refuse unstamped ledgers
+until this explicit boundary; migration never silently adopts one. New Nen
+ledgers use the protocol from creation. An existing differing backup refuses.
+
+Nen writers exclusively create `<key>.cycle.lock.nen-mutex/` and leave a
+unique PID/UUID owner file while holding it. Contention waits up to two
+seconds, then refuses at exit `2`. Normal completion or an ordinary exception
+releases only that ownership. Abrupt termination leaves ownership evidence;
+**no age causes automatic deletion**. After stopping all writers and proving
+that owner is gone, inspect/retain the evidence and remove that owner's file
+and empty mutex directory manually before retrying. Keep `.cycle.lock` and
+opened markers intact. `show`/`decide` also take the mutex; all `ledger`
+commands classify as mutating. No operation calls GitHub or starts a reviewer.
+
+| Exit | Meaning |
+|---|---|
+| `0` | successful local action or ensure present/opened |
+| `1` | no declared reviewers, or filesystem/tool execution failure |
+| `2` | invalid arguments/policy/history, unconfirmed recovery/migration, or held mutex |
+| `3` | ensure refuses trunk or a non-branch name |
+| `4` | ensure finds evidence of lost history; restore, never initialize again |
+
+Compatibility reference: Hatsu script blob
+`bd6fd5ff1f0f2fece6bb492c940460404a6afc44`. Its 79 baseline assertions
+are ported as grouped store/CLI/trace/race tests. The explicit dispositions
+are: target policy replaces the built-in seven-persona defaults and silent
+malformed-policy fallback; Nen-only ownership plus confirmed migration
+replaces Python locking; missing late-persona rows require restoration instead
+of hydration. Later frozen deleted/re-cased/hydrated-row fixtures remain
+refusals. Existing data, exact PR keys, recovery confirmation, count
+consistency, persistent lock age and cross-worktree loss traces are retained.
 
 ## Surfaces
 

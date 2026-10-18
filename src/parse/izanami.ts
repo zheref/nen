@@ -1254,6 +1254,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   // one file read, which is read-only in the strongest sense this table has.
   review: {
     subcommands: {
+      ledger: MUT("takes the Nen-only review ledger mutex; creates/migrates/spends local review-cycle budgets"),
       scopes: RO("classifies '<base>...HEAD' against review.scopes and reports the raised scopes -- one git read, one file read, nothing written"),
     },
   },

@@ -2032,3 +2032,13 @@ describe("runner relabel (#340) -- read-only bare, mutating only with --run", ()
     expect(classifyCommand("nen runner relabel --target o/r --pool windows-x64 --runner NZ-NNR1 --run").classification).toBe("mutating");
   });
 });
+
+// Ledger reads also acquire a local mutex; the nested family stays mutating.
+describe("review ledger command classification (#346)", () => {
+  it.each(["init", "ensure", "decide", "record", "show", "recover-first", "migrate"])("classifies ledger %s as mutating", (action) => {
+    expect(classifyCommand(`nen review ledger ${action} --branch feature/x --repo /tmp/fixture`).classification).toBe("mutating");
+  });
+  it("keeps the existing scopes read-only", () => {
+    expect(classifyCommand("nen review scopes --base origin/main").classification).toBe("read-only");
+  });
+});

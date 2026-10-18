@@ -236,10 +236,10 @@ describe("nen review scopes", () => {
     expect(captured.err.join("\n")).toMatch(/--base is required/);
   });
 
-  it("refuses a subcommand it has not got, naming the one it has", async () => {
+  it("refuses a subcommand it has not got, naming the subcommands it has", async () => {
     const captured = await capture(["review", "raise"], []);
     expect(captured.code).toBe(2);
-    expect(captured.err.join("\n")).toMatch(/unknown 'review' subcommand 'raise'\. Known: scopes\./);
+    expect(captured.err.join("\n")).toMatch(/unknown 'review' subcommand 'raise'\. Known: scopes, ledger\./);
   });
 });
 

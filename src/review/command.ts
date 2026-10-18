@@ -1,21 +1,4 @@
-// src/review/command.ts -- `nen review scopes`: the reviewer half of a branch,
-// read off the repository's own `review.scopes` declaration.
-//
-// A FAMILY OF ONE, ON PURPOSE. ../cli/registry.ts's rule is that a family is
-// listed when it does something, and "which scopes does this diff raise" is a
-// complete question with a complete answer. The verbs that would join it later
-// -- raising a reviewer, spending a budget -- are acts, and this one is a read;
-// putting the read in its own family now is what keeps `nen review <tab>` from
-// meaning "review something" the first time an acting verb arrives.
-//
-// EXIT 1 IS "THIS REPOSITORY DECLARES NO REVIEW BLOCK", AND IT IS NOT A USAGE
-// ERROR. The invocation was right, the flags were right, and the answer is that
-// there is nothing here to classify by -- which is a verb's own failure (exit
-// 1) rather than a typo (exit 2), on ../index.ts's own distinction: a caller
-// retrying a 1 might find a block somebody added, and retrying a 2 never fixes
-// a misspelled flag. It is NAMED, with the pointer to write, because a bare
-// non-zero here would read as "your diff raised nothing".
-
+// Review scope classification and the repository-owned review-cycle ledger.
 import {
   emit,
   requireSubcommand,
@@ -28,9 +11,37 @@ import { SchemaError } from "../schema/errors.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { assertBase } from "../report/data.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
+import { runCycle, type CycleAction } from "./ledger.js";
 import { assembleScopes, readChangedPaths, renderScopes } from "./scopes.js";
 
-const USAGE = `nen review scopes --base <ref> [--repo <path>] [--json]
+const USAGE = `nen review ledger <init|ensure|decide|record|show|recover-first|migrate>
+  --branch <name> [--pr <positive-number>] [--repo <path>] [--json]
+  ensure: [--base <trunk>]
+  decide: [--applicable <comma-separated-personas>] (empty/omitted means none)
+  record: --persona <declared-persona> --outcome ran|skipped-exhausted
+  recover-first: --confirmed-first-cycle
+  migrate: --confirmed-no-legacy-writers
+
+ledger:
+  A local hatsu.hanten.cycle/v0.1 ledger in .nen/hanten/<branch-slug>[-prN].cycle.json.
+  Personas and minimum repeated-persona budgets come from this repo's review.scopes.
+  init opens one exact effort key; ensure opens only without earlier traces.
+  decide/show read counts; record spends/records an invocation atomically.
+  recover-first requires confirmation that NO review ran under a lost effort key.
+  Lost, missing or inconsistent history is restored, never reset or hydrated.
+
+  Legacy documents require explicit migrate --confirmed-no-legacy-writers AFTER
+  stopping ALL Python writers. Migration keeps an exact .cycle.json.legacy backup.
+  Nen uses a separate exclusive .cycle.lock.nen-mutex directory; it does NOT
+  coordinate with Python locks. An interrupted mutex is never removed by age:
+  stop writers, inspect ownership evidence and restore before retrying.
+  The persistent .cycle.lock's age survives release; git-common-dir opened
+  markers and other worktrees prevent ensure from minting a lost budget.
+  All ledger operations take this mutex (including show/decide).
+  Ledger exits: 0 success; 1 no declared reviewers or I/O failure; 2 invalid input,
+  history, migration or held mutex; ensure additionally 3 trunk/not-branch, 4 lost.
+
+nen review scopes --base <ref> [--repo <path>] [--json]
 
 scopes:
   Classify this branch's diff against '<base>...HEAD' (three dots -- the
@@ -59,7 +70,8 @@ repository declares no 'review' block, named, with the pointer to write; 2 a
 missing or unresolvable --base, or a malformed 'review' block (refused by
 pointer by the policy loader).`;
 
-const SUBCOMMANDS: readonly string[] = ["scopes"];
+const SUBCOMMANDS: readonly string[] = ["scopes", "ledger"];
+const ACTIONS: readonly CycleAction[] = ["init", "ensure", "decide", "record", "show", "recover-first", "migrate"];
 
 function runScopes(context: CommandContext): number {
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
@@ -106,14 +118,49 @@ function runScopes(context: CommandContext): number {
   return 0;
 }
 
+async function runLedger(context: CommandContext): Promise<number> {
+  const action = context.args.positionals[2];
+  if (!ACTIONS.includes(action as CycleAction) || context.args.positionals.length !== 3) {
+    throw new VerbUsageError(`review ledger needs one action: ${ACTIONS.join(", ")}`);
+  }
+  const allowed = new Set(["repo", "branch", "pr", ...(action === "ensure" ? ["base"] : []),
+    ...(action === "decide" ? ["applicable"] : []), ...(action === "record" ? ["persona", "outcome"] : [])]);
+  for (const flag of Object.keys(context.args.values)) {
+    if (!allowed.has(flag)) throw new VerbUsageError(`--${flag} is not valid with review ledger ${action}`);
+  }
+  if (action === "record") {
+    requireValue(context.args, "persona", "Name the declared reviewer.");
+    requireValue(context.args, "outcome", "Use ran or skipped-exhausted.");
+  }
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  try {
+    const result = await runCycle(action as CycleAction, {
+      root, branch: requireValue(context.args, "branch", "Name this effort's branch."),
+      pr: context.args.values["pr"], base: context.args.values["base"],
+      applicable: context.args.values["applicable"], persona: context.args.values["persona"],
+      outcome: context.args.values["outcome"],
+      confirmedFirstCycle: context.args.booleans.has("confirmed-first-cycle"),
+      confirmedNoLegacyWriters: context.args.booleans.has("confirmed-no-legacy-writers"),
+    }, context.seams);
+    if (result.code === 1) context.io.err(String(result.document["error"]));
+    else emit(context.io, context.json, result.document, [JSON.stringify(result.document, null, 2)]);
+    return result.code;
+  } catch (error) {
+    if (error instanceof SchemaError) throw new VerbUsageError(error.message);
+    throw error;
+  }
+}
+
 export const reviewCommand: Command = {
   name: "review",
   subcommands: SUBCOMMANDS,
-  summary: "Which review scopes a branch diff raises, off the repository's own review.scopes.",
+  summary: "Classify review scopes and maintain repository-owned review-cycle budgets.",
   usage: USAGE,
-  flags: { values: ["base"], booleans: [] },
-  run(context: CommandContext): number {
-    requireSubcommand("review", context.args, ["scopes"]);
+  flags: { values: ["base", "branch", "pr", "applicable", "persona", "outcome"], booleans: ["confirmed-first-cycle", "confirmed-no-legacy-writers"] },
+  run(context: CommandContext): number | Promise<number> {
+    const subcommand = requireSubcommand("review", context.args, SUBCOMMANDS);
+    if (subcommand === "ledger") return runLedger(context);
+    if (context.args.positionals.length !== 2 || Object.keys(context.args.values).some((flag) => !["repo", "base"].includes(flag)) || context.args.booleans.has("confirmed-first-cycle") || context.args.booleans.has("confirmed-no-legacy-writers")) throw new VerbUsageError("review scopes only accepts --base, --repo and --json");
     return runScopes(context);
   },
 };
