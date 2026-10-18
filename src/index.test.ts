@@ -1011,6 +1011,29 @@ describe("nen schema check --ledger (#216)", () => {
     }
   });
 
+  it.skipIf(process.platform === "win32")("rejects a real dangling parent symlink, retains directory symlinks, and leaves no-flag checks alone", async () => {
+    const root = fixture();
+    try {
+      const target = join(root, "marker-parent");
+      symlinkSync(target, join(root, ".nen"), "dir");
+      for (const ledger of [false, true]) {
+        const result = await capture(["schema", "check", "--repo", root, "--json", ...(ledger ? ["--ledger"] : [])]);
+        expect(result.code).toBe(ledger ? 1 : 0);
+        if (ledger) expect(rows(result).at(-1)).toMatchObject({ ok: false, required: true, detail: expect.stringContaining("could not read marker parent") });
+      }
+      mkdirSync(target);
+      const empty = await capture(["schema", "check", "--ledger", "--repo", root, "--json"]);
+      expect(empty.code).toBe(0);
+      expect(rows(empty).at(-1)).toMatchObject({ ok: true, detail: expect.stringContaining("absent (optional") });
+      expect((await capture(["stop", "--mark", "--repo", root])).code).toBe(0);
+      const present = await capture(["schema", "check", "--ledger", "--repo", root, "--json"]);
+      expect(present.code).toBe(0);
+      expect(rows(present).at(-1)).toMatchObject({ ok: true, detail: "valid nen.stop.mark/v0.1" });
+      expect((await capture(["stop", "clear", "--repo", root])).code).toBe(0);
+      expect((await capture(["schema", "check", "--ledger", "--repo", root])).code).toBe(0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it.skipIf(process.platform === "win32")("refuses a FIFO and a FIFO symlink without blocking; the no-flag route never opens either", () => {
     const root = fixture();
     try {

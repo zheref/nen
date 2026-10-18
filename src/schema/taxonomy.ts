@@ -479,11 +479,17 @@ function stopMarkerCheck(root: string): SchemaCheck {
     // reports ENOTDIR. Only an absent marker or absent parent is optional.
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       try {
+        // Establish entry absence without following a dangling parent symlink.
+        lstatSync(dirname(path));
+      } catch (parentError) {
+        if ((parentError as NodeJS.ErrnoException).code === "ENOENT") return row(true, false, "absent (optional; may have been consumed)");
+        return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
+      }
+      try {
+        // A present parent may be a directory symlink; its target must resolve.
         if (!statSync(dirname(path)).isDirectory()) return row(false, true, "could not read marker: parent is not a directory");
       } catch (parentError) {
-        if ((parentError as NodeJS.ErrnoException).code !== "ENOENT") {
-          return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
-        }
+        return row(false, true, `could not read marker parent: ${parentError instanceof Error ? parentError.message : String(parentError)}`);
       }
       return row(true, false, "absent (optional; may have been consumed)");
     }
