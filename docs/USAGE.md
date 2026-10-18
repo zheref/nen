@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 134 verbs, every flag checked against the binary this repository
+families, 135 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -742,7 +742,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 134 verbs, grouped as the README groups them. **Reads** is what a
+All 135 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -769,6 +769,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wc`](#family-wc) | [`nen wc squash`](#nen-wc-squash) | fold every commit since `git merge-base <onto> HEAD` into one, validated message, refused if dirty / --onto not an ancestor / any commit already on the upstream | git (status, merge-base, log, fetch, reset --soft, commit -F, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the folded commit's trailer read-back -- exit 3 on an injected one, #273), nen/workflow.json under --repo | yes |
 | [`wc`](#family-wc) | [`nen wc catch-up`](#nen-wc-catch-up) | fetch `origin/<base>` and rebase (nothing published) or merge (something is) the current branch onto it; stop on a conflict with both sides of every path, its class (manifest / changelog / mirror / other, by `nen/contract.json`'s `mechanical` block) and the abort line, never picking one -- exit 3 when every path is mechanical, with the commands to run printed and none run; re-run on the same tree to continue a staged resolution, `--abort` to back out | git (status, fetch, rev-list, rebase / merge, diff --diff-filter=U, show :2:/:3:, rebase --continue / commit --no-edit, --abort), nen/contract.json's `mechanical` block under --repo (only on a conflict) | yes |
 | [`wc`](#family-wc) | [`nen wc publish`](#nen-wc-publish) | push the current branch **under its own name** to the remote its upstream names (origin, or `--remote`, when it has none), refusing a detached HEAD, the trunk as local name **or as destination**, an upstream of **another name** unless `--set-upstream` (which publishes to `<remote>/<own name>` — `--remote`, else `origin`, else the upstream's remote — and retracks it there), any refspec/force shape, and reporting `needsForce` at exit 1 instead of forcing | git (symbolic-ref, fetch, merge-base, rev-list, push, reaches the upstream's remote) | yes |
+| [`wc`](#family-wc) | [`nen wc prune`](#nen-wc-prune) | execute only an explicit cleanup plan; preview by default, preserve dirt/unmerged work, report per-item outcomes and logical freed bytes; host links are read-only | plan file, local Git refs/worktrees, exact configured remote branch reads | yes |
 | [`wc`](#family-wc) | [`nen wc worktrees`](#nen-wc-worktrees) | list every checkout of the project, core first: core/in mark, branch or detached, uncommitted count, +ahead/-behind against `origin/<base>`, HEAD, last commit and age, path | git (rev-parse --git-common-dir, worktree list, status, rev-list, log) | yes |
 | [`wc`](#family-wc) | [`nen wc swap`](#nen-wc-swap) | bring a worktree's committed tree into the core checkout (view: HEAD detached; `--take`: the branch), `--return` it with core's parked work restored, `--status`; core's work parked in a pinned commit, never stashed; exit 3 on a dirty tree | git (worktree list, status, read-tree/add/write-tree/commit-tree through a temporary index, update-ref, reset --hard, clean -fd, checkout, diff) | yes |
 | [`wc`](#family-wc) | [`nen wc worktree`](#nen-wc-worktree) | keep ONE detached worktree at `<core>/.nen/worktrees/<name>` at `origin/<base>`'s fetched tip -- created, reused, moved, or (its registration outliving its directory) that one registration dropped and recreated; refused, never discarded, when dirty, and refused for a stray directory, a symlink or a sibling registration; `--copy-from-core` copies gitignored, untracked regular files from core after proving the source in core and the destination at the tip and in the worktree, through a temp file and a rename | git (rev-parse --git-common-dir/--git-dir, check-ref-format, fetch, ls-remote, rev-parse, ls-files, check-ignore, ls-tree, worktree list/add/remove, status -z, diff --name-only, checkout --detach), the files named by --copy-from-core in core, the copy record in the worktree's git dir | yes |
@@ -3943,6 +3944,67 @@ nen wc publish --repo . --set-upstream --dry-run
 would run: git push -u origin -- refs/heads/feature/x:refs/heads/feature/x  (no upstream yet)
 ```
 
+### `nen wc prune`
+
+Acts only on caller-listed resources in a JSON plan. It never discovers a deletion list,
+fetches objects, globally prunes registrations or remote refs, or runs object GC. The
+caller supplies each item's explicit base; a branch or worktree whose commit is not
+already an ancestor of that local base is retained. Picker, marker and billed-resource
+cleanup remain outside this verb.
+
+**Usage**
+
+```text
+nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The checkout whose resources the plan names. | Must name its root. |
+| `--plan <file>` | yes | A JSON array of closed-shape rows, processed in order. | Relative paths resolve against `--repo`; unknown fields/kinds, malformed refs and missing strings refuse the whole plan before any deletion. |
+| `--dry-run` | no | Validate and preview without writes. | The default; conflicts with `--run`. No fetch, ref deletion or directory removal. |
+| `--run` | no | Execute only the listed removals. | Each operational refusal/failure is reported and later items still run. |
+| `--json` | no | Emit one outcome document. | No progress text on stdout. |
+
+A plan may contain these rows (all named fields are required):
+
+```json
+[
+  {"kind":"worktree", "path":"../finished-tree", "base":"refs/remotes/origin/main"},
+  {"kind":"local-branch", "ref":"refs/heads/finished", "base":"refs/remotes/origin/main"},
+  {"kind":"remote-branch", "remote":"origin", "ref":"refs/heads/finished", "base":"refs/remotes/origin/main"},
+  {"kind":"remote-ref", "ref":"refs/remotes/origin/finished", "base":"refs/remotes/origin/main"},
+  {"kind":"host-link", "path":"../host-link"}
+]
+```
+
+`base` is a full local branch or remote-tracking ref already available locally. Missing
+objects must be fetched separately. A base itself listed for removal refuses. Worktrees
+must belong to this repository, be real directories, clean including ignored files,
+unlocked and merged into the base. Current/primary worktrees, checked-out local branches,
+configured protected base branches and symbolic refs are retained. Native `branch -d`
+also retains its HEAD/upstream merge guard; nothing is force-removed.
+
+Remote branch deletion reads the exact single configured push URL and leases the observed
+object ID, so a moved tip cannot be deleted. It preserves unlisted local tracking refs.
+A `remote-ref` row removes only that local tracking ref after a successful read of its
+configured fetch remote proves the corresponding branch absent. Remote HEAD is protected.
+No global `worktree prune` or `remote prune` runs. `host-link` reports the raw readlink
+target without following or removing the link, including with `--run`.
+
+**Output and exit codes** — JSON is `{ contract: "nen.wc.prune/v0.1", dryRun,
+bytesBasis: "logical-file-bytes", physicalFreedBytes: null, freedBytes, items[] }`.
+Each item carries its original `item`, `status` (`would-remove`, `removed`, `missing`,
+`refused`, `failed`, or `read-link`), `message`, `measuredBytes`, `freedBytes` and
+`linkTarget`. Only a successfully removed worktree whose directory is confirmed absent
+contributes measured logical file/link bytes. Ref deletion and previews report zero;
+an uncertain write reports `null`, including in the total. This does not claim physical
+capacity reclaimed, and shared Git objects are never measured as freed. Human output
+prints one outcome per item plus the total. Exit 0 for success/preview/absence, 2 for a
+refusal or invalid plan, and 1 if any operation failed (even alongside refusals).
+
 ### `nen wc worktrees`
 
 Lists **every checkout of the project** — the core checkout (the one whose
@@ -5471,7 +5533,8 @@ nen direct registry --registry <path> [--repo <path>] [--json]
 alias, the surfaces, the live-lookup sources and a counts line. `--json` prints one document;
 top-level keys, in this order: `contract` (`nen.direct.registry/v0.1`), `registry` (the resolved
 path), `snapshot` (`asOf` and the per-alias quotes), `aliases`, `surfaces`, `liveLookup` and `counts`
-(`aliases`, `routingJobs`, `routingCells`). Exit 0 when the file is valid; exit 1 when it is not (the
+(`aliases`, `routingJobs`, `routingCells`). Each `aliases.<name>.line` equals the registry
+file's string or explicit `null`; older registries omitting it report `null`. Exit 0 when the file is valid; exit 1 when it is not (the
 refusal names the pointer) or cannot be read; exit 2 when `--registry` is missing.
 
 ### `nen direct resolve`
