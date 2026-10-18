@@ -121,7 +121,7 @@ function workflowContentsCall(
   };
 }
 
-function changedFilesCall(files: readonly { filename: string; previous_filename?: string }[] = [{ filename: "src/unit/a.ts" }]): readonly ScriptedCall[] {
+function changedFilesCall(files: readonly { filename: string; previous_filename?: string; status?: string }[] = [{ filename: "src/unit/a.ts" }]): readonly ScriptedCall[] {
   return [
     { match: "gh api --paginate --slurp repos/zheref/example/pulls/9/files", result: { code: 0, stdout: JSON.stringify(files) } },
     { match: "gh api repos/zheref/example/pulls/9", result: { code: 0, stdout: JSON.stringify({ changed_files: files.length }) } },
@@ -165,6 +165,24 @@ async function run(
 }
 
 describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
+  it.each(["removed", "added", "modified", "renamed", undefined])("enforces BASE deletion-only policy for %s without merging", async (status) => {
+    const root = tmpRoot();
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ release: { unitPaths: ["changelog.d/"] } }));
+    const changed = { filename: "changelog.d/425.md", ...(status === undefined ? {} : { status }), ...(status === "renamed" ? { previous_filename: "changelog.d/old.md" } : {}) };
+    const script = [
+      ORIGIN_CALL, prOnceCall(), ...changedFilesCall([changed]),
+      workflowContentsCall([{ path: "changelog.d/", deleteOnly: true }]),
+      treeCall(status === "removed" ? [] : [{ path: "changelog.d/425.md", mode: "100644" }]),
+      baseTreeCall([{ path: status === "renamed" ? "changelog.d/old.md" : "changelog.d/425.md", mode: "100644" }]), VIEWER_CALL,
+    ];
+    const seams = new ScriptedSeams(script);
+    const outcome = await run(root, script, { run: status !== "removed", seams });
+    expect(outcome.report.unitOk).toBe(status === "removed");
+    expect(outcome.report.ran).toBe(false);
+    if (status !== "removed") expect(outcome.lines.join("\n")).toContain('outside: "changelog.d/425.md"');
+    expect(seams.calls.some((call): boolean => call.command === "gh" && call.args[0] === "pr" && call.args[1] === "merge")).toBe(false);
+  });
+
   it.each([
     { before: "context\npin 1\n", after: "context\npin 2\n", ok: true },
     { before: "context\npin 1\n", after: "pin 2\n", ok: false },

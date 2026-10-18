@@ -25,7 +25,7 @@
 import { matchesPattern } from "../report/patterns.js";
 import { parseTarget, targetFromRemote, TargetError, type Target } from "../github/target.js";
 import { GH, must, mustJson, ToolError, type Seams } from "../seam/exec.js";
-import type { ReleaseUnitEntry, ReleaseUnitKeyedPath, ReleaseUnitLinedPath } from "../schema/workflow.js";
+import type { ReleaseUnitEntry, ReleaseUnitKeyedPath, ReleaseUnitLinedPath, ReleaseUnitDeletedPath } from "../schema/workflow.js";
 import { releaseLinePatterns } from "../schema/pattern.js";
 import { RELEASE_PATTERN_LIMITS, type ReleaseLineMatcher } from "../schema/releasepattern.js";
 import { changedLines, type ChangedLine } from "./linediff.js";
@@ -33,7 +33,7 @@ import { loadRepoRegistry } from "../schema/repos.js";
 import { SchemaError } from "../schema/errors.js";
 import { RefError, resolveProductCode } from "../verbs/pr_ready.js";
 
-export type { ReleaseUnitEntry, ReleaseUnitKeyedPath, ReleaseUnitLinedPath } from "../schema/workflow.js";
+export type { ReleaseUnitEntry, ReleaseUnitKeyedPath, ReleaseUnitLinedPath, ReleaseUnitDeletedPath } from "../schema/workflow.js";
 
 export const UNIT_CHECK_CONTRACT = "nen.release.unit-check/v0.1";
 
@@ -163,6 +163,7 @@ function resolveCodeTarget(repoRoot: string, code: string): Target {
 
 interface PrFileEntry {
   readonly filename: string;
+  readonly status?: string;
   readonly previous_filename?: string;
 }
 
@@ -176,6 +177,8 @@ interface PrMetaResponse {
 /** One changed path, and the path it was renamed FROM when it is a rename. */
 export interface ChangedFile {
   readonly path: string;
+  /** REST status, omitted by older callers; only an explicit "removed" proves deletion. */
+  readonly status?: string;
   /** `null` unless this entry is a rename -- then the file's PREVIOUS path. */
   readonly previousPath: string | null;
 }
@@ -230,7 +233,7 @@ export function fetchChangedFiles(seams: Seams, target: Target, prNumber: number
       `'${target.slug}#${prNumber}' has ${entries.length} changed file(s), at or past GitHub's ${GITHUB_FILES_CAP}-file cap on this endpoint -- the true changed-file set cannot be read past this point, so no unit-check verdict is given.`,
     );
   }
-  return entries.map((entry): ChangedFile => ({ path: entry.filename, previousPath: entry.previous_filename ?? null }));
+  return entries.map((entry): ChangedFile => ({ path: entry.filename, previousPath: entry.previous_filename ?? null, ...(entry.status === undefined ? {} : { status: entry.status }) }));
 }
 
 /** The pull request's base/head commits, for a caller (`nen release unit-check`) that has not already fetched them for some other reason. */
@@ -294,11 +297,15 @@ export function outsideReleaseUnit(
   // `keys` is a SEPARATE question, answered by `keyScopedViolations` below;
   // this function only decides path membership, exactly as it always has.
   const claims = (path: string): boolean =>
-    unitPaths.some((entry): boolean => (typeof entry === "string" ? matchesPattern(path, entry) : entry.path === path));
+    unitPaths.some((entry): boolean => (typeof entry === "string" ? matchesPattern(path, entry) : "deleteOnly" in entry ? matchesPattern(path, entry.path) : entry.path === path));
   const outside: string[] = [];
   for (const file of changedFiles) {
     const previousOutside = file.previousPath !== null && !claims(file.previousPath);
-    if (!claims(file.path) || previousOutside) outside.push(file.path);
+    // Like content bounds, deletion bounds remain mandatory under overlapping
+    // broad entries. A rename touches both names and is never a deletion.
+    const deletionBound = unitPaths.some((entry): boolean => typeof entry !== "string" && "deleteOnly" in entry &&
+      (matchesPattern(file.path, entry.path) || (file.previousPath !== null && matchesPattern(file.previousPath, entry.path))));
+    if (!claims(file.path) || previousOutside || (deletionBound && (file.status !== "removed" || file.previousPath !== null))) outside.push(file.path);
   }
   return outside;
 }
@@ -838,6 +845,7 @@ export interface UnitCheckReport {
   readonly ok: boolean;
   /** Additive fields: keyedPaths keeps its original JSON-key entry shape. */
   readonly linedPaths: readonly ReleaseUnitLinedPath[];
+  readonly deletionOnlyPaths: readonly ReleaseUnitDeletedPath[];
   readonly lineScopedViolations: readonly LineScopedOutcome[];
 }
 
@@ -855,7 +863,7 @@ export function assembleUnitCheck(
   // and changed-line budgets rather than multiplying the work allowance.
   const matchingWork = new Map<string, LineScopedWork>();
   for (const entry of unitPaths) {
-    if (typeof entry === "string") continue;
+    if (typeof entry === "string" || "deleteOnly" in entry) continue;
     // Only a CONTENT entry whose declared file was actually touched (as its
     // path, or as a rename's previous path) needs a content read at all --
     // every other one is silently in bounds, the same as an untouched
@@ -896,12 +904,14 @@ export function assembleUnitCheck(
     ok: outsideUnit.length === 0 && keyScopedViolations.length === 0 && lineScopedViolations.length === 0,
     linedPaths: unitPaths.filter((entry): entry is ReleaseUnitLinedPath => typeof entry !== "string" && "lines" in entry),
     lineScopedViolations,
+    deletionOnlyPaths: unitPaths.filter((entry): entry is ReleaseUnitDeletedPath => typeof entry !== "string" && "deleteOnly" in entry),
   };
 }
 
 export function renderUnitCheck(report: UnitCheckReport): readonly string[] {
   const unitDescription = [
     ...report.unitPaths,
+    ...report.deletionOnlyPaths.map((entry): string => `${entry.path} {deleteOnly: true}`),
     ...report.keyedPaths.map((entry): string => `${entry.path} {keys: ${entry.keys.join(", ")}}`),
     ...report.linedPaths.map((entry): string => `${entry.path} {lines: ${entry.lines.map((source): string => JSON.stringify(source)).join(", ")}}`),
   ].join(", ");

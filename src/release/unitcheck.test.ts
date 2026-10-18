@@ -961,3 +961,48 @@ describe("complete UTF-8 content reader for JSON and line bounds", () => {
     expect(fetch("", "none")).toBeNull();
   });
 });
+
+
+describe("deletion-only release paths (#425)", () => {
+  const entry = { path: "changelog.d/", deleteOnly: true } as const;
+  const target = { owner: "acme", repo: "widgets", slug: "acme/widgets" };
+
+  it.each(["removed", "added", "modified", "renamed", "copied", "changed", "unknown", undefined])("admits only explicit removed status (%s)", (status) => {
+    const changed = [{ ...file("changelog.d/425.md"), ...(status === undefined ? {} : { status }) }];
+    const report = assembleUnitCheck(target, 9, [entry], changed);
+    expect(report.ok).toBe(status === "removed");
+    expect(report.outsideUnit).toEqual(status === "removed" ? [] : ["changelog.d/425.md"]);
+    expect(report.deletionOnlyPaths).toEqual([entry]);
+    expect(report.keyedPaths).toEqual([]);
+    expect(report.linedPaths).toEqual([]);
+    expect(report.unitPaths).toEqual([]);
+  });
+
+  it.each([
+    ["changelog.d/new.md", "changelog.d/old.md"],
+    ["changelog.d/new.md", "other/old.md"],
+    ["other/new.md", "changelog.d/old.md"],
+  ])("refuses both rename directions and names the changed file (%s from %s)", (path, previousPath) => {
+    // Even a malformed 'removed' status cannot turn a rename into deletion.
+    for (const status of ["renamed", "removed"]) {
+      expect(outsideReleaseUnit([{ path, previousPath, status }], [entry, "other/"])).toEqual([path]);
+    }
+  });
+
+  it("does not let a broad overlapping string waive the deletion bound", () => {
+    expect(outsideReleaseUnit([{ ...file("changelog.d/425.md"), status: "modified" }], ["changelog.d/", entry])).toEqual(["changelog.d/425.md"]);
+    expect(outsideReleaseUnit([{ ...file("changelog.d-evil/425.md"), status: "removed" }], [entry])).toEqual(["changelog.d-evil/425.md"]);
+    expect(outsideReleaseUnit([{ ...file("changelog.d/nested/425.md"), status: "removed" }], [entry])).toEqual([]);
+  });
+
+  it("still enforces a JSON content bound overlapping an admitted deletion", () => {
+    const report = assembleUnitCheck(target, 9, [entry, { path: "changelog.d/425.md", keys: ["version"] }], [{ ...file("changelog.d/425.md"), status: "removed" }]);
+    expect(report.outsideUnit).toEqual([]);
+    expect(report.ok).toBe(false);
+    expect(report.keyScopedViolations).toHaveLength(1);
+  });
+
+  it("declares nen's own fragment prefix deletion-only", () => {
+    expect(loadWorkflow(process.cwd()).workflow.release.unitPaths).toContainEqual(entry);
+  });
+});

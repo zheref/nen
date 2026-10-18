@@ -599,11 +599,11 @@ describe("nen/workflow.json#release row (zheref/nen#348)", () => {
     return checkTaxonomy({ repoFlag: root });
   }
 
-  it("reports the declared exact, pattern, keyed and line-bound entries", () => {
-    const report = reportFor({ release: { unitPaths: ["=CHANGELOG.md", "releases/**", { path: "package.json", keys: ["version"] }, { path: "src/version.ts", lines: ["^VERSION=[0-9]+$"] }] } });
+  it("reports the declared exact, pattern, keyed, line-bound and deletion-only entries", () => {
+    const report = reportFor({ release: { unitPaths: ["=CHANGELOG.md", "releases/**", { path: "package.json", keys: ["version"] }, { path: "src/version.ts", lines: ["^VERSION=[0-9]+$"] }, { path: "changelog.d/", deleteOnly: true }] } });
     const row = report.checks.find((check): boolean => check.file === "nen/workflow.json#release");
     expect(row).toMatchObject({ ok: true, required: false });
-    expect(row?.detail).toBe("4 entry(s): 1 exact path(s), 1 prefix/glob(s), 1 key-bound, 1 line-bound");
+    expect(row?.detail).toBe("5 entry(s): 1 exact path(s), 1 prefix/glob(s), 1 key-bound, 1 line-bound, 1 deletion-only");
   });
 
   it("distinguishes no policy, an undeclared unit and an unreadable policy", () => {
