@@ -42,6 +42,8 @@ import {
   type Workflow,
 } from "./workflow.js";
 import { describeDecisions, loadDecisions } from "./decisions.js";
+import { canonMirrorCheck } from "./canonmirror.js";
+import type { Runner } from "../seam/exec.js";
 import {
   COLORS_FILE,
   DECISIONS_FILE,
@@ -456,6 +458,12 @@ function defaultTargetCheck(root: string): SchemaCheck {
 export interface CheckOptions extends RepoRootOptions {
   /** Opt in to the generated stop marker; ordinary schema checks never read it. */
   readonly ledger?: boolean;
+  /**
+   * The subprocess seam, for the one row that reads git: the canon mirror row
+   * (zheref/nen#262), and only when `.claude/canon-values.yml` and a generated
+   * mirror are both present. Absent, that row reads `NOT CHECKED` there.
+   */
+  readonly run?: Runner;
 }
 
 function stopMarkerCheck(root: string): SchemaCheck {
@@ -575,9 +583,13 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     defaultTargetCheck(root),
     // The release unit's path/content bounds (zheref/nen#348).
     pointerCheck(root, "release", describeRelease),
-    // `nen/decisions.json` LAST OF ALL: newest file, optional, and read by the
+    // `nen/decisions.json` LAST OF THE nen/ FILES: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),
+    // The consumer's generated `.claude/rules/` mirror against the bindings in
+    // `.claude/canon-values.yml` (zheref/nen#262). Absent is `ok`; a value the
+    // mirror kept after its binding moved is a required FAIL.
+    canonMirrorCheck(root, options.run),
     ...(options.ledger === true ? [stopMarkerCheck(root)] : []),
   ];
   return {

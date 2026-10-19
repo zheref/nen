@@ -797,7 +797,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`direct`](#family-direct) | [`nen direct registry`](#nen-direct-registry) | validates a model-direction registry file and prints it: the snapshot date, each alias (provider, family, surface/tier, snapshot quote), the surfaces and the live-lookup sources | local file (--registry) | yes |
 | [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
 | [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
-| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
+| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover, and a consumer's `.claude/rules/` canon mirror against its bindings | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional), .claude/canon-values.yml (optional) and its git history | yes |
 | [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
@@ -6352,6 +6352,47 @@ reclassify a `human-gate` row or change its declared `gate` identity. `mergeDeci
 change by its `.class` or `.gate` pointer, without ranking gate IDs: G4 → G2 and G2 → G4 are both
 changes to canon. Same-gate options, surfaces and proposal metadata may still be overridden. This
 protection is enforced by the merge function; `schema check` validates a single declared matrix.
+
+**The `.claude/rules/` row — a consumer's canon mirror against its bindings ([#262](https://github.com/zheref/nen/issues/262)).**
+After `nen/decisions.json`, one row compares the generated canon mirror under `.claude/rules/` (the
+`claude-code` surface's rules location; only files carrying nen's own canon marker, so a consumer's
+hand-written rule beside them is never read) with the `{{TOKEN}}` bindings in `.claude/canon-values.yml`.
+It needs no canon checkout — that comparison is [`canon mirror check`](#nen-canon-mirror-check)'s — so it
+catches, in a local warm-up, the rebind that otherwise surfaces only when CI's drift check fails the pull
+request. The mirror carries no token names (generation replaced them), so "a binding that moved" is read
+from git: every committed revision of `.claude/canon-values.yml`, the most recent 100, each through the
+same reader `canon mirror generate` uses. A value a token held there and does not hold now is
+**superseded**. This is the one `schema check` row that runs a subprocess, and only when the bindings file
+and at least one generated mirror file are both present.
+
+| State | Mark | Row |
+|---|---|---|
+| no `.claude/canon-values.yml` | `ok` | `absent (optional): no .claude/canon-values.yml` |
+| bindings, no generated mirror file | `ok` | `no generated mirror under .claude/rules/ (no file carries nen's canon marker); nothing to compare against .claude/canon-values.yml (2 tokens)` |
+| consistent | `ok` | `mirror consistent with .claude/canon-values.yml (34 tokens, 17 files, 5 revision(s) read)` |
+| history git cannot read (not a repository, git missing) | `warn` | `NOT CHECKED -- .claude/canon-values.yml has no readable git history (git log exited 128: fatal: not a git repository …), so no superseded value is known (34 tokens, 17 files)` |
+| a bindings file that is not a regular file | `FAIL` | `could not read .claude/canon-values.yml: not a regular file` |
+| a finding (below) | `FAIL` | one clause per finding, then the remedy |
+
+A superseded value FAILs the row only where its token evidently put it — never on a bare substring sweep,
+because `26.5` may sit in an example for reasons of its own:
+
+- **Stale** — the token's bound value occurs **nowhere** in the mirror while a superseded value does: the
+  mirror predates the rebind. Every file carrying the old value is named:
+  `SNAPSHOT_OS is bound to '27.0' but 3 file(s) still carry '26.5': 07-testing.md, 13-build-execution.md, 16-ui-screenshots.md. Regenerate the mirror (nen canon mirror generate); never hand-edit it (CON-13).`
+- **Beside** — the bound value does occur, and a superseded value sits on the **same line** as it, or as
+  the token's own name: a placeholder table whose token column was substituted and whose value column was
+  hardcoded (`` | `27.0` | `26.5` | ``), which a mirror-vs-generator drift check accepts because the
+  generator does produce it. Named by line, with a second sentence:
+  `SNAPSHOT_OS is bound to '27.0' but 1 line(s) still carry '26.5' beside it: 16-ui-screenshots.md:12. Regenerate the mirror (nen canon mirror generate); never hand-edit it (CON-13). A superseded value that survives a regenerate beside its token is hardcoded in the canon itself -- fix it there, then regenerate.`
+
+Not findings: a superseded value on a line of its own in a mirror that carries the bound value; a value
+that is **any** token's current binding (it may be that token's substitution); a value inside a longer
+literal (`26.5` is not found in `26.5.1`, `v26.5` or `126.5`); nen's own marker lines. A finding is a
+required `FAIL` and the report exits `1`; the closing line names the regenerate remedy and never says the
+taxonomy could not be read. A shallow clone reads only the revisions it has, and a token the canon no
+longer uses never appears in a fresh mirror, so its old value in unrelated prose would read as stale —
+regenerating answers both. The `--json` row has the ordinary shape, `file: ".claude/rules/"`.
 
 **Arguments**
 
