@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -143,4 +143,46 @@ it("parses a GitHub subject with no local registry", async () => {
 it("refuses an invalid URL without guessing", async () => {
   const result = await capture(["ref", "parse", "https://["]);
   expect(result.code).toBe(2); expect(result.err.join("\n")).toContain("not a valid GitHub object URL");
+});
+
+describe("review regressions on exact GitHub subjects", () => {
+  it.each([
+    "https://user:PLACEHOLDER@[invalid",
+    "https:/user:PLACEHOLDER@github.com/o/r/issues/1",
+  ])("refuses malformed authorities without echoing userinfo", async (token) => {
+    const result = await capture(["ref", "parse", token]);
+    expect(result.code).toBe(2); expect(result.out).toEqual([]);
+    expect(result.err.join("\n")).not.toContain("PLACEHOLDER");
+    expect(result.err.join("\n")).not.toContain("user:");
+  });
+  it.each(["github。com", "github．com"])("requires the literal ASCII host rather than URL-normalized %s", async (host) => {
+    const result = await capture(["ref", "parse", `https://${host}/o/r/issues/1`]);
+    expect(result.code).toBe(2); expect(result.out).toEqual([]);
+  });
+  it("does not borrow a registered code from a different owner with the same basename", async () => {
+    const result = await capture(["ref", "parse", "attacker/KroApple#460", "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ slug: "attacker/KroApple", kind: null, number: 460 });
+  });
+  it("finds a registered consumer code with case-insensitive exact slug identity", async () => {
+    const result = await capture(["ref", "parse", "ZHEREF/kroapple#460", "--json"]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toEqual({ slug: "ZHEREF/kroapple", code: "KP", kind: null, number: 460 });
+  });
+  it("includes consumer-only and fully recorded product codes without guessing bare-name owners", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-ref-exact-code-")); mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen/repos.json"), JSON.stringify({
+      consumers: [{ repo: "o/r", code: "RR", consumes: [] }],
+      product_codes: { TT: "known/tools", BB: "Bare", OO: "OnlyBare" },
+      maintained_tools: [{ repo: "owner/Bare" }],
+    }));
+    for (const [slug, code] of [["O/R", "RR"], ["KNOWN/Tools", "TT"], ["owner/Bare", "BB"], ["attacker/Bare", undefined], ["unknown/OnlyBare", undefined], ["unknown/unknown", undefined]]) {
+      const result = await capture(["ref", "parse", `${slug}#1`, "--json"], root);
+      expect(result.code).toBe(0);
+      const parsed = JSON.parse(result.out.join("\n"));
+      expect(parsed.slug).toBe(slug);
+      if (code === undefined) expect(parsed).not.toHaveProperty("code");
+      else expect(parsed.code).toBe(code);
+    }
+  });
 });

@@ -6915,7 +6915,11 @@ nen ref format --repo src/schema/fixtures/bankai-repo --code KP --kind PR --numb
 Also accepts `https://github.com/<owner>/<name>/(issues|pull)/<N>` and
 `<owner>/<name>#<N>`. These forms return `{ slug, code?, kind, number }` in JSON;
 `kind` is `IS`/`PR` from the URL path and `null` for a short ref. A known registry
-code is included when available; no registry or network lookup is required.
+code is included only for an exact, case-insensitive registered `owner/name`
+identity, including codes recorded solely on `consumers[]`. A foreign owner with
+the same repository basename receives no code. A bare `product_codes` name is
+enriched only when another registry entry explicitly records that exact slug.
+No registry or network lookup is required.
 Other hosts, credentials, ports, queries, fragments, encoded/dot paths and extra
 segments are refused at exit 2 with the host or path shape named.
 
