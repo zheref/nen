@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 134 verbs, every flag checked against the binary this repository
+families, 135 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -742,7 +742,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 134 verbs, grouped as the README groups them. **Reads** is what a
+All 135 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -796,6 +796,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
 | [`direct`](#family-direct) | [`nen direct registry`](#nen-direct-registry) | validates a model-direction registry file and prints it: the snapshot date, each alias (provider, family, surface/tier, snapshot quote), the surfaces and the live-lookup sources | local file (--registry) | yes |
 | [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
+| [`direct`](#family-direct) | [`nen direct matrix`](#nen-direct-matrix) | enumerates every (job, domain, language) answer `resolve` gives, for a consumer that renders the whole table: per job and domain the witness issue that derives it (or `unreachable`), the route, fallback and phase, and per language column (`*` the shared one) the pair, the aggregate, the winner and runner-up resolved and the effort -- computed by `resolve`'s own functions, owning no rule | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
 | [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
 | [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover, and a consumer's `.claude/rules/` canon mirror against its bindings | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional), .claude/canon-values.yml (optional) and its git history | yes |
 | [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
@@ -5736,6 +5737,110 @@ mismatch: yes (surface match; model fable != opus; effort unread)
 (row 1 matched on the canon role, so the domain is the first row's and its domain add fires; the two
 pairs split between the frontier author and the execution model and the tie goes to the registry's
 precedence; the surface matches, the model differs, the effort is unread — exit 0)
+
+### `nen direct matrix`
+
+Answers "what would `resolve` say for every job, in every domain, in every language column" — in one
+call, for a consumer that renders the whole routing table as a page a person reads (Hatsu's
+`docs/DIRECT-MATRIX.md`, [#426](https://github.com/zheref/nen/issues/426)). Without it such a page
+re-implements the domain derivation, the fallback order, the aggregation and the effort banding beside
+the verb and proves its copy with a [`resolve`](#nen-direct-resolve) call per claim.
+
+**It owns no rule.** Each cell is what `resolve` answers for an issue carrying **that one job and that
+one language** (or no language, the `*` column) in that domain, computed by the same functions:
+`resolve`'s step 1 decides which domains a job can be in, and steps 2 to 5 — the cell and its
+fallback and stand-ins, the aggregate, each side's surface, spelled alias and restart line, the effort
+— answer the cell. The tests hold every cell of the real registry to `resolve`'s own JSON.
+
+**Which domains a job can be in is a witness search.** The domain is derived from the repository's
+kind and role, the issue's labels and *all* its jobs, so a job is in a domain only when some issue
+carrying it derives that domain. The verb asks step 1 about a bounded, deterministic set of
+candidate issues, in this order: the job **alone**, then with **one**, then **two** other jobs (the
+taxonomy's job order); a kind **no rule names** (`unlisted`, suffixed `-2`, `-3`… should a rule name
+it), then each kind a `repoKind` predicate names; **no** role, then each role a `repoRole` predicate
+names; **no** label, then one label per `issueLabels` pattern (`*:name` as `ns:name`). The first
+candidate that derives a domain is printed as that domain's **witness** — `kind`, `role`, `labels`,
+`jobs`, the rule row's `order` and sentence — and is passable to `resolve` as typed. A domain no
+candidate derives is **`unreachable`** for the job and carries no cells; the bound searched is printed
+as `search`. A witness of the job alone is exactly the issue the cell describes; a witness that needed
+companions shares the domain and the job's own pairs with the cell, while the cell's winner and effort
+remain that one job's.
+
+**A reviewer winning with no stand-in is `skipped`.** `resolve` refuses an issue whose every pair is
+such a cell (exit 1), so the matrix carries the cell's pair and effort with `skipped: true` and no
+winner, never a guessed one.
+
+**Usage**
+
+```text
+nen direct matrix --registry <path> --taxonomy <path> --repo <path> [--job <c,d>] [--domain <e,f>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--registry <path>` | yes | The model-direction registry file. | Relative paths resolve against `--repo`'s root. |
+| `--taxonomy <path>` | yes | The classification taxonomy file. | The file `resolve` reads; it must carry job weights and the `domains` block. |
+| `--repo <path>` | yes | The checkout whose `nen/workflow.json` spells the aliases, and the root every path resolves against. | Unbracketed in usage; omitted is refused at exit 2. An absent workflow or `models` block is `unspelled`, not an error. |
+| `--job <c,d>` | no | Enumerate only these job keys. | An unknown or empty list -> exit 2, naming the valid set. Rows keep the taxonomy's order. |
+| `--domain <e,f>` | no | Enumerate only these domain keys. | Same refusals. The witness search still asks every domain the full derivation. |
+
+**Output and exit codes** — human rendering is one table row per cell (`job`, `domain`, `routed on` —
+`<domain> (fallback)` when the job has no phase in it — `phase`, `lang`, `cell` (the key read: the
+language's own or `*`), `winner` and `runner-up` (`<alias> (for <reviewer>)` on a stand-in, `none
+distinct`, or `skipped (…)`), `effort` as `resolve` prints it), one `unreachable` row per job and domain
+no witness derives, then `<n> job(s) x <n> domain(s): <n> reachable, <n> unreachable; <n> cell(s), <n>
+skipped`. `--json` prints one document; top-level keys, in this order: `contract`
+(`nen.direct.matrix/v0.1`), `inputs` (`registry`, `taxonomy` — the paths read — `jobs`, `domains` —
+the filters, or `null`), `search` (`kinds`, `roles`, `labels`, `maxCompanions`), `domains` (an array of
+`{ domain, fallbackOrder }`, `fallbackOrder` the order a job with no phase in that domain is routed
+on), `languages` (`"*"` first, then the taxonomy's language keys), `jobs` and `counts` (`jobs`,
+`domains`, `reachable`, `unreachable`, `cells`, `skipped`). Each `jobs[]` entry is `{ job, weight,
+domains }`, grouped **job → domain → language**; each `domains[]` entry is `{ domain, reachable,
+witness, routedOn, fallbackFrom, phase, phaseName, fallback, cells }` — `witness` `{ kind, role,
+labels, jobs, rule, because }`, `fallback` the `fallback: …` note `resolve` prints, every field after
+`reachable` `null` (and `cells` empty) when unreachable — and each `cells[]` entry is `{ lang, cell,
+pair, skipped, aggregate, winner, runnerUp, effort }`, in `languages` order, where `pair` is one of
+`resolve`'s `pairs`, `aggregate` its `{ skipped, tally }`, `winner` and `runnerUp` its resolved sides
+(`{ alias, provider, family, reviewer, surface, tier, surfaceAlias, restart, effortControl,
+interactive, note, substituted, snapshot, liveLookup }`, `runnerUp` `null` when none is distinct) and
+`effort` its `{ score, weight, level, derivation, surfaceEffort }`; `aggregate`, `winner` and
+`runnerUp` are `null` and `effort.surfaceEffort` is `null` on a skipped cell. Exit 0 the matrix; exit
+1 for the failures `resolve` gives, by the same names (an invalid registry or taxonomy, an unreadable
+workflow, a job the registry does not route, a job with no weight); exit 2 for a missing flag, an
+unknown or empty `--job` or `--domain`, or a flag another `direct` verb owns. No version or price is
+looked up: the snapshot quote is the registry's dated record, as on `resolve`.
+
+**Example** (a real run against Hatsu's registry and taxonomy by absolute path, in nen's own checkout
+— its `nen/workflow.json` spells the aliases the `--json` document's `surfaceAlias` and `restart`
+carry; a job that lists only `maintenance`, asked about `feature`)
+
+```bash
+nen direct matrix --registry /path/to/hatsu/contracts/direct.registry.json \
+  --taxonomy /path/to/hatsu/contracts/classify.taxonomy.json --repo . --job ci-cd --domain feature,maintenance
+```
+```text
+| job   | domain      | routed on              | phase         | lang       | cell | winner             | runner-up       | effort              |
+| ----- | ----------- | ---------------------- | ------------- | ---------- | ---- | ------------------ | --------------- | ------------------- |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | *          | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | swift      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | kotlin     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | typescript | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | csharp     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | prose      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | *          | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | swift      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | kotlin     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | typescript | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | csharp     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | prose      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+1 job(s) x 2 domain(s): 2 reachable, 0 unreachable; 12 cell(s), 0 skipped
+```
+(alone, `ci-cd` derives `maintenance` — every job it carries lists only that domain — so the
+`feature` witness carries a companion, `jobs: ["ci-cd", "discovery"]`, and the job is routed on
+`maintenance`, the first domain the fallback sentence names that it lists; one `*` row and one row per
+language; exit 0)
 
 ### `nen direct answer`
 
