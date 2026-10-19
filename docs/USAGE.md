@@ -916,14 +916,18 @@ never merges, labels, or comments on a pull request.
 Every `pr` subcommand refuses, at exit 2 and before any `gh` call, each flag it
 does not read, and the refusal names the subcommands that do read it:
 `nen pr edit-body … --token-env NARROW` answers *"--token-env is not read by
-'pr edit-body'. --token-env is only read by 'pr ready'; edit-body runs on gh's
-own credential, …"*. An unknown flag is unknown to the **subcommand**: another
-subcommand's flag is refused exactly as a misspelt one is, and every foreign
-flag of one invocation is named at once. Through v0.22.0 the family shared one
-flag table with `pr ready`'s set spread onto it, so `edit-body`,
-`request-reviews`, `threads` and `open` accepted `--token-env` and `--gh-repo`
-and ignored them — a caller naming a narrower credential still wrote with
-`gh`'s own. The global `--repo`, `--json` and `--help` are never refused.
+'pr edit-body'. --token-env is only read by 'pr ready'; edit-body runs on
+whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its
+stored login), never on the variable --token-env names."*. An unknown flag is
+unknown to the **subcommand** — a `threads` action to its own action's flags:
+another subcommand's flag is refused exactly as a misspelt one is, and every
+foreign flag of one invocation is named at once. Tokens after a bare `--` are
+refused too (no `pr` subcommand forwards arguments), naming only flag-shaped
+tokens, never a value. Through v0.22.0 the family shared one flag table with
+`pr ready`'s set spread onto it, so every subcommand but `ready`, `mark-ready`
+and `merge` accepted `--token-env` and `--gh-repo` and ignored them — a caller
+naming a narrower credential still wrote with `gh`'s own. The global `--repo`,
+`--json` and `--help` are never refused.
 
 **Authentication for every `nen pr` verb**
 
@@ -2350,7 +2354,7 @@ nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 |---|---|---|---|
 | `--repo <path>` | **yes** | the repository whose current branch the trunk is merged into | unbracketed in usage; omitted is refused at exit 2 — this verb mutates whatever it is pointed at (#28) |
 | `--trunk <branch>` | no | the trunk branch | default `main` |
-| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every OTHER `pr` subcommand — this family has no per-subcommand flag table yet, so it would otherwise parse cleanly and be silently ignored |
+| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every other `pr` subcommand, naming 'pr cascade-main' (the family's per-subcommand flag table, [#351](https://github.com/zheref/nen/issues/351)) |
 | `--json` | no | machine-readable cascade result | — |
 
 **Output and exit codes** — human lines are the `log[]` entries (`fetched
@@ -2741,8 +2745,8 @@ GitHub. With `--require-head`, a head that moved by the read back is
 no longer holds. Without `--require-head`, `headMoved: true` is only reported.
 
 Every family flag this verb does not read is refused at exit 2 before any
-`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on gh's own
-credential"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
+`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on whatever
+credential gh resolves … never on the variable --token-env names"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
 `--exclude-check` and the rest, and other verbs' `--base`,
 `--add-reviewers`, `--policy` and so on. Accepted silently, `--token-env`
 would read as "this ran on that token" when the write ran on gh's. From
