@@ -228,8 +228,38 @@ describe("verifyCanonCheckout -- five facts, each its own named failure", () => 
       expect(consumer, url).toMatchObject({ failure: { code: "no-consumer-origin", message: expect.stringContaining("https://***@") as unknown } });
       expect(JSON.stringify(consumer), url).not.toMatch(/fake0000/i);
     }
-    // An scp userinfo carrying a '/' is one userinfo, not a host called 'oauth2'.
-    expect(remoteHost("oauth2:FAKE0000/x@github.com:owner/handbooks")).toBe("github.com");
+    // scp syntax as GIT reads it: the host part is everything before the first ':',
+    // so this connects to 'oauth2' -- never to github.com, and never printing the secret.
+    expect(remoteHost("oauth2:FAKE0000/x@github.com:owner/handbooks")).toBe("oauth2");
+  });
+
+  it("reads the host off the RAW authority, never off the display form -- a path '@' moves no host (SEC-7, Feitan round 2, zheref/nen#373)", () => {
+    // Unit: where git and curl connect.
+    expect(remoteHost("https://evil.example/x@github.com:owner/handbooks")).toBeNull();
+    expect(remoteHost("https://evil.example/x@github.com/owner/handbooks")).toBeNull();
+    expect(remoteHost("evil.example:x@github.com:owner/handbooks")).toBe("evil.example");
+    expect(remoteHost("https://u:p@Host:443/o/n")).toBe("host");
+    expect(remoteHost("https://host:8443/path@revision")).toBe("host");
+    expect(remoteHost("https://u:pa ss@github.com/o/n")).toBe("github.com");
+    const path = dir();
+    // The source's origin against a github.com consumer: refused, wrong-host.
+    for (const [url, on] of [["https://evil.example/x@github.com:owner/handbooks", "no host"], ["evil.example:x@github.com:owner/handbooks", "evil.example"]] as const) {
+      const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: `${url}\n` } }, CONSUMER, { stdout: "https://github.com/owner/consumer\n" })), path, SOURCE, REF, CONSUMER);
+      expect(result, url).toMatchObject({ failure: { code: "wrong-host", message: expect.stringContaining(`is on ${on}, but the consumer's origin is on github.com`) as unknown } });
+    }
+    // The consumer's origin: ambiguous, so there is no host to hold the canon to.
+    const consumer = verifyCanonCheckout(new ScriptedSeams(gitFor(path, {}, CONSUMER, { stdout: "https://evil.example/x@github.com:owner/consumer\n" })), path, SOURCE, REF, CONSUMER);
+    expect(consumer).toMatchObject({ failure: { code: "no-consumer-origin" } });
+  });
+
+  it("redacts a userinfo that carries a space, a TAB or a CR, on the SUCCESS path and in --json (SEC-5, Feitan round 2)", () => {
+    const path = dir();
+    for (const sep of [" ", "\t", "\r"]) {
+      const url = `https://u:pa${sep}ssFAKE0000@github.com/owner/handbooks`;
+      const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: `${url}\n` } })), path, SOURCE, REF, CONSUMER);
+      expect("verified" in result && result.verified.origin, JSON.stringify(sep)).toBe("https://***@github.com/owner/handbooks");
+      expect(JSON.stringify(result), JSON.stringify(sep)).not.toMatch(/fake0000/i);
+    }
   });
 
   it("echoes no userinfo when an unparseable origin is refused as the wrong source (zheref/nen#373)", () => {

@@ -409,40 +409,105 @@ function redactTokens(text: string): string {
 }
 
 /**
- * A REMOTE URL, for a message, stderr or `--json`: its WHOLE userinfo
- * replaced by `***` (`https://***@host/owner/name`), whatever shape that
- * userinfo has (SEC-5, zheref/nen#373).
+ * A REMOTE URL, for a message, stderr or `--json` -- for DISPLAY ONLY: its
+ * userinfo replaced by `***` (`https://***@host/owner/name`) in the shapes
+ * below (SEC-5, zheref/nen#373). Never derive a host from what this returns:
+ * the userinfo it masks can reach past the authority, so the text after its
+ * `***@` is not where git connects. `readRemoteAuthority` reads the RAW URL
+ * for that (Feitan, hanten round 2).
  *
  * `redactRemoteCredentials` above is for TEXT a subprocess printed, and it
  * keeps a userinfo with no `:` because in free text that is usually a login
- * name. A value KNOWN to be a remote URL gets no such benefit of the doubt:
- * `https://<token>@host/...` is how a credential is commonly embedded in an
- * origin, and a token that is not GitHub-shaped (or a made-up one too short
- * for the pattern) would be echoed whole. So here no userinfo survives --
- * `user:secret@`, `token@`, `git@` alike -- in either spelling git writes:
- * `scheme://userinfo@host/...` (the same reading of where the userinfo ends,
- * `userinfoEnd`) and scp's `userinfo@host:path`, whose userinfo is everything
- * up to the LAST `@` before `host:` -- a `/` included, so a secret carrying
- * one is not left behind (Nobunaga, hanten round 1 on zheref/nen#373). The
- * GitHub token shapes are then redacted wherever else they stand (a path, a
- * query). It is the reading every origin echo uses: the sites that print the
- * URL call it directly, and the host readers (canon/checkout.ts and
- * dev/release-publish.ts `remoteHost`, surface/install.ts `normalizeRemote`)
- * read the redacted URL, so no part of a userinfo can be taken for a host.
+ * name. A value KNOWN to be a remote URL gets no such benefit of the doubt.
+ * The value is ONE URL and is read whole, never split into runs, so a space,
+ * a TAB or a CR inside the userinfo cannot end it early. Covered:
+ *
+ * - `scheme://userinfo@...` -- `user:secret@`, `token@`, `git@` alike; the
+ *   userinfo runs to the LAST `@` (`userinfoEnd`), so an `@` past the
+ *   authority is taken as userinfo too (a secret with a `/` in it), unless a
+ *   numeric port in the authority explains the colon.
+ * - scp syntax `userinfo@host:path` -- everything up to the last `@` before
+ *   `host:`, a `/` or whitespace included.
+ * - the two GitHub token shapes, anywhere in the value.
+ *
+ * Echoed whole, because git reads no userinfo there: `tok@host` with no
+ * `:` after the host, `https:/tok@h/...`, `//tok@h/...`, and
+ * `https://u:1234/tok@h/o/n` (the port reading). A query or fragment is not
+ * userinfo and is kept apart from a GitHub-shaped token.
  */
 export function redactRemoteUrl(url: string): string {
-  return redactTokens(
-    url
-      .replace(/:\/\/(\S+)/g, (whole: string, run: string): string => {
-        const at = userinfoEnd(run);
-        return at === -1 ? whole : `://***${run.slice(at)}`;
-      })
-      // scp syntax has no `://`: everything up to the last `@` before
-      // `host:` is the userinfo, whatever it carries -- the same reading
-      // `parseRemoteUrl`'s `^[^@]+@` makes of a userinfo with a `/` in it.
-      // A token that carries a `://` was a scheme URL, handled above.
-      .replace(/\S+/g, (token: string): string => (token.includes("://") ? token : token.replace(/^\S*@(?=[^\s@/:]+:)/, "***@"))),
-  );
+  const scheme = /^(\s*[A-Za-z][A-Za-z0-9+.-]*:\/\/)([\s\S]*)$/.exec(url);
+  if (scheme !== null) {
+    const run = scheme[2] ?? "";
+    const at = userinfoEnd(run);
+    return redactTokens(at === -1 ? url : `${scheme[1] ?? ""}***${run.slice(at)}`);
+  }
+  return redactTokens(url.replace(/^[\s\S]*@(?=[^@/:]*:)/, "***@"));
+}
+
+/** Where a remote URL connects, read off the RAW value as git and curl read it. */
+export interface RemoteAuthority {
+  /** As written; callers lower-case it where they compare. */
+  readonly host: string;
+  /** The port's digits, `""` for a bare `:`, null where none is written (always null in scp syntax). */
+  readonly port: string | null;
+  /** After the authority (`/o/n`, possibly `?q`/`#f`), or after scp's `:`. */
+  readonly path: string;
+  readonly form: "scheme" | "scp";
+  /** Whether a userinfo was written before the host. */
+  readonly userinfo: boolean;
+}
+
+/** True when the text carries whitespace or a C0/DEL control character. */
+function hasSpaceOrControl(text: string): boolean {
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * The host a remote URL CONNECTS to, read from the raw value (SEC-7, Feitan
+ * on zheref/nen#373 round 2). Read off `redactRemoteUrl`'s display form,
+ * `https://evil.example/x@github.com:o/n` became `https://***@github.com:o/n`
+ * and the host check passed while git fetched from evil.example.
+ *
+ * A scheme URL's authority ends at the first `/`, `?` or `#` after `://`, and
+ * the host is what follows the last `@` INSIDE it. When the `@` that
+ * `userinfoEnd` takes for the userinfo's end lies past the authority -- the
+ * reading the redactor uses for a secret containing `/` -- the URL is
+ * AMBIGUOUS and has no host: null, so a host check refuses. In scp syntax
+ * git's own rule applies: it is scp only when no `/` precedes the first `:`,
+ * the host part is everything before that `:`, and the host is what follows
+ * the last `@` in it (`evil.example:x@github.com:o/n` connects to
+ * evil.example). A one-letter host is a drive (`C:`), and a host with
+ * whitespace, a control byte or a bracket nen cannot read is null too.
+ */
+export function readRemoteAuthority(url: string): RemoteAuthority | null {
+  const value = url.trim();
+  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([\s\S]*)$/.exec(value);
+  if (scheme !== null) {
+    const run = scheme[1] ?? "";
+    const end = run.search(/[/?#]/);
+    const length = end === -1 ? run.length : end;
+    if (userinfoEnd(run) >= length) return null;
+    const authority = run.slice(0, length);
+    const at = authority.lastIndexOf("@");
+    const hostPort = /^(\[[^\]]+\]|[^:[\]]+)(?::(\d*))?$/.exec(authority.slice(at + 1));
+    const host = hostPort?.[1];
+    if (hostPort === null || host === undefined || hasSpaceOrControl(host)) return null;
+    return { host, port: hostPort[2] ?? null, path: run.slice(length), form: "scheme", userinfo: at !== -1 };
+  }
+  if (value.includes("://")) return null;
+  const colon = value.indexOf(":");
+  if (colon <= 0 || value.startsWith("//", colon + 1)) return null;
+  const hostPart = value.slice(0, colon);
+  if (hostPart.includes("/")) return null;
+  const at = hostPart.lastIndexOf("@");
+  const host = hostPart.slice(at + 1);
+  if (host.length < 2 || /[[\]]/.test(host) || hasSpaceOrControl(host)) return null;
+  return { host, port: null, path: value.slice(colon + 1), form: "scp", userinfo: at !== -1 };
 }
 
 /** Split subprocess output into non-empty lines, EOL-normalized, trimmed, and with remote credentials redacted. */

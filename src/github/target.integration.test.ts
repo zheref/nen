@@ -61,6 +61,10 @@ describe.skipIf(!HAVE_GIT || !HAVE_BUN)("a token-bearing, unparseable origin (zh
   const SHAPES = [
     ["a token alone as the userinfo", `https://${TOKEN}@github.com/owner/name/extra`],
     ["a user and a token", `https://user:${TOKEN}@github.com/owner/name/extra`],
+    // Feitan round 2: whitespace or a control byte inside the userinfo must not end it.
+    ["a space inside the userinfo", `https://u:pa ss${TOKEN}@github.com/owner/name/extra`],
+    ["a TAB inside the userinfo", `https://u:pa\tss${TOKEN}@github.com/owner/name/extra`],
+    ["a CR inside the userinfo", `https://${TOKEN}\r@github.com/owner/name/extra`],
   ] as const;
 
   for (const [label, url] of SHAPES) {
@@ -75,13 +79,15 @@ describe.skipIf(!HAVE_GIT || !HAVE_BUN)("a token-bearing, unparseable origin (zh
     });
   }
 
-  it("repo resolve and repo classify refuse an unparseable origin without its token", () => {
-    const repo = repoWithOrigin("repo-verbs", `https://user:${TOKEN}@github.com/only`);
+  it("repo resolve and repo classify refuse an unparseable origin without its token -- space, TAB and CR variants too", () => {
+    for (const [name, url] of [["plain", `https://user:${TOKEN}@github.com/only`], ["space", `https://u:pa ss${TOKEN}@github.com/only`], ["tab", `https://u:pa\tss${TOKEN}@github.com/only`], ["cr", `https://${TOKEN}\r@github.com/only`]] as const) {
+    const repo = repoWithOrigin(`repo-verbs-${name}`, url);
     for (const argv of [["repo", "resolve", "--repo", repo], ["repo", "resolve", "--repo", repo, "--json"], ["repo", "classify", "--repo", repo], ["repo", "classify", "--repo", repo, "--json"]]) {
       const result = nen(repo, argv);
       expect(result.code).toBe(1);
       expect((result.stdout + result.stderr).toLowerCase()).not.toContain(TOKEN.toLowerCase());
       expect(result.stdout + result.stderr).toContain("https://***@github.com/only");
+    }
     }
   });
 });

@@ -1264,8 +1264,14 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { "shared-market": { source: { source: "git", url: "https://oauth2:FAKE0000/with-slash@gitlab.example/o/n" } } });
     const slashed = await capture([...installArgs(w, "claude-code"), "--dry-run", "--json"], seams(w, [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n")]));
     expect(slashed.code).toBe(3);
-    expect(String(slashed.doc()["reason"])).toMatch(/comes from the git source gitlab\.example\/o\/n, not this checkout/);
+    expect(String(slashed.doc()["reason"])).toMatch(/comes from a git source that is not a remote URL, not this checkout/);
     expect([...slashed.out, ...slashed.err].join("\n")).not.toMatch(/fake0000|with-slash|oauth2/i);
+    // SEC-7: a foreign source whose PATH carries '@github.com/me/zephyr' is not this checkout's.
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { "shared-market": { source: { source: "git", url: "https://evil.example/x@github.com/me/zephyr" } } });
+    const pathAt = seams(w, [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n")]);
+    const foreign = await capture([...installArgs(w, "claude-code"), "--dry-run", "--json"], pathAt);
+    expect(foreign.code).toBe(3);
+    expect(commandsOf(pathAt)).not.toContain("claude plugin marketplace remove shared-market");
     writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { "shared-market": { source: { source: "github", repo: "someone-else/other-repo" } } });
     // A directory source elsewhere, or none recorded, is not ours either.
     for (const known of [{ source: { source: "directory", path: w.other } }, {}]) {
@@ -1316,8 +1322,6 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
       "https://user:tok@GITHUB.com/me/zephyr.git/",
       "ssh://git@github.com:22/me/zephyr.git",
       "git+https://github.com/me/zephyr",
-      "https://oauth2:tok/with-slash@github.com/me/zephyr",
-      "oauth2:tok/x@github.com:me/zephyr",
     ]) {
       expect(normalizeRemote(url), url).toBe("github.com/me/zephyr");
     }
@@ -1328,6 +1332,12 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     // neither an absolute URL nor user@host:path -- never a remote, never a match
     for (const url of ["../zephyr", "/srv/git/zephyr.git", "zephyr", "host:me/zephyr", "file:relative", "", "https://github.com/"]) {
       expect(normalizeRemote(url), url).toBeNull();
+    }
+    // SEC-7 (Feitan round 2, zheref/nen#373): the host is the RAW authority's. An '@' past
+    // the authority is ambiguous and never a match; scp's host part ends at the first ':'.
+    for (const url of ["https://evil.example/x@github.com/me/zephyr", "https://oauth2:tok/with-slash@github.com/me/zephyr", "oauth2:tok/x@github.com:me/zephyr"]) {
+      expect(normalizeRemote(url), url).toBeNull();
+      expect(normalizeRemote(url), url).not.toBe("github.com/me/zephyr");
     }
   });
 
@@ -1504,6 +1514,20 @@ describe("surface install: Feitan's confirmation pass", () => {
       seams(w, [ok("codex plugin list", `${MARKET_ID}  installed, enabled  1.0.0  ${root}\n`), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${root}\n`)]),
     );
     expect(status.out.join("\n")).not.toContain("hunter2");
+  });
+
+  it("F-A: a Codex marketplace root whose userinfo is a bare token is redacted too (Feitan round 2, zheref/nen#373)", async () => {
+    const w = world();
+    const root = "https://FAKE0000tok@example.invalid/market.git";
+    const refused = await capture([...installArgs(w, "codex"), "--json"], seams(w, [git(w.root), ok("codex plugin list", ""), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${root}\n`)]));
+    expect(refused.code).toBe(3);
+    expect([...refused.out, ...refused.err].join("\n")).not.toMatch(/fake0000/i);
+    expect([...refused.out, ...refused.err].join("\n")).toContain("https://***@example.invalid/market.git");
+    const status = await capture(
+      [...statusArgs(w, "codex"), "--json"],
+      seams(w, [ok("codex plugin list", `${MARKET_ID}  installed, enabled  1.0.0  ${root}\n`), ok("codex plugin marketplace list", `${HEADER}\n${MARKET}  ${root}\n`)]),
+    );
+    expect([...status.out, ...status.err].join("\n")).not.toMatch(/fake0000/i);
   });
 
   it("F-B: a plugin installed from the marketplace during the uninstall leaves it known -- owed (exit 4), no remove", async () => {
