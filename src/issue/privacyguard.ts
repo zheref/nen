@@ -24,6 +24,7 @@ import { resolveRepoRoot } from "../repo/root.js";
 import type { Target } from "../github/target.js";
 import {
   checkPrivateNames,
+  ignoreFileInsideTree,
   parseIgnoreList,
   privateNameLines,
   SKIP_PRIVATE_NAME_CHECK_FLAG,
@@ -52,7 +53,8 @@ export const PRIVATE_NAME_FLAGS: Required<Pick<FlagSpec, "values" | "booleans">>
  * `--private-names-ignore-file <path>`, read BEFORE any `gh` call: absent or
  * unreadable when given is a usage error (exit 2), and with the flag omitted
  * nothing is read -- there is no default path. Resolved against --repo's root
- * like every other own-path flag (zheref/nen#100).
+ * like every other own-path flag (zheref/nen#100), and refused (exit 2) when
+ * its real path lies inside the working tree holding that root.
  */
 export function readIgnoreFlag(context: CommandContext): IgnoreList | null {
   const raw = context.args.values[PRIVATE_NAMES_IGNORE_FILE_FLAG];
@@ -64,7 +66,11 @@ export function readIgnoreFlag(context: CommandContext): IgnoreList | null {
     }
     return null;
   }
-  const path = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), raw);
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  const path = resolveAgainstRepo(root, raw);
+  // Never a list the change under review could have written (Feitan F8).
+  const inside = ignoreFileInsideTree(path, root);
+  if (inside !== null) throw new VerbUsageError(`--${PRIVATE_NAMES_IGNORE_FILE_FLAG}: ${inside}`);
   return parseIgnoreList(
     readTextFile(
       path,

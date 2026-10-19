@@ -3,7 +3,7 @@
 // specs and the help, and the shared adapter's own refusals.
 
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, type FlagSpec } from "../cli/args.js";
@@ -12,7 +12,7 @@ import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { GUARDED_VERBS, privateNameLines, type PrivateNameCheck } from "./privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "./privacyguard.js";
-import { privateListRow, visibilityRow } from "./privacy.testkit.js";
+import { FULL_REACH_ROW, privateListRow, visibilityRow } from "./privacy.testkit.js";
 import { ISSUE_SUBCOMMAND_FLAGS, issueCommand } from "./command.js";
 import { ideaCommand } from "../idea/command.js";
 import { PR_SUBCOMMAND_FLAGS, prCommand } from "../pr/command.js";
@@ -52,9 +52,21 @@ function context(argv: readonly string[], seams = new ScriptedSeams([]), repoFla
 }
 
 describe("every guarded verb, named once (zheref/nen#363)", () => {
-  it("docs/USAGE.md's guard section names every guarded verb", () => {
-    const section = guardSection();
-    for (const verb of GUARDED_VERBS) expect(section, verb).toContain(`\`${verb}\``);
+  // The table's first column, both ways (Nobunaga N4): a verb guarded and not
+  // in the table fails, and so does a table row naming a verb nobody guards.
+  // Mentions elsewhere in the section (the ruled-out paragraph) never count.
+  it("docs/USAGE.md's guard table lists exactly GUARDED_VERBS", () => {
+    const rows = guardSection()
+      .split("\n")
+      .filter((line): boolean => line.startsWith("| ") && !line.startsWith("| Guarded verb") && !/^\|[-| ]+\|$/.test(line));
+    const listed = rows.map((row): string => {
+      const first = row.split(" | ")[0] ?? "";
+      const named = /`([^`]+)`/.exec(first);
+      expect(named, row).not.toBeNull();
+      return (named as RegExpExecArray)[1] as string;
+    });
+    expect(new Set(listed)).toEqual(new Set(GUARDED_VERBS));
+    expect(listed).toHaveLength(GUARDED_VERBS.length);
   });
 
   it("the guard section no longer says any writer is unguarded", () => {
@@ -137,8 +149,27 @@ describe("the shared adapter", () => {
     expect(() => readIgnoreFlag(context(["--private-names-ignore-file", "nope.txt"], new ScriptedSeams([]), root).context)).toThrow(VerbUsageError);
   });
 
+  it("readIgnoreFlag: refuses (exit 2) an ignore file whose REAL path is inside the --repo working tree (Feitan F8)", () => {
+    const tree = mkdtempSync(join(tmpdir(), "nen-guard-tree-"));
+    mkdirSync(join(tree, ".git"));
+    mkdirSync(join(tree, "sub"));
+    writeFileSync(join(tree, "ignore.txt"), "vault\n");
+    expect(() => readIgnoreFlag(context(["--private-names-ignore-file", "../ignore.txt"], new ScriptedSeams([]), join(tree, "sub")).context)).toThrow(
+      /inside the working tree/,
+    );
+    // A link from outside that resolves into the tree is the same file.
+    const outside = mkdtempSync(join(tmpdir(), "nen-guard-out-"));
+    symlinkSync(join(tree, "ignore.txt"), join(outside, "link.txt"));
+    expect(() => readIgnoreFlag(context(["--private-names-ignore-file", join(outside, "link.txt")], new ScriptedSeams([]), tree).context)).toThrow(
+      /inside the working tree/,
+    );
+    // A real file outside the tree is read.
+    writeFileSync(join(outside, "real.txt"), "vault\n");
+    expect(readIgnoreFlag(context(["--private-names-ignore-file", join(outside, "real.txt")], new ScriptedSeams([]), tree).context)).not.toBeNull();
+  });
+
   it("guardPrivateNames: runs the check, prints its lines with the verb's prefix, and returns the verdict", () => {
-    const seams = new ScriptedSeams([visibilityRow("o/pub", "public"), privateListRow(["acme/vault"])]);
+    const seams = new ScriptedSeams([visibilityRow("o/pub", "public"), FULL_REACH_ROW, privateListRow(["acme/vault"])]);
     const { context: ctx, err } = context([], seams);
     const check = guardPrivateNames(ctx, TARGET, [{ field: "comment", text: "the vault" }], null, "nen wake fire");
     expect(check.result).toBe("refused");

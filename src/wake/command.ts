@@ -67,10 +67,11 @@ composes around --now, --flag-marker and --redrive-marker. Before anything is
 written -- and without --run too, so the dry run's verdict is the real run's --
 that caller text is checked against the credential's live private repository
 list exactly as 'nen issue comment' checks a body ('nen issue --help', PRIVATE
-REPOSITORY NAMES): a private repository named in text bound for a PUBLIC
---repo-slug exits 4 and writes nothing (no label removed, no workflow
-redriven, no comment posted); a check that could not run exits 1, never a
-pass; a private or internal --repo-slug is not checked. 'fire' with no
+REPOSITORY NAMES): a private repository named in text bound for a PUBLIC or
+INTERNAL --repo-slug exits 4 and writes nothing (no label removed, no
+workflow redriven, no comment posted); a check that could not run exits 1,
+never a pass; a private --repo-slug is not checked. --now must be an ISO-8601
+instant (exit 2 otherwise). 'fire' with no
 --comment posts no text and runs no check. --skip-private-name-check is the
 opt-out, named on stderr every time; --private-names-ignore-file <path> and
 --allow-all-ignored work as there. The guard's lines go to stderr, beginning
@@ -160,6 +161,12 @@ function toRun(raw: RawRun): WorkflowRun {
 function verify(context: CommandContext): number {
   const repo = requireValue(context.args, "repo-slug", "The owner/name this scan reads over gh api.");
   const now = requireValue(context.args, "now", "Read once per sweep, never the live clock -- so a replay is reproducible.");
+  // AN INSTANT, NOTHING ELSE (zheref/nen#363, Nobunaga N1): --now is stamped
+  // into every comment this sweep posts, so free text here is free text on a
+  // public timeline. Refused at the flag, before any call.
+  if (!ISO_INSTANT.test(now) || Number.isNaN(Date.parse(now))) {
+    throw new VerbUsageError(`--now takes an ISO-8601 instant such as 2026-09-07T00:00:00Z (got '${now}'); it is stamped into every comment this sweep posts.`);
+  }
   const authorPatternRaw = requireValue(
     context.args,
     "author-pattern",
@@ -222,7 +229,9 @@ function verify(context: CommandContext): number {
     "nen wake verify",
   );
   if (blocksWrite(privateNameCheck)) {
-    if (context.json) context.io.out(JSON.stringify({ repo, now, dryRun, scanned: 0, privateNameCheck }, null, 2));
+    // No `now` here: it is one of the checked fields, and a refusal never
+    // carries the text it refused (as 'wake fire' leaves out its comment).
+    if (context.json) context.io.out(JSON.stringify({ repo, dryRun, scanned: 0, privateNameCheck }, null, 2));
     return blockingExit(privateNameCheck);
   }
 
@@ -352,6 +361,9 @@ function postCommentBestEffort(
     );
   }
 }
+
+/** `YYYY-MM-DDTHH:MM[:SS[.fff]]` and a zone (`Z` or `±HH:MM`). */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 
 function pickSwallowedCount(runs: readonly WorkflowRun[]): number {
   return runs.filter((run): boolean => run.conclusion === "action_required" || run.conclusion === "startup_failure").length;
