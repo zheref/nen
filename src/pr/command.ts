@@ -163,7 +163,9 @@ Flags are PER SUBCOMMAND (zheref/nen#351). Every subcommand refuses, at exit
 2 and before any gh call, each flag it does not read -- another
 subcommand's flag exactly as a misspelt one, 'pr ready''s --token-env and
 --gh-repo included -- and the refusal names the subcommands that do read
-it. The global --repo, --json and --help are never refused.
+it. A threads action reads only its own action's flags, and tokens after a
+bare '--' are refused too: no subcommand forwards arguments. The global
+--repo, --json and --help are never refused.
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict and every
@@ -930,7 +932,7 @@ export const PR_SUBCOMMANDS: readonly string[] = Object.keys(PR_SUBCOMMAND_FLAGS
  * Copilot on #221). Module-level so the family refusal can name the one action
  * that reads a flag (`--from` is 'pr threads settle''s) rather than the verb.
  */
-const THREADS_ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
+export const THREADS_ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
   list: { values: [], booleans: [] },
   reply: { values: ["thread", "body-file"], booleans: ["dry-run"] },
   resolve: { values: ["thread"], booleans: ["dry-run"] },
@@ -966,47 +968,66 @@ const PR_GLOBAL_FLAG_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * A flag one FORM of a subcommand reads and the other refuses: `--require-head`
+ * is 'pr merge --delivery''s, and doMerge refuses it with --release-unit, so
+ * naming bare 'pr merge' would send a caller to a refusal (hanten round 1).
+ */
+const PR_FLAG_FORM: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  merge: { "require-head": "merge --delivery" },
+};
+
+/**
  * Who reads this flag, in the table's order, each as `'pr <subcommand>'` --
  * or `'pr threads <action>'` where exactly one threads action reads it, which
  * is the more useful answer for `--from` (settle) and `--body-file` (reply).
+ * `withinThreads` (the refused invocation is itself a threads action) names
+ * EVERY threads action that reads it, since 'pr threads' alone would name the
+ * verb the caller is already running.
  */
-export function prFlagOwners(flag: string): readonly string[] {
-  return PR_SUBCOMMANDS.filter((name): boolean => declaresFlag(PR_SUBCOMMAND_FLAGS[name] ?? {}, flag)).map((name): string => {
+export function prFlagOwners(flag: string, withinThreads = false): readonly string[] {
+  return PR_SUBCOMMANDS.filter((name): boolean => declaresFlag(PR_SUBCOMMAND_FLAGS[name] ?? {}, flag)).flatMap((name): string[] => {
     if (name === "threads") {
       const actions = THREAD_ACTIONS.filter((action): boolean => {
         const row = THREADS_ACTION_FLAGS[action];
         return row !== undefined && (row.values.includes(flag) || row.booleans.includes(flag));
       });
-      if (actions.length === 1) return `'pr threads ${actions[0] ?? ""}'`;
+      if (actions.length === 1 || (withinThreads && actions.length > 0)) return actions.map((action): string => `'pr threads ${action}'`);
     }
-    return `'pr ${name}'`;
+    return [`'pr ${PR_FLAG_FORM[name]?.[flag] ?? name}'`];
   });
 }
 
-/** The subcommands that reach GitHub through gh, on gh's own credential (docs/USAGE.md's authentication table). */
-const PR_GH_CREDENTIAL: ReadonlySet<string> = new Set(["fetch", "next-blocker", "retarget", "request-reviews", "edit-body", "mark-ready", "threads", "open"]);
+const GH_RESOLVES = "runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login), never on the variable --token-env names.";
 
 /**
  * What `--token-env` would have meant here, said truthfully per subcommand --
  * a refusal that asserts something false about the verb is one a caller stops
- * believing (../issue/command.ts's refuseForeignFlags, the same rule).
+ * believing (../issue/command.ts's refuseForeignFlags, the same rule). Keyed
+ * by EVERY subcommand but `ready` (the one that reads the flag) with no default
+ * branch, so a new subcommand gets no credential claim until one is written
+ * for it (command.test.ts asserts the coverage; hanten round 1).
  */
-function tokenEnvAdvice(subcommand: string): string {
-  if (PR_GH_CREDENTIAL.has(subcommand)) {
-    return `${subcommand} runs on gh's own credential, so the token you named would not have been the one the call ran on.`;
-  }
-  if (subcommand === "merge") {
-    return "merge judges readiness on GH_TOKEN and merges on gh's own credential, so the variable you named would have changed neither.";
-  }
-  if (subcommand === "cascade-main") {
-    return "cascade-main fetches and pushes on git's own credential and calls no GitHub API.";
-  }
-  return `${subcommand} reads local files only and calls no GitHub API, so there is no credential to name.`;
-}
+const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
+  staleness: "staleness reads local files only and calls no GitHub API, so there is no credential to name.",
+  "body-check": "body-check reads local files and git only and calls no GitHub API, so there is no credential to name.",
+  fetch: `fetch ${GH_RESOLVES}`,
+  "next-blocker": `next-blocker ${GH_RESOLVES}`,
+  "cascade-main": "cascade-main fetches and pushes on git's own credential and calls no GitHub API.",
+  retarget: `retarget ${GH_RESOLVES}`,
+  "request-reviews": `request-reviews ${GH_RESOLVES}`,
+  "edit-body": `edit-body ${GH_RESOLVES}`,
+  "mark-ready": `mark-ready ${GH_RESOLVES}`,
+  threads: `threads ${GH_RESOLVES}`,
+  open: `open ${GH_RESOLVES}`,
+  merge: "merge judges readiness on GH_TOKEN and merges on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login); the variable --token-env names would have changed neither.",
+};
+
+/** Exported for the coverage test: every key of PR_SUBCOMMAND_FLAGS but `ready` has advice. */
+export const PR_TOKEN_ENV_ADVICE_KEYS: readonly string[] = Object.keys(TOKEN_ENV_ADVICE);
 
 /** What to type instead, where the owners alone are not the useful answer. */
 function foreignFlagAdvice(subcommand: string, flag: string): string | undefined {
-  if (flag === "token-env") return tokenEnvAdvice(subcommand);
+  if (flag === "token-env") return TOKEN_ENV_ADVICE[subcommand];
   if (flag === "gh-repo" && declaresFlag(PR_SUBCOMMAND_FLAGS[subcommand] ?? {}, "target")) {
     return `'pr ${subcommand}' names its repository with --target <owner/name>.`;
   }
@@ -1018,9 +1039,25 @@ function foreignFlagAdvice(subcommand: string, flag: string): string | undefined
  * -- ALL of them named at once, sorted -- at exit 2, before any subcommand
  * runs and so before any gh call (zheref/nen#351). Each sentence says the
  * subcommand does not read the flag, then which subcommands DO.
+ *
+ * A `threads` action is judged against its OWN row (--target, --pr and
+ * THREADS_ACTION_FLAGS[action]), here rather than inside threads(), so one
+ * message names every foreign flag at both levels (hanten round 1). An action
+ * that is missing or unknown is judged against the verb's row; threads() then
+ * refuses the action itself.
+ *
+ * TOKENS AFTER A BARE `--` ARE REFUSED TOO (Feitan, SEC-7, hanten round 1).
+ * ../cli/args.ts stops reading at `--` and hands the rest over as
+ * `passthrough`, which no `pr` subcommand forwards anywhere -- so
+ * `-- --token-env NARROW` was accepted and ignored on every subcommand, write
+ * paths included. Only a flag-shaped token's NAME is ever echoed, never a value.
  */
 function refuseFlagsSubcommandDoesNotRead(context: CommandContext, subcommand: string): void {
-  const spec = PR_SUBCOMMAND_FLAGS[subcommand];
+  const action = context.args.positionals[2];
+  const actionRow = subcommand === "threads" && action !== undefined ? THREADS_ACTION_FLAGS[action] : undefined;
+  const spec: FlagSpec | undefined =
+    actionRow === undefined ? PR_SUBCOMMAND_FLAGS[subcommand] : { values: ["target", "pr", ...actionRow.values], booleans: [...actionRow.booleans] };
+  const subject = actionRow === undefined ? subcommand : `threads ${action ?? ""}`;
   // Unreachable: requireSubcommand has already refused anything not keyed
   // here. Stated so a caller that skips that step fails closed, never reading
   // `undefined` as "reads everything".
@@ -1031,19 +1068,30 @@ function refuseFlagsSubcommandDoesNotRead(context: CommandContext, subcommand: s
     ...context.args.booleans,
   ];
   const foreign = [...new Set(given)].filter((flag): boolean => !PR_GLOBAL_FLAG_NAMES.has(flag) && !declaresFlag(spec, flag)).sort();
-  if (foreign.length === 0) return;
-  throw new VerbUsageError(
-    foreign
-      .map((flag): string => {
-        const owners = prFlagOwners(flag);
-        // Never empty while PR_FLAGS is the union of these rows: a flag no row
-        // declares is an 'unknown option' at the parser and never reaches here.
-        const read = owners.length === 0 ? `No 'pr' subcommand reads --${flag}.` : `--${flag} is only read by ${conjoin(owners)}`;
-        const advice = foreignFlagAdvice(subcommand, flag);
-        return `--${flag} is not read by 'pr ${subcommand}'. ${read}${owners.length === 0 ? "" : advice === undefined ? "." : `; ${advice}`}`;
-      })
-      .join(" "),
-  );
+  const passthrough = context.args.passthrough;
+  if (foreign.length === 0 && passthrough.length === 0) return;
+  const sentences = foreign.map((flag): string => {
+    const owners = prFlagOwners(flag, actionRow !== undefined);
+    // Never empty while PR_FLAGS is the union of these rows: a flag no row
+    // declares is an 'unknown option' at the parser and never reaches here.
+    const read = owners.length === 0 ? `No 'pr' subcommand reads --${flag}.` : `--${flag} is only read by ${conjoin(owners)}`;
+    const advice = foreignFlagAdvice(subcommand, flag);
+    return `--${flag} is not read by 'pr ${subject}'. ${read}${owners.length === 0 ? "" : advice === undefined ? "." : `; ${advice}`}`;
+  });
+  if (passthrough.length > 0) {
+    const named = [
+      ...new Set(
+        passthrough
+          .filter((token): boolean => token.startsWith("--"))
+          .map((token): string => token.slice(2).split("=")[0] ?? "")
+          .filter((name): boolean => /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(name)),
+      ),
+    ].map((name): string => `--${name}`);
+    sentences.push(
+      `'pr ${subject}' reads nothing after a bare '--': no 'pr' subcommand forwards arguments, so ${passthrough.length} token(s) there would have been accepted and ignored${named.length === 0 ? "" : `, among them ${conjoin(named)}`}. Drop the '--'.`,
+    );
+  }
+  throw new VerbUsageError(sentences.join(" "));
 }
 
 export const prCommand: Command = {
@@ -1755,9 +1803,10 @@ function doMarkReady(context: CommandContext): number {
 //
 // THE ACTION IS A SECOND POSITIONAL, not a third flag. `nen pr threads list`
 // reads as one verb with a mode, which is what it is; a `--resolve` boolean
-// beside a `--reply` boolean would be two flags that can both be given, and
-// this family already has one refusal per silently-ignored flag because that
-// mistake is expensive here.
+// beside a `--reply` boolean would be two flags that can both be given, and a
+// flag that is accepted and ignored is what PR_SUBCOMMAND_FLAGS and
+// refuseFlagsSubcommandDoesNotRead exist to refuse, because that mistake is
+// expensive here.
 //
 // EVERY PATH LISTS FIRST, INCLUDING `--dry-run`. The listing is what turns a
 // bad `--thread` into exit 4 naming it and an already-resolved one into exit 3
@@ -1771,27 +1820,11 @@ function threads(context: CommandContext): number {
       `'pr threads' needs an action: ${THREAD_ACTIONS.join(", ")}. Try 'nen pr threads list --target <owner/name> --pr <n>'.`,
     );
   }
-  // THE FAMILY GUARD STOPS AT THE FAMILY, AND THE ACTION NEEDS ITS OWN
-  // (Copilot, #221). `--thread`, `--body-file` and `--dry-run` all belong to
-  // 'threads', so the family-level refusals above let them through -- and then
-  // `list` ignored `--thread`, and `resolve` ignored `--body-file`. A caller
-  // got a successful listing or a real resolution while an instruction they
-  // typed had no effect, which is the exact thing this family already refuses
-  // one level up: the ignored thing is the instruction you gave.
-  const mine = THREADS_ACTION_FLAGS[action] as { values: readonly string[]; booleans: readonly string[] };
-  const foreign = [
-    ...["thread", "body-file", "from"].filter(
-      (flag): boolean => context.args.values[flag] !== undefined && !mine.values.includes(flag),
-    ),
-    ...["dry-run"].filter(
-      (flag): boolean => context.args.booleans.has(flag) && !mine.booleans.includes(flag),
-    ),
-  ];
-  if (foreign.length > 0) {
-    throw new VerbUsageError(
-      `--${foreign.join(", --")} ${foreign.length === 1 ? "is" : "are"} not read by 'pr threads ${action}'. A flag accepted and ignored is worse than one refused: the ignored thing is the instruction you gave, and this verb would otherwise have answered 0 while doing something other than what you asked.`,
-    );
-  }
+  // EACH ACTION READS ONLY ITS OWN FLAGS (Copilot, #221): `list` used to
+  // ignore `--thread` and `resolve` `--body-file`. refuseFlagsSubcommandDoesNotRead
+  // judges a threads action against THREADS_ACTION_FLAGS[action] before this
+  // runs, so every flag the action does not read was already refused there,
+  // naming the actions that do read it (hanten round 1).
 
   const target = requireTarget(context);
   const prNumber = requirePrStrict(context, `threads ${action}`);
