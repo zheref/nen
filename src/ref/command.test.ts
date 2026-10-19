@@ -186,3 +186,20 @@ describe("review regressions on exact GitHub subjects", () => {
     }
   });
 });
+
+it("does not lend a bare product code to a second recorded owner with the same name", async () => {
+  const root = mkdtempSync(join(tmpdir(), "nen-ref-two-owners-")); mkdirSync(join(root, "nen"));
+  writeFileSync(join(root, "nen/repos.json"), JSON.stringify({
+    consumers: [{ repo: "trusted/r", code: "RR", consumes: [] }],
+    product_codes: { RR: "r" },
+    maintained_tools: [{ repo: "other/r" }],
+  }));
+  const trusted = await capture(["ref", "parse", "TRUSTED/R#12", "--json"], root);
+  expect(trusted.code).toBe(0);
+  expect(JSON.parse(trusted.out.join("\n"))).toEqual({ slug: "TRUSTED/R", code: "RR", kind: null, number: 12 });
+  for (const slug of ["other/r", "OTHER/R"]) {
+    const other = await capture(["ref", "parse", `${slug}#12`, "--json"], root);
+    expect(other.code).toBe(0);
+    expect(JSON.parse(other.out.join("\n"))).toEqual({ slug, kind: null, number: 12 });
+  }
+});

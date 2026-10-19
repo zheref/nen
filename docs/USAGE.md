@@ -6918,7 +6918,9 @@ Also accepts `https://github.com/<owner>/<name>/(issues|pull)/<N>` and
 code is included only for an exact, case-insensitive registered `owner/name`
 identity, including codes recorded solely on `consumers[]`. A foreign owner with
 the same repository basename receives no code. A bare `product_codes` name is
-enriched only when another registry entry explicitly records that exact slug.
+enriched only when resolving that code canonically identifies the exact requested
+slug. Recording two owners with the same basename does not lend one owner
+the other owner’s code.
 No registry or network lookup is required.
 Other hosts, credentials, ports, queries, fragments, encoded/dot paths and extra
 segments are refused at exit 2 with the host or path shape named.

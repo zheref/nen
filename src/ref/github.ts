@@ -1,4 +1,5 @@
 // Strict syntax-only parsing: a URL never implies authentication or a lookup.
+import { resolveToken } from "../repo/resolve.js";
 import type { RepoRegistry } from "../schema/repos.js";
 import { RefError, type ObjectKind } from "./notation.js";
 
@@ -36,16 +37,17 @@ function reference(slug: string, kind: ObjectKind | null, digits: string): Githu
  * not infer an owner for a subject that has already named one. */
 export function githubRefCode(registry: RepoRegistry, slug: string): string | null {
   const wanted = slug.toLowerCase();
-  const consumer = registry.consumers.find((entry) => entry.repo.toLowerCase() === wanted);
-  if (consumer?.code !== undefined && consumer.code !== null) return consumer.code;
-  for (const [code, name] of Object.entries(registry.productCodes)) {
-    if (name.toLowerCase() === wanted) return code;
-  }
-  const recorded = [...registry.consumers.map((entry) => entry.repo), ...registry.maintainedTools, ...registry.pendingOnboarding];
-  if (!recorded.some((repo) => repo.toLowerCase() === wanted)) return null;
-  const basename = wanted.slice(wanted.indexOf("/") + 1);
-  for (const [code, name] of Object.entries(registry.productCodes)) {
-    if (!name.includes("/") && name.toLowerCase() === basename) return code;
+  const codes = new Set([
+    ...Object.keys(registry.productCodes),
+    ...registry.consumers.flatMap((entry) => entry.code === null ? [] : [entry.code]),
+  ]);
+  for (const code of codes) {
+    // Ask the existing resolver what THIS CODE identifies, not what a bare
+    // repository name might resemble. An optional code may be omitted; it
+    // must never identify a different owner, even when both are recorded.
+    const resolved = resolveToken(registry, code);
+    const canonical = resolved.length === 1 ? resolved[0] : undefined;
+    if (canonical?.kind === "code" && canonical.repo.toLowerCase() === wanted) return canonical.code;
   }
   return null;
 }
