@@ -296,17 +296,24 @@ describe("this repository's own review.scopes -- the runner and the host-credent
     expect(security?.paths).toEqual(pr336.filter((path): boolean => path.startsWith("src/runner/")));
   });
 
-  it("raises the security scope on the NN-PR-#334 diff -- the elevated host scripts and their goldens", () => {
+  it("raises the security scope on the NN-PR-#334 diff -- the elevated host scripts and their goldens, never the docs", () => {
     const pr334 = [
+      "docs/USAGE.md",
+      "src/runner/command.test.ts",
+      "src/runner/command.ts",
+      "src/runner/enable.test.ts",
       "src/runner/enable.ts",
       "src/runner/fixtures/register.linux.golden.txt",
       "src/runner/fixtures/register.macos.golden.txt",
       "src/runner/fixtures/register.windows.golden.ps1",
       "src/runner/preflight.ts",
+      "src/runner/script.test.ts",
       "src/runner/script.ts",
     ];
     const classified = classifyScopes(pr334, loadWorkflow(process.cwd()).workflow.review.scopes);
-    expect(classified.scopes.find((scope): boolean => scope.scope === "security")?.paths).toEqual(pr334);
+    const security = classified.scopes.find((scope): boolean => scope.scope === "security");
+    expect(security?.persona).toBe("feitan");
+    expect(security?.paths).toEqual(pr334.filter((path): boolean => path.startsWith("src/runner/")));
   });
 
   it("raises the security scope on the three other files that read, mint or copy a host credential's value", () => {
@@ -326,6 +333,12 @@ describe("this repository's own review.scopes -- the runner and the host-credent
       "src/issue/privacy.ts",
       "src/github/graphql.ts",
       "src/wc/swap.ts",
+      "src/canon/checkout.ts",
+      "src/report/data.ts",
+      "src/dev/command.ts",
+      "src/tag/cut.ts",
+      "src/wake/detect.ts",
+      "src/run/rerun.ts",
     ];
     const classified = classifyScopes(ruledOut, loadWorkflow(process.cwd()).workflow.review.scopes);
     expect(classified.scopes.map((scope): string => scope.scope)).toEqual(["code"]);
