@@ -15,7 +15,7 @@ import { botNodesArgv, commitArgv, gatesAtArgv, requestTimelineArgv } from "./ro
 import { markReadyArgv, readDraftStateArgv } from "./markready.js";
 import { PR_FLAGS, PR_SUBCOMMAND_FLAGS, PR_SUBCOMMANDS, prCommand, prFlagOwners } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
-import { privateListRow, PRIVATE_LIST_PAGE, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
+import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
 /** A throwaway file, for edit-body's --body-file. */
 function tempFile(name: string, contents: string): string {
@@ -3008,12 +3008,13 @@ describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
   ];
 
   it("a private name on a PUBLIC target refuses with exit 4 after certifying, before any write, and never prints the name", async () => {
-    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), LIST]);
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST]);
     const result = await capture(argvFor("moved out of the vault"), null, seams, "scripted");
     expect(result.code).toBe(4);
     expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
       "gh api repos/zheref/nen/pulls/12",
       "gh api repos/zheref/nen",
+      SCOPES_CALL,
       PRIVATE_LIST_PAGE,
     ]);
     const all = [...result.out, ...result.err].join("\n");
@@ -3022,7 +3023,7 @@ describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
   });
 
   it("--dry-run refuses the same way, and --json carries the verdict with written: false", async () => {
-    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), LIST]);
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST]);
     const result = await capture(argvFor("the vault", "--dry-run", "--json"), null, seams, "scripted");
     expect(result.code).toBe(4);
     const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
@@ -3040,7 +3041,7 @@ describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
   });
 
   it("an unreadable private list fails closed (exit 1) and writes nothing", async () => {
-    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), UNREADABLE_PRIVATE_LIST]);
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, UNREADABLE_PRIVATE_LIST]);
     const result = await capture(argvFor("anything"), null, seams, "scripted");
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/nen pr edit-body: private-name check could not run/);

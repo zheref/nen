@@ -8097,28 +8097,39 @@ matched: zheref/hatsu's `scripts/private_name_check.sh`.
 | [`pr threads settle`](#nen-pr-threads) | `entry[<n>]`, every reply body in the batch file, numbered from 1 | after the batch file's own refusals, before the walk: one hit sends nothing to any thread |
 | [`wake fire`](#nen-wake-fire) | `comment` | before the label is removed. Only with `--comment`: without it nothing is posted, nothing is checked, `privateNameCheck` is `null` and the guard's flags are refused (exit **2**) |
 | [`wake verify`](#nen-wake-verify) | `now`, `flag-marker`, `redrive-marker` — the caller's text in every comment the sweep can post (the rest is nen's wording and GitHub's own run URL) | before the first pull-request read, with or without `--run` |
-| `release-publish` (`bun src/dev/release-publish.ts`, the argv of nen's own `project.verbs.nen.release`) | `title`, `notes` — the release's title and the changelog section it carries | after the repository, tag and release reads, before `gh release create`; every `gh api` call pinned to github.com like the script's others. **Not on `--dry-run`**, which reads nothing from GitHub at all and says so in its plan |
+| `release-publish` (`bun src/dev/release-publish.ts`, the argv of nen's own `project.verbs.nen.release`) | `title`, `notes` — the release's title and the changelog section it carries | after the repository, tag and release reads, before `gh release create`; every `gh api` call pinned to github.com like the script's others. **Not on `--dry-run`**, which reads nothing from GitHub at all and says so in its plan. **Under the declared row** (`nen shu release`, argv `src/dev/release-publish.ts --repo .`) no flag reaches the script and `nen shu` reports any failing step as exit `1`: a hit, or a credential that cannot be shown to see every private repository, stops the release at `1` with no way to pass the opt-out or an ignore file. Run the script directly — `bun src/dev/release-publish.ts --private-names-ignore-file <path>` or, after your own check, `--skip-private-name-check` — or declare the ignore file in the contract's argv |
 
-**Ruled out, by name** ([#363](https://github.com/zheref/nen/issues/363)), each
-because it writes no caller prose to a GitHub text field:
-[`labels sync`](#nen-labels-sync) and [`labels rename`](#nen-labels-rename)
-write label names and descriptions from the declared taxonomy
-(`nen/labels.json`), data reviewed as its own change, not per-call text;
-[`label apply`](#nen-label-apply) and `classify apply` add a label that already
-exists, by name; [`issue attach-sub`](#nen-issue-attach-sub),
-[`pr request-reviews`](#nen-pr-request-reviews), [`pr retarget`](#nen-pr-retarget),
-[`pr mark-ready`](#nen-pr-mark-ready), [`pr merge`](#nen-pr-merge),
-[`pr threads resolve`](#nen-pr-threads) and `run rerun` post no text at all;
-[`issue reconcile`](#nen-issue-reconcile) is read-only; the `runner` verbs set
-a repository **variable** and runner labels, neither readable by the public;
-and [`wc publish`](#nen-wc-publish), [`tag cut --push`](#nen-tag-cut) and
-[`commit write`](#nen-commit-write) move git objects, whose content is the
-repository's own history rather than a field this guard reads.
+**Not guarded, by name** ([#363](https://github.com/zheref/nen/issues/363)).
+Some of these DO carry caller text to GitHub; they are out of #363's scope,
+which is the API text fields, not exempt from the rule:
+
+- **Declared taxonomy data, reviewed as its own change** —
+  [`labels sync`](#nen-labels-sync) sends each label's `--description` from
+  `nen/labels.json` to the label's description field, and
+  [`labels rename`](#nen-labels-rename) its names. *Follow-up: label
+  descriptions.*
+- **Git objects that reach GitHub by push, not through an API text field** —
+  the commit messages [`commit write`](#nen-commit-write) records and
+  [`wc publish`](#nen-wc-publish) pushes, and the annotated tag message
+  [`tag cut --message --push`](#nen-tag-cut) publishes, which GitHub shows.
+  *Follow-ups: `tag cut --message --push`, and the push-side commit messages.*
+- **No text at all** — [`label apply`](#nen-label-apply) and `classify apply`
+  add a label that already exists, by name; [`issue attach-sub`](#nen-issue-attach-sub),
+  [`pr request-reviews`](#nen-pr-request-reviews), [`pr retarget`](#nen-pr-retarget),
+  [`pr mark-ready`](#nen-pr-mark-ready), [`pr merge`](#nen-pr-merge),
+  [`pr threads resolve`](#nen-pr-threads) and `run rerun` post nothing a reader
+  sees as prose; [`issue reconcile`](#nen-issue-reconcile) is read-only.
+- **Not public** — the `runner` verbs set a repository **variable** and runner
+  labels, neither readable by the public. Runner names do appear in public job
+  logs (`runner_name`), but carry only the machine's and the consumer's own
+  name.
 
 - **The list** is `gh api user/repos?visibility=private`, every page of 100,
-  read on every call and never cached or written to disk. A private or
-  **internal** target is not checked and the list is never read: naming a
-  private repository there leaks nothing. The target's visibility is
+  read on every call and never cached or written to disk. A **private** target
+  is not checked and the list is never read: naming a private repository there
+  leaks nothing. An **internal** target is checked like a public one — the
+  whole enterprise can read it ([#363](https://github.com/zheref/nen/issues/363)).
+  The target's visibility is
   `repos/{owner}/{name}`'s `visibility`, or its `private` boolean on a server
   that carries no `visibility`.
 - **The match** is each repository's NAME (the part after the owner),
@@ -8153,6 +8164,14 @@ repository's own history rather than a field this guard reads.
   halves non-empty and whitespace-free), a list that fills 100 pages (and so may be truncated) and a list that
   reads **EMPTY** are each a refusal at exit **1** — never a pass. A token that
   cannot see private repositories would otherwise read green.
+- **The credential's reach** ([#363](https://github.com/zheref/nen/issues/363)).
+  A fine-grained token limited to selected repositories, an app token or an
+  SSO-restricted one returns *some* private repositories, and a name it was
+  never given would read clean. So before the list, `gh api -i user` is read:
+  its `X-OAuth-Scopes` header must be present and include `repo`. Absent (a
+  fine-grained, app or CI token) or without `repo`, the check is unavailable —
+  exit **1**, *"the private-repository list may be partial"* — and a caller
+  that has run its own check passes `--skip-private-name-check`.
 - **The ignore file** is `--private-names-ignore-file <path>`: private
   repositories the caller has ruled too generic to police — one per line, `#`
   comments and blank lines ignored, case-insensitive. A bare `name` exempts
@@ -8160,7 +8179,12 @@ repository's own history rather than a field this guard reads.
   name shared by two owners stays policed until both are exempt). **No default
   path is ever read**: a caller that keeps one passes it (a caller such as Hatsu
   can pass its own `~/.config/hatsu/redaction-ignore`), and a missing or unreadable file is a
-  usage error (exit **2**) before any `gh` call, never an empty list. An
+  usage error (exit **2**) before any `gh` call, never an empty list. **An
+  ignore file whose real path (symlinks resolved) lies inside the working tree
+  holding `--repo`'s root is refused** (exit **2**,
+  [#363](https://github.com/zheref/nen/issues/363)): a list the change under
+  review can edit is an exemption it wrote for itself. Keep it outside the
+  checkout. An
   ignore file that exempts **every** private name is a refusal at exit **1**
   (`every private name is ignored`) — it would police nothing — unless
   `--allow-all-ignored` is given; that flag without an ignore file is a usage
@@ -8212,7 +8236,7 @@ plus `privateNameCheck`, and never carries the refused text: `issue file`
 `pr threads reply` `{ contract, target, pr, thread, replied: false, dryRun }`,
 `pr threads settle` `{ contract, target, pr, from, dryRun, ok: false }`,
 `wake fire` `{ repo, number, label, run, fired: false }`, `wake verify`
-`{ repo, now, dryRun, scanned: 0 }`, and `release-publish`
+`{ repo, dryRun, scanned: 0 }` (no `now`: it is a checked field), and `release-publish`
 `{ schema, sent: false, slug, tag }`.
 
 ### `nen issue attach-sub`
@@ -12892,7 +12916,7 @@ nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <rege
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo-slug <owner/name>` | yes | The repository scanned over `gh api`. | |
-| `--now <ISO-8601>` | yes | The sweep's fixed instant. | Read once, never `Date.now()` -- makes a replay reproducible. |
+| `--now <ISO-8601>` | yes | The sweep's fixed instant. | Read once, never `Date.now()` -- makes a replay reproducible. Must be an ISO-8601 instant with a zone (`2026-09-07T00:00:00Z`), else exit 2 before any call: it is stamped into every comment the sweep posts. |
 | `--author-pattern <regex>` | yes | Which PR authors are in scope. | Nen carries no repository's own agent-login list, so this has no default; refused at the flag (before any `gh` call) if it has a potentially catastrophic-backtracking shape (e.g. `(a+)+`). |
 | `--flag-marker <text>` | no | The idempotency-stamp phrase a detect-only flag comment carries. | Defaults to `nen-wake-guard`; NOT interoperable at that default with the shell sweep this replaces -- set it to that script's own phrase when migrating alongside it. |
 | `--redrive-marker <text>` | no | The idempotency-stamp phrase a redrive comment carries. | Defaults to `nen-wake-redrive`; same interop note. |
@@ -12903,7 +12927,7 @@ nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <rege
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 | `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- prints `scanned <n> PR(s)[ (dry run)]`, then `#<pr> run <id>: <kind> -- <reason>` per action (or `no swallowed wakes found`), then any `warning: ...` lines. `--json`: `{ repo, now, dryRun, scanned, results, warnings, privateNameCheck }`. **The [private-name guard](#the-private-name-guard)** ([#363](https://github.com/zheref/nen/issues/363)) checks the caller's text every posted comment carries -- `--now`, `--flag-marker`, `--redrive-marker` -- before the first pull-request read, with or without `--run`: a hit is exit **4** with nothing read, rerun or posted (`--json`: `{ repo, now, dryRun, scanned: 0, privateNameCheck }`), a check that could not run exit **1**; a `--repo-slug` that is not `owner/name` is exit **2** before any call. Exit 0 on a completed sweep -- a failed redrive or a failed follow-up comment POST is tolerated (reported as a `warning:` line, never a non-zero exit); exit 1 if one of the THREE `gh api` fetches this sweep depends on (the open-PR list, a PR's run history, a PR's comment thread) itself fails, since those go through the throwing `must`/`mustJson` seam rather than the tolerated per-action path; exit 2 on a malformed or catastrophic-shaped `--author-pattern`, before any `gh` call.
+**Output and exit codes** -- prints `scanned <n> PR(s)[ (dry run)]`, then `#<pr> run <id>: <kind> -- <reason>` per action (or `no swallowed wakes found`), then any `warning: ...` lines. `--json`: `{ repo, now, dryRun, scanned, results, warnings, privateNameCheck }`. **The [private-name guard](#the-private-name-guard)** ([#363](https://github.com/zheref/nen/issues/363)) checks the caller's text every posted comment carries -- `--now`, `--flag-marker`, `--redrive-marker` -- before the first pull-request read, with or without `--run`: a hit is exit **4** with nothing read, rerun or posted (`--json`: `{ repo, dryRun, scanned: 0, privateNameCheck }`, never the checked text), a check that could not run exit **1**; a `--repo-slug` that is not `owner/name`, or a `--now` that is not an ISO-8601 instant, is exit **2** before any call. Exit 0 on a completed sweep -- a failed redrive or a failed follow-up comment POST is tolerated (reported as a `warning:` line, never a non-zero exit); exit 1 if one of the THREE `gh api` fetches this sweep depends on (the open-PR list, a PR's run history, a PR's comment thread) itself fails, since those go through the throwing `must`/`mustJson` seam rather than the tolerated per-action path; exit 2 on a malformed or catastrophic-shaped `--author-pattern`, before any `gh` call.
 
 **Example**
 

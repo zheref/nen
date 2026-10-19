@@ -479,11 +479,15 @@ usage:
       name two owners share, the first entry the ignore file does not
       exempt). The body that passed is the body sent: 'gh' gets it on stdin
       ('--body-file -'), never the path, so nothing written to the file after
-      the check is published. A PRIVATE or INTERNAL
-      target is not checked (naming a private repository there leaks
-      nothing) and the list is never read. FAIL CLOSED: an unreadable target
-      visibility, an unreadable list, a list that may be truncated or one
-      that reads EMPTY refuses with exit 1 -- never a pass. nen never
+      the check is published. A PRIVATE target is not checked (naming a
+      private repository there leaks nothing) and the list is never read; an
+      INTERNAL one is checked like a public one, the enterprise can read it
+      (zheref/nen#363). FAIL CLOSED: an unreadable target visibility, an
+      unreadable list, a list that may be truncated or one that reads EMPTY
+      refuses with exit 1 -- never a pass -- and so does a credential that
+      cannot be shown to see every private repository: 'gh api -i user' must
+      answer an X-OAuth-Scopes header that includes 'repo' (a fine-grained,
+      app or CI token answers none, and its list may be partial). nen never
       rewrites the text: redact and retry. --skip-private-name-check is the
       opt-out for a caller that has run its own check; nothing is read, and
       every run that uses it says so on stderr.
@@ -491,7 +495,9 @@ usage:
       generic to police: one per line, '#' comments and blank lines ignored,
       case-insensitive; a bare 'name' exempts that name under every owner,
       an 'owner/name' line that slug only. No default path is ever read, and
-      a missing file is a usage error (exit 2). An ignore file that exempts
+      a missing file is a usage error (exit 2), and so is one whose real
+      path lies inside the working tree holding --repo's root (the change
+      under review must not write its own exemption). An ignore file that exempts
       EVERY private name refuses (exit 1, "every private name is ignored")
       unless --allow-all-ignored is given. An ignored hit never blocks
       and is never silent: 'ignored: <field>:<line>: private repository #k

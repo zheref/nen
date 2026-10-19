@@ -43,10 +43,14 @@
 // would be a hole nobody reviewed.
 //
 // FAIL CLOSED, ALWAYS. An unreadable target visibility, an unreadable list, a
-// list that may be truncated and a list that reads EMPTY are each a refusal --
+// list that may be truncated, a list that reads EMPTY and a credential that
+// cannot be shown to see every private repository (no `repo` in its
+// X-OAuth-Scopes, zheref/nen#363) are each a refusal --
 // a token that cannot see private repositories would otherwise read green, and
 // "could not look" must never read the same as "found nothing".
 
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, join as joinPath, resolve as resolvePath, sep } from "node:path";
 import { GH, outputLines, type Seams } from "../seam/exec.js";
 import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
@@ -145,12 +149,15 @@ export interface CheckedText {
  * The check's verdict, carried on every --json report of the three verbs.
  *
  * `checked`/`clean` -- the target is public and nothing matched.
- * `skipped-private-target` -- a private or internal target: naming a private
- *   repository inside one leaks nothing, so the list is never read.
+ * `skipped-private-target` -- a private target: naming a private repository
+ *   inside one leaks nothing, so the list is never read. An INTERNAL target is
+ *   checked like a public one (zheref/nen#363, Feitan F9): the whole
+ *   enterprise can read it.
  * `skipped-by-flag` -- the opt-out was given; nothing was read.
  * `refused` -- at least one hit; nothing was written.
  * `unavailable` -- the check could not be performed (visibility or list
- *   unreadable, empty or possibly truncated, or every name on it ignored
+ *   unreadable, empty or possibly truncated, a credential that cannot be
+ *   shown to see every private repository, or every name on it ignored
  *   without --allow-all-ignored); nothing was written.
  */
 export interface PrivateNameCheck {
@@ -212,6 +219,82 @@ export function readTargetVisibility(seams: GuardSeams, target: Target): Visibil
   const isPrivate = record["private"];
   if (typeof isPrivate === "boolean") return isPrivate ? "private" : "public";
   throw new PrivateListUnavailableError("the target's repository read carried no visibility");
+}
+
+/**
+ * THE LIST MAY BE PARTIAL, and a partial list is a quieter guard (zheref/nen#363,
+ * Feitan F7). A fine-grained PAT limited to selected repositories, a GitHub App
+ * token, or an SSO-restricted token answers `user/repos?visibility=private`
+ * with SOME private repositories, and a name it was never given reads clean.
+ * Only a classic token proves its reach: `gh api -i user` answers an
+ * `X-OAuth-Scopes` header, and `repo` in it means every private repository
+ * the user can see. So the header must be present and name `repo`; absent (a
+ * fine-grained or app token) or without `repo`, the check is unavailable --
+ * the caller that has run its own check passes --skip-private-name-check.
+ */
+export function requireFullPrivateReach(seams: GuardSeams): void {
+  const result = seams.run(GH, ["api", "-i", "user"]);
+  if (result.spawnFailed) {
+    throw new PrivateListUnavailableError("gh could not be started, so the credential's reach could not be read");
+  }
+  if (result.code !== 0) {
+    throw new PrivateListUnavailableError(`could not read the credential's scopes (gh exited ${result.code})`);
+  }
+  let scopes: string | null = null;
+  for (const line of result.stdout.split(/\r?\n/)) {
+    if (line.trim() === "") break;
+    const match = /^x-oauth-scopes:(.*)$/i.exec(line);
+    if (match !== null) scopes = match[1] ?? "";
+  }
+  if (scopes === null) {
+    throw new PrivateListUnavailableError(
+      "the private-repository list may be partial: the credential carries no X-OAuth-Scopes header (a fine-grained, app or CI token), so it cannot be shown to see every private repository",
+    );
+  }
+  const granted = scopes.split(",").map((scope): string => scope.trim().toLowerCase());
+  if (!granted.includes("repo")) {
+    throw new PrivateListUnavailableError(
+      "the private-repository list may be partial: the credential's scopes do not include 'repo', so it cannot be shown to see every private repository",
+    );
+  }
+}
+
+/**
+ * The working tree a path sits inside, or null: the nearest ancestor of
+ * `root` holding a `.git` entry (a directory, or a linked worktree's file).
+ */
+function workingTreeOf(root: string): string | null {
+  let dir = resolvePath(root);
+  for (;;) {
+    if (existsSync(joinPath(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * AN IGNORE FILE INSIDE THE TREE UNDER REVIEW IS REFUSED (zheref/nen#363,
+ * Feitan F8). The file exempts names; one the change under review can edit is
+ * an exemption that change wrote for itself. Returns the reason when the
+ * file's REAL path (symlinks resolved) lies inside the working tree holding
+ * `root`, else null. A file that cannot be resolved is the reader's to refuse.
+ */
+export function ignoreFileInsideTree(path: string, root: string): string | null {
+  const tree = workingTreeOf(root);
+  if (tree === null) return null;
+  let realFile: string;
+  let realTree: string;
+  try {
+    realFile = realpathSync(path);
+    realTree = realpathSync(tree);
+  } catch {
+    return null;
+  }
+  const inside = realFile === realTree || realFile.startsWith(realTree.endsWith(sep) ? realTree : `${realTree}${sep}`);
+  return inside
+    ? `the ignore file '${path}' lies inside the working tree '${tree}': a list the change under review can edit is an exemption it wrote for itself. Keep it outside the checkout (e.g. under your config directory).`
+    : null;
 }
 
 /**
@@ -493,11 +576,12 @@ export function checkPrivateNames(
     if (!(error instanceof PrivateListUnavailableError)) throw error;
     return { result: "unavailable", targetVisibility: null, ...unread, hits: [], error: error.message };
   }
-  if (visibility !== "public") {
+  if (visibility === "private") {
     return { result: "skipped-private-target", targetVisibility: visibility, ...unread, hits: [], error: null };
   }
   let list: readonly string[];
   try {
+    requireFullPrivateReach(seams);
     list = readPrivateList(seams);
   } catch (error) {
     if (!(error instanceof PrivateListUnavailableError)) throw error;

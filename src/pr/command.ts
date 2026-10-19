@@ -167,15 +167,17 @@ PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
   PRIVATE REPOSITORY NAMES) before the write -- on --dry-run too: the text
   is compared against the credential's live private repository list, a
   private repository named in text bound for a PUBLIC target exits 4 and
-  writes nothing, a check that could not run exits 1, a private or internal
-  target is not checked. The guard's stderr lines begin 'nen pr <subcommand>:'
+  writes nothing, a check that could not run exits 1 (a credential whose
+  X-OAuth-Scopes lacks 'repo' included: its list may be partial), a private
+  target is not checked and an internal one is. The guard's stderr lines begin 'nen pr <subcommand>:'
   and never print the name; --json adds 'privateNameCheck'. Fields checked:
   'open' title and body, before any other call; 'edit-body' body, after the
   certifying read; 'threads reply' body, before the walk; 'threads settle'
   every entry's body (entry[<n>], from 1), after the file's own refusals and
   before the walk. On 'threads', 4 is also 'no such thread' / 'the pull
-  request is not visible': a guard refusal is the one carrying
-  privateNameCheck. 'open' and 'edit-body' hand gh the checked bytes on
+  request is not visible': a guard refusal is told apart by its stderr lines
+  and, under --json, by privateNameCheck.result "refused", which those
+  refusals never print. 'open' and 'edit-body' hand gh the checked bytes on
   stdin ('--body-file -'), never the path.
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]

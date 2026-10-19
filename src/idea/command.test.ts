@@ -7,6 +7,7 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { ideaCommand } from "./command.js";
+import { FULL_REACH_ROW, SCOPES_CALL } from "../issue/privacy.testkit.js";
 
 /**
  * THE DEFAULT PRIVATE-NAME GUARD ANSWER (zheref/nen#363), for every test that
@@ -283,9 +284,9 @@ describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
   ];
 
   it("a private name in the body on a PUBLIC target refuses with exit 4 before any write, and never prints the name", async () => {
-    const result = await capture(filing("ported from the vault"), [PUBLIC, LIST], BANKAI_REPO, "scripted");
+    const result = await capture(filing("ported from the vault"), [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
     expect(result.code).toBe(4);
-    expect(result.calls).toEqual(["gh api repos/zheref/nen", LIST_PAGE]);
+    expect(result.calls).toEqual(["gh api repos/zheref/nen", SCOPES_CALL, LIST_PAGE]);
     const all = [...result.out, ...result.err].join("\n");
     expect(all).toContain("nen idea file: body:1: private repository #2");
     expect(all).not.toMatch(/vault/i);
@@ -294,14 +295,14 @@ describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
   it("a private name in the TITLE refuses too", async () => {
     const argv = filing("nothing private");
     argv[argv.indexOf("--title") + 1] = "about Hidden-Thing";
-    const result = await capture(argv, [PUBLIC, LIST], BANKAI_REPO, "scripted");
+    const result = await capture(argv, [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
     expect(result.code).toBe(4);
     expect(result.err.join("\n")).toContain("title:1: private repository #1");
     expect(result.calls.some((line): boolean => line.startsWith("gh issue create"))).toBe(false);
   });
 
   it("--json: the refusal is { filed: false, privateNameCheck }", async () => {
-    const result = await capture(filing("the vault", "--json"), [PUBLIC, LIST], BANKAI_REPO, "scripted");
+    const result = await capture(filing("the vault", "--json"), [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
     expect(result.code).toBe(4);
     const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(report["filed"]).toBe(false);
@@ -319,7 +320,7 @@ describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
   it("an unreadable private list fails closed (exit 1) and files nothing", async () => {
     const result = await capture(
       filing("nothing private"),
-      [PUBLIC, { match: LIST_PAGE, result: { code: 1, stderr: "HTTP 401" } }],
+      [PUBLIC, FULL_REACH_ROW, { match: LIST_PAGE, result: { code: 1, stderr: "HTTP 401" } }],
       BANKAI_REPO,
       "scripted",
     );
@@ -329,7 +330,7 @@ describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
   });
 
   it("a clean filing on a PUBLIC target files, and --json carries the clean verdict", async () => {
-    const result = await capture(filing("nothing private", "--json"), [PUBLIC, LIST, ...created], BANKAI_REPO, "scripted");
+    const result = await capture(filing("nothing private", "--json"), [PUBLIC, FULL_REACH_ROW, LIST, ...created], BANKAI_REPO, "scripted");
     expect(result.code).toBe(0);
     expect((JSON.parse(result.out.join("\n")) as { privateNameCheck: { result: string } }).privateNameCheck.result).toBe("clean");
   });
