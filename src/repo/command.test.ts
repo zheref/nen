@@ -81,14 +81,14 @@ describe("nen repo resolve -- dispatches through the union registry", () => {
     expect(text.out[0]).toBe("origin: https://***@github.com/zheref/bankai-core.git");
     const json = await capture(["repo", "resolve"], run, BANKAI_REPO, true);
     expect(json.code).toBe(0);
-    for (const result of [text, json]) expect([...result.out, ...result.err].join("\n")).not.toContain("ghp_FAKE0000");
+    for (const result of [text, json]) expect([...result.out, ...result.err].join("\n")).not.toMatch(/fake0000/i);
   });
 
   it("no-token form refuses an unparseable origin without echoing its userinfo (SEC-5, zheref/nen#373)", async () => {
     const result = await capture(["repo", "resolve"], (): CommandResult => ({ code: 0, stdout: "https://user:ghp_FAKE0000@github.com/only\n", stderr: "", spawnFailed: false }));
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toContain("'https://***@github.com/only'");
-    expect([...result.out, ...result.err].join("\n")).not.toContain("ghp_FAKE0000");
+    expect([...result.out, ...result.err].join("\n")).not.toMatch(/fake0000/i);
   });
 
   // zheref/nen#17: the bankai fixture's product_codes nests a `$comment`, the

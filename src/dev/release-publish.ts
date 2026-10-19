@@ -61,6 +61,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { parseRemoteUrl } from "../github/target.js";
+import { redactRemoteUrl } from "../seam/exec.js";
 import { looksLikeOwnerSlug } from "../repo/root.js";
 import { renderArgv } from "../shu/render.js";
 
@@ -155,10 +156,13 @@ export const GITHUB_HOST = "github.com";
  * `scheme://[user@]host[:port]/path` -- lowercased, or `undefined` for anything else.
  */
 export function remoteHost(url: string): string | undefined {
-  const trimmed = url.trim();
-  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d*)?\//i.exec(trimmed);
+  // Read off the REDACTED URL, with no `@` in the host (SEC-5, zheref/nen#373):
+  // read raw, `https://<token>@/o/r` answered '<token>@' and the other-host
+  // refusal printed it.
+  const trimmed = redactRemoteUrl(url.trim());
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:@]+)(?::\d*)?\//i.exec(trimmed);
   if (scheme !== null) return scheme[1]?.toLowerCase();
-  const scp = /^[^@/:]+@([^:/]+):/.exec(trimmed);
+  const scp = /^[^@/:]+@([^:/@]+):/.exec(trimmed);
   return scp?.[1]?.toLowerCase();
 }
 
@@ -551,6 +555,14 @@ export function selfTest(): SelfTestResult {
       const err = capture();
       const code = releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsHost), err.io);
       ok(code === 2 && err.text().includes("git.example.com") && callsHost.length === 0, `an origin on another host (${remote}) refuses (2) before any gh call`);
+    }
+    // zheref/nen#373: a credential with no host after it is never read as the host.
+    for (const remote of ["https://FAKE0000@/acme/widget.git", "https://FAKE0000@:443/acme/widget.git", "https://user:FAKE0000@/acme/widget.git"]) {
+      gg("remote", "set-url", "origin", remote);
+      const callsTok: string[][] = [];
+      const err = capture();
+      const code = releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsTok), err.io);
+      ok(code === 2 && !/fake0000/i.test(err.text()) && callsTok.length === 0, `a host-less origin carrying a credential (${remote.replace("FAKE0000", "***")}) refuses (2) without echoing it`);
     }
     const calls2i: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], calls2i), quiet)) === 0 &&

@@ -208,18 +208,35 @@ describe("verifyCanonCheckout -- five facts, each its own named failure", () => 
     const path = dir();
     const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://me:s3cret@github.com/Owner/Handbooks\n" } })), path, SOURCE, REF, CONSUMER);
     expect("verified" in result && result.verified.origin).toBe("https://***@github.com/Owner/Handbooks");
-    expect(JSON.stringify(result)).not.toMatch(/s3cret/);
+    expect(JSON.stringify(result)).not.toMatch(/s3cret/i);
     // A token standing alone as the userinfo, too short for the GitHub shape.
     const bare = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://ghp_FAKE0000@github.com/Owner/Handbooks\n" } })), path, SOURCE, REF, CONSUMER);
     expect("verified" in bare && bare.verified.origin).toBe("https://***@github.com/Owner/Handbooks");
-    expect(JSON.stringify(bare)).not.toMatch(/ghp_FAKE0000/);
+    expect(JSON.stringify(bare)).not.toMatch(/fake0000/i);
+  });
+
+  it("never reads a userinfo with no host after it as the host -- wrong-host and no-consumer-origin (Nobunaga round 1, zheref/nen#373)", () => {
+    const path = dir();
+    for (const url of ["https://FAKE0000@/owner/handbooks", "https://FAKE0000@:443/owner/handbooks", "https://user:FAKE0000@/owner/handbooks"]) {
+      expect(remoteHost(url), url).toBeNull();
+      // The source's origin: the refusal says 'no host', never the token.
+      const source = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: `${url}\n` } })), path, SOURCE, REF, CONSUMER);
+      expect(source, url).toMatchObject({ failure: { code: "wrong-host", message: expect.stringMatching(/is on no host, but the consumer's origin is on github\.com/) as unknown } });
+      expect(JSON.stringify(source), url).not.toMatch(/fake0000/i);
+      // The consumer's origin: no host, so the consumer has no origin to hold the canon to.
+      const consumer = verifyCanonCheckout(new ScriptedSeams(gitFor(path, {}, CONSUMER, { stdout: `${url.replace("handbooks", "consumer")}\n` })), path, SOURCE, REF, CONSUMER);
+      expect(consumer, url).toMatchObject({ failure: { code: "no-consumer-origin", message: expect.stringContaining("https://***@") as unknown } });
+      expect(JSON.stringify(consumer), url).not.toMatch(/fake0000/i);
+    }
+    // An scp userinfo carrying a '/' is one userinfo, not a host called 'oauth2'.
+    expect(remoteHost("oauth2:FAKE0000/x@github.com:owner/handbooks")).toBe("github.com");
   });
 
   it("echoes no userinfo when an unparseable origin is refused as the wrong source (zheref/nen#373)", () => {
     const path = dir();
     const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://ghp_FAKE0000@github.com/Owner/Handbooks/extra/seg\n" } })), path, SOURCE, REF, CONSUMER);
     expect(result).toMatchObject({ failure: { code: "wrong-source" } });
-    expect(JSON.stringify(result)).not.toMatch(/ghp_FAKE0000/);
+    expect(JSON.stringify(result)).not.toMatch(/fake0000/i);
     expect(JSON.stringify(result)).toContain("https://***@github.com/Owner/Handbooks/extra/seg");
   });
 });

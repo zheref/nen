@@ -421,9 +421,14 @@ function redactTokens(text: string): string {
  * for the pattern) would be echoed whole. So here no userinfo survives --
  * `user:secret@`, `token@`, `git@` alike -- in either spelling git writes:
  * `scheme://userinfo@host/...` (the same reading of where the userinfo ends,
- * `userinfoEnd`) and scp's `userinfo@host:path`. The GitHub token shapes are
- * then redacted wherever else they stand (a path, a query). Every echo site
- * of an origin or remote URL goes through this one helper.
+ * `userinfoEnd`) and scp's `userinfo@host:path`, whose userinfo is everything
+ * up to the LAST `@` before `host:` -- a `/` included, so a secret carrying
+ * one is not left behind (Nobunaga, hanten round 1 on zheref/nen#373). The
+ * GitHub token shapes are then redacted wherever else they stand (a path, a
+ * query). It is the reading every origin echo uses: the sites that print the
+ * URL call it directly, and the host readers (canon/checkout.ts and
+ * dev/release-publish.ts `remoteHost`, surface/install.ts `normalizeRemote`)
+ * read the redacted URL, so no part of a userinfo can be taken for a host.
  */
 export function redactRemoteUrl(url: string): string {
   return redactTokens(
@@ -433,9 +438,10 @@ export function redactRemoteUrl(url: string): string {
         return at === -1 ? whole : `://***${run.slice(at)}`;
       })
       // scp syntax has no `://`: everything up to the last `@` before
-      // `host:` is the userinfo. A `/` ends the candidate, because git reads
-      // a slash before the colon as a local path, not a remote.
-      .replace(/(^|\s)[^\s/]*@(?=[^\s@/:]+:)/g, "$1***@"),
+      // `host:` is the userinfo, whatever it carries -- the same reading
+      // `parseRemoteUrl`'s `^[^@]+@` makes of a userinfo with a `/` in it.
+      // A token that carries a `://` was a scheme URL, handled above.
+      .replace(/\S+/g, (token: string): string => (token.includes("://") ? token : token.replace(/^\S*@(?=[^\s@/:]+:)/, "***@"))),
   );
 }
 

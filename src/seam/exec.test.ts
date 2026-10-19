@@ -119,6 +119,9 @@ describe("redactRemoteUrl -- a remote URL keeps no userinfo at all (SEC-5, zhere
     expect(redactRemoteUrl("git@github.com:zheref/nen.git")).toBe("***@github.com:zheref/nen.git");
     expect(redactRemoteUrl("ghp_FAKE0000@github.com:only")).toBe("***@github.com:only");
     expect(redactRemoteUrl("user:FAKE@host:o/n")).toBe("***@host:o/n");
+    // One reading with parseRemoteUrl's: the userinfo runs to the last '@' before 'host:', a '/' included.
+    expect(redactRemoteUrl("oauth2:FAKE0000/x@github.com:owner/handbooks")).toBe("***@github.com:owner/handbooks");
+    expect(redactRemoteUrl("a/b@c@host:o/n")).toBe("***@host:o/n");
   });
 
   it("keeps a URL that carries no userinfo exactly as it is", () => {

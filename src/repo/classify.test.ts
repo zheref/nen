@@ -141,6 +141,6 @@ describe("readOrigin -- an unreadable origin is refused without its userinfo (SE
       message = (error as Error).message;
     }
     expect(message).toContain("https://***@github.com/only");
-    expect(message).not.toContain("ghp_FAKE0000");
+    expect(message).not.toMatch(/fake0000/i);
   });
 });

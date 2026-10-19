@@ -85,7 +85,7 @@ describe("targetFromRemote", () => {
         message = (error as Error).message;
       }
       expect(message).toContain("'https://***@github.com/owner/name/extra'");
-      expect(message).not.toContain("ghp_FAKE0000");
+      expect(message).not.toMatch(/fake0000/i);
       expect(message).not.toContain("user:");
     }
   });

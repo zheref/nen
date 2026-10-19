@@ -62,7 +62,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
-import { outputLines, redactRemoteCredentials, type Seams } from "../seam/exec.js";
+import { outputLines, redactRemoteCredentials, redactRemoteUrl, type Seams } from "../seam/exec.js";
 import {
   classifyError,
   identityOf,
@@ -1275,7 +1275,11 @@ function describeSource(source: KnownSource): string {
  * matches. Only the HOST is lower-cased; a trailing `/` and `.git` are dropped.
  */
 export function normalizeRemote(url: string): string | null {
-  const text = url.trim();
+  // The userinfo is dropped by the ONE reading of where it ends (SEC-5,
+  // zheref/nen#373): this regex's authority stops at the first '/', so a
+  // secret carrying one ('oauth2:tok/en@host') used to survive into the
+  // host/path that describeSource prints.
+  const text = redactRemoteUrl(url.trim());
   let host: string;
   let path: string;
   const absolute = /^[a-z][a-z0-9+.-]*:\/\/([^/]*)(\/.*)?$/i.exec(text);

@@ -8,7 +8,9 @@
 // is set with the real git, so the URL reaches nen exactly as `git remote
 // get-url` answers it. The token is a made-up literal, deliberately too short
 // for the GitHub token shape, so this file passes only if the USERINFO is
-// redacted rather than the token's pattern.
+// redacted rather than the token's pattern. Every no-leak assertion is
+// case-insensitive: a host reader lower-cases what it returns, so a leaked
+// token can come back as 'ghp_fake0000' (Nobunaga, hanten round 1).
 //
 // It SKIPS where `git` or `bun` is missing, as ../stage/list.integration.test.ts does.
 
@@ -67,7 +69,7 @@ describe.skipIf(!HAVE_GIT || !HAVE_BUN)("a token-bearing, unparseable origin (zh
       for (const json of [false, true]) {
         const result = nen(repo, ["runner", "inventory", ...(json ? ["--json"] : [])]);
         expect(result.code).toBe(2);
-        expect(result.stdout + result.stderr).not.toContain(TOKEN);
+        expect((result.stdout + result.stderr).toLowerCase()).not.toContain(TOKEN.toLowerCase());
         expect(result.stdout + result.stderr).toContain("https://***@github.com/owner/name/extra");
       }
     });
@@ -78,7 +80,7 @@ describe.skipIf(!HAVE_GIT || !HAVE_BUN)("a token-bearing, unparseable origin (zh
     for (const argv of [["repo", "resolve", "--repo", repo], ["repo", "resolve", "--repo", repo, "--json"], ["repo", "classify", "--repo", repo], ["repo", "classify", "--repo", repo, "--json"]]) {
       const result = nen(repo, argv);
       expect(result.code).toBe(1);
-      expect(result.stdout + result.stderr).not.toContain(TOKEN);
+      expect((result.stdout + result.stderr).toLowerCase()).not.toContain(TOKEN.toLowerCase());
       expect(result.stdout + result.stderr).toContain("https://***@github.com/only");
     }
   });

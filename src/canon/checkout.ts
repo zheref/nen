@@ -437,11 +437,16 @@ export function verificationGitEnv(env: Readonly<Record<string, string | undefin
  * anything else with no host (Nobunaga N4).
  */
 export function remoteHost(url: string): string | null {
-  const trimmed = url.trim();
-  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[^@/]*@)?(\[[^\]]+\]|[^/:]+)/.exec(trimmed);
+  // THE HOST IS READ OFF THE REDACTED URL, and never holds an `@` (SEC-5,
+  // Nobunaga round 1 on zheref/nen#373): read raw, `https://<token>@/o/n` --
+  // a userinfo with no host after it -- answered '<token>@' as its host, and
+  // the wrong-host refusal printed it. After `redactRemoteUrl` every userinfo
+  // is `***`, and a host must END the authority, so that URL has no host.
+  const trimmed = redactRemoteUrl(url.trim());
+  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[^@/]*@)?(\[[^\]]+\]|[^/:@?#]+)(?=[/:?#]|$)/.exec(trimmed);
   if (scheme !== null) return scheme[1] === undefined || scheme[1] === "" ? null : scheme[1].toLowerCase();
   if (trimmed.includes("://")) return null;
-  const scp = /^(?:[^@/:]+@)?([^/:]+):(?!\/\/)/.exec(trimmed);
+  const scp = /^(?:[^@/:]+@)?([^/:@]+):(?!\/\/)/.exec(trimmed);
   if (scp === null || scp[1] === undefined) return null;
   // `C:` on Windows is a drive, not a host: a one-letter "host" is a path.
   if (scp[1].length === 1) return null;

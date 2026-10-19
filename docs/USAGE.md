@@ -14177,7 +14177,8 @@ matches); and no other `*@<marketplace>` key is in `installed_plugins.json`.
 The last two are checked **again** from a fresh read right after the
 uninstall: a plugin installed from the marketplace meanwhile, or a source that
 changed, leaves it known as an action owed. A recorded source URL is shown only
-in that normalised form, so a `user:token@` in it never reaches any output; any
+in that normalised form, its whole userinfo dropped first -- a secret carrying a
+`/` included -- so no part of a `user:token@` in it reaches any output; any
 other root or path a surface reports is printed with credentials redacted. A known marketplace of the same name whose
 source is anything else is **refused** (exit 3: installing beside it is not
 safe either). One that other plugins depend on is left known, and its removal is

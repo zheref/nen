@@ -1260,6 +1260,13 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     expect(result.code).toBe(3);
     expect(String(result.doc()["reason"])).toMatch(/'shared-market' comes from the git source github.com\/someone-else\/other-repo, not this checkout/);
     expect(commandsOf(s)).not.toContain("claude plugin marketplace remove shared-market");
+    // zheref/nen#373: a recorded secret carrying a '/' is dropped with the rest of the userinfo.
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { "shared-market": { source: { source: "git", url: "https://oauth2:FAKE0000/with-slash@gitlab.example/o/n" } } });
+    const slashed = await capture([...installArgs(w, "claude-code"), "--dry-run", "--json"], seams(w, [git(w.root), ok("git remote get-url origin", "git@github.com:me/zephyr.git\n")]));
+    expect(slashed.code).toBe(3);
+    expect(String(slashed.doc()["reason"])).toMatch(/comes from the git source gitlab\.example\/o\/n, not this checkout/);
+    expect([...slashed.out, ...slashed.err].join("\n")).not.toMatch(/fake0000|with-slash|oauth2/i);
+    writeJson(join(w.cfg, "plugins", "known_marketplaces.json"), { "shared-market": { source: { source: "github", repo: "someone-else/other-repo" } } });
     // A directory source elsewhere, or none recorded, is not ours either.
     for (const known of [{ source: { source: "directory", path: w.other } }, {}]) {
       const v = world();
@@ -1309,6 +1316,8 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
       "https://user:tok@GITHUB.com/me/zephyr.git/",
       "ssh://git@github.com:22/me/zephyr.git",
       "git+https://github.com/me/zephyr",
+      "https://oauth2:tok/with-slash@github.com/me/zephyr",
+      "oauth2:tok/x@github.com:me/zephyr",
     ]) {
       expect(normalizeRemote(url), url).toBe("github.com/me/zephyr");
     }
