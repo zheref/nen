@@ -716,7 +716,7 @@ describe("--reviewer-login and the anchored name-as-login fallback (zheref/nen#2
       values: { "gh-repo": "zheref/example", gates: GATES },
       booleans: new Set<string>(),
       lists: { "reviewer-login": [`copilot=${BOT}`] },
-      repoFlag: null,
+      repoFlag: OUTSIDE_ROOT,
     };
     const read = await readReady("9", input, stub);
     expect(read.kind === "verdict" && read.report.meta.warnings.some((w) => w.startsWith("--reviewer-login is read only when"))).toBe(true);
