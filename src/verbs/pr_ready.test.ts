@@ -598,7 +598,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       declaredExclusionsSource: "zheref/example@basebase",
       notes: [],
       deliveryPr: false,
-      identities: { source: "schema", path: "/repo/nen/gates.json" },
+      identities: { source: "schema", path: "/repo/nen/gates.json", read: "gates-flag" },
       dependabotCarveOut: false,
       warnings: [],
       evaluatedAt: "2025-01-01T00:00:00Z",
@@ -2022,7 +2022,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(report?.meta.notes).toEqual([]);
   });
 
-  it("without --gates, reads the CHECKOUT's own nen/gates.json for identities -- and still takes exclusions from the base (N8)", async () => {
+  it("without --gates, reads identities AND exclusions from the base; a base with no file falls back for identities only (N8, zheref/nen#372)", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-249-checkout-"));
     dirs.push(root);
     mkdirSync(join(root, "nen"), { recursive: true });
@@ -2037,12 +2037,22 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
       return JSON.parse(out.join("\n")) as ReadyReport;
     };
     const atBase = await own(withRedWindows(baseDeclares([RULING])));
-    expect(atBase.meta.identities.path).toBe(join(root, "nen", "gates.json"));
+    expect(atBase.meta.identities).toEqual({
+      source: "schema",
+      path: "zheref/example@basebase:nen/gates.json",
+      read: "base",
+    });
     expect(atBase.verdict).toBe("ready");
     expect(atBase.meta.declaredExclusions[0]?.status).toBe("honoured");
     const headOnly = await own(withRedWindows(baseDeclares(null)));
     expect(headOnly.verdict).toBe("not-ready");
+    expect(headOnly.meta.identities).toEqual({
+      source: "schema",
+      path: join(root, "nen", "gates.json"),
+      read: "local-fallback",
+    });
     expect(headOnly.meta.warnings.join("\n")).toMatch(/in the local nen\/gates\.json but not at the pull request's base/);
+    expect(headOnly.meta.warnings.join("\n")).toMatch(/gate inputs read from the LOCAL [\s\S]*the base declares no nen\/gates\.json/);
   });
 
   it("a PR whose HEAD adds an exclusion for its own red check reads not-ready, and says why (Feitan F1)", async () => {
@@ -2211,6 +2221,277 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     );
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/checks\.excluded\[0\]\.reason/);
+  });
+});
+
+// ── every nen/gates.json input at the base (zheref/nen#372) ─────────────────
+
+describe("prReady -- every nen/gates.json input is read at the PR's base (zheref/nen#372)", () => {
+  const dirs: string[] = [];
+  afterEach((): void => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  // The BASE's rules: one reviewer, owed a round at head, posting as exactly
+  // `rev-bot[bot]`. Nothing else satisfies it.
+  // A delivery author nobody here is, so the CON-40 carve-out never fires.
+  const DELIVERY = { author_pattern: { pattern: "^delivery-bot\\[bot\\]$", ignoreCase: false }, head_ref_prefixes: ["integration/"], labels: [] };
+  const STRICT = {
+    version: 1,
+    delivery: DELIVERY,
+    reviewers: [{ name: "rev", login_pattern: { pattern: "^rev-bot\\[bot\\]$", ignoreCase: false } }],
+    approval_policy: "review-round-only",
+    default_approvers: [],
+    base_reviewers: ["rev"],
+  };
+  // The HEAD's edit: the same reviewer, its pattern widened to admit the PR's
+  // own author -- the shape Feitan named on #264.
+  const LOOSE_LOGIN = {
+    ...STRICT,
+    reviewers: [{ name: "rev", login_pattern: { pattern: "^(rev-bot\\[bot\\]|intruder)$", ignoreCase: false } }],
+  };
+  // A quorum of two over two bots, where only one has a round.
+  const QUORUM_OF_TWO = {
+    version: 1,
+    delivery: DELIVERY,
+    reviewers: [
+      { name: "alpha", login_pattern: { pattern: "^alpha\\[bot\\]$", ignoreCase: false } },
+      { name: "beta", login_pattern: { pattern: "^beta\\[bot\\]$", ignoreCase: false } },
+    ],
+    approval_policy: "review-round-only",
+    default_approvers: [],
+    base_reviewers: ["alpha"],
+    round_quorum: { any_of: ["alpha", "beta"], minimum: 2 },
+  };
+  const QUORUM_OF_ONE = { ...QUORUM_OF_TWO, round_quorum: { any_of: ["alpha", "beta"], minimum: 1 } };
+
+  /** A checkout -- the PR's own head, as a worktree holds it -- carrying `local`. */
+  function checkout(local: Record<string, unknown>): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-372-"));
+    dirs.push(root);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "gates.json"), JSON.stringify(local));
+    return root;
+  }
+  /** A green PR reviewed at head by `logins`, whose BASE answers `atBase`. */
+  function source(logins: readonly string[], atBase: () => Promise<string | null>): PrStateSource {
+    return stubSource({
+      reviews: async (): Promise<unknown[]> =>
+        logins.map((login) => ({ user: { login }, state: "COMMENTED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" })),
+      fileAtRef: async (_repo: PrRef, path: string, ref: string): Promise<string | null> => {
+        expect(path).toBe("nen/gates.json");
+        expect(ref).toBe("basebase");
+        return atBase();
+      },
+    });
+  }
+  const declares = (value: Record<string, unknown>) => async (): Promise<string | null> => JSON.stringify(value);
+  const run = async (
+    root: string,
+    src: PrStateSource | null,
+    mode: "json" | "explain" | "plain" = "json",
+    values: Record<string, string> = {},
+  ): Promise<{ code: number; out: string[]; report: ReadyReport | null }> => {
+    const { io, out, err } = capture();
+    const code = await prReady(
+      input({
+        values: { "gh-repo": "zheref/example", ...values },
+        repoFlag: root,
+        booleans: new Set(mode === "plain" ? [] : [mode]),
+      }),
+      io,
+      stubDeps(src),
+    );
+    // A refusal prints nothing on stdout; name it rather than failing on the parse.
+    expect(code === 2 ? err.join("\n") : "", "refused").toBe("");
+    return { code, out, report: mode === "json" ? (JSON.parse(out.join("\n")) as ReadyReport) : null };
+  };
+
+  it("a head that loosens login_pattern does not change the verdict: the base's pattern decides", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    const strictBase = await run(root, source(["intruder"], declares(STRICT)));
+    expect(strictBase.code).toBe(1);
+    expect(strictBase.report?.verdict).toBe("not-ready");
+    expect(strictBase.report?.meta.identities).toEqual({
+      source: "schema",
+      path: "zheref/example@basebase:nen/gates.json",
+      read: "base",
+    });
+    expect(strictBase.report?.meta.warnings).toEqual([]);
+    // The control: the SAME head, judged by its own file because the base
+    // carries the loose one too, reads ready -- so it was the base's pattern,
+    // and nothing else, that held the PR above.
+    const looseBase = await run(root, source(["intruder"], declares(LOOSE_LOGIN)));
+    expect(looseBase.report?.verdict).toBe("ready");
+  });
+
+  it("a head that loosens round_quorum does not change the verdict: the base's minimum decides", async () => {
+    const root = checkout(QUORUM_OF_ONE);
+    const strictBase = await run(root, source(["alpha[bot]"], declares(QUORUM_OF_TWO)));
+    expect(strictBase.code).toBe(1);
+    expect(strictBase.report?.verdict).toBe("not-ready");
+    expect(strictBase.report?.gateLine).toMatch(/quorum/);
+    const looseBase = await run(root, source(["alpha[bot]"], declares(QUORUM_OF_ONE)));
+    expect(looseBase.report?.verdict).toBe("ready");
+  });
+
+  it("the base's file decides even when the checkout's is STRICTER: the base is the source, not the stricter of the two", async () => {
+    const root = checkout(QUORUM_OF_TWO);
+    const { report } = await run(root, source(["alpha[bot]"], declares(QUORUM_OF_ONE)));
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.identities.read).toBe("base");
+  });
+
+  it("a base read that FAILS falls back to the local file, and every output says so", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    const failing = (): PrStateSource =>
+      source(["intruder"], async (): Promise<string | null> => {
+        throw new Error("HTTP 403: Resource not accessible by integration");
+      });
+    const json = await run(root, failing());
+    expect(json.report?.verdict).toBe("ready");
+    expect(json.report?.meta.identities).toEqual({
+      source: "schema",
+      path: join(root, "nen", "gates.json"),
+      read: "local-fallback",
+    });
+    const warning = `gate inputs read from the LOCAL ${join(root, "nen", "gates.json")}, NOT the pull request's base (zheref/example@basebase:nen/gates.json): the base could not be read (HTTP 403: Resource not accessible by integration). In a worktree the local file is the pull request's own head, so the reviewers, rounds, quorum, approvals and carve-outs this verdict applied are ones the base has not merged.`;
+    expect(json.report?.meta.warnings).toEqual([warning]);
+    const plain = await run(root, failing(), "plain");
+    expect(plain.out).toContain(`  warning: ${warning}`);
+    const explain = await run(root, failing(), "explain");
+    expect(explain.out.join("\n")).toContain("(LOCAL fallback -- the base could not supply it; see the warning)");
+  });
+
+  it("a base file this build refuses falls back too, naming the base location and the refusal", async () => {
+    const root = checkout(STRICT);
+    const { report } = await run(root, source(["rev-bot[bot]"], declares({ ...STRICT, version: 2 })));
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.identities.read).toBe("local-fallback");
+    expect(report?.meta.warnings.join("\n")).toMatch(
+      /the base's file was refused \(zheref\/example@basebase:nen\/gates\.json: at version, /,
+    );
+  });
+
+  it("a PR with no base commit, or a transport that cannot read files, falls back with the reason", async () => {
+    const root = checkout(STRICT);
+    const noReader = source(["rev-bot[bot]"], declares(STRICT));
+    delete (noReader as { fileAtRef?: unknown }).fileAtRef;
+    const a = await run(root, noReader);
+    expect(a.report?.meta.identities.read).toBe("local-fallback");
+    expect(a.report?.meta.warnings.join("\n")).toMatch(/cannot read files at a commit/);
+    const withBase = source(["rev-bot[bot]"], declares(STRICT));
+    const noBase: PrStateSource = {
+      ...withBase,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+        const snapshot = await withBase.pullRequestSnapshot(repo, n);
+        return { ...snapshot, pullRequest: { ...snapshot.pullRequest, baseRefOid: undefined } } as PullRequestSnapshot;
+      },
+    };
+    const b = await run(root, noBase);
+    expect(b.report?.meta.identities.read).toBe("local-fallback");
+    expect(b.report?.meta.warnings.join("\n")).toMatch(/\(zheref\/example@\(unknown base\):nen\/gates\.json\): the base could not be read \(GitHub answered no base commit/);
+  });
+
+  it("the base is read ONCE, and its checks.excluded and identities come from that one read", async () => {
+    const root = checkout(STRICT);
+    let reads = 0;
+    const src = source(["rev-bot[bot]"], async (): Promise<string | null> => {
+      reads += 1;
+      return JSON.stringify(STRICT);
+    });
+    const { report } = await run(root, src);
+    expect(report?.verdict).toBe("ready");
+    expect(reads).toBe(1);
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+  });
+
+  it("the base's round_policy.stallMinutes is the one applied, not the head's", async () => {
+    // Copilot-shaped: bounded-exempt, a request pending since 2024-12-31T23:00Z,
+    // judged at 2025-01-01T00:00Z -- 60 minutes. The head declares a 120-minute
+    // bound (not stalled); the base 30 (stalled).
+    const exempt = (stallMinutes: number): Record<string, unknown> => ({
+      version: 1,
+      delivery: DELIVERY,
+      reviewers: [{ name: "bot", login_pattern: { pattern: "^bot\\[bot\\]$", ignoreCase: false }, bounded_policy_exempt: true }],
+      approval_policy: "review-round-only",
+      default_approvers: [],
+      base_reviewers: ["bot"],
+      round_policy: { stallMinutes },
+    });
+    const root = checkout(exempt(120));
+    const pending = (atBase: number): PrStateSource => {
+      const base = stubSource();
+      return {
+        ...base,
+        reviews: async (): Promise<unknown[]> => [],
+        pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+          const snapshot = await base.pullRequestSnapshot(repo, n);
+          return { ...snapshot, reviewRequests: [{ login: "bot[bot]" }] };
+        },
+        timeline: async (): Promise<unknown[]> => [
+          { event: "review_requested", created_at: "2024-12-31T23:00:00Z", requested_reviewer: { login: "bot[bot]" } },
+        ],
+        fileAtRef: async (): Promise<string | null> => JSON.stringify(exempt(atBase)),
+      };
+    };
+    const stalled = await run(root, pending(30));
+    const notStalled = await run(root, pending(120));
+    const row = (report: ReadyReport | null): string | undefined =>
+      report?.conjuncts.find((c): boolean => c.id === "round-stalled")?.status;
+    expect(stalled.report?.meta.identities.read).toBe("base");
+    expect(row(stalled.report)).toBe("failed");
+    expect(row(notStalled.report)).toBe("ready");
+  });
+
+  it("an explicit --gates is the caller's word: its identities win, and checks.excluded is still the base's", async () => {
+    const root = checkout(STRICT);
+    const callerFile = join(root, "caller-gates.json");
+    writeFileSync(callerFile, JSON.stringify(LOOSE_LOGIN));
+    let reads = 0;
+    const src = source(["intruder"], async (): Promise<string | null> => {
+      reads += 1;
+      return JSON.stringify(STRICT);
+    });
+    const { report } = await run(root, src, "json", { gates: callerFile });
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.identities).toEqual({ source: "schema", path: callerFile, read: "gates-flag" });
+    expect(report?.meta.warnings).toEqual([]);
+    // Read once more, for the exclusions alone (zheref/nen#249).
+    expect(reads).toBe(1);
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+  });
+
+  it("a --gates naming the checkout's OWN nen/gates.json is the head's file by another spelling: read at the base", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    for (const spelling of ["nen/gates.json", "./nen/gates.json", join(root, "nen", "gates.json")]) {
+      const { report } = await run(root, source(["intruder"], declares(STRICT)), "json", { gates: spelling });
+      expect(report?.verdict, spelling).toBe("not-ready");
+      expect(report?.meta.identities.read, spelling).toBe("base");
+    }
+  });
+
+  it("an unevaluated report names the local file as local-unverified: the base was never read", async () => {
+    const root = checkout(STRICT);
+    const { report } = await run(root, null);
+    expect(report?.verdict).toBe("unevaluated");
+    expect(report?.meta.identities).toEqual({
+      source: "schema",
+      path: join(root, "nen", "gates.json"),
+      read: "local-unverified",
+    });
+  });
+
+  it("--reviewers reads no file, at the base or anywhere: read is null and the base is not consulted", async () => {
+    const empty = mkdtempSync(join(tmpdir(), "nen-372-empty-"));
+    dirs.push(empty);
+    let reads = 0;
+    const src = source(["rev"], async (): Promise<string | null> => {
+      reads += 1;
+      return JSON.stringify(STRICT);
+    });
+    const { report } = await run(empty, src, "json", { reviewers: "rev", approvers: "" });
+    expect(report?.meta.identities).toEqual({ source: "flags", path: null, read: null });
+    expect(reads).toBe(0);
   });
 });
 

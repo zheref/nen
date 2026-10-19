@@ -1041,6 +1041,43 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       expect(result.out.join("\n")).toMatch(/sasuke/);
     });
 
+    // zheref/nen#372: without --gates, the reviewer identities come from the
+    // BASE as well -- the checkout's own file, in a worktree the PR's head,
+    // cannot name its own reviewers. The same snapshot as above: alt's
+    // reviewers approved, bankai's are owed.
+    it("without --gates, reads the reviewer identities at the BASE: a head carrying its own reviewer set does not clear its round", async () => {
+      const altGates = readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8");
+      const bankaiGates = readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8");
+      const checkout = mkdtempSync(join(tmpdir(), "nen-372-"));
+      mkdirSync(join(checkout, "nen"));
+      writeFileSync(join(checkout, "nen", "gates.json"), altGates);
+      const script = (atBase: string | null): ScriptedCall[] => {
+        const [view, ...rest] = greenAltApprovedScript();
+        const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
+        const contents: ScriptedCall =
+          atBase === null
+            ? { match: "gh api repos/o/n/contents/nen/gates.json?ref=base123", result: { code: 1, stderr: "HTTP 404" } }
+            : {
+                match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+                result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(atBase).toString("base64") }) },
+              };
+        return [{ match: view?.match ?? "", result: { stdout: JSON.stringify({ ...viewJson, baseRefOid: "base123" }) } }, ...rest, contents];
+      };
+      const argv = ["pr", "next-blocker", "--target", "o/n", "--pr", "9"];
+      const atBase = await capture(argv, checkout, new ScriptedSeams(script(bankaiGates)));
+      expect(atBase.code).toBe(1);
+      expect(atBase.out[0]).toBe("#9: owed-round");
+      expect(atBase.out.join("\n")).toMatch(/sasuke/);
+      expect(atBase.out.join("\n")).not.toMatch(/warning: gate inputs read from the LOCAL/);
+      // The base declaring none: the checkout's file decides, and says so.
+      const fallback = await capture([...argv, "--json"], checkout, new ScriptedSeams(script(null)));
+      const parsed = JSON.parse(fallback.out.join("\n")) as { kind: string; warnings: string[] };
+      expect(parsed.kind).toBe("none");
+      expect(parsed.warnings.join("\n")).toMatch(
+        /gate inputs read from the LOCAL .*nen\/gates\.json, NOT the pull request's base \(o\/n@base123:nen\/gates\.json\): the base declares no nen\/gates\.json/,
+      );
+    });
+
     // zheref/nen#8 item 4, on THIS verb: next-blocker shares `ready`'s
     // resolveIdentities rather than re-spelling it, so the relative-path rule
     // is one rule for both -- and this case proves it is, rather than asserting

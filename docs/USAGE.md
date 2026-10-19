@@ -906,8 +906,9 @@ edit` mutation (`retarget`), and reviewer requests routed by resolved kind
 `requestReviews` GraphQL mutation for a Bot), and the one draft-to-ready
 transition (`mark-ready` — a write, and never the readiness verdict).
 `ready` and `next-blocker`
-read reviewer identities from `nen/gates.json` (or an explicit `--gates`
-file, or a reduced `--reviewers` set with no default); `ready`'s ref
+read reviewer identities from `nen/gates.json` **at the pull request's base
+commit** (or an explicit `--gates` file, or a reduced `--reviewers` set with
+no default; see [The gates file is the base's](#pr-ready-gates-at-base)); `ready`'s ref
 resolution also reads `nen/repos.json`'s `product_codes`. This family
 never merges, labels, or comments on a pull request.
 
@@ -952,6 +953,47 @@ Reviewer identities come from exactly one of `--gates <path>`,
 the target repo's `nen/gates.json`, or `--reviewers a,b,c` — there is no
 built-in default set, and with none of the three the verb refuses rather than
 guessing.
+
+<a id="pr-ready-gates-at-base"></a>
+
+**The gates file is the base's ([#372](https://github.com/zheref/nen/issues/372)).**
+Every input `nen/gates.json` supplies is read **at the pull request's base
+commit** (`baseRefOid`), through the same REST contents read
+[#249](https://github.com/zheref/nen/issues/249) built for `checks.excluded`:
+`reviewers[]` and each one's `login_pattern`, `review_check_pattern`,
+`round_check_pattern`, `enrolment_check_pattern`, `bounded_policy_exempt`,
+`delivery_holistic_pass` and `approves_when_posted_at_head`;
+`default_approvers`, `approval_policy` and `base_reviewers`; `round_quorum`;
+`round_policy` (`stallMinutes`, `minRounds`, `maxRounds`); `delivery`;
+`dependabot_carve_out`; and `checks.excluded`. Under `--repo`, a worktree holds
+the pull request's own head, so a head that widens a `login_pattern`, lowers a
+`round_quorum.minimum` or adds a carve-out does **not** change its own verdict:
+the base's file decides, and the head's edits apply once they are merged. The
+base is read once per evaluation and serves both the identities and the
+exclusions, so the two never come from different commits.
+
+| Where the file comes from | When | `meta.identities.read` |
+|---|---|---|
+| `nen/gates.json` at the base commit | the default: no `--gates`, the checkout carries a `nen/gates.json` | `base` (`meta.identities.path` is `<owner>/<repo>@<sha>:nen/gates.json`) |
+| the checkout's own `nen/gates.json` | **fallback only**: the base could not be read (no base commit, a 403, a transport that cannot read files), declares **no** `nen/gates.json`, or carries one this build refuses (invalid JSON, a duplicate key, an unsupported version, an unread key). A `meta.warnings` line on **every** output says so: `gate inputs read from the LOCAL <path>, NOT the pull request's base (<owner>/<repo>@<sha>:nen/gates.json): <why>. …` | `local-fallback` |
+| the file `--gates <path>` names | an explicit `--gates` naming any file **other** than the checkout's own `nen/gates.json`: the caller's word, used as given — a trusted checkout of the base in CI, a reference file in neither repository | `gates-flag` |
+| the checkout's own `nen/gates.json`, never checked | an `unevaluated` report: GitHub was never read, so neither was the base | `local-unverified` |
+| none | `--reviewers` | `null` |
+
+Three rules hold on every row. **`checks.excluded` is honoured from the base
+or not at all** — never from the fallback and never from `--gates`
+(see [declared check exclusions](#pr-ready-declared-exclusions) below), because
+an exclusion removes a check and only a merged ruling may do that. **A
+`--gates` that names the checkout's own `nen/gates.json`** — `--gates
+nen/gates.json`, `./nen/gates.json`, or the absolute path, compared through
+`realpath` — is the head's file under another spelling, and is read at the base
+like the default. **The fallback is never quiet**: unlike a lost exclusion,
+which can only make the verdict stricter, a fallback can make it wider. The
+local file is still read first, before GitHub, so a malformed one is refused at
+exit `2` as before. `nen watch until --pr` and `nen pr merge` run this same
+in-process read; `nen pr next-blocker` applies the same rule through `gh`. The
+base is only as trusted as its branch protection. The token needs
+`contents:read`: without it every evaluation falls back, with the warning.
 
 `nen/gates.json` may explicitly set `"approval_policy": "review-round-only"` together with
 `"default_approvers": []` when automated readiness requires every configured reviewer round at the
@@ -1195,7 +1237,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded`; see above |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
 | `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | **repeatable**, one name per occurrence ([zheref/nen#243](https://github.com/zheref/nen/issues/243)); one value may also join names with commas, and a comma inside `()`/`[]`/`{}` is part of the name — see below |
-| `--gates <path>` | no | read reviewer identities from this file instead of `nen/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
+| `--gates <path>` | no | read every gate input but `checks.excluded` from this file instead of `nen/gates.json` at the pull request's base ([#372](#pr-ready-gates-at-base)) | a RELATIVE path resolves against `--repo`, never cwd; one naming the checkout's own `nen/gates.json` is read at the base like the default |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
 | `--require-head <sha>` | no | judge only this commit: 7–40 hex digits, a case-insensitive prefix of GitHub's head | any other head is exit `8` (`head-mismatch`), both SHAs printed, no verdict; malformed is exit `2` |
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
@@ -1264,6 +1306,8 @@ matrix name is shaped that way; the declared, pattern-capable form is
 `nen/gates.json`'s `checks.excluded`, below. The grammar is
 `src/pr/excludecheck.ts`'s header.
 
+<a id="pr-ready-declared-exclusions"></a>
+
 **A declared exclusion: `checks.excluded` (zheref/nen#249).** A flag is a
 per-invocation choice every caller has to remember; a maintainer's ruling that
 a check is out of scope belongs in the declaration the verdict already reads.
@@ -1297,9 +1341,9 @@ dropped. That is why a glob needs a literal prefix, and why an exact name is
 the safer form.
 
 **Read at the pull request's BASE, never its head (Feitan F1).** `nen pr ready`
-reads reviewer identities from the local file (or `--gates`), as before, but
 reads `checks.excluded` from `nen/gates.json` **at the base commit GitHub
-reports for the pull request** (`baseRefOid`, through the REST contents API on
+reports for the pull request** — since [#372](#pr-ready-gates-at-base) the
+rest of the file too, unless `--gates` names another one — (`baseRefOid`, through the REST contents API on
 the same token — it needs `contents:read`). Under `--repo`, a worktree holds the
 pull request's own head; reading the exclusions there would let a pull request
 add an exclusion for its own red check. So:
@@ -1329,7 +1373,9 @@ on a protected base.
 
 **Consumer note:** `nen pr ready` (and `pr next-blocker`, through `gh`) now
 reads `nen/gates.json` at the base through the REST contents API, so the token
-needs `contents:read` for declared exclusions to apply.
+needs `contents:read` for declared exclusions to apply — and, since
+[#372](#pr-ready-gates-at-base), for the base's reviewer identities to apply
+rather than the checkout's, which is the warned fallback.
 
 What `nen pr ready` does with what it read:
 
@@ -2210,6 +2256,15 @@ declares no exclusion" line, when nothing is declared locally). This verb does n
 take `--exclude-check` or `--exclude-run`, so where a `pr ready` call passed
 one of those it can name a check `pr ready` dropped — stricter, never looser.
 
+**Reviewer identities at the base, too ([#372](#pr-ready-gates-at-base)).** The
+same one read supplies the identities: without `--gates` (or with one naming
+the checkout's own `nen/gates.json`), every input but `checks.excluded` is the
+base's, exactly as `pr ready` reads it, so a head carrying its own reviewer set
+cannot clear its own round. When the base cannot supply the file, the
+checkout's own one does, and a `  warning: gate inputs read from the LOCAL …`
+line (and a `--json` `warnings` entry) says so. An explicit `--gates` naming
+another file is the caller's word, as in `pr ready`.
+
 The quorum clause **says so wherever it can matter** (Nobunaga's delta review
 of E7, finding F2). That is when the quorum is unmet under `bounded` and a
 round-check member has no run, a `SKIPPED` run, or an unsuccessful run at head.
@@ -2235,11 +2290,11 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 |---|---|---|---|
 | `--target <owner/name>` | yes | the GitHub repository | missing exits 1 (see `pr fetch`'s note) |
 | `--pr <n>` | yes | the pull-request number | missing/invalid exits 2 |
-| `--repo <path>` | **yes** | the checkout whose `nen/gates.json` supplies identities | usage lists it unbracketed; an omitted `--repo` is refused by name at exit 2, never silently read from cwd (#28) |
+| `--repo <path>` | **yes** | the checkout whose `nen/gates.json` is read first, and supplies the identities only when the base cannot ([#372](#pr-ready-gates-at-base)) | usage lists it unbracketed; an omitted `--repo` is refused by name at exit 2, never silently read from cwd (#28) |
 | `--reviewers <a,b>` | no | override reviewer set | an explicitly empty value (`""`, `","`) is refused at exit 2, never read as "nothing owed" |
 | `--policy <p>` | no | `bounded` \| `strict` | any other value is silently ignored (treated as unset) rather than refused |
 | `--delivery-pr` | no | this PR is a delivery PR | affects the CON-40 carve-out |
-| `--gates <path>` | no | same resolver `pr ready` uses | a RELATIVE path resolves against `--repo`, not cwd |
+| `--gates <path>` | no | same resolver `pr ready` uses; supplies the identities instead of the base | a RELATIVE path resolves against `--repo`, not cwd; one naming the checkout's own `nen/gates.json` is read at the base |
 | `--json` | no | machine-readable blocker report | — |
 
 **Output and exit codes** — human lines: `#<pr>: <kind>`, then the detail
