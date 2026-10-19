@@ -13,7 +13,7 @@ import { botLoginArgv, collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsAr
 import { requestReviewsArgv } from "./reviewers.js";
 import { botNodesArgv, commitArgv, gatesAtArgv, requestTimelineArgv } from "./round_ceiling.js";
 import { markReadyArgv, readDraftStateArgv } from "./markready.js";
-import { prCommand } from "./command.js";
+import { PR_FLAGS, PR_SUBCOMMAND_FLAGS, PR_SUBCOMMANDS, prCommand, prFlagOwners } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 
 /** A throwaway file, for edit-body's --body-file. */
@@ -2219,10 +2219,12 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     expect(result.err.join("\n")).toMatch(/could not replace zheref\/nen#12's body/);
   });
 
-  it("refuses --dry-run on any subcommand other than edit-body", async () => {
+  it("refuses --dry-run on any subcommand that does not read it, naming all five that do", async () => {
     const result = await capture(["pr", "ready", "--dry-run"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/--dry-run is only read by 'pr edit-body'/);
+    expect(result.err.join("\n")).toContain(
+      "--dry-run is only read by 'pr request-reviews', 'pr edit-body', 'pr mark-ready', 'pr threads' and 'pr open'.",
+    );
   });
 
   it("refuses --body-file on any subcommand other than edit-body", async () => {
@@ -2796,5 +2798,142 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     const result = await capture(["pr", "retarget", "--target", "acme/widgets", "--pr", "1", "--base", "main", "--dry-run"], null);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/'pr mark-ready'/);
+  });
+});
+
+// zheref/nen#351: every `pr` subcommand refuses, at exit 2 and before any gh
+// call, each family flag it does not read -- naming the subcommands that do.
+// An empty ScriptedSeams throws on its first call, so `calls.length === 0`
+// proves the refusal came first.
+describe("the family's one flag guard (zheref/nen#351)", () => {
+  const BODY = tempFile("body.md", "## How to verify\n\nRun it.\n");
+  const TITLE = tempFile("title.txt", "A title\n");
+  const SETTLE = tempFile("settle.json", JSON.stringify([{ thread: "T1", body: "done" }]));
+  const REQUIREMENTS = tempFile("requirements.json", JSON.stringify([{ name: "how to verify", pattern: "## How to verify" }]));
+
+  // Each MUTATING subcommand at an invocation that is otherwise complete, so
+  // without the guard it would go on to a gh (or git) call.
+  const MUTATING: readonly (readonly [string, readonly string[]])[] = [
+    ["cascade-main", ["pr", "cascade-main", "--no-push"]],
+    ["retarget", ["pr", "retarget", "--target", "zheref/nen", "--pr", "12", "--base", "main"]],
+    ["request-reviews", ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "12", "--add-reviewers", "octocat"]],
+    ["edit-body", ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY]],
+    ["mark-ready", ["pr", "mark-ready", "--target", "zheref/nen", "--pr", "12"]],
+    ["threads", ["pr", "threads", "reply", "--target", "zheref/nen", "--pr", "12", "--thread", "T1", "--body-file", BODY]],
+    ["threads", ["pr", "threads", "resolve", "--target", "zheref/nen", "--pr", "12", "--thread", "T1"]],
+    ["threads", ["pr", "threads", "settle", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE]],
+    ["open", ["pr", "open", "--target", "zheref/nen", "--base", "main", "--title-file", TITLE, "--body-file", BODY]],
+    ["merge", ["pr", "merge", "zheref/example#9", "--release-unit", "--requirements-from", REQUIREMENTS]],
+    ["merge", ["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS]],
+  ];
+
+  for (const [subcommand, argv] of MUTATING) {
+    const label = argv.slice(1, subcommand === "threads" ? 3 : 2).join(" ");
+
+    it(`refuses --token-env on 'pr ${label}' at exit 2 with zero calls, naming 'pr ready'`, async () => {
+      const seams = new ScriptedSeams([]);
+      const result = await capture([...argv, "--token-env", "NARROW_TOKEN"], tmpdir(), seams);
+      expect(result.code).toBe(2);
+      const err = result.err.join("\n");
+      expect(err).toContain(`--token-env is not read by 'pr ${subcommand}'.`);
+      expect(err).toContain("--token-env is only read by 'pr ready';");
+      expect(seams.calls.length).toBe(0);
+    });
+
+    it(`refuses --gh-repo on 'pr ${label}' at exit 2 with zero calls, naming 'pr ready'`, async () => {
+      const seams = new ScriptedSeams([]);
+      const result = await capture([...argv, "--gh-repo", "acme/widgets"], tmpdir(), seams);
+      expect(result.code).toBe(2);
+      const err = result.err.join("\n");
+      expect(err).toContain(`--gh-repo is not read by 'pr ${subcommand}'.`);
+      expect(err).toContain("--gh-repo is only read by 'pr ready'");
+      expect(seams.calls.length).toBe(0);
+    });
+  }
+
+  it("says truthfully what credential each subcommand runs on instead", async () => {
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY], "edit-body runs on gh's own credential"],
+      [["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS], "merge judges readiness on GH_TOKEN and merges on gh's own credential"],
+      [["pr", "cascade-main"], "cascade-main fetches and pushes on git's own credential and calls no GitHub API"],
+      [["pr", "staleness", "--wakes-from", "w.json", "--last-activity", "2026-01-01T00:00:00Z", "--now", "2026-01-01T00:00:00Z"], "staleness reads local files only and calls no GitHub API"],
+    ];
+    for (const [argv, advice] of cases) {
+      const result = await capture([...argv, "--token-env", "T"], tmpdir(), new ScriptedSeams([]));
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n"), argv.join(" ")).toContain(advice);
+    }
+  });
+
+  it("points --gh-repo at --target on a subcommand that reads --target", async () => {
+    const result = await capture(["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--gh-repo", "acme/widgets"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--gh-repo is only read by 'pr ready'; 'pr fetch' names its repository with --target <owner/name>.");
+  });
+
+  it("names EVERY subcommand that reads a flag, not only 'pr ready'", async () => {
+    const mark = ["pr", "mark-ready", "--target", "zheref/nen", "--pr", "12"];
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [[...mark, "--reviewers", "a"], "--reviewers is only read by 'pr ready' and 'pr next-blocker'."],
+      [[...mark, "--gates", "g.json"], "--gates is only read by 'pr ready' and 'pr next-blocker'."],
+      [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr retarget' and 'pr open'."],
+      [[...mark, "--body-file", BODY], "--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE], "--from is only read by 'pr threads settle'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr mark-ready' and 'pr merge'."],
+    ];
+    for (const [argv, message] of cases) {
+      const result = await capture(argv, null, new ScriptedSeams([]));
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n"), argv.join(" ")).toContain(message);
+    }
+  });
+
+  it("names every foreign flag at once, sorted, and never one the subcommand reads", async () => {
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY, "--dry-run", "--token-env", "T", "--gh-repo", "a/b"],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err.indexOf("--gh-repo is not read")).toBeGreaterThanOrEqual(0);
+    expect(err.indexOf("--gh-repo is not read")).toBeLessThan(err.indexOf("--token-env is not read"));
+    for (const own of ["--target", "--pr", "--body-file", "--dry-run"]) expect(err).not.toContain(`${own} is not read`);
+  });
+
+  // Exhaustive, and derived from the parser's own spec: every family flag a
+  // subcommand's row does not declare is refused there, before any call.
+  for (const subcommand of PR_SUBCOMMANDS) {
+    it(`'pr ${subcommand}' refuses every family flag outside its own row (exit 2, zero calls)`, async () => {
+      const row = PR_SUBCOMMAND_FLAGS[subcommand] ?? {};
+      const own = new Set([...(row.values ?? []), ...(row.booleans ?? []), ...(row.lists ?? [])]);
+      const head = subcommand === "threads" ? ["pr", "threads", "list"] : subcommand === "merge" ? ["pr", "merge", "zheref/example#9"] : ["pr", subcommand];
+      const foreign: (readonly string[])[] = [
+        ...(PR_FLAGS.values ?? []).filter((flag): boolean => !own.has(flag)).map((flag): readonly string[] => [`--${flag}`, "x"]),
+        ...(PR_FLAGS.lists ?? []).filter((flag): boolean => !own.has(flag)).map((flag): readonly string[] => [`--${flag}`, "x"]),
+        ...(PR_FLAGS.booleans ?? []).filter((flag): boolean => !own.has(flag)).map((flag): readonly string[] => [`--${flag}`]),
+      ];
+      expect(foreign.length).toBeGreaterThan(0);
+      for (const extra of foreign) {
+        const seams = new ScriptedSeams([]);
+        const result = await capture([...head, ...extra], tmpdir(), seams);
+        const flag = (extra[0] ?? "").slice(2);
+        expect(result.code, `${subcommand} ${extra.join(" ")}`).toBe(2);
+        expect(result.err.join("\n"), `${subcommand} ${extra.join(" ")}`).toContain(`--${flag} is not read by 'pr ${subcommand}'. --${flag} is only read by `);
+        expect(seams.calls.length, `${subcommand} ${extra.join(" ")}`).toBe(0);
+      }
+    });
+  }
+
+  it("derives the parser spec as the union of the rows, and every flag in it has an owner", () => {
+    expect(prCommand.subcommands).toEqual(PR_SUBCOMMANDS);
+    expect(prCommand.flags).toBe(PR_FLAGS);
+    for (const flag of [...(PR_FLAGS.values ?? []), ...(PR_FLAGS.booleans ?? []), ...(PR_FLAGS.lists ?? [])]) {
+      expect(prFlagOwners(flag).length, flag).toBeGreaterThan(0);
+    }
+    // The spread zheref/nen#351 named is no longer the family's: --token-env
+    // and --gh-repo belong to 'pr ready' alone.
+    expect(prFlagOwners("token-env")).toEqual(["'pr ready'"]);
+    expect(prFlagOwners("gh-repo")).toEqual(["'pr ready'"]);
   });
 });

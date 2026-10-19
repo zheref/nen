@@ -24,6 +24,7 @@
 
 import {
   emit,
+  GLOBAL_FLAGS,
   requireRepoFlag,
   requireSubcommand,
   requireValue,
@@ -51,6 +52,8 @@ import { declarationWarnings } from "../gates/ready.js";
 import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
+import type { FlagSpec } from "../cli/args.js";
+import { conjoin } from "../cli/prose.js";
 import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
 import {
   checkDerivedBody,
@@ -155,6 +158,12 @@ nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-r
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--assignee <login>[,<login>...]] [--repo <path>] [--dry-run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
+
+Flags are PER SUBCOMMAND (zheref/nen#351). Every subcommand refuses, at exit
+2 and before any gh call, each flag it does not read -- another
+subcommand's flag exactly as a misspelt one, 'pr ready''s --token-env and
+--gh-repo included -- and the refusal names the subcommands that do read
+it. The global --repo, --json and --help are never refused.
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict and every
@@ -580,7 +589,9 @@ merge:
   and --delivery, a flag merge does not read, --require-head, a bad ref,
   an unknown or unreadable product code, missing --requirements-from,
   --repo's origin naming a different repository than the ref or the code
-  resolves to, or an unknown flag such as --admin/--auto);
+  resolves to, or an unknown flag such as --admin/--auto -- unknown to
+  'pr merge' itself: a flag another 'pr' subcommand reads is refused
+  here too, as it is on every subcommand, zheref/nen#351);
   5 gh REFUSED the merge (branch protection, a required review, ...) --
   its stderr and the exact command are printed for a human; 6 gh could
   not be RUN at all (not on PATH, no permission) -- distinct from 5,
@@ -858,124 +869,198 @@ function ready(context: CommandContext): Promise<number> {
   );
 }
 
+// ── which flags each subcommand reads (zheref/nen#351) ──────────────────────
+
+/**
+ * WHAT EACH `pr` SUBCOMMAND ACTUALLY READS -- the ONE declaration the family's
+ * parser spec and its foreign-flag refusal are both derived from, in the shape
+ * ../issue/command.ts's ISSUE_SUBCOMMAND_FLAGS set for the issue family.
+ *
+ * WHY. A family shares one parser spec, so every flag any `pr` subcommand
+ * declares parsed cleanly for ALL thirteen of them. `pr ready`'s whole set was
+ * spread onto the family (`...PR_READY_FLAGS.values`), and only some foreign
+ * flags were refused, one hand-written guard at a time -- so `pr edit-body`,
+ * `pr request-reviews`, `pr threads` and `pr open` accepted `--token-env` and
+ * `--gh-repo` and ignored them (zheref/nen#351; Feitan F1 and Nobunaga N1 on
+ * #345, which closed it for `pr mark-ready` alone). The sharpest case is
+ * `--token-env`: a caller naming a narrower credential still wrote with gh's
+ * own, and nothing said so.
+ *
+ * So ownership is no longer written as a list of refusals. Each subcommand
+ * declares the flags it reads, once, here; the parser gets their UNION (so a
+ * flag cannot exist without an owner), and a flag parsed but absent from the
+ * executing subcommand's own row is refused BY CONSTRUCTION, at exit 2 and
+ * before any gh call, naming the subcommands that do read it. Adding a flag to
+ * one row adds it to the parser and to every sibling's refusal in one edit.
+ *
+ * THE GLOBAL FLAGS ARE NOT LISTED and are never foreign: `--repo`, `--json`
+ * and `--help` are ../cli/command.ts's, merged into every family by
+ * mergeFlags. `threads` lists every flag ANY of its actions reads; the
+ * per-action refusal (THREADS_ACTION_FLAGS below) narrows it further.
+ */
+export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
+  // `pr ready`'s flags pass through to ../verbs/pr_ready.ts's prReady(), which
+  // reads PR_READY_FLAGS and the --target/--pr aliases (zheref/nen#383).
+  ready: {
+    values: ["target", "pr", ...PR_READY_FLAGS.values],
+    booleans: [...PR_READY_FLAGS.booleans],
+    lists: [...PR_READY_FLAGS.lists],
+  },
+  staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
+  "body-check": { values: ["body-from", "requirements-from", "base"] },
+  fetch: { values: ["target", "pr"] },
+  "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
+  "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
+  retarget: { values: ["target", "pr", "base"] },
+  "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
+  "edit-body": { values: ["target", "pr", "body-file"], booleans: ["dry-run"] },
+  "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
+  threads: { values: ["target", "pr", "thread", "body-file", "from"], booleans: ["dry-run"] },
+  open: { values: ["target", "base", "title-file", "body-file", "head", "assignee"], booleans: ["draft", "dry-run"] },
+  // --require-head is read by --delivery only; doMerge refuses it with
+  // --release-unit, naming the form that reads it.
+  merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
+};
+
+/** The subcommand names, read off the table so the two can never differ. */
+export const PR_SUBCOMMANDS: readonly string[] = Object.keys(PR_SUBCOMMAND_FLAGS);
+
+/**
+ * Which flags each `threads` action reads beyond --target/--pr (zheref/nen#215,
+ * Copilot on #221). Module-level so the family refusal can name the one action
+ * that reads a flag (`--from` is 'pr threads settle''s) rather than the verb.
+ */
+const THREADS_ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
+  list: { values: [], booleans: [] },
+  reply: { values: ["thread", "body-file"], booleans: ["dry-run"] },
+  resolve: { values: ["thread"], booleans: ["dry-run"] },
+  settle: { values: ["from"], booleans: ["dry-run"] },
+};
+
+const THREAD_ACTIONS: readonly string[] = Object.keys(THREADS_ACTION_FLAGS);
+
+/** Whether one row declares this flag, in any of its three halves. */
+function declaresFlag(spec: FlagSpec, flag: string): boolean {
+  return (spec.values ?? []).includes(flag) || (spec.booleans ?? []).includes(flag) || (spec.lists ?? []).includes(flag);
+}
+
+/** The family's parser spec: the UNION of every row, sorted for a stable 'unknown option' listing. */
+function unionPrFlags(specs: readonly FlagSpec[]): FlagSpec {
+  const values = new Set<string>();
+  const booleans = new Set<string>();
+  const lists = new Set<string>();
+  for (const spec of specs) {
+    for (const flag of spec.values ?? []) values.add(flag);
+    for (const flag of spec.booleans ?? []) booleans.add(flag);
+    for (const flag of spec.lists ?? []) lists.add(flag);
+  }
+  return { values: [...values].sort(), booleans: [...booleans].sort(), lists: [...lists].sort() };
+}
+
+export const PR_FLAGS: FlagSpec = unionPrFlags(Object.values(PR_SUBCOMMAND_FLAGS));
+
+const PR_GLOBAL_FLAG_NAMES: ReadonlySet<string> = new Set([
+  ...(GLOBAL_FLAGS.values ?? []),
+  ...(GLOBAL_FLAGS.booleans ?? []),
+  ...(GLOBAL_FLAGS.lists ?? []),
+]);
+
+/**
+ * Who reads this flag, in the table's order, each as `'pr <subcommand>'` --
+ * or `'pr threads <action>'` where exactly one threads action reads it, which
+ * is the more useful answer for `--from` (settle) and `--body-file` (reply).
+ */
+export function prFlagOwners(flag: string): readonly string[] {
+  return PR_SUBCOMMANDS.filter((name): boolean => declaresFlag(PR_SUBCOMMAND_FLAGS[name] ?? {}, flag)).map((name): string => {
+    if (name === "threads") {
+      const actions = THREAD_ACTIONS.filter((action): boolean => {
+        const row = THREADS_ACTION_FLAGS[action];
+        return row !== undefined && (row.values.includes(flag) || row.booleans.includes(flag));
+      });
+      if (actions.length === 1) return `'pr threads ${actions[0] ?? ""}'`;
+    }
+    return `'pr ${name}'`;
+  });
+}
+
+/** The subcommands that reach GitHub through gh, on gh's own credential (docs/USAGE.md's authentication table). */
+const PR_GH_CREDENTIAL: ReadonlySet<string> = new Set(["fetch", "next-blocker", "retarget", "request-reviews", "edit-body", "mark-ready", "threads", "open"]);
+
+/**
+ * What `--token-env` would have meant here, said truthfully per subcommand --
+ * a refusal that asserts something false about the verb is one a caller stops
+ * believing (../issue/command.ts's refuseForeignFlags, the same rule).
+ */
+function tokenEnvAdvice(subcommand: string): string {
+  if (PR_GH_CREDENTIAL.has(subcommand)) {
+    return `${subcommand} runs on gh's own credential, so the token you named would not have been the one the call ran on.`;
+  }
+  if (subcommand === "merge") {
+    return "merge judges readiness on GH_TOKEN and merges on gh's own credential, so the variable you named would have changed neither.";
+  }
+  if (subcommand === "cascade-main") {
+    return "cascade-main fetches and pushes on git's own credential and calls no GitHub API.";
+  }
+  return `${subcommand} reads local files only and calls no GitHub API, so there is no credential to name.`;
+}
+
+/** What to type instead, where the owners alone are not the useful answer. */
+function foreignFlagAdvice(subcommand: string, flag: string): string | undefined {
+  if (flag === "token-env") return tokenEnvAdvice(subcommand);
+  if (flag === "gh-repo" && declaresFlag(PR_SUBCOMMAND_FLAGS[subcommand] ?? {}, "target")) {
+    return `'pr ${subcommand}' names its repository with --target <owner/name>.`;
+  }
+  return undefined;
+}
+
+/**
+ * Refuse every flag of this invocation the executing subcommand does not read
+ * -- ALL of them named at once, sorted -- at exit 2, before any subcommand
+ * runs and so before any gh call (zheref/nen#351). Each sentence says the
+ * subcommand does not read the flag, then which subcommands DO.
+ */
+function refuseFlagsSubcommandDoesNotRead(context: CommandContext, subcommand: string): void {
+  const spec = PR_SUBCOMMAND_FLAGS[subcommand];
+  // Unreachable: requireSubcommand has already refused anything not keyed
+  // here. Stated so a caller that skips that step fails closed, never reading
+  // `undefined` as "reads everything".
+  if (spec === undefined) throw new VerbUsageError(`'pr ${subcommand}' declares no flags of its own.`);
+  const given = [
+    ...Object.keys(context.args.values).filter((flag): boolean => context.args.values[flag] !== undefined),
+    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
+    ...context.args.booleans,
+  ];
+  const foreign = [...new Set(given)].filter((flag): boolean => !PR_GLOBAL_FLAG_NAMES.has(flag) && !declaresFlag(spec, flag)).sort();
+  if (foreign.length === 0) return;
+  throw new VerbUsageError(
+    foreign
+      .map((flag): string => {
+        const owners = prFlagOwners(flag);
+        // Never empty while PR_FLAGS is the union of these rows: a flag no row
+        // declares is an 'unknown option' at the parser and never reaches here.
+        const read = owners.length === 0 ? `No 'pr' subcommand reads --${flag}.` : `--${flag} is only read by ${conjoin(owners)}`;
+        const advice = foreignFlagAdvice(subcommand, flag);
+        return `--${flag} is not read by 'pr ${subcommand}'. ${read}${owners.length === 0 ? "" : advice === undefined ? "." : `; ${advice}`}`;
+      })
+      .join(" "),
+  );
+}
+
 export const prCommand: Command = {
   name: "pr",
-  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "mark-ready", "threads", "open", "merge"],
+  subcommands: PR_SUBCOMMANDS,
   summary:
     "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge.",
   usage: USAGE,
-  flags: {
-    values: [
-      "wakes-from",
-      "last-activity",
-      "now",
-      "min-verified-wakes",
-      "idle-minutes",
-      "body-from",
-      "requirements-from",
-      ...PR_READY_FLAGS.values,
-      "target",
-      "pr",
-      "policy",
-      "trunk",
-      "base",
-      "add-reviewers",
-      "add-bots",
-      "body-file",
-      "thread",
-      "title-file",
-      "head",
-      "from",
-      "assignee",
-    ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft", "release-unit", "delivery", "run"],
-    // `ready`'s repeatable `--exclude-check` (zheref/nen#243) -- declared as a
-    // LIST so a second occurrence is kept, not refused as a repeated value.
-    lists: [...PR_READY_FLAGS.lists],
-  },
+  flags: PR_FLAGS,
   run(context: CommandContext): number | Promise<number> {
-    const subcommand = requireSubcommand("pr", context.args, [
-      "ready",
-      "staleness",
-      "body-check",
-      "fetch",
-      "next-blocker",
-      "cascade-main",
-      "retarget",
-      "request-reviews",
-      "edit-body",
-      "mark-ready",
-      "threads",
-      "open",
-      "merge",
-    ]);
-    // 'merge''s own two: a general-purpose merge is exactly what this
-    // subcommand refuses to be, so a caller who carried '--release-unit' or
-    // '--run' over from a 'merge' invocation onto any other subcommand is
-    // told rather than silently ignored.
-    if (subcommand !== "merge" && context.args.booleans.has("release-unit")) {
-      throw new VerbUsageError("--release-unit is only read by 'pr merge'.");
-    }
-    if (subcommand !== "merge" && context.args.booleans.has("delivery")) {
-      throw new VerbUsageError("--delivery is only read by 'pr merge'.");
-    }
-    if (subcommand !== "merge" && context.args.booleans.has("run")) {
-      throw new VerbUsageError("--run is only read by 'pr merge'.");
-    }
-    // --no-push sits in this family's shared boolean set (above) only because
-    // that set has no per-subcommand table (review finding, PR #141) -- so
-    // without this, it would parse cleanly and be silently ignored on every
-    // OTHER `pr` subcommand, misleading a caller who carried it over from a
-    // `cascade-main` invocation. A minimal, local refusal here, rather than
-    // the full foreign-flag table `shu`/`issue` have (../shu/command.ts,
-    // ../issue/command.ts), because this family has no such table for any of
-    // its other subcommand-specific flags yet (`--delivery-pr` has the same
-    // gap) and growing one is a bigger change than this flag's own PR.
-    if (subcommand !== "cascade-main" && context.args.booleans.has("no-push")) {
-      throw new VerbUsageError("--no-push is only read by 'pr cascade-main'.");
-    }
-    // Same shape, same reason, for edit-body's own two flags -- and, since
-    // zheref/nen#160, request-reviews' own --dry-run too (its resolution
-    // reads GitHub the same way edit-body's certifying read does, so it
-    // earns the identical dry-run-gated shape rather than a bespoke one):
-    // a flag left unguarded here would parse cleanly and be silently
-    // ignored on every OTHER `pr` subcommand.
-    if (
-      subcommand !== "edit-body" &&
-      subcommand !== "request-reviews" &&
-      subcommand !== "mark-ready" &&
-      subcommand !== "threads" &&
-      subcommand !== "open" &&
-      context.args.booleans.has("dry-run")
-    ) {
-      throw new VerbUsageError(
-        "--dry-run is only read by 'pr edit-body', 'pr request-reviews', 'pr mark-ready', 'pr threads' and 'pr open'.",
-      );
-    }
-    if (subcommand !== "edit-body" && subcommand !== "threads" && subcommand !== "open" && context.args.values["body-file"] !== undefined) {
-      throw new VerbUsageError("--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'.");
-    }
-    // Same shape for open's own four: a title file, a head, an assignee list
-    // and a draft flag mean nothing to any other subcommand here.
-    if (subcommand !== "open") {
-      for (const flag of ["title-file", "head", "assignee"]) {
-        if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is only read by 'pr open'.`);
-      }
-      if (context.args.booleans.has("draft")) throw new VerbUsageError("--draft is only read by 'pr open'.");
-    }
-    // Same shape, same reason: --thread names a review thread and nothing
-    // else in this family has one, so a caller who carried it over from a
-    // 'threads' invocation is told rather than silently ignored.
-    if (subcommand !== "threads" && context.args.values["thread"] !== undefined) {
-      throw new VerbUsageError("--thread is only read by 'pr threads'.");
-    }
-    if (subcommand !== "threads" && context.args.values["from"] !== undefined) {
-      throw new VerbUsageError("--from is only read by 'pr threads settle'.");
-    }
-    if (subcommand !== "request-reviews" && context.args.values["add-bots"] !== undefined) {
-      throw new VerbUsageError("--add-bots is only read by 'pr request-reviews'.");
-    }
-    if (subcommand === "mark-ready") refuseFlagsMarkReadyDoesNotRead(context);
+    const subcommand = requireSubcommand("pr", context.args, PR_SUBCOMMANDS);
+    // ONE GUARD FOR THE WHOLE FAMILY (zheref/nen#351), derived from
+    // PR_SUBCOMMAND_FLAGS above. It replaces the one-flag-at-a-time refusals
+    // this function used to carry (--release-unit, --no-push, --dry-run,
+    // --body-file, --thread, --add-bots, ...) and mark-ready's and merge's own
+    // tables, each of which covered the flags somebody had thought of.
+    refuseFlagsSubcommandDoesNotRead(context, subcommand);
     switch (subcommand) {
       case "ready":
         return ready(context);
@@ -1633,41 +1718,10 @@ function editBody(context: CommandContext): number {
 }
 
 // ── mark-ready (zheref/nen#345) ─────────────────────────────────────────────
-
-/** The only flags `pr mark-ready` reads (the global --json/--help/--repo aside). */
-const MARK_READY_VALUES: ReadonlySet<string> = new Set(["target", "pr", "require-head", "repo"]);
-const MARK_READY_BOOLEANS: ReadonlySet<string> = new Set(["dry-run", "json", "help"]);
-const PR_READY_ONLY: ReadonlySet<string> = new Set<string>([
-  ...PR_READY_FLAGS.values,
-  ...PR_READY_FLAGS.lists,
-  ...PR_READY_FLAGS.booleans,
-]);
-
-/**
- * Refuse, at exit 2 and before any `gh` call, every family flag mark-ready
- * does not read (Feitan F1, Nobunaga N1) -- the same local-refusal shape
- * `--thread` and `--add-bots` have above, generalised because this verb sits
- * in a family whose flag set is mostly OTHER verbs'. The sharpest case is
- * `--token-env`: silently accepted, it reads as "this ran on that token"
- * when the write in fact ran on whatever gh is authenticated as.
- */
-function refuseFlagsMarkReadyDoesNotRead(context: CommandContext): void {
-  const given = [
-    ...Object.keys(context.args.values).filter((flag): boolean => !MARK_READY_VALUES.has(flag)),
-    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
-    ...[...context.args.booleans].filter((flag): boolean => !MARK_READY_BOOLEANS.has(flag)),
-  ];
-  const first = given[0];
-  if (first === undefined) return;
-  if (first === "token-env") {
-    throw new VerbUsageError("--token-env is only read by 'pr ready'; mark-ready runs on gh's own credential.");
-  }
-  if (PR_READY_ONLY.has(first)) {
-    throw new VerbUsageError(`--${first} is only read by 'pr ready'; 'pr mark-ready' reads --target, --pr, --require-head and --dry-run.`);
-  }
-  throw new VerbUsageError(`--${first} is not read by 'pr mark-ready'; it reads --target, --pr, --require-head and --dry-run.`);
-}
-
+//
+// The flags it reads are its PR_SUBCOMMAND_FLAGS row; every other family flag
+// -- --token-env above all (Feitan F1, Nobunaga N1) -- is refused by the
+// family guard before this runs (zheref/nen#351 generalised #345's table).
 //
 // The verb's logic lives in ./markready.ts behind the seam; this adapts flags
 // and renders. `--pr` takes the STRICT reader, because this verb WRITES: a
@@ -1709,7 +1763,6 @@ function doMarkReady(context: CommandContext): number {
 // bad `--thread` into exit 4 naming it and an already-resolved one into exit 3
 // naming it, instead of a GraphQL error a caller has to read. See
 // ./threads.ts's header for why those two are separate codes at all.
-const THREAD_ACTIONS: readonly string[] = ["list", "reply", "resolve", "settle"];
 
 function threads(context: CommandContext): number {
   const action = context.args.positionals[2];
@@ -1725,13 +1778,7 @@ function threads(context: CommandContext): number {
   // got a successful listing or a real resolution while an instruction they
   // typed had no effect, which is the exact thing this family already refuses
   // one level up: the ignored thing is the instruction you gave.
-  const ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
-    list: { values: [], booleans: [] },
-    reply: { values: ["thread", "body-file"], booleans: ["dry-run"] },
-    resolve: { values: ["thread"], booleans: ["dry-run"] },
-    settle: { values: ["from"], booleans: ["dry-run"] },
-  };
-  const mine = ACTION_FLAGS[action] as { values: readonly string[]; booleans: readonly string[] };
+  const mine = THREADS_ACTION_FLAGS[action] as { values: readonly string[]; booleans: readonly string[] };
   const foreign = [
     ...["thread", "body-file", "from"].filter(
       (flag): boolean => context.args.values[flag] !== undefined && !mine.values.includes(flag),
@@ -1956,7 +2003,8 @@ function readAssignees(raw: string | undefined): readonly string[] {
  * whole composition; this adapter only reads the CLI's own flags and renders.
  */
 async function doMerge(context: CommandContext): Promise<number> {
-  refuseFlagsMergeDoesNotRead(context);
+  // Every flag 'pr merge' does not read was refused by the family guard
+  // (round 2, N7; zheref/nen#351) before this ran.
   const releaseUnit = context.args.booleans.has("release-unit");
   const delivery = context.args.booleans.has("delivery");
   if (releaseUnit && delivery) {
@@ -2066,28 +2114,4 @@ function readRequirements(requirementsPath: string, root: string): readonly Body
     throw error;
   }
   return rawRequirements;
-}
-
-/** Every flag 'pr merge' reads, globals included (round 2, N7). */
-const MERGE_VALUES: ReadonlySet<string> = new Set(["requirements-from", "require-head", "repo"]);
-const MERGE_BOOLEANS: ReadonlySet<string> = new Set(["release-unit", "delivery", "run", "json", "help"]);
-
-/**
- * The 'pr' family has ONE flag table, so every family flag parses on 'merge'.
- * 'merge' reads only the sets above; any other flag -- 'pr ready''s own
- * (round 1, N11) or another subcommand's, such as --base or --target (round
- * 2, N7) -- is refused here, before any gh call, rather than silently
- * ignored, as mark-ready does.
- */
-function refuseFlagsMergeDoesNotRead(context: CommandContext): void {
-  const given = [
-    ...Object.keys(context.args.values).filter((flag): boolean => context.args.values[flag] !== undefined && !MERGE_VALUES.has(flag)),
-    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
-    ...[...context.args.booleans].filter((flag): boolean => !MERGE_BOOLEANS.has(flag)),
-  ];
-  const first = given[0];
-  if (first === undefined) return;
-  const reads = "'pr merge' reads its ref, --release-unit or --delivery, --requirements-from, --repo, --require-head (--delivery only), --run and --json.";
-  if (PR_READY_ONLY.has(first)) throw new VerbUsageError(`--${first} is only read by 'pr ready'; ${reads}`);
-  throw new VerbUsageError(`--${first} is not read by 'pr merge'; ${reads}`);
 }
