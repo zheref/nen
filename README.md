@@ -447,7 +447,7 @@ it stays pending and holds every pull request's checks with it.
 
 ## The verb surface
 
-`nen --help` lists every command family (41); each
+`nen --help` lists every command family (43); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
 135 verbs outside the binary — each one's purpose, arguments, exit codes and

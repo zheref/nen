@@ -13,7 +13,7 @@ with the `nen` spelling. This document covers the **v0.13.0 line** (one new fami
 new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 41 command
+arrive with them): 43 command
 families, 135 verbs, every flag checked against the binary this repository
 builds.
 

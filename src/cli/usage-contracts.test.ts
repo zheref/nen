@@ -1,13 +1,15 @@
-// src/cli/usage-contracts.test.ts -- docs/USAGE.md's list of contract ids and
-// the family count in README.md and USAGE, held to the code (zheref/nen#350).
+// src/cli/usage-contracts.test.ts -- docs/USAGE.md's list of contract ids, held to
+// the code (zheref/nen#350).
 //
 // WHY THIS FILE EXISTS. USAGE said "Thirty shapes qualify today" and the list
 // beside it matched the sentence and not the binary: about nineteen ids the
-// code stamps (`nen.pr.open/v0.1`, `nen.wc.publish/v0.1`, ...) were missing,
-// and README and USAGE both said 41 command families while COMMANDS held 39. A
-// number that agrees with the list beside it and with nothing else is a
-// number nobody can tell is wrong, so this reads the two sides it must agree
-// with.
+// code stamps (`nen.pr.open/v0.1`, `nen.wc.publish/v0.1`, ...) were missing. A
+// number that agrees with the list beside it and with nothing else is a number
+// nobody can tell is wrong, so this reads the two sides it must agree with.
+//
+// THE FAMILY COUNT IS NOT HERE. It is ./surface.test.ts's, defined there as
+// COMMANDS.length plus the two pre-registry commands index.ts writes by hand;
+// a second pin of it in this file could only disagree with the first.
 //
 // HOW IT DISCOVERS THE IDS. There is no registry of contract ids to read, and
 // adding one would be a second list to keep in step with the first, which is
@@ -34,8 +36,6 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-
-import { COMMANDS } from "./registry.js";
 
 const ROOT = process.cwd();
 const read = (...parts: readonly string[]): string => readFileSync(join(ROOT, ...parts), "utf8").replace(/\r\n/g, "\n");
@@ -72,7 +72,6 @@ function emittedIds(): ReadonlyMap<string, string> {
 }
 
 const USAGE = read("docs", "USAGE.md");
-const README = read("README.md");
 
 /** The ids USAGE lists between its two markers, in document order. */
 function listedIds(): readonly string[] {
@@ -132,20 +131,5 @@ describe("docs/USAGE.md's contract list is the binary's", () => {
     expect(ids, "USAGE.md must state the id count as **N ids**").not.toBeNull();
     expect(Number(ids?.[1])).toBe(new Set(listed).size);
     expect(Number(shapes?.[1])).toBe(new Set(listed.map(shapeOf)).size);
-  });
-});
-
-describe("the command-family count is COMMANDS'", () => {
-  it("is the same in README.md and USAGE.md as the registry holds", () => {
-    const readme = /lists every command family \((\d+)\)/.exec(README);
-    const usage = /(\d+) command\s+families,/.exec(USAGE);
-    expect(readme, "README.md must say `nen --help` lists every command family (N)").not.toBeNull();
-    expect(usage, "USAGE.md must say N command families, M verbs").not.toBeNull();
-    expect(Number(readme?.[1])).toBe(COMMANDS.length);
-    expect(Number(usage?.[1])).toBe(COMMANDS.length);
-  });
-
-  it("has distinct names, so the count is of families and not of entries", () => {
-    expect(new Set(COMMANDS.map((command): string => command.name)).size).toBe(COMMANDS.length);
   });
 });
