@@ -21,8 +21,8 @@
 //             resolver, for a consumer that renders the whole table (#426);
 //   answer    write the maintainer's picker answer into that record afterwards.
 // Each lives in its own module beside this one (./registry-verb.ts,
-// ./resolve-verb.ts and ./matrix-verb.ts, over ./registry.ts, ./resolve.ts and
-// ./matrix.ts); this file is the
+// ./resolve-verb.ts, ./matrix-verb.ts and ./answer-verb.ts, over ./registry.ts,
+// ./resolve.ts, ./matrix.ts and ./record.ts); this file is the
 // family's registration, its usage text and its dispatch.
 //
 // EXIT CODES (docs/USAGE.md, "Exit codes"): 0 an answer (a mismatch is an
@@ -114,18 +114,21 @@ resolves against --repo's root.
       Every (job, domain, language) answer at once, for a consumer that renders the
       whole table: each job of the taxonomy, in each of its domains, in the shared
       column ('*', an issue with no language) and each language column. It OWNS NO
-      RULE: each cell is what 'resolve' answers for an issue carrying that one job
-      and that one language in that domain -- the pair (route, fallback, phase, cell
-      key, stand-in), the aggregate, the winner and runner-up resolved (surface,
-      spelled alias, restart line, interactive tools, snapshot quote, live lookup)
-      and the effort -- computed by the same resolver functions.
+      RULE: each cell is that one job and that one language in that domain, answered
+      by resolve's own functions -- the pair (route, fallback, phase, cell key,
+      stand-in), the aggregate, the winner and runner-up resolved (surface, spelled
+      alias, restart line, interactive tools, snapshot quote, live lookup) and the
+      effort.
       Whether a job can be in a domain at all is step 1's answer over a bounded set
       of WITNESS issues: the job alone, then with up to two other jobs; a kind no
       rule names, then each kind a rule names; no role, then each named role; no
-      label, then one per pattern ('*:name' as 'ns:name'). The first candidate that
+      label, then one per pattern ('*:name' as 'ns:name', 'ns' suffixed when named). The first candidate that
       derives a domain is printed as its witness (kind, role, labels, jobs, the rule
-      row), passable to 'resolve' as typed; a domain no candidate derives is
-      'unreachable', printed with no cells. A cell whose winner is a reviewer with no
+      row), passable to 'resolve' as typed. Where it is the job alone
+      (witnessIsCell: true), one 'resolve' call on it reproduces every cell; a
+      witness that needed companions shares the domain and the job's own pair with
+      the cell, while the cell's winner, aggregate and effort stay that one job's.
+      A domain no candidate derives is 'unreachable', printed with no cells. A cell whose winner is a reviewer with no
       stand-in is 'skipped' (no recommendation; 'resolve' refuses such an issue
       alone). --job and --domain narrow the table to those keys (taxonomy order).
       Exit 0 the matrix, 1 the failures 'resolve' gives (an invalid registry or

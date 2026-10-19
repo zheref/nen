@@ -5746,11 +5746,12 @@ call, for a consumer that renders the whole routing table as a page a person rea
 re-implements the domain derivation, the fallback order, the aggregation and the effort banding beside
 the verb and proves its copy with a [`resolve`](#nen-direct-resolve) call per claim.
 
-**It owns no rule.** Each cell is what `resolve` answers for an issue carrying **that one job and that
-one language** (or no language, the `*` column) in that domain, computed by the same functions:
-`resolve`'s step 1 decides which domains a job can be in, and steps 2 to 5 — the cell and its
-fallback and stand-ins, the aggregate, each side's surface, spelled alias and restart line, the effort
-— answer the cell. The tests hold every cell of the real registry to `resolve`'s own JSON.
+**It owns no rule.** Each cell is **that one job and that one language** (or no language, the `*`
+column) in that domain, answered by `resolve`'s own functions: step 1 decides which domains a job can
+be in, and steps 2 to 5 — the cell and its fallback and stand-ins, the aggregate, each side's surface,
+spelled alias and restart line, the effort — answer the cell. The tests run `resolve` on every cell's
+witness over the real registry and compare the domain, the rule row and the job's pair always, and
+the winner, runner-up, aggregate and effort wherever `witnessIsCell` is true.
 
 **Which domains a job can be in is a witness search.** The domain is derived from the repository's
 kind and role, the issue's labels and *all* its jobs, so a job is in a domain only when some issue
@@ -5758,13 +5759,15 @@ carrying it derives that domain. The verb asks step 1 about a bounded, determini
 candidate issues, in this order: the job **alone**, then with **one**, then **two** other jobs (the
 taxonomy's job order); a kind **no rule names** (`unlisted`, suffixed `-2`, `-3`… should a rule name
 it), then each kind a `repoKind` predicate names; **no** role, then each role a `repoRole` predicate
-names; **no** label, then one label per `issueLabels` pattern (`*:name` as `ns:name`). The first
+names; **no** label, then one label per `issueLabels` pattern (`*:name` as `ns:name`, `ns` suffixed
+`-2`, `-3`… should a pattern use it). The first
 candidate that derives a domain is printed as that domain's **witness** — `kind`, `role`, `labels`,
 `jobs`, the rule row's `order` and sentence — and is passable to `resolve` as typed. A domain no
 candidate derives is **`unreachable`** for the job and carries no cells; the bound searched is printed
-as `search`. A witness of the job alone is exactly the issue the cell describes; a witness that needed
-companions shares the domain and the job's own pairs with the cell, while the cell's winner and effort
-remain that one job's.
+as `search`. A witness of the job alone (`witnessIsCell: true`) is exactly the issue the cell
+describes, so one `resolve` call on it reproduces every cell; a witness that needed companions shares
+the domain and the job's own pair with the cell, while the cell's winner, aggregate and effort stay
+that one job's — `resolve` on that witness aggregates every job it carries.
 
 **A reviewer winning with no stand-in is `skipped`.** `resolve` refuses an issue whose every pair is
 such a cell (exit 1), so the matrix carries the cell's pair and effort with `skipped: true` and no
@@ -5798,8 +5801,9 @@ the filters, or `null`), `search` (`kinds`, `roles`, `labels`, `maxCompanions`),
 on), `languages` (`"*"` first, then the taxonomy's language keys), `jobs` and `counts` (`jobs`,
 `domains`, `reachable`, `unreachable`, `cells`, `skipped`). Each `jobs[]` entry is `{ job, weight,
 domains }`, grouped **job → domain → language**; each `domains[]` entry is `{ domain, reachable,
-witness, routedOn, fallbackFrom, phase, phaseName, fallback, cells }` — `witness` `{ kind, role,
-labels, jobs, rule, because }`, `fallback` the `fallback: …` note `resolve` prints, every field after
+witness, witnessIsCell, routedOn, fallbackFrom, phase, phaseName, fallback, cells }` — `witness` `{ kind, role,
+labels, jobs, rule, because }`, `witnessIsCell` `true` when the witness is the job alone (one `resolve`
+call on it reproduces every cell; `false` when unreachable), `fallback` the `fallback: …` note `resolve` prints, every field after
 `reachable` `null` (and `cells` empty) when unreachable — and each `cells[]` entry is `{ lang, cell,
 pair, skipped, aggregate, winner, runnerUp, effort }`, in `languages` order, where `pair` is one of
 `resolve`'s `pairs`, `aggregate` its `{ skipped, tally }`, `winner` and `runnerUp` its resolved sides
