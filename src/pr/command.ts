@@ -39,7 +39,7 @@ import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE }
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
-import { loadGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { SchemaError } from "../schema/errors.js";
 import {
   BASE_GATES_PATH,
@@ -52,7 +52,7 @@ import { resolveDeclaredExclusions } from "../gates/predicates.js";
 import { declarationWarnings } from "../gates/ready.js";
 import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
-import { isOwnGatesFile, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
+import { classifyGatesPath, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import type { FlagSpec } from "../cli/args.js";
 import { conjoin } from "../cli/prose.js";
 import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
@@ -254,22 +254,36 @@ ready:
                               root, NOT the current directory; pass an
                               absolute path for a file outside the target
                               repository. A --gates naming the checkout's OWN
-                              nen/gates.json is the head's file and is read
-                              at the base like the default. The resolved path
-                              is what --explain and --json report.
+                              nen/gates.json (any spelling, a hard link) is
+                              the head's file and is read at the base like
+                              the default; any other file inside the checkout
+                              is head content, applied with a warning
+                              (meta.identities.read: local-fallback). The
+                              resolved path is what --explain and --json
+                              report.
   THE GATES FILE IS THE BASE'S (zheref/nen#372). Without --gates, every input
-  nen/gates.json supplies -- reviewers and their login, review, round and
-  enrolment patterns, approves_when_posted_at_head, default_approvers,
+  nen/gates.json supplies -- every reviewers[] key (name, login_pattern,
+  review/round/enrolment_check_pattern, bounded_policy_exempt,
+  delivery_holistic_pass, approves_when_posted_at_head), default_approvers,
   approval_policy, base_reviewers, round_quorum, round_policy, delivery,
   dependabot_carve_out, checks.excluded -- is read at the PR's BASE commit
-  (contents:read), never from the --repo checkout, which in a worktree is the
-  PR's own head: a PR cannot loosen its own gate. When the base cannot be read,
-  declares no file, or carries one this build refuses, the checkout's file
-  supplies the identities and a warning on every output says so
-  (meta.identities.read: local-fallback); checks.excluded is never taken from
-  it. With --gates, that file supplies the rest and the base still supplies
-  checks.excluded (meta.identities.read: gates-flag). --reviewers reads no
-  file. 'watch until --pr' and 'pr merge' run this same read.
+  (contents:read), not from the --repo checkout (in a worktree the PR's own
+  head) unless the base cannot be READ: a PR cannot loosen its own gate.
+    base could not be read (403, network)  the checkout's file, warned
+                                           (read: local-fallback); 'pr merge'
+                                           and 'watch until --until ready'
+                                           refuse such a ready
+    base declares no nen/gates.json        --reviewers' own identities if
+                                           given (read: null), else NO
+                                           verdict: unevaluated, exit 1
+    base file this build refuses           NO verdict: unevaluated, exit 1
+                                           (upgrade nen)
+  checks.excluded is never taken from the checkout. With --gates naming a file
+  outside the checkout, that file supplies the rest and the base still
+  supplies checks.excluded (read: gates-flag). --reviewers reads no file only
+  with no --gates and no nen/gates.json in the checkout; with a file present
+  it narrows the configured reviewer set. 'watch until --pr' and 'pr merge'
+  run this same read.
   --token-env <VAR>           Environment variable holding the token. Default
                               GH_TOKEN; never picked up ambiently.
   --require-head <sha>        Judge ONLY this commit (7-40 hex digits, a prefix
@@ -332,8 +346,10 @@ next-blocker:
                               resolved against --repo, NOT the current
                               directory, exactly as it is for 'ready'.
   Without --gates (or with one naming the checkout's own file), every input
-  is read at the PR's BASE, as 'ready' reads it (zheref/nen#372); the
-  checkout's file is the fallback, with a warning.
+  is read at the PR's BASE, as 'ready' reads it (zheref/nen#372). A base that
+  could not be read falls back to the checkout's file, with a warning; a base
+  that declares no file, or one this build refuses, is exit 2. --json adds
+  identities { path, read }.
 
 cascade-main:
   Merges (never rebases) the trunk into the current branch and pushes on a
@@ -1158,7 +1174,10 @@ function blocker(context: CommandContext): number {
   // --reviewers guard above, which is checked first precisely so a bad flag
   // is refused without any filesystem or network work.
   const root = assertRepoRoot({
-    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/gates.json supplies the reviewer identities."),
+    repoFlag: requireRepoFlag(
+      context,
+      "It is the checkout whose nen/gates.json is read first; the reviewer identities come from nen/gates.json at the pull request's base, and from this file only when the base cannot be read.",
+    ),
   });
   // `--gates <path>` goes through ../verbs/pr_ready.ts's resolveIdentities --
   // THE SAME resolver `pr ready` uses, never a re-spelled copy -- because
@@ -1197,19 +1216,45 @@ function blocker(context: CommandContext): number {
   // failure (no base commit, an unreadable or absent file, a malformed block)
   // applies none, the stricter answer; and every OTHER input -- reviewers,
   // rounds, quorum, approvals, carve-outs (zheref/nen#372) -- where a base
-  // that cannot supply the file falls back to the local one with a warning.
-  // An explicit `--gates` is the caller's word for the second half, exactly as
-  // in `pr ready` -- unless it names the checkout's own nen/gates.json, which
-  // is read at the base like the default; the exclusions are the base's on
-  // every path.
+  // that could not be READ falls back to the local file with a warning, and a
+  // base that declares NO file or one this build REFUSES is a refusal (exit
+  // 2): this verb's --reviewers narrows a declared set and names no logins,
+  // so it is no identity source to fall back to. An explicit `--gates` naming
+  // a file outside the checkout is the caller's word for the second half,
+  // exactly as in `pr ready`; one naming the checkout's own nen/gates.json is
+  // read at the base like the default, and any other file inside the
+  // checkout is head content, applied with a warning. The exclusions are the
+  // base's on every path.
   const now = new Date().toISOString();
   const baseSha = snapshot.baseRefOid ?? "";
   const where = `${target.slug}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
   const baseRead = readBaseGatesWithGh(context.seams, target, baseSha);
-  const applied =
-    gatesFlag === undefined || isOwnGatesFile(root, local.path)
-      ? identitiesAtBase(baseRead, where, local)
-      : { identities: local, warnings: [] };
+  const gatesClass = gatesFlag === undefined ? null : classifyGatesPath(root, local.path);
+  let applied: { identities: GateIdentities; path: string; read: "base" | "local-fallback" | "gates-flag"; warnings: readonly string[] };
+  if (gatesClass === null || gatesClass === "own") {
+    const atBase = identitiesAtBase(baseRead, where, local);
+    if (atBase.kind !== "applied") {
+      throw new VerbUsageError(
+        `no gate to apply: ${atBase.reason}. ${
+          atBase.kind === "absent"
+            ? "Merge a nen/gates.json into the base first, or pass --gates <path> naming a file you vouch for outside this checkout."
+            : "Upgrade nen to a build that reads the base's gates file, or fix the base's file."
+        }`,
+      );
+    }
+    applied = { identities: atBase.identities, path: atBase.path, read: atBase.origin, warnings: atBase.warnings };
+  } else if (gatesClass === "inside") {
+    applied = {
+      identities: local,
+      path: local.path,
+      read: "local-fallback",
+      warnings: [
+        `--gates '${local.path}' names a file inside the --repo checkout (${root}), which in a worktree is the pull request's own head: it is applied as given, but as head content rather than the caller's word.`,
+      ],
+    };
+  } else {
+    applied = { identities: local, path: local.path, read: "gates-flag", warnings: [] };
+  }
   const identities = applied.identities;
   const base = exclusionsAtBase(baseRead, where, local.excludedChecks ?? []);
   // Every declared entry as `pr ready` reports it (hanten round 2, N1): the
@@ -1227,8 +1272,12 @@ function blocker(context: CommandContext): number {
     deliveryPr: context.args.booleans.has("delivery-pr"),
   });
   if (context.json) {
-    // `warnings` and `notes` are additive (hanten round 2, N1/N3).
-    context.io.out(JSON.stringify({ ...result, warnings, notes: base.notes }, null, 2));
+    // `warnings` and `notes` are additive (hanten round 2, N1/N3); so is
+    // `identities`, where the identities came from, mirroring `pr ready`'s
+    // `meta.identities` (zheref/nen#372, Feitan 5).
+    context.io.out(
+      JSON.stringify({ ...result, warnings, notes: base.notes, identities: { path: applied.path, read: applied.read } }, null, 2),
+    );
     return result.kind === "none" ? 0 : 1;
   }
   context.io.out(`#${prNumber}: ${result.kind}`);

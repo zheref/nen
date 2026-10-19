@@ -7,7 +7,7 @@
 // a ScriptedSeams with no script, so a single spawned subprocess fails the test.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checksSettled, pendingCheckLabels } from "../gates/predicates.js";
@@ -260,7 +260,10 @@ function deps(snapshots: readonly (Snapshot | null)[]): PrReadyDeps & { reads: (
 }
 
 const GATES = schemaPath(BANKAI_REPO, GATES_FILE);
-const BASE = ["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--gates", GATES, "--interval-ms", "30000"];
+// An empty --repo OUTSIDE this checkout (zheref/nen#372): with none, the root
+// is this repository and the fixture --gates would read as head content.
+const OUTSIDE_ROOT = mkdtempSync(join(tmpdir(), "nen-372-watch-"));
+const BASE = ["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--repo", OUTSIDE_ROOT, "--gates", GATES, "--interval-ms", "30000"];
 
 async function watch(
   argv: readonly string[],
@@ -344,12 +347,30 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     expect(result.code).toBe(0);
     // The same read, asked directly of the same two snapshots, agrees row for row.
     const direct = deps([SETTLED_COMMENTED, READY]);
-    const input = { positionals: ["pr", "ready", "9"], values: { "gh-repo": "zheref/example", gates: GATES }, booleans: new Set<string>(), repoFlag: null };
+    const input = { positionals: ["pr", "ready", "9"], values: { "gh-repo": "zheref/example", gates: GATES }, booleans: new Set<string>(), repoFlag: OUTSIDE_ROOT };
     const first = await readReady("9", input, direct);
     const second = await readReady("9", input, direct);
     expect(first.kind === "verdict" && first.report.verdict).toBe("not-ready");
     expect(second.kind === "verdict" && second.report.verdict).toBe("ready");
     expect(result.out[0]).toContain(first.kind === "verdict" ? first.report.gateLine : "?");
+  });
+
+  it("--until ready never wakes on a verdict judged from the checkout's own gates file: an observation error naming why (zheref/nen#372, Feitan 3)", async () => {
+    // A --gates file INSIDE the --repo checkout is head content: pr ready
+    // answers ready with read local-fallback, and the watch refuses it.
+    const root = mkdtempSync(join(tmpdir(), "nen-372-watch-inside-"));
+    mkdirSync(join(root, "contracts"));
+    writeFileSync(join(root, "contracts", "gates.json"), readFileSync(GATES, "utf8"));
+    const argv = ["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--repo", root, "--gates", join(root, "contracts", "gates.json"), "--interval-ms", "30000"];
+    const direct = await readReady("9", { positionals: ["pr", "ready", "9"], values: { "gh-repo": "zheref/example", gates: join(root, "contracts", "gates.json") }, booleans: new Set<string>(), repoFlag: root }, deps([READY]));
+    expect(direct.kind === "verdict" && direct.report.verdict).toBe("ready");
+    expect(direct.kind === "verdict" && direct.report.meta.identities.read).toBe("local-fallback");
+    const result = await watch([...argv, "--until", "ready"], deps([READY, READY, READY]));
+    expect(result.code).toBe(1);
+    expect(result.out[0]).toMatch(/^\[1\] observation failed: ready was judged on the checkout's own nen\/gates\.json \(meta\.identities\.read: local-fallback\), not the pull request's base -- not a merge signal; --gates '/);
+    // The wakes that are not a go still wake on the same read.
+    const settled = await watch([...argv, "--until", "checks-settled"], deps([READY]));
+    expect(settled.code).toBe(0);
   });
 
   it("an unevaluated read is an OBSERVATION ERROR: three in a row stop the watch at exit 1, never 'not yet'", async () => {
@@ -524,7 +545,7 @@ describe("F2 -- GitHub's strings are plain at every human seam, raw in --json", 
     const lines: string[] = [];
     const io = { out: (line: string): void => void lines.push(line), err: (line: string): void => void lines.push(line) };
     const stub = deps([{ pending: false, reviews: "approved", cancelledName: EVIL }, { pending: false, reviews: "approved", cancelledName: EVIL }]);
-    const input = { positionals: ["pr", "ready", "9"], values: { "gh-repo": "zheref/example", gates: GATES }, booleans: new Set<string>(), repoFlag: null };
+    const input = { positionals: ["pr", "ready", "9"], values: { "gh-repo": "zheref/example", gates: GATES }, booleans: new Set<string>(), repoFlag: OUTSIDE_ROOT };
     expect(await prReady(input, io, stub)).toBe(1);
     expect(lines.join("\n")).toContain("evil[2K]0;pwnedname");
     for (const line of lines) expect(line).not.toMatch(CONTROL);
@@ -573,7 +594,7 @@ describe("F3 -- the read's warnings, notes and declared exclusions are not dropp
 describe("F4/N6/N1 -- pacing for --pr", () => {
   it("refuses an --interval-ms under the 30000 ms floor, naming it, before any read", async () => {
     const stub = deps([]);
-    const result = await watch(["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--gates", GATES, "--until", "ready", "--interval-ms", "1000"], stub);
+    const result = await watch(["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--repo", OUTSIDE_ROOT, "--gates", GATES, "--until", "ready", "--interval-ms", "1000"], stub);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/under the --pr floor of 30000 ms/);
     expect(stub.reads()).toBe(0);

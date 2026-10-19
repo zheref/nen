@@ -62,7 +62,7 @@ import {
 } from "./mergeunit.js";
 import type { BodyRequirement } from "./bodycheck.js";
 import { loadWorkflow, parseBranchPolicy } from "../schema/workflow.js";
-import { fetchJsonAtRef, type JValue } from "../release/unitcheck.js";
+import { fetchChangedFiles, fetchJsonAtRef, UnitCheckTruncatedError, type JValue } from "../release/unitcheck.js";
 import { SchemaError } from "../schema/errors.js";
 import { GH, mustJson, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import type { PrReadyDeps } from "../verbs/pr_ready.js";
@@ -386,6 +386,42 @@ function runOwnGate(seams: Seams, prOnce: DeliveryPrOnce | null, fetchFailure: s
 }
 
 /**
+ * The policy a merge is judged against must not be the policy the same merge
+ * changes (zheref/nen#372, Feitan 3) -- the refusal `--release-unit` has made
+ * since Feitan FEI-3 item 5, now on the delivery form too. A pull request that
+ * adds, edits, renames or deletes `nen/workflow.json` or `nen/gates.json` is
+ * refused: its own `pr ready` reads both at the base, but a merge on a verdict
+ * any fallback widened would land the widening. A changed-file list that
+ * could not be read in full is a failed gate, never a pass.
+ */
+function runPolicyFilesGate(seams: Seams, target: Target, prNumber: number): GateOutcome {
+  const name = "policy files";
+  let changed;
+  try {
+    changed = fetchChangedFiles(seams, target, prNumber);
+  } catch (error) {
+    if (error instanceof UnitCheckTruncatedError || error instanceof ToolError) {
+      return { name, ok: false, lines: [`policy files: the changed files could not be read in full (${redactRemoteCredentials(error.message)}) -- refused.`] };
+    }
+    throw error;
+  }
+  const policyFiles = new Set(["nen/workflow.json", "nen/gates.json"]);
+  const touched = changed.filter(
+    (file): boolean => policyFiles.has(file.path) || (file.previousPath !== null && policyFiles.has(file.previousPath)),
+  );
+  if (touched.length > 0) {
+    return {
+      name,
+      ok: false,
+      lines: [
+        `policy files: this pull request changes ${[...new Set(touched.map((file): string => `'${file.path}'`))].join(", ")} -- refused. The policy a merge is judged against must not be the policy this same merge is changing.`,
+      ],
+    };
+  }
+  return { name, ok: true, lines: ["policy files: changes neither 'nen/workflow.json' nor 'nen/gates.json'"] };
+}
+
+/**
  * Runs the delivery form. A base that is a protected name is REFUSED BY
  * RULING: the outcome carries `refused: true` and the adapter exits 2, the
  * transcript and `--json` document still emitted. A base that could not be
@@ -569,8 +605,9 @@ export async function mergeDelivery(options: MergeDeliveryOptions): Promise<Merg
   const pinGate = pinWithRequiredHead(computePinGate(readyGate.judgedHead, prOnce, fetchFailure), options.requireHead, readyGate.judgedHead);
   const bodyGate = runBodyCheckGate(prOnce, fetchFailure, { requirements: options.requirements });
   const ownGate = runOwnGate(options.seams, prOnce, fetchFailure, baseCommitPolicy.template);
+  const policyGate = runPolicyFilesGate(options.seams, target, ref.number);
 
-  const gates: GateOutcome[] = [baseGate, readyGate, pinGate, bodyGate, ownGate];
+  const gates: GateOutcome[] = [baseGate, readyGate, pinGate, bodyGate, ownGate, policyGate];
   const ok = gates.every((gate): boolean => gate.ok);
   const judgedHead = readyGate.judgedHead;
   const mergeArgv =

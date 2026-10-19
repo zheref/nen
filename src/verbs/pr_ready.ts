@@ -45,8 +45,10 @@
 //                            BASE, read once GitHub names the base commit;
 //                            the checkout's copy is resolved first (a
 //                            malformed one is still exit 2 before any read)
-//                            and applies only as a warned fallback -- see
-//                            ../gates/base_identities.ts.
+//                            and applies only when the base could not be
+//                            READ, warned; a base that declares none or one
+//                            this build refuses never falls back to it --
+//                            see ../gates/base_identities.ts.
 //   3. `--reviewers a,b,c`   the shell gate's own flag, mirrored. The named
 //                            reviewers get the ORIGINAL's `default:` reading and
 //                            nothing else: each matches its own login,
@@ -73,7 +75,7 @@
 // competed with.
 
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import {
   declarationNotice,
   evaluateReady,
@@ -563,15 +565,22 @@ export interface ReadyMeta {
   /**
    * Where the identities the verdict applied came from. `path` is the file they
    * were parsed from -- since zheref/nen#372, `<owner>/<repo>@<sha>:nen/gates.json`
-   * when they were read at the pull request's base -- and `null` on the
-   * `--reviewers` path. `read` (additive, zheref/nen#372) says which route:
+   * when they were read at the pull request's base -- and `null` when
+   * `--reviewers` supplied them. `read` (additive, zheref/nen#372) says which
+   * route:
    *   `base`             `nen/gates.json` at the pull request's base commit;
    *   `local-fallback`   the checkout's own file, because the base could not
-   *                      supply one -- `meta.warnings` says why;
-   *   `gates-flag`       the file `--gates` named, the caller's word;
+   *                      be READ, or a `--gates` file inside the checkout --
+   *                      `meta.warnings` says why; `pr merge` and `watch
+   *                      until --until ready` refuse a verdict on it;
+   *   `gates-flag`       a `--gates` file outside the checkout, the caller's word;
    *   `local-unverified` ONLY on an unevaluated report: the checkout's own
-   *                      file, never checked against the base;
-   *   `null`             `--reviewers`, which names no file.
+   *                      file, NOT applied -- GitHub was never read, or the
+   *                      base declares no file or one this build refuses;
+   *   `null`             `--reviewers` supplied them: with no `--gates` and no
+   *                      `nen/gates.json` in the checkout, or with a base that
+   *                      declares no file. With a file present, `--reviewers`
+   *                      only narrows the configured reviewer set.
    */
   readonly identities: {
     readonly source: "schema" | "flags";
@@ -839,6 +848,21 @@ export interface ResolvedIdentities {
 }
 
 export class IdentityError extends Error {}
+
+/**
+ * The base supplied no gate this verdict may apply (zheref/nen#372): it
+ * declares no `nen/gates.json` and no `--reviewers` was given, or it carries
+ * one this build refuses. Thrown from the fetch's identity hook and turned
+ * into an `unevaluated` report -- never a verdict, never `ready`.
+ */
+export class GateUnavailableError extends Error {
+  readonly remedy: string;
+  constructor(message: string, remedy: string) {
+    super(message);
+    this.name = "GateUnavailableError";
+    this.remedy = remedy;
+  }
+}
 
 /** Which route the identities a report applied took (zheref/nen#372); see `ReadyMeta.identities`. */
 export type IdentitiesRead = "base" | "local-fallback" | "gates-flag" | "local-unverified";
@@ -1108,28 +1132,61 @@ export function resolveIdentities(
   );
 }
 
+/** Where a `--gates` path sits relative to the `--repo` checkout (zheref/nen#372). */
+export type GatesPathClass =
+  /** The checkout's own `nen/gates.json`, under any spelling: read at the base. */
+  | "own"
+  /** Some other file inside the checkout -- head content, applied with a warning. */
+  | "inside"
+  /** A file outside the checkout: the caller's word. */
+  | "outside";
+
+/** `dev`+`ino` of a path, or `null` when it cannot be stat'ed. */
+function fileIdentity(path: string): string | null {
+  try {
+    const stats = statSync(path);
+    return `${String(stats.dev)}:${String(stats.ino)}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Whether `path` IS the target repository's own `nen/gates.json` (zheref/nen#372).
+ * Classify a `--gates` path (zheref/nen#372; hanten round 1, Feitan 4).
  *
  * `--gates nen/gates.json` -- the spelling USAGE's own `watch until` example
  * used -- resolves against the `--repo` root to exactly the file the base read
  * exists to replace: in a worktree, the pull request's head. Taking that as
  * "the caller's word" would hand the head its own gate back through a flag
  * whose purpose is to name a DIFFERENT file, so a `--gates` naming the
- * checkout's own file is read at the base exactly as the default is. Compared
- * through `realpath`, so a symlink or a `./` spelling of the same file is the
- * same file; a path that does not resolve is compared as written.
+ * checkout's own file is `own` and is read at the base exactly as the default
+ * is. The comparison is the FILE, not its spelling: `dev`+`ino`, so a
+ * symlink, a `./` spelling, a case-folded spelling on a case-insensitive
+ * volume and a hard link are all the same file. Any OTHER path inside the
+ * checkout -- decided by walking the path's real directories up to the root
+ * and comparing each one's `dev`+`ino` with the root's -- is still head
+ * content: `inside`, applied as given but never as the caller's word.
  */
+export function classifyGatesPath(repoRoot: string, path: string): GatesPathClass {
+  const own = fileIdentity(resolveSchemaFile(repoRoot, GATES_FILE).canonical.path);
+  if (own !== null && fileIdentity(path) === own) return "own";
+  const root = fileIdentity(repoRoot);
+  if (root === null) return "outside";
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    real = resolve(path);
+  }
+  for (let dir = dirname(real); ; dir = dirname(dir)) {
+    if (fileIdentity(dir) === root) return "inside";
+    if (dirname(dir) === dir) return "outside";
+  }
+}
+
+/** Whether `path` IS the target repository's own `nen/gates.json`; see `classifyGatesPath`. */
 export function isOwnGatesFile(repoRoot: string, path: string | null): boolean {
-  if (path === null) return false;
-  const real = (candidate: string): string => {
-    try {
-      return realpathSync(candidate);
-    } catch {
-      return resolve(candidate);
-    }
-  };
-  return real(resolveSchemaFile(repoRoot, GATES_FILE).canonical.path) === real(path);
+  return path !== null && classifyGatesPath(repoRoot, path) === "own";
 }
 
 // ── rendering ───────────────────────────────────────────────────────────────
@@ -1556,16 +1613,19 @@ export async function readReady(
   // `default_approvers` decides and the flag is silently unreachable code with
   // no diagnostic. Loud rather than silent: a caller who typed `--approvers` and
   // sees it ignored needs to know the identity source won, not guess.
-  const flagWarnings: string[] = [
-    ...(identities.source === "schema" && approversFlag !== undefined
+  // Built from the identities APPLIED, not the ones resolved locally
+  // (zheref/nen#372): the base read can replace the file, or -- on a base
+  // that declares none -- hand the gate to --reviewers after all.
+  const flagWarnings = (from: AppliedIdentities): string[] => [
+    ...(from.source === "schema" && approversFlag !== undefined
       ? [
-          `--approvers is read only when reviewer identities come from --reviewers; identities came from '${identities.path ?? "?"}' instead, so --approvers was ignored.`,
+          `--approvers is read only when reviewer identities come from --reviewers; they came from a gates file ('${from.path ?? "?"}', see meta.identities) instead, so --approvers was ignored.`,
         ]
       : []),
     // The same loudness for --reviewer-login: a file's `login_pattern` decides.
-    ...(identities.source === "schema" && reviewerLogins.size > 0
+    ...(from.source === "schema" && reviewerLogins.size > 0
       ? [
-          `--reviewer-login is read only when reviewer identities come from --reviewers; identities came from '${identities.path ?? "?"}' instead, so --reviewer-login was ignored (declare login_pattern there).`,
+          `--reviewer-login is read only when reviewer identities come from --reviewers; they came from a gates file ('${from.path ?? "?"}', see meta.identities) instead, so --reviewer-login was ignored (declare login_pattern there).`,
         ]
       : []),
   ];
@@ -1589,24 +1649,38 @@ export async function readReady(
   // quorum. The base commit is known only once GitHub is read, so the swap
   // happens inside the fetch (`identitiesAtBase`); until then -- and on every
   // report that never reached GitHub -- the local file is what was resolved,
-  // marked `local-unverified`. An explicit `--gates <path>` is the CALLER'S
-  // word and wins: it names a file the caller vouches for (a trusted checkout
+  // marked `local-unverified`. What the base read can answer, and what each
+  // answer applies, is ../gates/base_identities.ts's header: a base that
+  // could not be READ falls back to the local file, warned; a base that
+  // declares NO file or one this build REFUSES never does -- the caller's
+  // `--reviewers` applies to the first, and otherwise no verdict is given.
+  //
+  // An explicit `--gates <path>` naming a file OUTSIDE the checkout is the
+  // CALLER'S word: it names a file the caller vouches for (a trusted checkout
   // of the base in CI, a reference file in neither repository), so it is used
-  // as given and the base is not consulted for it -- unless it names the
-  // checkout's own `nen/gates.json`, which is the head's file under another
-  // spelling and is read at the base like the default (`isOwnGatesFile`).
-  // `checks.excluded` is the
-  // one exception on every path: it is honoured from the base or not at all
-  // (zheref/nen#249), whichever file supplied the rest. `--reviewers` names no
-  // file and reads none.
-  const readsBase =
-    identities.source === "schema" &&
-    (input.values["gates"] === undefined || isOwnGatesFile(repoRoot, identities.path));
+  // as given and the base is not consulted for it. Naming the checkout's own
+  // `nen/gates.json` (under any spelling) is the head's file and is read at
+  // the base like the default; naming any OTHER file inside the checkout is
+  // head content too, applied as given but marked `local-fallback`, so the
+  // autonomous callers refuse it (`classifyGatesPath`). `checks.excluded` is
+  // the one exception on every path: it is honoured from the base or not at
+  // all (zheref/nen#249), whichever file supplied the rest. `--reviewers`
+  // with no gates file anywhere reads none.
+  const gatesClass =
+    identities.source === "schema" && input.values["gates"] !== undefined && identities.path !== null
+      ? classifyGatesPath(repoRoot, identities.path)
+      : null;
+  const readsBase = identities.source === "schema" && (input.values["gates"] === undefined || gatesClass === "own");
   const resolved = identities;
   let applied: AppliedIdentities = {
     ...resolved,
-    read: resolved.source === "flags" ? null : readsBase ? "local-unverified" : "gates-flag",
-    warnings: [],
+    read: resolved.source === "flags" ? null : readsBase ? "local-unverified" : gatesClass === "inside" ? "local-fallback" : "gates-flag",
+    warnings:
+      gatesClass === "inside"
+        ? [
+            `--gates '${resolved.path ?? "?"}' names a file inside the --repo checkout (${repoRoot}), which in a worktree is the pull request's own head: it is applied as given, but as head content rather than the caller's word, and 'pr merge' and 'watch until --until ready' refuse a verdict that rests on it.`,
+          ]
+        : [],
   };
   // The one base read, shared by the identities and the exclusions so the two
   // can never come from different commits. A holder rather than a bare `let`:
@@ -1625,7 +1699,7 @@ export async function readReady(
         stallMinutes,
         excludeRun,
         excludeCheckNames,
-        [...flagWarnings, ...applied.warnings],
+        [...flagWarnings(applied), ...applied.warnings],
         "no usable token, so GitHub could not be read",
         `${opened.message}. Set GH_TOKEN explicitly, or use --token-env <VAR> to name the environment variable holding the token; never use an ambient credential.`,
       ),
@@ -1643,15 +1717,41 @@ export async function readReady(
               const base = await readBaseGates(source, ref, baseSha);
               seen.base = base;
               const atBase = identitiesAtBase(base.read, base.where, resolved.identities);
-              applied = {
-                identities: atBase.identities,
-                source: "schema",
-                path: atBase.path,
-                read: atBase.origin,
-                warnings: atBase.warnings,
-                ...(atBase.origin === "base" ? { origin: base.origin } : {}),
-              };
-              return atBase.identities;
+              if (atBase.kind === "applied") {
+                applied = {
+                  identities: atBase.identities,
+                  source: "schema",
+                  path: atBase.path,
+                  read: atBase.origin,
+                  warnings: atBase.warnings,
+                  ...(atBase.origin === "base" ? { origin: base.origin } : {}),
+                };
+                return atBase.identities;
+              }
+              // A base that declares NO file, with the caller's own reviewer
+              // set on the command line: that set is the gate (Feitan 1). The
+              // head's file is never what decides who reviews.
+              if (atBase.kind === "absent" && reviewerNames.length > 0) {
+                const flags = identitiesFromFlags(reviewerNames, approverNames, reviewerLogins);
+                applied = {
+                  identities: flags,
+                  source: "flags",
+                  path: null,
+                  read: null,
+                  warnings: [
+                    `${atBase.reason}. The identities are --reviewers' own (each name the whole login); the checkout's ${resolved.path ?? "nen/gates.json"} was ignored.`,
+                  ],
+                };
+                return flags;
+              }
+              // Otherwise there is no gate anybody merged: no verdict (Feitan 1, 2).
+              applied = { ...resolved, read: "local-unverified", warnings: [] };
+              throw new GateUnavailableError(
+                atBase.reason,
+                atBase.kind === "absent"
+                  ? "Merge a nen/gates.json into the base first, or pass --reviewers a,b,c (the caller's own reviewer set), or --gates <path> naming a file you vouch for outside this checkout. Never read this as ready."
+                  : "Upgrade nen to a build that reads the base's gates file (nen bootstrap --ref <newer tag>), or fix the base's file. Never read this as ready.",
+              );
             },
           }
         : {}),
@@ -1663,6 +1763,25 @@ export async function readReady(
       maxReviewRequestPages: MAX_REVIEW_REQUEST_PAGES,
     });
   } catch (error) {
+    // The base supplied no gate this verdict may apply (zheref/nen#372).
+    if (error instanceof GateUnavailableError) {
+      return verdictOf(
+        unevaluatedReport(
+          ref,
+          deps.now(),
+          deps.executable(),
+          applied,
+          policy,
+          stallMinutes,
+          excludeRun,
+          excludeCheckNames,
+          [...flagWarnings(applied), ...applied.warnings],
+          `no gate to apply: ${error.message}`,
+          error.remedy,
+          `the gate could not be established (${error.message})`,
+        ),
+      );
+    }
     // A network failure, a 403 from a token without checks:read, an
     // unauthenticated read: SKILL.md § 4's list, and its classification.
     return verdictOf(
@@ -1675,7 +1794,7 @@ export async function readReady(
         stallMinutes,
         excludeRun,
         excludeCheckNames,
-        [...flagWarnings, ...applied.warnings],
+        [...flagWarnings(applied), ...applied.warnings],
         `GitHub could not be read (${error instanceof Error ? error.message : String(error)})`,
         "Check the token's grants (pull-requests:read AND checks:read AND actions:read), that it is not expired, and that the network reached github.com. Never read this as ready.",
       ),
@@ -1693,7 +1812,7 @@ export async function readReady(
         stallMinutes,
         excludeRun,
         excludeCheckNames,
-        [...flagWarnings, ...applied.warnings],
+        [...flagWarnings(applied), ...applied.warnings],
         fetched.reason,
         fetched.remedy,
       ),
@@ -1812,7 +1931,7 @@ export async function readReady(
       identities: { source: applied.source, path: applied.path, read: applied.read },
       dependabotCarveOut: evaluation.context.dependabotCarveOut,
       warnings: [
-        ...flagWarnings,
+        ...flagWarnings(applied),
         ...applied.warnings,
         ...fetched.warnings,
         ...base.warnings,
@@ -1985,6 +2104,7 @@ function unevaluatedReport(
   warnings: readonly string[],
   reason: string,
   remedy: string,
+  rowsWhy: string = `GitHub could not be read (${reason})`,
 ): ReadyReport {
   return {
     contract: CONTRACT,
@@ -2000,7 +2120,7 @@ function unevaluatedReport(
     // request was established, and a table with green rows in it would be a
     // claim about evidence nobody read. Every row names WHY (zheref/nen#248):
     // the one missing fact is the whole state.
-    conjuncts: unknownTable(`GitHub could not be read (${reason})`),
+    conjuncts: unknownTable(rowsWhy),
     caveats: CAVEATS,
     remedy,
     meta: {

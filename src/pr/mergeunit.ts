@@ -195,6 +195,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     readonly meta?: {
       readonly declaredExclusions?: readonly DeclaredExclusionReport[];
       readonly warnings?: readonly string[];
+      readonly identities?: { readonly read?: string | null };
     };
   };
   try {
@@ -208,9 +209,20 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     };
   }
   const line = parsed.gateLine ?? parsed.message ?? "(no verdict line)";
+  // A `ready` judged on the CHECKOUT's own gates file is not a merge signal
+  // (zheref/nen#372, Feitan 3): under `--repo` that file is the pull
+  // request's head, which can loosen its own reviewers, rounds and quorum.
+  // `pr ready` still answers a human reader with a warning; a merge refuses.
+  const read = parsed.meta?.identities?.read;
+  const untrusted = read === "local-fallback" || read === "local-unverified";
+  const refusal = untrusted
+    ? [
+        `pr ready: refused for a merge: the verdict's gate inputs came from the checkout's own nen/gates.json (meta.identities.read: ${String(read)}), not the pull request's base -- a merge never rests on gate inputs the base has not merged. Give the token contents:read so the base can be read.`,
+      ]
+    : [];
   return {
     name: "pr ready",
-    ok: parsed.verdict === "ready",
+    ok: parsed.verdict === "ready" && !untrusted,
     judgedHead: parsed.judgedHead ?? null,
     // What a declared `checks.excluded` entry removed from CON-32(a)
     // (zheref/nen#249, Feitan F2): a merge transcript never records a widened
@@ -226,6 +238,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
       ...(Array.isArray(parsed.meta?.warnings) ? parsed.meta.warnings : [])
         .filter((warning): boolean => typeof warning === "string" && !warning.startsWith("excluded by declaration: "))
         .map((warning): string => plainLine(`pr ready: warning: ${redact(warning)}`)),
+      ...refusal,
       ...captured.errLines.map(redact),
     ],
   };

@@ -5,7 +5,7 @@
 // still emitted); every base read that fails is "unknown" (exit 1).
 
 import { afterAll, describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
@@ -81,7 +81,9 @@ function readySource(head: string = HEAD): PrStateSource {
     reviewRequestsPage: async (): Promise<never> => {
       throw new Error("should not paginate");
     },
-    fileAtRef: async (): Promise<string | null> => null,
+    // The base carries the same nen/gates.json the checkout does
+    // (zheref/nen#372): a base that declared none would give no verdict.
+    fileAtRef: async (): Promise<string | null> => readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
   };
 }
 
@@ -177,10 +179,18 @@ function stateCall(baseRefName: unknown = INTEGRATION): ScriptedCall {
   };
 }
 
+/** The changed-file reads the policy-files gate makes (zheref/nen#372, Feitan 3). */
+function filesCalls(files: readonly { filename: string; previous_filename?: string }[] = [{ filename: "src/a.ts" }]): ScriptedCall[] {
+  return [
+    { match: "gh api --paginate --slurp repos/zheref/example/pulls/9/files", result: { code: 0, stdout: JSON.stringify([files]) } },
+    { match: "gh api repos/zheref/example/pulls/9", result: { code: 0, stdout: JSON.stringify({ changed_files: files.length }) } },
+  ];
+}
+
 type Slot = "pr" | "default" | "baseWorkflow" | "defaultWorkflow" | "chain" | "viewer";
 
 /** Every read a fully-passing plan makes, each replaceable (or droppable, with `null`) by name. */
-function script(overrides: Partial<Record<Slot, ScriptedCall | null>> & { protection?: ScriptedCall[] } = {}): ScriptedCall[] {
+function script(overrides: Partial<Record<Slot, ScriptedCall | null>> & { protection?: ScriptedCall[]; files?: ScriptedCall[] } = {}): ScriptedCall[] {
   const pick = (slot: Slot, fallback: ScriptedCall): ScriptedCall[] => {
     const value = overrides[slot];
     if (value === null) return [];
@@ -195,6 +205,7 @@ function script(overrides: Partial<Record<Slot, ScriptedCall | null>> & { protec
     ...(overrides.protection ?? protectionCalls()),
     ...pick("chain", chainCall()),
     ...pick("viewer", VIEWER_CALL),
+    ...(overrides.files ?? filesCalls()),
   ];
 }
 
@@ -386,7 +397,7 @@ describe("mergeDelivery -- a base nobody could establish is a failed gate (exit 
   }
 
   it("the pull-request fetch fails", async () => {
-    await expectUnknown([ORIGIN_CALL, { match: PR_VIEW, result: { code: 1, stderr: "HTTP 502" } }, defaultBranchCall(), workflowAt("main"), VIEWER_CALL], /could not fetch the pull request/);
+    await expectUnknown([ORIGIN_CALL, { match: PR_VIEW, result: { code: 1, stderr: "HTTP 502" } }, defaultBranchCall(), workflowAt("main"), VIEWER_CALL, ...filesCalls()], /could not fetch the pull request/);
   });
 
   it("defaultBranchRef is null", async () => {
@@ -455,9 +466,43 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     expect(outcome.report.baseProtected).toBe(false);
     expect(outcome.report.baseRulesets).toBe(0);
     expect(outcome.report.bodyOk).toBe(true);
-    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "pr body-check", "whose pr"]);
+    expect(outcome.report.gates.map((gate) => gate.name)).toEqual(["base", "pr ready", "head pin", "pr body-check", "whose pr", "policy files"]);
+    expect(outcome.lines).toContain("policy files: changes neither 'nen/workflow.json' nor 'nen/gates.json'");
     expect(outcome.lines.at(-1)).toBe(`plan only (pass --run to execute): gh ${MERGE_MATCH.slice(3)}`);
     expect(exitOf(outcome.report)).toBe(0);
+  });
+
+  it("refuses a pull request that changes nen/gates.json or nen/workflow.json -- the policy it is judged by (zheref/nen#372, Feitan 3)", async () => {
+    for (const files of [
+      [{ filename: "nen/gates.json" }],
+      [{ filename: "src/a.ts" }, { filename: "nen/workflow.json" }],
+      [{ filename: "nen/elsewhere.json", previous_filename: "nen/gates.json" }],
+    ]) {
+      const outcome = await run(tmpRoot(), script({ files: filesCalls(files) }));
+      expect(outcome.report.ok, JSON.stringify(files)).toBe(false);
+      expect(outcome.report.mergeArgv).toBeNull();
+      expect(outcome.lines.join("\n"), JSON.stringify(files)).toMatch(/^policy files: this pull request changes .* -- refused\. The policy a merge is judged against must not be the policy this same merge is changing\.$/m);
+      expect(exitOf(outcome.report)).toBe(1);
+    }
+  });
+
+  it("a changed-file list that cannot be read is a failed policy gate, never a pass", async () => {
+    const outcome = await run(tmpRoot(), script({ files: [{ match: "gh api --paginate --slurp repos/zheref/example/pulls/9/files", result: { code: 1, stderr: "HTTP 502" } }] }));
+    expect(outcome.report.ok).toBe(false);
+    expect(outcome.lines.join("\n")).toMatch(/^policy files: the changed files could not be read in full .* -- refused\.$/m);
+  });
+
+  it("refuses a 'ready' judged on the checkout's own gates file (zheref/nen#372, Feitan 3)", async () => {
+    const source: PrStateSource = {
+      ...readySource(),
+      fileAtRef: async (): Promise<string | null> => {
+        throw new Error("HTTP 403");
+      },
+    };
+    const outcome = await run(tmpRoot(), script(), { deps: readyDeps(source) });
+    expect(outcome.report.ready).toBe(false);
+    expect(outcome.report.ok).toBe(false);
+    expect(outcome.lines.join("\n")).toContain("pr ready: refused for a merge: the verdict's gate inputs came from the checkout's own nen/gates.json (meta.identities.read: local-fallback)");
   });
 
   it("refuses a head ref outside the run form of branch.template (F1)", async () => {

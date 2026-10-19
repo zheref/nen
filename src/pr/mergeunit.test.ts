@@ -70,7 +70,9 @@ function readySource(head: string = HEAD): PrStateSource {
     reviewRequestsPage: async (): Promise<never> => {
       throw new Error("should not paginate");
     },
-    fileAtRef: async (): Promise<string | null> => null,
+    // The base carries the same nen/gates.json the checkout does
+    // (zheref/nen#372): a base that declared none would give no verdict.
+    fileAtRef: async (): Promise<string | null> => readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
   };
 }
 
@@ -316,6 +318,22 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     expect(outcome.lines.join("\n")).toMatch(/plan only \(pass --run to execute\)/);
   });
 
+  it("refuses a 'ready' judged on the checkout's own gates file -- the base could not be read (zheref/nen#372, Feitan 3)", async () => {
+    const source: PrStateSource = {
+      ...readySource(),
+      fileAtRef: async (): Promise<string | null> => {
+        throw new Error("HTTP 403: Resource not accessible by integration");
+      },
+    };
+    const outcome = await run(tmpRoot(), passingScript(), { deps: readyDeps(source) });
+    expect(outcome.report.ok).toBe(false);
+    expect(outcome.report.ran).toBe(false);
+    expect(outcome.lines).toContain("pr ready: ready");
+    expect(outcome.lines.join("\n")).toContain(
+      "pr ready: refused for a merge: the verdict's gate inputs came from the checkout's own nen/gates.json (meta.identities.read: local-fallback), not the pull request's base",
+    );
+  });
+
   it("the transcript names what a declared checks.excluded entry removed (zheref/nen#249, Feitan F2)", async () => {
     const root = tmpRoot();
     const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
@@ -377,7 +395,9 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
 
     it("a head-only exclusion is NOT honoured: the merge is refused and the transcript says why (N8)", async () => {
       const outcome = await run(headDeclaringRoot(), passingScript(), {
-        deps: readyDeps(redWindows(async (): Promise<string | null> => null)),
+        // The base carries the file WITHOUT the exclusion (zheref/nen#372: a
+        // base declaring no file at all would give no verdict).
+        deps: readyDeps(redWindows(async (): Promise<string | null> => readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"))),
       });
       expect(outcome.report.ok).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/pr ready: not-ready: required checks reported but are not all green/);
