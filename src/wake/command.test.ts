@@ -252,6 +252,7 @@ describe("nen wake -- the private-name guard (zheref/nen#363)", () => {
       seen.push([command, ...args].join(" "));
       const joined = args.join(" ");
       if (joined === "api repos/o/r") return ok(JSON.stringify({ visibility }));
+      if (joined === "api -i user") return ok("HTTP/2.0 200 OK\nX-Oauth-Scopes: repo\n\n{}");
       if (joined === LIST_PAGE && list !== null) return list;
       return ok("[]");
     };
@@ -262,7 +263,7 @@ describe("nen wake -- the private-name guard (zheref/nen#363)", () => {
     const seen: string[] = [];
     const result = await capture([...FIRE, "--comment", "re-fired after the vault move", "--run"], guardOnly("public", ok(LIST), seen), "scripted");
     expect(result.code).toBe(4);
-    expect(seen).toEqual(["gh api repos/o/r", `gh ${LIST_PAGE}`]);
+    expect(seen).toEqual(["gh api repos/o/r", "gh api -i user", `gh ${LIST_PAGE}`]);
     const all = [...result.out, ...result.err].join("\n");
     expect(all).toContain("nen wake fire: comment:1: private repository #2");
     expect(all).not.toMatch(/vault/i);
@@ -289,7 +290,7 @@ describe("nen wake -- the private-name guard (zheref/nen#363)", () => {
       "scripted",
     );
     expect(result.code).toBe(1);
-    expect(seen).toEqual(["gh api repos/o/r", `gh ${LIST_PAGE}`]);
+    expect(seen).toEqual(["gh api repos/o/r", "gh api -i user", `gh ${LIST_PAGE}`]);
   });
 
   it("fire: with no --comment there is no text, no check -- and the guard's flags are refused rather than ignored", async () => {
@@ -313,8 +314,28 @@ describe("nen wake -- the private-name guard (zheref/nen#363)", () => {
     const seen: string[] = [];
     const result = await capture([...VERIFY, "--flag-marker", "vault_guard", "--run"], guardOnly("public", ok(LIST), seen), "scripted");
     expect(result.code).toBe(4);
-    expect(seen).toEqual(["gh api repos/o/r", `gh ${LIST_PAGE}`]);
+    expect(seen).toEqual(["gh api repos/o/r", "gh api -i user", `gh ${LIST_PAGE}`]);
     expect(result.err.join("\n")).toContain("nen wake verify: flag-marker:1: private repository #2");
+  });
+
+  it("verify: a hit in --now is never echoed under --json (N1)", async () => {
+    const result = await capture(
+      ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "a", "--flag-marker", "acme/vault", "--json"],
+      guardOnly("public", ok(LIST), []),
+      "scripted",
+    );
+    expect(result.code).toBe(4);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["now"]).toBeUndefined();
+    expect(result.out.join("\n")).not.toMatch(/vault/i);
+  });
+
+  it("verify: --now that is not an ISO-8601 instant is exit 2 before any call -- free text never reaches a comment", async () => {
+    const seen: string[] = [];
+    const result = await capture(["wake", "verify", "--repo-slug", "o/r", "--now", "acme/vault 2026", "--author-pattern", "a", "--json"], guardOnly("public", ok(LIST), seen), "scripted");
+    expect(result.code).toBe(2);
+    expect(seen).toEqual([]);
+    expect(result.out.join("\n")).not.toMatch(/vault/i);
   });
 
   it("verify: a PRIVATE target is not checked, and the sweep runs", async () => {
@@ -333,7 +354,7 @@ describe("nen wake -- the private-name guard (zheref/nen#363)", () => {
 
   it("verify: a --repo-slug that is not owner/name is a usage error (exit 2) before any call", async () => {
     const seen: string[] = [];
-    const result = await capture(["wake", "verify", "--repo-slug", "not-a-slug", "--now", "x", "--author-pattern", "a"], guardOnly("public", ok(LIST), seen), "scripted");
+    const result = await capture(["wake", "verify", "--repo-slug", "not-a-slug", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "a"], guardOnly("public", ok(LIST), seen), "scripted");
     expect(result.code).toBe(2);
     expect(seen).toEqual([]);
   });

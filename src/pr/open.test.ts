@@ -10,7 +10,7 @@ import { runFamily, type Io } from "../index.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { prCommand } from "./command.js";
 import { OPEN_CONTRACT } from "./open.js";
-import { privateListRow, PRIVATE_LIST_PAGE, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
+import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
 const SHA = "abc123abc123abc123abc123abc123abc123abc1";
 const ON_WORK = { match: "git symbolic-ref --short HEAD", result: { stdout: "feature/work\n" } };
@@ -349,9 +349,9 @@ describe("nen pr open -- the private-name guard (zheref/nen#363)", () => {
   it("a private name in the body on a PUBLIC target refuses with exit 4 before ANY other call, and never prints the name", async () => {
     const { root } = repo();
     writeFileSync(join(root, "body.md"), "## Why\n\nPorted from the vault.\n", "utf8");
-    const result = await capture(root, [], [PUBLIC, LIST], false, "scripted");
+    const result = await capture(root, [], [PUBLIC, FULL_REACH_ROW, LIST], false, "scripted");
     expect(result.code).toBe(4);
-    expect(calls(result.seams)).toEqual(["gh api repos/zheref/nen", PRIVATE_LIST_PAGE]);
+    expect(calls(result.seams)).toEqual(["gh api repos/zheref/nen", SCOPES_CALL, PRIVATE_LIST_PAGE]);
     const all = [...result.out, ...result.err].join("\n");
     expect(all).toContain("nen pr open: body:3: private repository #2");
     expect(all).not.toMatch(/vault/i);
@@ -359,7 +359,7 @@ describe("nen pr open -- the private-name guard (zheref/nen#363)", () => {
 
   it("a private name in the TITLE refuses too, and --json is { opened: false, privateNameCheck }", async () => {
     const { root } = repo("feat: the hidden-thing port\n");
-    const result = await capture(root, ["--dry-run"], [PUBLIC, LIST], true, "scripted");
+    const result = await capture(root, ["--dry-run"], [PUBLIC, FULL_REACH_ROW, LIST], true, "scripted");
     expect(result.code).toBe(4);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(doc).toMatchObject({ contract: OPEN_CONTRACT, dryRun: true, opened: false });
@@ -383,10 +383,10 @@ describe("nen pr open -- the private-name guard (zheref/nen#363)", () => {
 
   it("an unreadable private list fails closed (exit 1): nothing asked of git, nothing opened", async () => {
     const { root } = repo();
-    const result = await capture(root, [], [PUBLIC, UNREADABLE_PRIVATE_LIST], false, "scripted");
+    const result = await capture(root, [], [PUBLIC, FULL_REACH_ROW, UNREADABLE_PRIVATE_LIST], false, "scripted");
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/nen pr open: private-name check could not run/);
-    expect(calls(result.seams)).toEqual(["gh api repos/zheref/nen", PRIVATE_LIST_PAGE]);
+    expect(calls(result.seams)).toEqual(["gh api repos/zheref/nen", SCOPES_CALL, PRIVATE_LIST_PAGE]);
   });
 
   it("--skip-private-name-check reads nothing for the guard, opens, and is named", async () => {
