@@ -137,12 +137,18 @@ describe.skipIf(!HAVE_GIT)("canon checkout + mirror -- one literal argv, two mac
     }
   });
 
-  it("refuses wrong-host for an origin whose path carries '@github.com:' (SEC-7)", async () => {
+  it("refuses wrong-host, text and --json, for the path-'@', bracket and fragment spoofs (SEC-7, Feitan rounds 2-3)", async () => {
     try {
-      git(canonA, ["remote", "set-url", "origin", "https://evil.example/x@github.com:owner/handbooks"]);
-      const result = await run(["canon", "checkout"], MACHINE_A(), true);
-      expect(result.code).toBe(1);
-      expect(JSON.parse(result.out)).toMatchObject({ ok: false, verified: null, failure: { code: "wrong-host" } });
+      for (const url of ["https://evil.example/x@github.com:owner/handbooks", "ssh://[evil.invalid]@github.com/owner/handbooks", "ssh://github.com:22#@evil.invalid/owner/handbooks"]) {
+        git(canonA, ["remote", "set-url", "origin", url]);
+        const json = await run(["canon", "checkout"], MACHINE_A(), true);
+        expect(json.code, url).toBe(1);
+        expect(JSON.parse(json.out), url).toMatchObject({ ok: false, verified: null, failure: { code: "wrong-host" } });
+        const text = await run(["canon", "checkout"], MACHINE_A());
+        expect(text.code, url).toBe(1);
+        expect(text.out + text.err, url).toMatch(/wrong-host: .* is on no host, but the consumer's origin is on github\.com/);
+        expect(text.out, url).not.toContain("verified:");
+      }
     } finally {
       git(canonA, ["remote", "set-url", "origin", ORIGIN]);
     }

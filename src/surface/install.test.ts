@@ -1335,7 +1335,7 @@ describe("surface install: Feitan (security) and Nobunaga's extra round", () => 
     }
     // SEC-7 (Feitan round 2, zheref/nen#373): the host is the RAW authority's. An '@' past
     // the authority is ambiguous and never a match; scp's host part ends at the first ':'.
-    for (const url of ["https://evil.example/x@github.com/me/zephyr", "https://oauth2:tok/with-slash@github.com/me/zephyr", "oauth2:tok/x@github.com:me/zephyr"]) {
+    for (const url of ["https://evil.example/x@github.com/me/zephyr", "https://oauth2:tok/with-slash@github.com/me/zephyr", "oauth2:tok/x@github.com:me/zephyr", "ssh://[evil.invalid]@github.com/me/zephyr", "ssh://git@[evil.invalid]@github.com/me/zephyr", "ssh://github.com:22#@evil.invalid/me/zephyr", "file://github.com/me/zephyr"]) {
       expect(normalizeRemote(url), url).toBeNull();
       expect(normalizeRemote(url), url).not.toBe("github.com/me/zephyr");
     }

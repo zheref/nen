@@ -14178,9 +14178,10 @@ The last two are checked **again** from a fresh read right after the
 uninstall: a plugin installed from the marketplace meanwhile, or a source that
 changed, leaves it known as an action owed. A recorded source URL is shown only
 in that normalised form, its host read off the raw authority as git reads it
-(the last `@` inside the authority); one whose userinfo would reach past the
-authority -- an `@` in the path, a secret carrying a `/` -- has no host, never
-matches, and is shown as `a git source that is not a remote URL`, so no part of
+(the authority ends at the first `/`, the host follows its last `@`); one git
+and curl could read differently -- an `@` in the path, a secret carrying a `/`,
+a `?` or `#` before the first `/`, a bracket other than one whole IPv6
+literal, a `file://` URL -- has no host, never matches, and is shown as `a git source that is not a remote URL`, so no part of
 a `user:token@` reaches any output; any
 other root or path a surface reports is printed with credentials redacted. A known marketplace of the same name whose
 source is anything else is **refused** (exit 3: installing beside it is not

@@ -566,6 +566,10 @@ export function selfTest(): SelfTestResult {
     }
     // SEC-7 (Feitan round 2): an '@' in the PATH moves no host -- this one connects to evil.example.
     ok(remoteHost("https://evil.example/x@github.com/acme/widget") === undefined, "an origin whose path carries '@github.com/...' has no host, never github.com");
+    // Feitan round 3: git connects inside the brackets, and ends an ssh host at '/' only.
+    for (const spoof of ["ssh://[evil.invalid]@github.com/acme/widget", "ssh://git@[evil.invalid]@github.com/acme/widget", "ssh://github.com:22#@evil.invalid/acme/widget"]) {
+      ok(remoteHost(spoof) === undefined && slugFromRemote(spoof) === undefined, `${spoof} has no host and no slug, never github.com`);
+    }
     gg("remote", "set-url", "origin", "https://evil.example/x@github.com/acme/widget.git");
     const callsAt: string[][] = [];
     const errAt = capture();

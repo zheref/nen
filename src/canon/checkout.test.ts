@@ -252,6 +252,23 @@ describe("verifyCanonCheckout -- five facts, each its own named failure", () => 
     expect(consumer).toMatchObject({ failure: { code: "no-consumer-origin" } });
   });
 
+  it("refuses wrong-host for the bracket and fragment spoofs, and gives a file:// URL no host (SEC-7, Feitan round 3, zheref/nen#373)", () => {
+    const path = dir();
+    for (const url of [
+      "ssh://[evil.invalid]@github.com/owner/handbooks",
+      "ssh://git@[evil.invalid]@github.com/owner/handbooks",
+      "git://[evil.invalid]@github.com/owner/handbooks",
+      "ssh://github.com:22#@evil.invalid/owner/handbooks",
+      "ssh://github.com:22?@evil.invalid/owner/handbooks",
+      "file://github.com/owner/handbooks",
+    ]) {
+      expect(remoteHost(url), url).toBeNull();
+      const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: `${url}\n` } }, CONSUMER, { stdout: "https://github.com/owner/consumer\n" })), path, SOURCE, REF, CONSUMER);
+      expect(result, url).toMatchObject({ failure: { code: "wrong-host", message: expect.stringContaining("is on no host, but the consumer's origin is on github.com") as unknown } });
+    }
+    expect(remoteHost("github.com::evil.invalid:owner/handbooks")).toBeNull();
+  });
+
   it("redacts a userinfo that carries a space, a TAB or a CR, on the SUCCESS path and in --json (SEC-5, Feitan round 2)", () => {
     const path = dir();
     for (const sep of [" ", "\t", "\r"]) {

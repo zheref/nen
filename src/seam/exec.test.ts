@@ -165,6 +165,29 @@ describe("readRemoteAuthority -- where a remote URL connects, read off the RAW v
     }
   });
 
+  it("gives NO host where git and curl could disagree: brackets, '?'/'#' before the first '/', file://, a remote helper (Feitan round 3)", () => {
+    for (const url of [
+      "ssh://[evil.invalid]@good.example/o/n",
+      "ssh://git@[evil.invalid]@good.example/o/n",
+      "ssh://[evil.invalid]:22@good.example/o/n",
+      "ssh://[evil.invalid:2222]@good.example/o/n",
+      "git://[evil.invalid]@good.example/o/n",
+      "ssh://git@[::1]:22/o/n",
+      "ssh://good.example:22#@evil.invalid/o/n",
+      "ssh://good.example:22?@evil.invalid/o/n",
+      "https://good.example:443#@evil.invalid/o/n",
+      "file://good.example/o/n",
+      "FILE://good.example/o/n",
+      "[evil.invalid]@good.example:o/n",
+      "git@[evil.invalid]@good.example:o/n",
+      "good.example::evil.invalid:o/n",
+    ]) {
+      expect(readRemoteAuthority(url), url).toBeNull();
+    }
+    // A bracketed literal that is the WHOLE authority is still a host.
+    expect(readRemoteAuthority("ssh://[::1]:2222/o/n")).toMatchObject({ host: "[::1]", port: "2222" });
+  });
+
   it("reads scp syntax as git does: the host part ends at the first ':', the host after its last '@'", () => {
     expect(readRemoteAuthority("git@github.com:o/n.git")).toEqual({ host: "github.com", port: null, path: "o/n.git", form: "scp", userinfo: true });
     expect(readRemoteAuthority("evil.example:x@github.com:o/n")).toMatchObject({ host: "evil.example", userinfo: false });

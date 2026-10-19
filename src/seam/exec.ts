@@ -469,30 +469,50 @@ function hasSpaceOrControl(text: string): boolean {
 
 /**
  * The host a remote URL CONNECTS to, read from the raw value (SEC-7, Feitan
- * on zheref/nen#373 round 2). Read off `redactRemoteUrl`'s display form,
- * `https://evil.example/x@github.com:o/n` became `https://***@github.com:o/n`
- * and the host check passed while git fetched from evil.example.
+ * on zheref/nen#373 rounds 2 and 3). Read off `redactRemoteUrl`'s display
+ * form, `https://evil.example/x@github.com:o/n` became
+ * `https://***@github.com:o/n` and the host check passed while git fetched
+ * from evil.example. The rule is narrow on purpose: a host is returned only
+ * where git's and curl's readings AGREE on it, and null everywhere they could
+ * differ, so a host check refuses rather than guesses.
  *
- * A scheme URL's authority ends at the first `/`, `?` or `#` after `://`, and
- * the host is what follows the last `@` INSIDE it. When the `@` that
- * `userinfoEnd` takes for the userinfo's end lies past the authority -- the
- * reading the redactor uses for a secret containing `/` -- the URL is
- * AMBIGUOUS and has no host: null, so a host check refuses. In scp syntax
- * git's own rule applies: it is scp only when no `/` precedes the first `:`,
- * the host part is everything before that `:`, and the host is what follows
- * the last `@` in it (`evil.example:x@github.com:o/n` connects to
- * evil.example). A one-letter host is a drive (`C:`), and a host with
- * whitespace, a control byte or a bracket nen cannot read is null too.
+ * A scheme URL's authority is the run up to the first `/` -- where git's
+ * ssh:// and git:// transports end the host -- and it has no host (null) when:
+ *
+ * - the scheme is `file`: git ignores a file URL's host entirely;
+ * - a `?` or `#` sits in it: curl ends the authority there and git does not,
+ *   so `ssh://good:22#@evil/o/n` reaches ssh as `good:22#@evil`, which ssh
+ *   resolves to evil;
+ * - a `[` or `]` sits in it, unless the WHOLE authority is one bracketed
+ *   literal with at most a `:digits` port and no `@`: git's `host_end()`
+ *   strips a leading `[...]` or `@[...]` and connects to what is inside, so
+ *   `ssh://[evil]@good/o/n` and `ssh://git@[evil]@good/o/n` go to evil;
+ * - the `@` that `userinfoEnd` takes for the userinfo's end lies past it:
+ *   the display redactor's reading of a secret containing `/` would move the
+ *   host, and git connects elsewhere (`https://evil/x@good:o/n`).
+ *
+ * Otherwise the host is what follows the last `@` in the authority -- ssh's
+ * own split of `user@host` -- with an optional `:digits` port.
+ *
+ * In scp syntax git's own rule applies: it is scp only when no `/` precedes
+ * the first `:`, the host part is everything before that `:`, and the host is
+ * what follows its last `@` (`evil.example:x@github.com:o/n` connects to
+ * evil.example). Null for a bracket anywhere in the host part, for the
+ * remote-helper form `<transport>::<address>` (git runs a helper, not ssh),
+ * for a one-letter host (a drive, `C:`), and for whitespace or a control byte.
  */
 export function readRemoteAuthority(url: string): RemoteAuthority | null {
   const value = url.trim();
-  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([\s\S]*)$/.exec(value);
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([\s\S]*)$/.exec(value);
   if (scheme !== null) {
-    const run = scheme[1] ?? "";
-    const end = run.search(/[/?#]/);
-    const length = end === -1 ? run.length : end;
-    if (userinfoEnd(run) >= length) return null;
+    if ((scheme[1] ?? "").toLowerCase() === "file") return null;
+    const run = scheme[2] ?? "";
+    const slash = run.indexOf("/");
+    const length = slash === -1 ? run.length : slash;
     const authority = run.slice(0, length);
+    if (/[?#]/.test(authority)) return null;
+    if (/[[\]]/.test(authority) && !/^\[[^[\]@]+\](?::\d*)?$/.test(authority)) return null;
+    if (userinfoEnd(run) >= length) return null;
     const at = authority.lastIndexOf("@");
     const hostPort = /^(\[[^\]]+\]|[^:[\]]+)(?::(\d*))?$/.exec(authority.slice(at + 1));
     const host = hostPort?.[1];
@@ -501,12 +521,12 @@ export function readRemoteAuthority(url: string): RemoteAuthority | null {
   }
   if (value.includes("://")) return null;
   const colon = value.indexOf(":");
-  if (colon <= 0 || value.startsWith("//", colon + 1)) return null;
+  if (colon <= 0 || value.startsWith("//", colon + 1) || value.startsWith(":", colon + 1)) return null;
   const hostPart = value.slice(0, colon);
-  if (hostPart.includes("/")) return null;
+  if (hostPart.includes("/") || /[[\]]/.test(hostPart)) return null;
   const at = hostPart.lastIndexOf("@");
   const host = hostPart.slice(at + 1);
-  if (host.length < 2 || /[[\]]/.test(host) || hasSpaceOrControl(host)) return null;
+  if (host.length < 2 || hasSpaceOrControl(host)) return null;
   return { host, port: null, path: value.slice(colon + 1), form: "scp", userinfo: at !== -1 };
 }
 
