@@ -55,8 +55,9 @@
 // repository list exactly as `nen issue file` checks a filing
 // (../issue/privacy.ts): after every remote certification above and before the
 // create, on the same runner and against github.com only. A hit exits 4 and
-// publishes nothing; a check that could not run exits 1; a private or internal
-// repository is not checked. Same opt-out (--skip-private-name-check), same
+// publishes nothing; a check that could not run exits 1 (a credential whose
+// X-OAuth-Scopes lacks `repo` included); a private repository is not checked,
+// an internal one is. Same opt-out (--skip-private-name-check), same
 // ignore file (--private-names-ignore-file, resolved against --repo), same
 // lines (prefixed `release-publish:`), same `privateNameCheck` in --json. NOT
 // on --dry-run, which reads nothing from GitHub at all -- it skips the
@@ -80,6 +81,7 @@ import {
   blockingExit,
   blocksWrite,
   checkPrivateNames,
+  ignoreFileInsideTree,
   parseIgnoreList,
   privateNameLines,
   type GuardSeams,
@@ -331,6 +333,9 @@ export function readIgnoreOption(options: Options): IgnoreList | null {
     return null;
   }
   const path = resolvePath(options.repo, options.privateNamesIgnoreFile);
+  // Never a list the tagged tree itself could have written (Feitan F8).
+  const inside = ignoreFileInsideTree(path, options.repo);
+  if (inside !== null) throw new Refusal(`--private-names-ignore-file: ${inside}`, 2);
   try {
     return parseIgnoreList(readFileSync(path, "utf8"));
   } catch (error) {
@@ -513,6 +518,7 @@ export function selfTest(): SelfTestResult {
   // repository read WITHOUT --jq is its visibility read, and `user/repos` the
   // credential's private list -- by default one name the fixture never says.
   const PRIVATE_LIST: RunResult = { status: 0, stdout: JSON.stringify([{ full_name: "acme/hidden-thing" }]), stderr: "" };
+  const FULL_REACH: RunResult = { status: 0, stdout: "HTTP/2.0 200 OK\nX-Oauth-Scopes: gist, read:org, repo\n\n{}", stderr: "" };
   const PUBLIC_REPO: RunResult = { status: 0, stdout: JSON.stringify({ full_name: "acme/widget", visibility: "public" }), stderr: "" };
   const fakeGh = (
     remoteTags: readonly string[],
@@ -520,7 +526,7 @@ export function selfTest(): SelfTestResult {
     calls: string[][],
     moved: readonly string[] = [],
     repoAnswer?: RunResult,
-    guard: { readonly visibility?: RunResult; readonly list?: RunResult } = {},
+    guard: { readonly visibility?: RunResult; readonly list?: RunResult; readonly scopes?: RunResult } = {},
   ): Run => (exe, args, cwd) => {
     if (exe !== "gh") return defaultRun(exe, args, cwd);
     calls.push([...args]);
@@ -528,6 +534,7 @@ export function selfTest(): SelfTestResult {
     const notFound: RunResult = { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
     const noRelease: RunResult = { status: 1, stdout: "", stderr: "release not found" };
     if (args[0] === "auth") return pass;
+    if (args[0] === "api" && args[1] === "-i" && args[2] === "user") return guard.scopes ?? FULL_REACH;
     if (args[0] === "api" && (args[1] ?? "").startsWith("user/repos?visibility=private")) return guard.list ?? PRIVATE_LIST;
     if (args[0] === "api" && /^repos\/[^/]+\/[^/]+$/.test(args[1] ?? "") && !args.includes("--jq")) return guard.visibility ?? PUBLIC_REPO;
     if (args[0] === "api" && /^repos\/[^/]+\/[^/]+$/.test(args[1] ?? "")) return repoAnswer ?? { status: 0, stdout: "acme/widget\n", stderr: "" };
@@ -681,7 +688,7 @@ export function selfTest(): SelfTestResult {
     const hit = capture();
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG1, [], undefined, { list: named("landed") }), hit.io)) === 4, "a private repository named in the notes refuses (4)");
     ok(!callsG1.some((c): boolean => c[1] === "create"), "and no release was created");
-    ok(hit.text().includes("release-publish: notes:3: private repository #2") && !/landed/i.test(hit.text().replace(/a thing that landed/g, "")), "the refusal names the field, the line and an index -- never the name");
+    ok(hit.text().includes("release-publish: notes:3: private repository #2") && !/landed/i.test(hit.text()), "the refusal names the field, the line and an index -- never the name");
     const callsG2: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0", title: "Nen v2.0.0 for hidden-thing" }), fakeGh(["v2.0.0"], [], callsG2), quiet)) === 4 && !callsG2.some((c): boolean => c[1] === "create"), "a private repository named in --title refuses (4), nothing created");
     const callsG3: string[][] = [];
@@ -699,9 +706,16 @@ export function selfTest(): SelfTestResult {
       && !callsG6.some((c): boolean => (c[1] ?? "").startsWith("user/repos")) && skipped.text().includes("SKIPPED by --skip-private-name-check"), "--skip-private-name-check reads no list, publishes, and is named");
     ok(outcome(() => publish(base({ tag: "v2.0.0", privateNamesIgnoreFile: "no-such-ignore-file" }), fakeGh(["v2.0.0"], [], []), quiet)) === 2, "a missing --private-names-ignore-file is a usage defect (2), never an empty list");
     ok(outcome(() => publish(base({ tag: "v2.0.0", allowAllIgnored: true, dryRun: true }), defaultRun, quiet)) === 2, "--allow-all-ignored without an ignore file refuses (2)");
+    writeFileSync(join(repo, "in-tree-ignore.txt"), "landed\n");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", privateNamesIgnoreFile: "in-tree-ignore.txt", dryRun: true }), defaultRun, quiet)) === 2, "an ignore file inside the repository's own working tree refuses (2) -- the tree under release cannot exempt itself");
+    rmSync(join(repo, "in-tree-ignore.txt"));
     const callsG7: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0", dryRun: true }), fakeGh(["v2.0.0"], [], callsG7, [], undefined, { list: named("landed") }), quiet)) === 0 && callsG7.length === 0, "--dry-run reads nothing from GitHub, the guard included");
     ok(n.includes("private    : title and notes checked"), "and its plan says where the check runs instead");
+    const callsG8: string[][] = [];
+    const fineGrained: RunResult = { status: 0, stdout: "HTTP/2.0 200 OK\nContent-Type: application/json\n\n{}", stderr: "" };
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG8, [], undefined, { scopes: fineGrained }), quiet)) === 1
+      && !callsG8.some((c): boolean => c[1] === "create") && !callsG8.some((c): boolean => (c[1] ?? "").startsWith("user/repos")), "a credential with no X-OAuth-Scopes (a list that may be partial) fails closed (1), nothing created");
 
     lines.push("a failed create -- gh's defect (2), with its diagnostic");
     const failing = (answer: RunResult): Run => (exe, args, cwd) => (exe === "gh" && args[0] === "release" && args[1] === "create" ? answer : fakeGh(["v2.0.0"], [], [])(exe, args, cwd));

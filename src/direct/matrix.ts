@@ -20,8 +20,14 @@
 //     `resolveInDomain`;
 //   - the effort: `scoreEffort` (step 5) and the surface dial, through
 //     `resolveInDomain`.
-// So a cell here is, field for field, what `resolve` prints for an issue that
-// carries that one job and that one language (or none) in that domain.
+// So a cell here is that one job and that one language (or none) in that domain,
+// answered by those functions. Where the domain's witness (below) is the job ALONE
+// (`witnessIsCell`), one `resolve` call on the witness reproduces the whole cell;
+// a witness that needed companions shares the domain and the job's own pair with
+// the cell, while the cell's winner, aggregate and effort stay that one job's --
+// `resolve` on the witness aggregates every job it carries. The tests compare
+// exactly that: the domain, the rule row and the pair always, and the winner,
+// runner-up, aggregate and effort where `witnessIsCell` is true.
 //
 // A WITNESS IS AN ISSUE THAT PUTS THE JOB IN THE DOMAIN. The domain is derived
 // from the repository's kind and role, the issue's labels and ALL its jobs, so a
@@ -34,7 +40,8 @@
 //           value a `repoKind` predicate names, in rule order;
 //   role    none, then every value a `repoRole` predicate names, in rule order;
 //   labels  none, then one label per `issueLabels` pattern, in rule order (a
-//           `*:name` pattern as `<LABEL_NAMESPACE>:name`).
+//           `*:name` pattern as `<namespace>:name`, the namespace LABEL_NAMESPACE
+//           suffixed until no pattern names it).
 // The first candidate (fewest jobs, then kind, role, labels, in those orders) that
 // derives a domain is that domain's witness, and a domain no candidate derives is
 // UNREACHABLE for the job: printed with no cells, never a guessed route. Every
@@ -50,7 +57,7 @@
 //
 // EVERY NAME IS DATA (src/taxonomy-purity.test.ts): no alias, surface, domain, job
 // or language is written here; the two placeholders below are not vocabulary of
-// either contract, and the kind one is re-suffixed should a rule ever name it.
+// either contract, and each is re-suffixed should a rule ever name it.
 
 import { VerbUsageError } from "../cli/command.js";
 import type { ClassifyTaxonomy, DomainPredicate } from "../classify/taxonomy.js";
@@ -119,6 +126,8 @@ export interface MatrixDomain {
   /** False when no witness in the searched space derives this domain with this job. */
   readonly reachable: boolean;
   readonly witness: Witness | null;
+  /** True when the witness is the job alone, so one `resolve` call on it reproduces every cell; false when unreachable. */
+  readonly witnessIsCell: boolean;
   /** The domain the job is routed on, its fallback source and phase; null when unreachable. */
   readonly routedOn: string | null;
   readonly fallbackFrom: string | null;
@@ -182,7 +191,11 @@ export function searchSpace(taxonomy: ClassifyTaxonomy): MatrixSearch {
   for (let suffix = 2; named.includes(none); suffix += 1) none = `${KIND_NONE}-${suffix}`;
   const roles = unique(rows.flatMap((atom): readonly string[] => (atom.kind === "repoRole" ? atom.values : [])));
   const patterns = unique(rows.flatMap((atom): readonly string[] => (atom.kind === "issueLabels" ? atom.any : [])));
-  const labels = unique(patterns.map((pattern): string => (pattern.startsWith("*:") ? `${LABEL_NAMESPACE}:${pattern.slice(2)}` : pattern)));
+  // A namespace a literal pattern already uses would make the wildcard's candidate
+  // match that earlier row too, and the later domain would read unreachable.
+  let namespace = LABEL_NAMESPACE;
+  for (let suffix = 2; patterns.some((pattern): boolean => pattern.startsWith(`${namespace}:`)); suffix += 1) namespace = `${LABEL_NAMESPACE}-${suffix}`;
+  const labels = unique(patterns.map((pattern): string => (pattern.startsWith("*:") ? `${namespace}:${pattern.slice(2)}` : pattern)));
   return {
     kinds: [none, ...named],
     roles: [null, ...roles],
@@ -288,7 +301,7 @@ export function buildMatrix(context: ResolveContext, filter: MatrixFilter): Matr
       const witness = witnesses.get(domain);
       if (witness === undefined) {
         unreachable += 1;
-        return { domain, reachable: false, witness: null, routedOn: null, fallbackFrom: null, phase: null, phaseName: null, fallback: null, cells: [] };
+        return { domain, reachable: false, witness: null, witnessIsCell: false, routedOn: null, fallbackFrom: null, phase: null, phaseName: null, fallback: null, cells: [] };
       }
       reachable += 1;
       const verdict = { domain, rule: witness.rule, because: witness.because };
@@ -301,6 +314,7 @@ export function buildMatrix(context: ResolveContext, filter: MatrixFilter): Matr
         domain,
         reachable: true,
         witness,
+        witnessIsCell: witness.jobs.length === 1,
         routedOn: first.domain,
         fallbackFrom: first.fallbackFrom,
         phase: first.phase,

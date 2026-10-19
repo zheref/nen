@@ -74,7 +74,8 @@ async function expectAgrees(repo: string, registry: string, taxonomy: string, en
   } else {
     expect(resolved["domain"]["fallbacks"], where).toContain(note);
   }
-  if ((witness["jobs"] as string[]).length === 1) {
+  expect(entry["witnessIsCell"], where).toBe((witness["jobs"] as string[]).length === 1);
+  if (entry["witnessIsCell"] === true) {
     expect(resolved["winner"], where).toEqual(cell["winner"]);
     expect(resolved["runnerUp"], where).toEqual(cell["runnerUp"]);
     expect(resolved["effort"], where).toEqual(cell["effort"]);
@@ -144,7 +145,7 @@ describe("nen direct matrix -- the real registry, every cell held to resolve", (
   it("a domain no issue carrying the job can derive is unreachable, with no cells", async () => {
     const matrix = await matrixJson(repo, REAL_REGISTRY, REAL_TAXONOMY, "--job", "parity");
     for (const domain of ["feature", "maintenance"]) {
-      expect(entryOf(matrix, "parity", domain)).toEqual({ domain, reachable: false, witness: null, routedOn: null, fallbackFrom: null, phase: null, phaseName: null, fallback: null, cells: [] });
+      expect(entryOf(matrix, "parity", domain)).toEqual({ domain, reachable: false, witness: null, witnessIsCell: false, routedOn: null, fallbackFrom: null, phase: null, phaseName: null, fallback: null, cells: [] });
     }
     // resolve agrees: the job's own marker row decides before maintenance or feature can.
     const resolved = await resolveJson(repo, REAL_REGISTRY, REAL_TAXONOMY, ["--kind", "unlisted", "--labels", "bug", "--job", "parity,ci-cd"]);
@@ -224,6 +225,9 @@ describe("nen direct matrix -- the edges, on the mini vocabulary", () => {
     const resolved = await resolveJson(repo, registryPath, taxonomyPath, witnessArgs(entry["witness"], "*"));
     expect(resolved["aggregate"]["tally"]).toEqual({ A_TOP: 1, A_EXEC: 1 });
     expect(resolved["winner"]["alias"]).toBe("A_TOP");
+    // ...which is why the entry says one resolve call does NOT reproduce this cell.
+    expect(entry["witnessIsCell"]).toBe(false);
+    expect(entryOf(await matrixJson(repo, registryPath, taxonomyPath, "--job", "plain", "--domain", "dev"), "plain", "dev")["witnessIsCell"]).toBe(true);
   });
 
   it("effort band edges: the domain add, the shared column and a single language, held to resolve", async () => {
@@ -272,6 +276,20 @@ describe("nen direct matrix -- the edges, on the mini vocabulary", () => {
     });
     const matrix = await matrixJson(repo, registryPath, taxonomyPath, "--job", "plain");
     expect(matrix["search"]["kinds"]).toEqual(["unlisted-2", "process", "library", "unlisted"]);
+  });
+
+  it("re-suffixes the wildcard label namespace when a literal pattern uses it, so a later label row stays reachable", async () => {
+    // Row 3 names 'ns:bug' literally; row 4 names '*:bug'. A candidate 'ns:bug' would match
+    // row 3 first and ops would read unreachable for every job that reaches it only by label.
+    const { registryPath, taxonomyPath } = miniFiles(undefined, (t): void => {
+      t["domains"]["rule"][2] = { order: 3, domain: "port", when: { issueLabels: { any: ["ns:bug"] } }, $comment: "the literal" };
+      t["domains"]["rule"][3] = { order: 4, domain: "ops", when: { issueLabels: { any: ["*:bug"] } }, $comment: "any namespace" };
+    });
+    const matrix = await matrixJson(repo, registryPath, taxonomyPath, "--job", "plain");
+    expect(matrix["search"]["labels"]).toEqual([[], ["ns:bug"], ["ns-2:bug"]]);
+    const entry = entryOf(matrix, "plain", "ops");
+    expect(entry).toMatchObject({ reachable: true, witnessIsCell: true, witness: { labels: ["ns-2:bug"], rule: 4 } });
+    for (const cell of entry["cells"] as Json[]) await expectAgrees(repo, registryPath, taxonomyPath, entry, cell);
   });
 
   it("prints a table a person reads, with the unreachable rows and the counts", async () => {

@@ -22,6 +22,15 @@ export function visibilityRow(slug: string, visibility: "public" | "private" | "
   return { match: `gh api repos/${slug}`, result: { stdout: JSON.stringify({ visibility }) } };
 }
 
+/** The credential-reach read the guard makes before the list (zheref/nen#363, Feitan F7). */
+export const SCOPES_CALL = "gh api -i user";
+
+/** A classic token whose scopes include `repo`: the list it returns is the whole list. */
+export const FULL_REACH_ROW: ScriptedCall = {
+  match: SCOPES_CALL,
+  result: { stdout: "HTTP/2.0 200 OK\nX-Oauth-Scopes: gist, read:org, repo\n\n{}" },
+};
+
 /** The private list's first page, holding exactly these `owner/name`s. */
 export function privateListRow(names: readonly string[]): ScriptedCall {
   return {

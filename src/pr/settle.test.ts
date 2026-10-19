@@ -16,7 +16,7 @@ import { parseTarget } from "../github/target.js";
 import { prCommand } from "./command.js";
 import { MAX_BATCH_FILE_BYTES, MAX_BODY_CHARS, readSettleFile, SETTLE_CONTRACT } from "./settle.js";
 import { listArgv, listPageArgv, replyArgv, resolveArgv } from "./threads.js";
-import { privateListRow, PRIVATE_LIST_PAGE, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
+import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
 const TARGET = parseTarget("zheref/nen");
 const HEAD_SHA = "1f4bb2c0a1b2c3d4e5f60718293a4b5c6d7e8f90";
@@ -570,9 +570,9 @@ describe("nen pr threads settle -- the private-name guard (zheref/nen#363)", () 
       { thread: "T1", body: "Fixed." },
       { thread: "T2", body: "Moved to\nthe vault." },
     ]);
-    const result = await capture(ARGS(from), [visibilityRow("zheref/nen", "public"), LIST], null, "scripted");
+    const result = await capture(ARGS(from), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST], null, "scripted");
     expect(result.code).toBe(4);
-    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual(["gh api repos/zheref/nen", PRIVATE_LIST_PAGE]);
+    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual(["gh api repos/zheref/nen", SCOPES_CALL, PRIVATE_LIST_PAGE]);
     const all = [...result.out, ...result.err].join("\n");
     expect(all).toContain("nen pr threads settle: entry[2]:2: private repository #2");
     expect(all).not.toMatch(/vault/i);
@@ -580,7 +580,7 @@ describe("nen pr threads settle -- the private-name guard (zheref/nen#363)", () 
 
   it("--json: the refusal carries the verdict and ok: false", async () => {
     const from = batch([{ thread: "T1", body: "see hidden-thing" }]);
-    const result = await capture(ARGS(from, "--json", "--dry-run"), [visibilityRow("zheref/nen", "public"), LIST], null, "scripted");
+    const result = await capture(ARGS(from, "--json", "--dry-run"), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST], null, "scripted");
     expect(result.code).toBe(4);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(doc).toMatchObject({ contract: SETTLE_CONTRACT, ok: false, dryRun: true });
@@ -601,10 +601,10 @@ describe("nen pr threads settle -- the private-name guard (zheref/nen#363)", () 
 
   it("an unreadable private list fails closed (exit 1) with nothing walked or sent", async () => {
     const from = batch([{ thread: "T1", body: "Fixed." }]);
-    const result = await capture(ARGS(from), [visibilityRow("zheref/nen", "public"), UNREADABLE_PRIVATE_LIST], null, "scripted");
+    const result = await capture(ARGS(from), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, UNREADABLE_PRIVATE_LIST], null, "scripted");
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/nen pr threads settle: private-name check could not run/);
-    expect(result.seams.calls).toHaveLength(2);
+    expect(result.seams.calls).toHaveLength(3);
   });
 
   it("the file's own refusals still come first: a malformed batch is exit 2 with no guard read", async () => {
