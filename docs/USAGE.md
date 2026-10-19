@@ -983,13 +983,28 @@ exclusions, so the two never come from different commits.
 | `--reviewers`' own identities | the base declares **no** `nen/gates.json` and `--reviewers` was given. The checkout's file is **never** applied in its place — a head that adds a gates file to a base that has none would name its own reviewers — and a warning names it as ignored | `null` | judged |
 | nothing | the base declares **no** `nen/gates.json` and no `--reviewers`; or the base carries a file **this build refuses** (invalid JSON, a duplicate key, an unsupported version, a key this build does not read) — a trunk that adopted a key from a newer nen is never judged by the checkout's file instead | `local-unverified` | **none**: `unevaluated`, exit `1`, every row `unevaluated`; the remedy names the fix (merge a gates file, pass `--reviewers`, or upgrade nen) |
 | the file `--gates <path>` names | an explicit `--gates` naming a file **outside** the `--repo` checkout: the caller's word, used as given — a trusted checkout of the base in CI, a reference file in neither repository | `gates-flag` | judged |
-| the file `--gates <path>` names, as head content | an explicit `--gates` naming any **other** file inside the `--repo` checkout: applied as given, with a warning | `local-fallback` | judged; refused by the autonomous callers as above |
+| the file `--gates <path>` names, as possible head content | an explicit `--gates` naming any **other** file inside the `--repo` checkout: applied as given, with a warning that it **may be** head content. A separately checked-out trusted tree under the head checkout (`.trusted/` in Hatsu's `pr-readiness.yml`) lands here too: check the head out to a subdirectory and pass `--repo` instead. A submodule is head-pinned content and is never exempt | `local-fallback` | judged; refused by the autonomous callers as above |
 | the checkout's own `nen/gates.json`, not applied | an `unevaluated` report: GitHub was never read, so neither was the base. When the base WAS read and a later GitHub read failed (a paging error), the unevaluated report keeps the route it took — `base` or `local-fallback` — and `meta.declaredExclusionsSource` is `<owner>/<repo>@<sha>` | `local-unverified` | none |
-| none | `--reviewers` with no `--gates` and no `nen/gates.json` in the checkout | `null` | judged |
+| the base's `nen/gates.json`, `--reviewers` narrowing it | `--reviewers`, no `--gates`, and **no** `nen/gates.json` in the checkout — a head that deleted it — while the base declares one. The base is read on this route too (round 2, Feitan 1), so deleting the file never turns `--reviewers` from a narrowing into a replacement; a warning says the base's gate applies | `base` | judged |
+| `--reviewers`' own identities | the same, and the base was read and declares **no** file | `null` | judged |
+| `--reviewers`' own identities, unverified | the same, and the base could **not be read**: whether it declares a gate is unknown; warned | `flags-unverified` | judged for a human reader; refused like `local-fallback` |
+| nothing | the same, and the base carries a file this build refuses | `local-unverified` | none: `unevaluated`, exit `1` |
 
-With a `nen/gates.json` in the checkout, `--reviewers` is not an identity
-source: it narrows the configured reviewer set the file's (the base's)
-identities are applied to — except on the base-declares-none row above.
+With a `nen/gates.json` in the checkout **or at the base**, `--reviewers` is not
+an identity source: it narrows the configured reviewer set the base's
+identities are applied to — except on the base-declares-none rows above.
+
+**`--require-base-gates` — for every caller that acts on the exit code.** A
+`ready` judged on the checkout's file exits `0` exactly like a base-judged one,
+so `nen pr ready … && <merge>`, a required CI check, or an agent quoting exit
+codes cannot tell them apart. With `--require-base-gates`, a verdict whose
+route is not `base`, `gates-flag`, or `null` (the base read, declaring none) is
+`unevaluated`, exit `1`, every row `unevaluated`, the gate line naming the
+route: `unevaluated: --require-base-gates: the gate inputs were not the pull
+request's base's (meta.identities.read: local-fallback)`. `nen watch until --pr`
+passes it through to every read. `nen pr merge` and `watch until --until
+ready` apply the same allow-list without it — the merge gate admits only
+`base`, since it passes neither `--gates` nor `--reviewers`.
 
 Three rules hold on every row. **`checks.excluded` is honoured from the base
 or not at all** — never from the fallback and never from `--gates`
@@ -1007,7 +1022,8 @@ this same in-process read; `nen pr next-blocker` applies the same rule through
 `gh`, refusing at exit `2` where `pr ready` gives no verdict, and adds
 `identities { path, read }` to its `--json`. `nen pr merge --delivery` also
 refuses a pull request that changes `nen/gates.json` or `nen/workflow.json`, as
-`--release-unit` always has. The base is only as trusted as its branch
+`--release-unit` always has; both compare the changed paths case-insensitively,
+so `NEN/gates.json` or `nen/Gates.json` is refused too. The base is only as trusted as its branch
 protection. The token needs `contents:read`: without it every evaluation falls
 back, with the warning, and no merge runs on it.
 
@@ -1235,7 +1251,7 @@ commit. Three things make that visible:
 
 ```text
 nen pr ready --target <owner/name> --pr <n> [the same ready options below]
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
 ```
 
 **Arguments**
@@ -1256,6 +1272,7 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--gates <path>` | no | read every gate input but `checks.excluded` from this file instead of `nen/gates.json` at the pull request's base ([#372](#pr-ready-gates-at-base)) | a RELATIVE path resolves against `--repo`, never cwd; one naming the checkout's own `nen/gates.json` (any spelling, a hard link) is read at the base like the default; any other file inside the checkout is applied as head content, warned (`local-fallback`) |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
 | `--require-head <sha>` | no | judge only this commit: 7–40 hex digits, a case-insensitive prefix of GitHub's head | any other head is exit `8` (`head-mismatch`), both SHAs printed, no verdict; malformed is exit `2` |
+| `--require-base-gates` | no | no verdict unless the gate inputs were the base's ([#372](#pr-ready-gates-at-base)) | `meta.identities.read` other than `base`, `gates-flag` or `null` is `unevaluated`, exit `1`, naming the route; pass it wherever the exit code is acted on |
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
 
@@ -5373,7 +5390,8 @@ nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
 nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
                 [--interval-ms 30000] [--max-iterations <n>]
                 [every `nen pr ready` flag: --gh-repo --reviewers --reviewer-login --approvers --round-policy
-                 --exclude-run --exclude-check --gates --token-env --require-head]
+                 --exclude-run --exclude-check --gates --token-env --require-head
+                 --require-base-gates]
 ```
 
 **The target's `monitor` policy is the default pace (v0.11.0, zheref/nen#216).** When the checkout under

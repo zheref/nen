@@ -330,7 +330,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     expect(outcome.report.ran).toBe(false);
     expect(outcome.lines).toContain("pr ready: ready");
     expect(outcome.lines.join("\n")).toContain(
-      "pr ready: refused for a merge: the verdict's gate inputs came from the checkout's own nen/gates.json (meta.identities.read: local-fallback), not the pull request's base",
+      "pr ready: refused for a merge: the verdict's gate inputs were not the pull request's base's (meta.identities.read: local-fallback) -- a merge never rests on gate inputs the base has not merged. Give the token contents:read so the base can be read.",
     );
   });
 
@@ -632,6 +632,26 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       const outcome = await run(root, script);
       expect(outcome.report.unitOk).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/declares no 'release\.unitPaths'/);
+    });
+
+    it("refuses a case-colliding policy path too: NEN/gates.json, nen/Gates.json, a rename from NEN/WORKFLOW.JSON (zheref/nen#372 round 2, Feitan 4)", async () => {
+      for (const files of [
+        [{ filename: "NEN/gates.json" }],
+        [{ filename: "nen/Gates.json" }],
+        [{ filename: "src/unit/a.ts", previous_filename: "NEN/WORKFLOW.JSON" }],
+      ]) {
+        const script = [
+          ORIGIN_CALL,
+          prOnceCall(),
+          ...changedFilesCall(files),
+          workflowContentsCall(),
+          treeCall(files.map((file) => ({ path: file.filename, mode: "100644" }))),
+          VIEWER_CALL,
+        ];
+        const outcome = await run(tmpRoot(), script);
+        expect(outcome.report.unitOk, JSON.stringify(files)).toBe(false);
+        expect(outcome.lines.join("\n"), JSON.stringify(files)).toMatch(/this pull request changes 'nen\/workflow\.json' or 'nen\/gates\.json'/);
+      }
     });
 
     it("refuses a pull request that itself changes nen/workflow.json", async () => {

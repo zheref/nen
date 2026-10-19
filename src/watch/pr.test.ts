@@ -367,10 +367,78 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     expect(direct.kind === "verdict" && direct.report.meta.identities.read).toBe("local-fallback");
     const result = await watch([...argv, "--until", "ready"], deps([READY, READY, READY]));
     expect(result.code).toBe(1);
-    expect(result.out[0]).toMatch(/^\[1\] observation failed: ready was judged on the checkout's own nen\/gates\.json \(meta\.identities\.read: local-fallback\), not the pull request's base -- not a merge signal; --gates '/);
+    expect(result.out[0]).toMatch(/^\[1\] observation failed: ready was not judged on the pull request's base gate \(meta\.identities\.read: local-fallback\) -- not a merge signal; --gates '/);
     // The wakes that are not a go still wake on the same read.
     const settled = await watch([...argv, "--until", "checks-settled"], deps([READY]));
     expect(settled.code).toBe(0);
+  });
+
+  // A head that DELETED its gates file, with --reviewers (round 2, Feitan 1).
+  function quorum(minimum: number): string {
+    const pattern = (p: string): { pattern: string; ignoreCase: boolean } => ({ pattern: p, ignoreCase: false });
+    return JSON.stringify({
+      version: 1,
+      delivery: { author_pattern: pattern("^delivery-bot\\[bot\\]$"), head_ref_prefixes: ["integration/"], labels: [] },
+      reviewers: [
+        { name: "copilot", login_pattern: pattern("^copilot$") },
+        { name: "bugbot", login_pattern: pattern("^bugbot\\[bot\\]$") },
+      ],
+      approval_policy: "review-round-only",
+      default_approvers: [],
+      base_reviewers: ["copilot"],
+      round_quorum: { any_of: ["copilot", "bugbot"], minimum },
+    });
+  }
+  /** `deps()`, with the base answering `atBase` for nen/gates.json. */
+  function depsAtBase(snapshots: readonly Snapshot[], atBase: () => Promise<string | null>): PrReadyDeps {
+    const inner = deps(snapshots);
+    return {
+      ...inner,
+      openSource: (env: string): ReturnType<PrReadyDeps["openSource"]> => {
+        const opened = inner.openSource(env);
+        return opened.ok ? { ok: true, source: { ...opened.source, fileAtRef: atBase } } : opened;
+      },
+    };
+  }
+  const COMMENTED: Snapshot = { pending: false, reviews: "comment" };
+
+  it("--until ready does not wake when the head removed its gates file and --reviewers names one bot: the base's quorum of two holds", async () => {
+    const bare = mkdtempSync(join(tmpdir(), "nen-372-watch-bare-"));
+    const argv = ["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--repo", bare, "--reviewers", "copilot", "--approvers", "", "--interval-ms", "30000", "--until", "ready", "--max-iterations", "2"];
+    const held = await watch(argv, depsAtBase([COMMENTED, COMMENTED], async (): Promise<string | null> => quorum(2)));
+    expect(held.code).toBe(1);
+    expect(held.out.join("\n")).toMatch(/ready is not yet true/);
+    expect(held.out.join("\n")).toMatch(/quorum/);
+    // The control: a base quorum of one wakes on the same reads.
+    const woke = await watch(argv, depsAtBase([COMMENTED], async (): Promise<string | null> => quorum(1)));
+    expect(woke.code).toBe(0);
+  });
+
+  it("--until ready refuses flags-unverified: the head removed its gates file and the base could not be read", async () => {
+    const bare = mkdtempSync(join(tmpdir(), "nen-372-watch-bare-"));
+    const argv = ["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--repo", bare, "--reviewers", "copilot", "--approvers", "", "--interval-ms", "30000", "--until", "ready"];
+    const failing = async (): Promise<string | null> => {
+      throw new Error("HTTP 403");
+    };
+    const result = await watch(argv, depsAtBase([COMMENTED, COMMENTED, COMMENTED], failing));
+    expect(result.code).toBe(1);
+    expect(result.out[0]).toMatch(/^\[1\] observation failed: ready was not judged on the pull request's base gate \(meta\.identities\.read: flags-unverified\) -- not a merge signal; the pull request's base \(zheref\/example@basebase:nen\/gates\.json\) could not be read/);
+  });
+
+  it("--require-base-gates passes through to the read: a local-fallback ready is an observation error on every predicate", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-372-watch-req-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "gates.json"), readFileSync(GATES, "utf8"));
+    const argv = ["watch", "until", "--pr", "9", "--gh-repo", "zheref/example", "--repo", root, "--interval-ms", "30000", "--until", "checks-settled", "--require-base-gates"];
+    const failing = async (): Promise<string | null> => {
+      throw new Error("HTTP 403");
+    };
+    const result = await watch(argv, depsAtBase([READY, READY, READY], failing));
+    expect(result.code).toBe(1);
+    expect(result.out[0]).toMatch(/^\[1\] observation failed: unevaluated: --require-base-gates: the gate inputs were not the pull request's base's \(meta\.identities\.read: local-fallback\)/);
+    const refused = await watch(["watch", "until", "--command", "nen --version", "--require-base-gates"], deps([]));
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toContain("--require-base-gates is not read by the --command form of 'watch until'.");
   });
 
   it("an unevaluated read is an OBSERVATION ERROR: three in a row stop the watch at exit 1, never 'not yet'", async () => {

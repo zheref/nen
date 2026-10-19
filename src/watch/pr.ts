@@ -39,7 +39,7 @@
 
 import { VerbUsageError } from "../cli/command.js";
 import type { RoundAtHead } from "../gates/predicates.js";
-import type { ReadyRead } from "../verbs/pr_ready.js";
+import { trustedIdentitiesRead, type ReadyRead } from "../verbs/pr_ready.js";
 import type { WatchObservation } from "./until.js";
 
 /** The closed set `--until` takes. */
@@ -76,12 +76,13 @@ export function observePr(read: ReadyRead, predicate: PrPredicate): WatchObserva
   // on a verdict judged from the checkout's own gates file (zheref/nen#372,
   // Feitan 3): that is an ERROR, counted toward the streak and naming why --
   // a watch that cannot see the base's gate is not watching it.
-  const identitiesRead = predicate === "ready" && ready ? report.meta.identities.read : null;
-  if (identitiesRead === "local-fallback" || identitiesRead === "local-unverified") {
+  // An ALLOW-list (round 2, Feitan 5): `trustedIdentitiesRead`.
+  if (predicate === "ready" && ready && !trustedIdentitiesRead(report.meta.identities.read)) {
+    const identitiesRead = String(report.meta.identities.read);
     return {
       errored: true,
       conditionTrue: false,
-      message: `observation failed: ready was judged on the checkout's own nen/gates.json (meta.identities.read: ${identitiesRead}), not the pull request's base -- not a merge signal; ${report.meta.warnings.find((w): boolean => w.startsWith("gate inputs read from the LOCAL") || w.startsWith("--gates ")) ?? "see meta.warnings"}`,
+      message: `observation failed: ready was not judged on the pull request's base gate (meta.identities.read: ${identitiesRead}) -- not a merge signal; ${report.meta.warnings.find((w): boolean => w.startsWith("gate inputs read from the LOCAL") || w.startsWith("--gates ") || w.startsWith("the pull request's base (")) ?? "see meta.warnings"}`,
     };
   }
   const checks = settlement.checksSettled;

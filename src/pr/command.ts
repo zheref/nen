@@ -144,7 +144,7 @@ function requirePr(context: CommandContext): number {
 }
 
 const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready options below]
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr fetch --target <owner/name> --pr <n>
@@ -259,7 +259,7 @@ ready:
                               nen/gates.json (any spelling, a hard link) is
                               the head's file and is read at the base like
                               the default; any other file inside the checkout
-                              is head content, applied with a warning
+                              may be head content, applied with a warning
                               (meta.identities.read: local-fallback). The
                               resolved path is what --explain and --json
                               report.
@@ -280,12 +280,24 @@ ready:
                                            verdict: unevaluated, exit 1
     base file this build refuses           NO verdict: unevaluated, exit 1
                                            (upgrade nen)
-  checks.excluded is never taken from the checkout. With --gates naming a file
-  outside the checkout, that file supplies the rest and the base still
-  supplies checks.excluded (read: gates-flag). --reviewers reads no file only
-  with no --gates and no nen/gates.json in the checkout; with a file present
-  it narrows the configured reviewer set. 'watch until --pr' and 'pr merge'
-  run this same read.
+  The checkout carrying NO nen/gates.json (a head that deleted it) with
+  --reviewers reads the base all the same: a base file applies, --reviewers
+  narrowing it (read: base, warned); none at the base, the flags are the gate
+  (read: null); a base that could not be read leaves the flags unverified
+  (read: flags-unverified, refused like local-fallback); a refused base file
+  is no verdict. checks.excluded is never taken from the checkout. With
+  --gates naming a file outside the checkout, that file supplies the rest and
+  the base still supplies checks.excluded (read: gates-flag). 'watch until
+  --pr' and 'pr merge' run this same read.
+  --require-base-gates        No verdict unless the gate inputs were the
+                              base's: read base, gates-flag, or null (the
+                              base read, declaring none). Any other route --
+                              local-fallback, flags-unverified -- is
+                              unevaluated, exit 1, naming it. A ready on the
+                              checkout's file otherwise exits 0 like a
+                              base-judged one; pass this wherever the exit
+                              code is acted on (a script, a required check,
+                              an agent). 'watch until --pr' takes it too.
   --token-env <VAR>           Environment variable holding the token. Default
                               GH_TOKEN; never picked up ambiently.
   --require-head <sha>        Judge ONLY this commit (7-40 hex digits, a prefix
@@ -1297,7 +1309,7 @@ function blocker(context: CommandContext): number {
       path: local.path,
       read: "local-fallback",
       warnings: [
-        `--gates '${local.path}' names a file inside the --repo checkout (${root}), which in a worktree is the pull request's own head: it is applied as given, but as head content rather than the caller's word.`,
+        `--gates '${local.path}' names a file inside the --repo checkout (${root}), which in a worktree may be the pull request's own head: it is applied as given, but as possible head content rather than the caller's word.`,
       ],
     };
   } else {

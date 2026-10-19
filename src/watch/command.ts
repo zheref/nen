@@ -41,7 +41,8 @@ usage:
                   [--interval-ms 30000] [--max-iterations <n>] [--repo <path>]
                   [<every 'nen pr ready' flag: --gh-repo --reviewers
                    --reviewer-login --approvers --round-policy --exclude-run
-                   --exclude-check --gates --token-env --require-head>]
+                   --exclude-check --gates --token-env --require-head
+                   --require-base-gates>]
 
   --command       the observation to repeat, e.g. "gh pr checks 42 --json state".
                   Classified against izanami's read-only table before the FIRST
@@ -176,7 +177,8 @@ export function createWatchCommand(deps: WatchDeps = { prReady: defaultDeps }): 
     flags: {
       values: ["command", "true-pattern", "interval-ms", "max-iterations", "cwd", "error-exit-threshold", "pr", ...PR_ONLY_VALUES],
       lists: PR_ONLY_LISTS,
-      booleans: [],
+      // `pr ready`'s own boolean the --pr form passes through (zheref/nen#372).
+      booleans: ["require-base-gates"],
     },
     run(context: CommandContext): number | Promise<number> {
       requireSubcommand("watch", context.args, ["until"]);
@@ -194,6 +196,9 @@ function runCommand(context: CommandContext): number {
     throw new VerbUsageError("--command '<bin> <args...>' or --pr <ref> --until <predicate> is required.");
   }
   refuseForeign(context, [...PR_ONLY_VALUES, ...PR_ONLY_LISTS], "--command");
+  if (context.args.booleans.has("require-base-gates")) {
+    throw new VerbUsageError("--require-base-gates is not read by the --command form of 'watch until'.");
+  }
 
   // The host that will spawn the argv decides how far the seam may trust a
   // quote -- see classifyWatchCommand's Windows paragraph.
@@ -297,7 +302,9 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   const input = {
     positionals: ["pr", "ready", typedRef],
     values: context.args.values,
-    booleans: new Set<string>(),
+    // `--explain`/`--json` are never passed (the read is never printed);
+    // `--require-base-gates` is, because it decides whether there is a verdict.
+    booleans: new Set<string>(context.args.booleans.has("require-base-gates") ? ["require-base-gates"] : []),
     lists: context.args.lists,
     repoFlag: context.repoFlag,
   };

@@ -477,6 +477,11 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
       [{ filename: "nen/gates.json" }],
       [{ filename: "src/a.ts" }, { filename: "nen/workflow.json" }],
       [{ filename: "nen/elsewhere.json", previous_filename: "nen/gates.json" }],
+      // Case-insensitively (round 2, Feitan 4).
+      [{ filename: "NEN/gates.json" }],
+      [{ filename: "nen/Gates.json" }],
+      [{ filename: "Nen/workflow.json" }],
+      [{ filename: "src/a.ts", previous_filename: "NEN/GATES.JSON" }],
     ]) {
       const outcome = await run(tmpRoot(), script({ files: filesCalls(files) }));
       expect(outcome.report.ok, JSON.stringify(files)).toBe(false);
@@ -502,7 +507,7 @@ describe("mergeDelivery -- a non-main base, every gate reused", () => {
     const outcome = await run(tmpRoot(), script(), { deps: readyDeps(source) });
     expect(outcome.report.ready).toBe(false);
     expect(outcome.report.ok).toBe(false);
-    expect(outcome.lines.join("\n")).toContain("pr ready: refused for a merge: the verdict's gate inputs came from the checkout's own nen/gates.json (meta.identities.read: local-fallback)");
+    expect(outcome.lines).toContain("pr ready: refused for a merge: the verdict's gate inputs were not the pull request's base's (meta.identities.read: local-fallback) -- a merge never rests on gate inputs the base has not merged. Give the token contents:read so the base can be read.");
   });
 
   it("refuses a head ref outside the run form of branch.template (F1)", async () => {

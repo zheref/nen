@@ -407,7 +407,11 @@ function runPolicyFilesGate(seams: Seams, target: Target, prNumber: number): Gat
   }
   const policyFiles = new Set(["nen/workflow.json", "nen/gates.json"]);
   const touched = changed.filter(
-    (file): boolean => policyFiles.has(file.path) || (file.previousPath !== null && policyFiles.has(file.previousPath)),
+    // Case-insensitively (round 2, Feitan 4): on a case-insensitive checkout
+    // `NEN/gates.json` can supply the bytes local readers see as nen/gates.json.
+    (file): boolean =>
+      policyFiles.has(file.path.toLowerCase()) ||
+      (file.previousPath !== null && policyFiles.has(file.previousPath.toLowerCase())),
   );
   if (touched.length > 0) {
     return {

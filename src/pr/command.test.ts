@@ -3028,7 +3028,7 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     expect(PR_SUBCOMMAND_FLAGS).toEqual({
       ready: {
         values: ["target", "pr", "gh-repo", "reviewers", "approvers", "round-policy", "exclude-run", "gates", "token-env", "require-head"],
-        booleans: ["explain"],
+        booleans: ["explain", "require-base-gates"],
         lists: ["exclude-check", "reviewer-login"],
       },
       staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
