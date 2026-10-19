@@ -24,8 +24,12 @@ function tempFile(name: string, contents: string): string {
   return path;
 }
 
-/** The three verbs that run the private-name guard (zheref/nen#329). */
-const GUARDED_SUBCOMMANDS: readonly string[] = ["file", "comment", "edit-body"];
+/**
+ * The verbs that run the private-name guard: three since zheref/nen#329, and
+ * `consolidate-close` since #363 -- only when the caller's own close text
+ * rides the close (see privateTargetRow).
+ */
+const GUARDED_SUBCOMMANDS: readonly string[] = ["file", "comment", "edit-body", "consolidate-close"];
 
 /**
  * THE DEFAULT PRIVATE-NAME GUARD ANSWER, for every test that is not about it.
@@ -39,6 +43,7 @@ const GUARDED_SUBCOMMANDS: readonly string[] = ["file", "comment", "edit-body"];
  */
 function privateTargetRow(argv: readonly string[]): ScriptedCall | null {
   if (argv[0] !== "issue" || !GUARDED_SUBCOMMANDS.includes(argv[1] ?? "")) return null;
+  if (argv[1] === "consolidate-close" && !argv.some((arg): boolean => /^--close-comment(-map)?(=|$)/.test(arg))) return null;
   const at = argv.indexOf("--target");
   const slug = at >= 0 ? argv[at + 1] : undefined;
   if (slug === undefined) return null;
@@ -3457,5 +3462,76 @@ describe("nen issue reconcile -- read-only, proposes only (zheref/nen#332)", () 
     expect(out).toMatch(/READ-ONLY, PROPOSES ONLY/);
     // Copilot E on zheref/nen#387: the --json shape in --help matches USAGE.
     expect(out).toMatch(/landing, delivery: \{ pr,\s+url, mergedAt \} \| null, references:/);
+  });
+});
+
+describe("nen issue consolidate-close -- the private-name guard on the close comment (zheref/nen#363)", () => {
+  const CHILD_5: ScriptedCall = {
+    match: "gh api repos/o/n/issues/5",
+    result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [] }) },
+  };
+  const NO_OPEN_PRS: ScriptedCall = {
+    match: "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+    result: { stdout: "[]" },
+  };
+  const PUBLIC: ScriptedCall = { match: "gh api repos/o/n", result: { stdout: JSON.stringify({ visibility: "public" }) } };
+  const LIST: ScriptedCall = {
+    match: "gh api user/repos?visibility=private&per_page=100&page=1",
+    result: { stdout: JSON.stringify([{ full_name: "acme/hidden-thing" }, { full_name: "acme/vault" }]) },
+  };
+  const argv = (...extra: string[]): string[] => ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5", ...extra];
+  const guarded = { privateGuard: "scripted" as const, repoFlag: BANKAI_REPO };
+
+  it("a private name in --close-comment on a PUBLIC target refuses with exit 4: nothing attached, nothing closed, the name never printed", async () => {
+    const result = await capture(argv("--close-comment", "Folded into #{parent}; see the vault."), [PARENT_1, CHILD_5, NO_OPEN_PRS, PUBLIC, LIST], guarded);
+    expect(result.code).toBe(4);
+    expect(writes(result.calls)).toEqual([]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen issue: close-comment[5]:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("checks each child's text from --close-comment-map, and --json carries the refusal without the text", async () => {
+    const path = tempFile("closes.json", JSON.stringify({ "5": "Absorbed by the Hidden-Thing section of #{parent}." }));
+    const result = await capture(argv("--close-comment-map", path, "--json"), [PARENT_1, CHILD_5, NO_OPEN_PRS, PUBLIC, LIST], guarded);
+    expect(result.code).toBe(4);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report["refused"]).toBe(true);
+    expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "close-comment[5]", line: 1, index: 1, normalised: false, ignored: false }]);
+    expect(result.out.join("\n")).not.toMatch(/hidden-thing/i);
+  });
+
+  it("a PRIVATE target is not checked: the list is never read and the close goes ahead", async () => {
+    const result = await capture(
+      argv("--close-comment", "see the vault"),
+      [
+        PARENT_1,
+        CHILD_5,
+        NO_OPEN_PRS,
+        { match: "gh api repos/o/n", result: { stdout: JSON.stringify({ visibility: "private" }) } },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=55", result: {} },
+        { match: "gh issue close 5 --repo o/n --comment see the vault", result: {} },
+      ],
+      guarded,
+    );
+    expect(result.code).toBe(0);
+    expect(result.calls).not.toContain("gh api user/repos?visibility=private&per_page=100&page=1");
+  });
+
+  it("an unreadable private list fails closed (exit 1) before the attach", async () => {
+    const result = await capture(
+      argv("--close-comment", "Folded into #{parent}."),
+      [PARENT_1, CHILD_5, NO_OPEN_PRS, PUBLIC, { match: "gh api user/repos?visibility=private&per_page=100&page=1", result: { code: 1, stderr: "HTTP 401" } }],
+      guarded,
+    );
+    expect(result.code).toBe(1);
+    expect(writes(result.calls)).toEqual([]);
+  });
+
+  it("with no caller close text there is no check, and the guard's flags are refused (exit 2) before any call", async () => {
+    const result = await capture(argv("--skip-private-name-check"), [], guarded);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/only with --close-comment or --close-comment-map/);
+    expect(result.calls).toEqual([]);
   });
 });

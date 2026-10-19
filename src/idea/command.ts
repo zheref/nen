@@ -15,7 +15,9 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import type { FileRequest } from "../issue/file.js";
+import { validateFiling, type FileRequest } from "../issue/file.js";
+import { blockingExit, blocksWrite } from "../issue/privacy.js";
+import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { fileIdea } from "./file.js";
 
 const USAGE = `nen idea file -- file an idea issue, then READ IT BACK to verify GitHub stored it as sent.
@@ -23,7 +25,8 @@ const USAGE = `nen idea file -- file an idea issue, then READ IT BACK to verify 
 usage:
   nen idea file --target <owner/name> --repo <path> --title <t>
                --body-file <path> --label a,b --assignee <user>
-               [--forbid-family ns:family]
+               [--forbid-family ns:family] [--skip-private-name-check]
+               [--private-names-ignore-file <path> [--allow-all-ignored]]
 
   --forbid-family ns:family
       Label families this invocation declares off-limits, comma-separated.
@@ -32,6 +35,19 @@ usage:
       caller declared out of bounds, alongside the taxonomy check every label
       already gets. Caller data: nen carries no repository's own convention
       about which family means what.
+
+  PRIVATE REPOSITORY NAMES (zheref/nen#363). Before the create, the title and
+      the body are checked against the credential's live private repository
+      list exactly as 'nen issue file' checks them -- the same matching, the
+      same --skip-private-name-check opt-out, the same ignore file, the same
+      'privateNameCheck' --json shape ('nen issue --help', PRIVATE REPOSITORY
+      NAMES). A private repository named in a filing to a PUBLIC target exits
+      4 and files nothing; a check that could not run (an unreadable
+      visibility or list, a list that reads empty) exits 1, never a pass; a
+      private or internal target is not checked. The guard's lines go to
+      stderr, each beginning 'nen idea file:', and never print the name.
+      --json: the success report adds 'privateNameCheck'; a refusal prints
+      '{ filed: false, privateNameCheck }'.
 
 Reuses 'nen issue file's own choreography (labels and assignee IN the create
 call), then reads the created issue back over the API and compares title,
@@ -53,8 +69,8 @@ export const ideaCommand: Command = {
   summary: "File an idea issue and verify it read back exactly as submitted.",
   usage: USAGE,
   flags: {
-    values: ["target", "title", "body-file", "label", "assignee", "forbid-family"],
-    booleans: [],
+    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
+    booleans: [...PRIVATE_NAME_FLAGS.booleans],
   },
   run(context: CommandContext): number {
     requireSubcommand("idea", context.args, ["file"]);
@@ -91,6 +107,9 @@ export const ideaCommand: Command = {
     if (bodyFile === undefined) {
       throw new VerbUsageError("--body-file <path> is required; a body typed on the command line is a body nobody reviewed.");
     }
+    // The ignore file is an input like any other: read, and refused when
+    // unreadable (exit 2), before the first `gh` call (zheref/nen#363).
+    const ignore = readIgnoreFlag(context);
     const root = assertRepoRoot({ repoFlag });
     let submittedBody: string;
     try {
@@ -113,6 +132,30 @@ export const ideaCommand: Command = {
     };
 
     const taxonomy = loadLabelTaxonomy(root);
+    // The filing's own refusals first, exactly as 'issue file' orders them:
+    // a filing that is not valid is refused for that, before anything is read
+    // from GitHub. fileIdea validates again; the two cannot disagree.
+    const refusals = validateFiling(request, taxonomy);
+    if (refusals.length > 0) {
+      for (const refusal of refusals) context.io.err(`nen: ${refusal.reason}`);
+      return 1;
+    }
+    // THE PRIVATE-NAME GUARD (zheref/nen#363), before the create: the title and
+    // the very bytes that travel to gh on stdin.
+    const privateNameCheck = guardPrivateNames(
+      context,
+      target,
+      [
+        { field: "title", text: request.title },
+        { field: "body", text: submittedBody },
+      ],
+      ignore,
+      "nen idea file",
+    );
+    if (blocksWrite(privateNameCheck)) {
+      if (context.json) context.io.out(JSON.stringify({ filed: false, privateNameCheck }, null, 2));
+      return blockingExit(privateNameCheck);
+    }
     const result = fileIdea(context.seams, target, request, submittedBody, taxonomy);
 
     if ("refusals" in result) {
@@ -121,7 +164,7 @@ export const ideaCommand: Command = {
     }
 
     if (context.json) {
-      context.io.out(JSON.stringify(result, null, 2));
+      context.io.out(JSON.stringify({ ...result, privateNameCheck }, null, 2));
       return result.mismatches.length === 0 ? 0 : 1;
     }
     context.io.out(`filed #${result.filed.number} ${result.filed.url}`);

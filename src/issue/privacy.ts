@@ -6,9 +6,11 @@
 // private repositories for weeks before anyone noticed. The only guard was a
 // script every skill had to remember to pipe each title, body and comment
 // through BEFORE calling nen -- so a skill that forgot, or a caller outside
-// that one consumer, published unchecked. `issue file`, `issue comment` and
-// `issue edit-body` are the three verbs that put caller-written text on a
-// GitHub issue, so the check lives where the write does.
+// that one consumer, published unchecked. So the check lives where the write
+// does: every verb that puts caller-written text on GitHub runs it before the
+// write (zheref/nen#329 for `issue file`, `issue comment` and `issue
+// edit-body`; zheref/nen#363 for the rest -- GUARDED_VERBS below is the list,
+// and ./privacyguard.ts is the command-side adapter they share).
 //
 // THE BEHAVIOUR MATCHED is zheref/hatsu's `scripts/private_name_check.sh`:
 //
@@ -54,6 +56,34 @@ export const PRIVATE_NAME_EXIT = 4;
 
 /** The opt-out: the caller attests it ran its own check. Named in every run that uses it. */
 export const SKIP_PRIVATE_NAME_CHECK_FLAG = "skip-private-name-check";
+
+/**
+ * EVERY VERB THAT RUNS THE GUARD, as the docs and the help name them
+ * (zheref/nen#329, #363). One list, so a test can hold USAGE's guard section
+ * to it: a verb added here and not documented there fails a test, never a
+ * reader.
+ */
+export const GUARDED_VERBS: readonly string[] = [
+  "issue file",
+  "issue comment",
+  "issue edit-body",
+  "issue consolidate-close",
+  "idea file",
+  "pr open",
+  "pr edit-body",
+  "pr threads reply",
+  "pr threads settle",
+  "wake fire",
+  "wake verify",
+  "release-publish",
+];
+
+/**
+ * The one member of `Seams` the check uses. Narrowed so a caller outside the
+ * `Seams` world (src/dev/release-publish.ts, which carries its own runner) can
+ * hand it an adapter rather than a fake of every seam.
+ */
+export type GuardSeams = Pick<Seams, "run">;
 
 /** Page size asked of `user/repos`, and the size a full page is judged against. */
 const PAGE_SIZE = 100;
@@ -153,7 +183,7 @@ export class PrivateListUnavailableError extends Error {
  * boolean `private` throws. gh's own message is NOT echoed: it may name the
  * repository being asked about.
  */
-export function readTargetVisibility(seams: Seams, target: Target): Visibility {
+export function readTargetVisibility(seams: GuardSeams, target: Target): Visibility {
   const result = seams.run(GH, ["api", `repos/${target.slug}`]);
   if (result.spawnFailed) {
     throw new PrivateListUnavailableError("gh could not be started, so the target's visibility could not be read");
@@ -189,7 +219,7 @@ export function readTargetVisibility(seams: Seams, target: Target): Visibility {
  * de-duplicated -- the order the refusal's indices point into. Every page is
  * read; a list that may be truncated, fails, or reads EMPTY throws.
  */
-export function readPrivateList(seams: Seams): readonly string[] {
+export function readPrivateList(seams: GuardSeams): readonly string[] {
   const names: string[] = [];
   for (let page = 1; page <= MAX_PAGES; page++) {
     const result = seams.run(GH, ["api", `user/repos?visibility=private&per_page=${PAGE_SIZE}&page=${page}`]);
@@ -447,7 +477,7 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
  * on exactly as it refuses a hit.
  */
 export function checkPrivateNames(
-  seams: Seams,
+  seams: GuardSeams,
   target: Target,
   fields: readonly CheckedText[],
   skip: boolean,
@@ -508,14 +538,19 @@ export function blockingExit(check: PrivateNameCheck): number {
  * The human lines for a verdict, for stderr. Empty for `clean` and for a
  * private target (nothing to say), so a passing run's text output is
  * unchanged. The opt-out is always named.
+ *
+ * `verb` is the prefix every line carries -- `nen issue` for the three verbs
+ * #329 guarded, the guarded verb's own name for the rest (`nen pr open`,
+ * `release-publish`, ...) -- so a caller can tell the guard's lines from the
+ * verb's own and from gh's, and knows which verb refused.
  */
-export function privateNameLines(check: PrivateNameCheck, target: Target): readonly string[] {
+export function privateNameLines(check: PrivateNameCheck, target: Target, verb: string = "nen issue"): readonly string[] {
   const where = (hit: PrivateNameHit): string =>
     `${hit.field}:${hit.line}: private repository #${hit.index}${hit.normalised ? " (spelt through an escape, entity, encoding, markup or invisible character)" : ""}`;
   // An ignored hit is never silent, whatever the verdict.
   const ignoredLines = check.hits
     .filter((hit): boolean => hit.ignored)
-    .map((hit): string => `nen issue: ignored: ${where(hit)} (ignore file)`);
+    .map((hit): string => `${verb}: ignored: ${where(hit)} (ignore file)`);
   switch (check.result) {
     case "clean":
       return ignoredLines;
@@ -523,21 +558,21 @@ export function privateNameLines(check: PrivateNameCheck, target: Target): reado
       return [];
     case "skipped-by-flag":
       return [
-        `nen issue: private-name check SKIPPED by --${SKIP_PRIVATE_NAME_CHECK_FLAG} -- the caller attests it ran its own; nothing was compared against the private repository list.`,
+        `${verb}: private-name check SKIPPED by --${SKIP_PRIVATE_NAME_CHECK_FLAG} -- the caller attests it ran its own; nothing was compared against the private repository list.`,
       ];
     case "unavailable":
       return [
         // plainLine: the error can carry gh's stderr, which is text nen did
         // not write; --json keeps the bytes.
-        `nen issue: private-name check could not run -- ${plainLine(check.error ?? "unknown error")}.`,
+        `${verb}: private-name check could not run -- ${plainLine(check.error ?? "unknown error")}.`,
         `  ${target.slug} may be public, so nothing was written: a check that cannot read is a refusal, never a pass. Fix the read, or pass --${SKIP_PRIVATE_NAME_CHECK_FLAG} after running your own check.`,
       ];
     case "refused": {
       const blocking = check.hits.filter((hit): boolean => !hit.ignored);
       return [
         ...ignoredLines,
-        ...blocking.map((hit): string => `nen issue: ${where(hit)}`),
-        `nen issue: ${blocking.length} mention(s) of a private repository in text bound for PUBLIC ${target.slug}; nothing was written. Redact them and retry.`,
+        ...blocking.map((hit): string => `${verb}: ${where(hit)}`),
+        `${verb}: ${blocking.length} mention(s) of a private repository in text bound for PUBLIC ${target.slug}; nothing was written. Redact them and retry.`,
         `  #k indexes the credential's private list, sorted bytewise: gh api --paginate 'user/repos?visibility=private&per_page=100' -q '.[].full_name' | LC_ALL=C sort -u | sed -n '<k>p'`,
       ];
     }

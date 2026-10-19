@@ -6,7 +6,25 @@ import { noPortProbe } from "../seam/scripted.js";
 
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping (review finding).
-async function capture(argv: readonly string[], run: Seams["run"]): Promise<{ code: number; out: string[]; err: string[] }> {
+//
+// `guard`: by default the private-name guard's visibility read
+// (zheref/nen#363) -- `gh api repos/<--repo-slug>` exactly -- answers
+// "private" before `run` sees it, so a test about something else neither
+// scripts nor counts it. The guard's own tests pass "scripted".
+async function capture(
+  argv: readonly string[],
+  given: Seams["run"],
+  guard: "private-target" | "scripted" = "private-target",
+): Promise<{ code: number; out: string[]; err: string[] }> {
+  const at = argv.indexOf("--repo-slug");
+  const slug = at >= 0 ? argv[at + 1] : undefined;
+  const run: Seams["run"] =
+    guard === "scripted" || slug === undefined
+      ? given
+      : (command, args, options): CommandResult =>
+          command === "gh" && args.length === 2 && args[0] === "api" && args[1] === `repos/${slug}`
+            ? ok(JSON.stringify({ visibility: "private" }))
+            : given(command, args, options);
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -222,5 +240,101 @@ describe("nen wake verify", () => {
       (): CommandResult => ok("[]"),
     );
     expect(result.code).toBe(0);
+  });
+});
+
+describe("nen wake -- the private-name guard (zheref/nen#363)", () => {
+  const LIST_PAGE = "api user/repos?visibility=private&per_page=100&page=1";
+  const LIST = JSON.stringify([{ full_name: "acme/hidden-thing" }, { full_name: "acme/vault" }]);
+  /** A gh answering the guard's two reads, recording every call, and nothing else. */
+  const guardOnly = (visibility: string, list: CommandResult | null, seen: string[]) =>
+    (command: string, args: readonly string[]): CommandResult => {
+      seen.push([command, ...args].join(" "));
+      const joined = args.join(" ");
+      if (joined === "api repos/o/r") return ok(JSON.stringify({ visibility }));
+      if (joined === LIST_PAGE && list !== null) return list;
+      return ok("[]");
+    };
+  const FIRE = ["wake", "fire", "--repo-slug", "o/r", "--ref", "XX-PR-#12", "--label", "wake"];
+  const VERIFY = ["wake", "verify", "--repo-slug", "o/r", "--now", "2026-01-01T00:00:00Z", "--author-pattern", "bankai\\[bot\\]$"];
+
+  it("fire: a private name in --comment on a PUBLIC target refuses with exit 4 -- no label touched, nothing posted, the name never printed", async () => {
+    const seen: string[] = [];
+    const result = await capture([...FIRE, "--comment", "re-fired after the vault move", "--run"], guardOnly("public", ok(LIST), seen), "scripted");
+    expect(result.code).toBe(4);
+    expect(seen).toEqual(["gh api repos/o/r", `gh ${LIST_PAGE}`]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen wake fire: comment:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("fire: the dry run refuses the same way", async () => {
+    const result = await capture([...FIRE, "--comment", "Hidden-Thing"], guardOnly("public", ok(LIST), []), "scripted");
+    expect(result.code).toBe(4);
+  });
+
+  it("fire: a PRIVATE target is not checked -- the list is never read, and the wake fires", async () => {
+    const seen: string[] = [];
+    const result = await capture([...FIRE, "--comment", "the vault", "--run"], guardOnly("private", null, seen), "scripted");
+    expect(result.code).toBe(0);
+    expect(seen).not.toContain(`gh ${LIST_PAGE}`);
+    expect(seen.some((call): boolean => call.includes("/issues/12/comments"))).toBe(true);
+  });
+
+  it("fire: an unreadable private list fails closed (exit 1), nothing written", async () => {
+    const seen: string[] = [];
+    const result = await capture(
+      [...FIRE, "--comment", "anything", "--run"],
+      guardOnly("public", { code: 1, stdout: "", stderr: "HTTP 401", spawnFailed: false }, seen),
+      "scripted",
+    );
+    expect(result.code).toBe(1);
+    expect(seen).toEqual(["gh api repos/o/r", `gh ${LIST_PAGE}`]);
+  });
+
+  it("fire: with no --comment there is no text, no check -- and the guard's flags are refused rather than ignored", async () => {
+    const seen: string[] = [];
+    expect((await capture(FIRE, guardOnly("public", ok(LIST), seen), "scripted")).code).toBe(0);
+    expect(seen).toEqual([]);
+    const refused = await capture([...FIRE, "--skip-private-name-check"], guardOnly("public", ok(LIST), []), "scripted");
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toMatch(/only with --comment/);
+  });
+
+  it("fire --json: the refusal is { fired: false, privateNameCheck }", async () => {
+    const result = await capture([...FIRE, "--comment", "the vault", "--json"], guardOnly("public", ok(LIST), []), "scripted");
+    expect(result.code).toBe(4);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc["fired"]).toBe(false);
+    expect((doc["privateNameCheck"] as { result: string }).result).toBe("refused");
+  });
+
+  it("verify: a private name in a marker refuses with exit 4 before the first PR read", async () => {
+    const seen: string[] = [];
+    const result = await capture([...VERIFY, "--flag-marker", "vault_guard", "--run"], guardOnly("public", ok(LIST), seen), "scripted");
+    expect(result.code).toBe(4);
+    expect(seen).toEqual(["gh api repos/o/r", `gh ${LIST_PAGE}`]);
+    expect(result.err.join("\n")).toContain("nen wake verify: flag-marker:1: private repository #2");
+  });
+
+  it("verify: a PRIVATE target is not checked, and the sweep runs", async () => {
+    const seen: string[] = [];
+    const result = await capture([...VERIFY, "--flag-marker", "vault-guard"], guardOnly("private", null, seen), "scripted");
+    expect(result.code).toBe(0);
+    expect(seen).not.toContain(`gh ${LIST_PAGE}`);
+  });
+
+  it("verify: an unreadable private list fails closed (exit 1) before the sweep", async () => {
+    const seen: string[] = [];
+    const result = await capture(VERIFY, guardOnly("public", { code: 1, stdout: "", stderr: "HTTP 401", spawnFailed: false }, seen), "scripted");
+    expect(result.code).toBe(1);
+    expect(seen.some((call): boolean => call.includes("/pulls?"))).toBe(false);
+  });
+
+  it("verify: a --repo-slug that is not owner/name is a usage error (exit 2) before any call", async () => {
+    const seen: string[] = [];
+    const result = await capture(["wake", "verify", "--repo-slug", "not-a-slug", "--now", "x", "--author-pattern", "a"], guardOnly("public", ok(LIST), seen), "scripted");
+    expect(result.code).toBe(2);
+    expect(seen).toEqual([]);
   });
 });

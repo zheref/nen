@@ -47,6 +47,9 @@ import {
 } from "../cli/command.js";
 import { catastrophicShape } from "../schema/pattern.js";
 import { GH, must, mustJson, type Seams } from "../seam/exec.js";
+import { parseTarget, TargetError, type Target } from "../github/target.js";
+import { blockingExit, blocksWrite, type PrivateNameCheck } from "../issue/privacy.js";
+import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import {
   decideActions,
   flagBody,
@@ -55,8 +58,24 @@ import {
   type WorkflowRun,
 } from "./detect.js";
 
-const USAGE = `nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <regex> [--max-prs <n>] [--max-runs-per-pr <n>] [--flag-marker <text>] [--redrive-marker <text>] [--run]
-nen wake fire --repo-slug <owner/name> --ref <object-ref> --label <name> [--comment <text>] [--run]
+const USAGE = `nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <regex> [--max-prs <n>] [--max-runs-per-pr <n>] [--flag-marker <text>] [--redrive-marker <text>] [--run] [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]]
+nen wake fire --repo-slug <owner/name> --ref <object-ref> --label <name> [--comment <text>] [--run] [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]]
+
+PRIVATE REPOSITORY NAMES (zheref/nen#363). Both subcommands post caller text
+on a pull request or issue: 'fire' its --comment, 'verify' the comments it
+composes around --now, --flag-marker and --redrive-marker. Before anything is
+written -- and without --run too, so the dry run's verdict is the real run's --
+that caller text is checked against the credential's live private repository
+list exactly as 'nen issue comment' checks a body ('nen issue --help', PRIVATE
+REPOSITORY NAMES): a private repository named in text bound for a PUBLIC
+--repo-slug exits 4 and writes nothing (no label removed, no workflow
+redriven, no comment posted); a check that could not run exits 1, never a
+pass; a private or internal --repo-slug is not checked. 'fire' with no
+--comment posts no text and runs no check. --skip-private-name-check is the
+opt-out, named on stderr every time; --private-names-ignore-file <path> and
+--allow-all-ignored work as there. The guard's lines go to stderr, beginning
+'nen wake <subcommand>:', and never print the name; --json adds
+'privateNameCheck' (null on a 'fire' with no --comment).
 
 verify:
   Scans open pull requests whose author matches --author-pattern for a
@@ -184,6 +203,29 @@ function verify(context: CommandContext): number {
   const write = context.args.booleans.has("run");
   const dryRun = !write;
 
+  // THE PRIVATE-NAME GUARD (zheref/nen#363), before the first `gh` read and
+  // so before any redrive or comment. The caller's text in every comment this
+  // sweep can post is --now and the two markers (the stamps carry all three);
+  // the rest is nen's own wording and GitHub's own run URL. Run without --run
+  // too: the dry run is this verb's default, and it must refuse the same way.
+  const ignore = readIgnoreFlag(context);
+  const target = wakeTarget(repo);
+  const privateNameCheck = guardPrivateNames(
+    context,
+    target,
+    [
+      { field: "now", text: now },
+      { field: "flag-marker", text: flagMarker },
+      { field: "redrive-marker", text: redriveMarker },
+    ],
+    ignore,
+    "nen wake verify",
+  );
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) context.io.out(JSON.stringify({ repo, now, dryRun, scanned: 0, privateNameCheck }, null, 2));
+    return blockingExit(privateNameCheck);
+  }
+
   const prs = mustJson<RawPr[]>(context.seams, GH, [
     "api",
     `repos/${repo}/pulls?state=open&per_page=100`,
@@ -269,8 +311,24 @@ function verify(context: CommandContext): number {
   if (total === 0) lines.push("no swallowed wakes found");
   for (const warning of warnings) lines.push(`warning: ${warning}`);
 
-  emit(context.io, context.json, { repo, now, dryRun, scanned, results, warnings }, lines);
+  emit(context.io, context.json, { repo, now, dryRun, scanned, results, warnings, privateNameCheck }, lines);
   return 0;
+}
+
+/**
+ * `--repo-slug` as the guard's target. A slug that is not `owner/name` cannot
+ * have its visibility read, so it is a usage error (exit 2) here, before any
+ * call -- the same refusal `--target` gives elsewhere.
+ */
+function wakeTarget(repo: string): Target {
+  try {
+    return parseTarget(repo);
+  } catch (error) {
+    if (error instanceof TargetError) {
+      throw new VerbUsageError(`--repo-slug takes an owner/name repository slug and '${repo}' is not one.`);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -314,6 +372,31 @@ function fire(context: CommandContext): number {
   const comment = context.args.values["comment"] ?? null;
   const run = context.args.booleans.has("run");
 
+  // THE PRIVATE-NAME GUARD (zheref/nen#363), on the settle comment -- the one
+  // caller text this subcommand writes -- before the label is removed, so a
+  // hit leaves the object exactly as it was. Without --comment there is no
+  // text, no check, and the guard's flags would be read by nothing, so they
+  // are refused (exit 2) rather than ignored.
+  let privateNameCheck: PrivateNameCheck | null = null;
+  if (comment === null) {
+    const given = [
+      ...PRIVATE_NAME_FLAGS.values.filter((flag): boolean => context.args.values[flag] !== undefined),
+      ...PRIVATE_NAME_FLAGS.booleans.filter((flag): boolean => context.args.booleans.has(flag)),
+    ];
+    if (given.length > 0) {
+      throw new VerbUsageError(
+        `--${given.join(", --")} ${given.length === 1 ? "is" : "are"} read by 'wake fire' only with --comment: without one it posts no text, so the private-name guard does not run and the flag would be ignored.`,
+      );
+    }
+  } else {
+    const ignore = readIgnoreFlag(context);
+    privateNameCheck = guardPrivateNames(context, wakeTarget(repo), [{ field: "comment", text: comment }], ignore, "nen wake fire");
+    if (blocksWrite(privateNameCheck)) {
+      if (context.json) context.io.out(JSON.stringify({ repo, number, label, run, fired: false, privateNameCheck }, null, 2));
+      return blockingExit(privateNameCheck);
+    }
+  }
+
   const lines = [
     `${run ? "" : "(dry run) "}remove label '${label}' from ${repo}#${number}`,
     `${run ? "" : "(dry run) "}re-apply label '${label}' to ${repo}#${number}`,
@@ -329,7 +412,7 @@ function fire(context: CommandContext): number {
     }
   }
 
-  emit(context.io, context.json, { repo, number, label, comment, run }, lines);
+  emit(context.io, context.json, { repo, number, label, comment, run, privateNameCheck }, lines);
   return 0;
 }
 
@@ -350,8 +433,9 @@ export const wakeCommand: Command = {
       "ref",
       "label",
       "comment",
+      ...PRIVATE_NAME_FLAGS.values,
     ],
-    booleans: ["run"],
+    booleans: ["run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("wake", context.args, ["fire", "verify"]);
