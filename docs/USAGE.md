@@ -185,31 +185,60 @@ verdict. [`pr ready`](#nen-pr-ready)'s JSON carries a `contract` field,
 change from a compatible one.
 
 **Which shapes carry a `contract`, and why not all of them.**
-[#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
-here is the ruling rather than the silence. A `contract` field is **earned by a
-shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. **70 shapes**
-qualify today and declare one (**73 ids**: `nen.runner.plan`, `nen.stop.mark`
-and `nen.wc.worktree.copies` each have two versions, and `nen.shu.<verb>/v0.1`
-is one id standing for the per-verb string `nen.shu.${verb}/v0.1` that every
-executing `shu` verb stamps on its own report). A shape is an id without its
-version; an id is the whole `nen.<name>/v<major>.<minor>` string.
 
-**The list below is derived from the code, not chosen from it.** It is held to
-the binary by `src/cli/usage-contracts.test.ts`, which discovers the ids with no
-registry of its own to keep in step: it reads every file under `src/` and
-`templates/` that is not a `*.test.ts` and does not sit under a `fixtures/`
-directory — the files the compiled binary is built from — and collects every
-quoted literal of the exact shape `"nen.<name>/v<n>.<n>"` (a `contract:` or
-`$schema:` value, a `*_CONTRACT` constant, a `schema:` key) plus every template
-literal of the shape `` `nen.<family>.${name}/v<n>.<n>` ``, which it spells
-`nen.<family>.<name>/v<n>.<n>`. A mention in a comment or a help line that is
-not quoted whole is not an emission and is not collected. The test fails when
-an id it finds is missing from this list, when this list names an id it does
-not find, and when either stated count disagrees with the list. **Adding a
-contract id to the binary therefore means adding it here and moving the two
-counts above in the same change**; a new shape still gains a `contract` only
-when something must refuse it, in the same change that gives it that consumer.
+> [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
+> here is the ruling rather than the silence. A `contract` field is **earned by a
+> shape a consumer must be able to REFUSE on** — one where reading an unrecognised
+> document half-understood is worse than not reading it at all. [The sentence that counted the qualifying shapes, thirty-three at that time, is not repeated here; the list below stands in its place.]
+>
+> Every one of them is read by a **program** that acts on it: a gate decides a
+> merge, a hook rings a bell, a scaffolder writes a file, a coverage ladder bands
+> a row. The rest are **diagnostics a caller reads once** — a verdict, a table, a
+> plan — where a missing key is visible immediately and an unrecognised one costs
+> nothing. Stamping a version on all ninety-two would create ninety-two things to
+> version, ninety-two decisions about what counts as breaking, and no consumer
+> asking for any of it: a promise nobody made and everybody would then have to
+> keep. **The rule going forward** is the one above — a new shape gains a
+> `contract` when something must refuse it, in the same change that gives it that
+> consumer — and the shape of every `--json` document, contract or not, is stated
+> in its own section below and held there by `src/cli/json-shape.test.ts`.
+
+**What the list below is.** The ruling above is quoted as it was written at
+[#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
+below is not the set that ruling would qualify: it is every **versioned id the
+binary carries**, writing or reading — **70 shapes** and **73 ids** (`nen.runner.plan`,
+`nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
+`nen.shu.<verb>/v0.1` is one id standing for the per-verb string
+`nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
+A shape is an id without its version; an id is the whole
+`nen.<name>/v<major>[.<minor>]` string. Some ids are only read (`nen.runner.plan/v0.1`,
+`nen.wc.worktree.copies/v0.1`), and one is only the `$schema` tag of a bundled
+data file (`nen.scaffold.template/v0.1`, the scaffold template pack). Whether the
+ruling still holds as written, now that more ids carry a version than a consumer
+refuses on, is the maintainer's to say ([#350](https://github.com/zheref/nen/issues/350));
+the list is held to the code either way.
+
+**The list is derived from the code, not chosen from it.** It is held to the
+binary by `src/cli/usage-contracts.test.ts`, which has no registry of its own to
+keep in step. It reads every file under `src/` and `templates/` except
+`*.test.ts`, `*.testkit.ts` and anything under a `fixtures/` directory, blanks
+the `//` and `/* */` comments, and collects (1) every quoted literal — single,
+double or backtick, no interpolation — that is exactly
+`nen.<name>/v<major>[.<minor>]` (a `contract:` or `$schema:` value, a
+`*_CONTRACT` constant, a `schema:` key, **and an id quoted whole inside a help
+text**), and (2) every template literal with an interpolation in the name, which it
+spells with `<placeholders>`. Any other `nen.…/v<digit>` text in the code that no
+rule collected, and no collected id explains, **fails the test with its
+file:line** instead of being skipped. A comment mention is not collected. The test
+fails when an id it finds is missing from this list, when this list names an id it
+does not find, when an id is listed twice, and when either stated count disagrees
+with the list. **Adding a contract id to the binary therefore means adding it
+here and moving the two counts in the same change.** The command-family count is
+not this list's: `src/cli/surface.test.ts` pins it.
+
+The ids are grouped by their first segment after `nen.`, which is usually a
+command family and is not always one (`contract`, `decisions` and `workflow` are
+file formats).
 
 <!-- contract-ids:begin -->
 - **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
@@ -237,19 +266,6 @@ when something must refuse it, in the same change that gives it that consumer.
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
 - **`workflow`** — `nen.workflow/v0.1`
 <!-- contract-ids:end -->
-
-Some of these are read by a **program** that acts on them: a gate decides a
-merge, a hook rings a bell, a scaffolder writes a file, a coverage ladder bands
-a row. Others are **diagnostics a caller reads once** — a verdict, a table, a
-plan — that gained a version because the verb that prints them is itself driven
-by a program. An older version stays on the list while the binary still reads
-it (`nen.runner.plan/v0.1`, `nen.wc.worktree.copies/v0.1`). The shapes that do
-not appear here are the ones nothing refuses on, where a missing key is visible
-immediately and an unrecognised one costs nothing: stamping a version on every
-verb's output would create a decision per verb about what counts as breaking,
-and no consumer asking for any of it. The shape of every `--json` document,
-contract or not, is stated in its own section below and held there by
-`src/cli/json-shape.test.ts`.
 
 Four verbs have no `--json` because they have no result of their own to
 render: [`dev test`](#nen-dev-test) and [`dev lint`](#nen-dev-lint) inherit
