@@ -20,6 +20,7 @@ import {
   normalizeEol,
   outputLines,
   redactRemoteCredentials,
+  redactRemoteUrl,
   outputWindow,
   spawnInteractiveRunner,
   spawnRunner,
@@ -102,6 +103,32 @@ describe("redactRemoteCredentials", () => {
     expect(redactRemoteCredentials("git@github.com:zheref/nen.git")).toBe("git@github.com:zheref/nen.git");
     expect(redactRemoteCredentials("auth: ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 expired")).toBe("auth: *** expired");
     expect(redactRemoteCredentials("https://user:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/x")).toBe("https://user:***@github.com/x");
+  });
+});
+
+describe("redactRemoteUrl -- a remote URL keeps no userinfo at all (SEC-5, zheref/nen#373)", () => {
+  it("replaces the whole userinfo, with or without a ':', in a scheme URL", () => {
+    expect(redactRemoteUrl("https://user:ghp_FAKE0000@github.com/o/n")).toBe("https://***@github.com/o/n");
+    expect(redactRemoteUrl("https://ghp_FAKE0000@github.com/o/n/extra")).toBe("https://***@github.com/o/n/extra");
+    expect(redactRemoteUrl("https://oauth2:FAKE/with-slash@gitlab.example/o/n")).toBe("https://***@gitlab.example/o/n");
+    expect(redactRemoteUrl("https://a@b@host/o/n")).toBe("https://***@host/o/n");
+    expect(redactRemoteUrl("ssh://git@host:22/o/n.git")).toBe("ssh://***@host:22/o/n.git");
+  });
+
+  it("replaces the userinfo of scp syntax too", () => {
+    expect(redactRemoteUrl("git@github.com:zheref/nen.git")).toBe("***@github.com:zheref/nen.git");
+    expect(redactRemoteUrl("ghp_FAKE0000@github.com:only")).toBe("***@github.com:only");
+    expect(redactRemoteUrl("user:FAKE@host:o/n")).toBe("***@host:o/n");
+  });
+
+  it("keeps a URL that carries no userinfo exactly as it is", () => {
+    for (const url of ["https://github.com/zheref/nen.git", "https://host:8443/path@revision", "/local/bare/repo.git", "file:///srv/repo.git", "not a url at all", ""]) {
+      expect(redactRemoteUrl(url)).toBe(url);
+    }
+  });
+
+  it("still redacts a GitHub-shaped token standing outside the userinfo", () => {
+    expect(redactRemoteUrl("https://github.com/o/n?access=ghp_abcdefghijklmnopqrstuvwxyz0123")).toBe("https://github.com/o/n?access=***");
   });
 });
 

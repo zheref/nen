@@ -74,6 +74,23 @@ describe("nen repo resolve -- dispatches through the union registry", () => {
     ]);
   });
 
+  it("no-token form shows the origin without its userinfo, in the text and in --json (SEC-5, zheref/nen#373)", async () => {
+    const run = (): CommandResult => ({ code: 0, stdout: "https://ghp_FAKE0000@github.com/zheref/bankai-core.git\n", stderr: "", spawnFailed: false });
+    const text = await capture(["repo", "resolve"], run);
+    expect(text.code).toBe(0);
+    expect(text.out[0]).toBe("origin: https://***@github.com/zheref/bankai-core.git");
+    const json = await capture(["repo", "resolve"], run, BANKAI_REPO, true);
+    expect(json.code).toBe(0);
+    for (const result of [text, json]) expect([...result.out, ...result.err].join("\n")).not.toContain("ghp_FAKE0000");
+  });
+
+  it("no-token form refuses an unparseable origin without echoing its userinfo (SEC-5, zheref/nen#373)", async () => {
+    const result = await capture(["repo", "resolve"], (): CommandResult => ({ code: 0, stdout: "https://user:ghp_FAKE0000@github.com/only\n", stderr: "", spawnFailed: false }));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("'https://***@github.com/only'");
+    expect([...result.out, ...result.err].join("\n")).not.toContain("ghp_FAKE0000");
+  });
+
   // zheref/nen#17: the bankai fixture's product_codes nests a `$comment`, the
   // same shape the live bankai-core file carries. Before the loader fix, this
   // sweep printed a SEVENTH row -- "Object-reference notation (...)  ($comment)

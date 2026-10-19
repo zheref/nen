@@ -370,25 +370,73 @@ export function normalizeEol(text: string): string {
  * `ssh://git@host`) carries no secret and is kept whole.
  */
 export function redactRemoteCredentials(text: string): string {
-  return text
-    .replace(/:\/\/(\S+)/g, (whole: string, run: string): string => {
-      const at = run.lastIndexOf("@");
+  return redactTokens(
+    text.replace(/:\/\/(\S+)/g, (whole: string, run: string): string => {
+      const at = userinfoEnd(run);
       if (at === -1) return whole;
-      const authorityEnd = run.search(/[/?#]/);
-      // A port belongs to the authority; an @ in a later path/query/fragment
-      // is not userinfo. Keep the older fail-closed treatment of malformed
-      // passwords containing slashes when no numeric port explains the colon.
-      if (authorityEnd !== -1 && at > authorityEnd) {
-        const authority = run.slice(0, authorityEnd);
-        if (!authority.includes("@") && /:\d+$/.test(authority)) return whole;
-      }
       const userinfo = run.slice(0, at);
       const colon = userinfo.indexOf(":");
       if (colon === -1) return whole;
       return `://${userinfo.slice(0, colon)}:***${run.slice(at)}`;
-    })
+    }),
+  );
+}
+
+/**
+ * Where the userinfo of the run after a `://` ends -- the index of its LAST
+ * `@` -- or -1 when the run carries none. ONE READING, shared by both
+ * redactors below, so "is this userinfo" is never answered twice.
+ */
+function userinfoEnd(run: string): number {
+  const at = run.lastIndexOf("@");
+  if (at === -1) return -1;
+  const authorityEnd = run.search(/[/?#]/);
+  // A port belongs to the authority; an @ in a later path/query/fragment
+  // is not userinfo. Keep the older fail-closed treatment of malformed
+  // passwords containing slashes when no numeric port explains the colon.
+  if (authorityEnd !== -1 && at > authorityEnd) {
+    const authority = run.slice(0, authorityEnd);
+    if (!authority.includes("@") && /:\d+$/.test(authority)) return -1;
+  }
+  return at;
+}
+
+/** The two GitHub token shapes, wherever they stand in the text. */
+function redactTokens(text: string): string {
+  return text
     .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}/g, "***")
     .replace(/\bgithub_pat_[A-Za-z0-9_]+/g, "***");
+}
+
+/**
+ * A REMOTE URL, for a message, stderr or `--json`: its WHOLE userinfo
+ * replaced by `***` (`https://***@host/owner/name`), whatever shape that
+ * userinfo has (SEC-5, zheref/nen#373).
+ *
+ * `redactRemoteCredentials` above is for TEXT a subprocess printed, and it
+ * keeps a userinfo with no `:` because in free text that is usually a login
+ * name. A value KNOWN to be a remote URL gets no such benefit of the doubt:
+ * `https://<token>@host/...` is how a credential is commonly embedded in an
+ * origin, and a token that is not GitHub-shaped (or a made-up one too short
+ * for the pattern) would be echoed whole. So here no userinfo survives --
+ * `user:secret@`, `token@`, `git@` alike -- in either spelling git writes:
+ * `scheme://userinfo@host/...` (the same reading of where the userinfo ends,
+ * `userinfoEnd`) and scp's `userinfo@host:path`. The GitHub token shapes are
+ * then redacted wherever else they stand (a path, a query). Every echo site
+ * of an origin or remote URL goes through this one helper.
+ */
+export function redactRemoteUrl(url: string): string {
+  return redactTokens(
+    url
+      .replace(/:\/\/(\S+)/g, (whole: string, run: string): string => {
+        const at = userinfoEnd(run);
+        return at === -1 ? whole : `://***${run.slice(at)}`;
+      })
+      // scp syntax has no `://`: everything up to the last `@` before
+      // `host:` is the userinfo. A `/` ends the candidate, because git reads
+      // a slash before the colon as a local path, not a remote.
+      .replace(/(^|\s)[^\s/]*@(?=[^\s@/:]+:)/g, "$1***@"),
+  );
 }
 
 /** Split subprocess output into non-empty lines, EOL-normalized, trimmed, and with remote credentials redacted. */

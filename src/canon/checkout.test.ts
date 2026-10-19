@@ -204,11 +204,23 @@ describe("verifyCanonCheckout -- five facts, each its own named failure", () => 
     expect(seams.calls).toEqual([]);
   });
 
-  it("matches the source case-insensitively and redacts credentials in the reported origin", () => {
+  it("matches the source case-insensitively and redacts the whole userinfo in the reported origin (zheref/nen#373)", () => {
     const path = dir();
     const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://me:s3cret@github.com/Owner/Handbooks\n" } })), path, SOURCE, REF, CONSUMER);
-    expect("verified" in result && result.verified.origin).toBe("https://me:***@github.com/Owner/Handbooks");
+    expect("verified" in result && result.verified.origin).toBe("https://***@github.com/Owner/Handbooks");
     expect(JSON.stringify(result)).not.toMatch(/s3cret/);
+    // A token standing alone as the userinfo, too short for the GitHub shape.
+    const bare = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://ghp_FAKE0000@github.com/Owner/Handbooks\n" } })), path, SOURCE, REF, CONSUMER);
+    expect("verified" in bare && bare.verified.origin).toBe("https://***@github.com/Owner/Handbooks");
+    expect(JSON.stringify(bare)).not.toMatch(/ghp_FAKE0000/);
+  });
+
+  it("echoes no userinfo when an unparseable origin is refused as the wrong source (zheref/nen#373)", () => {
+    const path = dir();
+    const result = verifyCanonCheckout(new ScriptedSeams(gitFor(path, { "remote get-url origin": { stdout: "https://ghp_FAKE0000@github.com/Owner/Handbooks/extra/seg\n" } })), path, SOURCE, REF, CONSUMER);
+    expect(result).toMatchObject({ failure: { code: "wrong-source" } });
+    expect(JSON.stringify(result)).not.toMatch(/ghp_FAKE0000/);
+    expect(JSON.stringify(result)).toContain("https://***@github.com/Owner/Handbooks/extra/seg");
   });
 });
 
