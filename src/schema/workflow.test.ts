@@ -1322,3 +1322,16 @@ describe("severity declarations", () => {
     expect(parseWorkflow("workflow.json", { severity }).severity?.labels).toEqual({ p1: "flat label" });
   });
 });
+
+describe("severity metadata cannot become an ordered label", () => {
+  it.each(["$comment", "$source"])("refuses reserved order name %s before looking up its mapping value", (name) => {
+    const severity = { family: "priority", order: [name], labels: { [name]: "flat" } };
+    expect(() => parseWorkflow("workflow.json", { severity })).toThrow(/severity\.order\[0\]/);
+  });
+  it("ignores untyped metadata values in severity.labels", () => {
+    const severity = { family: "priority", order: ["p1"], labels: { p1: "flat", $comment: { nested: [false, 42] }, $source: null, $flag: true } };
+    const parsed = parseWorkflow("workflow.json", { severity }).severity!;
+    expect(parsed.labels).toEqual({ p1: "flat" });
+    expect(parsed.raw).toEqual(severity);
+  });
+});

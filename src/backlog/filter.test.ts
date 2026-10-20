@@ -205,3 +205,12 @@ describe("declared severity and strict positional boundaries (#427)", () => {
     expect(bad.code).toBe(2); expect(bad.calls).toBe(0);
   });
 });
+
+it("refuses activating a metadata mapping through severity.order before any network read", async () => {
+  const root = checkout();
+  writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ severity: { family: "priority", order: ["$comment"], labels: { $comment: "enhancement" } } }));
+  const result = await fetch(["--severity", "$comment", "--json"], root);
+  expect(result.code).toBe(1);
+  expect(result.calls).toBe(0);
+  expect(result.err.join("\n")).toContain("severity.order[0]");
+});

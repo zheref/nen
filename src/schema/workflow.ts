@@ -2131,7 +2131,12 @@ function parseSeverity(path: string, value: unknown): SeverityPolicy | null {
   const raw = block(path, "severity", value, ["family", "order", "labels"], "Severity keys are");
   const family = requireString(path, "severity.family", raw["family"]);
   if (!/^[^/,\s+]+$/.test(family)) throw new SchemaError(path, "severity.family", "expected a family identifier without whitespace, slash, comma or plus");
-  const order = requireArray(path, "severity.order", raw["order"]).map((item, index) => requireString(path, `severity.order[${index}]`, item));
+  const order = requireArray(path, "severity.order", raw["order"]).map((item, index): string => {
+    const pointer = `severity.order[${index}]`;
+    const name = requireString(path, pointer, item);
+    if (name.startsWith("$")) throw new SchemaError(path, pointer, "must not start with '$': $-prefixed names are metadata and cannot select severity labels");
+    return name;
+  });
   if (order.length === 0 || order.some((leaf) => leaf.trim() !== leaf || /[/:,+\s]/.test(leaf)) || new Set(order.map((leaf) => leaf.toLowerCase())).size !== order.length) {
     throw new SchemaError(path, "severity.order", "expected nonempty, distinct label leaves, highest priority first (no whitespace, '/', ':', ',' or '+')");
   }

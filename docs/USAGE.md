@@ -468,8 +468,9 @@ For existing labels without that shape, add an explicit full-label map, for exam
 `--severity-family` and `--severity-order` independently override its fields; a full-label
 map applies only when the selected family matches its declared family. Without a map,
 labels are `<family>/<name>`. `schema check` verifies every ordered label against the
-checkout's `nen/labels.json`. Empty or duplicate order names, incomplete/duplicate label
-mappings and undeclared labels are refused. No label is created or synchronized.
+checkout's `nen/labels.json`. Empty, duplicate or `$`-prefixed order names, incomplete/duplicate label
+mappings and undeclared labels are refused. `$`-prefixed mapping entries remain
+untyped metadata and cannot be activated by naming them in `order`. No label is created or synchronized.
 
 
 **Optional, and its absence is a full policy rather than none.** Every key in
@@ -6921,12 +6922,13 @@ the same repository basename receives no code. A bare `product_codes` name is
 enriched only when resolving that code canonically identifies the exact requested
 slug. Recording two owners with the same basename does not lend one owner
 the other owner’s code.
-No registry or network lookup is required.
+The registry is optional, and parsing performs no network lookup.
 Other hosts, credentials, ports, queries, fragments, encoded/dot paths and extra
 segments are refused at exit 2 with the host or path shape named.
 
-Answers "what does this token mean" — the inverse of `format`. A token that does not match
-`<CODE>-<IS|PR>-#<N>` is refused with the full grammar restated, never guessed at.
+Answers "what does this token mean". For object notation `<CODE>-<IS|PR>-#<N>`, it is
+the inverse of `format`; GitHub URLs and `owner/name#N` are additional accepted forms.
+A token matching none of these forms is refused with the grammar restated, never guessed at.
 
 **Usage**
 
@@ -6940,9 +6942,14 @@ nen ref parse <token>
 |---|---|---|---|
 | `<token>` (positional) | yes | Object notation, GitHub object URL, or owner/name#N. | Missing or malformed -> exit 2, naming the exact grammar. Object notation retains its existing output and needs no registry. |
 
-**Output and exit codes** — human rendering: `ref:`, `code:`, `kind:`, `number:`, `glyph:` lines.
-`--json` prints `{ ref, code, kind, number, glyph }`. Exit 0 on a well-formed token; exit 2 when the
-token is missing or does not match the notation.
+**Output and exit codes** — object notation renders `ref:`, `code:`, `kind:`,
+`number:`, `glyph:` lines; its JSON is `{ ref, code, kind, number, glyph }`.
+GitHub URL and short subjects render `slug:`, `code:`, `kind:`, `number:` lines;
+their JSON is `{ slug, code?, kind, number }`. An unrecorded code is omitted from
+JSON and shown as `(unrecorded)` in human output. Short subjects have `kind: null`
+in JSON and `(unknown)` in human output; URL kinds are `IS` or `PR`.
+Exit 0 on a well-formed token in any accepted form; exit 2 when the token is
+missing or matches none of the accepted forms.
 
 **Example**
 
