@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 135 verbs, every flag checked against the binary this repository
+families, 136 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -185,35 +185,87 @@ verdict. [`pr ready`](#nen-pr-ready)'s JSON carries a `contract` field,
 change from a compatible one.
 
 **Which shapes carry a `contract`, and why not all of them.**
-[#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
-here is the ruling rather than the silence. A `contract` field is **earned by a
-shape a consumer must be able to REFUSE on** — one where reading an unrecognised
-document half-understood is worse than not reading it at all. Thirty-three shapes
-qualify today and declare one (thirty-five ids: `nen.stop.mark` and
-`nen.runner.plan` each have two versions):
 
-`nen.commit.check/v0.1` · `nen.contract/v0.1` · `nen.issue.edit-body/v0.2` ·
-`nen.loop.iterate/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.ready/v0.1` ·
-`nen.report.data/v0.1` · `nen.report.render/v0.1` · `nen.scaffold.init/v0.1` ·
-`nen.scaffold.new/v0.1` · `nen.shu.<verb>/v0.1` (per executing verb) ·
-`nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` ·
-`nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` ·
-`nen.shu.warmup/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.decisions/v0.1` · `nen.phase.ledger/v0.1` · `nen.repo.classify/v0.1` · `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2` · `nen.surface.capabilities/v0.1` ·
-`nen.surface.install/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.generate/v0.1` ·
-`nen.surface.status/v0.1` ·
-`nen.wc.squash/v0.1` · `nen.workflow/v0.1`
+> [#79](https://github.com/zheref/nen/issues/79) asked the question directly, so
+> here is the ruling rather than the silence. A `contract` field is **earned by a
+> shape a consumer must be able to REFUSE on** — one where reading an unrecognised
+> document half-understood is worse than not reading it at all. [The sentence that counted the qualifying shapes, thirty-three at that time, is not repeated here; the list below stands in its place.]
+>
+> Every one of them is read by a **program** that acts on it: a gate decides a
+> merge, a hook rings a bell, a scaffolder writes a file, a coverage ladder bands
+> a row. The rest are **diagnostics a caller reads once** — a verdict, a table, a
+> plan — where a missing key is visible immediately and an unrecognised one costs
+> nothing. Stamping a version on all ninety-two would create ninety-two things to
+> version, ninety-two decisions about what counts as breaking, and no consumer
+> asking for any of it: a promise nobody made and everybody would then have to
+> keep. **The rule going forward** is the one above — a new shape gains a
+> `contract` when something must refuse it, in the same change that gives it that
+> consumer — and the shape of every `--json` document, contract or not, is stated
+> in its own section below and held there by `src/cli/json-shape.test.ts`.
 
-Every one of them is read by a **program** that acts on it: a gate decides a
-merge, a hook rings a bell, a scaffolder writes a file, a coverage ladder bands
-a row. The rest are **diagnostics a caller reads once** — a verdict, a table, a
-plan — where a missing key is visible immediately and an unrecognised one costs
-nothing. Stamping a version on all ninety-two would create ninety-two things to
-version, ninety-two decisions about what counts as breaking, and no consumer
-asking for any of it: a promise nobody made and everybody would then have to
-keep. **The rule going forward** is the one above — a new shape gains a
-`contract` when something must refuse it, in the same change that gives it that
-consumer — and the shape of every `--json` document, contract or not, is stated
-in its own section below and held there by `src/cli/json-shape.test.ts`.
+**What the list below is.** The ruling above is quoted as it was written at
+[#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
+below is not the set that ruling would qualify: it is every **versioned id the
+binary carries**, writing or reading — **71 shapes** and **74 ids** (`nen.runner.plan`,
+`nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
+`nen.shu.<verb>/v0.1` is one id standing for the per-verb string
+`nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
+A shape is an id without its version; an id is the whole
+`nen.<name>/v<major>[.<minor>]` string. Some ids are only read (`nen.runner.plan/v0.1`,
+`nen.wc.worktree.copies/v0.1`), and one is only the `$schema` tag of a bundled
+data file (`nen.scaffold.template/v0.1`, the scaffold template pack). Whether the
+ruling still holds as written, now that more ids carry a version than a consumer
+refuses on, is the maintainer's to say ([#350](https://github.com/zheref/nen/issues/350));
+the list is held to the code either way.
+
+**The list is derived from the code, not chosen from it.** It is held to the
+binary by `src/cli/usage-contracts.test.ts`, which has no registry of its own to
+keep in step. It reads every file under `src/` and `templates/` except
+`*.test.ts`, `*.testkit.ts` and anything under a `fixtures/` directory, blanks
+the `//` and `/* */` comments, and collects (1) every quoted literal — single,
+double or backtick, no interpolation — that is exactly
+`nen.<name>/v<major>[.<minor>]` (a `contract:` or `$schema:` value, a
+`*_CONTRACT` constant, a `schema:` key, **and an id quoted whole inside a help
+text**), and (2) every template literal with an interpolation in the name, which it
+spells with `<placeholders>`. Any other `nen.…/v<digit>` text in the code that no
+rule collected, and no collected id explains, **fails the test with its
+file:line** instead of being skipped. A comment mention is not collected. The test
+fails when an id it finds is missing from this list, when this list names an id it
+does not find, when an id is listed twice, and when either stated count disagrees
+with the list. **Adding a contract id to the binary therefore means adding it
+here and moving the two counts in the same change.** The command-family count is
+not this list's: `src/cli/surface.test.ts` pins it.
+
+The ids are grouped by their first segment after `nen.`, which is usually a
+command family and is not always one (`contract`, `decisions` and `workflow` are
+file formats).
+
+<!-- contract-ids:begin -->
+- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
+- **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
+- **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
+- **`contract`** — `nen.contract/v0.1`
+- **`decisions`** — `nen.decisions/v0.1`
+- **`dev`** — `nen.dev.release-publish/v0.1`
+- **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
+- **`issue`** — `nen.issue.edit-body/v0.3` · `nen.issue.reconcile/v0.1`
+- **`loop`** — `nen.loop.iterate/v0.1`
+- **`phase`** — `nen.phase.ledger/v0.1`
+- **`pr`** — `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`release`** — `nen.release.unit-check/v0.1`
+- **`repo`** — `nen.repo.classify/v0.1`
+- **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
+- **`review`** — `nen.review.scopes/v0.1`
+- **`runner`** — `nen.runner.plan/v0.1` · `nen.runner.plan/v0.2`
+- **`scaffold`** — `nen.scaffold.init/v0.1` · `nen.scaffold.new/v0.1` · `nen.scaffold.template/v0.1`
+- **`schema`** — `nen.schema.set/v0.1`
+- **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
+- **`stop`** — `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
+- **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
+- **`usage`** — `nen.usage.ledger/v0.1`
+- **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
+- **`workflow`** — `nen.workflow/v0.1`
+<!-- contract-ids:end -->
 
 Four verbs have no `--json` because they have no result of their own to
 render: [`dev test`](#nen-dev-test) and [`dev lint`](#nen-dev-lint) inherit
@@ -296,7 +348,7 @@ verb it invoked. The complete list:
 | [`commit write`](#nen-commit-write) | `3` | committed, and the read-back found a trailer the policy refuses — **injected** by a hook, or carried by the message where git's parser read one nen's did not; the commit is left in place ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`wc squash`](#nen-wc-squash) | `3` | squashed, and the read-back found a refused trailer on the fold — as `commit write`'s `3` ([#273](https://github.com/zheref/nen/issues/273)) |
 | [`issue edit-body`](#nen-issue-edit-body) | `3` | conflict, nothing written: under `--expect-body-sha256` the current body is not the version the replacement was prepared from ([#205](https://github.com/zheref/nen/issues/205)) |
-| [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body) | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329)). A check that could not run is `1`, never `4` and never `0` |
+| [`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment), [`issue edit-body`](#nen-issue-edit-body), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`pr open`](#nen-pr-open), [`pr edit-body`](#nen-pr-edit-body), [`pr threads reply\|settle`](#nen-pr-threads), [`wake fire`](#nen-wake-fire), [`wake verify`](#nen-wake-verify), `release-publish` | `4` | a private repository named in text bound for a PUBLIC target; nothing written ([private-name guard](#the-private-name-guard), [#329](https://github.com/zheref/nen/issues/329), [#363](https://github.com/zheref/nen/issues/363)). A check that could not run is `1`, never `4` and never `0`. On `pr threads` `4` is shared (no such thread / the pull request is not visible): `privateNameCheck` tells the two apart |
 | [`wc swap`](#nen-wc-swap) | `3` | a tree is dirty; nothing moved |
 | [`wc catch-up`](#nen-wc-catch-up) | `3` | stopped on a conflict whose **every** path is in `nen/contract.json`'s declared `mechanical` set (manifest, changelog, mirror); nothing resolved, the commands printed. Any `other` path is still `1`. Exit `1` no longer covers every conflict: a caller that treats `1` as "conflict" must also treat `3` as one ([#326](https://github.com/zheref/nen/issues/326)) |
 | [`surface mirror check --plugin`](#nen-surface-mirror-check---plugin) | `3` / `4` / `5` | not installed (no `<name>@` entry and no `skills/<name>`) / not comparable (the copy is the source given and no independent source exists) / broken install (an unusable record entry, a gone path, a dangling or looping link, a recorded path that is not a directory, a control character in an `installPath`, an install record that is not JSON or is itself a dangling link, a recorded copy holding another plugin). Its `2` is **wiring**, which includes a copy that could not be read, with the `--json` report still printed ([#339](https://github.com/zheref/nen/issues/339)) |
@@ -338,8 +390,8 @@ verb does by default:
 | [`labels sync`](#nen-labels-sync) | no | `--dry-run` | reads remote labels, without mutations |
 | [`labels rename`](#nen-labels-rename) | no | `--dry-run` | **still calls `gh label list`** to decide idempotence |
 | [`label apply`](#nen-label-apply) | yes | `--run` | the ledger line is written either way, with `outcome: "dry-run"` |
-| [`wake verify`](#nen-wake-verify) | yes | `--run` | despite the name, `--run` reruns workflows and posts comments |
-| [`wake fire`](#nen-wake-fire) | yes | `--run` | every line is prefixed `(dry run)` without it |
+| [`wake verify`](#nen-wake-verify) | yes | `--run` | despite the name, `--run` reruns workflows and posts comments; the dry run also runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)) |
+| [`wake fire`](#nen-wake-fire) | yes | `--run` | every line is prefixed `(dry run)` without it; with `--comment` the dry run **reads GitHub** for the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)) |
 | [`changelog collate`](#nen-changelog-collate) | yes | `--write` | without it, nothing is rewritten and no fragment is deleted |
 | [`tag cut`](#nen-tag-cut) | yes | `--push` | the tag is created locally; a tag is never auto-pushed |
 | [`canon mirror generate`](#nen-canon-mirror-generate) | no | `--dry-run` | writes into every declared surface's rules location under `--repo`; the dry form reports every write, deletion and foreign file and performs none. [`canon mirror check`](#nen-canon-mirror-check) writes nothing but its `--markdown-out` table (creating that table's parent directory) and refuses `--dry-run` |
@@ -349,7 +401,7 @@ verb does by default:
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
 | [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
-| [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, before printing the byte count and first/last line |
+| [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
 | [`pr request-reviews`](#nen-pr-request-reviews) | no | `--dry-run` | **still reads GitHub** — resolving every `--add-reviewers` login against the pull request's own known bots and `--target`'s collaborators, with REST bot lookup for unseen bot logins, so it can print which route each name or `--add-bots` login/id would go to — but neither `gh pr edit --add-reviewer` nor the `requestReviews` mutation is ever called (zheref/nen#160). When a bot is named it also reads the base's `nen/gates.json` and, under a declared `round_policy.maxRounds`, the timeline, and previews the ceiling: `request N of M` per bot, or the refusal at exit `2` (zheref/nen#240) |
 | [`runner script`](#nen-runner-script), [`runner workflow`](#nen-runner-workflow) | no | `--dry-run` | render and validate, write nothing; neither verb ever runs what it renders -- the host script's launch is the maintainer's |
@@ -684,8 +736,8 @@ retryable exit `4` ([#228](https://github.com/zheref/nen/issues/228)). Fetch
 the bootstrap script, then run it:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.22.0/bootstrap/nen.sh -o nen-bootstrap.sh
-bash nen-bootstrap.sh --ref v0.22.0
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.23.0/bootstrap/nen.sh -o nen-bootstrap.sh
+bash nen-bootstrap.sh --ref v0.23.0
 ```
 
 It verifies the downloaded binary against that manifest, caches it under
@@ -693,7 +745,7 @@ It verifies the downloaded binary against that manifest, caches it under
 executable binary on stdout and nothing else — so it composes directly:
 
 ```bash
-nen="$(bash nen-bootstrap.sh --ref v0.22.0)"
+nen="$(bash nen-bootstrap.sh --ref v0.23.0)"
 "$nen" --version
 ```
 
@@ -742,7 +794,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 135 verbs, grouped as the README groups them. **Reads** is what a
+All 136 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -797,8 +849,9 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`classify`](#family-classify) | [`nen classify apply`](#nen-classify-apply) | validates a classification plan whole, then applies it as labels (listing low-confidence rows, skipping labels already present), one ledger line per application | local file (--taxonomy, --plan), nen/labels.json, gh (issue reads; gh issue edit only with --run) | yes |
 | [`direct`](#family-direct) | [`nen direct registry`](#nen-direct-registry) | validates a model-direction registry file and prints it: the snapshot date, each alias (provider, family, surface/tier, snapshot quote), the surfaces and the live-lookup sources | local file (--registry) | yes |
 | [`direct`](#family-direct) | [`nen direct resolve`](#nen-direct-resolve) | resolves a classification (languages, jobs, repository kind) to a recommended alias, surface and effort: derives the domain, reads each (job, language) cell, aggregates, spells the alias from nen/workflow.json, scores the effort, and reports any mismatch with the session (exit 0, never blocks); --record files the result under .nen/direct/ | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
+| [`direct`](#family-direct) | [`nen direct matrix`](#nen-direct-matrix) | enumerates every (job, domain, language) answer `resolve` gives, for a consumer that renders the whole table: per job and domain the witness issue that derives it (or `unreachable`), the route, fallback and phase, and per language column (`*` the shared one) the pair, the aggregate, the winner and runner-up resolved and the effort -- computed by `resolve`'s own functions, owning no rule | local files (--registry, --taxonomy), nen/workflow.json under --repo | yes |
 | [`direct`](#family-direct) | [`nen direct answer`](#nen-direct-answer) | writes the maintainer's picker answer (continue or stop) and its time into the record `direct resolve --record` filed, replacing an earlier answer and leaving every other field unchanged; a missing record is a failure | `.nen/direct/<encoded id>.json` under --repo (reads and rewrites); no git/gh | yes |
-| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional) | yes |
+| [`schema`](#family-schema) | [`nen schema check`](#nen-schema-check) | loads and validates the files a repository is expected to carry under nen/, reporting each one's verdict and any legacy schemas/ leftover, and a consumer's `.claude/rules/` canon mirror against its bindings | nen/labels.json, repos.json, colors.yml, gates.json, contract.json (optional), workflow.json (optional), .claude/canon-values.yml (optional) and its git history | yes |
 | [`schema`](#family-schema) | [`nen schema set`](#nen-schema-set) | writes ONE value into a nen/ JSON declaration by RFC 6901 pointer -- an existing scalar replaced, or a member added to an existing object -- every other byte kept, the result validated by that file's own loader before anything is written, then written atomically and read back; a [gate-change](#gate-changes) pointer needs `--gate-change`; `--dry-run` writes nothing | the named nen/ declaration under --repo (reads and rewrites); no git/gh | yes |
 | [`color`](#family-color) | [`nen color status`](#nen-color-status) | resolves one row's colour token by the repository's own nen/colors.yml precedence | nen/colors.yml | yes |
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
@@ -907,17 +960,35 @@ edit` mutation (`retarget`), and reviewer requests routed by resolved kind
 `requestReviews` GraphQL mutation for a Bot), and the one draft-to-ready
 transition (`mark-ready` — a write, and never the readiness verdict).
 `ready` and `next-blocker`
-read reviewer identities from `nen/gates.json` (or an explicit `--gates`
-file, or a reduced `--reviewers` set with no default); `ready`'s ref
+read reviewer identities from `nen/gates.json` **at the pull request's base
+commit** (or an explicit `--gates` file, or a reduced `--reviewers` set with
+no default; see [The gates file is the base's](#pr-ready-gates-at-base)); `ready`'s ref
 resolution also reads `nen/repos.json`'s `product_codes`. This family
 never merges, labels, or comments on a pull request.
+
+**Flags are per subcommand** ([#351](https://github.com/zheref/nen/issues/351)).
+Every `pr` subcommand refuses, at exit 2 and before any `gh` call, each flag it
+does not read, and the refusal names the subcommands that do read it:
+`nen pr edit-body … --token-env NARROW` answers *"--token-env is not read by
+'pr edit-body'. --token-env is only read by 'pr ready'; edit-body runs on
+whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its
+stored login), never on the variable --token-env names."*. An unknown flag is
+unknown to the **subcommand** — a `threads` action to its own action's flags:
+another subcommand's flag is refused exactly as a misspelt one is, and every
+foreign flag of one invocation is named at once. Tokens after a bare `--` are
+refused too (no `pr` subcommand forwards arguments), naming only flag-shaped
+tokens, never a value. Through v0.22.0 the family shared one flag table with
+`pr ready`'s set spread onto it, so every subcommand but `ready`, `mark-ready`
+and `merge` accepted `--token-env` and `--gh-repo` and ignored them — a caller
+naming a narrower credential still wrote with `gh`'s own. The global `--repo`,
+`--json` and `--help` are never refused.
 
 **Authentication for every `nen pr` verb**
 
 | Verb | Credential source |
 |---|---|
 | `ready` | Nen's direct GitHub client reads the explicitly selected environment variable: `GH_TOKEN` by default, or `--token-env <VAR>`. It never imports `gh`'s stored credential or discovers a token from the checkout. An unset/unusable token produces `unevaluated`, exit 1, with both token spellings in the remedy. |
-| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls. `open` and `merge` also use Git's configured transport where they perform Git operations. |
+| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls, and every one of them refuses it at exit 2 ([#351](https://github.com/zheref/nen/issues/351)). `open` and `merge` also use Git's configured transport where they perform Git operations. |
 | `cascade-main` | Git's configured transport credentials for fetch/push; no direct Nen API token. |
 | `staleness`, `body-check` | Local inputs and files; no GitHub authentication. |
 
@@ -940,6 +1011,75 @@ Reviewer identities come from exactly one of `--gates <path>`,
 the target repo's `nen/gates.json`, or `--reviewers a,b,c` — there is no
 built-in default set, and with none of the three the verb refuses rather than
 guessing.
+
+<a id="pr-ready-gates-at-base"></a>
+
+**The gates file is the base's ([#372](https://github.com/zheref/nen/issues/372)).**
+Every input `nen/gates.json` supplies is read **at the pull request's base
+commit** (`baseRefOid`), through the same REST contents read
+[#249](https://github.com/zheref/nen/issues/249) built for `checks.excluded`:
+`reviewers[]` and each one's `login_pattern`, `review_check_pattern`,
+`round_check_pattern`, `enrolment_check_pattern`, `bounded_policy_exempt`,
+`delivery_holistic_pass` and `approves_when_posted_at_head`;
+`default_approvers`, `approval_policy` and `base_reviewers`; `round_quorum`;
+`round_policy` (`stallMinutes`, `minRounds`, `maxRounds`); `delivery`;
+`dependabot_carve_out`; and `checks.excluded`. Under `--repo`, a worktree holds
+the pull request's own head, so a head that widens a `login_pattern`, lowers a
+`round_quorum.minimum` or adds a carve-out does **not** change its own verdict:
+the base's file decides, and the head's edits apply once they are merged. The
+base is read once per evaluation and serves both the identities and the
+exclusions, so the two never come from different commits.
+
+| Where the file comes from | When | `meta.identities.read` | Verdict |
+|---|---|---|---|
+| `nen/gates.json` at the base commit | the default: no `--gates`, the checkout carries a `nen/gates.json` | `base` (`meta.identities.path` is `<owner>/<repo>@<sha>:nen/gates.json`) | judged |
+| the checkout's own `nen/gates.json` | **fallback, only when the base could not be READ**: no base commit, a 403, a network failure, a transport that cannot read files. A `meta.warnings` line on **every** output says so: `gate inputs read from the LOCAL <path>, NOT the pull request's base (<owner>/<repo>@<sha>:nen/gates.json): the base could not be read (<why>). …` | `local-fallback` | judged for a human reader; `nen pr merge` (both forms) and `nen watch until --pr --until ready` **refuse** a `ready` on it |
+| `--reviewers`' own identities | the base declares **no** `nen/gates.json` and `--reviewers` was given. The checkout's file is **never** applied in its place — a head that adds a gates file to a base that has none would name its own reviewers — and a warning names it as ignored | `null` | judged |
+| nothing | the base declares **no** `nen/gates.json` and no `--reviewers`; or the base carries a file **this build refuses** (invalid JSON, a duplicate key, an unsupported version, a key this build does not read) — a trunk that adopted a key from a newer nen is never judged by the checkout's file instead | `local-unverified` | **none**: `unevaluated`, exit `1`, every row `unevaluated`; the remedy names the fix (merge a gates file, pass `--reviewers`, or upgrade nen) |
+| the file `--gates <path>` names | an explicit `--gates` naming a file **outside** the `--repo` checkout: the caller's word, used as given — a trusted checkout of the base in CI, a reference file in neither repository | `gates-flag` | judged |
+| the file `--gates <path>` names, as possible head content | an explicit `--gates` naming any **other** file inside the `--repo` checkout: applied as given, with a warning that it **may be** head content. A separately checked-out trusted tree under the head checkout (`.trusted/` in Hatsu's `pr-readiness.yml`) lands here too: check the head out to a subdirectory and pass `--repo` instead. A submodule is head-pinned content and is never exempt | `local-fallback` | judged; refused by the autonomous callers as above |
+| the checkout's own `nen/gates.json`, not applied | an `unevaluated` report: GitHub was never read, so neither was the base. When the base WAS read and a later GitHub read failed (a paging error), the unevaluated report keeps the route it took — `base` or `local-fallback` — and `meta.declaredExclusionsSource` is `<owner>/<repo>@<sha>` | `local-unverified` | none |
+| the base's `nen/gates.json`, `--reviewers` narrowing it | `--reviewers`, no `--gates`, and **no** `nen/gates.json` in the checkout — a head that deleted it — while the base declares one. The base is read on this route too (round 2, Feitan 1), so deleting the file never turns `--reviewers` from a narrowing into a replacement; a warning says the base's gate applies | `base` | judged |
+| `--reviewers`' own identities | the same, and the base was read and declares **no** file | `null` | judged |
+| `--reviewers`' own identities, unverified | the same, and the base could **not be read**: whether it declares a gate is unknown; warned | `flags-unverified` | judged for a human reader; refused like `local-fallback` |
+| nothing | the same, and the base carries a file this build refuses | `local-unverified` | none: `unevaluated`, exit `1` |
+
+With a `nen/gates.json` in the checkout **or at the base**, `--reviewers` is not
+an identity source: it narrows the configured reviewer set the base's
+identities are applied to — except on the base-declares-none rows above.
+
+**`--require-base-gates` — for every caller that acts on the exit code.** A
+`ready` judged on the checkout's file exits `0` exactly like a base-judged one,
+so `nen pr ready … && <merge>`, a required CI check, or an agent quoting exit
+codes cannot tell them apart. With `--require-base-gates`, a verdict whose
+route is not `base`, `gates-flag`, or `null` (the base read, declaring none) is
+`unevaluated`, exit `1`, every row `unevaluated`, the gate line naming the
+route: `unevaluated: --require-base-gates: the gate inputs were not the pull
+request's base's (meta.identities.read: local-fallback)`. `nen watch until --pr`
+passes it through to every read. `nen pr merge` and `watch until --until
+ready` apply the same allow-list without it — the merge gate admits only
+`base`, since it passes neither `--gates` nor `--reviewers`.
+
+Three rules hold on every row. **`checks.excluded` is honoured from the base
+or not at all** — never from the fallback and never from `--gates`
+(see [declared check exclusions](#pr-ready-declared-exclusions) below), because
+an exclusion removes a check and only a merged ruling may do that. **A
+`--gates` that names the checkout's own `nen/gates.json`** — `--gates
+nen/gates.json`, `./nen/gates.json`, the absolute path, a case-folded spelling
+on a case-insensitive volume, a symlink or a hard link, compared by the file's
+device and inode — is the head's file under another name, and is read at the
+base like the default. **The fallback is never quiet**: unlike a lost
+exclusion, which can only make the verdict stricter, a fallback can make it
+wider. The local file is still read first, before GitHub, so a malformed one
+is refused at exit `2` as before. `nen watch until --pr` and `nen pr merge` run
+this same in-process read; `nen pr next-blocker` applies the same rule through
+`gh`, refusing at exit `2` where `pr ready` gives no verdict, and adds
+`identities { path, read }` to its `--json`. `nen pr merge --delivery` also
+refuses a pull request that changes `nen/gates.json` or `nen/workflow.json`, as
+`--release-unit` always has; both compare the changed paths case-insensitively,
+so `NEN/gates.json` or `nen/Gates.json` is refused too. The base is only as trusted as its branch
+protection. The token needs `contents:read`: without it every evaluation falls
+back, with the warning, and no merge runs on it.
 
 `nen/gates.json` may explicitly set `"approval_policy": "review-round-only"` together with
 `"default_approvers": []` when automated readiness requires every configured reviewer round at the
@@ -1165,7 +1305,7 @@ commit. Three things make that visible:
 
 ```text
 nen pr ready --target <owner/name> --pr <n> [the same ready options below]
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
 ```
 
 **Arguments**
@@ -1177,15 +1317,16 @@ nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [-
 | `--target <owner/name>` | no | alias for `--gh-repo` | may pair with a positional ref; must agree with `--gh-repo` and a coded ref's registry repository (case-insensitive); an unknown code with this new alias is refused |
 | `--pr <n>` | no | alias for the positional number | positive safe whole number; may pair with `--gh-repo` or a coded ref; must agree with any positional number |
 | `--explain` | no | print the full conjunct table plus what the gate does not decide, and — when `nen/gates.json` states `round_policy.minRounds` or `.maxRounds` — each reviewer's requested and posted rounds against both ([#240](https://github.com/zheref/nen/issues/240)); and, for each check still queued at the judged head, whether an online runner carries its `runs-on` labels ([#224](https://github.com/zheref/nen/issues/224)) | suppressed by `--json` (the JSON already carries the table, and `meta.roundCounts`) |
-| `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates`; a file's `round_quorum` still applies. On that flags path each name (and each `--approvers` name) matches the **whole** login, case-insensitively, with an optional `[bot]` suffix — `^<name>(\[bot\])?$`, the name taken literally — never a substring or a regex, so `sasuke` is not `Not-Sasuke-Fan` ([#264](https://github.com/zheref/nen/issues/264), Feitan F1). A repository that needs a pattern declares `login_pattern` in `nen/gates.json`. The same exact reading now applies wherever a reviewer name has no declared identity (a `--reviewers` name a gates file does not declare): the name is the login |
+| `--reviewers <a,b,c>` | no | the configured reviewer set | also the identity source of last resort — see `--gates` — and, with a `nen/gates.json` in the checkout, the identity source when the base declares none ([#372](#pr-ready-gates-at-base)); otherwise beside a file it narrows the configured set. A file's `round_quorum` still applies. On that flags path each name (and each `--approvers` name) matches the **whole** login, case-insensitively, with an optional `[bot]` suffix — `^<name>(\[bot\])?$`, the name taken literally — never a substring or a regex, so `sasuke` is not `Not-Sasuke-Fan` ([#264](https://github.com/zheref/nen/issues/264), Feitan F1). A repository that needs a pattern declares `login_pattern` in `nen/gates.json`. The same exact reading now applies wherever a reviewer name has no declared identity (a `--reviewers` name a gates file does not declare): the name is the login |
 | `--reviewer-login <name>=<login>` | no, repeatable | the exact login a `--reviewers` name posts under | flags path only ([#264](https://github.com/zheref/nen/issues/264)). Whole login, case-insensitive, optional `[bot]` suffix, taken literally; repeat a name for alternative logins. **Nothing is built in** — which login a bot posts under is data (§3), so without this flag the name must equal the login, e.g. `--reviewers copilot --reviewer-login copilot=copilot-pull-request-reviewer[bot]`. Split at the first `=`; an empty half is exit `2`, and so is a name `--reviewers` does not list. Beside a gates file it is ignored with a warning in `meta.warnings` — declare `login_pattern` there instead |
 | `--approvers <a,b>` | no | the approval set, on the `--reviewers` identity path only | omitted defaults to the reviewer set (conservative: everyone must approve), never to "nobody" |
 | `--round-policy <p>` | no | `strict` \| `bounded` | default `bounded`; see above |
 | `--exclude-run <id>` | no | drop one Actions run's own checks (CON-36 clause 3) | numeric run id; pass only from inside that run's own job |
 | `--exclude-check <name>` | no | drop check(s) with this exact name from CON-32(a) before it is evaluated (zheref/hatsu#81) | **repeatable**, one name per occurrence ([zheref/nen#243](https://github.com/zheref/nen/issues/243)); one value may also join names with commas, and a comma inside `()`/`[]`/`{}` is part of the name — see below |
-| `--gates <path>` | no | read reviewer identities from this file instead of `nen/gates.json` | a RELATIVE path resolves against `--repo`, never cwd |
+| `--gates <path>` | no | read every gate input but `checks.excluded` from this file instead of `nen/gates.json` at the pull request's base ([#372](#pr-ready-gates-at-base)) | a RELATIVE path resolves against `--repo`, never cwd; one naming the checkout's own `nen/gates.json` (any spelling, a hard link) is read at the base like the default; any other file inside the checkout is applied as head content, warned (`local-fallback`) |
 | `--token-env <VAR>` | no | env var holding the GitHub token | default `GH_TOKEN`; never read ambiently |
 | `--require-head <sha>` | no | judge only this commit: 7–40 hex digits, a case-insensitive prefix of GitHub's head | any other head is exit `8` (`head-mismatch`), both SHAs printed, no verdict; malformed is exit `2` |
+| `--require-base-gates` | no | no verdict unless the gate inputs were the base's ([#372](#pr-ready-gates-at-base)) | `meta.identities.read` other than `base`, `gates-flag` or `null` is `unevaluated`, exit `1`, naming the route; pass it wherever the exit code is acted on |
 | `--repo <path>` | no | the checkout whose `nen/` is read | default cwd |
 | `--json` | no | machine contract `nen.pr.ready/v0.1` | — |
 
@@ -1252,6 +1393,8 @@ matrix name is shaped that way; the declared, pattern-capable form is
 `nen/gates.json`'s `checks.excluded`, below. The grammar is
 `src/pr/excludecheck.ts`'s header.
 
+<a id="pr-ready-declared-exclusions"></a>
+
 **A declared exclusion: `checks.excluded` (zheref/nen#249).** A flag is a
 per-invocation choice every caller has to remember; a maintainer's ruling that
 a check is out of scope belongs in the declaration the verdict already reads.
@@ -1285,10 +1428,10 @@ dropped. That is why a glob needs a literal prefix, and why an exact name is
 the safer form.
 
 **Read at the pull request's BASE, never its head (Feitan F1).** `nen pr ready`
-reads reviewer identities from the local file (or `--gates`), as before, but
 reads `checks.excluded` from `nen/gates.json` **at the base commit GitHub
 reports for the pull request** (`baseRefOid`, through the REST contents API on
-the same token — it needs `contents:read`). Under `--repo`, a worktree holds the
+the same token — it needs `contents:read`) — since [#372](#pr-ready-gates-at-base)
+the rest of the file too, unless `--gates` names another one. Under `--repo`, a worktree holds the
 pull request's own head; reading the exclusions there would let a pull request
 add an exclusion for its own red check. So:
 
@@ -1317,7 +1460,9 @@ on a protected base.
 
 **Consumer note:** `nen pr ready` (and `pr next-blocker`, through `gh`) now
 reads `nen/gates.json` at the base through the REST contents API, so the token
-needs `contents:read` for declared exclusions to apply.
+needs `contents:read` for declared exclusions to apply — and, since
+[#372](#pr-ready-gates-at-base), for the base's reviewer identities to apply
+rather than the checkout's, which is the warned fallback.
 
 What `nen pr ready` does with what it read:
 
@@ -2160,7 +2305,7 @@ checked here.
 |---|---|
 | `0` | nothing blocks, by this check |
 | `1` | something blocks (the blocker is printed) |
-| `2` | usage, or a refused gates file — unreadable, malformed, or carrying a key this build does not read (zheref/nen#310); no blocker is reported, as in `pr ready` |
+| `2` | usage, or a refused gates file — unreadable, malformed, or carrying a key this build does not read (zheref/nen#310); or no gate to apply — the pull request's base declares no `nen/gates.json`, or one this build refuses ([#372](#pr-ready-gates-at-base)); no blocker is reported, as in `pr ready` |
 
 **`round_quorum`, and the head only (review of E7, finding H2).** When the
 `gates.json` declares a `round_quorum`, the owed-round step asks it too. It
@@ -2198,6 +2343,20 @@ declares no exclusion" line, when nothing is declared locally). This verb does n
 take `--exclude-check` or `--exclude-run`, so where a `pr ready` call passed
 one of those it can name a check `pr ready` dropped — stricter, never looser.
 
+**Reviewer identities at the base, too ([#372](#pr-ready-gates-at-base)).** The
+same one read supplies the identities: without `--gates` (or with one naming
+the checkout's own `nen/gates.json`), every input but `checks.excluded` is the
+base's, exactly as `pr ready` reads it, so a head carrying its own reviewer set
+cannot clear its own round. When the base could not be **read**, the
+checkout's own file applies, and a `  warning: gate inputs read from the LOCAL …`
+line (and a `--json` `warnings` entry) says so. A base that declares **no**
+`nen/gates.json`, or one this build refuses, is **exit `2`** (`no gate to
+apply: …`): this verb's `--reviewers` narrows a declared set and is no identity
+source, so there is nothing to fall back to. An explicit `--gates` naming a
+file outside the checkout is the caller's word, as in `pr ready`; another file
+inside the checkout is applied with a warning. `--json` adds `identities: {
+path, read }`, the same route `pr ready` reports in `meta.identities`.
+
 The quorum clause **says so wherever it can matter** (Nobunaga's delta review
 of E7, finding F2). That is when the quorum is unmet under `bounded` and a
 round-check member has no run, a `SKIPPED` run, or an unsuccessful run at head.
@@ -2223,11 +2382,11 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 |---|---|---|---|
 | `--target <owner/name>` | yes | the GitHub repository | missing exits 1 (see `pr fetch`'s note) |
 | `--pr <n>` | yes | the pull-request number | missing/invalid exits 2 |
-| `--repo <path>` | **yes** | the checkout whose `nen/gates.json` supplies identities | usage lists it unbracketed; an omitted `--repo` is refused by name at exit 2, never silently read from cwd (#28) |
+| `--repo <path>` | **yes** | the checkout whose `nen/gates.json` is read first, and supplies the identities only when the base cannot ([#372](#pr-ready-gates-at-base)) | usage lists it unbracketed; an omitted `--repo` is refused by name at exit 2, never silently read from cwd (#28) |
 | `--reviewers <a,b>` | no | override reviewer set | an explicitly empty value (`""`, `","`) is refused at exit 2, never read as "nothing owed" |
 | `--policy <p>` | no | `bounded` \| `strict` | any other value is silently ignored (treated as unset) rather than refused |
 | `--delivery-pr` | no | this PR is a delivery PR | affects the CON-40 carve-out |
-| `--gates <path>` | no | same resolver `pr ready` uses | a RELATIVE path resolves against `--repo`, not cwd |
+| `--gates <path>` | no | same resolver `pr ready` uses; supplies the identities instead of the base | a RELATIVE path resolves against `--repo`, not cwd; one naming the checkout's own `nen/gates.json` is read at the base |
 | `--json` | no | machine-readable blocker report | — |
 
 **Output and exit codes** — human lines: `#<pr>: <kind>`, then the detail
@@ -2266,7 +2425,7 @@ nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 |---|---|---|---|
 | `--repo <path>` | **yes** | the repository whose current branch the trunk is merged into | unbracketed in usage; omitted is refused at exit 2 — this verb mutates whatever it is pointed at (#28) |
 | `--trunk <branch>` | no | the trunk branch | default `main` |
-| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every OTHER `pr` subcommand — this family has no per-subcommand flag table yet, so it would otherwise parse cleanly and be silently ignored |
+| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every other `pr` subcommand, naming 'pr cascade-main' (the family's per-subcommand flag table, [#351](https://github.com/zheref/nen/issues/351)) |
 | `--json` | no | machine-readable cascade result | — |
 
 **Output and exit codes** — human lines are the `log[]` entries (`fetched
@@ -2570,6 +2729,8 @@ because a 404/410 from `pulls/<n>` cannot tell "an issue" apart from
 
 ```text
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
+                 [--skip-private-name-check]
+                 [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -2578,17 +2739,25 @@ nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository. | Missing exits 1. |
 | `--pr <n>` | yes | The pull request to replace the body of. | Read with a strict `/^\d+$/` guard (like [`issue comment`](#nen-issue-comment)'s `--issue`, unlike this file's own `requirePr()`) — `1e3` or `0x0c` are refused rather than silently accepted as 1000/12, because this is a MUTATING read. |
-| `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) so `gh` reads the same bytes this verb previewed. | There is no inline `--body`. An unreadable path, or one holding only whitespace, is refused (exit 2). |
-| `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — this verb is not network-free even under `--dry-run`, the same shape [`issue attach-sub`](#nen-issue-attach-sub) has. |
+| `--body-file <path>` | yes | The new body, read RAW (no CRLF normalization) once; those bytes are checked by the [private-name guard](#the-private-name-guard) and handed to `gh` on stdin (`--body-file -`), never the path ([#363](https://github.com/zheref/nen/issues/363)). | There is no inline `--body`. An unreadable path, or one holding only whitespace, is refused (exit 2). |
+| `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — this verb is not network-free even under `--dry-run`, the same shape [`issue attach-sub`](#nen-issue-attach-sub) has — and runs the private-name guard. |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
 **Output and exit codes** — human line on a real write: `replaced
 <target>#<pr>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh pr
 edit ...` followed by `target:`/`number:`/`bytes:`/`first line:`/`last
 line:`. `--json`: `{ contract: "nen.pr.edit-body/v0.1", target, number,
-bytes, written, dryRun }` — exactly those six fields, dry run or not. Exit 0
+bytes, written, dryRun, privateNameCheck }` — exactly those seven fields, dry
+run, refusal or not (the guard's verdict joined the six in
+[#363](https://github.com/zheref/nen/issues/363)). Exit 0
 on success (dry or real); exit 2 on a malformed/absent `--pr`, an
 empty/unreadable `--body-file`, or a number that does not certify as a pull
-request; exit 1 if `gh pr edit` itself fails after certification passed.
+request; exit 1 if `gh pr edit` itself fails after certification passed, or
+when the private-name guard could not run; exit **4** when the guard finds a
+private repository named in a body bound for a PUBLIC target, checked after
+the certification, nothing written.
 
 **Example**
 
@@ -2657,11 +2826,14 @@ GitHub. With `--require-head`, a head that moved by the read back is
 no longer holds. Without `--require-head`, `headMoved: true` is only reported.
 
 Every family flag this verb does not read is refused at exit 2 before any
-`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on gh's own
-credential"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
+`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on whatever
+credential gh resolves … never on the variable --token-env names"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
 `--exclude-check` and the rest, and other verbs' `--base`,
 `--add-reviewers`, `--policy` and so on. Accepted silently, `--token-env`
-would read as "this ran on that token" when the write ran on gh's.
+would read as "this ran on that token" when the write ran on gh's. From
+[#351](https://github.com/zheref/nen/issues/351) this is the whole family's
+rule rather than this verb's alone, and each refusal names every subcommand
+that does read the flag (`--reviewers`: `pr ready` and `pr next-blocker`).
 
 **Usage**
 
@@ -2741,8 +2913,10 @@ what lets `--dry-run` be truthful about a thread that is not there.
 ```text
 nen pr threads list --target <owner/name> --pr <n> [--json]
 nen pr threads reply --target <owner/name> --pr <n> --thread <id> --body-file <path> [--dry-run] [--json]
+                     [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]]
 nen pr threads resolve --target <owner/name> --pr <n> --thread <id> [--dry-run] [--json]
 nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json]
+                      [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -2754,8 +2928,11 @@ nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-r
 | `--thread <id>` | `reply`/`resolve` | the thread's GraphQL node id | as `list` prints it; there is no positional form. Each action refuses the flags it does not read — `--thread` on `list`/`settle`, `--body-file` on `list`/`resolve`/`settle`, `--from` on `list`/`reply`/`resolve`, `--dry-run` on `list` — rather than accepting and ignoring them |
 | `--body-file <path>` | `reply` | the reply's bytes, read raw | a reply typed on a command line is a reply nobody reviewed; an empty or whitespace-only file is refused. A relative path resolves against `--repo`, not the process cwd |
 | `--from <file.json>` | `settle` | the batch — see [`settle`](#settling-a-batch-pr-threads-settle) below | a relative path resolves against `--repo`; refused on every other action |
-| `--dry-run` | no | print the exact `gh api graphql` argv and write nothing | the thread is still looked up, so exits 3 and 4 still fire |
+| `--dry-run` | no | print the exact `gh api graphql` argv and write nothing | the thread is still looked up, so exits 3 and 4 still fire; the [private-name guard](#the-private-name-guard) runs too |
 | `--json` | no | the document | see below |
+| `--skip-private-name-check` | `reply`/`settle` only | skip the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)): the caller attests it ran its own check | nothing is read for it; named on stderr every time. Refused (exit 2) on `list` and `resolve`, which write no text |
+| `--private-names-ignore-file <path>` | `reply`/`settle` only | private repositories the caller ruled too generic to police | no default path is read; a missing file exits **2** before any `gh` call; resolves against `--repo` |
+| `--allow-all-ignored` | `reply`/`settle` only | permit an ignore file that exempts every private name | only with `--private-names-ignore-file`; alone it exits **2** |
 
 **Output and exit codes** — `list` prints one line per thread (resolution
 mark, id, `path:line`, author) with the first 200 characters of its opening
@@ -2765,7 +2942,15 @@ comment under it. `--json` top-level keys: `contract`
 `isResolved`, `path`, `line` — `null` on an outdated hunk —, `author`,
 `firstComment`, `url`; empty for the two mutations) and `argv` (the full
 argv the mutation ran, or **would** have run under `--dry-run`; `null` for
-`list`). The human `would run:` line summarises the body as a byte count plus
+`list`), then — on `reply` only — `privateNameCheck`
+([#363](https://github.com/zheref/nen/issues/363)). **The private-name
+guard** checks `reply`'s body before the thread walk, and every `settle`
+entry's body (`entry[<n>]`, numbered from 1) after the batch file's own
+refusals and before the walk; a hit is exit **4** with nothing walked and
+nothing sent, a check that could not run is exit **1**. `4` is this verb's
+code for an unknown thread too: a guard refusal carries `privateNameCheck`
+under `--json` (`settle`'s full document gains it as its last key) and its
+stderr lines begin `nen pr threads reply:` / `nen pr threads settle:`. The human `would run:` line summarises the body as a byte count plus
 its first line and quotes every other element; the unsummarised argv is in
 `--json`. Human renderings of a path, an author or a comment have their
 control characters stripped — a terminal *executes* `ESC[2K` — while `--json`
@@ -2941,6 +3126,8 @@ remote (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)) — the
 nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path>
             [--head <branch>] [--draft] [--assignee <login>[,<login>...]]
             [--repo <path>] [--dry-run] [--json]
+            [--skip-private-name-check]
+            [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 | Flag | Required | Meaning |
@@ -2948,12 +3135,23 @@ nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <
 | `--target <owner/name>` | **yes** | the GitHub repository; `--repo` names a checkout and never addresses the API |
 | `--base <ref>` | **yes** | the pull request's base branch |
 | `--title-file <path>` | **yes** | the title is the file's first non-empty line; a file with none is refused at exit 2 |
-| `--body-file <path>` | **yes** | the body, handed to `gh pr create --body-file` by path (read once first, so a missing file is refused before any question is asked) |
+| `--body-file <path>` | **yes** | the body, read once (a missing file is refused before any question is asked); those bytes are checked by the [private-name guard](#the-private-name-guard) and handed to `gh pr create` on stdin (`--body-file -`), never the path ([#363](https://github.com/zheref/nen/issues/363)) |
 | `--head <branch>` | no | the head branch; default the branch checked out under `--repo` (the current directory by default — this verb's write goes to GitHub, and the checkout is only asked which branch is out) |
 | `--draft` | no | open as a draft |
 | `--assignee <login>[,<login>...]` | no | assign the pull request as it is opened ([#293](https://github.com/zheref/nen/issues/293)); `@me` is the login of the token running the verb — see below. A malformed, empty or repeated login is refused at exit 2 before any call |
 | `--dry-run` | no | print the `gh pr create` argv; still asks git and GitHub every question below, creates nothing |
 | `--json` | no | `nen.pr.open/v0.1` — see below |
+| `--skip-private-name-check` | no | skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check; named on stderr every time |
+| `--private-names-ignore-file <path>` | no | private repositories the caller ruled too generic to police; no default path is read, a missing file exits **2** before any call; resolves against `--repo` |
+| `--allow-all-ignored` | no | permit an ignore file that exempts every private name; alone it exits **2** |
+
+**The private-name guard** ([#363](https://github.com/zheref/nen/issues/363))
+runs first — before git is asked which branch is out and before any other
+GitHub call, on `--dry-run` too — over the title and the body. A private
+repository named in either, for a PUBLIC target, is exit **4** with nothing
+asked and nothing opened; a check that could not run is exit **1**. `--json`
+adds `privateNameCheck` as the report's last key, and a refusal prints
+`{ contract, dryRun, opened: false, privateNameCheck }`.
 
 **Refused at exit 2:** a detached `HEAD` with no `--head`; a head with no
 upstream (never published); a head whose local sha is not what its
@@ -2967,8 +3165,8 @@ into any of these messages has remote credentials redacted (`://user:***@`,
 `***` for a GitHub token) before it is printed. **Exit 1, nothing opened:** a
 pull request is already open for that head (`gh pr list --head <branch>
 --state open`), reported with its number and url — one head, one pull
-request. Then `gh pr create --repo --base --head --title --body-file
-[--draft]`, and the number is **read out of the url gh printed**: a create
+request. Then `gh pr create --repo --base --head --title --body-file -
+[--draft]`, the body on stdin, and the number is **read out of the url gh printed**: a create
 that prints none is exit 1, never reported as opened; one that exits
 non-zero **after** printing a url is reported as opened, at exit 1, so nobody
 is invited to open a second.
@@ -3122,7 +3320,9 @@ an unknown product code or an unreadable `nen/repos.json`,
 missing/empty/unparseable `--requirements-from`, `--repo`'s origin naming a
 different repository than the ref or its code resolves to, or an unknown
 flag such as
-`--admin`/`--auto`); 5 `gh` REFUSED the merge (branch protection, a
+`--admin`/`--auto` — unknown to `pr merge` itself, as on every `pr`
+subcommand: a flag another subcommand reads is refused here exactly as a
+misspelt one, [#351](https://github.com/zheref/nen/issues/351)); 5 `gh` REFUSED the merge (branch protection, a
 required review, …) — its stderr and the exact command are printed for a
 human to run once the refusal is resolved; 6 `gh` could not be RUN at all
 (not on `PATH`, no permission) — distinct from 5, which means `gh` ran and
@@ -5382,7 +5582,8 @@ nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
 nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
                 [--interval-ms 30000] [--max-iterations <n>]
                 [every `nen pr ready` flag: --gh-repo --reviewers --reviewer-login --approvers --round-policy
-                 --exclude-run --exclude-check --gates --token-env --require-head]
+                 --exclude-run --exclude-check --gates --token-env --require-head
+                 --require-base-gates]
 ```
 
 **The target's `monitor` policy is the default pace (v0.11.0, zheref/nen#216).** When the checkout under
@@ -5731,6 +5932,114 @@ mismatch: yes (surface match; model fable != opus; effort unread)
 (row 1 matched on the canon role, so the domain is the first row's and its domain add fires; the two
 pairs split between the frontier author and the execution model and the tie goes to the registry's
 precedence; the surface matches, the model differs, the effort is unread — exit 0)
+
+### `nen direct matrix`
+
+Answers "what would `resolve` say for every job, in every domain, in every language column" — in one
+call, for a consumer that renders the whole routing table as a page a person reads (Hatsu's
+`docs/DIRECT-MATRIX.md`, [#426](https://github.com/zheref/nen/issues/426)). Without it such a page
+re-implements the domain derivation, the fallback order, the aggregation and the effort banding beside
+the verb and proves its copy with a [`resolve`](#nen-direct-resolve) call per claim.
+
+**It owns no rule.** Each cell is **that one job and that one language** (or no language, the `*`
+column) in that domain, answered by `resolve`'s own functions: step 1 decides which domains a job can
+be in, and steps 2 to 5 — the cell and its fallback and stand-ins, the aggregate, each side's surface,
+spelled alias and restart line, the effort — answer the cell. The tests run `resolve` on every cell's
+witness over the real registry and compare the domain, the rule row and the job's pair always, and
+the winner, runner-up, aggregate and effort wherever `witnessIsCell` is true.
+
+**Which domains a job can be in is a witness search.** The domain is derived from the repository's
+kind and role, the issue's labels and *all* its jobs, so a job is in a domain only when some issue
+carrying it derives that domain. The verb asks step 1 about a bounded, deterministic set of
+candidate issues, in this order: the job **alone**, then with **one**, then **two** other jobs (the
+taxonomy's job order); a kind **no rule names** (`unlisted`, suffixed `-2`, `-3`… should a rule name
+it), then each kind a `repoKind` predicate names; **no** role, then each role a `repoRole` predicate
+names; **no** label, then one label per `issueLabels` pattern (`*:name` as `ns:name`, `ns` suffixed
+`-2`, `-3`… should a pattern use it). The first
+candidate that derives a domain is printed as that domain's **witness** — `kind`, `role`, `labels`,
+`jobs`, the rule row's `order` and sentence — and is passable to `resolve` as typed. A domain no
+candidate derives is **`unreachable`** for the job and carries no cells; the bound searched is printed
+as `search`. A witness of the job alone (`witnessIsCell: true`) is exactly the issue the cell
+describes, so one `resolve` call on it reproduces every cell; a witness that needed companions shares
+the domain and the job's own pair with the cell, while the cell's winner, aggregate and effort stay
+that one job's — `resolve` on that witness aggregates every job it carries.
+
+**A reviewer winning with no stand-in is `skipped`.** `resolve` refuses an issue whose every pair is
+such a cell (exit 1), so the matrix carries the cell's pair and effort with `skipped: true` and no
+winner, never a guessed one.
+
+**Usage**
+
+```text
+nen direct matrix --registry <path> --taxonomy <path> --repo <path> [--job <c,d>] [--domain <e,f>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--registry <path>` | yes | The model-direction registry file. | Relative paths resolve against `--repo`'s root. |
+| `--taxonomy <path>` | yes | The classification taxonomy file. | The file `resolve` reads; it must carry job weights and the `domains` block. |
+| `--repo <path>` | yes | The checkout whose `nen/workflow.json` spells the aliases, and the root every path resolves against. | Unbracketed in usage; omitted is refused at exit 2. An absent workflow or `models` block is `unspelled`, not an error. |
+| `--job <c,d>` | no | Enumerate only these job keys. | An unknown or empty list -> exit 2, naming the valid set. Rows keep the taxonomy's order. |
+| `--domain <e,f>` | no | Enumerate only these domain keys. | Same refusals. The witness search still asks every domain the full derivation. |
+
+**Output and exit codes** — human rendering is one table row per cell (`job`, `domain`, `routed on` —
+`<domain> (fallback)` when the job has no phase in it — `phase`, `lang`, `cell` (the key read: the
+language's own or `*`), `winner` and `runner-up` (`<alias> (for <reviewer>)` on a stand-in, `none
+distinct`, or `skipped (…)`), `effort` as `resolve` prints it), one `unreachable` row per job and domain
+no witness derives, then `<n> job(s) x <n> domain(s): <n> reachable, <n> unreachable; <n> cell(s), <n>
+skipped`. `--json` prints one document; top-level keys, in this order: `contract`
+(`nen.direct.matrix/v0.1`), `inputs` (`registry`, `taxonomy` — the paths read — `jobs`, `domains` —
+the filters, or `null`), `search` (`kinds`, `roles`, `labels`, `maxCompanions`), `domains` (an array of
+`{ domain, fallbackOrder }`, `fallbackOrder` the order a job with no phase in that domain is routed
+on), `languages` (`"*"` first, then the taxonomy's language keys), `jobs` and `counts` (`jobs`,
+`domains`, `reachable`, `unreachable`, `cells`, `skipped`). Each `jobs[]` entry is `{ job, weight,
+domains }`, grouped **job → domain → language**; each `domains[]` entry is `{ domain, reachable,
+witness, witnessIsCell, routedOn, fallbackFrom, phase, phaseName, fallback, cells }` — `witness` `{ kind, role,
+labels, jobs, rule, because }`, `witnessIsCell` `true` when the witness is the job alone (one `resolve`
+call on it reproduces every cell; `false` when unreachable), `fallback` the `fallback: …` note `resolve` prints, every field after
+`reachable` `null` (and `cells` empty) when unreachable — and each `cells[]` entry is `{ lang, cell,
+pair, skipped, aggregate, winner, runnerUp, effort }`, in `languages` order, where `pair` is one of
+`resolve`'s `pairs`, `aggregate` its `{ skipped, tally }`, `winner` and `runnerUp` its resolved sides
+(`{ alias, provider, family, reviewer, surface, tier, surfaceAlias, restart, effortControl,
+interactive, note, substituted, snapshot, liveLookup }`, `runnerUp` `null` when none is distinct) and
+`effort` its `{ score, weight, level, derivation, surfaceEffort }`; `aggregate`, `winner` and
+`runnerUp` are `null` and `effort.surfaceEffort` is `null` on a skipped cell. Exit 0 the matrix; exit
+1 for the failures `resolve` gives, by the same names (an invalid registry or taxonomy, an unreadable
+workflow, a job the registry does not route, a job with no weight); exit 2 for a missing flag, an
+unknown or empty `--job` or `--domain`, or a flag another `direct` verb owns. No version or price is
+looked up: the snapshot quote is the registry's dated record, as on `resolve`.
+
+**Example** (a real run against Hatsu's registry and taxonomy by absolute path, in nen's own checkout
+— its `nen/workflow.json` spells the aliases the `--json` document's `surfaceAlias` and `restart`
+carry; a job that lists only `maintenance`, asked about `feature`)
+
+```bash
+nen direct matrix --registry /path/to/hatsu/contracts/direct.registry.json \
+  --taxonomy /path/to/hatsu/contracts/classify.taxonomy.json --repo . --job ci-cd --domain feature,maintenance
+```
+```text
+| job   | domain      | routed on              | phase         | lang       | cell | winner             | runner-up       | effort              |
+| ----- | ----------- | ---------------------- | ------------- | ---------- | ---- | ------------------ | --------------- | ------------------- |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | *          | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | swift      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | kotlin     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | typescript | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | csharp     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | feature     | maintenance (fallback) | MAINT.OPS.011 | prose      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | *          | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | swift      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | kotlin     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | typescript | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | csharp     | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+| ci-cd | maintenance | maintenance            | MAINT.OPS.011 | prose      | *    | EXECUTION_FRONTIER | EDITOR_FRONTIER | weight 2 = 2 -> low |
+1 job(s) x 2 domain(s): 2 reachable, 0 unreachable; 12 cell(s), 0 skipped
+```
+(alone, `ci-cd` derives `maintenance` — every job it carries lists only that domain — so the
+`feature` witness carries a companion, `jobs: ["ci-cd", "discovery"]`, and the job is routed on
+`maintenance`, the first domain the fallback sentence names that it lists; one `*` row and one row per
+language; exit 0)
 
 ### `nen direct answer`
 
@@ -6348,19 +6657,84 @@ change by its `.class` or `.gate` pointer, without ranking gate IDs: G4 → G2 a
 changes to canon. Same-gate options, surfaces and proposal metadata may still be overridden. This
 protection is enforced by the merge function; `schema check` validates a single declared matrix.
 
+**The `.claude/rules/` row — a consumer's canon mirror against its bindings ([#262](https://github.com/zheref/nen/issues/262)).**
+After `nen/decisions.json`, one row compares the canon mirror under `.claude/rules/` (the `claude-code`
+surface's rules location) with the `{{TOKEN}}` bindings in `.claude/canon-values.yml`. **It reads only
+mirror files written by [`canon mirror generate`](#nen-canon-mirror-generate)** — the ones whose first
+line is nen's `<!-- GENERATED by nen canon mirror from … -->` marker. A mirror written by another
+generator, such as the older `sync-canon` (`<!-- GENERATED from <repo>@<tag>/… -- DO NOT EDIT; … re-run
+sync-canon. -->`), is not read, and neither is a consumer's own hand-written rule. It needs no canon
+checkout — that comparison is [`canon mirror check`](#nen-canon-mirror-check)'s — so it catches, in a
+local warm-up, the rebind that otherwise surfaces only when CI's drift check fails the pull request. The
+mirror carries no token names (generation replaced them), so "a binding that moved" is read from git:
+every committed revision of `.claude/canon-values.yml` that did not delete it, the most recent 100, each
+through the same reader `canon mirror generate` uses. A value a token held there and does not hold now is
+**superseded**. This is the one `schema check` row that runs a subprocess, and only when the bindings file
+and at least one generated mirror file are both present; every git call carries `GIT_NO_LAZY_FETCH=1`,
+so a partial clone is never fetched from. A bindings file that is a symbolic link is followed when it
+resolves to a regular file inside the repository, as `canon mirror generate --canon-values` follows it.
+
+**An unperformed check is never a clean one**: every case where the comparison could not honestly be
+made is a `warn` row reading `NOT CHECKED`, which does not fail the report but never reads `ok`.
+
+| State | Mark | Row |
+|---|---|---|
+| no `.claude/canon-values.yml` | `ok` | `absent (optional): no .claude/canon-values.yml` |
+| bindings, `.claude/rules/` empty or missing | `ok` | `no generated mirror under .claude/rules/ (no .md file there); nothing to compare against .claude/canon-values.yml (2 tokens)` |
+| bindings, `.md` files none of which carries nen's marker | `warn` | `NOT CHECKED -- 17 .md file(s) under .claude/rules/ and none carries the marker 'nen canon mirror generate' writes; a mirror another generator wrote (such as the older sync-canon) is not read, so nothing was compared against .claude/canon-values.yml (34 tokens)` |
+| a shallow clone | `warn` | `NOT CHECKED -- .claude/canon-values.yml has no readable git history (a shallow clone: earlier revisions are unavailable), so no superseded value is known (34 tokens, 17 files)` |
+| not a repository, git missing | `warn` | `NOT CHECKED -- … no readable git history (git rev-parse exited 128: fatal: not a git repository …), …` |
+| a listed revision whose blob cannot be read (a partial clone without it) | `warn` | `NOT CHECKED -- … no readable git history (revision 1a2b3c4d5e6f could not be read (git cat-file exited 128: …)), …` |
+| no committed revision (the file is untracked) | `warn` | `NOT CHECKED -- .claude/canon-values.yml has no committed revision, so no superseded value is known (34 tokens, 17 files)` |
+| consistent | `ok` | `mirror consistent with .claude/canon-values.yml (34 tokens, 17 files, 5 revision(s) read)` |
+| a bindings file that is not a regular file, or a link that dangles or leaves the repository | `FAIL` | `could not read .claude/canon-values.yml: not a regular file` (or `: a symbolic link that resolves outside the repository`) |
+| a finding (below) | `FAIL` | one clause per finding, then the remedy |
+
+A superseded value FAILs the row only where its token evidently put it — never on a bare substring sweep,
+because `26.5` may sit in an example for reasons of its own:
+
+- **Stale** — the token's bound value occurs **nowhere** in the mirror while a superseded value does: the
+  mirror predates the rebind. Every file carrying the old value is named:
+  `SNAPSHOT_OS is bound to '27.0' but 3 file(s) still carry '26.5': 07-testing.md, 13-build-execution.md, 16-ui-screenshots.md. Regenerate the mirror (nen canon mirror generate); never hand-edit it (CON-13).`
+  Here a value counts when it is bounded on at least one side, so a token the canon glues into a longer
+  literal (`{{OS}}.1` → `27.0.1`, `v{{TAG}}`, `{{NAME}}Tests`) is seen in the fresh and in the stale
+  mirror alike; glued on both sides (`27.0` inside `127.0.0.1`) it is not. An occurrence of the bound value
+  is no evidence of a regenerate when **another token is bound to the same value** — it may be that
+  token's — so the token is judged as if its value were absent.
+- **Beside** — the bound value does occur, and a superseded value is a **table cell or a code span** on a
+  line whose cells or code spans also hold the bound value, or on a line naming the token: a placeholder
+  table whose token column was substituted and whose value column was hardcoded (`` | `27.0` | `26.5` | ``),
+  which a mirror-vs-generator drift check accepts because the generator does produce it. Bare prose is
+  never this shape (`Retry 3 times. 1. Build. 2. Test. 3. Ship.` after a `RETRIES` 2 → 3 rebind is not a
+  finding). Named by line, with a second sentence:
+  `SNAPSHOT_OS is bound to '27.0' but 1 line(s) still carry '26.5' beside it: 16-ui-screenshots.md:12. Regenerate the mirror (nen canon mirror generate); never hand-edit it (CON-13). A superseded value that survives a regenerate beside its token is hardcoded in the canon itself -- fix it there, then regenerate.`
+
+Not findings: a superseded value on a line of its own in a mirror that carries the bound value; a value
+that is **any** token's current binding (it may be that token's substitution); nen's own marker lines. A
+finding is a required `FAIL` and the report exits `1`; the closing line names the regenerate remedy and
+never says the taxonomy could not be read.
+
+**What the row cannot tell apart, both ways.** A *false FAIL*: a token the canon no longer uses never
+appears in a fresh mirror, and neither does one whose value another token shares, so an old value of it in
+unrelated prose reads as stale. A *false ok*: a bound value that occurs in the mirror for an unrelated
+reason (prose, or glued into an unrelated literal on one side) hides a stale mirror of that token, and
+an old value glued on both sides is not seen at all. Regenerating answers every one. The `--json` row has
+the ordinary shape, `file: ".claude/rules/"`.
+
 **Arguments**
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo <path>` | no | The target repository's working-tree root. | Defaults to cwd. |
 | `--ledger` | no (boolean) | Also validate `.nen/last-stop.json`. | Absent/consumed is optional; malformed or unreadable is a required FAIL. |
-| `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }` — `checks[]` carries one row per file, `nen/workflow.json` last. |
+| `--json` | no (boolean) | Machine-readable output. | `{ root, ok, checks: [...], deprecations: [...] }` — `checks[]` carries one row per file and pointer, then `nen/decisions.json`, then the `.claude/rules/` canon mirror row, then — with `--ledger` — `.nen/last-stop.json` last. |
 
 **Output and exit codes** — human rendering: `"repository: <root>"` then one line per file:
-`"  <ok|FAIL|warn>  <nen/…>  <detail>"` — always the canonical `nen/` spelling, whether or not the file
-loaded — optionally followed by an indented `"        ^ <leftover note>"` line. `--json` matches
+`"  <ok|FAIL|warn>  <file>  <detail>"` — for a taxonomy file always the canonical `nen/` spelling, whether
+or not the file loaded; the two rows that are not under `nen/` name their own location
+(`.claude/rules/`, and `.nen/last-stop.json` under `--ledger`) — optionally followed by an indented `"        ^ <leftover note>"` line. `--json` matches
 exactly: `{ root, ok, checks, deprecations }`, each check carrying `{ file, path, ok, detail, required,
-legacy, note }` in that key order for every row — `file`/`path` are always the `nen/` spelling, `legacy`
+legacy, note }` in that key order for every row — `file`/`path` are the `nen/` spelling for every taxonomy file, `legacy`
 is `true` when a `schemas/<file>` copy is present on disk (detected, never read; `false` for
 `nen/contract.json` and `nen/workflow.json`, which have no legacy location), `note` is the leftover
 sentence when `legacy` is `true` AND the row itself is `ok` (`null` otherwise — a failing row's own
@@ -6369,7 +6743,8 @@ sentence when `legacy` is `true` AND the row itself is `ok` (`null` otherwise �
 Exit 0 when every REQUIRED file loaded and validated — a `warn` row never trips this, leftover or
 absent-and-optional alike; exit 1 when any required file failed to load, whether it is missing outright
 or present only under the legacy `schemas/` location, or a required row failed (the
-`#deploy.defaultTarget` row, against the contract). The human line passes each row's `file` and
+`#deploy.defaultTarget` row, against the contract; the `.claude/rules/` row, on a finding or an
+unreadable bindings file or mirror directory; the `--ledger` row, on a malformed marker). The human line passes each row's `file` and
 `detail` through `plainLine`, so a control or bidi character in either never reaches the terminal;
 `--json` keeps the bytes.
 
@@ -6684,6 +7059,9 @@ nen repo resolve [--from <dir>] [--repo <path>]
 
 **Output and exit codes** — human rendering: an `"origin: <url>"` line (no-token form only), then one
 line per resolved repo: `"<repo>[  (<code>)]  via <kind>"`. `--json` prints `{ token, origin, repos }`.
+The origin URL — in that line, in `--json` and in every refusal that names it — is shown with its
+whole userinfo redacted (`https://***@host/owner/name`, `***@host:owner/name`), so a credential
+embedded in a remote never reaches the terminal or a log.
 Exit 0 on any successful resolution (including `all`); exit 1 when the token (or the resolved origin)
 names nothing in the registry, or when there is no readable `origin` remote to fall back to; exit 2
 when `--from` is combined with an explicit token.
@@ -8093,22 +8471,60 @@ exit 2
 
 ### The private-name guard
 
-[`issue file`](#nen-issue-file), [`issue comment`](#nen-issue-comment) and
-[`issue edit-body`](#nen-issue-edit-body) are three of the verbs that put
-caller text on an issue. [`issue consolidate-close`](#nen-issue-consolidate-close)
-(its `--close-comment`/`--close-comment-map`) and the [`pr`](#family-pr)
-writers are **not guarded yet**
-([#363](https://github.com/zheref/nen/issues/363)). Before any write to a **PUBLIC**
-target — on `--dry-run` too, so its verdict is the real run's — they compare
-that text (the title and body for `file`, the body for the other two) against
-the credential's **live** private repository list
-([#329](https://github.com/zheref/nen/issues/329)). Behaviour matched:
-zheref/hatsu's `scripts/private_name_check.sh`.
+Every verb that writes caller text to GitHub runs this guard before the write
+([#329](https://github.com/zheref/nen/issues/329) for the first three,
+[#363](https://github.com/zheref/nen/issues/363) for the rest). Before any write
+to a **PUBLIC** target — on `--dry-run` too, so its verdict is the real run's,
+with the one exception the table names — each compares the text it is about to
+write against the credential's **live** private repository list. Behaviour
+matched: zheref/hatsu's `scripts/private_name_check.sh`.
+
+| Guarded verb | The text checked (the `field` a hit names) | Where the check sits |
+|---|---|---|
+| [`issue file`](#nen-issue-file) | `title`, `body` | after the filing's own refusals, before the create |
+| [`issue comment`](#nen-issue-comment) | `body` | before the dry run prints the body, and before the post |
+| [`issue edit-body`](#nen-issue-edit-body) | `body` | after the certifying read and the `--expect-body-sha256` comparison |
+| [`issue consolidate-close`](#nen-issue-consolidate-close) | `close-comment[<child>]`, each child's close comment as it would be posted | after every read-only refusal, before the attach (the first write). Only with `--close-comment` or `--close-comment-map`: the fixed default sentence is nen's own, so without them nothing is checked, `privateNameCheck` is `null`, and the guard's flags are refused (exit **2**) |
+| [`idea file`](#nen-idea-file) | `title`, `body` | after the filing's own refusals, before the create |
+| [`pr open`](#nen-pr-open) | `title`, `body` | before any other GitHub call and before git is asked anything |
+| [`pr edit-body`](#nen-pr-edit-body) | `body` | after the certifying read, before the write |
+| [`pr threads reply`](#nen-pr-threads) | `body` | before the thread walk and the reply |
+| [`pr threads settle`](#nen-pr-threads) | `entry[<n>]`, every reply body in the batch file, numbered from 1 | after the batch file's own refusals, before the walk: one hit sends nothing to any thread |
+| [`wake fire`](#nen-wake-fire) | `comment` | before the label is removed. Only with `--comment`: without it nothing is posted, nothing is checked, `privateNameCheck` is `null` and the guard's flags are refused (exit **2**) |
+| [`wake verify`](#nen-wake-verify) | `now`, `flag-marker`, `redrive-marker` — the caller's text in every comment the sweep can post (the rest is nen's wording and GitHub's own run URL) | before the first pull-request read, with or without `--run` |
+| `release-publish` (`bun src/dev/release-publish.ts`, the argv of nen's own `project.verbs.nen.release`) | `title`, `notes` — the release's title and the changelog section it carries | after the repository, tag and release reads, before `gh release create`; every `gh api` call pinned to github.com like the script's others. **Not on `--dry-run`**, which reads nothing from GitHub at all and says so in its plan. **Under the declared row** (`nen shu release`, argv `src/dev/release-publish.ts --repo .`) no flag reaches the script and `nen shu` reports any failing step as exit `1`: a hit, or a credential that cannot be shown to see every private repository, stops the release at `1` with no way to pass the opt-out or an ignore file. Run the script directly — `bun src/dev/release-publish.ts --private-names-ignore-file <path>` or, after your own check, `--skip-private-name-check` — or declare the ignore file in the contract's argv |
+
+**Not guarded, by name** ([#363](https://github.com/zheref/nen/issues/363)).
+Some of these DO carry caller text to GitHub; they are out of #363's scope,
+which is the API text fields, not exempt from the rule:
+
+- **Declared taxonomy data, reviewed as its own change** —
+  [`labels sync`](#nen-labels-sync) sends each label's `--description` from
+  `nen/labels.json` to the label's description field, and
+  [`labels rename`](#nen-labels-rename) its names. *Follow-up: label
+  descriptions.*
+- **Git objects that reach GitHub by push, not through an API text field** —
+  the commit messages [`commit write`](#nen-commit-write) records and
+  [`wc publish`](#nen-wc-publish) pushes, and the annotated tag message
+  [`tag cut --message --push`](#nen-tag-cut) publishes, which GitHub shows.
+  *Follow-ups: `tag cut --message --push`, and the push-side commit messages.*
+- **No text at all** — [`label apply`](#nen-label-apply) and `classify apply`
+  add a label that already exists, by name; [`issue attach-sub`](#nen-issue-attach-sub),
+  [`pr request-reviews`](#nen-pr-request-reviews), [`pr retarget`](#nen-pr-retarget),
+  [`pr mark-ready`](#nen-pr-mark-ready), [`pr merge`](#nen-pr-merge),
+  [`pr threads resolve`](#nen-pr-threads) and `run rerun` post nothing a reader
+  sees as prose; [`issue reconcile`](#nen-issue-reconcile) is read-only.
+- **Not public** — the `runner` verbs set a repository **variable** and runner
+  labels, neither readable by the public. Runner names do appear in public job
+  logs (`runner_name`), but carry only the machine's and the consumer's own
+  name.
 
 - **The list** is `gh api user/repos?visibility=private`, every page of 100,
-  read on every call and never cached or written to disk. A private or
-  **internal** target is not checked and the list is never read: naming a
-  private repository there leaks nothing. The target's visibility is
+  read on every call and never cached or written to disk. A **private** target
+  is not checked and the list is never read: naming a private repository there
+  leaks nothing. An **internal** target is checked like a public one — the
+  whole enterprise can read it ([#363](https://github.com/zheref/nen/issues/363)).
+  The target's visibility is
   `repos/{owner}/{name}`'s `visibility`, or its `private` boolean on a server
   that carries no `visibility`.
 - **The match** is each repository's NAME (the part after the owner),
@@ -8131,7 +8547,8 @@ zheref/hatsu's `scripts/private_name_check.sh`.
   an ignored `vault.tools` or `my_vault` never hides a policed `vault`. Those transformations are what is handled;
   nothing else is claimed.
 - **The refusal** exits **4**, writes nothing, and never prints the name:
-  each hit is `nen issue: <field>:<line>: private repository #<k>`, `k` a
+  each hit is `<verb>: <field>:<line>: private repository #<k>` (see *Its
+  output* below for `<verb>`), `k` a
   1-based index into the list sorted bytewise (`LC_ALL=C sort -u` of the
   `full_name`s; for a name two owners share, the first entry the ignore file
   does not exempt), and the refusal
@@ -8142,6 +8559,14 @@ zheref/hatsu's `scripts/private_name_check.sh`.
   halves non-empty and whitespace-free), a list that fills 100 pages (and so may be truncated) and a list that
   reads **EMPTY** are each a refusal at exit **1** — never a pass. A token that
   cannot see private repositories would otherwise read green.
+- **The credential's reach** ([#363](https://github.com/zheref/nen/issues/363)).
+  A fine-grained token limited to selected repositories, an app token or an
+  SSO-restricted one returns *some* private repositories, and a name it was
+  never given would read clean. So before the list, `gh api -i user` is read:
+  its `X-OAuth-Scopes` header must be present and include `repo`. Absent (a
+  fine-grained, app or CI token) or without `repo`, the check is unavailable —
+  exit **1**, *"the private-repository list may be partial"* — and a caller
+  that has run its own check passes `--skip-private-name-check`.
 - **The ignore file** is `--private-names-ignore-file <path>`: private
   repositories the caller has ruled too generic to police — one per line, `#`
   comments and blank lines ignored, case-insensitive. A bare `name` exempts
@@ -8149,35 +8574,65 @@ zheref/hatsu's `scripts/private_name_check.sh`.
   name shared by two owners stays policed until both are exempt). **No default
   path is ever read**: a caller that keeps one passes it (a caller such as Hatsu
   can pass its own `~/.config/hatsu/redaction-ignore`), and a missing or unreadable file is a
-  usage error (exit **2**) before any `gh` call, never an empty list. An
+  usage error (exit **2**) before any `gh` call, never an empty list. **An
+  ignore file whose real path (symlinks resolved) lies inside the working tree
+  holding `--repo`'s root is refused** (exit **2**,
+  [#363](https://github.com/zheref/nen/issues/363)): a list the change under
+  review can edit is an exemption it wrote for itself. Keep it outside the
+  checkout. An
   ignore file that exempts **every** private name is a refusal at exit **1**
   (`every private name is ignored`) — it would police nothing — unless
   `--allow-all-ignored` is given; that flag without an ignore file is a usage
   error (exit 2). An
-  ignored hit does not block and is **never silent**: stderr prints `nen issue:
+  ignored hit does not block and is **never silent**: stderr prints `<verb>:
   ignored: <field>:<line>: private repository #<k> (ignore file)`, without the
   name, and `--json` records it with `ignored: true`.
 - **The opt-out** is `--skip-private-name-check`, for a caller that has run its
   own check. Nothing is read, the run says so on stderr every time, and
   `--json` reports it.
 
-**The checked bytes are the bytes sent.** All three verbs read the body once,
-check it, and hand `gh` those bytes on stdin (`--body-file -`) — never the
-path, which `gh` would re-read after the check — so nothing written to the file
-between the check and the write is published unchecked.
+**The checked bytes are the bytes sent.** Every guarded verb that takes its
+text from a file reads the file once, checks those bytes, and hands `gh` the
+same bytes — on stdin (`--body-file -`) for `issue file`, `issue comment`,
+`issue edit-body`, `idea file`, `pr open` and `pr edit-body` (the last two since
+[#363](https://github.com/zheref/nen/issues/363); they used to hand `gh` the
+path), in the GraphQL argument for `pr threads reply|settle`, and in a
+temporary file nen itself writes for `release-publish` — never a path `gh`
+would re-read after the check, so nothing written to the file between the check
+and the write is published unchecked. `consolidate-close`, `wake fire` and
+`wake verify` carry their text in the argv they checked.
 
-**Its output.** Every line the guard prints goes to stderr and begins
-`nen issue:` — a hit, an `ignored:` hit, the skip notice, and an
-unavailable check's reason — so a caller can tell the guard's lines from the
-verb's own and from `gh`'s.
+**Its output.** Every line the guard prints goes to stderr — a hit, an
+`ignored:` hit, the skip notice, and an unavailable check's reason — and
+begins with the verb that ran it, so a caller can tell the guard's lines from
+the verb's own and from `gh`'s, and knows which verb refused: `nen issue:` for
+the four `issue` verbs (as since #329), `nen idea file:`, `nen pr open:`,
+`nen pr edit-body:`, `nen pr threads reply:`, `nen pr threads settle:`,
+`nen wake fire:`, `nen wake verify:` and `release-publish:`.
 
-Every `--json` report of the three verbs carries `privateNameCheck: { result,
+**Exit 4 is shared on `pr threads`.** There `4` already meant *no such thread*
+(`reply`) and *the pull request is not visible* (`settle`). A refusal by the
+guard is told apart by its stderr lines and, under `--json`, by
+`privateNameCheck.result: "refused"`, which those refusals never print. Every
+other guarded verb used no `4` before.
+
+Every `--json` report of a guarded verb carries `privateNameCheck: { result,
 targetVisibility, listSize, owners, hits: [{ field, line, index, normalised,
 ignored }], error }` — `listSize` and `owners` are counts (never names), `null`
 when the list was not read — where `result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
 `refused` | `unavailable`; a run whose only hits are ignored is `clean` and
 still lists them. A clean run with no hits and a private target add nothing to
-the human output.
+the human output. A refusal's `--json` report is the verb's own refusal shape
+plus `privateNameCheck`, and never carries the refused text: `issue file`
+`{ dryRun, filed: false }`, `issue comment` `{ ..., posted: false }`,
+`issue consolidate-close` `{ parent, children, refused: true }`, `idea file`
+`{ filed: false }`, `pr open` `{ contract, dryRun, opened: false }`,
+`pr edit-body` `{ contract, target, number, bytes, written: false, dryRun }`,
+`pr threads reply` `{ contract, target, pr, thread, replied: false, dryRun }`,
+`pr threads settle` `{ contract, target, pr, from, dryRun, ok: false }`,
+`wake fire` `{ repo, number, label, run, fired: false }`, `wake verify`
+`{ repo, dryRun, scanned: 0 }` (no `now`: it is a checked field), and `release-publish`
+`{ schema, sent: false, slug, tag }`.
 
 ### `nen issue attach-sub`
 
@@ -8238,6 +8693,8 @@ nen issue consolidate-close --target <owner/name> --parent <n>
                             [--close-comment <template>]
                             [--close-comment-map <path>]
                             [--dry-run] [--allow-open-pr]
+                            [--skip-private-name-check]
+                            [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -8252,9 +8709,12 @@ nen issue consolidate-close --target <owner/name> --parent <n>
 | `--close-comment <template>` | no | Replaces the default close text for EVERY child. | Template over `{parent}`/`{child}` ONLY; any other brace run (unmatched, or an unknown placeholder) is refused (exit 2) before any call. Mutually exclusive with `--close-comment-map`. |
 | `--close-comment-map <path>` | no | A JSON object `{"<child>": "<text>", ...}` giving each child ITS OWN close text. | Path resolved against `--repo`'s root, not `process.cwd()`. Its key set must equal `--children` exactly -- a missing or extra key is refused. |
 | `--allow-open-pr` | no | Override the open-PR guard. | Without it, any blocked child refuses the whole close. |
-| `--dry-run` | no | Preview the plan and the rendered close comments; write nothing. | Still reads `--parent`/every child over `gh api` to certify object class and run the open-PR guard -- not network-free. |
+| `--dry-run` | no | Preview the plan and the rendered close comments; write nothing. | Still reads `--parent`/every child over `gh api` to certify object class and run the open-PR guard -- not network-free -- and, with a caller close comment, the private-name guard. |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard) on the close comments: the caller attests it ran its own check. | Named on stderr every time. Read only with `--close-comment`/`--close-comment-map`; without one it (and the two below) is refused, exit **2**. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police. | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts every private name. | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- prints `parent: #<n>`, `label union: <a, b, ...>`, the severity line, any plan `note:` lines, then the attach log and the close log (or `would run:` lines under `--dry-run`). Without either `--close-comment` flag, every child is closed with the fixed `Consolidated into #<parent>.`, byte for byte. `--json` carries `{ plan, openPrs, report }` on a normal run, `{ plan, refused: true }` on the omitted-severity-family refusal, `{ plan, openPrs, refused: true }` on the open-PR block, or `{ parent, children, pullRequests, refused: true, reason }` on the object-class refusal (which publishes NO plan). Exit 0 on a clean close; exit 1 on any of: an unreduced severity family, a blocked open PR without `--allow-open-pr`, an object-class refusal, or a failed attach/close step; exit 2 on a malformed `--severity-family`, `--close-comment`/`--close-comment-map`, or an omitted `--repo`.
+**Output and exit codes** -- prints `parent: #<n>`, `label union: <a, b, ...>`, the severity line, any plan `note:` lines, then the attach log and the close log (or `would run:` lines under `--dry-run`). Without either `--close-comment` flag, every child is closed with the fixed `Consolidated into #<parent>.`, byte for byte. `--json` carries `{ plan, openPrs, report, privateNameCheck }` on a normal run (`privateNameCheck` `null` without a caller close comment), `{ parent, children, refused: true, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)) -- exit **4** for a private repository named in a close comment bound for a PUBLIC target, nothing attached and nothing closed, exit 1 when it could not run -- `{ plan, refused: true }` on the omitted-severity-family refusal, `{ plan, openPrs, refused: true }` on the open-PR block, or `{ parent, children, pullRequests, refused: true, reason }` on the object-class refusal (which publishes NO plan). Exit 0 on a clean close; exit 1 on any of: an unreduced severity family, a blocked open PR without `--allow-open-pr`, an object-class refusal, or a failed attach/close step; exit 2 on a malformed `--severity-family`, `--close-comment`/`--close-comment-map`, or an omitted `--repo`.
 
 **Example**
 
@@ -8435,6 +8895,8 @@ Answers "did GitHub store this idea exactly as sent" -- a `gh issue create` exit
 ```text
 nen idea file --target <owner/name> --repo <path> --title <t>
              --body-file <path> --label a,b --assignee <user>
+             [--forbid-family ns:family] [--skip-private-name-check]
+             [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -8448,8 +8910,11 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 | `--label a,b` | yes | Comma-separated labels. | Same taxonomy validation as `issue file`. |
 | `--assignee <user>` | yes | A single GitHub login. | |
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Works exactly as [`issue file`](#nen-issue-file)'s does — forwarded into the same `FileRequest` — and is documented in `nen idea --help` since [#94](https://github.com/zheref/nen/issues/94). Caller data: nen carries no repository's own convention about which family means what. |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches }`. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
+**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)). Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
 
 **Example**
 
@@ -8804,7 +9269,7 @@ nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
 
 Every other `canon` flag (`--rules-dir`, `--stack-dir`, `--canon-values`, ...) is refused here at exit 2: a flag accepted and ignored would read as though it steered the resolution. For the same reason `--canon-checkout` is refused on [`canon pin`](#nen-canon-pin) without `--write` and on [`canon resolve`](#nen-canon-resolve).
 
-**Output and exit codes** -- prints `source: <owner/name>@<tag>`, `checkout: <path>` (or `(unresolved)`), `resolved from: <kind> <what>`, one `  passed over: <kind> <what> (<why>)` line per absent step, then `verified: origin <url> names <owner/name> on <host>; HEAD <sha12> is <tag>; clean` -- or `failed: <code>: <reason>`. Credentials in an origin URL are redacted. Every text line, and the `nen:` refusal on stderr, has its control characters stripped -- an origin, a path or a status line can carry an escape sequence -- while `--json` keeps the raw bytes; `canon mirror`'s checkout refusal is stripped the same way. `--json`, the same document on success and failure: `{ contract: "nen.canon.checkout/v0.1", ok, source, ref, path, resolvedFrom: { kind, status, from } | null, steps: [{ kind, status, from, note? }], verified: { origin, originSlug, host, head, tag, tagCommit, clean } | null, failure: { code, message } | null }`. `kind` is `flag`, `env` or `declared-path`. Exit 0 on a verified checkout; exit **1** on any resolution or verification failure, with `nen: <code>: <reason>` on stderr; exit 2 on an omitted `--repo`, an empty or foreign flag, no pin to take `--source`/`--ref` from (the same refusal `mirror` gives), or a malformed `nen/repos.json` (the loader's pointer, as on `mirror`). **A usage error carries no `--json` document**, even under `--json`: its refusal is on stderr alone, because there is no resolved source or ref to fill one with.
+**Output and exit codes** -- prints `source: <owner/name>@<tag>`, `checkout: <path>` (or `(unresolved)`), `resolved from: <kind> <what>`, one `  passed over: <kind> <what> (<why>)` line per absent step, then `verified: origin <url> names <owner/name> on <host>; HEAD <sha12> is <tag>; clean` -- or `failed: <code>: <reason>`. An origin URL's whole userinfo is redacted (`https://***@host/owner/name`), in the text, in `--json` and in every refusal. Every text line, and the `nen:` refusal on stderr, has its control characters stripped -- an origin, a path or a status line can carry an escape sequence -- while `--json` keeps the raw bytes; `canon mirror`'s checkout refusal is stripped the same way. `--json`, the same document on success and failure: `{ contract: "nen.canon.checkout/v0.1", ok, source, ref, path, resolvedFrom: { kind, status, from } | null, steps: [{ kind, status, from, note? }], verified: { origin, originSlug, host, head, tag, tagCommit, clean } | null, failure: { code, message } | null }`. `kind` is `flag`, `env` or `declared-path`. Exit 0 on a verified checkout; exit **1** on any resolution or verification failure, with `nen: <code>: <reason>` on stderr; exit 2 on an omitted `--repo`, an empty or foreign flag, no pin to take `--source`/`--ref` from (the same refusal `mirror` gives), or a malformed `nen/repos.json` (the loader's pointer, as on `mirror`). **A usage error carries no `--json` document**, even under `--json`: its refusal is on stderr alone, because there is no resolved source or ref to fill one with.
 
 **Example** -- on a machine with no `MY_CANON_CHECKOUT`, whose cache slot holds a clone at the pin:
 
@@ -12817,10 +13282,10 @@ nen bootstrap --ref <tag> [--source <owner/name>] [--cache-dir <dir>] [--script 
 **Example**
 
 ```bash
-nen bootstrap --ref v0.22.0 --source zheref/nen
+nen bootstrap --ref v0.23.0 --source zheref/nen
 ```
 ```text
-/home/me/.cache/nen/zheref_nen/v0.22.0/nen-linux-x64
+/home/me/.cache/nen/zheref_nen/v0.23.0/nen-linux-x64
 ```
 (shape derived from `bootstrap/nen.sh`'s own header and `src/supply/bootstrap.ts`/`bootstrap.test.ts` -- not run live, this needs the network and a real published release)
 
@@ -12838,6 +13303,7 @@ Scans open pull requests whose author matches `--author-pattern` for a workflow 
 
 ```text
 nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <regex> [--max-prs <n>] [--max-runs-per-pr <n>] [--flag-marker <text>] [--redrive-marker <text>] [--run]
+                [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -12845,15 +13311,18 @@ nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <rege
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--repo-slug <owner/name>` | yes | The repository scanned over `gh api`. | |
-| `--now <ISO-8601>` | yes | The sweep's fixed instant. | Read once, never `Date.now()` -- makes a replay reproducible. |
+| `--now <ISO-8601>` | yes | The sweep's fixed instant. | Read once, never `Date.now()` -- makes a replay reproducible. Must be an ISO-8601 instant with a zone (`2026-09-07T00:00:00Z`), else exit 2 before any call: it is stamped into every comment the sweep posts. |
 | `--author-pattern <regex>` | yes | Which PR authors are in scope. | Nen carries no repository's own agent-login list, so this has no default; refused at the flag (before any `gh` call) if it has a potentially catastrophic-backtracking shape (e.g. `(a+)+`). |
 | `--flag-marker <text>` | no | The idempotency-stamp phrase a detect-only flag comment carries. | Defaults to `nen-wake-guard`; NOT interoperable at that default with the shell sweep this replaces -- set it to that script's own phrase when migrating alongside it. |
 | `--redrive-marker <text>` | no | The idempotency-stamp phrase a redrive comment carries. | Defaults to `nen-wake-redrive`; same interop note. |
 | `--max-prs <n>` | no | Cap on PRs scanned this tick. | Defaults to 6. |
 | `--max-runs-per-pr <n>` | no | Cap on swallowed runs handled per PR this tick. | Defaults to 3. |
 | `--run` | no | Actually rerun workflows / post comments. | Without it, this is a dry-run report only -- despite the verb's name. |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- prints `scanned <n> PR(s)[ (dry run)]`, then `#<pr> run <id>: <kind> -- <reason>` per action (or `no swallowed wakes found`), then any `warning: ...` lines. `--json`: `{ repo, now, dryRun, scanned, results, warnings }`. Exit 0 on a completed sweep -- a failed redrive or a failed follow-up comment POST is tolerated (reported as a `warning:` line, never a non-zero exit); exit 1 if one of the THREE `gh api` fetches this sweep depends on (the open-PR list, a PR's run history, a PR's comment thread) itself fails, since those go through the throwing `must`/`mustJson` seam rather than the tolerated per-action path; exit 2 on a malformed or catastrophic-shaped `--author-pattern`, before any `gh` call.
+**Output and exit codes** -- prints `scanned <n> PR(s)[ (dry run)]`, then `#<pr> run <id>: <kind> -- <reason>` per action (or `no swallowed wakes found`), then any `warning: ...` lines. `--json`: `{ repo, now, dryRun, scanned, results, warnings, privateNameCheck }`. **The [private-name guard](#the-private-name-guard)** ([#363](https://github.com/zheref/nen/issues/363)) checks the caller's text every posted comment carries -- `--now`, `--flag-marker`, `--redrive-marker` -- before the first pull-request read, with or without `--run`: a hit is exit **4** with nothing read, rerun or posted (`--json`: `{ repo, dryRun, scanned: 0, privateNameCheck }`, never the checked text), a check that could not run exit **1**; a `--repo-slug` that is not `owner/name`, or a `--now` that is not an ISO-8601 instant, is exit **2** before any call. Exit 0 on a completed sweep -- a failed redrive or a failed follow-up comment POST is tolerated (reported as a `warning:` line, never a non-zero exit); exit 1 if one of the THREE `gh api` fetches this sweep depends on (the open-PR list, a PR's run history, a PR's comment thread) itself fails, since those go through the throwing `must`/`mustJson` seam rather than the tolerated per-action path; exit 2 on a malformed or catastrophic-shaped `--author-pattern`, before any `gh` call.
 
 **Example**
 
@@ -12886,6 +13355,7 @@ Fires a wake ALONE on one object by removing then re-applying a label -- the edg
 
 ```text
 nen wake fire --repo-slug <owner/name> --ref <object-ref> --label <name> [--comment <text>] [--run]
+              [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
 **Arguments**
@@ -12897,8 +13367,11 @@ nen wake fire --repo-slug <owner/name> --ref <object-ref> --label <name> [--comm
 | `--label <name>` | yes | The label removed then re-applied. | |
 | `--comment <text>` | no | A settle comment posted after the re-apply. | |
 | `--run` | no | Actually write to GitHub. | Without it, every line is prefixed `(dry run)` and nothing is written. |
+| `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard) on `--comment`: the caller attests it ran its own check. | Named on stderr every time. Without `--comment` the guard does not run and this flag (and the two below) is refused, exit **2**. |
+| `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police. | No default path is read; a missing file exits **2** before any call. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts every private name. | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- prints `[(dry run) ]remove label '<label>' from <slug>#<n>`, then the same for re-apply, then the settle-comment line if `--comment` was given, then (without `--run`) `nothing written -- pass --run to fire for real.`. `--json`: `{ repo, number, label, comment, run }`. Exit 0 on success (dry or real); exit 2 when `--ref` carries no `#<N>`; a `--run` write that fails (the label removal, the re-apply, or the comment POST) throws and exits 1 -- these three go through the throwing `must` seam, unlike `wake verify`'s tolerated per-action failures.
+**Output and exit codes** -- prints `[(dry run) ]remove label '<label>' from <slug>#<n>`, then the same for re-apply, then the settle-comment line if `--comment` was given, then (without `--run`) `nothing written -- pass --run to fire for real.`. `--json`: `{ repo, number, label, comment, run, privateNameCheck }` (`null` without `--comment`). **The [private-name guard](#the-private-name-guard)** ([#363](https://github.com/zheref/nen/issues/363)) checks `--comment` before the label is removed, with or without `--run`: a hit is exit **4** with nothing written (`--json`: `{ repo, number, label, run, fired: false, privateNameCheck }`), a check that could not run exit **1**. Exit 0 on success (dry or real); exit 2 when `--ref` carries no `#<N>`, or `--repo-slug` is not `owner/name` while `--comment` is given; a `--run` write that fails (the label removal, the re-apply, or the comment POST) throws and exits 1 -- these three go through the throwing `must` seam, unlike `wake verify`'s tolerated per-action failures.
 
 **Example**
 
@@ -14300,7 +14773,12 @@ matches); and no other `*@<marketplace>` key is in `installed_plugins.json`.
 The last two are checked **again** from a fresh read right after the
 uninstall: a plugin installed from the marketplace meanwhile, or a source that
 changed, leaves it known as an action owed. A recorded source URL is shown only
-in that normalised form, so a `user:token@` in it never reaches any output; any
+in that normalised form, its host read off the raw authority as git reads it
+(the authority ends at the first `/`, the host follows its last `@`); one git
+and curl could read differently -- an `@` in the path, a secret carrying a `/`,
+a `?` or `#` before the first `/`, a bracket other than one whole IPv6
+literal, a `file://` URL -- has no host, never matches, and is shown as `a git source that is not a remote URL`, so no part of
+a `user:token@` reaches any output; any
 other root or path a surface reports is printed with credentials redacted. A known marketplace of the same name whose
 source is anything else is **refused** (exit 3: installing beside it is not
 safe either). One that other plugins depend on is left known, and its removal is
@@ -15863,8 +16341,8 @@ notification or an audible cue, because it only ever shells out to `git` and
 
 ```bash
 # 1. Two-step fetch, pinned. Never `latest`.
-curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.22.0/bootstrap/nen.sh -o nen-bootstrap.sh
-nen="$(bash nen-bootstrap.sh --ref v0.22.0)"
+curl -fsSL https://raw.githubusercontent.com/zheref/nen/v0.23.0/bootstrap/nen.sh -o nen-bootstrap.sh
+nen="$(bash nen-bootstrap.sh --ref v0.23.0)"
 "$nen" --version
 ```
 
@@ -15875,7 +16353,7 @@ retried. Once a `nen` exists, the in-CLI form pins a second one — pass
 find `bootstrap/nen.sh` relative to itself:
 
 ```bash
-nen bootstrap --ref v0.22.0 --source zheref/nen --script ./nen-bootstrap.sh
+nen bootstrap --ref v0.23.0 --source zheref/nen --script ./nen-bootstrap.sh
 ```
 
 ```bash

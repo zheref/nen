@@ -20,6 +20,8 @@ import {
   normalizeEol,
   outputLines,
   redactRemoteCredentials,
+  readRemoteAuthority,
+  redactRemoteUrl,
   outputWindow,
   spawnInteractiveRunner,
   spawnRunner,
@@ -102,6 +104,97 @@ describe("redactRemoteCredentials", () => {
     expect(redactRemoteCredentials("git@github.com:zheref/nen.git")).toBe("git@github.com:zheref/nen.git");
     expect(redactRemoteCredentials("auth: ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123 expired")).toBe("auth: *** expired");
     expect(redactRemoteCredentials("https://user:ghp_abcdefghijklmnopqrstuvwxyz0123@github.com/x")).toBe("https://user:***@github.com/x");
+  });
+});
+
+describe("redactRemoteUrl -- a remote URL keeps no userinfo at all (SEC-5, zheref/nen#373)", () => {
+  it("replaces the whole userinfo, with or without a ':', in a scheme URL", () => {
+    expect(redactRemoteUrl("https://user:ghp_FAKE0000@github.com/o/n")).toBe("https://***@github.com/o/n");
+    expect(redactRemoteUrl("https://ghp_FAKE0000@github.com/o/n/extra")).toBe("https://***@github.com/o/n/extra");
+    expect(redactRemoteUrl("https://oauth2:FAKE/with-slash@gitlab.example/o/n")).toBe("https://***@gitlab.example/o/n");
+    expect(redactRemoteUrl("https://a@b@host/o/n")).toBe("https://***@host/o/n");
+    expect(redactRemoteUrl("ssh://git@host:22/o/n.git")).toBe("ssh://***@host:22/o/n.git");
+  });
+
+  it("replaces the userinfo of scp syntax too", () => {
+    expect(redactRemoteUrl("git@github.com:zheref/nen.git")).toBe("***@github.com:zheref/nen.git");
+    expect(redactRemoteUrl("ghp_FAKE0000@github.com:only")).toBe("***@github.com:only");
+    expect(redactRemoteUrl("user:FAKE@host:o/n")).toBe("***@host:o/n");
+    // One reading with parseRemoteUrl's: the userinfo runs to the last '@' before 'host:', a '/' included.
+    expect(redactRemoteUrl("oauth2:FAKE0000/x@github.com:owner/handbooks")).toBe("***@github.com:owner/handbooks");
+    expect(redactRemoteUrl("a/b@c@host:o/n")).toBe("***@host:o/n");
+  });
+
+  it("keeps a URL that carries no userinfo exactly as it is", () => {
+    for (const url of ["https://github.com/zheref/nen.git", "https://host:8443/path@revision", "/local/bare/repo.git", "file:///srv/repo.git", "not a url at all", ""]) {
+      expect(redactRemoteUrl(url)).toBe(url);
+    }
+  });
+
+  it("reads the value WHOLE: a space, a TAB or a CR inside the userinfo does not end it (Feitan round 2)", () => {
+    for (const sep of [" ", "\t", "\r"]) {
+      expect(redactRemoteUrl(`https://u:pa${sep}ssFAKE0000@github.com/o/n`), JSON.stringify(sep)).toBe("https://***@github.com/o/n");
+      expect(redactRemoteUrl(`https://FAKE0000${sep}@github.com/o/n`), JSON.stringify(sep)).toBe("https://***@github.com/o/n");
+      expect(redactRemoteUrl(`u:pa${sep}FAKE0000@github.com:o/n`), JSON.stringify(sep)).toBe("***@github.com:o/n");
+    }
+    expect(redactRemoteUrl(" https://FAKE0000@github.com/o/n")).toBe(" https://***@github.com/o/n");
+  });
+
+  it("documents what it echoes whole -- git reads no userinfo there", () => {
+    for (const url of ["FAKE0000@host", "https:/FAKE0000@h/o/n", "//FAKE0000@h/o/n", "https://u:1234/FAKE0000@h/o/n"]) {
+      expect(redactRemoteUrl(url)).toBe(url);
+    }
+  });
+
+  it("still redacts a GitHub-shaped token standing outside the userinfo", () => {
+    expect(redactRemoteUrl("https://github.com/o/n?access=ghp_abcdefghijklmnopqrstuvwxyz0123")).toBe("https://github.com/o/n?access=***");
+  });
+});
+
+describe("readRemoteAuthority -- where a remote URL connects, read off the RAW value (SEC-7, zheref/nen#373)", () => {
+  it("ends the authority at the first '/', '?' or '#', and takes the host after the last '@' inside it", () => {
+    expect(readRemoteAuthority("https://u:p@Host:443/o/n")).toEqual({ host: "Host", port: "443", path: "/o/n", form: "scheme", userinfo: true });
+    expect(readRemoteAuthority("ssh://git@host/o/n")).toMatchObject({ host: "host", port: null, userinfo: true });
+    expect(readRemoteAuthority("https://[::1]:8080/o/n")).toMatchObject({ host: "[::1]", port: "8080" });
+    expect(readRemoteAuthority("https://host:8443/path@revision")).toMatchObject({ host: "host", path: "/path@revision" });
+  });
+
+  it("gives NO host when the userinfo reading reaches past the authority, or nothing follows it", () => {
+    for (const url of ["https://evil.example/x@github.com:o/n", "https://evil.example/x@github.com/o/n", "https://u:pa/ss@github.com/o/n", "https://FAKE0000@/o/n", "https://FAKE0000@:443/o/n", "https://h:abc/o/n", "https://ho st/o/n"]) {
+      expect(readRemoteAuthority(url), url).toBeNull();
+    }
+  });
+
+  it("gives NO host where git and curl could disagree: brackets, '?'/'#' before the first '/', file://, a remote helper (Feitan round 3)", () => {
+    for (const url of [
+      "ssh://[evil.invalid]@good.example/o/n",
+      "ssh://git@[evil.invalid]@good.example/o/n",
+      "ssh://[evil.invalid]:22@good.example/o/n",
+      "ssh://[evil.invalid:2222]@good.example/o/n",
+      "git://[evil.invalid]@good.example/o/n",
+      "ssh://git@[::1]:22/o/n",
+      "ssh://good.example:22#@evil.invalid/o/n",
+      "ssh://good.example:22?@evil.invalid/o/n",
+      "https://good.example:443#@evil.invalid/o/n",
+      "file://good.example/o/n",
+      "FILE://good.example/o/n",
+      "[evil.invalid]@good.example:o/n",
+      "git@[evil.invalid]@good.example:o/n",
+      "good.example::evil.invalid:o/n",
+    ]) {
+      expect(readRemoteAuthority(url), url).toBeNull();
+    }
+    // A bracketed literal that is the WHOLE authority is still a host.
+    expect(readRemoteAuthority("ssh://[::1]:2222/o/n")).toMatchObject({ host: "[::1]", port: "2222" });
+  });
+
+  it("reads scp syntax as git does: the host part ends at the first ':', the host after its last '@'", () => {
+    expect(readRemoteAuthority("git@github.com:o/n.git")).toEqual({ host: "github.com", port: null, path: "o/n.git", form: "scp", userinfo: true });
+    expect(readRemoteAuthority("evil.example:x@github.com:o/n")).toMatchObject({ host: "evil.example", userinfo: false });
+    expect(readRemoteAuthority("github.com:o/n")).toMatchObject({ host: "github.com", userinfo: false });
+    for (const url of ["C:/repos/n", "./a:b", "/srv/git/n.git", "host:////x", "", "no colon at all"]) {
+      expect(readRemoteAuthority(url), url).toBeNull();
+    }
   });
 });
 

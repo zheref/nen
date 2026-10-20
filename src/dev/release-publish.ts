@@ -50,22 +50,48 @@
 // G3 (CON-6) still holds the go: this row is what mugetsu RUNS, never
 // permission to run it.
 //
+// THE PRIVATE-NAME GUARD (zheref/nen#363). A release's title and notes are text
+// written to GitHub, so they are checked against the credential's live private
+// repository list exactly as `nen issue file` checks a filing
+// (../issue/privacy.ts): after every remote certification above and before the
+// create, on the same runner and against github.com only. A hit exits 4 and
+// publishes nothing; a check that could not run exits 1 (a credential whose
+// X-OAuth-Scopes lacks `repo` included); a private repository is not checked,
+// an internal one is. Same opt-out (--skip-private-name-check), same
+// ignore file (--private-names-ignore-file, resolved against --repo), same
+// lines (prefixed `release-publish:`), same `privateNameCheck` in --json. NOT
+// on --dry-run, which reads nothing from GitHub at all -- it skips the
+// repository, tag and release reads too -- and says so in its plan.
+//
 // USAGE
 //   bun src/dev/release-publish.ts [--tag <vX.Y.Z>] [--repo <path>]
 //     [--slug <owner/name>] [--changelog <path>] [--previous-tag <vX.Y.Z>]
-//     [--title <text>] [--dry-run] [--json]
+//     [--title <text>] [--dry-run] [--json] [--skip-private-name-check]
+//     [--private-names-ignore-file <path> [--allow-all-ignored]]
 //   bun src/dev/release-publish.ts --self-test
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
-import { parseRemoteUrl } from "../github/target.js";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { parseRemoteUrl, parseTarget } from "../github/target.js";
+import { readRemoteAuthority } from "../seam/exec.js";
 import { looksLikeOwnerSlug } from "../repo/root.js";
 import { renderArgv } from "../shu/render.js";
+import {
+  blockingExit,
+  blocksWrite,
+  checkPrivateNames,
+  ignoreFileInsideTree,
+  parseIgnoreList,
+  privateNameLines,
+  type GuardSeams,
+  type IgnoreList,
+  type PrivateNameCheck,
+} from "../issue/privacy.js";
 
 export const USAGE =
-  "usage: bun src/dev/release-publish.ts [--tag <vX.Y.Z>] [--repo <path>] [--slug <owner/name>] [--changelog <path>] [--previous-tag <vX.Y.Z>] [--title <text>] [--dry-run] [--json] | --self-test";
+  "usage: bun src/dev/release-publish.ts [--tag <vX.Y.Z>] [--repo <path>] [--slug <owner/name>] [--changelog <path>] [--previous-tag <vX.Y.Z>] [--title <text>] [--dry-run] [--json] [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]] | --self-test";
 
 export interface RunResult {
   readonly status: number | null;
@@ -92,6 +118,12 @@ export interface Options {
   dryRun: boolean;
   json: boolean;
   selfTest: boolean;
+  /** The private-name guard's opt-out (zheref/nen#363): the caller ran its own check. */
+  skipPrivateNameCheck: boolean;
+  /** Private repositories the caller ruled too generic to police; relative to --repo. */
+  privateNamesIgnoreFile?: string;
+  /** Permit an ignore file that exempts every private name. */
+  allowAllIgnored: boolean;
 }
 
 class Refusal extends Error {
@@ -100,16 +132,18 @@ class Refusal extends Error {
   }
 }
 
-const VALUED = new Set(["--tag", "--repo", "--slug", "--changelog", "--previous-tag", "--title"]);
+const VALUED = new Set(["--tag", "--repo", "--slug", "--changelog", "--previous-tag", "--title", "--private-names-ignore-file"]);
 
 export function parseArgs(argv: readonly string[]): Options {
-  const options: Options = { repo: ".", dryRun: false, json: false, selfTest: false };
+  const options: Options = { repo: ".", dryRun: false, json: false, selfTest: false, skipPrivateNameCheck: false, allowAllIgnored: false };
   const seen = new Set<string>();
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i] ?? "";
     if (flag === "--dry-run") options.dryRun = true;
     else if (flag === "--json") options.json = true;
     else if (flag === "--self-test") options.selfTest = true;
+    else if (flag === "--skip-private-name-check") options.skipPrivateNameCheck = true;
+    else if (flag === "--allow-all-ignored") options.allowAllIgnored = true;
     else if (VALUED.has(flag)) {
       const value = argv[i + 1];
       if (value === undefined || value.startsWith("--") || value === "") throw new Refusal(`${flag} needs a value. ${USAGE}`, 2);
@@ -123,6 +157,7 @@ export function parseArgs(argv: readonly string[]): Options {
       else if (flag === "--slug") options.slug = value;
       else if (flag === "--changelog") options.changelog = value;
       else if (flag === "--previous-tag") options.previousTag = value;
+      else if (flag === "--private-names-ignore-file") options.privateNamesIgnoreFile = value;
       else options.title = value;
     } else throw new Refusal(`unexpected argument '${flag}'. ${USAGE}`, 2);
   }
@@ -155,11 +190,14 @@ export const GITHUB_HOST = "github.com";
  * `scheme://[user@]host[:port]/path` -- lowercased, or `undefined` for anything else.
  */
 export function remoteHost(url: string): string | undefined {
-  const trimmed = url.trim();
-  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d*)?\//i.exec(trimmed);
-  if (scheme !== null) return scheme[1]?.toLowerCase();
-  const scp = /^[^@/:]+@([^:/]+):/.exec(trimmed);
-  return scp?.[1]?.toLowerCase();
+  // Read off the RAW authority as git reads it (SEC-7, zheref/nen#373 round
+  // 2), never off the display form: an ambiguous `https://evil.example/x@
+  // github.com/o/r` and a host-less `https://<token>@/o/r` have no host. A
+  // scheme URL needs a path after the host; scp syntax needs a `user@`.
+  const authority = readRemoteAuthority(url);
+  if (authority === null) return undefined;
+  if (authority.form === "scheme" ? !authority.path.startsWith("/") : !authority.userinfo) return undefined;
+  return authority.host.toLowerCase();
 }
 
 /** The tag immediately BELOW `tag` in descending version order -- not merely the newest other one. */
@@ -286,7 +324,48 @@ export function plan(options: Options, run: Run = defaultRun): Plan {
   return { slug, tag, derived, previous, title, notes: composed.notes, sections: composed.sections, latest, latestWhy, argv };
 }
 
-function renderPlan(p: Plan, source: string): string {
+/**
+ * `--private-names-ignore-file`, read before any `gh` call: given and
+ * unreadable is a usage defect (2), never an empty list; omitted, nothing is
+ * read. `--allow-all-ignored` alone means nothing and is refused (2).
+ */
+export function readIgnoreOption(options: Options): IgnoreList | null {
+  if (options.privateNamesIgnoreFile === undefined) {
+    if (options.allowAllIgnored) {
+      throw new Refusal("--allow-all-ignored permits an ignore file that exempts every private name; it means nothing without --private-names-ignore-file <path>.", 2);
+    }
+    return null;
+  }
+  const path = resolvePath(options.repo, options.privateNamesIgnoreFile);
+  // Never a list the tagged tree itself could have written (Feitan F8).
+  const inside = ignoreFileInsideTree(path, options.repo);
+  if (inside !== null) throw new Refusal(`--private-names-ignore-file: ${inside}`, 2);
+  try {
+    return parseIgnoreList(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new Refusal(
+      `--private-names-ignore-file '${path}' could not be read (${(error as NodeJS.ErrnoException).code ?? "error"}); it names the private repositories this release may mention, and a missing one is never read as an empty list.`,
+      2,
+    );
+  }
+}
+
+/**
+ * This script's runner, shaped as the one seam the guard reads through. Every
+ * `gh api` call it makes is pinned to github.com, as every other call here is,
+ * so GH_HOST cannot redirect the visibility or the private-list read.
+ */
+function guardSeams(run: Run, repo: string): GuardSeams {
+  return {
+    run: (command, args): ReturnType<GuardSeams["run"]> => {
+      const pinned = command === "gh" && args[0] === "api" ? [...args, "--hostname", GITHUB_HOST] : [...args];
+      const result = run(command, pinned, repo);
+      return { code: result.status ?? 1, stdout: result.stdout, stderr: result.stderr, spawnFailed: result.error !== undefined };
+    },
+  };
+}
+
+function renderPlan(p: Plan, source: string, options: Options): string {
   return [
     "would publish:",
     `  repository : ${p.slug}`,
@@ -297,6 +376,7 @@ function renderPlan(p: Plan, source: string): string {
     "  assets     : none (release-assets attaches the binaries on release: published)",
     `  command    : ${renderArgv({ exe: "gh", argv: p.argv })}`,
     `  latest     : ${p.latestWhy}`,
+    `  private    : ${options.skipPrivateNameCheck ? "SKIPPED by --skip-private-name-check -- the caller attests it ran its own check" : "title and notes checked against the private repository list before the create -- not here: a dry run reads nothing from GitHub"}`,
     "",
     "nothing was sent (--dry-run).",
   ].join("\n");
@@ -315,8 +395,11 @@ const defaultIo: Io = {
 export function publish(options: Options, run: Run = defaultRun, io: Io = defaultIo): number {
   const p = plan(options, run);
   const source = options.changelog ?? `${p.tag}:CHANGELOG.md`;
+  // Read before any `gh` call, on a dry run too: a mistyped path is a usage
+  // defect whichever mode found it.
+  const ignore = readIgnoreOption(options);
   if (options.dryRun) {
-    io.out(options.json ? JSON.stringify({ schema: "nen.dev.release-publish/v0.1", sent: false, ...p }) : renderPlan(p, source));
+    io.out(options.json ? JSON.stringify({ schema: "nen.dev.release-publish/v0.1", sent: false, ...p, privateNameCheck: null }) : renderPlan(p, source, options));
     return 0;
   }
   const auth = run("gh", ["auth", "status", "--hostname", GITHUB_HOST], options.repo);
@@ -358,6 +441,25 @@ export function publish(options: Options, run: Run = defaultRun, io: Io = defaul
   if (!/^release not found$/i.test(view.stderr.trim())) {
     throw new Refusal(`'gh release view ${p.tag}' failed without saying the release is absent (${view.stderr.trim() || `exit ${view.status}`}); refusing rather than risking a duplicate.`, 2);
   }
+  // THE PRIVATE-NAME GUARD (zheref/nen#363): the title and the very notes the
+  // release would carry, after every read above and before the one write.
+  const target = parseTarget(p.slug);
+  const privateNameCheck: PrivateNameCheck = checkPrivateNames(
+    guardSeams(run, options.repo),
+    target,
+    [
+      { field: "title", text: p.title },
+      { field: "notes", text: p.notes },
+    ],
+    options.skipPrivateNameCheck,
+    ignore,
+    options.allowAllIgnored,
+  );
+  for (const line of privateNameLines(privateNameCheck, target, "release-publish")) io.err(line);
+  if (blocksWrite(privateNameCheck)) {
+    if (options.json) io.out(JSON.stringify({ schema: "nen.dev.release-publish/v0.1", sent: false, slug: p.slug, tag: p.tag, privateNameCheck }));
+    return blockingExit(privateNameCheck);
+  }
   const dir = mkdtempSync(join(tmpdir(), "nen-release-notes-"));
   try {
     const notesFile = join(dir, "notes.md");
@@ -370,7 +472,7 @@ export function publish(options: Options, run: Run = defaultRun, io: Io = defaul
     if (created.status !== 0) throw new Refusal(`'gh release create ${p.tag}' failed: ${created.stderr.trim() || `exit ${created.status}`}`, 2);
     const url = created.stdout.trim().split("\n").pop() ?? "";
     io.out(options.json
-      ? JSON.stringify({ schema: "nen.dev.release-publish/v0.1", sent: true, slug: p.slug, tag: p.tag, derived: p.derived, latest: p.latest, url })
+      ? JSON.stringify({ schema: "nen.dev.release-publish/v0.1", sent: true, slug: p.slug, tag: p.tag, derived: p.derived, latest: p.latest, url, privateNameCheck })
       : `published ${p.tag}${p.derived ? " (derived)" : ""}: ${url}`);
     return 0;
   } finally {
@@ -416,13 +518,29 @@ export function selfTest(): SelfTestResult {
     return { io: { out: (l): void => { buf.push(l); }, err: (l): void => { buf.push(l); } }, text: (): string => buf.join("\n") };
   };
   // Fake gh: remote tags, existing releases and every call recorded. Git is real.
-  const fakeGh = (remoteTags: readonly string[], released: readonly string[], calls: string[][], moved: readonly string[] = [], repoAnswer?: RunResult): Run => (exe, args, cwd) => {
+  // The private-name guard's two reads (zheref/nen#363) are answered too: the
+  // repository read WITHOUT --jq is its visibility read, and `user/repos` the
+  // credential's private list -- by default one name the fixture never says.
+  const PRIVATE_LIST: RunResult = { status: 0, stdout: JSON.stringify([{ full_name: "acme/hidden-thing" }]), stderr: "" };
+  const FULL_REACH: RunResult = { status: 0, stdout: "HTTP/2.0 200 OK\nX-Oauth-Scopes: gist, read:org, repo\n\n{}", stderr: "" };
+  const PUBLIC_REPO: RunResult = { status: 0, stdout: JSON.stringify({ full_name: "acme/widget", visibility: "public" }), stderr: "" };
+  const fakeGh = (
+    remoteTags: readonly string[],
+    released: readonly string[],
+    calls: string[][],
+    moved: readonly string[] = [],
+    repoAnswer?: RunResult,
+    guard: { readonly visibility?: RunResult; readonly list?: RunResult; readonly scopes?: RunResult } = {},
+  ): Run => (exe, args, cwd) => {
     if (exe !== "gh") return defaultRun(exe, args, cwd);
     calls.push([...args]);
     const pass: RunResult = { status: 0, stdout: "https://github.com/acme/widget/releases/tag/x\n", stderr: "" };
     const notFound: RunResult = { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
     const noRelease: RunResult = { status: 1, stdout: "", stderr: "release not found" };
     if (args[0] === "auth") return pass;
+    if (args[0] === "api" && args[1] === "-i" && args[2] === "user") return guard.scopes ?? FULL_REACH;
+    if (args[0] === "api" && (args[1] ?? "").startsWith("user/repos?visibility=private")) return guard.list ?? PRIVATE_LIST;
+    if (args[0] === "api" && /^repos\/[^/]+\/[^/]+$/.test(args[1] ?? "") && !args.includes("--jq")) return guard.visibility ?? PUBLIC_REPO;
     if (args[0] === "api" && /^repos\/[^/]+\/[^/]+$/.test(args[1] ?? "")) return repoAnswer ?? { status: 0, stdout: "acme/widget\n", stderr: "" };
     if (args[0] === "api") {
       const hit = remoteTags.find((t): boolean => (args[1] ?? "").endsWith(`/tags/${t}`));
@@ -552,6 +670,24 @@ export function selfTest(): SelfTestResult {
       const code = releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsHost), err.io);
       ok(code === 2 && err.text().includes("git.example.com") && callsHost.length === 0, `an origin on another host (${remote}) refuses (2) before any gh call`);
     }
+    // zheref/nen#373: a credential with no host after it is never read as the host.
+    for (const remote of ["https://FAKE0000@/acme/widget.git", "https://FAKE0000@:443/acme/widget.git", "https://user:FAKE0000@/acme/widget.git"]) {
+      gg("remote", "set-url", "origin", remote);
+      const callsTok: string[][] = [];
+      const err = capture();
+      const code = releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsTok), err.io);
+      ok(code === 2 && !/fake0000/i.test(err.text()) && callsTok.length === 0, `a host-less origin carrying a credential (${remote.replace("FAKE0000", "***")}) refuses (2) without echoing it`);
+    }
+    // SEC-7 (Feitan round 2): an '@' in the PATH moves no host -- this one connects to evil.example.
+    ok(remoteHost("https://evil.example/x@github.com/acme/widget") === undefined, "an origin whose path carries '@github.com/...' has no host, never github.com");
+    // Feitan round 3: git connects inside the brackets, and ends an ssh host at '/' only.
+    for (const spoof of ["ssh://[evil.invalid]@github.com/acme/widget", "ssh://git@[evil.invalid]@github.com/acme/widget", "ssh://github.com:22#@evil.invalid/acme/widget"]) {
+      ok(remoteHost(spoof) === undefined && slugFromRemote(spoof) === undefined, `${spoof} has no host and no slug, never github.com`);
+    }
+    gg("remote", "set-url", "origin", "https://evil.example/x@github.com/acme/widget.git");
+    const callsAt: string[][] = [];
+    const errAt = capture();
+    ok(releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsAt), errAt.io) === 2 && callsAt.length === 0, "an origin whose path carries '@github.com/...' refuses (2) before any gh call");
     const calls2i: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], calls2i), quiet)) === 0 &&
       calls2i.length > 0 && calls2i.every((c): boolean => c.includes("--hostname") ? c[c.indexOf("--hostname") + 1] === "github.com" : c[c.indexOf("--repo") + 1] === "github.com/acme/widget"),
@@ -567,6 +703,41 @@ export function selfTest(): SelfTestResult {
     ok(create.includes("--verify-tag") && !create.includes("<notes>") && create.includes("--notes-file"), "with --verify-tag and a real notes file");
     ok(!calls3.some((c): boolean => c[1] === "upload" || c[0] === "push"), "no asset upload, no push");
     ok(sent.text().startsWith("published v2.0.0"), "the output names the tag it published");
+
+    lines.push("the private-name guard (zheref/nen#363) -- before the create, never on --dry-run");
+    const named = (name: string): RunResult => ({ status: 0, stdout: JSON.stringify([{ full_name: `acme/${name}` }, { full_name: "acme/hidden-thing" }]), stderr: "" });
+    const callsG1: string[][] = [];
+    const hit = capture();
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG1, [], undefined, { list: named("landed") }), hit.io)) === 4, "a private repository named in the notes refuses (4)");
+    ok(!callsG1.some((c): boolean => c[1] === "create"), "and no release was created");
+    ok(hit.text().includes("release-publish: notes:3: private repository #2") && !/landed/i.test(hit.text()), "the refusal names the field, the line and an index -- never the name");
+    const callsG2: string[][] = [];
+    ok(outcome(() => publish(base({ tag: "v2.0.0", title: "Nen v2.0.0 for hidden-thing" }), fakeGh(["v2.0.0"], [], callsG2), quiet)) === 4 && !callsG2.some((c): boolean => c[1] === "create"), "a private repository named in --title refuses (4), nothing created");
+    const callsG3: string[][] = [];
+    const privateRepo: RunResult = { status: 0, stdout: JSON.stringify({ visibility: "private" }), stderr: "" };
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG3, [], undefined, { visibility: privateRepo, list: named("landed") }), quiet)) === 0
+      && !callsG3.some((c): boolean => (c[1] ?? "").startsWith("user/repos")), "a PRIVATE repository is not checked -- the list is never read, and it publishes");
+    const callsG4: string[][] = [];
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG4, [], undefined, { list: { status: 1, stdout: "", stderr: "HTTP 401" } }), quiet)) === 1
+      && !callsG4.some((c): boolean => c[1] === "create"), "an unreadable private list fails closed (1), nothing created");
+    const callsG5: string[][] = [];
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG5, [], undefined, { list: { status: 0, stdout: "[]", stderr: "" } }), quiet)) === 1, "a private list that reads EMPTY fails closed (1)");
+    const callsG6: string[][] = [];
+    const skipped = capture();
+    ok(outcome(() => publish(base({ tag: "v2.0.0", skipPrivateNameCheck: true }), fakeGh(["v2.0.0"], [], callsG6, [], undefined, { list: named("landed") }), skipped.io)) === 0
+      && !callsG6.some((c): boolean => (c[1] ?? "").startsWith("user/repos")) && skipped.text().includes("SKIPPED by --skip-private-name-check"), "--skip-private-name-check reads no list, publishes, and is named");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", privateNamesIgnoreFile: "no-such-ignore-file" }), fakeGh(["v2.0.0"], [], []), quiet)) === 2, "a missing --private-names-ignore-file is a usage defect (2), never an empty list");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", allowAllIgnored: true, dryRun: true }), defaultRun, quiet)) === 2, "--allow-all-ignored without an ignore file refuses (2)");
+    writeFileSync(join(repo, "in-tree-ignore.txt"), "landed\n");
+    ok(outcome(() => publish(base({ tag: "v2.0.0", privateNamesIgnoreFile: "in-tree-ignore.txt", dryRun: true }), defaultRun, quiet)) === 2, "an ignore file inside the repository's own working tree refuses (2) -- the tree under release cannot exempt itself");
+    rmSync(join(repo, "in-tree-ignore.txt"));
+    const callsG7: string[][] = [];
+    ok(outcome(() => publish(base({ tag: "v2.0.0", dryRun: true }), fakeGh(["v2.0.0"], [], callsG7, [], undefined, { list: named("landed") }), quiet)) === 0 && callsG7.length === 0, "--dry-run reads nothing from GitHub, the guard included");
+    ok(n.includes("private    : title and notes checked"), "and its plan says where the check runs instead");
+    const callsG8: string[][] = [];
+    const fineGrained: RunResult = { status: 0, stdout: "HTTP/2.0 200 OK\nContent-Type: application/json\n\n{}", stderr: "" };
+    ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], callsG8, [], undefined, { scopes: fineGrained }), quiet)) === 1
+      && !callsG8.some((c): boolean => c[1] === "create") && !callsG8.some((c): boolean => (c[1] ?? "").startsWith("user/repos")), "a credential with no X-OAuth-Scopes (a list that may be partial) fails closed (1), nothing created");
 
     lines.push("a failed create -- gh's defect (2), with its diagnostic");
     const failing = (answer: RunResult): Run => (exe, args, cwd) => (exe === "gh" && args[0] === "release" && args[1] === "create" ? answer : fakeGh(["v2.0.0"], [], [])(exe, args, cwd));

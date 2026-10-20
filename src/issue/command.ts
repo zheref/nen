@@ -52,20 +52,13 @@ import {
   unmatchedBraces,
   CLOSE_COMMENT_PLACEHOLDERS,
   NotAnIssueError,
+  renderCloseComment,
+  templateFor,
   type CloseComments,
 } from "./subissue.js";
 import { commentArgv, postComment, type CommentRequest } from "./comment.js";
-import {
-  blockingExit,
-  blocksWrite,
-  checkPrivateNames,
-  parseIgnoreList,
-  privateNameLines,
-  SKIP_PRIVATE_NAME_CHECK_FLAG,
-  type CheckedText,
-  type IgnoreList,
-  type PrivateNameCheck,
-} from "./privacy.js";
+import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "./privacy.js";
+import { guardPrivateNames as runPrivateNameGuard, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "./privacyguard.js";
 import {
   bodySha256,
   certifyIssue,
@@ -132,21 +125,23 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   search: { values: ["target", "subject", "files", "rule-ids", "lane-labels"] },
   "open-pr-check": { values: ["target", "issues"] },
   file: {
-    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", "private-names-ignore-file"],
-    booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"],
+    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   comment: {
-    values: ["target", "issue", "body", "body-file", "private-names-ignore-file"],
-    booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"],
+    values: ["target", "issue", "body", "body-file", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   "edit-body": {
-    values: ["target", "issue", "body-file", "expect-body-sha256", "current-body-out", "private-names-ignore-file"],
-    booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"],
+    values: ["target", "issue", "body-file", "expect-body-sha256", "current-body-out", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   "attach-sub": { values: ["target", "parent", "children"], booleans: ["dry-run"] },
+  // The guard runs here only when the close-comment channel carries the
+  // CALLER's text (zheref/nen#363): the fixed default is nen's own sentence.
   "consolidate-close": {
-    values: ["target", "parent", "children", "severity-family", "close-comment", "close-comment-map"],
-    booleans: ["dry-run", "allow-open-pr"],
+    values: ["target", "parent", "children", "severity-family", "close-comment", "close-comment-map", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["dry-run", "allow-open-pr", ...PRIVATE_NAME_FLAGS.booleans],
   },
   "chain-position": { values: ["target", "issue", "chain-labels"] },
   terminus: { values: ["target", "issue", "chain-labels", "integration-prefix", "trunk"] },
@@ -453,9 +448,17 @@ usage:
       'readBack: { currentSha256, matchesSubmitted, matchesPrevious,
       readError }' on uncertain.
 
-  PRIVATE REPOSITORY NAMES ('file', 'comment', 'edit-body'; zheref/nen#329).
-      Three of the verbs that put caller text on an issue; 'consolidate-close'
-      and the 'nen pr' writers are not guarded yet (zheref/nen#363).
+  PRIVATE REPOSITORY NAMES ('file', 'comment', 'edit-body', zheref/nen#329;
+      'consolidate-close', zheref/nen#363). Every nen verb that writes caller
+      text to GitHub runs this guard: these four, 'idea file', 'pr open', 'pr
+      edit-body', 'pr threads reply|settle', 'wake fire|verify' and nen's own
+      release-publish script -- docs/USAGE.md's private-name guard section
+      names each one's checked fields, and the writers ruled out with why.
+      'consolidate-close' checks each child's close comment (field
+      'close-comment[<child>]') only when --close-comment or
+      --close-comment-map supplied it -- the fixed default is nen's own
+      sentence -- after its read-only refusals and before the attach;
+      without one, privateNameCheck is null and the guard's flags exit 2.
       Before any write to a PUBLIC target -- and on --dry-run too, so its
       verdict is the real run's -- the title (for 'file') and the body are
       compared against the credential's LIVE private repository list
@@ -476,11 +479,15 @@ usage:
       name two owners share, the first entry the ignore file does not
       exempt). The body that passed is the body sent: 'gh' gets it on stdin
       ('--body-file -'), never the path, so nothing written to the file after
-      the check is published. A PRIVATE or INTERNAL
-      target is not checked (naming a private repository there leaks
-      nothing) and the list is never read. FAIL CLOSED: an unreadable target
-      visibility, an unreadable list, a list that may be truncated or one
-      that reads EMPTY refuses with exit 1 -- never a pass. nen never
+      the check is published. A PRIVATE target is not checked (naming a
+      private repository there leaks nothing) and the list is never read; an
+      INTERNAL one is checked like a public one, the enterprise can read it
+      (zheref/nen#363). FAIL CLOSED: an unreadable target visibility, an
+      unreadable list, a list that may be truncated or one that reads EMPTY
+      refuses with exit 1 -- never a pass -- and so does a credential that
+      cannot be shown to see every private repository: 'gh api -i user' must
+      answer an X-OAuth-Scopes header that includes 'repo' (a fine-grained,
+      app or CI token answers none, and its list may be partial). nen never
       rewrites the text: redact and retry. --skip-private-name-check is the
       opt-out for a caller that has run its own check; nothing is read, and
       every run that uses it says so on stderr.
@@ -488,7 +495,9 @@ usage:
       generic to police: one per line, '#' comments and blank lines ignored,
       case-insensitive; a bare 'name' exempts that name under every owner,
       an 'owner/name' line that slug only. No default path is ever read, and
-      a missing file is a usage error (exit 2). An ignore file that exempts
+      a missing file is a usage error (exit 2), and so is one whose real
+      path lies inside the working tree holding --repo's root (the change
+      under review must not write its own exemption). An ignore file that exempts
       EVERY private name refuses (exit 1, "every private name is ignored")
       unless --allow-all-ignored is given. An ignored hit never blocks
       and is never silent: 'ignored: <field>:<line>: private repository #k
@@ -532,6 +541,8 @@ usage:
                               [--close-comment <template>]
                               [--close-comment-map <path>]
                               [--dry-run] [--allow-open-pr]
+                              [--skip-private-name-check]
+                              [--private-names-ignore-file <path> [--allow-all-ignored]]
       The whole choreography in its load-bearing order: file (already done by
       the caller) -> attach -> close, with the label union and severity maximum
       computed and reported. --severity-family names the ONE label family that
@@ -823,11 +834,10 @@ function openPr(context: CommandContext): number {
 }
 
 /**
- * THE PRIVATE-NAME GUARD, as the three text-writing verbs run it
- * (zheref/nen#329; ./privacy.ts has the matching rules). Runs on a dry run
- * too: a dry run whose verdict differs from the real run's is not a dry run.
- * Its human lines go to stderr in every mode, so a passing run's stdout is
- * unchanged and the opt-out is named even under --json.
+ * THE PRIVATE-NAME GUARD, as this family's text-writing verbs run it
+ * (zheref/nen#329; ./privacy.ts has the matching rules, ./privacyguard.ts the
+ * flags and lines every guarded verb shares since #363). Every line it prints
+ * here begins `nen issue:`, as it has since #329.
  */
 function guardPrivateNames(
   context: CommandContext,
@@ -835,42 +845,26 @@ function guardPrivateNames(
   fields: readonly CheckedText[],
   ignore: IgnoreList | null,
 ): PrivateNameCheck {
-  const check = checkPrivateNames(
-    context.seams,
-    target,
-    fields,
-    context.args.booleans.has(SKIP_PRIVATE_NAME_CHECK_FLAG),
-    ignore,
-    context.args.booleans.has("allow-all-ignored"),
-  );
-  for (const line of privateNameLines(check, target)) context.io.err(line);
-  return check;
+  return runPrivateNameGuard(context, target, fields, ignore, "nen issue");
 }
 
 /**
- * `--private-names-ignore-file <path>`, read BEFORE any `gh` call: absent or
- * unreadable when given is a usage error (exit 2), and with the flag omitted
- * nothing is read -- there is no default path. Resolved against --repo's root
- * like every other own-path flag (zheref/nen#100).
+ * `consolidate-close` with no caller close text runs no guard, so the guard's
+ * flags would be accepted and ignored there -- the thing this family refuses
+ * (exit 2) rather than letting a caller believe an ignore file or an opt-out
+ * applied. Returns null, the ignore list that run never reads.
  */
-function readIgnoreFlag(context: CommandContext): IgnoreList | null {
-  const raw = context.args.values["private-names-ignore-file"];
-  if (raw === undefined) {
-    if (context.args.booleans.has("allow-all-ignored")) {
-      throw new VerbUsageError(
-        "--allow-all-ignored permits an ignore file that exempts every private name; it means nothing without --private-names-ignore-file <path>.",
-      );
-    }
-    return null;
+function refuseUnreadGuardFlags(context: CommandContext): null {
+  const given = [
+    ...PRIVATE_NAME_FLAGS.values.filter((flag): boolean => context.args.values[flag] !== undefined),
+    ...PRIVATE_NAME_FLAGS.booleans.filter((flag): boolean => context.args.booleans.has(flag)),
+  ];
+  if (given.length > 0) {
+    throw new VerbUsageError(
+      `--${given.join(", --")} ${given.length === 1 ? "is" : "are"} read by 'consolidate-close' only with --close-comment or --close-comment-map: without one, every child is closed with nen's fixed sentence, which carries no caller text, so the private-name guard does not run and the flag would be ignored.`,
+    );
   }
-  const path = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), raw);
-  return parseIgnoreList(
-    readTextFile(
-      path,
-      process.cwd(),
-      "--private-names-ignore-file names the private repositories this run may mention; a missing one is never read as an empty list.",
-    ),
-  );
+  return null;
 }
 
 function file(context: CommandContext): number {
@@ -1779,6 +1773,9 @@ function consolidate(context: CommandContext): number {
   // without a single `gh` call -- the same discipline readSeverityFamily's
   // shape check follows one line up.
   const closeComments = readCloseComments(context, children, root);
+  // The ignore file, like every other input, before the first `gh` call --
+  // and never at all when no caller text rides the close (zheref/nen#363).
+  const ignore = closeComments === null ? refuseUnreadGuardFlags(context) : readIgnoreFlag(context);
   // THE PARENT IS READ HERE, AND IT IS READ FIRST. Nothing in this verb had
   // ever looked at `--parent` before its first write, and the certification
   // below cannot certify a number nobody read. Reading it before the children
@@ -1870,6 +1867,31 @@ function consolidate(context: CommandContext): number {
     return 1;
   }
 
+  // THE PRIVATE-NAME GUARD (zheref/nen#363), after every read-only refusal
+  // above and before the FIRST write -- the attach is a write too, so a hit
+  // stops the run with nothing attached and nothing closed. It checks the close
+  // comments exactly as they would be posted, one field per child, and runs
+  // only when the caller supplied them: the fixed default is nen's sentence
+  // and names nothing. privateNameCheck is null then.
+  let privateNameCheck: PrivateNameCheck | null = null;
+  if (closeComments !== null) {
+    privateNameCheck = guardPrivateNames(
+      context,
+      target,
+      plan.toClose.map((child): CheckedText => ({
+        field: `close-comment[${child}]`,
+        text: renderCloseComment(templateFor(closeComments, child), plan.parent, child),
+      })),
+      ignore,
+    );
+    if (blocksWrite(privateNameCheck)) {
+      if (context.json) {
+        context.io.out(JSON.stringify({ parent, children, refused: true, privateNameCheck }, null, 2));
+      }
+      return blockingExit(privateNameCheck);
+    }
+  }
+
   // THE SECOND HALF OF THE OBJECT-CLASS REFUSAL, and it is deliberately still
   // here after the hoisted check above. ./subissue.ts certifies the parent and
   // every child again at the write stage -- that pre-flight is the module's
@@ -1895,7 +1917,7 @@ function consolidate(context: CommandContext): number {
     throw error;
   }
   if (context.json) {
-    context.io.out(JSON.stringify({ plan, openPrs, report }, null, 2));
+    context.io.out(JSON.stringify({ plan, openPrs, report, privateNameCheck }, null, 2));
     return report.failed.length === 0 ? 0 : 1;
   }
   for (const line of report.log) context.io.out(line);

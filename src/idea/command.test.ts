@@ -7,13 +7,30 @@ import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { ideaCommand } from "./command.js";
+import { FULL_REACH_ROW, SCOPES_CALL } from "../issue/privacy.testkit.js";
+
+/**
+ * THE DEFAULT PRIVATE-NAME GUARD ANSWER (zheref/nen#363), for every test that
+ * is not about the guard: the target's visibility read answers "private", so
+ * the guard skips and reads no list. The guard's own describe block passes
+ * `guard: "scripted"` and scripts every read itself.
+ */
+function privateTargetRow(argv: readonly string[]): ScriptedCall | null {
+  const at = argv.indexOf("--target");
+  const slug = at >= 0 ? argv[at + 1] : undefined;
+  if (slug === undefined) return null;
+  return { match: `gh api repos/${slug}`, result: { stdout: JSON.stringify({ visibility: "private" }) } };
+}
 
 async function capture(
   argv: readonly string[],
   script: readonly ScriptedCall[] = [],
   // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
   repoFlag: string | null = BANKAI_REPO,
-): Promise<{ code: number; out: string[]; err: string[] }> {
+  guard: "private-target" | "scripted" = "private-target",
+): Promise<{ code: number; out: string[]; err: string[]; calls: readonly string[] }> {
+  const guardRow = guard === "scripted" ? null : privateTargetRow(argv);
+  if (guardRow !== null) script = [guardRow, ...script];
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -24,9 +41,17 @@ async function capture(
       err.push(line);
     },
   };
-  const seams: Seams = new ScriptedSeams(script);
+  const scripted = new ScriptedSeams(script);
+  const seams: Seams = scripted;
   const code = await runFamily(ideaCommand, argv, repoFlag, false, io, seams);
-  return { code, out, err };
+  return {
+    code,
+    out,
+    err,
+    calls: scripted.calls
+      .map((call): string => [call.command, ...call.args].join(" "))
+      .filter((line): boolean => guardRow === null || line !== guardRow.match),
+  };
 }
 
 describe("nen idea file -- CLI wiring", () => {
@@ -229,5 +254,97 @@ describe("nen idea file -- --target refuses the way every other family does", ()
     ]);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/--target owner\/name is required/);
+  });
+});
+
+describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
+  const PUBLIC: ScriptedCall = { match: "gh api repos/zheref/nen", result: { stdout: JSON.stringify({ visibility: "public" }) } };
+  const PRIVATE: ScriptedCall = { match: "gh api repos/zheref/nen", result: { stdout: JSON.stringify({ visibility: "private" }) } };
+  const LIST_PAGE = "gh api user/repos?visibility=private&per_page=100&page=1";
+  const LIST: ScriptedCall = {
+    match: LIST_PAGE,
+    result: { stdout: JSON.stringify([{ full_name: "acme/hidden-thing" }, { full_name: "acme/vault" }]) },
+  };
+  const CREATE = "gh issue create --repo zheref/nen --title t --body-file - --assignee me --label bankai:severity/high";
+  const filing = (body: string, ...extra: string[]): string[] => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-idea-guard-"));
+    const bodyFile = join(dir, "body.md");
+    writeFileSync(bodyFile, body);
+    return [
+      "idea", "file", "--target", "zheref/nen", "--title", "t", "--body-file", bodyFile,
+      "--label", "bankai:severity/high", "--assignee", "me", ...extra,
+    ];
+  };
+  const created: ScriptedCall[] = [
+    { match: CREATE, result: { stdout: "https://github.com/zheref/nen/issues/5\n" } },
+    {
+      match: "gh api repos/zheref/nen/issues/5",
+      result: { stdout: JSON.stringify({ title: "t", body: "nothing private", labels: [{ name: "bankai:severity/high" }] }) },
+    },
+  ];
+
+  it("a private name in the body on a PUBLIC target refuses with exit 4 before any write, and never prints the name", async () => {
+    const result = await capture(filing("ported from the vault"), [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
+    expect(result.code).toBe(4);
+    expect(result.calls).toEqual(["gh api repos/zheref/nen", SCOPES_CALL, LIST_PAGE]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen idea file: body:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("a private name in the TITLE refuses too", async () => {
+    const argv = filing("nothing private");
+    argv[argv.indexOf("--title") + 1] = "about Hidden-Thing";
+    const result = await capture(argv, [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
+    expect(result.code).toBe(4);
+    expect(result.err.join("\n")).toContain("title:1: private repository #1");
+    expect(result.calls.some((line): boolean => line.startsWith("gh issue create"))).toBe(false);
+  });
+
+  it("--json: the refusal is { filed: false, privateNameCheck }", async () => {
+    const result = await capture(filing("the vault", "--json"), [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
+    expect(result.code).toBe(4);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report["filed"]).toBe(false);
+    expect((report["privateNameCheck"] as { result: string }).result).toBe("refused");
+    expect(result.out.join("\n")).not.toMatch(/vault/i);
+  });
+
+  it("a PRIVATE target is not checked -- the list is never read, and the idea is filed", async () => {
+    const result = await capture(filing("nothing private"), [PRIVATE, ...created], BANKAI_REPO, "scripted");
+    expect(result.code).toBe(0);
+    expect(result.calls).not.toContain(LIST_PAGE);
+    expect(result.calls).toContain(CREATE);
+  });
+
+  it("an unreadable private list fails closed (exit 1) and files nothing", async () => {
+    const result = await capture(
+      filing("nothing private"),
+      [PUBLIC, FULL_REACH_ROW, { match: LIST_PAGE, result: { code: 1, stderr: "HTTP 401" } }],
+      BANKAI_REPO,
+      "scripted",
+    );
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/nen idea file: private-name check could not run/);
+    expect(result.calls.some((line): boolean => line.startsWith("gh issue create"))).toBe(false);
+  });
+
+  it("a clean filing on a PUBLIC target files, and --json carries the clean verdict", async () => {
+    const result = await capture(filing("nothing private", "--json"), [PUBLIC, FULL_REACH_ROW, LIST, ...created], BANKAI_REPO, "scripted");
+    expect(result.code).toBe(0);
+    expect((JSON.parse(result.out.join("\n")) as { privateNameCheck: { result: string } }).privateNameCheck.result).toBe("clean");
+  });
+
+  it("--skip-private-name-check reads nothing, files, and is named on stderr", async () => {
+    const result = await capture(filing("nothing private", "--skip-private-name-check"), created, BANKAI_REPO, "scripted");
+    expect(result.code).toBe(0);
+    expect(result.calls).not.toContain("gh api repos/zheref/nen");
+    expect(result.err.join("\n")).toMatch(/SKIPPED by --skip-private-name-check/);
+  });
+
+  it("a missing --private-names-ignore-file is exit 2 before any gh call", async () => {
+    const result = await capture(filing("x", "--private-names-ignore-file", "no-such-ignore-file"), [], BANKAI_REPO, "scripted");
+    expect(result.code).toBe(2);
+    expect(result.calls).toEqual([]);
   });
 });

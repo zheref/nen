@@ -195,6 +195,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     readonly meta?: {
       readonly declaredExclusions?: readonly DeclaredExclusionReport[];
       readonly warnings?: readonly string[];
+      readonly identities?: { readonly read?: string | null };
     };
   };
   try {
@@ -208,9 +209,24 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     };
   }
   const line = parsed.gateLine ?? parsed.message ?? "(no verdict line)";
+  // A `ready` judged on the CHECKOUT's own gates file is not a merge signal
+  // (zheref/nen#372, Feitan 3): under `--repo` that file is the pull
+  // request's head, which can loosen its own reviewers, rounds and quorum.
+  // `pr ready` still answers a human reader with a warning; a merge refuses.
+  // An ALLOW-list (round 2, Feitan 5): this gate passes neither --gates nor
+  // --reviewers, so the base's file is the one route a merge may rest on; an
+  // absent `meta.identities`, or a route a later build adds, is refused.
+  const read = parsed.meta?.identities?.read;
+  const untrusted = read !== "base";
+  const refusal =
+    untrusted && parsed.verdict === "ready"
+      ? [
+          `pr ready: refused for a merge: the verdict's gate inputs were not the pull request's base's (meta.identities.read: ${String(read)}) -- a merge never rests on gate inputs the base has not merged. Give the token contents:read so the base can be read.`,
+        ]
+      : [];
   return {
     name: "pr ready",
-    ok: parsed.verdict === "ready",
+    ok: parsed.verdict === "ready" && !untrusted,
     judgedHead: parsed.judgedHead ?? null,
     // What a declared `checks.excluded` entry removed from CON-32(a)
     // (zheref/nen#249, Feitan F2): a merge transcript never records a widened
@@ -226,6 +242,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
       ...(Array.isArray(parsed.meta?.warnings) ? parsed.meta.warnings : [])
         .filter((warning): boolean => typeof warning === "string" && !warning.startsWith("excluded by declaration: "))
         .map((warning): string => plainLine(`pr ready: warning: ${redact(warning)}`)),
+      ...refusal,
       ...captured.errLines.map(redact),
     ],
   };
@@ -491,7 +508,11 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
   // a file the merge changes.
   const policyFiles = new Set(["nen/workflow.json", "nen/gates.json"]);
   const touchesPolicy = changedFiles.some(
-    (file): boolean => policyFiles.has(file.path) || (file.previousPath !== null && policyFiles.has(file.previousPath)),
+    // Case-insensitively (round 2, Feitan 4): on a case-insensitive checkout
+    // `NEN/gates.json` can supply the bytes local readers see as nen/gates.json.
+    (file): boolean =>
+      policyFiles.has(file.path.toLowerCase()) ||
+      (file.previousPath !== null && policyFiles.has(file.previousPath.toLowerCase())),
   );
   if (touchesPolicy) {
     return {
