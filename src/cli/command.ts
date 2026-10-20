@@ -285,3 +285,11 @@ export function emit(io: Io, json: boolean, value: unknown, lines: readonly stri
   }
   for (const line of lines) io.out(line);
 }
+
+/** Opt-in arity guard for verbs that consume flags only after their verb path. */
+export function refuseExtraPositionals(args: ParsedArgs, consumed: number): void {
+  const extra = [...args.positionals.slice(consumed), ...args.passthrough];
+  if (extra.length > 0) {
+    throw new VerbUsageError(`Unexpected positional ${extra.map((value) => JSON.stringify(value)).join(", ")}; a value with spaces is one quoted argument.`);
+  }
+}

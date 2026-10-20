@@ -618,3 +618,14 @@ describe("nen/workflow.json#release row (zheref/nen#348)", () => {
     expect(report.checks.find((check): boolean => check.file === "nen/workflow.json#release")?.detail).toContain("not read -- nen/workflow.json did not load");
   });
 });
+
+it.each([false, true])("schema check validates severity against the target's labels, mapped=%s", (mapped) => {
+  const root = mkdtempSync(join(tmpdir(), "nen-severity-schema-")); mkdirSync(join(root, "nen"));
+  writeFileSync(join(root, "nen/labels.json"), JSON.stringify({ labels: [{ name: mapped ? "Priority one" : "acme:sev/high", color: "aaaaaa", description: "one" }] }));
+  const severity = mapped ? { family: "priority", order: ["p1"], labels: { p1: "Priority one" } } : { family: "acme:sev", order: ["high"] };
+  writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ severity }));
+  const row = (): SchemaCheck => checkTaxonomy({ repoFlag: root }).checks.find((check) => check.file === "nen/workflow.json")!;
+  expect(row().ok).toBe(true);
+  writeFileSync(join(root, "nen/labels.json"), JSON.stringify({ labels: [{ name: "other", color: "aaaaaa", description: "other" }] }));
+  expect(row().ok).toBe(false); expect(row().detail).toContain("severity.order"); expect(row().detail).toContain("not declared");
+});

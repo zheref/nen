@@ -1,3 +1,4 @@
+import { refuseExtraPositionals } from "../cli/command.js";
 // src/report/command.ts -- `nen report data` and `nen report render`: the two
 // halves of a rich effort report, split at the line every other pair in this
 // repository is split at.
@@ -138,7 +139,8 @@ data      One document describing this branch against --base: the commits, the
                    declared label containing '&' is refused naming it.
   --severity <name>[+] (with --severity-family <ns>:<family> and
                    --severity-order <a,b,..>)
-                   The same severity band 'nen backlog fetch' takes.
+                   The same severity band 'nen backlog fetch' takes; omitted
+                   family/order flags read workflow.severity.
                    A filter needs objects to filter: given with none of the
                    five flags above it is refused. A filtered document adds an
                    'objectsFilter' key ({ labels, severity, kept, of }) at the
@@ -472,6 +474,7 @@ function readDesk(context: CommandContext, root: string): Desk | null {
 }
 
 async function runData(context: CommandContext): Promise<number> {
+  refuseExtraPositionals(context.args, 2);
   const root = assertRepoRoot({
     repoFlag: requireRepoFlag(context, "It names the working tree this report describes."),
   });

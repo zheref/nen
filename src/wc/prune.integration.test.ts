@@ -502,3 +502,11 @@ describe("wc prune -- explicit targets, real disposable repositories", () => {
   });
 
 });
+
+it("refuses an empty-plan invocation's ignored passthrough before cleanup", async () => {
+  const w = world(); const before = git(w.repo, "show-ref");
+  const result = await run(w, [], ["--", "unexpected"]);
+  expect(result.code).toBe(2); expect(result.report).toBeNull();
+  expect(result.err).toContain('"unexpected"');
+  expect(git(w.repo, "show-ref")).toBe(before);
+});

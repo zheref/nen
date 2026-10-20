@@ -35,7 +35,7 @@ const PULLS = JSON.stringify([
   { number: 9, title: "lone", body: "", created_at: "2026-01-05T00:00:00Z" },
 ]);
 
-async function fetch(extra: readonly string[]): Promise<{ code: number; out: string[]; err: string[]; calls: number }> {
+async function fetch(extra: readonly string[], root = checkout()): Promise<{ code: number; out: string[]; err: string[]; calls: number }> {
   const out: string[] = [];
   const err: string[] = [];
   let calls = 0;
@@ -59,7 +59,7 @@ async function fetch(extra: readonly string[]): Promise<{ code: number; out: str
     },
     platform: "linux",
   };
-  const code = await runFamily(backlogCommand, ["backlog", "fetch", "--repo-slug", "o/r", "--repo", checkout(), ...extra], null, false, io, seams);
+  const code = await runFamily(backlogCommand, ["backlog", "fetch", "--repo-slug", "o/r", "--repo", root, ...extra], null, false, io, seams);
   return { code, out, err, calls };
 }
 
@@ -171,4 +171,46 @@ describe("nen backlog order refuses the fetch's filter flags", () => {
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/--label filters 'backlog fetch'/);
   });
+});
+
+describe("declared severity and strict positional boundaries (#427)", () => {
+  it.each([{ extra: ["fix"] }, { extra: ["--", "fix"] }])("refuses a stray argument before any network read: %s", async ({ extra }) => {
+    const result = await fetch(["--label", "enhancement", ...extra]);
+    expect(result.code).toBe(2); expect(result.calls).toBe(0);
+    expect(result.err.join("\n")).toContain('"fix"');
+    expect(result.err.join("\n")).toContain("a value with spaces is one quoted argument");
+  });
+  it("uses the declared family and highest-first order, with independent flag overrides", async () => {
+    const root = checkout();
+    writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ severity: { family: "acme:sev", order: ["critical", "high", "low"] } }));
+    expect(kept((await fetch(["--severity", "low+", "--json"], root)).out)).toEqual([2, 3]);
+    expect(kept((await fetch(["--severity", "high+", "--severity-order", "low,high", "--json"], root)).out)).toEqual([2, 3]);
+    writeFileSync(join(root, "nen/labels.json"), JSON.stringify({ labels: [...LABELS, "other:sev/critical", "other:sev/high", "other:sev/low"].map((name) => ({ name, color: "aaaaaa", description: "severity" })) }));
+    const familyOnly = await fetch(["--severity", "high+", "--severity-family", "other:sev", "--json"], root);
+    expect(familyOnly.code).toBe(0);
+    expect(JSON.parse(familyOnly.out.join("\n")).filter.severity.labels).toEqual(["other:sev/critical", "other:sev/high"]);
+    const override = await fetch(["--severity", "high", "--severity-family", "unknown:sev"], root);
+    expect(override.code).toBe(2); expect(override.err.join("\n")).toContain("unknown:sev/*");
+  });
+  it("maps a flat, spaced taxonomy to short severity names without creating labels", async () => {
+    const root = checkout();
+    writeFileSync(join(root, "nen/labels.json"), JSON.stringify({ labels: ["priority: p1 (patch)", "priority: p2 (minor)"].map((name) => ({ name, color: "aaaaaa", description: "priority" })) }));
+    writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ severity: { family: "priority", order: ["p1", "p2"], labels: { p1: "priority: p1 (patch)", p2: "priority: p2 (minor)" } } }));
+    const result = await fetch(["--severity", "p2+", "--json"], root);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).filter.severity.labels).toEqual(["priority: p1 (patch)", "priority: p2 (minor)"]);
+    const explicit = await fetch(["--severity", "p1", "--severity-family", "priority", "--severity-order", "p2,p1", "--json"], root);
+    expect(JSON.parse(explicit.out.join("\n")).filter.severity.labels).toEqual(["priority: p1 (patch)"]);
+    const bad = await fetch(["--severity", "p3"], root);
+    expect(bad.code).toBe(2); expect(bad.calls).toBe(0);
+  });
+});
+
+it("refuses activating a metadata mapping through severity.order before any network read", async () => {
+  const root = checkout();
+  writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ severity: { family: "priority", order: ["$comment"], labels: { $comment: "enhancement" } } }));
+  const result = await fetch(["--severity", "$comment", "--json"], root);
+  expect(result.code).toBe(1);
+  expect(result.calls).toBe(0);
+  expect(result.err.join("\n")).toContain("severity.order[0]");
 });

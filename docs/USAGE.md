@@ -504,6 +504,27 @@ warn about them, because it never sees them.
 
 #### `nen/workflow.json`
 
+`severity` is optional and has no default vocabulary. Declare a slash family as
+`{ "family": "acme:severity", "order": ["critical", "high", "low"] }`, highest first.
+For existing labels without that shape, add an explicit full-label map, for example:
+
+```json
+"severity": {
+  "family": "priority",
+  "order": ["p1", "p2"],
+  "labels": { "p1": "priority: p1 (next patch)", "p2": "priority: p2 (next minor)" }
+}
+```
+
+`backlog fetch --severity p2+` and `report data --severity p2+` read this declaration.
+`--severity-family` and `--severity-order` independently override its fields; a full-label
+map applies only when the selected family matches its declared family. Without a map,
+labels are `<family>/<name>`. `schema check` verifies every ordered label against the
+checkout's `nen/labels.json`. Empty, duplicate or `$`-prefixed order names, incomplete/duplicate label
+mappings and undeclared labels are refused. `$`-prefixed mapping entries remain
+untyped metadata and cannot be activated by naming them in `order`. No label is created or synchronized.
+
+
 **Optional, and its absence is a full policy rather than none.** Every key in
 it has a default, so a repository that carries no policy file runs under the
 same parameters as one whose file states them all — and
@@ -5063,7 +5084,7 @@ nen backlog fetch --repo-slug <owner/name> [--limit <n>] [--label <name>]... [--
 | `--repo-slug <owner/name>` | yes | The owner/name to fetch fresh from over `gh api`. | |
 | `--limit <n>` | no | Caps the TOTAL rows fetched per resource (issues, PRs), across as many pages as it takes to reach it. | Omit for no cap. Must be a positive whole number, or refused (exit 2). A capped fetch is always reported TRUNCATED, never presented as complete. |
 | `--label <name>` | no, **repeatable** | Keep only the efforts carrying EVERY `--label` (AND). An effort's labels are its issue's and all of its pull requests' labels, unioned; a lone PR is its own effort. | Names match exactly. Each must be declared in `--repo`'s `nen/labels.json`, checked **before any GitHub read**: an undeclared label is refused (exit 2), never matched against nothing; a value that is a piece of a declared label containing `&` is refused naming it — labels containing `&` are not supported in selectors (zheref/nen#410). |
-| `--severity <name>[+]` | no | Keep only the efforts carrying that severity's label; with a trailing `+`, that severity or any above it. | Needs `--severity-family <ns>:<family>` (which labels are severities — nen carries no severity vocabulary) and `--severity-order <a,b,..>` (highest first, the spelling `backlog order` takes). A family `nen/labels.json` does not declare, an order naming an undeclared leaf, an unknown severity or more than one `+` is refused (exit 2). ANDs with `--label`. |
+| `--severity <name>[+]` | no | Keep only the efforts carrying that severity's label; with a trailing `+`, that severity or any above it. | Reads `workflow.severity` when either family/order flag is omitted. Explicit `--severity-family` and `--severity-order` independently override it (highest first, the spelling `backlog order` takes). A family `nen/labels.json` does not declare, an order naming an undeclared leaf, an unknown severity or more than one `+` is refused (exit 2). ANDs with `--label`. |
 
 **Output and exit codes** — human rendering is `"<n> row(s) -- X issue(s), Y PR(s)"`, an optional
 `TRUNCATED at --limit <n>: ...` or `TRUNCATED at a defensive 200-page ceiling: ...` line, then one line
@@ -7362,8 +7383,22 @@ nen ref format --repo src/schema/fixtures/bankai-repo --code KP --kind PR --numb
 `--json`: `{ ref, token, glyph, mark, unknownState }`.
 ### `nen ref parse`
 
-Answers "what does this token mean" — the inverse of `format`. A token that does not match
-`<CODE>-<IS|PR>-#<N>` is refused with the full grammar restated, never guessed at.
+Also accepts `https://github.com/<owner>/<name>/(issues|pull)/<N>` and
+`<owner>/<name>#<N>`. These forms return `{ slug, code?, kind, number }` in JSON;
+`kind` is `IS`/`PR` from the URL path and `null` for a short ref. A known registry
+code is included only for an exact, case-insensitive registered `owner/name`
+identity, including codes recorded solely on `consumers[]`. A foreign owner with
+the same repository basename receives no code. A bare `product_codes` name is
+enriched only when resolving that code canonically identifies the exact requested
+slug. Recording two owners with the same basename does not lend one owner
+the other owner’s code.
+The registry is optional, and parsing performs no network lookup.
+Other hosts, credentials, ports, queries, fragments, encoded/dot paths and extra
+segments are refused at exit 2 with the host or path shape named.
+
+Answers "what does this token mean". For object notation `<CODE>-<IS|PR>-#<N>`, it is
+the inverse of `format`; GitHub URLs and `owner/name#N` are additional accepted forms.
+A token matching none of these forms is refused with the grammar restated, never guessed at.
 
 **Usage**
 
@@ -7375,11 +7410,16 @@ nen ref parse <token>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `<token>` (positional) | yes | A token in object notation. | Missing or malformed -> exit 2, naming the exact grammar. Does not touch the registry — the code half is not re-validated against it. |
+| `<token>` (positional) | yes | Object notation, GitHub object URL, or owner/name#N. | Missing or malformed -> exit 2, naming the exact grammar. Object notation retains its existing output and needs no registry. |
 
-**Output and exit codes** — human rendering: `ref:`, `code:`, `kind:`, `number:`, `glyph:` lines.
-`--json` prints `{ ref, code, kind, number, glyph }`. Exit 0 on a well-formed token; exit 2 when the
-token is missing or does not match the notation.
+**Output and exit codes** — object notation renders `ref:`, `code:`, `kind:`,
+`number:`, `glyph:` lines; `--json` prints `{ ref, code, kind, number, glyph }`.
+GitHub URL and short subjects render `slug:`, `code:`, `kind:`, `number:` lines;
+their `--json` output is `{ slug, code?, kind, number }`. An unrecorded code is omitted from
+JSON and shown as `(unrecorded)` in human output. Short subjects have `kind: null`
+in JSON and `(unknown)` in human output; URL kinds are `IS` or `PR`.
+Exit 0 on a well-formed token in any accepted form; exit 2 when the token is
+missing or matches none of the accepted forms.
 
 **Example**
 
@@ -13631,7 +13671,7 @@ nen report data … [--tz <zone>] [--open-stop]
 | `--backlog` | no (boolean) | every **open** issue and pull request of `--target` | paginated to completion; a fetch that hits the defensive page ceiling says so on stderr rather than presenting a partial register as whole |
 | `--objects-from <file>` | no | the register, read from a file instead of GitHub | a JSON array of rows already in the published `objects` shape. **Validated at the read seam and refused BY ROW INDEX at exit 2.** Never mixed with the four flags above: a register whose rows came from two authorities says nothing about which row came from which |
 | `--label <name>` | no, **repeatable** | keep only the objects of the EFFORTS carrying every `--label` (AND) | an effort is an issue plus the pull requests linked to it in the set (a link read from either side), or a lone PR; its labels are its members' labels unioned — the rule [`backlog fetch --label`](#nen-backlog-fetch) applies. **Every object of a kept effort is kept**, and every tally and the register count the filtered set. Validated against `--repo`'s `nen/labels.json` before any read: undeclared is exit 2; a piece of a declared label containing `&` is refused naming it. A filter with none of the five register flags is refused at exit 2. A filtered document appends `objectsFilter` (`{ labels, severity, kept, of }`) as its LAST key — with or without `--register` — and says `filter: … -- kept <k> of <n> object(s)` in the human output and on stderr; a register filtered to nothing reads `objects: none (the filter kept 0 of <n> object(s))` at exit 0. A `--register` desk naming an object the filter removed is refused at exit 2, and the refusal names the objects the filter removed. An unfiltered document is unchanged (zheref/nen#410) |
-| `--severity <name>[+]` | no | the same severity band `backlog fetch` takes | with `--severity-family <ns>:<family>` and `--severity-order <a,b,..>`, refused as there |
+| `--severity <name>[+]` | no | the same severity band `backlog fetch` takes | reads `workflow.severity` or explicit `--severity-family` / `--severity-order`, refused as there |
 | `--register <desk>` | no | emit the **register document** a Rikugan page renders from | the judgement half only, as JSON — see *The register document* below. Validated at the read seam and refused at exit 2 naming the field; an empty value is refused too |
 | `--tz <zone>` | no | the IANA zone the local clock is read in | must be a **compiled** zone in this host's zoneinfo database — `$TZDIR`, else `/usr/share/zoneinfo`, `/var/db/timezone/zoneinfo`, `/usr/lib/zoneinfo` — i.e. a **regular file**, whose real path stays inside the database's real directory (a symlink out of it is refused), and whose first four bytes are `TZif` (`UTC`/`Etc/UTC` need none). **Where no such directory exists** (on `win32`, or a `$TZDIR` that is not a directory) the runtime's ICU zone list (`Intl.supportedValuesOf("timeZone")`) answers instead, and stderr names that authority. The zone is printed as ICU's canonical name; a misspelling, a **case mismatch** (`america/bogota`), a metadata file such as `zone.tab`, or a path is **refused at exit 2** naming it, before any GitHub read, rather than stamped in UTC as `date(1)` silently would. Without it: `$TZ`, then the **`/etc/localtime` symlink's target**, then **`/etc/timezone`**, then ICU's own guess; a zone from any of them that fails the same check is `null` with the reason |
 | `--open-stop` | no (boolean) | a G5 stop is open this turn | `effortStage` is `blocked`. The **only** way to `blocked`: a `.nen/last-stop.json` on disk records a stop, not an open one |
@@ -16690,3 +16730,18 @@ regression capture. The default `nen` lane's full
 the saved LCOV exists and lets Nen parse it during mukai; it never reruns the suite. Verify the
 capture's source-tree and configuration provenance before measurement; mere artifact existence
 is not freshness. This wiring implements the phase boundary requested by Hatsu #48 for Nen #204.
+
+### Selector invocation corrections and argument boundaries (#427)
+
+`backlog fetch` and `report data` refuse unexpected positionals, including after `--`,
+at exit 2, naming the token with the hint “a value with spaces is one quoted argument”.
+For example, pass `--label 'bug fix'` as one argument. The shared opt-in guard also
+closes `wc prune --plan empty.json -- unexpected`; families consuming positionals or
+passing arguments to tools retain their declared behavior.
+
+`parse` keeps its guarded concrete corrections: `hatsu@g4+model/gpt` becomes
+`hatsu@G4#model/gpt` when a following free-list slot has a symbol separator.
+A `severity` enumeration with `[+]` is highest-first; two severities such as
+`high+low` are corrected to `low+`. The refused input remains exit 2 and JSON carries
+`corrected`. Mixed alternatives, incomplete lines and boundary-changing rewrites keep
+the existing refusal without an invented correction; legacy scalar placeholders stay.

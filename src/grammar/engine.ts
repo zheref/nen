@@ -905,7 +905,14 @@ function repairStructured(slot: Slot, text: string, next: Slot | undefined): Str
   const items = parts.filter((item) => item !== "");
   const isKnown = (item: string): boolean => matchValue(alternative, item) !== undefined;
   if (items.every(isKnown)) {
-    if (alternative.joiner === null && items.length !== 1) return undefined;
+    if (alternative.joiner === null && items.length !== 1) {
+      // A suffix enumeration is ordered highest-first by its template. A
+      // band containing both values is the lower value with that suffix.
+      if (parts.length !== 2 || items.length !== 2 || alternative.name !== "severity" || alternative.suffix !== "+" || text.endsWith(separator)) return undefined;
+      const indices = items.map((item) => alternative.values.findIndex((value) => value.toLowerCase() === item.toLowerCase()));
+      const own = resolved(`${alternative.values[Math.max(...indices)]}+`);
+      return own === undefined ? undefined : { own };
+    }
     const candidate = alternative.joiner === null ? `${items[0]}${text.endsWith(separator) ? separator : ""}` : items.join(separator);
     const own = resolved(candidate);
     return own === undefined ? undefined : { own };
@@ -914,7 +921,7 @@ function repairStructured(slot: Slot, text: string, next: Slot | undefined): Str
   if (firstFree <= 0 || parts.slice(firstFree).some(isKnown)) return undefined;
   const prefix = parts.slice(0, firstFree).filter((item) => item !== "");
   if (prefix.length === 0 || (alternative.joiner === null && firstFree !== 1)) return undefined;
-  if (next === undefined || next.separator === null || next.alternatives.length !== 1 || next.values.length !== 0 || next.joiner === null) return undefined;
+  if (next === undefined || next.separator === null || next.separatorKind !== "symbol" || next.alternatives.length !== 1 || next.values.length !== 0 || next.joiner === null) return undefined;
   const following = repairFreeList(next, parts.slice(firstFree).join(separator));
   const own = resolved(prefix.join(separator));
   return own === undefined || following === undefined ? undefined : { own, following };

@@ -490,7 +490,17 @@ export interface ProfilePolicy {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+export interface SeverityPolicy {
+  readonly family: string;
+  /** Optional name-to-full-label mapping for taxonomies without slash families. */
+  readonly labels: Readonly<Record<string, string>> | null;
+  /** Highest priority first; leaves in the declared label family. */
+  readonly order: readonly string[];
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface Workflow {
+  readonly severity: SeverityPolicy | null;
   readonly schema: string | null;
   readonly branch: BranchPolicy;
   readonly iteration: IterationPolicy;
@@ -570,6 +580,7 @@ export function defaultWorkflow(): Workflow {
   const empty: Readonly<Record<string, unknown>> = {};
   return {
     schema: null,
+    severity: null,
     branch: { template: DEFAULT_BRANCH_TEMPLATE, base: DEFAULT_BASE, raw: empty },
     iteration: { checks: DEFAULT_CHECKS, lane: null, raw: empty },
     tests: { required: DEFAULT_REQUIRED_TESTS, extra: [], raw: empty },
@@ -613,6 +624,7 @@ export function defaultWorkflow(): Workflow {
 
 /** The blocks this loader reads. Everything else at the root is preserved. */
 const ROOT_KEYS: readonly string[] = [
+  "severity",
   "branch",
   "iteration",
   "tests",
@@ -2114,14 +2126,44 @@ function parseProfile(path: string, value: unknown): ProfilePolicy {
   return { default: defaultProfile, allowed, raw };
 }
 
+function parseSeverity(path: string, value: unknown): SeverityPolicy | null {
+  if (value === undefined) return null;
+  const raw = block(path, "severity", value, ["family", "order", "labels"], "Severity keys are");
+  const family = requireString(path, "severity.family", raw["family"]);
+  if (!/^[^/,\s+]+$/.test(family)) throw new SchemaError(path, "severity.family", "expected a family identifier without whitespace, slash, comma or plus");
+  const order = requireArray(path, "severity.order", raw["order"]).map((item, index): string => {
+    const pointer = `severity.order[${index}]`;
+    const name = requireString(path, pointer, item);
+    if (name.startsWith("$")) throw new SchemaError(path, pointer, "must not start with '$': $-prefixed names are metadata and cannot select severity labels");
+    return name;
+  });
+  if (order.length === 0 || order.some((leaf) => leaf.trim() !== leaf || /[/:,+\s]/.test(leaf)) || new Set(order.map((leaf) => leaf.toLowerCase())).size !== order.length) {
+    throw new SchemaError(path, "severity.order", "expected nonempty, distinct label leaves, highest priority first (no whitespace, '/', ':', ',' or '+')");
+  }
+  let labels: Record<string, string> | null = null;
+  if (raw["labels"] !== undefined) {
+    const mapping = requireRecord(path, "severity.labels", raw["labels"]);
+    labels = emptyRecord<string>();
+    for (const name of order) labels[name] = requireString(path, `severity.labels.${name}`, mapping[name]);
+    for (const key of Object.keys(mapping)) {
+      if (!key.startsWith("$") && !order.includes(key)) throw new SchemaError(path, `severity.labels.${key}`, "is not named in severity.order");
+    }
+    if (new Set(Object.values(labels)).size !== order.length) throw new SchemaError(path, "severity.labels", "each severity must name a distinct label");
+  } else if (!/^([^:/\s]+):([^:/\s]+)$/.test(family)) {
+    throw new SchemaError(path, "severity.family", "expected '<namespace>:<family>', or explicit severity.labels mapping to full label names");
+  }
+  return { family, order, labels, raw };
+}
+
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's sixteen blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's seventeen blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
     // rule ../schema/contract.ts states for the same field.
     schema: typeof raw["$schema"] === "string" && raw["$schema"] !== "" ? raw["$schema"] : null,
+    severity: parseSeverity(path, raw["severity"]),
     branch: parseBranch(path, raw["branch"]),
     iteration: parseIteration(path, raw["iteration"]),
     tests: parseTests(path, raw["tests"]),

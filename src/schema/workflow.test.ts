@@ -862,9 +862,9 @@ describe("futon.advanceGo -- duplicate names after namespace normalization are r
   });
 });
 
-describe("a workflow's SIXTEEN blocks", () => {
-  it("says sixteen, now that deploy is one of them", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's sixteen blocks are/);
+describe("a workflow's SEVENTEEN blocks", () => {
+  it("says seventeen, now that severity is one of them", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's seventeen blocks are/);
   });
 });
 
@@ -1302,5 +1302,36 @@ describe("release.unitPaths -- deletion-only entries (#425)", () => {
 
   it.each([{ keys: ["version"] }, { lines: ["ok"] }, { extra: true }])("refuses mixed or unknown deletion entry keys %j", (extra) => {
     expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: "changelog.d/", deleteOnly: true, ...extra }] } })).toThrow(SchemaError);
+  });
+});
+
+describe("severity declarations", () => {
+  it("has no invented vocabulary by default", () => expect(defaultWorkflow().severity).toBeNull());
+  it.each([
+    { family: "bad", order: ["high"] },
+    { family: "acme:sev", order: [] },
+    { family: "acme:sev", order: ["high", "HIGH"] },
+    { family: "priority", order: ["p1"], labels: {} },
+    { family: "priority", order: ["p1", "p2"], labels: { p1: "same", p2: "same" } },
+    { family: "priority", order: ["p1"], labels: { p1: "one", p2: "two" } },
+  ])("refuses malformed or incomplete declarations by pointer: %j", (severity) => {
+    expect(() => parseWorkflow("workflow.json", { severity })).toThrow(/severity/);
+  });
+  it("preserves metadata in the mapping", () => {
+    const severity = { family: "priority", order: ["p1"], labels: { p1: "flat label", $comment: "metadata" } };
+    expect(parseWorkflow("workflow.json", { severity }).severity?.labels).toEqual({ p1: "flat label" });
+  });
+});
+
+describe("severity metadata cannot become an ordered label", () => {
+  it.each(["$comment", "$source"])("refuses reserved order name %s before looking up its mapping value", (name) => {
+    const severity = { family: "priority", order: [name], labels: { [name]: "flat" } };
+    expect(() => parseWorkflow("workflow.json", { severity })).toThrow(/severity\.order\[0\]/);
+  });
+  it("ignores untyped metadata values in severity.labels", () => {
+    const severity = { family: "priority", order: ["p1"], labels: { p1: "flat", $comment: { nested: [false, 42] }, $source: null, $flag: true } };
+    const parsed = parseWorkflow("workflow.json", { severity }).severity!;
+    expect(parsed.labels).toEqual({ p1: "flat" });
+    expect(parsed.raw).toEqual(severity);
   });
 });
