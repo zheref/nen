@@ -3056,7 +3056,8 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
         lists: ["exclude-check", "reviewer-login"],
       },
       staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
-      "body-check": { values: ["body-from", "requirements-from", "base"] },
+      "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
+      sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
       fetch: { values: ["target", "pr"] },
       "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
       "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
@@ -3148,5 +3149,30 @@ describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
     const result = await capture(argvFor("x", "--private-names-ignore-file", "/no/such/ignore-file"), null, seams, "scripted");
     expect(result.code).toBe(2);
     expect(seams.calls).toEqual([]);
+  });
+});
+
+
+describe("body-check exact and prose flags", () => {
+  it("returns line findings, warning counts and retains legacy success", async () => {
+    const requirements = tempFile("requirements.json", JSON.stringify([{ name: "summary", pattern: "^## Summary$" }]));
+    const body = tempFile("body.md", "## Summary\n" + "word ".repeat(151) + "\n## Extra\n");
+    const argv = ["pr", "body-check", "--body-from", body, "--requirements-from", requirements];
+    expect((await capture(argv, process.cwd())).code).toBe(0);
+    const exact = await capture([...argv, "--exact", "--max", "1", "--prose-budget", "150", "--json"], process.cwd());
+    expect(exact.code).toBe(1);
+    expect(JSON.parse(exact.out.join("\n"))).toMatchObject({ findings: [{ line: 3, message: expect.stringContaining("undeclared") }], warnings: [{ words: 151 }] });
+    const warning = await capture([...argv, "--prose-budget", "150"], process.cwd());
+    expect(warning.code).toBe(0); expect(warning.out.join("\n")).toContain("WARN Summary: 151");
+    expect((await capture([...argv, "--max", "1"], process.cwd())).code).toBe(2);
+    expect((await capture([...argv, "--exact", "--max", "1.5"], process.cwd())).code).toBe(2);
+  });
+  it("applies exact findings to derived requirements too", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "nen-derived-exact-"));
+    writeFileSync(join(repo, "pull_request_template.md"), "## Summary\n<!-- Explain -->\n");
+    const body = tempFile("body.md", "## Summary\nReal content\n## Extra\nContent\n");
+    const result = await capture(["pr", "body-check", "--body-from", body, "--exact", "--json"], repo);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ source: { kind: "derived" }, findings: [{ line: 3 }] });
   });
 });
