@@ -384,6 +384,15 @@ describe("versionFrom -- all four members, each read the way the enum says", () 
     expect(satisfiesPin(parsePin("4.0.0", "fixture.version"), found ?? "")).toBe(false);
   });
 
+  it.each(["4.0.0pre", "4.0.0.0pre", "4.0.0.0beta1", "4.0pre.0"].flatMap((version) =>
+    (["first-semver-on-stdout", "first-semver-on-stderr"] as const).map((mode) => ({ version, mode })),
+  ))("keeps numeric-attached prerelease $version from $mode", ({ version, mode }) => {
+    const banner = `Tool ${version}`;
+    const found = extractVersion(mode, mode === "first-semver-on-stdout" ? banner : "", mode === "first-semver-on-stderr" ? banner : "");
+    expect(found).toBe(version);
+    expect(satisfiesPin(parsePin("4.0.0", "fixture.version"), found ?? "")).toBe(false);
+  });
+
   it("whole-line-stdout takes the first non-empty line verbatim", () => {
     expect(extractVersion("whole-line-stdout", "\n  9.15.9  \n", "")).toBe("9.15.9");
     // Verbatim means verbatim: a line that is not a version comes back as one,
@@ -2385,13 +2394,13 @@ describe("the pinned shell coverage installer", () => {
     expect(row(result, "bashcov")).toMatchObject({ found: "4.0.0", satisfied: true });
     expect(result.seams.calls.every((call): boolean => call.env === null)).toBe(true);
   });
-  it.each(["4.0.0.pre.1", "4.0.0.rc1", "4.0.0.beta"])("rejects a post-install prerelease observation %s", async (version) => {
+  it.each(["4.0.0.pre.1", "4.0.0.rc1", "4.0.0.beta", "4.0.0pre", "4.0.0.0pre", "4.0.0.0beta1", "4.0pre.0"])("rejects a post-install prerelease observation %s", async (version) => {
     const result = await withDeclaration(oneTool(entry), ["--install", "--json"], { script: [missing, ...ok, installed(version)] });
     expect(result.code).toBe(5);
     expect(row(result, "bashcov")).toMatchObject({ found: version, satisfied: false });
     expect(spawned(result.seams)).toEqual([missing.match, ...steps, missing.match]);
   });
-  it.each(["4.0.0.pre.1", "4.0.0.rc1", "4.0.0.beta"])("replaces an existing prerelease %s instead of certifying it as stable", async (version) => {
+  it.each(["4.0.0.pre.1", "4.0.0.rc1", "4.0.0.beta", "4.0.0pre", "4.0.0.0pre", "4.0.0.0beta1", "4.0pre.0"])("replaces an existing prerelease %s instead of certifying it as stable", async (version) => {
     const result = await withDeclaration(oneTool(entry), ["--install", "--json"], { script: [installed(version), ...ok, installed("4.0.0")] });
     expect(result.code).toBe(0);
     expect(row(result, "bashcov")).toMatchObject({ found: "4.0.0", satisfied: true });

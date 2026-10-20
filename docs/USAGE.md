@@ -12499,8 +12499,9 @@ test computes that rule from the seam rather than from a list of names.
 | `wrapper`, `npx` | nothing | There is nothing to install: the repository's own committed wrapper, or its own dependency graph, resolves the tool. |
 | `sdkmanager`, `dotnet-install`, `winget` | nothing | Declared, and **not enabled in this release**: every installer that fetches and executes vendor code, or writes into an SDK root, ships behind its own explicit decision. The row names the tool, the pin and the installer a human runs. |
 
-Dotted RubyGems prerelease observations (for example `4.0.0.pre.1`) retain
-their suffix and cannot satisfy an exact stable pin. A pre-existing prerelease
+RubyGems prerelease observations (for example `4.0.0.pre.1`, `4.0.0pre` or
+`4.0.0.0pre`) retain their full alphanumeric components and cannot satisfy an
+exact stable pin. A pre-existing prerelease
 still requires installation; a post-install prerelease remains unsatisfied.
 
 The `gem` report lists runtime preflights and the exact install argv in check and
