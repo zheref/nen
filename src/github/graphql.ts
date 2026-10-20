@@ -132,6 +132,8 @@ export const PULL_REQUEST_QUERY = `
       defaultBranchRef { name target { oid } }
       pullRequest(number:$pr) {
         number
+        state
+        mergeCommit { oid }
         mergeable
         isDraft
         headRefOid
@@ -299,6 +301,8 @@ function requestedReviewers(value: unknown): unknown {
 // field here is then a visible, reviewable omission rather than an accident --
 // `defaultBranchRef` is the current, deliberate one (see PULL_REQUEST_QUERY).
 export interface GhPullRequestNode {
+  readonly state?: unknown;
+  readonly mergeCommit?: unknown;
   readonly number: unknown;
   readonly mergeable: unknown;
   readonly isDraft: unknown;
@@ -474,6 +478,8 @@ function toGhPullRequestNode(raw: unknown): GhPullRequestNode | undefined {
     headRefOid: raw["headRefOid"],
     headRefName: raw["headRefName"],
     baseRefName: raw["baseRefName"],
+    state: raw["state"],
+    mergeCommit: raw["mergeCommit"],
     baseRefOid: raw["baseRefOid"],
     // `author { login }` is ALREADY the shape parsePullRequest() reads
     // (`{login}` object or bare string), so it is carried across untouched.

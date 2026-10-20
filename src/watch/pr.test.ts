@@ -201,6 +201,8 @@ function source(snapshot: Snapshot): PrStateSource {
       reviewRequests: [],
     },
     defaultBranch: "main",
+    // The exclusion reader confirms absence at a readable default-branch tip.
+    defaultBranchOid: "d".repeat(40),
     checkRollup: [
       ...CHECK_NAMES.map((name) => ({ name, status: "COMPLETED", conclusion: "SUCCESS" })),
       snapshot.pending
@@ -626,6 +628,23 @@ describe("F2 -- GitHub's strings are plain at every human seam, raw in --json", 
 });
 
 describe("F3 -- the read's warnings, notes and declared exclusions are not dropped", () => {
+  it("an unread default-branch tip remains an explicit exclusion note", async () => {
+    const inner = deps([READY]);
+    const unread: PrReadyDeps = { ...inner, openSource: (env) => {
+      const opened = inner.openSource(env);
+      if (!opened.ok) return opened;
+      const original = opened.source;
+      return { ok: true, source: { ...original, pullRequestSnapshot: async (ref, number): Promise<PullRequestSnapshot> => {
+        const snapshot = await original.pullRequestSnapshot(ref, number);
+        return { ...snapshot, defaultBranchOid: undefined };
+      } } };
+    } };
+    const got = await watch([...BASE, "--until", "ready"], unread, true);
+    expect(got.code).toBe(0);
+    const doc = JSON.parse(got.out.join("\n")) as { last: { notes: string[] } };
+    expect(doc.last.notes).toEqual([expect.stringContaining("could not confirm the default-branch tip declares no exclusion")]);
+  });
+
   it("an unmatched --exclude-check is printed to stderr on the first poll, not again while unchanged, and carried in --json", async () => {
     const argv = [...BASE, "--until", "checks-settled", "--exclude-check", "no-such-check"];
     const human = await watch(argv, deps([PENDING, PENDING, SETTLED]));

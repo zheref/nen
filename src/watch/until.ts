@@ -38,7 +38,7 @@ export interface WatchIteration {
   readonly message: string;
 }
 
-export type WatchOutcome = "condition-true" | "error-streak" | "max-iterations";
+export type WatchOutcome = "condition-false" | "condition-true" | "error-streak" | "max-iterations";
 
 export interface WatchResult {
   readonly outcome: WatchOutcome;
@@ -137,6 +137,8 @@ export function watchUntil(seams: Seams, options: WatchOptions): WatchResult {
 
 /** One observation the async loop is handed: the caller's own verdict on it. */
 export interface WatchObservation {
+  /** A valid terminal reading where the requested condition can no longer hold. */
+  readonly terminalFalse?: boolean;
   readonly errored: boolean;
   readonly conditionTrue: boolean;
   readonly message: string;
@@ -195,6 +197,7 @@ export async function watchUntilAsync(options: AsyncWatchOptions): Promise<Watch
       if (conditionTrue) {
         return { outcome: "condition-true", iterations };
       }
+      if (observed.terminalFalse === true) return { outcome: "condition-false", iterations };
     }
 
     if (options.maxIterations !== undefined && iteration >= options.maxIterations) {

@@ -43,7 +43,7 @@ import { trustedIdentitiesRead, type ReadyRead } from "../verbs/pr_ready.js";
 import type { WatchObservation } from "./until.js";
 
 /** The closed set `--until` takes. */
-export const PR_PREDICATES = ["checks-settled", "review-posted", "ready", "settled-and-reviewed"] as const;
+export const PR_PREDICATES = ["checks-settled", "review-posted", "ready", "settled-and-reviewed", "merged"] as const;
 export type PrPredicate = (typeof PR_PREDICATES)[number];
 
 export function parsePrPredicate(text: string | undefined): PrPredicate {
@@ -61,7 +61,7 @@ export function parsePrPredicate(text: string | undefined): PrPredicate {
  * Decide one observation from one `readReady` result. Pure: no read, no
  * clock. Throws VerbUsageError on a usage refusal (exit 2, see the header).
  */
-export function observePr(read: ReadyRead, predicate: PrPredicate): WatchObservation {
+export function observePr(read: ReadyRead, predicate: Exclude<PrPredicate, "merged">): WatchObservation {
   if (read.kind === "usage") throw new VerbUsageError(read.message);
   if (read.kind === "head-mismatch") {
     return { errored: true, conditionTrue: false, message: `observation failed: ${read.report.message}` };

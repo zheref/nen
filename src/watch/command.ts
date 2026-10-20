@@ -20,6 +20,7 @@
 // same pacing, bound, streak and exit codes. ./pr.ts says why it is native and
 // what each predicate reads.
 
+import { mergedReader, type LifecycleObservation } from "./merged.js";
 import { classifyWatchCommand } from "../parse/izanami.js";
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import type { CommandResult } from "../seam/exec.js";
@@ -37,7 +38,7 @@ usage:
   nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                   [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                   [--error-exit-threshold <n>] [--repo <path>]
-  nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
+  nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed|merged
                   [--interval-ms 30000] [--max-iterations <n>] [--repo <path>]
                   [<every 'nen pr ready' flag: --gh-repo --reviewers
                    --reviewer-login --approvers --round-policy --exclude-run
@@ -97,11 +98,13 @@ usage:
                   regardless.
 
   --pr <ref>      INSTEAD of --command (zheref/nen#264): watch one pull request
-                  through the SAME in-process read 'nen pr ready <ref>' makes --
+                  for readiness predicates, through the SAME in-process read
+                  'nen pr ready <ref>' makes --
                   its ref grammar, its token, its identity resolution, its
                   exclusions and its gate -- so the two never disagree about one
                   snapshot. Every 'pr ready' flag above is read exactly as
-                  'pr ready' reads it, and only with --pr. --true-pattern,
+                  'pr ready' reads it, and only with readiness predicates.
+                  --true-pattern,
                   --error-exit-threshold and --cwd belong to --command and are
                   refused beside --pr (exit 2).
   --until         what --pr waits for, one of:
@@ -123,10 +126,18 @@ usage:
                                     reads it). A review from anyone outside
                                     the set wakes nothing; a pending
                                     re-request means not posted yet
+                    merged          lifecycle only: wait for an already completed
+                                    merge; final human line and JSON include the
+                                    full merge SHA and base branch. CLOSED without
+                                    merge stops immediately at exit 3. JSON fields:
+                                    state, mergeSHA, base, headSHA (no readyAtWake).
+                                    Uses ref, --gh-repo, --token-env, --require-head;
+                                    readiness-only flags are refused (exit 2).
                     ready           'pr ready' would answer ready
                     settled-and-reviewed
                                     checks-settled AND (review-posted OR ready)
-                  ONLY 'ready' IS A MERGE SIGNAL. checks-settled, review-posted
+                  ONLY 'ready' IS A READINESS SIGNAL; 'merged' observes a
+                  completed merge. checks-settled, review-posted
                   and settled-and-reviewed are WAKES: the caller looks again,
                   and asks 'nen pr ready' (or watches --until ready) before
                   calling anything ready. --json's 'readyAtWake' says what the
@@ -154,7 +165,7 @@ usage:
 
 Exits 0 when the condition became true, 1 on an error streak or a bound
 reached -- a caller piping this into further automation stops rather than
-reading a watch that gave up as success. 2 on a usage error.`;
+reading a watch that gave up as success. 2 on a usage error. 3 on a PR CLOSED without merge (--until merged).`;
 
 /** What the `--pr` form reads through; injected so a test never reaches GitHub or sleeps. */
 export interface WatchDeps {
@@ -171,7 +182,7 @@ const COMMAND_ONLY_VALUES: readonly string[] = ["true-pattern", "error-exit-thre
 export function createWatchCommand(deps: WatchDeps = { prReady: defaultDeps }): Command {
   return {
     name: "watch",
-    summary: "Poll a read-only command, or a pull request's readiness facts, until a condition holds.",
+    summary: "Poll a read-only command, or a pull request's lifecycle or readiness facts, until a condition holds.",
     usage: USAGE,
     subcommands: ["until"],
     flags: {
@@ -278,6 +289,12 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   refuseForeign(context, COMMAND_ONLY_VALUES, "--pr");
   const predicate: PrPredicate = parsePrPredicate(context.args.values["until"]);
 
+  const lifecycle = predicate === "merged";
+  if (lifecycle) {
+    refuseForeign(context, [...PR_READY_FLAGS.values.filter((name): boolean => !["gh-repo", "token-env", "require-head"].includes(name)), ...PR_ONLY_LISTS], "--until merged");
+    if (context.args.booleans.has("require-base-gates")) throw new VerbUsageError("--require-base-gates is not read by --until merged.");
+  }
+  const readMerged = lifecycle ? mergedReader(context, typedRef, deps.prReady) : null;
   const pace = readPace(context);
   if (pace === null) return 1;
   let intervalMs = pace.intervalMs;
@@ -310,12 +327,16 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   };
   // The final read, for --json's `last`. A box rather than a bare `let`, so
   // the narrowing after the loop is not lost to the closure that assigns it.
-  const last: { read: ReadyRead | null } = { read: null };
+  const last: { read: ReadyRead | null; lifecycle: LifecycleObservation | null } = { read: null, lifecycle: null };
   // What the read said beside its verdict -- warnings, notes, declared
   // exclusions -- printed on the first poll and whenever it changes (F3).
   let printedContext: string | null = null;
   const result = await watchUntilAsync({
     observe: async () => {
+      if (readMerged !== null) {
+        last.lifecycle = await readMerged();
+        return last.lifecycle;
+      }
       last.read = await readReady(typedRef, input, deps.prReady);
       if (last.read.kind === "verdict") {
         const lines = contextLines(last.read.report);
@@ -325,6 +346,7 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
           for (const line of lines) context.io.err(plainLine(line));
         }
       }
+      if (predicate === "merged") throw new Error("merged watch requires its lifecycle reader");
       return observePr(last.read, predicate);
     },
     intervalMs,
@@ -338,6 +360,17 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
           context.io.out(plainLine(`[${iteration.iteration}] ${iteration.message}`));
         },
   });
+
+  if (lifecycle) {
+    if (context.json) {
+      context.io.out(JSON.stringify({ ...result, until: predicate, pr: typedRef,
+        state: last.lifecycle?.reading?.state ?? null, mergeSHA: last.lifecycle?.reading?.mergeSHA ?? null,
+        base: last.lifecycle?.reading?.base ?? null, headSHA: last.lifecycle?.reading?.headSHA ?? null }, null, 2));
+    } else if (result.outcome === "condition-true" || result.outcome === "condition-false") {
+      context.io.out(plainLine(last.lifecycle?.message ?? ""));
+    } else printOutcome(context, result);
+    return result.outcome === "condition-true" ? 0 : result.outcome === "condition-false" ? 3 : 1;
+  }
 
   if (context.json) {
     const { read } = last;
@@ -459,6 +492,9 @@ function readMonitor(context: CommandContext): { pollSeconds: number | null; max
 
 function printOutcome(context: CommandContext, result: WatchResult): void {
   switch (result.outcome) {
+    case "condition-false":
+      context.io.err("nen: condition became terminally false");
+      return;
     case "condition-true":
       context.io.out(`condition became true after ${result.iterations.length} observation(s)`);
       return;

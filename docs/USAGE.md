@@ -862,7 +862,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`session`](#family-session) | [`nen session`](#nen-session) | records caller-reported session identity and effort dial per effort, and shows the ledger | `.nen/sessions/<effort>.json` under --repo; no git/gh or harness reads | yes |
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`warmup`](#family-warmup) | [`nen warmup`](#nen-warmup) | warms a REGISTRY: detects stale/unpinned consumer versions, plus an optional handbook-question sweep. Reads only. Not [`nen shu warmup`](#nen-shu-warmup), which warms a working copy | nen/repos.json, optional local files | yes |
-| [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command — or, with `--pr`, one pull request's readiness facts through `pr ready`'s own read — until its condition holds, paced and bounded | whatever --command names (typically git or gh); with --pr, GitHub GraphQL + REST (token from --token-env, default GH_TOKEN), as `pr ready` | yes |
+| [`watch`](#family-watch) | [`nen watch until`](#nen-watch-until) | polls one read-only observation command — or, with `--pr`, one pull request's lifecycle (`merged`) or readiness facts through `pr ready`'s own read — until its condition holds, paced and bounded | whatever --command names (typically git or gh); with --pr, GitHub GraphQL + REST (token from --token-env, default GH_TOKEN), as `pr ready` | yes |
 | [`label`](#family-label) | [`nen label apply`](#nen-label-apply) | applies one label or a batch of ref/label pairs and appends an after-the-fact ledger line | nen/labels.json; gh only with --run | yes |
 | [`labels`](#family-labels) | [`nen labels sync`](#nen-labels-sync) | creates missing labels and updates only differing taxonomy labels | nen/labels.json; gh read even with --dry-run | yes |
 | [`labels`](#family-labels) | [`nen labels rename`](#nen-labels-rename) | renames labels in place, preserving every issue association, idempotently | gh label list (always), gh label edit unless --dry-run | yes |
@@ -5765,7 +5765,7 @@ regardless of `--max-iterations`.
 nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                 [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                 [--error-exit-threshold <n>]
-nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
+nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed|merged
                 [--interval-ms 30000] [--max-iterations <n>]
                 [every `nen pr ready` flag: --gh-repo --reviewers --reviewer-login --approvers --round-policy
                  --exclude-run --exclude-check --gates --token-env --require-head
@@ -5788,8 +5788,8 @@ was parsed and consumed by nothing, so a file that said 300 s watched every 5 s.
 | `--max-iterations <n>` | no | A safety bound, not izanagi's mandatory cap. | Default `monitor.maxCycles`; omit both for an unbounded `--command` watch. A `--pr` watch is **never** unbounded: with neither, it stops after two hours' worth of polls at its pace. An error streak still stops either. |
 | `--cwd <path>` | no | Working directory for the spawned command. | Defaults to the process's own cwd. |
 | `--error-exit-threshold <n>` | no | In exit-code-as-truth mode (no `--true-pattern`), an exit code at or above this is an OBSERVATION ERROR. | Default 2; ignored when `--true-pattern` is given. |
-| `--pr <ref>` | instead of `--command` | Watch one pull request through the **same in-process read** [`nen pr ready`](#nen-pr-ready) makes ([#264](https://github.com/zheref/nen/issues/264)). | The ref grammar, token, identity resolution, exclusions and gate are all `pr ready`'s, so the watch and a `pr ready` asked of one snapshot never disagree. Every `pr ready` flag is read exactly as `pr ready` reads it, and only beside `--pr`. `--pr` beside `--command`, or `--true-pattern`/`--error-exit-threshold`/`--cwd` beside `--pr`, or `--until`/a `pr ready` flag beside `--command`, refuses at exit 2. |
-| `--until <predicate>` | with `--pr` | What `--pr` waits for. | `checks-settled` — every **reported** latest check, after the exclusions CON-32(a) applies, has a verdict, **red included**; an empty rollup is never settled. A check that registers only after the others have settled is not waited for — the rollup cannot name what has not reported yet. `review-posted` — a **configured** reviewer's round is posted at the current head: the gate's own reviewer set, resolved through the same identities and the same round rules CON-32(b) uses (a review whose author matches the reviewer's `login_pattern` — on the `--reviewers` flags path the whole login, case-insensitively, with an optional `[bot]` suffix, never a substring — or its definitive-SUCCESS round-check run at head, or, on a CON-40 delivery pull request for a `delivery_holistic_pass` reviewer, its one holistic-pass review at any commit together with a definitive-SUCCESS review check at head), current head only, and not while a review request for that reviewer is pending. A review from anyone outside the set — a stray human comment, say — wakes nothing. `ready` — `pr ready` would answer `ready`. `settled-and-reviewed` — `checks-settled` AND (`review-posted` OR `ready`). **Only `ready` is a merge signal**: the other three are wakes — look again, and ask [`nen pr ready`](#nen-pr-ready) (or watch `--until ready`) before calling anything ready. |
+| `--pr <ref>` | instead of `--command` | For readiness predicates, watch one pull request through the **same in-process read** [`nen pr ready`](#nen-pr-ready) makes ([#264](https://github.com/zheref/nen/issues/264)). | The ref grammar, token, identity resolution, exclusions and gate are all `pr ready`'s, so the watch and a `pr ready` asked of one snapshot never disagree. Every `pr ready` flag is read exactly as `pr ready` reads it for readiness predicates; lifecycle `merged` accepts only ref/auth/head options. `--pr` beside `--command`, or `--true-pattern`/`--error-exit-threshold`/`--cwd` beside `--pr`, or `--until`/a `pr ready` flag beside `--command`, refuses at exit 2. |
+| `--until <predicate>` | with `--pr` | What `--pr` waits for. | `checks-settled` — every **reported** latest check, after the exclusions CON-32(a) applies, has a verdict, **red included**; an empty rollup is never settled. A check that registers only after the others have settled is not waited for — the rollup cannot name what has not reported yet. `review-posted` — a **configured** reviewer's round is posted at the current head: the gate's own reviewer set, resolved through the same identities and the same round rules CON-32(b) uses (a review whose author matches the reviewer's `login_pattern` — on the `--reviewers` flags path the whole login, case-insensitively, with an optional `[bot]` suffix, never a substring — or its definitive-SUCCESS round-check run at head, or, on a CON-40 delivery pull request for a `delivery_holistic_pass` reviewer, its one holistic-pass review at any commit together with a definitive-SUCCESS review check at head), current head only, and not while a review request for that reviewer is pending. A review from anyone outside the set — a stray human comment, say — wakes nothing. `ready` — `pr ready` would answer `ready`. `settled-and-reviewed` — `checks-settled` AND (`review-posted` OR `ready`). `merged` — observe a completed merge; closed without merge stops at exit 3. **Only `ready` is a readiness signal**; `merged` observes an already completed merge: the other three are wakes — look again, and ask [`nen pr ready`](#nen-pr-ready) (or watch `--until ready`) before calling anything ready. |
 
 **Output and exit codes** — human rendering is one `"[<n>] <message>"` line per observation, then a
 final line naming the outcome. `--json` prints `{ outcome, iterations }`, each iteration carrying
@@ -5807,7 +5807,7 @@ independently polled facts, and `--command` takes one command and one pattern �
 orchestrating flow most often holds before Ready was hand-rolled as a `for` + `sleep` loop over
 `gh pr checks` and `gh api …/reviews`. `--pr <ref> --until <predicate>` expresses it as one read-only
 verb, with the same pacing (`monitor.pollSeconds`), bound (`monitor.maxCycles`), three-error streak and
-exit codes as the `--command` form, and no subprocess at all. Each observation is one call of the
+exit codes as the `--command` form, and no subprocess at all. For readiness predicates, each observation is one call of the
 function `nen pr ready` prints; the predicates read its verdict and two facts the gate's own
 evaluation computes from the same snapshot — whether the rollup has settled (with the still-running
 checks named) and which configured reviewers' rounds are posted at the current head. A read that could not see — an `unevaluated`
@@ -5832,6 +5832,30 @@ of 2026-10-03 notification rungs stay the host's, and `nen stop` does not ring t
 
 ```bash
 nen watch until --pr 42 --gh-repo owner/name --until settled-and-reviewed --gates nen/gates.json
+```
+
+**PR lifecycle ([#454](https://github.com/zheref/nen/issues/454)).** `--until merged` uses the same
+PR reference grammar, token and bounded watch engine, with `monitor.maxCycles`/`pollSeconds` defaults
+and typed overrides. It reads lifecycle independently of readiness: no gate configuration, readable
+checks, reviews or surviving source branch is required. It accepts `--gh-repo`, `--token-env` and
+`--require-head` (7–40 hex digits, matched against the same observation's head); readiness-only flags
+such as `--gates`, `--reviewers`, exclusions and `--require-base-gates` refuse at exit 2.
+
+| Reading | Outcome | Exit |
+|---|---|---|
+| MERGED with full merge commit SHA and base | `condition-true` | 0 |
+| CLOSED without merge | `condition-false`, immediately | 3 |
+| OPEN at the cap | `max-iterations` | 1 |
+| Three consecutive unreadable observations | `error-streak` | 1 |
+
+The final human success line is `PR owner/name#42 MERGED at <full mergeSHA> into <base>`.
+JSON adds `until`, `pr`, `state`, `mergeSHA`, `base`, `headSHA` to the engine result; lifecycle output
+omits readiness fields (`readyAtWake` and `last`). CLOSED has `mergeSHA: null`; unreadable final
+observations have null lifecycle fields. Human lines strip control characters while JSON preserves
+observed bytes. A missing/invalid state, merge SHA or base never counts as a successful merge.
+
+```bash
+nen watch until --pr 42 --gh-repo owner/name --until merged --require-head abcdef0 --json
 ```
 
 <a id="watch-until-quoting"></a>
