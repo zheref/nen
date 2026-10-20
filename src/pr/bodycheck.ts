@@ -12,7 +12,7 @@
 // "report the whole table, not the first failure" discipline this repository
 // applies everywhere a caller round-trips on a check (see ../release/preflight.ts).
 
-import { readLines, stripComments } from "./template.js";
+import { readLines, stripComments, validFenceOpening } from "./template.js";
 
 export interface BodyRequirement {
   /** A short name for this requirement, reported in the result. */
@@ -101,7 +101,7 @@ export function checkBody(body: string, requirements: readonly BodyRequirement[]
   if (options.proseBudget !== undefined && (!Number.isSafeInteger(options.proseBudget) || options.proseBudget < 1)) {
     throw new BodyCheckError("--prose-budget requires a positive safe integer.");
   }
-  const lines = readLines(body);
+  const lines = readLines(body, { strictFences: true });
   const checked = options.exact ? lines.filter((line): boolean => line.kind === "heading").map((line): string => line.kind === "heading" ? line.text : "").join("\n") : body;
   const results = requirements.map((requirement): RequirementResult => {
     const regex = new RegExp(requirement.pattern, "im");
@@ -133,19 +133,27 @@ export function checkBody(body: string, requirements: readonly BodyRequirement[]
 
 /** Measurement only; code (including Mermaid), tables and comments contribute no prose. */
 export function measureProse(body: string, budget: number): { section: string; words: number; budget: number }[] {
-  const classified = readLines(body);
+  const classified = readLines(body, { strictFences: true });
   const sections: { section: string; words: number; budget: number }[] = [];
   let current = { section: "preamble", words: 0, budget };
   let fence: string | null = null;
   let comment = false;
   const rows = body.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
   const tableRows = new Set<number>();
+  const cellsOf = (row: string): string[] => row.trim().replace(/\\\|/g, "escaped-pipe").replace(/^\||\|$/g, "").split("|");
   rows.forEach((row, index): void => {
-    const cells = row.trim().replace(/^\||\|$/g, "").split("|");
-    if (!row.includes("|") || !cells.every((cell): boolean => /^\s*:?-{3,}:?\s*$/.test(cell)) || index === 0 || !rows[index - 1]?.includes("|")) return;
+    const cells = cellsOf(row);
+    const header = rows[index - 1] ?? "";
+    if ((!row.includes("|") && !header.includes("|")) || !cells.every((cell): boolean => /^\s*:?-+:?\s*$/.test(cell)) || index === 0 || header.trim() === "" || cellsOf(header).length !== cells.length) return;
     tableRows.add(index - 1);
     tableRows.add(index);
-    for (let next = index + 1; next < rows.length && rows[next]?.includes("|"); next++) tableRows.add(next);
+    // GFM permits omitted cells and pipe-free body rows. A blank or a new
+    // block ends the table, rather than the first row without a pipe.
+    for (let next = index + 1; next < rows.length; next++) {
+      const following = rows[next] ?? "";
+      if (following.trim() === "" || classified[next]?.kind === "heading" || validFenceOpening(following) !== null || /^ {0,3}(?:>|[-+*][ \t]|[0-9]{1,9}[.)][ \t]|<!--|<(?:div|table|details|pre|script|style|section|p)(?:[\s>])|([-*_])(?:[ \t]*\1){2,}[ \t]*$)/i.test(following)) break;
+      tableRows.add(next);
+    }
   });
   rows.forEach((raw, index): void => {
     if (fence !== null) {
@@ -155,8 +163,8 @@ export function measureProse(body: string, budget: number): { section: string; w
     const stripped = stripComments(raw, comment);
     comment = stripped.open;
     const line = stripped.text;
-    const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-    if (open !== null) { fence = open[1] as string; return; }
+    const open = validFenceOpening(line);
+    if (open !== null) { fence = open; return; }
     const parsed = classified[index];
     if (parsed?.kind === "heading" && parsed.level <= 2) {
       sections.push(current);

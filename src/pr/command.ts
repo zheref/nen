@@ -942,7 +942,7 @@ function bodyCheck(context: CommandContext): number {
     throw error;
   }
   const { requirements, source } = derived;
-  const derivedReport = checkDerivedBody(body, requirements);
+  const derivedReport = checkDerivedBody(body, requirements, { strictFences: exact });
   const extra = exact || proseBudget !== undefined ? checkBody(body, requirements, options) : undefined;
   const report = { ...derivedReport, ...(extra?.findings === undefined ? {} : { findings: extra.findings }), ...(extra?.warnings === undefined ? {} : { warnings: extra.warnings }), ok: derivedReport.ok && (extra?.ok ?? true) };
   const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;

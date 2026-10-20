@@ -24,6 +24,19 @@ describe("checkBody", () => {
     expect(() => checkBody("x", requirements, { max: 7 })).toThrow(/requires --exact/);
     expect(() => checkBody("x", requirements, { proseBudget: 0 })).toThrow(/positive/);
   });
+  it("does not let invalid backtick fence info hide visible headings", () => {
+    const body = "## Summary\ntext\n\n``` `not a fence`\n## Extra\n";
+    const onlySummary = [requirements[0] as { name: string; pattern: string }];
+    expect(checkBody(body, onlySummary).ok).toBe(true);
+    expect(checkBody(body, onlySummary, { exact: true, max: 1 })).toMatchObject({ ok: false, findings: [{ line: 5, message: expect.stringContaining("undeclared") }] });
+    expect(checkBody("## Summary\n```bad`\n" + "word ".repeat(151), onlySummary, { proseBudget: 150 }).warnings?.[0]?.words).toBeGreaterThan(150);
+  });
+  it("excludes short GFM table delimiters and pipe-free continuation rows", () => {
+    const body = "## Summary\n| Header | Other |\n| - | - |\n| " + "word ".repeat(151) + "| ignored |\n" + "more ".repeat(151) + "\n\n" + "prose ".repeat(151) + "\n## Tests\nDone";
+    expect(checkBody(body, requirements, { proseBudget: 150 }).warnings).toEqual([{ section: "Summary", words: 151, budget: 150 }]);
+    const notTable = "## Summary\nprose | prose\n" + "word ".repeat(151) + "\n## Tests";
+    expect(checkBody(notTable, requirements, { proseBudget: 150 }).warnings?.[0]?.words).toBe(153);
+  });
   it("measures prose without changing the verdict or counting tables, comments, fences or Mermaid", () => {
     const body = `## Summary\n${"word ".repeat(151)}\n| Table words | Ignored |\n| --- | --- |\n<!-- ${"hidden ".repeat(200)} -->\n\`\`\`mermaid\n${"diagram ".repeat(200)}\n\`\`\`\n## Tests\none two`;
     expect(checkBody(body, requirements, { proseBudget: 150 })).toMatchObject({ ok: true, warnings: [{ section: "Summary", words: 151, budget: 150 }] });
