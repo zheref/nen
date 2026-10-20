@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs, type FlagSpec } from "../cli/args.js";
 import { VerbUsageError, type CommandContext } from "../cli/command.js";
-import { ScriptedSeams } from "../seam/scripted.js";
+import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { GUARDED_VERBS, privateNameLines, type PrivateNameCheck } from "./privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag, readNamedList } from "./privacyguard.js";
@@ -136,9 +136,10 @@ describe("privateNameLines -- the verb that refused, on every line", () => {
 });
 
 describe("the shared adapter", () => {
-  it("readIgnoreFlag: absent reads nothing; --allow-all-ignored alone is a usage error", () => {
+  it("readIgnoreFlag: absent reads nothing; --allow-all-ignored alone is a usage error where no named list is declared either", () => {
     expect(readIgnoreFlag(context([]).context)).toBeNull();
-    expect(() => readIgnoreFlag(context(["--allow-all-ignored"]).context)).toThrow(VerbUsageError);
+    const bare = mkdtempSync(join(tmpdir(), "nen-guard-bare-"));
+    expect(() => readIgnoreFlag(context(["--allow-all-ignored"], new ScriptedSeams([]), bare).context)).toThrow(VerbUsageError);
   });
 
   it("readIgnoreFlag: resolves the file against --repo, and a missing one is a usage error, never an empty list", () => {
@@ -198,7 +199,10 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
     return { dir, root: resolveRepoRoot({ repoFlag: dir }) };
   }
   const DECLARED = '{"privateNames":{"namedFile":"scripts/named.txt"}}';
-  const show = (root: string, base = "main"): string => `git -C ${root} show refs/remotes/origin/${base}:scripts/named.txt`;
+  const headRef = (root: string): ScriptedCall => ({ match: `git -C ${root} symbolic-ref -q refs/remotes/origin/HEAD`, result: { stdout: "refs/remotes/origin/main\n" } });
+  const shown = (root: string, path: string, text: string): ScriptedCall => ({ match: `git -C ${root} show refs/remotes/origin/main:${path}`, result: { stdout: text } });
+  const blob = (root: string, path: string): ScriptedCall => ({ match: `git -C ${root} ls-tree refs/remotes/origin/main -- ${path}`, result: { stdout: `100644 blob 0123456789abcdef0123456789abcdef01234567\t${path}\n` } });
+  const onMain = (root: string, policy: string, list: string): ScriptedCall[] => [headRef(root), shown(root, "nen/workflow.json", policy), blob(root, "scripts/named.txt"), shown(root, "scripts/named.txt", list)];
 
   it("reads nothing, and runs no git, where the checkout declares no named list", () => {
     const { dir } = repo(null);
@@ -209,30 +213,65 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
     expect(err).toEqual([]);
   });
 
-  it("reads the declared file at refs/remotes/origin/<branch.base>, never from the checkout", () => {
+  it("reads the policy, the path and the list at the remote's default branch, never from the checkout", () => {
     const { dir, root } = repo('{"branch":{"base":"develop"},"privateNames":{"namedFile":"scripts/named.txt"}}');
-    // The checkout's own copy says something else: it is never read.
+    // The checkout's own copy says something else: it is never read, and its
+    // branch.base chooses nothing.
     mkdirSync(join(dir, "scripts"));
     writeFileSync(join(dir, "scripts", "named.txt"), "evil/other\n");
-    const seams = new ScriptedSeams([{ match: show(root, "develop"), result: { stdout: "# ruled\nAcme/Thing\n" } }]);
-    const list = readNamedList(context([], seams, dir).context, "nen issue");
+    const seams = new ScriptedSeams(onMain(root, DECLARED, "# ruled\nAcme/Thing\n"));
+    const { context: ctx, err } = context([], seams, dir);
+    const list = readNamedList(ctx, "nen issue");
     expect([...(list?.slugs ?? [])]).toEqual(["acme/thing"]);
-    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([show(root, "develop")]);
+    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      `git -C ${root} symbolic-ref -q refs/remotes/origin/HEAD`,
+      `git -C ${root} show refs/remotes/origin/main:nen/workflow.json`,
+      `git -C ${root} ls-tree refs/remotes/origin/main -- scripts/named.txt`,
+      `git -C ${root} show refs/remotes/origin/main:scripts/named.txt`,
+    ]);
+    expect(err).toEqual([]);
   });
 
-  it("a declared file not at the base tip names nothing, and says so with the verb's prefix", () => {
-    const { dir, root } = repo(DECLARED);
-    const seams = new ScriptedSeams([{ match: show(root), result: { code: 128, stderr: "fatal: path 'scripts/named.txt' does not exist" } }]);
+  it("a checkout that declares its own file while the default branch declares none exempts nothing, said (Feitan F8, this change)", () => {
+    const { dir, root } = repo('{"branch":{"base":"feature"},"privateNames":{"namedFile":"scripts/mine.txt"}}');
+    const seams = new ScriptedSeams([headRef(root), shown(root, "nen/workflow.json", '{"branch":{"base":"main"}}')]);
     const { context: ctx, err } = context([], seams, dir);
     expect(readNamedList(ctx, "nen pr open")).toBeNull();
     expect(err).toEqual([
-      "nen pr open: named list 'scripts/named.txt' is not at refs/remotes/origin/main (it is read at the base tip, never from the checkout), so it names nothing in this run.",
+      "nen pr open: named list not read -- refs/remotes/origin/main:nen/workflow.json declares no privateNames.namedFile; the checkout's own declaration ('scripts/mine.txt') is head content and decides nothing; it names nothing in this run.",
     ]);
   });
 
-  it("a bare name on the list is a usage error (exit 2) naming the line, never the entry", () => {
+  it("the default branch's path wins over the checkout's, and the difference is said", () => {
+    const { dir, root } = repo('{"privateNames":{"namedFile":"scripts/mine.txt"}}');
+    const seams = new ScriptedSeams(onMain(root, DECLARED, "acme/thing\n"));
+    const { context: ctx, err } = context([], seams, dir);
+    expect([...(readNamedList(ctx, "nen issue")?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect(err).toEqual([
+      "nen issue: named list read from refs/remotes/origin/main:scripts/named.txt; the checkout declares 'scripts/mine.txt', which is head content and decides nothing.",
+    ]);
+  });
+
+  it("the ref unset, or the file not at it, names nothing and says so with the verb's prefix", () => {
+    const unset = repo(DECLARED);
+    const unsetSeams = new ScriptedSeams([{ match: `git -C ${unset.root} symbolic-ref -q refs/remotes/origin/HEAD`, result: { code: 1 } }]);
+    const first = context([], unsetSeams, unset.dir);
+    expect(readNamedList(first.context, "nen idea file")).toBeNull();
+    expect(first.err).toEqual([
+      "nen idea file: named list not read -- refs/remotes/origin/HEAD is not set in this checkout (git remote set-head origin --auto records the remote's default branch), so the committed named list is read nowhere; it names nothing in this run.",
+    ]);
+    const missing = repo(DECLARED);
+    const missingSeams = new ScriptedSeams([headRef(missing.root), shown(missing.root, "nen/workflow.json", DECLARED), { match: `git -C ${missing.root} ls-tree refs/remotes/origin/main -- scripts/named.txt`, result: { stdout: "" } }]);
+    const second = context([], missingSeams, missing.dir);
+    expect(readNamedList(second.context, "nen pr open")).toBeNull();
+    expect(second.err).toEqual([
+      "nen pr open: named list not read -- named list 'scripts/named.txt' is not at refs/remotes/origin/main (it is read at the remote's default branch, never from the checkout); it names nothing in this run.",
+    ]);
+  });
+
+  it("a bare name on the committed list is a usage error (exit 2) naming the line, never the entry", () => {
     const { dir, root } = repo(DECLARED);
-    const seams = new ScriptedSeams([{ match: show(root), result: { stdout: "acme/thing\nvault\n" } }]);
+    const seams = new ScriptedSeams(onMain(root, DECLARED, "acme/thing\nvault\n"));
     let thrown: unknown;
     try {
       readNamedList(context([], seams, dir).context, "nen issue");
@@ -240,7 +279,7 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(VerbUsageError);
-    expect((thrown as Error).message).toMatch(/named list 'scripts\/named.txt' at refs\/remotes\/origin\/main: line 2 is not an exact owner\/name/);
+    expect((thrown as Error).message).toMatch(/named list at the remote's default branch: line 2 is not an exact owner\/name/);
     expect((thrown as Error).message).not.toContain("vault");
   });
 
@@ -254,22 +293,37 @@ describe("the committed named list, read by every guarded verb (zheref/nen#441)"
     expect(seams.calls).toEqual([]);
   });
 
-  it("guardPrivateNames hands the named list to the check, and skips the read under the opt-out", () => {
+  it("guardPrivateNames reads the named list after the visibility row: never under the opt-out, never for a private target", () => {
     const { dir, root } = repo(DECLARED);
     const seams = new ScriptedSeams([
-      { match: show(root), result: { stdout: "o/thing\n" } },
       visibilityRow(TARGET.slug, "public"),
       FULL_REACH_ROW,
       privateListRow(["o/thing", "o/vault"]),
+      ...onMain(root, DECLARED, "o/thing\n"),
     ]);
     const { context: ctx, err } = context([], seams, dir);
     const check = guardPrivateNames(ctx, TARGET, [{ field: "body", text: "thing" }], null, "nen issue");
     expect(check.result).toBe("clean");
     expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
     expect(err).toEqual(["nen issue: ignored: body:1: private repository #1 (named list)"]);
+    expect(seams.calls[0]?.args.join(" ")).toBe(`api repos/${TARGET.slug}`);
     const skipped = new ScriptedSeams([]);
-    const skippedCheck = guardPrivateNames(context(["--skip-private-name-check"], skipped, dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue");
-    expect(skippedCheck.result).toBe("skipped-by-flag");
+    expect(guardPrivateNames(context(["--skip-private-name-check"], skipped, dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue").result).toBe("skipped-by-flag");
     expect(skipped.calls).toEqual([]);
+    const privateTarget = new ScriptedSeams([visibilityRow(TARGET.slug, "private")]);
+    expect(guardPrivateNames(context([], privateTarget, dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue").result).toBe("skipped-private-target");
+    expect(privateTarget.calls).toHaveLength(1);
+  });
+
+  it("--allow-all-ignored alone is accepted with a declared named list, and refused with neither list (Nobunaga)", () => {
+    const declared = repo(DECLARED);
+    expect(readIgnoreFlag(context(["--allow-all-ignored"], new ScriptedSeams([]), declared.dir).context)).toBeNull();
+    const undeclared = repo(null);
+    expect(() => readIgnoreFlag(context(["--allow-all-ignored"], new ScriptedSeams([]), undeclared.dir).context)).toThrow(/or a committed named list declared by --repo's nen\/workflow.json/);
+    // The remedy the every-name refusal names is now one a verb takes.
+    const seams = new ScriptedSeams([visibilityRow(TARGET.slug, "public"), FULL_REACH_ROW, privateListRow(["o/thing"]), ...onMain(declared.root, DECLARED, "o/thing\n")]);
+    const check = guardPrivateNames(context(["--allow-all-ignored"], seams, declared.dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue");
+    expect(check.result).toBe("clean");
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
   });
 });

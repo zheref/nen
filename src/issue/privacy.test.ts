@@ -10,13 +10,17 @@ import {
   NamedListError,
   normalise,
   parseIgnoreList,
+  objectKindAtRef,
   parseNamedList,
   privateNameLines,
-  readNamedListAtBase,
+  readCommittedNamedList,
   readPrivateList,
+  resolveRemoteDefaultRef,
+  showAtRef,
   readTargetVisibility,
   PrivateListUnavailableError,
   PRIVATE_NAME_EXIT,
+  type NamedList,
 } from "./privacy.js";
 
 const TARGET: Target = { owner: "o", repo: "pub", slug: "o/pub" };
@@ -439,12 +443,90 @@ describe("the named list (zheref/nen#441)", () => {
     expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
   });
 
-  it("reads the list at the base tip through git show, and answers null when git cannot show it", () => {
-    const shown = new ScriptedSeams([{ match: "git -C /r show refs/remotes/origin/main:scripts/named.txt", result: { stdout: "acme/thing\n" } }]);
-    expect(readNamedListAtBase(shown, "/r", "main", "scripts/named.txt")).toBe("acme/thing\n");
-    const missing = new ScriptedSeams([{ match: "git -C /r show refs/remotes/origin/main:scripts/named.txt", result: { code: 128, stderr: "fatal: path 'scripts/named.txt' does not exist in 'refs/remotes/origin/main'" } }]);
-    expect(readNamedListAtBase(missing, "/r", "main", "scripts/named.txt")).toBeNull();
-    const unstartable = new ScriptedSeams([{ match: "git -C /r show refs/remotes/origin/main:scripts/named.txt", result: { code: 1, spawnFailed: true } }]);
-    expect(readNamedListAtBase(unstartable, "/r", "main", "scripts/named.txt")).toBeNull();
+  const HEAD_REF = "git -C /r symbolic-ref -q refs/remotes/origin/HEAD";
+  const main = (path: string): string => `git -C /r show refs/remotes/origin/main:${path}`;
+  const tree = (path: string): string => `git -C /r ls-tree refs/remotes/origin/main -- ${path}`;
+  const file = (path: string, text: string): ScriptedCall => ({ match: main(path), result: { stdout: text } });
+  const blob = (path: string): ScriptedCall => ({ match: tree(path), result: { stdout: `100644 blob 0123456789abcdef0123456789abcdef01234567\t${path}\n` } });
+  const headRef: ScriptedCall = { match: HEAD_REF, result: { stdout: "refs/remotes/origin/main\n" } };
+
+  it("resolves the remote's default branch from refs/remotes/origin/HEAD, and null when it is unset or not origin's", () => {
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([headRef]), "/r")).toBe("refs/remotes/origin/main");
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([{ match: HEAD_REF, result: { code: 1 } }]), "/r")).toBeNull();
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([{ match: HEAD_REF, result: { stdout: "refs/remotes/upstream/main\n" } }]), "/r")).toBeNull();
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([{ match: HEAD_REF, result: { code: 1, spawnFailed: true } }]), "/r")).toBeNull();
+  });
+
+  it("shows a committed file at a ref, tells a file from a tree or symlink, and answers null or absent when git cannot", () => {
+    expect(showAtRef(new ScriptedSeams([file("scripts/named.txt", "acme/thing\n")]), "/r", "refs/remotes/origin/main", "scripts/named.txt")).toBe("acme/thing\n");
+    expect(showAtRef(new ScriptedSeams([{ match: main("scripts/named.txt"), result: { code: 128, stderr: "fatal: path does not exist" } }]), "/r", "refs/remotes/origin/main", "scripts/named.txt")).toBeNull();
+    expect(objectKindAtRef(new ScriptedSeams([blob("scripts/named.txt")]), "/r", "refs/remotes/origin/main", "scripts/named.txt")).toBe("file");
+    expect(objectKindAtRef(new ScriptedSeams([{ match: tree("changelog.d"), result: { stdout: "040000 tree 0123456789abcdef0123456789abcdef01234567\tchangelog.d\n" } }]), "/r", "refs/remotes/origin/main", "changelog.d")).toBe("tree");
+    expect(objectKindAtRef(new ScriptedSeams([{ match: tree("link"), result: { stdout: "120000 blob 0123456789abcdef0123456789abcdef01234567\tlink\n" } }]), "/r", "refs/remotes/origin/main", "link")).toBe("symlink");
+    expect(objectKindAtRef(new ScriptedSeams([{ match: tree("gone"), result: { stdout: "" } }]), "/r", "refs/remotes/origin/main", "gone")).toBe("absent");
+  });
+
+  it("reads the policy, the path and the list at the remote's default branch, and never the checkout's values", () => {
+    const seams = new ScriptedSeams([
+      headRef,
+      file("nen/workflow.json", '{"privateNames":{"namedFile":"scripts/ruled.txt"}}'),
+      blob("scripts/ruled.txt"),
+      file("scripts/ruled.txt", "# ruled\nAcme/Thing\n"),
+    ]);
+    // The checkout declares another path: compared, never read.
+    const read = readCommittedNamedList(seams, "/r", "scripts/mine.txt");
+    expect(read.ref).toBe("refs/remotes/origin/main");
+    expect(read.path).toBe("scripts/ruled.txt");
+    expect([...(read.named?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      HEAD_REF,
+      main("nen/workflow.json"),
+      tree("scripts/ruled.txt"),
+      main("scripts/ruled.txt"),
+    ]);
+  });
+
+  it("a branch that declares its own list, or retargets branch.base at itself, exempts nothing: the default branch's policy decides (Feitan, Nobunaga)", () => {
+    // main's policy declares no named list; the checkout's does, and names a
+    // base of its own. Neither checkout value is read.
+    const seams = new ScriptedSeams([headRef, file("nen/workflow.json", '{"branch":{"base":"feature"}}')]);
+    const read = readCommittedNamedList(seams, "/r", "scripts/mine.txt");
+    expect(read.named).toBeNull();
+    expect(read.reason).toMatch(/declares no privateNames\.namedFile; the checkout's own declaration \('scripts\/mine.txt'\) is head content and decides nothing/);
+    expect(seams.calls.map((call): string => call.args.join(" ")).join("\n")).not.toContain("feature");
+    expect(seams.calls.map((call): string => call.args.join(" ")).join("\n")).not.toContain("mine.txt");
+  });
+
+  it.each([
+    ["the ref unset", [{ match: HEAD_REF, result: { code: 1 } }], /refs\/remotes\/origin\/HEAD is not set/],
+    ["no policy at the ref", [headRef, { match: main("nen/workflow.json"), result: { code: 128 } }], /nen\/workflow.json is not at refs\/remotes\/origin\/main/],
+    ["a policy this build cannot parse", [headRef, file("nen/workflow.json", '{"coverage":{"minimun":1}}')], /could not be read -- .*coverage\.minimun/],
+    ["a policy that is not JSON", [headRef, file("nen/workflow.json", "not json")], /is not valid JSON/],
+    ["a directory at the path", [headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"changelog.d"}}'), { match: tree("changelog.d"), result: { stdout: "040000 tree 0123456789abcdef0123456789abcdef01234567\tchangelog.d\n" } }], /'changelog.d' at refs\/remotes\/origin\/main is a tree, not a regular file/],
+    ["a symlink at the path", [headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"link"}}'), { match: tree("link"), result: { stdout: "120000 blob 0123456789abcdef0123456789abcdef01234567\tlink\n" } }], /is a symlink, not a regular file/],
+    ["no such file at the ref", [headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"scripts/x.txt"}}'), { match: tree("scripts/x.txt"), result: { stdout: "" } }], /'scripts\/x.txt' is not at refs\/remotes\/origin\/main/],
+  ])("names nothing, with the reason, on %s", (_case, script, reason) => {
+    const read = readCommittedNamedList(new ScriptedSeams(script as ScriptedCall[]), "/r", "scripts/x.txt");
+    expect(read.named).toBeNull();
+    expect(read.reason).toMatch(reason);
+  });
+
+  it("a bare name on the committed list throws NamedListError naming the line", () => {
+    const seams = new ScriptedSeams([headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"scripts/x.txt"}}'), blob("scripts/x.txt"), file("scripts/x.txt", "acme/thing\nvault\n")]);
+    expect(() => readCommittedNamedList(seams, "/r", "scripts/x.txt")).toThrow(NamedListError);
+  });
+
+  it("reads a lazily given named list only after the visibility row: never under the opt-out, never for a private target", () => {
+    let calls = 0;
+    const named = (): NamedList => {
+      calls += 1;
+      return parseNamedList("acme/thing\n");
+    };
+    expect(checkPrivateNames(new ScriptedSeams([]), TARGET, [{ field: "body", text: "thing" }], true, null, false, named).result).toBe("skipped-by-flag");
+    expect(checkPrivateNames(new ScriptedSeams([visibility({ visibility: "private" })]), TARGET, [{ field: "body", text: "thing" }], false, null, false, named).result).toBe("skipped-private-target");
+    expect(calls).toBe(0);
+    const check = checkPrivateNames(new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/thing", "b/zeta"])]), TARGET, [{ field: "body", text: "thing" }], false, null, false, named);
+    expect(calls).toBe(1);
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
   });
 });

@@ -509,12 +509,19 @@ usage:
       ignored, case-insensitive). A bare 'name' there is a usage error
       (exit 2) naming the line: it would exempt every owner's repository of
       that name, and a same-named private repository under another owner
-      stays a hit. It is read at the base tip, 'refs/remotes/origin/
-      <branch.base>:<namedFile>', never from the checkout; declared and not
-      there, or a nen/workflow.json nen cannot read, it names nothing and
-      the run says so. Every-name-exempted counts both lists. An ignored hit
-      says which list: '(named list)' or '(ignore file)' on stderr,
-      'ignoredBy: named-list | ignore-file' under --json. --json carries
+      stays a hit. The checkout's declaration is only the switch: the path
+      and the list are read at the remote's default branch
+      ('refs/remotes/origin/HEAD', then '<that ref>:nen/workflow.json' and
+      '<that ref>:<its namedFile>'), never from the checkout, so a branch
+      cannot write, retarget or point the guard at its own exemption; a line
+      counts once merged there and fetched. Whatever cannot be read on that
+      route (the ref unset, no policy or no file there, a directory or
+      symlink, a policy this build cannot parse) names nothing and the run
+      says so. Every-name-exempted counts both lists, and
+      --allow-all-ignored is accepted with a declared named list and no
+      ignore file. An ignored hit says which list: '(named list)' or
+      '(ignore file)' on stderr, 'ignoredBy: named-list | ignore-file'
+      under --json. --json carries
       'privateNameCheck: { result: clean | skipped-private-target |
       skipped-by-flag | refused | unavailable, targetVisibility, listSize,
       owners, hits: [{ field, line, index, normalised, ignored, ignoredBy }],

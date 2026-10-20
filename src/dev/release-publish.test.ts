@@ -11,6 +11,7 @@ import {
   composeNotes,
   parseArgs,
   previousTagOf,
+  readIgnoreOption,
   readNamedListOption,
   releasePublishMain,
   remoteHost,
@@ -92,15 +93,18 @@ describe("release-publish reads the committed named list as every guarded verb d
     }
     return dir;
   }
-  function options(repo: string): Options {
-    return { repo, dryRun: false, json: false, selfTest: false, skipPrivateNameCheck: false, allowAllIgnored: false };
+  function options(repo: string, allowAllIgnored = false): Options {
+    return { repo, dryRun: false, json: false, selfTest: false, skipPrivateNameCheck: false, allowAllIgnored };
   }
-  /** A `run` answering `git show` with `stdout`, recording every call. */
-  function fakeRun(stdout: string | null): { run: Run; calls: string[] } {
+  /** A `run` answering git by its argv, recording every call. */
+  function fakeRun(answers: Readonly<Record<string, string | null>>): { run: Run; calls: string[] } {
     const calls: string[] = [];
     const run: Run = (exe, args): ReturnType<Run> => {
-      calls.push([exe, ...args].join(" "));
-      return stdout === null ? { status: 128, stdout: "", stderr: "fatal: path does not exist" } : { status: 0, stdout, stderr: "" };
+      const key = [exe, ...args].join(" ");
+      calls.push(key);
+      const found = Object.entries(answers).find(([suffix]): boolean => key.endsWith(suffix));
+      if (found === undefined || found[1] === null) return { status: 128, stdout: "", stderr: "fatal: not found" };
+      return { status: 0, stdout: found[1], stderr: "" };
     };
     return { run, calls };
   }
@@ -108,39 +112,65 @@ describe("release-publish reads the committed named list as every guarded verb d
     const err: string[] = [];
     return { io: { out: (): void => undefined, err: (line): void => void err.push(line) }, err };
   };
+  const DECLARED = '{"privateNames":{"namedFile":"scripts/named.txt"}}';
+  const MAIN = {
+    "symbolic-ref -q refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
+    "show refs/remotes/origin/main:nen/workflow.json": DECLARED,
+    "ls-tree refs/remotes/origin/main -- scripts/named.txt": "100644 blob 0123456789abcdef0123456789abcdef01234567\tscripts/named.txt\n",
+  };
 
   it("reads nothing where the checkout declares no named list", () => {
-    const { run, calls } = fakeRun("x/y\n");
+    const { run, calls } = fakeRun({ ...MAIN, "show refs/remotes/origin/main:scripts/named.txt": "x/y\n" });
     const { io: sink, err } = io();
     expect(readNamedListOption(options(repo(null)), run, sink)).toBeNull();
     expect(calls).toEqual([]);
     expect(err).toEqual([]);
   });
 
-  it("shows the declared file at refs/remotes/origin/<branch.base>", () => {
-    const { run, calls } = fakeRun("# ruled\nAcme/Thing\n");
-    const { io: sink } = io();
-    const list = readNamedListOption(options(repo('{"privateNames":{"namedFile":"scripts/named.txt"}}')), run, sink);
+  it("reads the policy, the path and the list at the remote's default branch, never from the checkout", () => {
+    const { run, calls } = fakeRun({ ...MAIN, "show refs/remotes/origin/main:scripts/named.txt": "# ruled\nAcme/Thing\n" });
+    const { io: sink, err } = io();
+    const list = readNamedListOption(options(repo('{"branch":{"base":"feature"},"privateNames":{"namedFile":"scripts/mine.txt"}}')), run, sink);
     expect([...(list?.slugs ?? [])]).toEqual(["acme/thing"]);
-    expect(calls).toEqual(["git show refs/remotes/origin/main:scripts/named.txt"]);
+    expect(calls.map((call): string => call.replace(/^git -C \S+ /, "git "))).toEqual([
+      "git symbolic-ref -q refs/remotes/origin/HEAD",
+      "git show refs/remotes/origin/main:nen/workflow.json",
+      "git ls-tree refs/remotes/origin/main -- scripts/named.txt",
+      "git show refs/remotes/origin/main:scripts/named.txt",
+    ]);
+    expect(err).toEqual([
+      "release-publish: named list read from refs/remotes/origin/main:scripts/named.txt; the checkout declares 'scripts/mine.txt', which is head content and decides nothing.",
+    ]);
   });
 
-  it("a file not at the tip names nothing and says so; a bare name is a usage defect (2)", () => {
-    const declared = '{"privateNames":{"namedFile":"scripts/named.txt"}}';
-    const missing = fakeRun(null);
+  it("a file not at the default branch names nothing and says so; a bare name is a usage defect (2)", () => {
+    const missing = fakeRun({ ...MAIN, "ls-tree refs/remotes/origin/main -- scripts/named.txt": "" });
     const first = io();
-    expect(readNamedListOption(options(repo(declared)), missing.run, first.io)).toBeNull();
+    expect(readNamedListOption(options(repo(DECLARED)), missing.run, first.io)).toBeNull();
     expect(first.err).toEqual([
-      "release-publish: named list 'scripts/named.txt' is not at refs/remotes/origin/main (it is read at the base tip, never from the checkout), so it names nothing in this run.",
+      "release-publish: named list not read -- named list 'scripts/named.txt' is not at refs/remotes/origin/main (it is read at the remote's default branch, never from the checkout); it names nothing in this run.",
     ]);
-    const bare = fakeRun("vault\n");
+    const bare = fakeRun({ ...MAIN, "show refs/remotes/origin/main:scripts/named.txt": "vault\n" });
     let thrown: unknown;
     try {
-      readNamedListOption(options(repo(declared)), bare.run, io().io);
+      readNamedListOption(options(repo(DECLARED)), bare.run, io().io);
     } catch (error) {
       thrown = error;
     }
-    expect((thrown as { exit?: number; code?: number; message: string }).message).toMatch(/line 1 is not an exact owner\/name/);
+    expect((thrown as { code: number }).code).toBe(2);
+    expect((thrown as Error).message).toMatch(/line 1 is not an exact owner\/name/);
     expect((thrown as Error).message).not.toContain("vault");
+  });
+
+  it("--allow-all-ignored alone is accepted with a declared named list and refused with neither list", () => {
+    expect(readIgnoreOption(options(repo(DECLARED), true))).toBeNull();
+    let thrown: unknown;
+    try {
+      readIgnoreOption(options(repo(null), true));
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as { code: number }).code).toBe(2);
+    expect((thrown as Error).message).toMatch(/or a committed named list/);
   });
 });

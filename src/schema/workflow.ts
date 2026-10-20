@@ -216,13 +216,15 @@ export interface DeployPolicy {
  *
  * ONE KEY, A REPO-RELATIVE PATH, AND NO DEFAULT EVER. The guard
  * (../issue/privacy.ts) exempts the exact `owner/name` slugs that file lists,
- * beside the caller's own `--private-names-ignore-file`. It is read AT THE
- * BASE TIP (`refs/remotes/origin/<branch.base>:<namedFile>`), never from the
- * checkout: a list the change under review can edit is an exemption it wrote
- * for itself (zheref/nen#363, Feitan F8), and a committed file is exactly
- * what a branch can edit. A line of it reaches the guard once it has been
- * merged, which is the same bound Hatsu's own fixture puts on the file. No
- * default, because the file publishes what it names and only a ruling may.
+ * beside the caller's own `--private-names-ignore-file`. THE CHECKOUT'S COPY
+ * OF THIS KEY IS ONLY THE SWITCH: declared here, the guard looks; what it
+ * reads -- this policy, the path and the list -- it takes at the remote's
+ * default branch (`refs/remotes/origin/HEAD`), never from the checkout,
+ * because a list the change under review can edit is an exemption it wrote
+ * for itself (zheref/nen#363, Feitan F8), and a committed file, this key and
+ * `branch.base` are exactly what a branch can edit. A line reaches the guard
+ * once it has been merged to the default branch and fetched. No default,
+ * because the file publishes what it names and only a ruling may.
  */
 export interface PrivateNamesPolicy {
   /** The committed named list's repo-relative path, or null for "none declared". No default ever. */

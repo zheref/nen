@@ -602,7 +602,7 @@ they assumed instead); they come back empty or `null`.
 | `coverage.minimum` / `recommended` / `ideal` / `scope` | the ladder. Whole percentages `0`–`100`, and they must **ascend** — three rungs whose order is the whole of their meaning | callers |
 | `launch.default` / `launch.fallback` | which `project.launch` target a bare launch uses. No default ever | callers |
 | `deploy.defaultTarget` | the `project.targets` key a caller's **own** tooling sends to when it is told no target ([#300](https://github.com/zheref/nen/issues/300); Hatsu's `kagutsuchi`). `null` or absent means *ask*. **No default ever**, and **nen never reads it to choose anything**: [`shu deploy`](#nen-shu-deploy) still requires `--target`. A non-string, an empty string or a near-miss key (`defaultTaget`) is refused **by pointer** at load; a name that is no key of `nen/contract.json` → `project.targets`, or names one not marked `"nonProduction": true`, FAILs its own [`schema check`](#nen-schema-check) row | callers; [`schema check`](#nen-schema-check) validates it, [`shu detect`](#nen-shu-detect) proposes it |
-| `privateNames.namedFile` | the [private-name guard](#the-private-name-guard)'s committed NAMED LIST ([#441](https://github.com/zheref/nen/issues/441)): a repo-relative path (no leading `/`, no `..`, not a directory) to a file of exact `owner/name` slugs a recorded ruling made public. Every guarded verb reads it **at the base tip**, `refs/remotes/origin/<branch.base>:<namedFile>`, never from the checkout, and exempts those slugs beside the caller's ignore file. A non-string or a path outside the allowlist is refused **by pointer** at load. `null` or absent means no named list. **No default ever**: the file publishes what it names, and only a ruling may | every guarded verb ([`issue file`](#nen-issue-file) and the rest of the guard's table), `release-publish` |
+| `privateNames.namedFile` | the [private-name guard](#the-private-name-guard)'s committed NAMED LIST ([#441](https://github.com/zheref/nen/issues/441)): a repo-relative path (no leading `/`, no `..`, no trailing `/`; a directory or symlink at it names nothing, said) to a file of exact `owner/name` slugs a recorded ruling made public. **The checkout's copy is only the switch**: declared here, every guarded verb reads this policy, the path and the list **at the remote's default branch** (`refs/remotes/origin/HEAD`), never from the checkout, and exempts those slugs beside the caller's ignore file. A non-string or a path outside the allowlist is refused **by pointer** at load; a [gate change](#gate-changes) under `schema set`. `null` or absent means no named list. **No default ever**: the file publishes what it names, and only a ruling may | every guarded verb ([`issue file`](#nen-issue-file) and the rest of the guard's table), `release-publish` |
 | `reports.sections` | which blocks each report VARIANT renders, and with which template. No default ever | [`report render --variant`](#nen-report-render) |
 | `review.scopes` | which reviewer, at which tier, within which budget, over which paths. No default ever | [`review scopes`](#nen-review-scopes) |
 | `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
@@ -2858,7 +2858,7 @@ nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
 | `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — this verb is not network-free even under `--dry-run`, the same shape [`issue attach-sub`](#nen-issue-attach-sub) has — and runs the private-name guard. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** — human line on a real write: `replaced
 <target>#<pr>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh pr
@@ -3047,7 +3047,7 @@ nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-r
 | `--json` | no | the document | see below |
 | `--skip-private-name-check` | `reply`/`settle` only | skip the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)): the caller attests it ran its own check | nothing is read for it; named on stderr every time. Refused (exit 2) on `list` and `resolve`, which write no text |
 | `--private-names-ignore-file <path>` | `reply`/`settle` only | private repositories the caller ruled too generic to police | no default path is read; a missing file exits **2** before any `gh` call; resolves against `--repo` |
-| `--allow-all-ignored` | `reply`/`settle` only | permit an ignore file that exempts every private name | only with `--private-names-ignore-file`; alone it exits **2** |
+| `--allow-all-ignored` | `reply`/`settle` only | permit an ignore file that exempts every private name | only with `--private-names-ignore-file` or a declared named list (`privateNames.namedFile`); with neither it exits **2** |
 
 **Output and exit codes** — `list` prints one line per thread (resolution
 mark, id, `path:line`, author) with the first 200 characters of its opening
@@ -3258,7 +3258,7 @@ nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <
 | `--json` | no | `nen.pr.open/v0.1` — see below |
 | `--skip-private-name-check` | no | skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check; named on stderr every time |
 | `--private-names-ignore-file <path>` | no | private repositories the caller ruled too generic to police; no default path is read, a missing file exits **2** before any call; resolves against `--repo` |
-| `--allow-all-ignored` | no | permit an ignore file that exempts every private name; alone it exits **2** |
+| `--allow-all-ignored` | no | permit an ignore file, or a declared named list, that exempts every private name; with neither it exits **2** |
 
 **The private-name guard** ([#363](https://github.com/zheref/nen/issues/363))
 runs first — before git is asked which branch is out and before any other
@@ -6988,7 +6988,7 @@ without `--gate-change`, naming the pointer and the reason:
 | `nen/decisions.json` | every pointer | which stops a person answers and which run on their own |
 | `nen/contract.json` | `/dependency/**`, `/project/verbs/**`, `/project/lanes/**`, `/project/toolchain/**`, `/project/targets/**` | which nen runs here, what it runs, where, with what tools, and where it deploys |
 | `nen/contract.json` | any pointer with a `probe`, `version_probe`, `args`, `cwd`, `installer`, `bootstrap`, `select` or `pinned_ref` step, anywhere | a command line, a working directory, an install or a fetch |
-| `nen/workflow.json` | `/branch/**`, `/review/**`, `/coverage/**`, `/tests/**`, `/iteration/**`, `/deploy/**` | the trunk, the review scopes, the bars a change must meet, and where a release goes |
+| `nen/workflow.json` | `/branch/**`, `/review/**`, `/coverage/**`, `/tests/**`, `/iteration/**`, `/deploy/**`, `/privateNames/**` | the trunk, the review scopes, the bars a change must meet, where a release goes, and which private repository names the [private-name guard](#the-private-name-guard) lets through |
 
 **The named exceptions** (`GATE_EXCEPTIONS`), each tested to be no gate: a decision row's **`why`**
 (the prose a stop prints beside it), and a **`note`** anywhere (prose for a person). An exception
@@ -8400,7 +8400,7 @@ nen issue file --target <owner/name> --repo <path> --title <t>
 | `--dry-run` | no | Print the exact `gh issue create` argv and write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs here too, so a dry run's verdict is the real run's. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; every run that uses it says so on stderr, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** -- human rendering: `filed #<n> <url>` on success, or `would run: gh issue create ... --body-file - ...` and a `stdin:` line naming the file the checked bytes came from under `--dry-run`. `--json`: `{ ...FileResult, labels, bodyFile, privateNameCheck }` on success (`FileResult` = `{ url, number }`), `{ dryRun: true, argv, bodyFile, privateNameCheck }` under `--dry-run` (`bodyFile` the resolved path the body was read from), `{ dryRun, filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses. Refusals are ALWAYS printed as plain `nen: <reason>` lines to stderr, even under `--json` -- a caller in JSON mode still gets prose for a refusal, only the success path is machine-shaped. Exit 0 on a successful file (dry or real); exit 1 when title/labels/assignee/label-taxonomy/forbidden-family checks fail (every failing check is reported at once, not one round trip at a time); exit 2 when `--repo` or `--body-file` was omitted outright, `--body-file` cannot be read, or the label taxonomy itself could not be loaded; exit **4** when the [private-name guard](#the-private-name-guard) finds a private repository named in the title or body of a filing to a PUBLIC target, and exit 1 when that guard could not run.
 
@@ -8442,7 +8442,7 @@ nen issue comment --target <owner/name> --issue <n>
 | `--dry-run` | no | Print the exact `gh` call AND the exact bytes it would send; write nothing. | Writes nothing. Since [#329](https://github.com/zheref/nen/issues/329) it READS: the [private-name guard](#the-private-name-guard) runs first, and a refusal prints no body. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read; named on stderr in every run that uses it. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** -- prints `commented on <target>#<issue> <url>` (or, when `gh` printed no URL, says so explicitly rather than inventing one). `--dry-run` prints `would run: gh ...` plus the body fenced between `--- body as it would be posted ---` / `--- end of body ...---`, stating explicitly whether the body ends with a trailing newline. `--json`: `{ dryRun, target, issue, source, bodyFile?, argv, body, url?, privateNameCheck }` (`bodyFile` the resolved path, present for a file body; the argv then reads `--body-file -`, the body travelling on stdin); when the [private-name guard](#the-private-name-guard) refuses, `{ dryRun, target, issue, source, posted: false, privateNameCheck }` -- with **no `body`**, because the body is the text that names it. Exit 0 on a successful post (dry or real); exit 2 on a malformed/absent body or issue number; exit **4** when the guard finds a private repository named in a comment bound for a PUBLIC target; exit 1 when the guard could not run.
 
@@ -8494,7 +8494,7 @@ nen issue edit-body --target <owner/name> --issue <n> --body-file <path>
 | `--dry-run` | no | Certify the number, then print the target, the number, the byte count and the first/last line instead of writing. | **Still reads GitHub** to certify — the same "not network-free" shape [`attach-sub`](#nen-issue-attach-sub) has — and runs the [private-name guard](#the-private-name-guard). |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** — human line on a real write: `replaced
 <target>#<issue>'s body (<n> byte(s))`; `--dry-run` prints `would run: gh
@@ -8727,23 +8727,36 @@ which is the API text fields, not exempt from the rule:
   recorded ruling made public while their code stays private (zheref/hatsu's
   `scripts/private_name_named.txt`, the ruling of 2026-10-19), declared as
   `nen/workflow.json` → `privateNames.namedFile` (a repo-relative path; no
-  default, nothing is read where it is absent). One exact `owner/name` per
-  line, `#` comments and blank lines ignored, case-insensitive; **a bare
-  `name` is a usage error (exit 2)** naming the line and never the entry — a
-  ruling names one repository, a bare name would exempt every owner's
+  default; a [gate change](#gate-changes) under `schema set`). One exact
+  `owner/name` per line, `#` comments and blank lines ignored, case-insensitive;
+  **a bare `name` is a usage error (exit 2)** naming the line and never the
+  entry — a ruling names one repository, a bare name would exempt every owner's
   repository of that name, and a same-named private repository under another
-  owner is still a hit. Every guarded verb honours it beside the ignore file
-  in one call, with no flag. **It is read at the base tip,
-  `refs/remotes/origin/<branch.base>:<namedFile>`, never from the checkout**:
-  the same rule as the ignore file's (a committed file is exactly what the
-  change under review can edit), so a line reaches the guard once it has been
-  merged. Declared and not at that ref, or a `nen/workflow.json` nen cannot
-  read, it names nothing — stricter, never looser — and the run says so on
-  stderr with the verb's prefix. Nothing is read under the opt-out. An
-  every-name-exempted refusal counts both lists (`the ignore file and the
-  named list exempt all <n>`). A hit it exempts is reported `ignored: <field>:<line>:
-  private repository #<k> (named list)` and `ignoredBy: "named-list"`; an
-  entry both lists exempt reports the named list, the exact-slug one.
+  owner is still a hit. Every guarded verb honours it beside the ignore file in
+  one call, with no flag. **The checkout's declaration is only the switch; what
+  is read comes from the remote's default branch, never from the checkout**:
+  `git symbolic-ref refs/remotes/origin/HEAD` names the ref (the remote is
+  `origin`, as every `wc` verb assumes), `nen/workflow.json` is shown at that
+  ref and ITS `privateNames.namedFile` is the path, and the list is shown at the
+  same ref — because the ignore file's rule applies (a committed file is exactly
+  what the change under review can edit) and so does its corollary: the
+  checkout's `branch.base` and `namedFile` are head content too, so a branch
+  that retargeted the base at itself or declared its own file would otherwise
+  make its own unmerged list "the base". A line reaches the guard once it has
+  been merged to the default branch **and fetched** into that ref; a line
+  removed there keeps exempting on a machine that has not fetched. The read
+  happens after the target's visibility, so a private target spends no
+  `git show`, and nothing is read under the opt-out. Whatever cannot be read on
+  that route — the ref unset (`git remote set-head origin --auto` records it),
+  no `nen/workflow.json` or no such file at the ref, a directory, symlink or
+  submodule at the path, a policy this build cannot parse, or a checkout policy
+  nen cannot read — names nothing, stricter never looser, and the run says so
+  on stderr with the verb's prefix. An every-name-exempted refusal counts both
+  lists (`the ignore file and the named list exempt all <n>`), and
+  `--allow-all-ignored` is accepted with a declared named list and no ignore
+  file. A hit it exempts is reported `ignored: <field>:<line>: private
+  repository #<k> (named list)` and `ignoredBy: "named-list"`; an entry both
+  lists exempt reports the named list, the exact-slug one.
 - **The opt-out** is `--skip-private-name-check`, for a caller that has run its
   own check. Nothing is read, the run says so on stderr every time, and
   `--json` reports it.
@@ -8870,7 +8883,7 @@ nen issue consolidate-close --target <owner/name> --parent <n>
 | `--dry-run` | no | Preview the plan and the rendered close comments; write nothing. | Still reads `--parent`/every child over `gh api` to certify object class and run the open-PR guard -- not network-free -- and, with a caller close comment, the private-name guard. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard) on the close comments: the caller attests it ran its own check. | Named on stderr every time. Read only with `--close-comment`/`--close-comment-map`; without one it (and the two below) is refused, exit **2**. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police. | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts every private name. | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts every private name. | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** -- prints `parent: #<n>`, `label union: <a, b, ...>`, the severity line, any plan `note:` lines, then the attach log and the close log (or `would run:` lines under `--dry-run`). Without either `--close-comment` flag, every child is closed with the fixed `Consolidated into #<parent>.`, byte for byte. `--json` carries `{ plan, openPrs, report, privateNameCheck }` on a normal run (`privateNameCheck` `null` without a caller close comment), `{ parent, children, refused: true, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)) -- exit **4** for a private repository named in a close comment bound for a PUBLIC target, nothing attached and nothing closed, exit 1 when it could not run -- `{ plan, refused: true }` on the omitted-severity-family refusal, `{ plan, openPrs, refused: true }` on the open-PR block, or `{ parent, children, pullRequests, refused: true, reason }` on the object-class refusal (which publishes NO plan). Exit 0 on a clean close; exit 1 on any of: an unreduced severity family, a blocked open PR without `--allow-open-pr`, an object-class refusal, or a failed attach/close step; exit 2 on a malformed `--severity-family`, `--close-comment`/`--close-comment-map`, or an omitted `--repo`.
 
@@ -9070,7 +9083,7 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 | `--forbid-family ns:family` | no | Label families this invocation declares off-limits. | Works exactly as [`issue file`](#nen-issue-file)'s does — forwarded into the same `FileRequest` — and is documented in `nen idea --help` since [#94](https://github.com/zheref/nen/issues/94). Caller data: nen carries no repository's own convention about which family means what. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)). Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
 
@@ -13478,7 +13491,7 @@ nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <rege
 | `--run` | no | Actually rerun workflows / post comments. | Without it, this is a dry-run report only -- despite the verb's name. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard): the caller attests it ran its own check. | Nothing is read for it; named on stderr in every run that uses it, and `--json` carries `privateNameCheck.result: "skipped-by-flag"`. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** -- prints `scanned <n> PR(s)[ (dry run)]`, then `#<pr> run <id>: <kind> -- <reason>` per action (or `no swallowed wakes found`), then any `warning: ...` lines. `--json`: `{ repo, now, dryRun, scanned, results, warnings, privateNameCheck }`. **The [private-name guard](#the-private-name-guard)** ([#363](https://github.com/zheref/nen/issues/363)) checks the caller's text every posted comment carries -- `--now`, `--flag-marker`, `--redrive-marker` -- before the first pull-request read, with or without `--run`: a hit is exit **4** with nothing read, rerun or posted (`--json`: `{ repo, dryRun, scanned: 0, privateNameCheck }`, never the checked text), a check that could not run exit **1**; a `--repo-slug` that is not `owner/name`, or a `--now` that is not an ISO-8601 instant, is exit **2** before any call. Exit 0 on a completed sweep -- a failed redrive or a failed follow-up comment POST is tolerated (reported as a `warning:` line, never a non-zero exit); exit 1 if one of the THREE `gh api` fetches this sweep depends on (the open-PR list, a PR's run history, a PR's comment thread) itself fails, since those go through the throwing `must`/`mustJson` seam rather than the tolerated per-action path; exit 2 on a malformed or catastrophic-shaped `--author-pattern`, before any `gh` call.
 
@@ -13527,7 +13540,7 @@ nen wake fire --repo-slug <owner/name> --ref <object-ref> --label <name> [--comm
 | `--run` | no | Actually write to GitHub. | Without it, every line is prefixed `(dry run)` and nothing is written. |
 | `--skip-private-name-check` | no | Skip the [private-name guard](#the-private-name-guard) on `--comment`: the caller attests it ran its own check. | Named on stderr every time. Without `--comment` the guard does not run and this flag (and the two below) is refused, exit **2**. |
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police. | No default path is read; a missing file exits **2** before any call. |
-| `--allow-all-ignored` | no | Permit an ignore file that exempts every private name. | Only with `--private-names-ignore-file`; alone it exits **2**. |
+| `--allow-all-ignored` | no | Permit an ignore file that exempts every private name. | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
 **Output and exit codes** -- prints `[(dry run) ]remove label '<label>' from <slug>#<n>`, then the same for re-apply, then the settle-comment line if `--comment` was given, then (without `--run`) `nothing written -- pass --run to fire for real.`. `--json`: `{ repo, number, label, comment, run, privateNameCheck }` (`null` without `--comment`). **The [private-name guard](#the-private-name-guard)** ([#363](https://github.com/zheref/nen/issues/363)) checks `--comment` before the label is removed, with or without `--run`: a hit is exit **4** with nothing written (`--json`: `{ repo, number, label, run, fired: false, privateNameCheck }`), a check that could not run exit **1**. Exit 0 on success (dry or real); exit 2 when `--ref` carries no `#<N>`, or `--repo-slug` is not `owner/name` while `--comment` is given; a `--run` write that fails (the label removal, the re-apply, or the comment POST) throws and exits 1 -- these three go through the throwing `must` seam, unlike `wake verify`'s tolerated per-action failures.
 

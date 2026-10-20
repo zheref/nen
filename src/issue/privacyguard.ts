@@ -29,11 +29,11 @@ import {
   ignoreFileInsideTree,
   NamedListError,
   parseIgnoreList,
-  parseNamedList,
   privateNameLines,
-  readNamedListAtBase,
+  readCommittedNamedList,
   SKIP_PRIVATE_NAME_CHECK_FLAG,
   type CheckedText,
+  type CommittedNamedListRead,
   type IgnoreList,
   type NamedList,
   type PrivateNameCheck,
@@ -65,9 +65,13 @@ export const PRIVATE_NAME_FLAGS: Required<Pick<FlagSpec, "values" | "booleans">>
 export function readIgnoreFlag(context: CommandContext): IgnoreList | null {
   const raw = context.args.values[PRIVATE_NAMES_IGNORE_FILE_FLAG];
   if (raw === undefined) {
-    if (context.args.booleans.has(ALLOW_ALL_IGNORED_FLAG)) {
+    // `--allow-all-ignored` alone is judged against the OTHER list too
+    // (zheref/nen#441): a declared named list can exempt every name on its
+    // own, and the refusal that recommends the flag must name a remedy a verb
+    // accepts. guardPrivateNames refuses the flag when neither list is there.
+    if (context.args.booleans.has(ALLOW_ALL_IGNORED_FLAG) && !namedListDeclared(context)) {
       throw new VerbUsageError(
-        `--${ALLOW_ALL_IGNORED_FLAG} permits an ignore file that exempts every private name; it means nothing without --${PRIVATE_NAMES_IGNORE_FILE_FLAG} <path>.`,
+        `--${ALLOW_ALL_IGNORED_FLAG} permits a list that exempts every private name; it means nothing without --${PRIVATE_NAMES_IGNORE_FILE_FLAG} <path> or a committed named list declared by --repo's nen/workflow.json (privateNames.namedFile).`,
       );
     }
     return null;
@@ -88,16 +92,32 @@ export function readIgnoreFlag(context: CommandContext): IgnoreList | null {
 
 /**
  * The `--repo` checkout's committed named list (zheref/nen#441), or null when
- * `nen/workflow.json` declares none. Read AT THE BASE TIP
- * (`refs/remotes/origin/<branch.base>:<privateNames.namedFile>`), never from
- * the checkout, so the change under review cannot write its own exemption
- * (Feitan F8). Three things are said rather than failed, each one stderr
- * line prefixed with `verb`, because each leaves the guard STRICTER than a
- * read list would: a `nen/workflow.json` nen cannot read, a declared file
- * not at the base tip, and -- not said, nothing to say -- no declaration at
- * all. A line that is not an exact `owner/name` is the one refusal (exit 2):
- * a bare name would exempt every owner's repository of that name.
+ * the checkout's `nen/workflow.json` declares none. The checkout's
+ * declaration is only the SWITCH: everything that decides what is exempt --
+ * the ref, the policy copy, the path and the list -- is read at the remote's
+ * default branch (`refs/remotes/origin/HEAD`) by ./privacy.ts's
+ * readCommittedNamedList, never from the checkout, so the change under review
+ * cannot write its own exemption, retarget the base at itself, or point the
+ * guard at a file of its own (Feitan F8, and his finding on this change).
+ * Whatever cannot be read on that route is said, one stderr line prefixed
+ * with `verb`, and names nothing -- each leaves the guard STRICTER than a read
+ * list would. A line that is not an exact `owner/name` is the one refusal
+ * (exit 2): a bare name would exempt every owner's repository of that name.
  */
+/**
+ * Whether the checkout's `nen/workflow.json` declares `privateNames.namedFile`
+ * -- the switch readNamedList turns on, read without git. An unreadable policy
+ * reads false (nothing is read then either).
+ */
+export function namedListDeclared(context: CommandContext): boolean {
+  try {
+    return loadWorkflow(resolveRepoRoot({ repoFlag: context.repoFlag })).workflow.privateNames.namedFile !== null;
+  } catch (error) {
+    if (error instanceof SchemaError) return false;
+    throw error;
+  }
+}
+
 export function readNamedList(context: CommandContext, verb: string): NamedList | null {
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   let loaded: LoadedWorkflow;
@@ -110,22 +130,23 @@ export function readNamedList(context: CommandContext, verb: string): NamedList 
     );
     return null;
   }
-  const path = loaded.workflow.privateNames.namedFile;
-  if (path === null) return null;
-  const base = loaded.workflow.branch.base;
-  const text = readNamedListAtBase(context.seams, root, base, path);
-  if (text === null) {
-    context.io.err(
-      `${verb}: named list '${path}' is not at refs/remotes/origin/${base} (it is read at the base tip, never from the checkout), so it names nothing in this run.`,
-    );
-    return null;
-  }
+  const declared = loaded.workflow.privateNames.namedFile;
+  if (declared === null) return null;
+  let read: CommittedNamedListRead;
   try {
-    return parseNamedList(text);
+    read = readCommittedNamedList(context.seams, root, declared);
   } catch (error) {
     if (!(error instanceof NamedListError)) throw error;
-    throw new VerbUsageError(`named list '${path}' at refs/remotes/origin/${base}: ${error.message}`);
+    throw new VerbUsageError(`named list at the remote's default branch: ${error.message}`);
   }
+  if (read.named === null) {
+    context.io.err(`${verb}: named list not read -- ${read.reason}; it names nothing in this run.`);
+    return null;
+  }
+  if (read.path !== declared) {
+    context.io.err(`${verb}: named list read from ${read.ref}:${read.path}; the checkout declares '${declared}', which is head content and decides nothing.`);
+  }
+  return read.named;
 }
 
 /**
@@ -145,8 +166,9 @@ export function guardPrivateNames(
   verb: string,
 ): PrivateNameCheck {
   const skip = context.args.booleans.has(SKIP_PRIVATE_NAME_CHECK_FLAG);
-  // Nothing is read under the opt-out: the run compares against nothing.
-  const named = skip ? null : readNamedList(context, verb);
+  // Read lazily, by checkPrivateNames, after the target's visibility: nothing
+  // is read under the opt-out or for a private target.
+  const named = (): NamedList | null => readNamedList(context, verb);
   const check = checkPrivateNames(
     context.seams,
     target,
