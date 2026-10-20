@@ -50,7 +50,7 @@ import { parseRemoteUrl } from "../github/target.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
 import { ENV_NAME_RE, type ToolCheckout } from "../schema/repos.js";
 import { REPOS_FILE } from "../schema/source.js";
-import { GIT, outputLines, redactRemoteCredentials, type Seams } from "../seam/exec.js";
+import { GIT, outputLines, readRemoteAuthority, redactRemoteUrl, type Seams } from "../seam/exec.js";
 
 export const CHECKOUT_CONTRACT = "nen.canon.checkout/v0.1";
 
@@ -437,15 +437,14 @@ export function verificationGitEnv(env: Readonly<Record<string, string | undefin
  * anything else with no host (Nobunaga N4).
  */
 export function remoteHost(url: string): string | null {
-  const trimmed = url.trim();
-  const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/(?:[^@/]*@)?(\[[^\]]+\]|[^/:]+)/.exec(trimmed);
-  if (scheme !== null) return scheme[1] === undefined || scheme[1] === "" ? null : scheme[1].toLowerCase();
-  if (trimmed.includes("://")) return null;
-  const scp = /^(?:[^@/:]+@)?([^/:]+):(?!\/\/)/.exec(trimmed);
-  if (scp === null || scp[1] === undefined) return null;
-  // `C:` on Windows is a drive, not a host: a one-letter "host" is a path.
-  if (scp[1].length === 1) return null;
-  return scp[1].toLowerCase();
+  // THE HOST IS READ OFF THE RAW AUTHORITY, never off the display form
+  // (SEC-7, Feitan round 2 on zheref/nen#373): `readRemoteAuthority` ends the
+  // authority where git and curl do and takes the host after the last `@`
+  // inside it, so `https://evil.example/x@github.com:o/n` is ambiguous (null)
+  // and `evil.example:x@github.com:o/n` is evil.example -- never github.com.
+  // A userinfo with no host after it (`https://<token>@/o/n`) is null too, so
+  // no part of a userinfo is ever printed as a host. `C:` is a drive.
+  return readRemoteAuthority(url)?.host.toLowerCase() ?? null;
 }
 
 /**
@@ -568,7 +567,9 @@ function verifyIdentityAndTag(
   const origin = git(["remote", "get-url", "origin"]);
   const url = outputLines(origin.stdout)[0];
   if (origin.code !== 0 || url === undefined) return failed(real, "no-origin", `'${real}' has no 'origin' remote, so nothing says it is a checkout of ${source}.`);
-  const redacted = redactRemoteCredentials(url);
+  // Every echo of either origin -- the refusals here, the `verified:` line
+  // and its `--json` field -- carries no userinfo (SEC-5, zheref/nen#373).
+  const redacted = redactRemoteUrl(url);
   const parsed = parseRemoteUrl(url);
   if (parsed === null || parsed.slug.toLowerCase() !== source.toLowerCase()) {
     return failed(real, "wrong-source", `'${real}''s origin is '${redacted}', which ${parsed === null ? "does not read as an owner/name repository" : `names ${parsed.slug}`}, not ${source}.`);
@@ -585,7 +586,7 @@ function verifyIdentityAndTag(
     return failed(
       real,
       "no-consumer-origin",
-      `the consumer '${consumerRoot}' has no readable 'origin' remote with a host${consumerUrl === undefined ? "" : ` ('${redactRemoteCredentials(consumerUrl)}')`}, so there is no host to hold ${source}'s checkout to. Add the consumer's origin.`,
+      `the consumer '${consumerRoot}' has no readable 'origin' remote with a host${consumerUrl === undefined ? "" : ` ('${redactRemoteUrl(consumerUrl)}')`}, so there is no host to hold ${source}'s checkout to. Add the consumer's origin.`,
     );
   }
   const host = remoteHost(url);

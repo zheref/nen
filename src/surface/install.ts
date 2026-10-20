@@ -62,7 +62,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
-import { outputLines, redactRemoteCredentials, type Seams } from "../seam/exec.js";
+import { outputLines, readRemoteAuthority, redactRemoteCredentials, redactRemoteUrl, type Seams } from "../seam/exec.js";
 import {
   classifyError,
   identityOf,
@@ -1275,22 +1275,16 @@ function describeSource(source: KnownSource): string {
  * matches. Only the HOST is lower-cased; a trailing `/` and `.git` are dropped.
  */
 export function normalizeRemote(url: string): string | null {
-  const text = url.trim();
-  let host: string;
-  let path: string;
-  const absolute = /^[a-z][a-z0-9+.-]*:\/\/([^/]*)(\/.*)?$/i.exec(text);
-  const scp = /^[^@/\s:]+@([^:/\s]+):(.+)$/.exec(text);
-  if (absolute !== null) {
-    const authority = absolute[1] as string;
-    const at = authority.lastIndexOf("@");
-    host = (at === -1 ? authority : authority.slice(at + 1)).replace(/:\d+$/, "");
-    path = absolute[2] ?? "";
-  } else if (scp !== null) {
-    host = scp[1] as string;
-    path = scp[2] as string;
-  } else {
-    return null;
-  }
+  // The host comes from the RAW authority as git reads it (SEC-7, zheref/nen#373
+  // round 2): an `@` past the authority makes the URL ambiguous and null, so
+  // `https://evil.example/x@github.com/o/n` never equals github.com/o/n, and
+  // a secret carrying a '/' (`oauth2:tok/en@host`) is never read as a host
+  // or path that describeSource would print.
+  const authority = readRemoteAuthority(url);
+  if (authority === null) return null;
+  if (authority.form === "scheme" ? authority.path !== "" && !authority.path.startsWith("/") : !authority.userinfo) return null;
+  const host = authority.host;
+  let path = authority.path;
   path = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "").replace(/\/+$/, "");
   if (host === "" || path === "") return null;
   return `${host.toLowerCase()}/${path}`;
@@ -1298,7 +1292,10 @@ export function normalizeRemote(url: string): string | null {
 
 /** A root or path a surface CLI reported, for output: credentials in a URL redacted (F-A), control characters made safe. */
 function shownRoot(text: string): string {
-  return safe(redactRemoteCredentials(text));
+  // The whole-value URL redactor, not the free-text one: a root registered as
+  // `https://<token>@host/...` has a colon-less userinfo that
+  // redactRemoteCredentials keeps (Feitan round 2 on zheref/nen#373).
+  return safe(redactRemoteUrl(text));
 }
 
 /** True when a known marketplace's source IS this checkout: its directory, or its remote. */
@@ -1685,7 +1682,7 @@ function statusClaudeCode(inputs: StatusInputs): StatusReport {
     } else {
       listed = entries
         .filter((entry): boolean => entry.id.startsWith(`${plugin}@`))
-        .map((entry): Served => ({ id: entry.id, version: entry.version, path: entry.installPath === null ? null : redactRemoteCredentials(entry.installPath), enabled: entry.enabled === true, status: null }));
+        .map((entry): Served => ({ id: entry.id, version: entry.version, path: entry.installPath === null ? null : redactRemoteUrl(entry.installPath), enabled: entry.enabled === true, status: null }));
       readBack = { checked: true, detail: `claude plugin list --json: ${listed.length} ${plugin}@ ${listed.length === 1 ? "entry" : "entries"}` };
     }
   }
@@ -1736,7 +1733,7 @@ function statusCodex(inputs: StatusInputs): StatusReport {
   } else {
     listed = parseCodexPlugins(result.stdout)
       .filter((row): boolean => row.id.startsWith(`${plugin}@`))
-      .map((row): Served => ({ id: row.id, version: row.version, path: row.path === null ? null : redactRemoteCredentials(row.path), enabled: codexEnabled(row.status), status: row.status }));
+      .map((row): Served => ({ id: row.id, version: row.version, path: row.path === null ? null : redactRemoteUrl(row.path), enabled: codexEnabled(row.status), status: row.status }));
     readBack = { checked: true, detail: `codex plugin list: ${listed.length} ${plugin}@ ${listed.length === 1 ? "row" : "rows"}` };
     const markets = callTool(inputs.seams, "codex", ["plugin", "marketplace", "list"], env);
     if (!markets.ok) problems.push(`codex plugin marketplace list failed: ${markets.last}`);
