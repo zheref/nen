@@ -6943,9 +6943,9 @@ nen ref parse <token>
 | `<token>` (positional) | yes | Object notation, GitHub object URL, or owner/name#N. | Missing or malformed -> exit 2, naming the exact grammar. Object notation retains its existing output and needs no registry. |
 
 **Output and exit codes** — object notation renders `ref:`, `code:`, `kind:`,
-`number:`, `glyph:` lines; its JSON is `{ ref, code, kind, number, glyph }`.
+`number:`, `glyph:` lines; `--json` prints `{ ref, code, kind, number, glyph }`.
 GitHub URL and short subjects render `slug:`, `code:`, `kind:`, `number:` lines;
-their JSON is `{ slug, code?, kind, number }`. An unrecorded code is omitted from
+their `--json` output is `{ slug, code?, kind, number }`. An unrecorded code is omitted from
 JSON and shown as `(unrecorded)` in human output. Short subjects have `kind: null`
 in JSON and `(unknown)` in human output; URL kinds are `IS` or `PR`.
 Exit 0 on a well-formed token in any accepted form; exit 2 when the token is
