@@ -29,9 +29,9 @@
 // is far above everything still exits 0 when the declaration's own pin is met.
 //
 // NO TOOLCHAIN NAME LIVES HERE. ./purity.test.ts sweeps this file with the rest
-// of the execution path; the one installer nen implements is named in
+// of the execution path; the reviewed installer vocabulary lives in
 // ./install.ts alone, which that sweep excludes by name and then holds to
-// naming exactly one.
+// its closed list of installer, preflight and supported-tool names.
 
 import { VerbUsageError } from "../cli/command.js";
 import { loadProfilesPack, profileById } from "../profiles/pack.js";
@@ -166,6 +166,8 @@ export interface ToolRow {
    * (a branch, a SHA, a bare year). Null is never "not behind".
    */
   readonly behindPinnedRef: boolean | null;
+  /** Installer-owned prerequisites, separate from the declaration's reason. */
+  readonly installPreconditions: string | null;
 }
 
 /**
@@ -369,6 +371,7 @@ export function buildPlans(
   for (const entry of Object.values(declared)) {
     const pointer = `project.toolchain.${entry.tool}.version`;
     const pin = parsePin(entry.version, pointer);
+    const install = resolveInstall(entry, manifest, host);
     plans.push({
       name: entry.tool,
       required: true,
@@ -377,7 +380,7 @@ export function buildPlans(
       installer: entry.installer,
       pinned: renderPin(pin),
       satisfiedBy: (found): boolean => satisfiesPin(pin, found),
-      install: resolveInstall(entry, manifest, host),
+      install,
       why: entry.why,
       // A toolchain entry pins a VERSION, never a ref: there is nothing to be
       // behind, and `null` says the comparison does not apply.
@@ -646,6 +649,7 @@ export function assembleToolsReport(
     why: entry.plan.why,
     pinnedRef: entry.plan.pinnedRef,
     behindPinnedRef: entry.assessment.behindPinnedRef,
+    installPreconditions: entry.plan.install.kind === "runnable" ? entry.plan.install.preconditions ?? null : null,
   }));
   return {
     contract: TOOLS_CONTRACT,
@@ -784,6 +788,7 @@ export function renderToolsReport(report: ToolsReport): readonly string[] {
       );
     }
     if (mode === "dry-run") lines.push(`${indent}would probe: ${row.probe}`);
+    if (row.installPreconditions != null) lines.push(`${indent}preconditions: ${row.installPreconditions}`);
     // THE LINE THAT MAKES `unknown` ACTIONABLE. A row that says "present,
     // version unknown" and quotes nothing sends a reader to run the probe by
     // hand to see what nen saw.
