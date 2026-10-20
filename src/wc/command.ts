@@ -7,6 +7,7 @@
 // zheref/nen#299 -- `nen wc worktree` (./worktree.ts), one detached worktree at
 // a fixed path with the core-to-worktree copy.
 
+import { runPrune } from "./prune.js";
 import { assertRepoRoot } from "../repo/root.js";
 import {
   emit,
@@ -44,7 +45,41 @@ import { copyPathRefusal, foldName, KEY_FILE, manageWorktree, MANIFEST_CONTRACT,
 
 const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 
-const USAGE = `nen wc classify -- where the current working copy sits, tensho's own table.
+const USAGE = `nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
+  An explicit JSON array, processed in order. Default: dry run, no fetch,
+  deletion, global prune or GC. --run acts ONLY on listed targets.
+  Items: worktree{path,base}, local-branch{ref,base},
+  remote-branch{remote,ref,base}, remote-ref{remote,ref,base}, host-link{path},
+  each with its named kind field. Refs and bases are full refs/heads/... or
+  refs/remotes/...; remote-ref means a stale LOCAL tracking ref, never HEAD.
+  Bases must already be available locally; fetch missing objects separately.
+  Relative plan/worktree/link paths resolve against --repo. Host links are
+  readlink-only, never removed. Current/primary, locked, dirty (ignored too),
+  unmerged and protected-base resources refuse at exit 2. Never force-remove
+  a worktree or branch. Worktree, local-branch and tracking-ref removals are unsupported:
+  preview and --run both refuse existing targets (absent refs report missing),
+  retaining directories, registrations, refs and branch configuration. No writer-quiescence or checkout-serialization
+  boundary is available; a snapshot or reversible move is not that guarantee.
+  Remote branch deletion freezes one configured endpoint and supported auth/
+  transport settings in memory; relative filesystem URLs become absolute.
+  Observation and leased deletion use an isolated bare context with no live
+  remotes, URL rewrites or includes. Helpers/tilde paths/embedded URL credentials refuse; filesystem,
+  file, HTTP(S), SSH and Git URLs are supported. No auth secrets are copied
+  into scratch files. Other Git settings are not inherited by transport.
+  A moved tip fails its exact observed OID lease. A remote-ref names its
+  configured remote and validates fetch mappings, but existing refs refuse:
+  no fetch-authority serialization boundary exists. Duplicate destructive
+  targets refuse the whole plan before writes; previews never promise an
+  unsupported removal.
+  --json: nen.wc.prune/v0.1 with dryRun, items (one status/message per item),
+  measuredBytes and freedBytes (logical file bytes), bytesBasis, and
+  physicalFreedBytes:null. Supported ref removals reclaim zero measured file
+  bytes; uncertain writes report null. Unsupported local removals report zero
+  freedBytes and null measuredBytes. No physical-capacity claim or object GC.
+  Ref removals and previews report zero; an uncertain write reports null.
+  Exit 0: successful/missing/preview; 2: refusal; 1: any failed operation.
+
+nen wc classify -- where the current working copy sits, tensho's own table.
 nen wc squash -- fold every commit on this branch since --onto into ONE.
 nen wc catch-up -- bring this branch up to date with its base; stop on a conflict.
 nen wc publish -- push this branch, under its own name, to its upstream's remote; never a force, never the trunk.
@@ -867,16 +902,18 @@ const SWAP_ONLY_BOOLEANS: readonly string[] = ["take", "return", "status"];
 
 export const wcCommand: Command = {
   name: "wc",
-  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree"],
+  subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune"],
   summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, or keep one at a fixed path.",
   usage: USAGE,
   flags: {
-    values: ["base", "onto", "message-file", "strategy", "remote", "name"],
-    booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status"],
+    values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan"],
+    booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run"],
     lists: ["copy-from-core"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree"]);
+    const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune"]);
+    if (subcommand === "prune") return runPrune(context);
+    if (context.args.values["plan"] !== undefined || context.args.booleans.has("run")) throw new VerbUsageError("--plan and --run are only read by wc prune.");
     // `--remote` IS PUBLISH'S ALONE; accepted and ignored elsewhere it would be
     // an instruction silently dropped (../commit/command.ts's rule).
     if (subcommand !== "publish" && context.args.values["remote"] !== undefined) {

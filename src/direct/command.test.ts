@@ -87,6 +87,16 @@ describe("nen direct registry", () => {
     expect(document["counts"]).toEqual({ aliases: 10, routingJobs: 39, routingCells: 204 });
   });
 
+  it("includes every alias's exact declared line, including explicit null", async () => {
+    const value = JSON.parse(readFileSync(REAL_REGISTRY, "utf8")) as Json;
+    Object.values(value["aliases"] as Record<string, Json>).forEach((alias, index) => { alias["line"] = index === 0 ? null : `fixture-line-${index}`; });
+    const repo = tmpRepo({ "reg.json": value });
+    const result = await capture(["direct", "registry", "--registry", "reg.json", "--repo", repo, "--json"]);
+    expect(result.code).toBe(0);
+    const document = JSON.parse(result.out.join("\n")) as Json;
+    for (const name of Object.keys(value["aliases"])) expect(document["aliases"][name]["line"]).toBe(value["aliases"][name]["line"]);
+  });
+
   it("resolves a relative --registry against --repo, not the process directory", async () => {
     const repo = tmpRepo({ "reg.json": JSON.parse(readFileSync(REAL_REGISTRY, "utf8")) });
     const result = await capture(["direct", "registry", "--registry", "reg.json", "--repo", repo]);

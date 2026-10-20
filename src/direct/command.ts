@@ -58,7 +58,8 @@ resolves against --repo's root.
   nen direct registry
       Validates the registry file and prints: the snapshot date, one line per alias
       (provider, family, surface/tier, the snapshot quote), the surfaces table and the
-      live-lookup sources per provider. Exit 0 valid, 1 invalid (the refusal names the
+      live-lookup sources per provider. JSON aliases include the exact declared line
+      (null when absent in an older registry). Exit 0 valid, 1 invalid (the refusal names the
       pointer: an alias or surface a routing cell names that is not declared, a cell
       whose surface is not its alias's, bands that do not partition the scores, a
       precedence that does not rank every alias, a snapshot date that is not a date).

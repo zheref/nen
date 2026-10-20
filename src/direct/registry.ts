@@ -84,6 +84,8 @@ export interface SnapshotAlias {
 export interface RegistryAlias {
   readonly provider: string;
   readonly family: string;
+  /** Registry-owned model line; null in older registries or for unlabelled aliases. */
+  readonly line: string | null;
   /** The surface the alias runs on by default, or null (a reviewer bot has none). */
   readonly surface: string | null;
   /** The tier key of `models.<surface>` in the consumer's workflow, or null. */
@@ -250,6 +252,7 @@ function parseAliases(path: string, value: unknown, surfaceNames: readonly strin
     aliases[name] = {
       provider: requireString(path, `${pointer}.provider`, row["provider"]),
       family: requireString(path, `${pointer}.family`, row["family"]),
+      line: row["line"] === undefined ? null : stringOrNull(path, `${pointer}.line`, row["line"]),
       surface,
       tier,
       reviewer,
