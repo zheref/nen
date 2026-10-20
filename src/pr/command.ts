@@ -195,6 +195,12 @@ ready:
   conjunct row (ready / FAILED / unknown, with why). Every row is evaluated;
   the verdict is their conjunction and the first line quotes the FIRST failing
   row. Read-only -- it never labels, merges or comments.
+  aiReviewers is read from nen/workflow.json at the pinned PR base and
+  default-branch tip: required > optional > off; absent/unreadable is required.
+  Optional/off waive only bots consistently declared kind: bot by both trusted
+  gates files. Human/unknown rounds, stalls, approvals and other gates bind.
+  JSON keeps raw owedRounds/quorum and adds meta.aiReviewers provenance,
+  owedRounds[].waivedByAiPolicy and the separate aiPolicyQuorum judgment.
   THE VERDICT CONCERNS GITHUB'S CURRENT HEAD for the pull request at the moment
   it is read -- not your local commit. A push still in flight is judged as its
   parent. Every output states the judged head, and warns (naming both SHAs)
@@ -466,10 +472,8 @@ request-reviews:
   round_policy.maxRounds; 9 every
   call was ACCEPTED but at least one requested bot is not pending review
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
-  }], login null for a bot this pull request has never seen). No review
-  round should be expected from such a bot (the response is read off a
-  first:100 page, so a PR with more pending requests than that can report
-  a landed bot here). When a call also failed outright, 1 wins and
+  }], login null for a bot this pull request has never seen). The response cannot determine allowance exhaustion versus an otherwise
+  unrecorded request; its first:100 page may omit a pending bot. When a call also failed outright, 1 wins and
   'unrecordedBots' still names the bot. --json: '{ ok, routing, message,
   unrecordedBots }'.
 

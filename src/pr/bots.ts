@@ -520,11 +520,11 @@ export function requestBotReviews(
     const plural = unrecordedBots.length > 1;
     return {
       ok: false,
-      message: `${target.slug}#${prNumber}: GitHub accepted the bot review request but did not record it for ${unrecordedBots
+      message: `${target.slug}#${prNumber}: GitHub accepted the bot review request but its response did not list it for ${unrecordedBots
         .map(describeBot)
         .join(", ")} -- the mutation's own response lists no pending review request from ${
         plural ? "those bots" : "that bot"
-      }, so no review round should be expected from ${plural ? "them" : "it"}. Pending bot review requests it does list: ${
+      }. This response cannot determine allowance exhaustion versus an otherwise unrecorded request; its first:100 page may omit a pending bot. Pending bot review requests it does list: ${
         pendingBotLogins.length > 0 ? pendingBotLogins.join(", ") : "(none)"
       }.`,
       pendingBotLogins,

@@ -1433,7 +1433,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     );
     expect(result.code).toBe(9);
     const out = result.out.join("\n");
-    expect(out).toMatch(/did not record it for BOT_kgDOCnlnWA/);
+    expect(out).toMatch(/its response did not list it for BOT_kgDOCnlnWA/);
     expect(out).not.toMatch(/none reported back/);
   });
 
@@ -1452,7 +1452,8 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string; routing: unknown };
     expect(report.ok).toBe(false);
     expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
-    expect(report.message).toMatch(/did not record it for BOT_kgDOCnlnWA/);
+    expect(report.message).toContain("cannot determine allowance exhaustion");
+    expect(report.message).toMatch(/its response did not list it for BOT_kgDOCnlnWA/);
     expect(report.routing).toEqual([{ name: "BOT_kgDOCnlnWA", via: "add-bots", route: "bot", id: "BOT_kgDOCnlnWA" }]);
   });
 
@@ -1498,9 +1499,10 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       new ScriptedSeams(script),
     );
     expect(result.code).toBe(1);
-    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown };
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(false);
     expect(report.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
+    expect(report.message).toContain("cannot determine allowance exhaustion");
   });
 
   it("a recorded request exits 0 and --json carries an EMPTY unrecordedBots, never an absent key", async () => {
@@ -1515,7 +1517,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       new ScriptedSeams(script),
     );
     expect(result.code).toBe(0);
-    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown };
+    const report = JSON.parse(result.out.join("\n")) as { ok: boolean; unrecordedBots: unknown; message: string };
     expect(report.ok).toBe(true);
     expect(report.unrecordedBots).toEqual([]);
   });

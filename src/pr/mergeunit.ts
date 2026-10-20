@@ -1,3 +1,5 @@
+import type { Conjunct } from "../gates/ready.js";
+import { aiReviewersNotices, type AiReviewersReading } from "../gates/ai_reviewers.js";
 // src/pr/mergeunit.ts -- `nen pr merge <ref> --release-unit`: the ONE bounded
 // merge this binary performs, and the only one it ever will.
 //
@@ -192,7 +194,9 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     readonly gateLine?: string;
     readonly message?: string;
     readonly judgedHead?: string | null;
+    readonly conjuncts?: readonly Conjunct[];
     readonly meta?: {
+      readonly aiReviewers?: AiReviewersReading;
       readonly declaredExclusions?: readonly DeclaredExclusionReport[];
       readonly warnings?: readonly string[];
       readonly identities?: { readonly read?: string | null };
@@ -233,6 +237,7 @@ export async function runReadyGate(options: RunReadyGate): Promise<ReadyGateOutc
     // verdict without the ruling that widened it.
     lines: [
       plainLine(`pr ready: ${line}`),
+      ...aiReviewersNotices(parsed.meta?.aiReviewers, parsed.conjuncts).map((notice): string => plainLine(`pr ready: ${notice}`)),
       // Plain at the boundary (Copilot on zheref/nen#359): labels, names,
       // reasons and conditions are text this verb did not write.
       ...declaredNoticeLines(parsed.meta?.declaredExclusions).map((notice): string => plainLine(`pr ready: ${notice}`)),

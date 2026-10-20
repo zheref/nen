@@ -230,8 +230,9 @@ describe("requestBotReviewsArgv / requestBotReviews", () => {
     expect(result.ok).toBe(false);
     expect(result.pendingBotLogins).toEqual([]);
     expect(result.unrecordedBots).toEqual([{ id: "BOT_kgDOCnlnWA", login: null }]);
-    expect(result.message).toMatch(/GitHub accepted the bot review request but did not record it for BOT_kgDOCnlnWA/);
-    expect(result.message).toMatch(/so no review round should be expected from it\./);
+    expect(result.message).toMatch(/GitHub accepted the bot review request but its response did not list it for BOT_kgDOCnlnWA/);
+    expect(result.message).toContain("cannot determine allowance exhaustion versus an otherwise unrecorded request");
+    expect(result.message).toContain("first:100");
     expect(result.message).not.toMatch(/none will arrive/);
     expect(result.message).not.toMatch(/none reported back/);
   });
@@ -274,7 +275,7 @@ describe("requestBotReviewsArgv / requestBotReviews", () => {
     expect(result.ok).toBe(false);
     expect(result.pendingBotLogins).toEqual(["first-bot"]);
     expect(result.unrecordedBots).toEqual([{ id: "BOT_2", login: null }]);
-    expect(result.message).toMatch(/did not record it for BOT_2 --/);
+    expect(result.message).toMatch(/its response did not list it for BOT_2 --/);
     expect(result.message).toMatch(/Pending bot review requests it does list: first-bot\./);
   });
 

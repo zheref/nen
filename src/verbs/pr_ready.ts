@@ -1,3 +1,4 @@
+import { readAiReviewers, trustedBotReviewers, aiReviewersNotices, type AiReviewersReading } from "../gates/ai_reviewers.js";
 // src/verbs/pr_ready.ts -- `nen pr ready <ref>`: the CON-32 readiness verdict,
 // for a human, for a skill, and for CI (zheref/nen#2, Akatsuki migration P1).
 //
@@ -475,6 +476,7 @@ export type DeclaredExclusionReport = Omit<DeclaredExclusionOutcome, "matched"> 
 };
 
 export interface ReadyMeta {
+  readonly aiReviewers?: AiReviewersReading;
   /** The ref exactly as the caller typed it. */
   readonly ref: string;
   readonly repo: string;
@@ -1307,9 +1309,12 @@ export function renderDeclaredExclusions(report: ReadyReport): string[] {
  * one line a caller reads, not only under `--explain`.
  */
 export function declarationNotices(report: ReadyReport): string[] {
-  return report.meta.declaredExclusions
-    .filter((exclusion): boolean => exclusion.status === "honoured" && exclusion.matched !== null && exclusion.matched.length > 0)
-    .map((exclusion): string => declarationNotice({ ...exclusion, matched: exclusion.matched ?? [] }));
+  return [
+    ...report.meta.declaredExclusions
+      .filter((exclusion): boolean => exclusion.status === "honoured" && exclusion.matched !== null && exclusion.matched.length > 0)
+      .map((exclusion): string => declarationNotice({ ...exclusion, matched: exclusion.matched ?? [] })),
+    ...aiReviewersNotices(report.meta.aiReviewers, report.conjuncts),
+  ];
 }
 
 /** A `meta.warnings` entry that is one of `declarationNotices`, already printed above it. */
@@ -1321,6 +1326,7 @@ export function renderExplain(report: ReadyReport): string[] {
   const lines: string[] = [];
   lines.push(`${report.meta.repo}#${report.meta.pr}: ${report.gateLine}`);
   lines.push(judgedHeadLine(report));
+  lines.push(...declarationNotices(report));
   lines.push("");
   const delivery =
     report.meta.deliveryPr === null ? "unknown" : report.meta.deliveryPr ? "yes" : "no";
@@ -1950,10 +1956,14 @@ export async function readReady(
   const base = baseRead !== undefined && defaultRead !== undefined
     ? baseExclusionsOf(baseRead, defaultRead, resolved.identities.excludedChecks ?? [])
     : { exclusions: [], warnings: [], notes: [], source: undefined, origin: null };
+  const aiReviewers = await readAiReviewers(opened.source, ref, stateBaseSha(fetched.state), defaultSha);
+  const trustedBots = trustedBotReviewers(baseRead?.read, defaultRead?.read, applied.identities);
   const evaluation: ReadyEvaluation = evaluateReady(
     { ...applied.identities, excludedChecks: base.exclusions },
     fetched.state,
     {
+      aiReviewers: aiReviewers.effective,
+      trustedBotReviewers: trustedBots,
       roundPolicyDefault: policy,
       // The APPLIED file's stall bound: the base's, when it was read there.
       stallMinutes: applied.identities.stallMinutes ?? STALL_MINUTES,
@@ -1983,6 +1993,7 @@ export async function readReady(
       approvers: evaluation.context.approvers,
       approvalPolicy: evaluation.context.approvalPolicy,
       roundPolicy: evaluation.context.policy,
+      aiReviewers,
       excludeRun: excludeRun === "" ? null : excludeRun,
       requiredHead: requiredHead ?? null,
       excludedChecks: excludeCheckNames,

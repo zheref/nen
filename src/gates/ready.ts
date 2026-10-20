@@ -531,10 +531,20 @@ export interface Conjunct {
   readonly roundQuorum?: QuorumResult;
   /** Existing obligations, including those excused by a met quorum. Absent when uncomputed. */
   readonly owedRounds?: readonly OwedRoundReport[];
+  readonly aiPolicyQuorum?: AiPolicyQuorum;
+}
+
+/** Policy judgment separate from the unchanged declared quorum and actual rounds. */
+export interface AiPolicyQuorum {
+  readonly waivedReviewers: readonly string[];
+  readonly bindingMinimum: number;
+  readonly bindingCount: number;
+  readonly met: boolean;
 }
 
 export interface OwedRoundReport extends OwedRound {
   readonly coveredByQuorum: boolean;
+  readonly waivedByAiPolicy?: "optional" | "off";
   readonly kind?: "bot" | "human";
 }
 
@@ -738,6 +748,8 @@ export interface Settlement {
 }
 
 export interface EvaluateOptions {
+  readonly aiReviewers?: "required" | "optional" | "off";
+  readonly trustedBotReviewers?: readonly string[];
   /** `${COPILOT_POLICY:-bounded}` -- evaluate_ready's default for `.round_policy`. */
   readonly roundPolicyDefault: RoundPolicy;
   /** `${COPILOT_STALL_MINUTES:-30}`. */
@@ -1058,12 +1070,14 @@ type RowResult =
       readonly note: string | null;
       readonly roundQuorum?: QuorumResult | undefined;
       readonly owedRounds?: readonly OwedRoundReport[];
+      readonly aiPolicyQuorum?: AiPolicyQuorum;
     }
   | {
       readonly status: "failed";
       readonly reason: string;
       readonly roundQuorum?: QuorumResult | undefined;
       readonly owedRounds?: readonly OwedRoundReport[];
+      readonly aiPolicyQuorum?: AiPolicyQuorum;
     }
   | { readonly status: "unevaluated"; readonly missing: string };
 
@@ -1103,6 +1117,7 @@ function table(rows: Readonly<Record<ConjunctId, RowResult>>): readonly Conjunct
       // serialises exactly as it did before the field existed.
       ...(quorum === undefined ? {} : { roundQuorum: quorum }),
       ...(row.status === "unevaluated" || row.owedRounds === undefined ? {} : { owedRounds: row.owedRounds }),
+      ...(row.status === "unevaluated" || row.aiPolicyQuorum === undefined ? {} : { aiPolicyQuorum: row.aiPolicyQuorum }),
     };
   });
 }
@@ -1548,7 +1563,16 @@ export function evaluateReady(
       // identity path, which names no file.
       const quorum =
         roundQuorum(identities, roundInputs, head, policy, delivery) ?? undefined;
-      const { owed: stillOwed, excused } = quorumExcusedRounds(owed, quorum);
+      const { owed: quorumOwed, excused } = quorumExcusedRounds(owed, quorum);
+      const aiPolicy = options.aiReviewers ?? "required";
+      const waivedBots = new Set(aiPolicy === "required" ? [] : (options.trustedBotReviewers ?? []).filter((name): boolean => identities.reviewer(name)?.kind === "bot"));
+      const stillOwed = quorumOwed.filter((entry): boolean => !waivedBots.has(entry.reviewer));
+      // Keep the raw quorum/counts intact. Only its bot contributions can be waived.
+      // Every human/unknown member remains eligible AND binding in a mixed quorum.
+      const bindingMembers = quorum?.members.filter((member): boolean => !waivedBots.has(member.reviewer));
+      const policyQuorumMet = quorum !== undefined && bindingMembers !== undefined &&
+        bindingMembers.filter((member): boolean => member.round !== null).length >= Math.min(quorum.minimum, bindingMembers.length);
+
       // zheref/nen#240: the round counts, read off the SAME inputs and the
       // SAME quorum this row was judged by, so the counts and the row cannot
       // disagree about who has a round or who the quorum covers.
@@ -1591,7 +1615,7 @@ export function evaluateReady(
                 delivery,
               ),
             );
-      if (quorum === undefined || quorum.met) {
+      if (quorum === undefined || quorum.met || policyQuorumMet) {
         const excusedClause =
           excused.length === 0
             ? ""
@@ -1619,7 +1643,20 @@ export function evaluateReady(
         const kind = identities.reviewer(entry.reviewer)?.kind;
         return { ...entry, coveredByQuorum: covered.has(entry.reviewer), ...(kind === undefined ? {} : { kind }) };
       });
-      if (owedRow.status !== "unevaluated") owedRow = { ...owedRow, owedRounds };
+      if (owedRow.status !== "unevaluated") owedRow = {
+        ...owedRow,
+        ...(quorum === undefined || aiPolicy === "required" ? {} : { aiPolicyQuorum: {
+          waivedReviewers: quorum.anyOf.filter((name): boolean => waivedBots.has(name)),
+          bindingMinimum: Math.min(quorum.minimum, bindingMembers?.length ?? 0),
+          bindingCount: bindingMembers?.filter((member): boolean => member.round !== null).length ?? 0,
+          met: policyQuorumMet,
+        } }),
+        owedRounds: owedRounds.map((entry): OwedRoundReport => waivedBots.has(entry.reviewer) && aiPolicy !== "required"
+          ? { ...entry, waivedByAiPolicy: aiPolicy } : entry),
+        ...(aiPolicy === "required" ? {} : owedRow.status === "ready"
+          ? { note: `${owedRow.note ?? "round obligations satisfied"}; aiReviewers ${aiPolicy} waives bot rounds: ${[...waivedBots].join(", ") || "(none)"}` }
+          : { reason: `${owedRow.reason}; aiReviewers ${aiPolicy} waives bot rounds: ${[...waivedBots].join(", ") || "(none)"}` }),
+      };
       stalledRow = passed();
       const requestedAt = state["stall_requested_at"];
       const requestedAtText = typeof requestedAt === "string" ? requestedAt : "";

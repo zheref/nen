@@ -1381,6 +1381,7 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
     expect(out).toEqual([
       "zheref/example#9: ready",
       "  judged head: cafebabe (GitHub's head for this pull request when it was read; the verdict is about this commit)",
+      "  aiReviewers required; base basebase: required (workflow file absent); default tip basebase: required (workflow file absent)",
     ]);
   });
 
@@ -2031,6 +2032,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
   it.each(["base-only", "default-only", "changed-until", "shared"])("intersects pinned stacked-base/default declarations: %s", async (scenario) => {
     const reads: string[] = [];
     const src = withRedWindows(async (_path, ref) => {
+      if (_path === "nen/workflow.json") return null;
       reads.push(ref);
       if (ref === "basebase") return gatesText(scenario === "default-only" ? [] : [RULING]);
       expect(ref).toBe("default123");
@@ -3025,5 +3027,58 @@ describe("prReady -- the pending-request reading reads earlier-head round checks
     const { io } = capture();
     await prReady(strictInput(), io, stubDeps(source));
     expect(calls).toEqual([]);
+  });
+});
+
+describe("pr ready trusted aiReviewers policy (#408)", () => {
+  const roots: string[] = [];
+  afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
+  const gates = (kind: "bot" | "human" | null = "bot", pattern = "^robot$"): Record<string, unknown> => ({
+    version: 1, reviewers: [{ name: "robot", ...(kind === null ? {} : { kind }), login_pattern: { pattern, ignoreCase: false } }],
+    base_reviewers: ["robot"], default_approvers: [], approval_policy: "review-round-only",
+    round_quorum: { any_of: ["robot"], minimum: 1 },
+    delivery: { author_pattern: { pattern: "^delivery$", ignoreCase: false }, head_ref_prefixes: ["delivery/"] },
+  });
+  async function runPolicy(basePolicy: unknown, defaultPolicy: unknown, defaultGates = gates(), mode = "json"): Promise<{ code: number; report: ReadyReport | null; out: string[]; reads: string[] }> {
+    const root = mkdtempSync(join(tmpdir(), "nen-408-")); roots.push(root);
+    mkdirSync(join(root, "nen")); writeFileSync(join(root, "nen/gates.json"), JSON.stringify(gates("bot", "^head$")));
+    // Local/head declares off; only immutable remote reads may relax the gate.
+    writeFileSync(join(root, "nen/workflow.json"), '{"aiReviewers":"off"}');
+    const plain = stubSource(); const reads: string[] = [];
+    const source = stubSource({
+      pullRequestSnapshot: async (ref, number) => ({ ...(await plain.pullRequestSnapshot(ref, number)), defaultBranchOid: "defaulttip" }),
+      reviews: async () => [],
+      fileAtRef: async (_ref, path, sha) => {
+        reads.push(`${sha}:${path}`);
+        if (path === "nen/gates.json") return JSON.stringify(sha === "basebase" ? gates() : defaultGates);
+        return JSON.stringify({ aiReviewers: sha === "basebase" ? basePolicy : defaultPolicy });
+      },
+    });
+    const { io, out } = capture();
+    const code = await prReady(input({ repoFlag: root, values: { "gh-repo": "zheref/example" }, booleans: new Set(mode === "plain" ? [] : [mode]) }), io, stubDeps(source));
+    return { code, report: mode === "json" ? JSON.parse(out.join("\n")) as ReadyReport : null, out, reads };
+  }
+  it.each(["optional", "off"])("%s waives trusted bot missing rounds and quorum with exact provenance", async (policy) => {
+    const { code, report, reads } = await runPolicy(policy, policy);
+    expect(code).toBe(0); expect(report?.meta.identities.read).toBe("base");
+    expect(report?.meta.aiReviewers).toEqual({ effective: policy, base: { sha: "basebase", policy, fallback: null }, defaultTip: { sha: "defaulttip", policy, fallback: null } });
+    expect(report?.conjuncts.find((row) => row.id === "rounds-owed")?.owedRounds?.[0]).toMatchObject({ reviewer: "robot", waivedByAiPolicy: policy });
+    expect(reads).toEqual(["basebase:nen/gates.json", "defaulttip:nen/gates.json", "basebase:nen/workflow.json", "defaulttip:nen/workflow.json"]);
+  });
+  it.each([["off", "required"], ["required", "off"], ["off", "invalid"], [null, "off"]])("head policy cannot loosen trusted %s/%s", async (a, b) => {
+    const { code, report } = await runPolicy(a, b);
+    expect(code).toBe(1); expect(report?.meta.aiReviewers?.effective).toBe("required");
+    expect(report?.failing).toContain("rounds-owed");
+  });
+  it("missing/human/conflicting default identity stays binding despite both policies allowing waivers", async () => {
+    for (const other of [gates(null), gates("human"), gates("bot", "^other$")]) {
+      const { code, report } = await runPolicy("off", "off", other);
+      expect(code).toBe(1); expect(report?.conjuncts.find((row) => row.id === "rounds-owed")?.owedRounds?.[0]).not.toHaveProperty("waivedByAiPolicy");
+    }
+  });
+  it.each(["plain", "explain"])("%s names policy provenance and waived reviewers", async (mode) => {
+    const { code, out } = await runPolicy("optional", "off", gates(), mode);
+    expect(code).toBe(0); expect(out.join("\n")).toContain("aiReviewers optional; base basebase: optional; default tip defaulttip: off");
+    expect(out.join("\n")).toContain("waived bot round: robot");
   });
 });
