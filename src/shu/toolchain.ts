@@ -110,14 +110,15 @@ export interface ParsedVersion {
  * One dot IS required, so a bare year or a build number is not mistaken for a
  * version.
  */
-// RubyGems prereleases use a dotted word suffix (`3.3.0.pre.1`). Keep that
-// suffix in the observation: parsing only `3.3.0` would certify a prerelease
-// against the exact stable pin. parseVersion rejects the full non-semver token.
-const VERSION_TOKEN = /\d+(?:\.\d+)+(?:\.[A-Za-z][0-9A-Za-z.-]*)?(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?/g;
+// Retain complete dotted alphanumeric components used by RubyGems versions,
+// including letters attached to digits. A stable numeric prefix alone must
+// never certify the complete prerelease observation.
+const VERSION_TOKEN = /\d+(?:\.[0-9A-Za-z]+)+(?:[-+][0-9A-Za-z][0-9A-Za-z.-]*)?/g;
 
 /** How many dotted numeric components a token's CORE carries. */
 function componentCount(token: string): number {
-  return (token.match(/^\d+(?:\.\d+)*/) ?? [""])[0].split(".").length;
+  const core = /^\d+(?:\.\d+)*/.exec(token)?.[0] ?? "";
+  return core.split(".").length;
 }
 
 /**

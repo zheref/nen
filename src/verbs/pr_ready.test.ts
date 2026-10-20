@@ -663,6 +663,7 @@ function stubSource(overrides: Partial<PrStateSource> = {}): PrStateSource {
       reviewRequests: [],
     },
     defaultBranch: "main",
+    defaultBranchOid: "basebase",
     checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
@@ -1035,6 +1036,7 @@ describe("prReady -- check-rollup pagination (zheref/nen#14's fact-check, zheref
         reviewRequests: [],
       },
       defaultBranch: "main",
+    defaultBranchOid: "basebase",
       // Page ONE: a single green entry, but hasNextPage:true -- exactly
       // #927's shape, scaled down from 100+114 entries to 1+1.
       checkRollup: [{ name: "kisuke / probe", status: "COMPLETED", conclusion: "SUCCESS" }],
@@ -1398,6 +1400,7 @@ describe("prReady -- the happy path and the frozen --json contract", () => {
           reviewRequests: [],
         },
         defaultBranch: "main",
+    defaultBranchOid: "basebase",
         checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
         checkRollupPageInfo: { hasNextPage: false, endCursor: null },
         reviewRequests: [],
@@ -1431,6 +1434,7 @@ describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
           reviewRequests: [],
         },
         defaultBranch: "main",
+    defaultBranchOid: "basebase",
         checkRollup: [{ name: "readiness", status: "COMPLETED", conclusion: "SUCCESS" }],
         checkRollupPageInfo: { hasNextPage: false, endCursor: null },
         reviewRequests: [],
@@ -1489,6 +1493,7 @@ describe("prReady -- --exclude-check (zheref/hatsu#81)", () => {
           reviewRequests: [],
         },
         defaultBranch: "main",
+    defaultBranchOid: "basebase",
         checkRollup: [
           { name: "readiness", status: "COMPLETED", conclusion: "SUCCESS" },
           { name: "status-summary", status: "COMPLETED", conclusion: "SUCCESS" },
@@ -1638,6 +1643,7 @@ function redCheckAndThreads(): PrStateSource {
         reviewRequests: [],
       },
       defaultBranch: "main",
+    defaultBranchOid: "basebase",
       checkRollup: [
         { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
         { name: "ci / windows", status: "COMPLETED", conclusion: "FAILURE" },
@@ -1867,6 +1873,7 @@ describe("prReady -- --require-head <sha> (zheref/nen#245)", () => {
           reviewRequests: [],
         },
         defaultBranch: "main",
+    defaultBranchOid: "basebase",
         checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
         checkRollupPageInfo: { hasNextPage: false, endCursor: null },
         reviewRequests: [],
@@ -1969,7 +1976,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     return path;
   }
   /** A source with a red Windows leg, whose BASE holds `atBase` (null: no file). */
-  function withRedWindows(atBase: (path: string, ref: string) => Promise<string | null>): PrStateSource {
+  function withRedWindows(atBase: (path: string, ref: string) => Promise<string | null>, defaultSha = "basebase"): PrStateSource {
     return stubSource({
       pullRequestSnapshot: async (): Promise<PullRequestSnapshot> => ({
         pullRequest: {
@@ -1985,6 +1992,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
           reviewRequests: [],
         },
         defaultBranch: "main",
+    defaultBranchOid: defaultSha,
         checkRollup: [
           { name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" },
           { name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
@@ -2020,6 +2028,37 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     return { code, out, report: mode === "json" ? (JSON.parse(out.join("\n")) as ReadyReport) : null };
   };
 
+  it.each(["base-only", "default-only", "changed-until", "shared"])("intersects pinned stacked-base/default declarations: %s", async (scenario) => {
+    const reads: string[] = [];
+    const src = withRedWindows(async (_path, ref) => {
+      reads.push(ref);
+      if (ref === "basebase") return gatesText(scenario === "default-only" ? [] : [RULING]);
+      expect(ref).toBe("default123");
+      return gatesText(scenario === "base-only" ? [] : scenario === "changed-until" ? [{ ...RULING, until: "2025-06-29" }] : [RULING]);
+    }, "default123");
+    const { code, report } = await run(src, [RULING]);
+    expect(reads).toEqual(["basebase", "default123"]);
+    expect(code).toBe(scenario === "shared" ? 0 : 1);
+    expect(report?.meta.declaredExclusions).toHaveLength(scenario === "shared" ? 1 : 0);
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase and zheref/example@default123 (intersection)");
+    if (scenario !== "shared") expect(report?.meta.warnings.join("\n")).toContain(scenario === "default-only" ? "pull request's base (zheref/example@basebase" : "default-branch tip (zheref/example@default123");
+  });
+
+  it.each(["missing", "failed", "absent", "malformed"])("default tip %s never authorises a base exclusion in any output mode", async (kind) => {
+    for (const mode of ["json", "explain", "plain"] as const) {
+      const src = withRedWindows(async (_path, ref) => {
+        if (ref === "basebase") return gatesText([RULING]);
+        expect(ref).toBe("default123");
+        if (kind === "failed") throw new Error("HTTP 403 at default");
+        return kind === "absent" ? null : "not JSON";
+      }, kind === "missing" ? "" : "default123");
+      const result = await run(src, [RULING], mode);
+      expect(result.code).toBe(1);
+      expect(result.out.join("\n")).toContain("default-branch tip");
+      expect(result.out.join("\n")).toContain("NOT honoured");
+    }
+  });
+
   it("an exclusion present AT THE BASE is honoured: ready, named with its reason in --json", async () => {
     const { code, report } = await run(withRedWindows(baseDeclares([RULING])), null);
     expect(code).toBe(0);
@@ -2028,7 +2067,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(report?.meta.declaredExclusions).toEqual([{ ...RULING, status: "honoured", matched: [WINDOWS] }]);
     expect(report?.conjuncts.find((c): boolean => c.id === "checks-green")?.note).toContain(NOTICE);
     expect(report?.meta.warnings).toContain(NOTICE);
-    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase and zheref/example@basebase (intersection)");
     expect(report?.meta.notes).toEqual([]);
   });
 
@@ -2072,7 +2111,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(report?.verdict).toBe("not-ready");
     expect(report?.meta.declaredExclusions).toEqual([]);
     expect(report?.meta.warnings).toContain(
-      "declared exclusion 'check (Windows*' is in the local nen/gates.json but not at the pull request's base (zheref/example@basebase:nen/gates.json) — NOT honoured until it is merged there.",
+      "declared exclusion 'check (Windows*' NOT honoured: the complete declaration is not authorised by the pull request's base (zheref/example@basebase:nen/gates.json) and the default-branch tip (zheref/example@basebase:nen/gates.json). Both pinned sources must declare the same match, name, reason, ruled and until.",
     );
   });
 
@@ -2091,7 +2130,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(code).toBe(1);
     expect(report?.meta.declaredExclusions).toEqual([]);
     expect(report?.meta.warnings.join("\n")).toMatch(
-      /declared check exclusions NOT honoured: the base could not be read \(HTTP 403[\s\S]*every check counts on CON-32\(a\)/,
+      /declared check exclusions NOT honoured: the pull request's base could not be read \(HTTP 403[\s\S]*every check counts on CON-32\(a\)/,
     );
   });
 
@@ -2151,12 +2190,13 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(json.code).toBe(1);
     expect(json.report?.meta.warnings).toEqual([]);
     expect(json.report?.meta.notes).toEqual([
-      "could not confirm the base declares no exclusion: the base could not be read (HTTP 403: Resource not accessible by integration). No declared exclusion was applied; every check counts on CON-32(a).",
+      "could not confirm the pull request's base declares no exclusion: the pull request's base could not be read (HTTP 403: Resource not accessible by integration) at zheref/example@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).",
+      "could not confirm the default-branch tip declares no exclusion: the default-branch tip could not be read (HTTP 403: Resource not accessible by integration) at zheref/example@basebase:nen/gates.json. No declared exclusion was applied; every check counts on CON-32(a).",
     ]);
     const plain = await run(failing, null, "plain");
     expect(plain.out.join("\n")).not.toMatch(/could not confirm|NOT honoured/);
     const explain = await run(failing, null, "explain");
-    expect(explain.out.join("\n")).toContain("  note: could not confirm the base declares no exclusion");
+    expect(explain.out.join("\n")).toContain("  note: could not confirm the pull request's base declares no exclusion");
   });
 
   it("a transport that cannot read files, or a PR with no base commit, honours none", async () => {
@@ -2437,6 +2477,15 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
     expect(b.report?.meta.warnings.join("\n")).toMatch(/\(zheref\/example@\(unknown base\):nen\/gates\.json\): the base could not be read \(GitHub answered no base commit/);
   });
 
+  it("echoes the BASE reviewer kind, never a local classification", async () => {
+    const base = { ...STRICT, base_reviewers: ["alpha"], reviewers: [{ name: "alpha", kind: "bot", login_pattern: { pattern: "^alpha$", ignoreCase: false } }] };
+    const root = checkout({ ...base, reviewers: [{ name: "alpha", kind: "human", login_pattern: { pattern: "^alpha$", ignoreCase: false } }] });
+    const result = await run(root, source([], declares(base)));
+    expect(result.report?.conjuncts.find((row) => row.id === "rounds-owed")?.owedRounds).toEqual([
+      { reviewer: "alpha", reason: "no-round-at-head", coveredByQuorum: false, kind: "bot" },
+    ]);
+  });
+
   it("the base is read ONCE, and its checks.excluded and identities come from that one read", async () => {
     const root = checkout(STRICT);
     let reads = 0;
@@ -2447,7 +2496,7 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
     const { report } = await run(root, src);
     expect(report?.verdict).toBe("ready");
     expect(reads).toBe(1);
-    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase and zheref/example@basebase (intersection)");
   });
 
   it("the base's round_policy.stallMinutes is the one applied, not the head's", async () => {
@@ -2505,7 +2554,7 @@ describe("prReady -- every nen/gates.json input is read at the PR's base (zheref
     expect(report?.meta.warnings).toEqual([]);
     // Read once, for the exclusions alone (zheref/nen#249).
     expect(reads).toBe(1);
-    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase and zheref/example@basebase (intersection)");
   });
 
   it("a --gates naming the checkout's OWN nen/gates.json is the head's file by another spelling: read at the base", async () => {

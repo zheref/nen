@@ -109,7 +109,7 @@ import { PROGRAM, VERSION } from "../version.js";
 import { plainLine } from "../cli/plain.js";
 import {
   BASE_GATES_PATH,
-  exclusionsAtBase,
+  exclusionsAtBoth,
   type BaseExclusions,
   type BaseGatesRead,
 } from "../gates/base_exclusions.js";
@@ -519,18 +519,16 @@ export interface ReadyMeta {
    */
   readonly declaredExclusions: readonly DeclaredExclusionReport[];
   /**
-   * WHERE `declaredExclusions` came from (hanten round 2, N5):
-   * `<owner>/<repo>@<sha>` -- the pull request's base, the only source a
-   * decided verdict honours (`@(unknown base)` when GitHub answered none) --
-   * or `local-unverified` on an unevaluated report, whose entries are the
-   * checkout's own file, never checked against the base. `null` when
-   * identities came from `--reviewers`, which declares no exclusion. Additive.
+   * WHERE `declaredExclusions` came from: `<repo>@<base> and <repo>@<default>
+   * (intersection)` on a decided report (#403), both immutable snapshot OIDs.
+   * Unevaluated entries retain their unverified/local or base-only source:
+   * nothing was applied. `null` on the flags-only identity path.
    */
   readonly declaredExclusionsSource: string | null;
   /**
    * Quiet facts that changed nothing a reader could see (hanten round 2, N3):
-   * today, only "could not confirm the base declares no exclusion" when the
-   * base read failed and the local file declares none. Rendered by `--explain`,
+   * an unread trusted source when no declaration is visible locally or on
+   * the other valid side. Rendered by `--explain`,
    * never by the default output. Always the array. Additive.
    */
   readonly notes: readonly string[];
@@ -1933,7 +1931,7 @@ export async function readReady(
         }
       : null;
 
-  // ── checks.excluded, AT THE BASE (zheref/nen#249, Feitan F1) ─────────────
+  // ── checks.excluded, BASE/DEFAULT INTERSECTION (zheref/nen#403) ──────────
   //
   // Never the local file's: under `--repo` a worktree holds the pull request's
   // own head, which could exempt its own red check. Read only when identities
@@ -1942,14 +1940,16 @@ export async function readReady(
   //
   // The LOCAL list is the resolved file's (the checkout's, or `--gates`'s),
   // compared so an entry the base lacks is named; what is APPLIED is the
-  // base's alone, even when the identities fell back to the local file.
-  const base =
-    identities.source === "schema" || seen.base !== undefined
-      ? baseExclusionsOf(
-          seen.base ?? (await readBaseGates(opened.source, ref, stateBaseSha(fetched.state))),
-          resolved.identities.excludedChecks ?? [],
-        )
-      : { exclusions: [], warnings: [], notes: [], source: undefined, origin: null };
+  // intersection at both pinned commits, even if identities fell back locally.
+  const baseRead = seen.base ?? (identities.source === "schema"
+    ? await readBaseGates(opened.source, ref, stateBaseSha(fetched.state)) : undefined);
+  const defaultSha = typeof fetched.state["default_branch_sha"] === "string" ? fetched.state["default_branch_sha"] : "";
+  const defaultRead = baseRead === undefined ? undefined :
+    defaultSha !== "" && defaultSha === stateBaseSha(fetched.state) ? baseRead :
+    await readBaseGates(opened.source, ref, defaultSha, "default-branch tip");
+  const base = baseRead !== undefined && defaultRead !== undefined
+    ? baseExclusionsOf(baseRead, defaultRead, resolved.identities.excludedChecks ?? [])
+    : { exclusions: [], warnings: [], notes: [], source: undefined, origin: null };
   const evaluation: ReadyEvaluation = evaluateReady(
     { ...applied.identities, excludedChecks: base.exclusions },
     fetched.state,
@@ -2088,12 +2088,12 @@ function stateBaseSha(state: Record<string, unknown>): string {
  * callers resolve: no exclusion honoured (../gates/base_exclusions.ts), the
  * local identities with a warning (../gates/base_identities.ts). Never throws.
  */
-async function readBaseGates(source: PrStateSource, ref: ResolvedRef, baseSha: string): Promise<BaseGatesAt> {
-  const origin = `${ref.owner}/${ref.repo}@${baseSha === "" ? "(unknown base)" : baseSha}`;
+async function readBaseGates(source: PrStateSource, ref: ResolvedRef, baseSha: string, label = "base"): Promise<BaseGatesAt> {
+  const origin = `${ref.owner}/${ref.repo}@${baseSha === "" ? `(unknown ${label})` : baseSha}`;
   const where = `${origin}:${BASE_GATES_PATH}`;
   let read: BaseGatesRead;
   if (baseSha === "") {
-    read = { kind: "failed", message: "GitHub answered no base commit for the pull request" };
+    read = { kind: "failed", message: `GitHub answered no ${label} commit for the pull request` };
   } else if (source.fileAtRef === undefined) {
     read = { kind: "failed", message: "this transport cannot read files at a commit" };
   } else {
@@ -2107,12 +2107,17 @@ async function readBaseGates(source: PrStateSource, ref: ResolvedRef, baseSha: s
   return { read, where, origin };
 }
 
-/** The base read's `checks.excluded`, resolved against the local list; see ../gates/base_exclusions.ts. */
+/** Both trusted reads' complete-declaration intersection, with combined provenance. */
 function baseExclusionsOf(
   base: BaseGatesAt,
+  defaultTip: BaseGatesAt,
   local: readonly DeclaredCheckExclusion[],
 ): BaseExclusions & { readonly source: string; readonly origin: string } {
-  return { ...exclusionsAtBase(base.read, base.where, local), source: `${base.where} checks.excluded`, origin: base.origin };
+  return {
+    ...exclusionsAtBoth({ read: base.read, source: base.where }, { read: defaultTip.read, source: defaultTip.where }, local),
+    source: `${base.where} and ${defaultTip.where} checks.excluded (intersection)`,
+    origin: `${base.origin} and ${defaultTip.origin} (intersection)`,
+  };
 }
 
 /** The document `--require-head` prints on a mismatch, in place of a verdict. */

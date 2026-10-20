@@ -1961,3 +1961,60 @@ describe("evaluateReady -- the rounds-owed row's pending-request and own-request
     );
   });
 });
+
+
+describe("structured owedRounds (#403)", () => {
+  const rowOf = (evaluation: ReturnType<typeof evaluateReady>, id: ConjunctId): Conjunct => {
+    const found = evaluation.conjuncts.find((row) => row.id === id);
+    if (found === undefined) throw new Error(`missing row ${id}`);
+    return found;
+  };
+  const identities = (quorum = true): ReturnType<typeof parseGateIdentities> => parseGateIdentities("fixture", {
+    version: 1,
+    reviewers: [
+      { name: "a", kind: "bot", login_pattern: { pattern: "^a$", ignoreCase: false } },
+      { name: "b", kind: "bot", login_pattern: { pattern: "^b$", ignoreCase: false }, round_check_pattern: { pattern: "^b-check$", ignoreCase: false } },
+      { name: "c", kind: "human", login_pattern: { pattern: "^c$", ignoreCase: false } },
+    ],
+    approval_policy: "review-round-only", default_approvers: [], base_reviewers: ["a", "b", "c"],
+    delivery: { author_pattern: { pattern: "^delivery$", ignoreCase: false }, head_ref_prefixes: ["delivery/"] },
+    ...(quorum ? { round_quorum: { any_of: ["a", "b"], minimum: 1 } } : {}),
+  });
+  const row = (state: Record<string, unknown>, quorum = true): Conjunct => rowOf(evaluateReady(identities(quorum), readyState(state), OPTIONS), "rounds-owed");
+  it("includes quorum-excused members and outsiders in original reviewer order, with declared kinds", () => {
+    const result = row({ reviews: [approvedAtHead("a")] });
+    expect(result.owedRounds).toEqual([
+      { reviewer: "b", reason: "no-round-at-head", coveredByQuorum: true, kind: "bot" },
+      { reviewer: "c", reason: "no-round-at-head", coveredByQuorum: false, kind: "human" },
+    ]);
+    expect(result.reason).toContain("c (no round at head)");
+  });
+  it("keeps a pending quorum member owed despite an otherwise met quorum", () => {
+    const result = row({ reviews: [approvedAtHead("a"), approvedAtHead("c")], checks: [greenCheck(), { name: "b-check", status: "IN_PROGRESS", conclusion: null }] });
+    expect(result.status).toBe("failed");
+    expect(result.owedRounds).toEqual([{ reviewer: "b", reason: "no-round-at-head", coveredByQuorum: false, kind: "bot" }]);
+  });
+  it("marks no obligation covered while quorum is unmet, or when no quorum exists", () => {
+    for (const quorum of [true, false]) {
+      const result = row({ reviews: [] }, quorum);
+      expect(result.owedRounds?.map((entry) => entry.coveredByQuorum)).toEqual([false, false, false]);
+      expect(result.status).toBe("failed");
+    }
+  });
+  it("publishes [] only after the ordinary calculation found no obligation", () => {
+    expect(row({ reviews: [approvedAtHead("a"), approvedAtHead("b"), approvedAtHead("c")] }).owedRounds).toEqual([]);
+    for (const state of [{ head_sha: "" }, { reviews: "unreadable" }, { review_requests: "unreadable" }]) {
+      expect(row(state)).not.toHaveProperty("owedRounds");
+    }
+    const carved = evaluateReady(IDENTITIES, readyState({ author: "dependabot[bot]", checks: [greenCheck("sasuke / audit"), greenCheck("tenma / review")], reviews: [] }), OPTIONS);
+    expect(rowOf(carved, "rounds-owed")).not.toHaveProperty("owedRounds");
+  });
+  it("carries a pending-request obligation without inferring a kind", () => {
+    const result = evaluateReady(IDENTITIES, readyState({ review_requests: [{ login: "Copilot" }] }), OPTIONS);
+    expect(rowOf(result, "rounds-owed").owedRounds).toContainEqual({ reviewer: "copilot", reason: "review-requested-not-yet-posted", coveredByQuorum: false });
+  });
+  it("carries delivery obligations and leaves undeclared kinds absent", () => {
+    const result = evaluateReady(IDENTITIES, readyState({ author: "roy-bankai", base_ref: "main", default_branch: "main", head_ref: "integration/x", checks: [greenCheck("sasuke / audit"), greenCheck("tenma / review")], reviews: [] }), OPTIONS);
+    expect(rowOf(result, "rounds-owed").owedRounds).toContainEqual({ reviewer: "sasuke", reason: "delivery-holistic-pass-never-posted", coveredByQuorum: false });
+  });
+});

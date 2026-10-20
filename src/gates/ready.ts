@@ -529,6 +529,13 @@ export interface Conjunct {
    * string does not move.
    */
   readonly roundQuorum?: QuorumResult;
+  /** Existing obligations, including those excused by a met quorum. Absent when uncomputed. */
+  readonly owedRounds?: readonly OwedRoundReport[];
+}
+
+export interface OwedRoundReport extends OwedRound {
+  readonly coveredByQuorum: boolean;
+  readonly kind?: "bot" | "human";
 }
 
 interface ConjunctSpec {
@@ -1050,11 +1057,13 @@ type RowResult =
       readonly status: "ready";
       readonly note: string | null;
       readonly roundQuorum?: QuorumResult | undefined;
+      readonly owedRounds?: readonly OwedRoundReport[];
     }
   | {
       readonly status: "failed";
       readonly reason: string;
       readonly roundQuorum?: QuorumResult | undefined;
+      readonly owedRounds?: readonly OwedRoundReport[];
     }
   | { readonly status: "unevaluated"; readonly missing: string };
 
@@ -1093,6 +1102,7 @@ function table(rows: Readonly<Record<ConjunctId, RowResult>>): readonly Conjunct
       // every row that carries no quorum, so a repository that declares none
       // serialises exactly as it did before the field existed.
       ...(quorum === undefined ? {} : { roundQuorum: quorum }),
+      ...(row.status === "unevaluated" || row.owedRounds === undefined ? {} : { owedRounds: row.owedRounds }),
     };
   });
 }
@@ -1604,6 +1614,12 @@ export function evaluateReady(
           quorum,
         );
       }
+      const covered = new Set(excused.map((entry): string => entry.reviewer));
+      const owedRounds = owed.map((entry): OwedRoundReport => {
+        const kind = identities.reviewer(entry.reviewer)?.kind;
+        return { ...entry, coveredByQuorum: covered.has(entry.reviewer), ...(kind === undefined ? {} : { kind }) };
+      });
+      if (owedRow.status !== "unevaluated") owedRow = { ...owedRow, owedRounds };
       stalledRow = passed();
       const requestedAt = state["stall_requested_at"];
       const requestedAtText = typeof requestedAt === "string" ? requestedAt : "";

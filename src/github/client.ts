@@ -311,6 +311,12 @@ export class GitHubClient {
       data = response.data;
     } catch (error) {
       if (typeof error === "object" && error !== null && (error as { status?: unknown }).status === 404) {
+        // A contents 404 alone may mean the commit itself was unreadable.
+        // Confirm that immutable object on this same explicit token first.
+        await this.octokit.request("GET /repos/{owner}/{repo}/git/commits/{commit_sha}", {
+          owner: repo.owner, repo: repo.repo, commit_sha: ref,
+        });
+        if (/No commit found/i.test(String((error as { message?: unknown }).message))) throw error;
         return null;
       }
       throw error;

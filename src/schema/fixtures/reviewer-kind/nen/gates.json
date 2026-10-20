@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "reviewers": [
+    {
+      "name": "declared-bot",
+      "kind": "bot",
+      "login_pattern": {
+        "pattern": "^(copilot|.+)$",
+        "ignoreCase": true
+      }
+    }
+  ],
+  "approval_policy": "review-round-only",
+  "default_approvers": [],
+  "base_reviewers": [
+    "declared-bot"
+  ],
+  "delivery": {
+    "author_pattern": {
+      "pattern": "^delivery-bot$",
+      "ignoreCase": false
+    },
+    "head_ref_prefixes": [
+      "delivery/"
+    ]
+  }
+}

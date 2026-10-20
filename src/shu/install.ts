@@ -1,55 +1,9 @@
-// src/shu/install.ts -- the closed installer table for `nen shu tools`, and the
-// ONE module in this family that names the installers nen implements.
-//
-// WHY THIS FILE IS EXCLUDED FROM ./purity.test.ts, AND WHY THE EXCLUSION IS
-// NARROW. The family's rule is that no file on the execution path names a
-// toolchain executable, because `nen shu build` must run what the target
-// repository declared and nothing else. `shu tools --install` is the one verb
-// that inverts that: it spawns a program NEN chose, to change THE HOST. There
-// is no declaration to take that name from -- the declaration names an
-// installer ID (`../schema/contract.ts`'s closed `INSTALLERS` set), and turning
-// an id into a command is exactly the knowledge nen has to carry itself. So the
-// name lives here, in one module, which:
-//
-//   * builds commands and never runs one (./probe.ts spawns; this file is
-//     pure), so the sweep's real subject -- what reaches a spawn -- is still
-//     covered by the modules the sweep still reads;
-//   * carries only names from the contract's closed installer set, which
-//     ./purity.test.ts asserts rather than merely skipping this file;
-//   * never reads the profiles pack, so the (d2) inertness rule is untouched --
-//     an install argv is built from the DECLARATION's own pin and from nothing
-//     else, which is the whole content of decision (d2).
-//
-// THE EIGHT FAIL-CLOSED RULES, where this file is the one that keeps them:
-//
-//   1. Check is the default. There is no field, env var or declaration key that
-//      turns an install on; only `--install` does, in ./command.ts.
-//   2. `--dry-run` prints and runs nothing. The commands it prints are the ones
-//      this file resolves, from the same call.
-//   3. NEVER sudo, never elevation. Nothing here renders one, and ./tools.test.ts
-//      sweeps every rendered plan for `sudo`, `runas`, `pkexec` and
-//      `Start-Process -Verb RunAs`.
-//   4. Never an installer the declaration does not name. The id comes from the
-//      entry; an id outside the closed set was already refused by the contract
-//      loader, at exit 2, listing the known ones.
-//   5. NEVER A VERSION THE DECLARATION DOES NOT PIN. Enabled installers
-//      activate EXACT versions, so a range pin is refused rather than
-//      resolved to "the newest thing that satisfies it". Corepack also refuses
-//      a pin the lane's own manifest contradicts.
-//      There is no fallback to the catalogue's tested minimum.
-//   6. Never a URL nen invented. Corepack ships with its runtime; gem-user
-//      invokes RubyGems by name, without assembling a source URL.
-//   7. Never edits PATH, a shell profile or an environment.
-//   8. Never installs a project's dependencies. That is a PRECONDITION nen
-//      asserts and never performs (./run.ts's header) -- a dependency install
-//      executes the project's own postinstall scripts, which is a different
-//      thing to consent to than activating a pinned package manager.
-//
-// WHAT IS ENABLED IN THIS RELEASE: two ids. The declaration's other installer
-// ids are real and are reported, with the version they pin, as work for a
-// human -- decision (d). A tool a repository believes nen manages, which nen
-// silently skips, is the failure this whole family is written against, so
-// "not enabled in this release" is a row a reader sees rather than an absence.
+// src/shu/install.ts -- closed, declaration-pinned installer plans.
+// This pure builder is the narrow exception to the execution-path tool-name
+// rule: it imports no seam, runs nothing and reads no profiles catalogue.
+// Only --install runs these plans; --dry-run runs neither probes nor steps.
+// No elevation, PATH/profile edits or project dependency installation.
+// Tool runtime dependencies belong to the isolated tool installation.
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -66,14 +20,14 @@ import { compareVersions, parsePin, parseVersion } from "./toolchain.js";
  * reason into exit 2. A function that threw could only ever serve the second.
  */
 export type InstallPlan =
-  | { readonly kind: "runnable"; readonly steps: readonly RenderedStep[] }
+  | { readonly kind: "runnable"; readonly steps: readonly RenderedStep[]; readonly preconditions?: string }
   | { readonly kind: "nothing-to-install"; readonly why: string }
   | { readonly kind: "by-hand"; readonly why: string }
   | { readonly kind: "not-enabled"; readonly why: string }
   | { readonly kind: "refused"; readonly why: string };
 
-/** The installer ids `--install` acts on in this release. */
-export const ENABLED_INSTALLERS: readonly Installer[] = ["corepack", "gem-user"];
+/** Installer ids `--install` acts on in this release. */
+export const ENABLED_INSTALLERS: readonly Installer[] = ["corepack", "gem", "gem-user"];
 
 /** The package-manager activator that ships with the runtime it manages. */
 const COREPACK = "corepack";
@@ -87,6 +41,9 @@ function gemUserPlan(entry: ToolchainEntry, host: NodeJS.Platform): InstallPlan 
       kind: "refused",
       why: `project.toolchain.${entry.tool} is not an unscoped Ruby gem name; gem-user never passes a scoped or path-shaped tool name to RubyGems.`,
     };
+  }
+  if (entry.versionFrom === "path-exists") {
+    return { kind: "refused", why: "gem-user requires a version-reading probe; path-exists cannot verify the pinned version." };
   }
   if (pin.kind !== "exact") {
     return {
@@ -109,6 +66,7 @@ function gemUserPlan(entry: ToolchainEntry, host: NodeJS.Platform): InstallPlan 
   }
   return {
     kind: "runnable",
+    preconditions: "Requires existing Ruby >=3.2 and RubyGems, a writable user gem home, network access to the configured gem source, and a declared version probe resolving the user gem on the existing PATH. Bashcov coverage also needs existing Bash 4.1+.",
     steps: [
       {
         exe: RUBY,
@@ -117,7 +75,7 @@ function gemUserPlan(entry: ToolchainEntry, host: NodeJS.Platform): InstallPlan 
       },
       {
         exe: RUBY,
-        argv: ["-S", "gem", "install", entry.tool, "--version", gemVersion, "--user-install", "--no-document"],
+        argv: ["-S", "gem", "install", entry.tool, "--version", gemVersion, "--user-install", "--no-document", "--norc"],
         stdoutTo: null,
       },
     ],
@@ -157,7 +115,7 @@ function gemUserPlan(entry: ToolchainEntry, host: NodeJS.Platform): InstallPlan 
  */
 const REFUSED_INSTALL_HOST: NodeJS.Platform = "win32";
 
-/** The lane manifest whose package-manager pin corepack must agree with. */
+/** The lane manifest whose pin the one enabled installer must agree with. */
 const MANIFEST_FILE = "package.json";
 
 /** The manifest field that states that pin. */
@@ -290,6 +248,35 @@ function corepackPlan(
   return { kind: "runnable", steps };
 }
 
+/** A deliberately narrow RubyGems mode for the shell coverage tool. */
+function gemPlan(entry: ToolchainEntry, host: NodeJS.Platform): InstallPlan {
+  if (entry.tool !== "bashcov") {
+    return { kind: "refused", why: "the gem installer supports only bashcov; other gems require their own installer decision." };
+  }
+  if (entry.versionFrom === "path-exists") {
+    return { kind: "refused", why: "the gem installer requires a version-reading probe; path-exists cannot verify the requested version after installation." };
+  }
+  // RubyGems' version grammar is different from semver: require a complete
+  // numeric release, never a floor, prerelease alias, or abbreviated pin.
+  if (!/^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(entry.version)) {
+    return { kind: "refused", why: `project.toolchain.${entry.tool}.version must be an exact MAJOR.MINOR.PATCH release for the gem installer, found '${entry.version}'.` };
+  }
+  if (host !== "darwin" && host !== "linux") {
+    return { kind: "refused", why: `the gem installer supports darwin and linux only; host '${host}' is unsupported. Nothing was installed.` };
+  }
+  return {
+    kind: "runnable",
+    preconditions: "Requires existing Ruby and RubyGems on PATH, network access to the configured gem source and a writable lane-local .nen/tools directory. Ruby compatibility is checked by RubyGems for the declared release. Running the coverage tool requires Bash 4.1+ (BASH_XTRACEFD); macOS /bin/bash 3.2 cannot capture its trace. Declare a compatible --bash-path in the coverage lane. Nen installs no runtime, edits no PATH/profile and installs no project dependencies.",
+    steps: [
+      // Read-only preconditions; stop before installation if either is absent.
+      { exe: "ruby", argv: ["--version"], stdoutTo: null },
+      { exe: "gem", argv: ["--version"], stdoutTo: null },
+      { exe: "gem", argv: ["install", entry.tool, "--version", entry.version,
+        "--install-dir", ".nen/tools/gems", "--bindir", ".nen/tools/bin", "--no-document", "--norc"], stdoutTo: null },
+    ],
+  };
+}
+
 /**
  * What `--install` would do for one entry, from the entry, the lane's manifest
  * and the host -- and from nothing else.
@@ -323,6 +310,8 @@ export function resolveInstall(
   switch (entry.installer) {
     case "corepack":
       return corepackPlan(entry, manifest, host);
+    case "gem":
+      return gemPlan(entry, host);
     case "gem-user":
       return gemUserPlan(entry, host);
     case "wrapper":

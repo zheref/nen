@@ -111,6 +111,7 @@ export type VersionFrom = (typeof VERSION_FROM)[number];
 export const INSTALLERS = [
   "verify-only",
   "corepack",
+  "gem",
   "gem-user",
   "wrapper",
   "npx",

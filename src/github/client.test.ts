@@ -354,8 +354,17 @@ describe("GitHubClient.fileAtRef -- one file at one commit (zheref/nen#249, Feit
   });
 
   it("answers null ONLY for a 404 -- the file is not there", async () => {
-    const { fetch: stub } = recordingFetch(() => ({ status: 404, body: { message: "Not Found" } }));
+    const { fetch: stub, calls } = recordingFetch((call) => call.url.includes("/git/commits/")
+      ? { body: { sha: "base123" } } : { status: 404, body: { message: "Not Found" } });
     expect(await drive(clientWith(stub).fileAtRef(REPO, "nen/gates.json", "base123"))).toBeNull();
+    expect(calls.map((call) => call.url)).toEqual([
+      expect.stringContaining("/contents/nen/gates.json?ref=base123"), expect.stringContaining("/git/commits/base123"),
+    ]);
+  });
+
+  it("does not call an unreadable commit a missing file", async () => {
+    const { fetch: stub } = recordingFetch(() => ({ status: 404, body: { message: "Not Found" } }));
+    expect(await rejection(clientWith(stub).fileAtRef(REPO, "nen/gates.json", "missing"))).toMatchObject({ status: 404 });
   });
 
   it("throws on any other failure, and on content that is not base64, so the caller can say the base was unread", async () => {

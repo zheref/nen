@@ -1,25 +1,7 @@
-// src/gates/base_exclusions.ts -- `checks.excluded` as the PULL REQUEST'S BASE
-// declares it (zheref/nen#249, Feitan F1).
-//
-// WHY THE BASE. A declared exclusion removes a check from CON-32(a). Read from
-// the checkout under `--repo` -- which in a worktree IS the pull request's own
-// head -- a pull request could add an exclusion for its own failing check and
-// read `ready` on the strength of a ruling nobody merged. So the exclusions are
-// read from `nen/gates.json` AT THE BASE COMMIT GitHub reports for the pull
-// request (`baseRefOid`), the same move `nen pr merge --release-unit` makes for
-// `nen/workflow.json` (Feitan FEI-3). zheref/nen#372 moved the REST of the
-// file to the base too, through the same read: ./base_identities.ts.
-//
-// EVERY FAILURE HONOURS NOTHING, AND SAYS SO. A base that could not be read, a
-// base file that is not JSON, a base `checks.excluded` that does not validate:
-// each yields no exclusion -- every check counts, the stricter verdict -- and a
-// warning naming why. A base with NO `nen/gates.json` declares nothing; that is
-// not a failure. An entry the LOCAL file declares that the base does not is
-// named too, because that is exactly the shape of a pull request trying to
-// exempt itself, and of an honest ruling that simply has not merged yet.
-//
-// Pure: the transports (`pr ready`'s token client, `pr next-blocker`'s `gh`)
-// do the reading and hand the outcome here.
+// src/gates/base_exclusions.ts -- checks.excluded at BOTH the PR base and
+// the default-branch tip (#403). A stacked base may carry an unreviewed ruling;
+// only complete declarations shared with the pinned default tip may remove a
+// check. Transports supply immutable reads; this module owns the pure policy.
 
 import { SchemaError } from "../schema/errors.js";
 import { parseCheckExclusions, parseGatesText, type DeclaredCheckExclusion } from "../schema/gates.js";
@@ -31,15 +13,14 @@ export type BaseGatesRead =
   | { readonly kind: "failed"; readonly message: string };
 
 export interface BaseExclusions {
-  /** The exclusions to apply: the base's, or none. */
+  /** The exclusions authorised by both pinned sources, or none. */
   readonly exclusions: readonly DeclaredCheckExclusion[];
   /** Loud: a ruling someone declared did not apply, and why. */
   readonly warnings: readonly string[];
   /**
-   * Quiet (hanten round 2, N3): the base could not be read, but NEITHER the
-   * local file declares an exclusion, so no ruling anybody can see was lost.
-   * The verdict is still the stricter one; this only says it could not be
-   * confirmed that the base declares none. `--json` and `--explain` carry it.
+   * Quiet (hanten round 2, N3): a source could not be read and no declaration
+   * is visible locally or on the other valid side. Every check still counts.
+   * `--json` and `--explain` carry the pinned source and failure.
    */
   readonly notes: readonly string[];
 }
@@ -76,57 +57,71 @@ export function decodeContentsPayload(data: unknown, path: string, ref: string):
   return Buffer.from(base64, "base64").toString("utf8");
 }
 
-/** The file the exclusions are read from, at the base. */
+/** The file read at each trusted commit. */
 export const BASE_GATES_PATH = "nen/gates.json";
 
+/** One pinned source of a declaration; both must authorise its complete value. */
+export interface ExclusionsSource {
+  readonly read: BaseGatesRead;
+  readonly source: string;
+}
+
+/** Full normalised declaration identity; a selector alone cannot extend a ruling. */
+function declarationKey(entry: DeclaredCheckExclusion): string {
+  return JSON.stringify([entry.match, entry.name, entry.reason, entry.ruled,
+    typeof entry.until === "string" ? ["date", entry.until] : ["condition", entry.until.condition]]);
+}
+
 /**
- * Resolve the base read into the exclusions to apply. `source` names the file
- * at the base (`<owner>/<repo>@<sha>:nen/gates.json`) in every message; `local`
- * is what the checkout's own file declares, compared so an entry not yet at the
- * base is named rather than silently dropped.
+ * The base/default-tip INTERSECTION, in base order (zheref/nen#403). Neither
+ * a stacked base nor a newer default tip can widen the other's ruling. Parse
+ * each independently through the version, duplicate-key and unknown-key guards;
+ * a missing/refused/unreadable side authorises nothing. The local file is only
+ * a diagnostic input, including when explicitly selected with --gates.
  */
-export function exclusionsAtBase(
-  read: BaseGatesRead,
-  source: string,
+export function exclusionsAtBoth(
+  base: ExclusionsSource,
+  defaultTip: ExclusionsSource,
   local: readonly DeclaredCheckExclusion[],
 ): BaseExclusions {
-  // LOUD when the local file declares something -- a ruling the reader
-  // believes in did not apply. QUIET otherwise (N3): nothing visible was lost,
-  // and a repository that never uses the feature should not read a warning on
-  // every run because its token lacks contents:read.
-  const refused = (why: string): BaseExclusions =>
-    local.length > 0
-      ? {
-          exclusions: [],
-          warnings: [
-            `declared check exclusions NOT honoured: ${why}. They are read from ${source}, the pull request's BASE, so a pull request cannot exempt its own checks; every check counts on CON-32(a).`,
-          ],
-          notes: [],
-        }
-      : {
-          exclusions: [],
-          warnings: [],
-          notes: [
-            `could not confirm the base declares no exclusion: ${why}. No declared exclusion was applied; every check counts on CON-32(a).`,
-          ],
-        };
-  let exclusions: DeclaredCheckExclusion[] = [];
-  if (read.kind === "failed") return refused(`the base could not be read (${read.message})`);
-  if (read.kind === "read") {
-    try {
-      // Duplicate keys and invalid JSON are refused here too (Feitan F3).
-      exclusions = parseCheckExclusions(source, parseGatesText(source, read.text));
-    } catch (error) {
-      if (error instanceof SchemaError) return refused(error.message);
-      throw error;
+  const sides = [
+    { ...base, label: "pull request's base" },
+    { ...defaultTip, label: "default-branch tip" },
+  ].map((side) => {
+    let entries: readonly DeclaredCheckExclusion[] = [];
+    let failure: string | null = null;
+    if (side.read.kind === "failed") failure = `the ${side.label} could not be read (${side.read.message})`;
+    if (side.read.kind === "read") {
+      try {
+        entries = parseCheckExclusions(side.source, parseGatesText(side.source, side.read.text));
+      } catch (error) {
+        if (!(error instanceof SchemaError)) throw error;
+        failure = `the ${side.label} refused its declaration (${error.message})`;
+      }
     }
+    return { ...side, entries, failure, keys: new Set(entries.map(declarationKey)) };
+  });
+  const warnings: string[] = [];
+  const notes: string[] = [];
+  const visible = [...local, ...sides.flatMap((side) => side.entries)];
+  const failed = sides.some((side): boolean => side.failure !== null);
+  for (const side of sides) {
+    if (side.failure === null) continue;
+    const message = `${side.failure} at ${side.source}. No declared exclusion was applied; every check counts on CON-32(a).`;
+    if (visible.length > 0) warnings.push(`declared check exclusions NOT honoured: ${message}`);
+    else notes.push(`could not confirm the ${side.label} declares no exclusion: ${message}`);
   }
-  const atBase = new Set(exclusions.map((entry): string => `${entry.match}\u0000${entry.name}`));
-  const warnings = local
-    .filter((entry): boolean => !atBase.has(`${entry.match}\u0000${entry.name}`))
-    .map(
-      (entry): string =>
-        `declared exclusion '${entry.name}' is in the local nen/gates.json but not at the pull request's base (${source}) — NOT honoured until it is merged there.`,
-    );
-  return { exclusions, warnings, notes: [] };
+  const first = sides[0];
+  const second = sides[1];
+  const exclusions = failed ? [] : (first?.entries ?? []).filter((entry): boolean => second?.keys.has(declarationKey(entry)) === true);
+  const applied = new Set(exclusions.map(declarationKey));
+  const reported = new Set<string>();
+  for (const entry of visible) {
+    const key = declarationKey(entry);
+    if (applied.has(key) || reported.has(key)) continue;
+    reported.add(key);
+    const rejecting = sides.filter((side): boolean => side.failure !== null || !side.keys.has(key));
+    warnings.push(`declared exclusion '${entry.name}' NOT honoured: the complete declaration is not authorised by ${rejecting.map((side): string => `the ${side.label} (${side.source})`).join(" and ")}. Both pinned sources must declare the same match, name, reason, ruled and until.`);
+  }
+  return { exclusions, warnings, notes };
 }

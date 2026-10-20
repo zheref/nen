@@ -4,7 +4,7 @@
 // TEST SUPPORT ONLY. It lives under `fixtures/` for the same reason
 // ./paths.ts does: the shu purity sweep, ../../taxonomy-purity.test.ts and
 // ../../profiles/inertness.test.ts all skip that directory. A file that names
-// twenty-eight programs could not sit anywhere else under `src/shu/` without
+// the listed programs could not sit anywhere else under `src/shu/` without
 // failing the rule it exists to enforce. No shipped module imports it, so
 // `bun build --compile ./src/index.ts` never reaches it.
 //
@@ -53,6 +53,9 @@ const TOOLCHAIN: readonly string[] = [
   "yarn",
   "pnpm",
   "corepack",
+  "ruby",
+  "gem",
+  "bashcov",
   "turbo",
   "swiftlint",
   "biome",

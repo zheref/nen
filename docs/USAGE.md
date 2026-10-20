@@ -429,7 +429,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`), plus where that repository's checkout is found on a machine (`checkout_env`, `checkout` -- [#294](https://github.com/zheref/nen/issues/294)) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon checkout`](#nen-canon-checkout) (the pin and the checkout declaration), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted; the checkout declaration, when `--rules-dir` is), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
-| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, read at the pull request's base) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
@@ -950,7 +950,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code; `--touched --base <ref>` narrows the rows to the files a change touched (a git-diff read after the run) and, with `--threshold` absent, bands each row against `nen/workflow.json`'s coverage ladder -- or, where that file is absent, nen's published 80/85/90 defaults -- instead; never gating either way | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name (and, under `--touched` with no `--threshold`, `nen/workflow.json` through the shared loader) | yes |
 | [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu evidence`](#nen-shu-evidence) | match `git diff --name-status <base>...HEAD` against project.evidence.globs, deriving each survivor's suite/scene and grouping suite -> scenes; empty is exit 0, never an error | git diff (through the seam only -- no declared invocation, no lane); nen/contract.json (project.evidence) | yes |
-| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong, exit 7 when nen is behind the dependency block's pinned_ref inside its minimum), and with --install run the supported corepack or user-local RubyGems installer | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
+| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong, exit 7 when nen is behind the dependency block's pinned_ref inside its minimum), and with --install use the closed corepack, Bashcov-only lane-local gem and general user-local gem-user modes | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
@@ -1043,7 +1043,7 @@ guessing.
 Every input `nen/gates.json` supplies is read **at the pull request's base
 commit** (`baseRefOid`), through the same REST contents read
 [#249](https://github.com/zheref/nen/issues/249) built for `checks.excluded`:
-`reviewers[]` and each one's `login_pattern`, `review_check_pattern`,
+`reviewers[]` and each one's optional `kind`, `login_pattern`, `review_check_pattern`,
 `round_check_pattern`, `enrolment_check_pattern`, `bounded_policy_exempt`,
 `delivery_holistic_pass` and `approves_when_posted_at_head`;
 `default_approvers`, `approval_policy` and `base_reviewers`; `round_quorum`;
@@ -1085,8 +1085,8 @@ passes it through to every read. `nen pr merge` and `watch until --until
 ready` apply the same allow-list without it — the merge gate admits only
 `base`, since it passes neither `--gates` nor `--reviewers`.
 
-Three rules hold on every row. **`checks.excluded` is honoured from the base
-or not at all** — never from the fallback and never from `--gates`
+Three rules hold on every row. **`checks.excluded` requires the complete declaration at both pinned base and
+default-tip commits** — never from the fallback and never from `--gates`
 (see [declared check exclusions](#pr-ready-declared-exclusions) below), because
 an exclusion removes a check and only a merged ruling may do that. **A
 `--gates` that names the checkout's own `nen/gates.json`** — `--gates
@@ -1452,42 +1452,36 @@ that reports under a matching name — whichever app or workflow posted it — i
 dropped. That is why a glob needs a literal prefix, and why an exact name is
 the safer form.
 
-**Read at the pull request's BASE, never its head (Feitan F1).** `nen pr ready`
-reads `checks.excluded` from `nen/gates.json` **at the base commit GitHub
-reports for the pull request** (`baseRefOid`, through the REST contents API on
-the same token — it needs `contents:read`) — since [#372](#pr-ready-gates-at-base)
-the rest of the file too, unless `--gates` names another one. Under `--repo`, a worktree holds the
-pull request's own head; reading the exclusions there would let a pull request
-add an exclusion for its own red check. So:
+**Intersect two immutable sources ([#403](https://github.com/zheref/nen/issues/403)).**
+`checks.excluded` is read at the PR's base commit (`baseRefOid`) and at the
+repository's default-branch tip OID, both selected in the same GitHub snapshot.
+No moving branch name or local ref supplies either file. The default branch's
+name is read, never assumed to be `main`. Both reads use the same explicit
+token (`contents:read`); the base read is shared with [#372](#pr-ready-gates-at-base)'s
+identity read, and equal OIDs reuse that one read.
 
-- an entry the local file declares that the base does not is **not honoured**,
-  and named: `declared exclusion '<name>' is in the local nen/gates.json but not
-  at the pull request's base (<owner>/<repo>@<sha>:nen/gates.json) — NOT
-  honoured until it is merged there.`;
-- a base read that **fails** (no base commit, a 403, a transport that cannot
-  read files, a payload that is not a base64-encoded file — a directory, a
-  symlink, a file too large to be delivered inline, named by its type or size —
-  or a base file that is not JSON or whose block does not validate) honours
-  **no** exclusion. When the local file (or `--gates`) declares at least one
-  entry, that is a `meta.warnings` line (`declared check exclusions NOT
-  honoured: …`); when it declares **none**, nothing anybody can see was lost,
-  so it is a quiet `meta.notes` line instead (`could not confirm the base
-  declares no exclusion: <reason>`), rendered by `--explain` only — the verdict
-  is the stricter one either way;
-- a base with **no** `nen/gates.json` declares nothing; that is not a failure;
-- identities from `--reviewers` declare no exclusion, as they declare no
-  carve-out, and the base is not read.
+An exclusion is applied only when both files declare the same normalized
+`match`, `name`, `reason`, `ruled`, and `until`, preserving base order. Omitted
+`match` and explicit `exact` are equivalent. A different expiry, condition,
+ruling date, reason, or matching mode is a different declaration, even when the
+selector text matches. Neither a stacked base nor a newer default tip can
+widen the other side's ruling. For each removed entry the output names which
+side did not authorize it and that side's pinned `<repo>@<oid>:nen/gates.json`.
+The local file and an explicit external `--gates` supply diagnostics only for
+exclusions; neither can authorize one.
 
-**The base is only as trusted as its branch protection.** Reading the base
-stops a pull request from exempting its own checks, but anyone who can push to
-the base branch directly can write a ruling there; a ruling binds when it lives
-on a protected base.
+A missing OID, an unreadable commit/file, malformed JSON, a duplicate or unknown
+key, an unsupported version, or an invalid exclusion on either side applies
+**no** exclusions. A file absent at a readable commit declares none. A contents
+404 is treated as absence only after the commit itself is confirmed readable.
+When an entry is visible locally or on the other valid side, failures are loud
+`meta.warnings` (`declared check exclusions NOT honoured: …`); otherwise they
+remain quiet `meta.notes`, rendered by `--explain`. Both paths keep every check
+in CON-32(a). The flags-only path declares no exclusion and infers none.
 
-**Consumer note:** `nen pr ready` (and `pr next-blocker`, through `gh`) now
-reads `nen/gates.json` at the base through the REST contents API, so the token
-needs `contents:read` for declared exclusions to apply — and, since
-[#372](#pr-ready-gates-at-base), for the base's reviewer identities to apply
-rather than the checkout's, which is the warned fallback.
+Reviewer identities and the rest of the gate retain #372's base-only route;
+only exclusion authorization uses this intersection. Consumer AI-reviewer
+policy belongs to #408; reviewer wake/state behavior belongs to #440.
 
 What `nen pr ready` does with what it read:
 
@@ -1510,7 +1504,8 @@ What `nen pr ready` does with what it read:
   were never read — `in-force`: the LOCAL file's entry is in force by its dates,
   but nothing was applied, so it is not `honoured`, and `matched` is `null`.
 - `meta.declaredExclusionsSource` says where the entries came from:
-  `<owner>/<repo>@<sha>` (the base, on a decided report) or `local-unverified`
+  `<owner>/<repo>@<base-oid> and <owner>/<repo>@<default-oid> (intersection)`
+  on a decided report, or `local-unverified`
   (an unevaluated report's entries, the checkout's own file, never checked
   against the base; `--explain` says `local, not verified at base`). It is
   `null` for identities from `--reviewers`. `meta.notes` is always an array.
@@ -1600,13 +1595,13 @@ What `nen pr ready` does with what it read:
 - Like `--exclude-check`, it never changes which reviewers owe a round or
   whether CON-30's carve-out fires. `meta.excludedChecks` stays the **flag's**
   names only.
-- `nen pr next-blocker` applies the same base-read exclusions; see its section.
+- `nen pr next-blocker` applies the same two-source intersection; see its section.
 - An entry carrying a key it does not define (`$comment` aside) is refused.
 
 The block is validated at load wherever it is read — the local file by
 `nen pr ready` (exit `2`) and by `nen schema check` (whose `gates.json` row adds
-`, N declared check exclusion(s)` when there are any), the base's copy by the
-base read above. Refused by pointer (`checks.excluded[<i>].<field>`): a missing
+`, N declared check exclusion(s)` when there are any), both trusted copies by the
+reads above. Refused by pointer (`checks.excluded[<i>].<field>`): a missing
 or blank field; surrounding whitespace on any field (its own message); a
 `ruled` or `until` that is not a strict, real `YYYY-MM-DD` date; an `until`
 object carrying anything but `condition`; an `until` date before `ruled`; a glob
@@ -1784,9 +1779,26 @@ gate, and said nothing.
 | `dependabot_carve_out` (`author_pattern`, `satisfied_by_context`) | 0.7.0 |
 | `approval_policy` | 0.10.0 |
 | `round_policy.stallMinutes` | 0.11.0 |
+| `reviewers[].kind` (`bot` or `human`, optional) | 0.24.0 |
 | `round_policy.minRounds`, `round_policy.maxRounds` | 0.21.0 |
 | `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
 | `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
+
+**Optional reviewer `kind` ([#403](https://github.com/zheref/nen/issues/403)).**
+A reviewer may state `"kind": "bot"` or `"kind": "human"`; every other present
+value is refused at `reviewers[i].kind`. Omission stays unknown. It is an
+explicit consumer declaration, not a verified GitHub account type, and does not
+change pattern matching. For example, this isolated fixture remains valid and
+matches `copilot` **and any non-empty human login**:
+
+```json
+{"name":"declared-bot","kind":"bot","login_pattern":{"pattern":"^(copilot|.+)$","ignoreCase":true}}
+```
+
+Its `kind` tells a consumer only that the applied identity was declared a bot;
+it does not make that broad regex safe or restrict who may satisfy it. The
+base-applied kind is echoed on every `owedRounds` entry, including members
+covered by quorum. A flags-only identity has no declared kind.
 
 **Repeated keys are refused too** (Feitan F3): `{"round_policy":{"maxRounds":1,"maxRounds":999}}`
 is refused by pointer (`at round_policy, carries the key 'maxRounds' twice`) at exit `2`, wherever the
@@ -2022,10 +2034,28 @@ line for each failing row after the first, and one `warning:` line for each warn
 `verdict` (`ready`\|`not-ready`\|`unevaluated`), `gateLine`, `firstFailing`,
 `failing[]`, `judgedHead`, `localHead`, `conjuncts[]` (each row has `id`, `order`,
 `clause`, `title`, `status`, `reason`, `note` and `missing`, and the `rounds-owed` row also
-carries `roundQuorum` when the file declares a `round_quorum`), `caveats[]`, `remedy` and `meta`
+carries `roundQuorum` when the file declares a `round_quorum`, plus `owedRounds`
+when its ordinary calculation ran), `caveats[]`, `remedy` and `meta`
 (`meta.requiredHead` included). `failing`, `judgedHead`, `localHead`,
-`conjuncts[].missing`, `conjuncts[].roundQuorum` and `meta.requiredHead` are additive to
+`conjuncts[].missing`, `conjuncts[].roundQuorum`, `conjuncts[].owedRounds` and
+`meta.requiredHead` are additive to
 `nen.pr.ready/v0.1`.
+The `rounds-owed` conjunct's optional `owedRounds` is an ordered array of
+`{ reviewer, reason, coveredByQuorum, kind? }`. It carries every obligation
+computed by the existing round rules, including quorum-excused obligations.
+`reason` is the round obligation: `review-requested-not-yet-posted`,
+`no-round-at-head`, `delivery-holistic-pass-never-posted`, or
+`delivery-no-definitive-success-review-check`. It is not an invented round
+ordinal; contextual numeric counts remain in `meta.roundCounts`. The row's
+existing prose `reason`, verdict and exit meanings are unchanged.
+`coveredByQuorum` is true only when the actual met-quorum calculation excused
+that obligation. A pending/in-flight member stays owed, and an outsider is
+never covered. `kind` is included only when the applied identity declares it.
+`[]` means the ordinary calculation ran and found no obligation. The key is
+absent on all other conjuncts and when uncomputed: missing inputs, parse
+failures, or the CON-30 carve-out. Consumers must not interpret absence as
+nobody owed. This list adds no GitHub reads.
+
 Exit 0 only on `verdict: ready`.
 Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
 "cleared" (SKILL.md §4's "absence is never a pass").
@@ -2239,8 +2269,8 @@ case and path separators, and a directory junction is followed and checked
 the same way. **A pull request's own head can edit its
 working-tree template** — drop a section it did not fill, and the check it
 must pass goes with it — so a gate passes `--base <ref>` (the PR's base),
-the same reasoning as `nen pr ready` reading `checks.excluded` at the base
-(zheref/nen#249). With `--base`, the ref is resolved once to a single commit
+the same reasoning as `nen pr ready` pinning exclusion declarations at the base
+and default tip (zheref/nen#249, #403). With `--base`, the ref is resolved once to a single commit
 (`git rev-parse --verify --quiet --end-of-options <ref>^{commit}`, so a range
 is refused rather than read as its tip), the locations are listed with
 `git ls-tree` at that commit and the chosen file read with `git cat-file`;
@@ -2440,23 +2470,21 @@ runs. So it does not count a round-check run on an earlier commit, which
 `nen pr ready` does under `bounded`. Where the two differ, `next-blocker` calls
 the round owed. It is stricter than `pr ready` there, never looser.
 
-**Declared check exclusions (zheref/nen#249).** The red-check step applies
-`checks.excluded` exactly as `nen pr ready` does: read from `nen/gates.json`
-**at the pull request's base commit** (`baseRefOid`), never from the local
-file, dated against the current UTC day, and the honoured labels dropped
-before the step judges the rollup. A rollup holding only excluded checks is a
-`red-check` whose detail begins `no checks remain after the declared
-exclusion(s): …`. Any failure to read the base (no base commit, a 403, a
-malformed block) applies **no** exclusion; a base with no `nen/gates.json`
-declares none. Nothing is applied or refused silently: under the result line
-it prints `  excluded by declaration: …` for each honoured entry that removed a
-check, and `  warning: …` for every base-read failure (when the local file
-declares an entry), local-only entry, expired, not-yet-ruled or
-condition-`until` entry — the same wording `pr ready` uses. `--json` adds
-`warnings` (those lines) and `notes` (the quiet "could not confirm the base
-declares no exclusion" line, when nothing is declared locally). This verb does not
-take `--exclude-check` or `--exclude-run`, so where a `pr ready` call passed
-one of those it can name a check `pr ready` dropped — stricter, never looser.
+**Declared check exclusions ([#403](https://github.com/zheref/nen/issues/403)).**
+The red-check step uses `pr ready`'s complete-declaration intersection at the
+base and default-tip commits. Both OIDs are selected together over GraphQL;
+that policy snapshot must still match the fetched PR's head and base. Drift or
+unconfirmed refs authorize no exclusion, with a diagnostic; the original
+fetched base still owns reviewer identities even if the later ref read fails.
+File reads pin the OIDs, confirm commit readability, and reuse the read when
+they coincide. An absent, unreadable, or invalid side authorizes none. Output
+names the rejecting side and pinned source for every removed declaration;
+honored exclusions retain their notices, dates, and condition warnings.
+`--json` adds `declaredExclusionsSource` naming both pinned files and the
+intersection, plus `warnings` and quiet `notes` as in `pr ready`. Local and
+external `--gates` exclusions are diagnostic inputs only. This verb does not
+take `--exclude-check` or `--exclude-run`, so a `pr ready` invocation using
+those flags can drop a check that this verb still weighs.
 
 **Reviewer identities at the base, too ([#372](#pr-ready-gates-at-base)).** The
 same one read supplies the identities: without `--gates` (or with one naming
@@ -12347,7 +12375,7 @@ exits `0`)
 ### `nen shu tools`
 
 Check the **host** toolchain this repository pins, and — only with `--install`,
-and only through an enabled installer — install what nen is allowed to install. It is
+and only through the closed installer inventory — install what nen is allowed to install. It is
 the one verb in this family whose blast radius is the developer's machine rather
 than a repository, which is why every rule below is stated as a refusal.
 
@@ -12375,7 +12403,7 @@ nen shu tools --install [--only <tool[,tool]>] [--dry-run] [--json]
 | `version` | **yes** | The pin. Either an exact version (`"9.15.9"`) or a floor (`">=20.19.0"`) — the two forms nen can evaluate. There is no caret, no tilde, no two-sided range and no dist-tag; one of those is exit 2 naming the pointer and both forms. A pre-release or build-metadata suffix is held to **semver's own identifier charset** (alphanumerics and `-`, per dot-separated identifier): `1.2.3-rc.1+sha512.abc` is a pin, `1.2.3-; rm -rf /` is exit 2 by pointer — that suffix is the one part of a pin that reaches an installer's argv unreshaped. **No entry may omit it**: nen never certifies or installs `latest`, and the loader refuses an entry that tries. |
 | `probe` | **yes** | Argv, never a string. There is no shell. |
 | `versionFrom` | **yes** | One of `first-semver-on-stdout`, `first-semver-on-stderr`, `whole-line-stdout`, `path-exists`. **Deliberately not a regex** — a caller-supplied pattern is a caller-supplied program, and a ReDoS surface `src/schema/pattern.ts` exists to guard. The two `first-semver` members read the first version-shaped token (one dot or more) on that stream, **preferring a three-component one when the line offers several** — so a banner leading with a build date `2024.01` does not beat the `1.2.3` beside it, while `MAJOR.MINOR` is still read when that is all a probe prints. Nothing scores further: two three-component tokens on one line still yield the first, because choosing between them would be nen guessing which version the probe meant. A probe whose line leads with an unrelated dotted number and carries no three-component version reads *that* number — declare a probe that prints the version alone. |
-| `installer` | **yes** | One of `verify-only`, `corepack`, `gem-user`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. Only **`corepack`** and **`gem-user`** run in this release. |
+| `installer` | **yes** | One of `verify-only`, `corepack`, `gem`, `gem-user`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. **`corepack`**, **`gem`** and **`gem-user`** run in this release. |
 | `why` | no | Where the pin comes from, in the repository's own words. Printed verbatim; never nen's. |
 
 The **`nen` row** comes from the `dependency` block instead, when there is one:
@@ -12493,13 +12521,49 @@ test computes that rule from the seam rather than from a list of names.
 
 | Installer | `--install` runs | Why |
 |---|---|---|
-| `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` — **on `darwin` and `linux` only** | The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. On **`win32` it is REFUSED**, with those two commands printed to run by hand: there `corepack` is a batch shim (`corepack.cmd`), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a `.bat`/`.cmd` without one (node, since the fix for CVE-2024-27980) fails; a runtime that starts it anyway starts it *through* the command interpreter, which re-parses the argument list nen assembled element by element — a shell by another name. Nen will not guess which of the two this host does, and an install that "works on POSIX and is untested on Windows" is a claim nobody checked. The **check** is unaffected on every host: it spawns only the probe the repository declared. |
-| `gem-user` | Check `ruby` is at least 3.2, then `ruby -S gem install <tool> --version <pin> --user-install --no-document` — **on `darwin` and `linux` only** | The tool and exact version come from `project.toolchain`. A leading `v` is removed for RubyGems; prerelease and build-metadata pins are refused because this installer supports stable dotted-numeric gem versions. RubyGems installs into the current user's gem home; nen neither upgrades Ruby nor edits `PATH` or a shell profile. If Ruby is absent or too old, the prerequisite step fails before `gem` runs. The final declared tool probe must find the pinned version on this `PATH`; a successful gem exit alone is not success. On `win32`, the install is refused; the ordinary check still runs. |
+| `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` — **on `darwin` and `linux` only** | The package-manager install nen performs. The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. On **`win32` it is REFUSED**, with those two commands printed to run by hand: there `corepack` is a batch shim (`corepack.cmd`), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a `.bat`/`.cmd` without one (node, since the fix for CVE-2024-27980) fails; a runtime that starts it anyway starts it *through* the command interpreter, which re-parses the argument list nen assembled element by element — a shell by another name. Nen will not guess which of the two this host does, and an install that "works on POSIX and is untested on Windows" is a claim nobody checked. The **check** is unaffected on every host: it spawns only the probe the repository declared. |
+| `gem` | `ruby --version`, `gem --version`, then `gem install bashcov --version <pin> --install-dir .nen/tools/gems --bindir .nen/tools/bin --no-document --norc` | Only the declared `bashcov` tool, with an exact numeric `MAJOR.MINOR.PATCH` release, on **darwin/linux**. Other tools, ranges, abbreviated pins and hosts refuse. Ruby/RubyGems must already exist; the preflight steps stop on failure. RubyGems checks release/runtime compatibility. Tool runtime dependencies are installed in the same lane-local directory; project dependencies are never installed. `--norc` bypasses `.gemrc`. No elevation, PATH or shell profile edits; use the declared Ruby activation probe below. The report's `installPreconditions` field and human preconditions line state the prerequisites, including **Bash 4.1+** for coverage (macOS system Bash 3.2 lacks `BASH_XTRACEFD`). |
+| `gem-user` | Check `ruby` is at least 3.2, then `ruby -S gem install <tool> --version <pin> --user-install --no-document --norc` — **on `darwin` and `linux` only** | The tool and exact version come from `project.toolchain`. A leading `v` is removed for RubyGems; prerelease and build-metadata pins are refused because this installer supports stable dotted-numeric gem versions. RubyGems installs into the current user's gem home; nen neither upgrades Ruby nor edits `PATH` or a shell profile. If Ruby is absent or too old, the prerequisite step fails before `gem` runs. Presence-only probes are refused. The report lists prerequisites separately from the consumer’s `why`. The final declared tool probe must find the pinned version on this `PATH`; a successful gem exit alone is not success. On `win32`, the install is refused; the ordinary check still runs. |
 | `verify-only` | nothing | Reported with the pin and the sentence *"install by hand"*. A system-wide install with five common answers is exactly the choice nen does not make for you. |
 | `wrapper`, `npx` | nothing | There is nothing to install: the repository's own committed wrapper, or its own dependency graph, resolves the tool. |
 | `sdkmanager`, `dotnet-install`, `winget` | nothing | Declared, and **not enabled in this release**: every installer that fetches and executes vendor code, or writes into an SDK root, ships behind its own explicit decision. The row names the tool, the pin and the installer a human runs. |
 
-**Shell coverage consumer shape (Hatsu #148).** `project.toolchain` can pin
+RubyGems prerelease observations (for example `4.0.0.pre.1`, `4.0.0pre` or
+`4.0.0.0pre`) retain their full alphanumeric components and cannot satisfy an
+exact stable pin. A pre-existing prerelease
+still requires installation; a post-install prerelease remains unsatisfied.
+
+The `gem` report lists runtime preflights and the exact install argv in check and
+dry-run modes. `--dry-run` spawns neither preflights nor probes. `--install`
+re-runs the declaration's probe after successful installation and exits 5 if
+it still reports a missing or wrong version; an installer exit 0 is insufficient.
+A local install does not put a command on PATH: declare a probe that activates
+the local gem through Ruby, and select a compatible Ruby/RubyGems pair before
+running Nen. Do not use `path-exists` to certify this version.
+
+```json
+"toolchain": {
+  "bashcov": {
+    "version": "4.0.0",
+    "installer": "gem",
+    "probe": ["ruby", "-e", "Gem.use_paths(File.expand_path('.nen/tools/gems')); require 'bashcov/version'; puts Bashcov::VERSION"],
+    "versionFrom": "whole-line-stdout",
+    "why": "Focused shell line coverage; Ruby >=3.2 and compatible Bash already provisioned."
+  }
+}
+```
+
+All paths above are relative to the selected lane's `cwd`. In the test row, capture using
+`ruby -e "Gem.use_paths(File.expand_path('.nen/tools/gems')); load Gem.bin_path('bashcov', 'bashcov', '4.0.0')" -- --bash-path <existing-compatible-bash> -- <focused-script>`.
+[The shell coverage demonstration](ab/443-shell-coverage.md) records the tested
+LCOV formatter and consumer lane shape for Hatsu #148: its test row executes
+and instruments fixtures; its coverage row only checks and parses the existing
+capture. No coverage lane or floor
+is added to Hatsu by this provisioning change.
+
+**General user-local gems (`gem-user`).** This mode accepts any declared unscoped gem name, with an exact stable dotted-numeric version, alongside the Bashcov-only lane-local `gem` mode. Ruby >=3.2, RubyGems, a writable user gem home, network access to the configured gem source, and an already configured version probe are prerequisites. `--norc` bypasses `.gemrc`; RubyGems may install tool runtime dependencies, never project dependencies.
+
+**Historical user-local shell coverage proof (Hatsu #148).** `project.toolchain` can pin
 `bashcov` at `3.3.0` with probe `["bashcov", "--version"]`, and
 `simplecov-lcov` at `0.8.0` with a RubyGems version probe. Both entries name
 `"installer": "gem-user"`; `--install` checks Ruby >=3.2, installs each exact
@@ -12518,7 +12582,7 @@ SimpleCov.formatter = SimpleCov::Formatter::LcovFormatter
 The formatter emits file rows such as `SF:./scripts/check.sh`. A consumer's
 declared coverage steps normalize the leading `./` to `SF:scripts/check.sh`
 before Nen reads `coverage/lcov.info`; that makes `--touched` join the row to
-Git's repository-relative path. A temporary fixture exercised this sequence:
+Git's repository-relative path. The original macOS proof at PR #455 head `79426ea` exercised this sequence:
 Nen read an LCOV report, matched its changed `sample.sh`, and measured 2 of 3
 executable lines (66.67%). On macOS, **modern Bash is a prerequisite**: use
 Homebrew Bash 5.x (the proof used 5.3.20) and pass its path through Bashcov's
@@ -12540,11 +12604,16 @@ The tested macOS lane used this contract shape (with the consumer owning
     },
     "verbs": {
       "shell": {
-        "coverage": {
+        "test": {
           "steps": [
             { "exe": "bashcov", "argv": ["--bash-path", "/opt/homebrew/bin/bash", "--", "./sample.sh", "yes"] },
             { "exe": "node", "argv": ["normalize-lcov.mjs"] }
           ],
+          "artifacts": ["coverage/lcov.info"]
+        },
+        "coverage": {
+          "exe": "node",
+          "argv": ["-e", "if (require('node:fs').statSync('coverage/lcov.info').size === 0) process.exit(1)"],
           "artifacts": ["coverage/lcov.info"]
         }
       }
@@ -12553,15 +12622,19 @@ The tested macOS lane used this contract shape (with the consumer owning
 }
 ```
 
+The `test` row creates and normalizes the capture. The `coverage` row checks the existing artifact; the consumer must also verify capture freshness and source provenance before measuring touched files.
+
+A fresh reconciliation smoke on 2026-10-20 used existing Ruby 3.4.4 and Bash 5.3.20 with a disposable child-process home. The final `--user-install --no-document --norc` invocation installed and re-probed Bashcov 3.3.0 and the separate generic gem `simplecov-lcov` 0.8.0 beneath that home. The test row generated LCOV with one deliberately uncovered line; artifact-only `coverage --touched` matched `sample.sh` and measured 3/4 executable lines (75%). PATH and sentinel shell profiles were unchanged. This is macOS installation evidence; Linux remains covered by fixture tests rather than a live installation smoke.
+
 **Eight fail-closed rules.** (1) Check is the default and `--install` is the
 only way to act — no field, env var or declaration key flips it. (2) `--dry-run`
 prints every command and runs nothing, probes included. (3) **Never `sudo`**,
 never elevation; a test sweeps every rendered install plan for `sudo`, `runas`,
 `pkexec` and `Start-Process -Verb RunAs`. (4) Never an installer the declaration
 does not name. (5) **Never a version the declaration does not pin** — a range
-pin is refused rather than resolved to "the newest thing that satisfies it".
-For `corepack`, a pin the lane's own `package.json` `packageManager` field
-contradicts is refused rather than silently preferred. That cross-check compares **versions,
+pin is refused rather than resolved to "the newest thing that satisfies it", and
+a pin the lane's own `package.json` `packageManager` field contradicts is
+refused rather than silently preferred. That cross-check compares **versions,
 not strings** — `9.15` and `9.15.0` agree, `v9.15.9` and `9.15.9` agree, and an
 integrity suffix is split off — and it fires only when both sides state
 something nen can read, because that field belongs to the ecosystem rather than
@@ -12625,7 +12698,7 @@ is still not ready, and the text prints it as a footer for the same reason.
 
 Each `tools[]` row is `{ name, required, packMinimum, pinned, versionFrom,
 probe, found, probeOutput, satisfied, state, installer, installCommand, remedy,
-install, why, pinnedRef, behindPinnedRef }`, in that order:
+install, why, pinnedRef, behindPinnedRef, installPreconditions }`, in that order:
 
 | Field | Meaning |
 |---|---|
@@ -12637,6 +12710,7 @@ install, why, pinnedRef, behindPinnedRef }`, in that order:
 | `remedy` | The way out **in words**, for a row with no command: `verify-only: install by hand — …`, `corepack: REFUSED — …`, `sdkmanager: not enabled in this release — …`, `wrapper: nothing to install — …`. Exactly one of `installCommand` and `remedy` is non-null on a row that needs a way out; both are null on a row that passes. Without it a refused `corepack` row and a `verify-only` row were the same row to a machine reader, because `why` is the *declaration's* reason for the pin and is null on most refusing rows. |
 | `pinnedRef` | `dependency.pinned_ref`, verbatim, on the `dependency` row; `null` on every `project.toolchain` row, which pins a version rather than a ref. |
 | `behindPinnedRef` | The host version against `pinnedRef`: `true` behind it (the `BEHIND` row), `false` at or above it, `null` when **no comparison was made** — no ref on the row, nothing observed or no version read, or a `pinned_ref` that is not a release tag. `null` never means "not behind". |
+| `installPreconditions` | Installer-owned prerequisites, rendered in the human check, dry-run and install report too; `null` when the plan has none. Appended in the next minor without reordering existing fields. `why` remains the declaration’s own reason verbatim. |
 | `install` | What `--install` ran for this row — `{ steps: [{ exe, argv, exitCode, durationMs }], outcome, failure }` — and `null` in every mode that installs nothing. `outcome` is `installed` (every step nen ran exited 0), `failed`, or `skipped` (nen acted on nothing here). It describes the **installer**, never the host: `installed` beside `state: "missing"` is the real finding "it installed somewhere not on this `PATH`", which is why this verb re-probes. There is no `refused` outcome, because a refusal stops the run before the first install and this CLI answers a refusal with a stderr line and exit 2 rather than a document (below). |
 
 **A refusal prints no document.** Every family in this CLI answers exit 2 with a
@@ -16775,7 +16849,7 @@ rather than the reader. See [per-stack notes](#nen-shu-detect) under
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. It is `compose-desktop`'s **only** row — `{gw} run`, the one invocation that lane has, which `detect` proposes end to end. On `expo` it is the verb that *builds and launches* a native lane, which is why `detect` proposes no `build` there and withholds `run` itself until the declaration names a platform — `expo run:{platform}` unedited is exit **2**. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
 | deploy | **the verb exists; `--target` and `--run` are both mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`, with the target's own `args` appended and the variables its `requiresEnv` names asserted (never read). Two flags and no single-flag path to acting: there is no default target, ever, and without `--run` the verb prints the fully resolved plan and spawns nothing at exit 0. The destination is resolved **after** the lane, the verb and the host, so a lane whose `deploy` is a seat answers exit 4 with its own reason whatever `--target` says, while a runnable row with no target is exit 2 naming what is declared. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push, proposed only where the tree declares the publishing tool); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. `detect` proposes `"targets": {}` on every stack and a destination on none. |
 | coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s two-step row is withheld naming the **simulator**, not the result bundle: the bundle path is the one value `detect` contributes rather than reads (it is an *output*, and nen's own generated output lives under `.nen/`). The note says so, and says four more things a maintainer would otherwise meet as a failure — the path is **lane-relative** (an `ios/` lane writes `ios/.nen/`); `.nen/` is the line [`nen scaffold init`](#nen-scaffold-init) appends to your `.gitignore`, so a repository stood up another way must ignore it itself; `xcodebuild` **refuses an existing `-resultBundlePath`**, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value carries something per-run; and the value must move in every step of the row at once. **The bundle is not the report.** When you fill that row in, the path to declare under `project.verbs.<lane>.coverage.artifacts` is the file the *second* step's JSON lands in — `xcrun xccov view --report --json` writes to stdout, so give that step a `stdoutTo` naming the same path (nen writes the captured bytes itself; there is no shell and no redirection operator), and give the file a name with `xccov` in it — because an `.xcresult` is a **directory** and the coverage reader recognises a report by its name. What a run produced is then **parsed**: nen reads the first path under the verb's own `artifacts` whose format it recognises — the Istanbul/Vitest JSON summary, `xccov` JSON, Cobertura XML, JaCoCo XML, LCOV — into a total and a row per target, and refuses a report it cannot honestly read (truncated, or claiming more covered lines than lines) by name rather than printing a plausible number for it. `--threshold` reports `met` against the **counts** and never changes the exit code, in either direction. |
-| host toolchain | **yes to check; two installers to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, or **7** when everything passes but nen is `BEHIND` — inside the dependency block's `minimum` and below its `pinned_ref` ([behind the pinned ref](#behind-the-pinned-ref)) — naming the exact command per tool. `--install` acts through `corepack` or `gem-user`; the other declared installer ids are reported with their pins for a human to handle. |
+| host toolchain | **yes to check; three closed installers** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, or **7** when everything passes but nen is `BEHIND` — inside the dependency block's `minimum` and below its `pinned_ref` ([behind the pinned ref](#behind-the-pinned-ref)) — naming the exact command per tool. `--install` acts through `corepack`, the Bashcov-only lane-local `gem` mode and general user-local `gem-user` with exact pins; other declared installers remain verify-only, reported with their pin for a human to run. |
 | start a piece of work (clean, fetch, branch, prove it builds) | **yes — the git half everywhere, the build half where a lane declares one** | [`shu warmup`](#nen-shu-warmup) | One line for the five things a developer does by hand at the start of every task: refuse (or, with `--discard`, destroy) uncommitted work, fetch, fast-forward the trunk, cut the branch **you** name from its fresh tip, then run the lane's declared `build` — and its `test` with `--tests`. The **only** `shu` verb that mutates git state, so `--repo` is required and every step refuses rather than guessing; `--dry-run` prints every git and toolchain command and runs none of them. A repository with no `project` block still gets the git half and exits 0. Not [`warmup`](#nen-warmup), which sweeps a registry for stale pins and reads only. |
 | report on a piece of work | **yes — the facts and the fill** | [`report data`](#nen-report-data), [`report render`](#nen-report-render) | `report data` gathers what is on the branch against a base — commits, changed files (with a tier from your own `--tiers` table), the lane's coverage report **if one is already on disk**, the build proof under `.nen/proof/<lane>.json`, the last recorded stop — into one document, reading and never writing. `report render` fills a template with it: four constructs and nothing else, an unknown token refused **naming it** rather than published as a blank cell, and `--out` refused unless it resolves inside the repository with symlinks resolved. It never runs the coverage command — [`shu coverage`](#nen-shu-coverage) is the verb that produces the report this one reads, and both parse it with the same reader. `evidence` is an empty list until `nen shu evidence` lands; the field ships now so a template written today does not change shape when it does. |
 
