@@ -9,6 +9,8 @@
 // `### Unreleased` empty. This module is the pure text transformation; the
 // caller (../changelog/command.ts) does the file I/O the source's CLI half
 // performed directly.
+// Without Unreleased, an existing ## or ### vX.Y.Z — YYYY-MM-DD heading
+// supplies the shape; an explicit --date supplies the new calendar date.
 //
 // FRAGMENTS SORT NEWEST-FIRST BY THEIR LEADING NUMERIC PREFIX -- the
 // `<pr-or-issue-number>-<slug>.md` convention -- matching the CHANGELOG's own
@@ -79,24 +81,59 @@ export class CollateError extends Error {
   }
 }
 
+const SUPPORTED_SHAPES = "supported shapes are '### Unreleased' with --theme, or '## vX.Y.Z — YYYY-MM-DD' / '### vX.Y.Z — YYYY-MM-DD' with --date";
+
+function validDate(date: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    !Number.isNaN(Date.parse(`${date}T00:00:00Z`)) &&
+    new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
+}
+
+/** Resolve once from the newest release, never a later historical format. */
+export function collationHeading(changelog: string, version: string, theme: string, date?: string): string {
+  const bareVersion = version.replace(/^v/, "");
+  if (changelog.split("\n").some((line): boolean => /^### Unreleased/.test(line))) {
+    if (date !== undefined || theme.length === 0) {
+      throw new CollateError(`'### Unreleased' requires --theme and does not accept --date; ${SUPPORTED_SHAPES}.`);
+    }
+    return `### v${bareVersion} — ${theme}`;
+  }
+  // Consider the first release-like heading, including unsupported levels and
+  // separators. Skipping it to infer from an older section would silently pick
+  // an obsolete shape. Unreleased at another level is also an unknown shape.
+  const newest = changelog.split("\n").find((line): boolean => /^#+\s+(?:\[?v?\d|\[?Unreleased\b)/i.test(line));
+  const shape = newest === undefined ? null : /^(#{2,3}) v\d+\.\d+\.\d+ — (\d{4}-\d{2}-\d{2})$/.exec(newest);
+  if (shape === null || !validDate(shape[2] ?? "")) {
+    throw new CollateError(`the changelog's newest section shape is not recognised; ${SUPPORTED_SHAPES}.`);
+  }
+  if (date === undefined || !validDate(date) || theme.length > 0) {
+    throw new CollateError("a dated changelog requires --date YYYY-MM-DD (a valid calendar date), without --theme.");
+  }
+  return `${shape[1]} v${bareVersion} — ${date}`;
+}
+
 /**
- * Rewrite a CHANGELOG's text: empty `### Unreleased`, insert the new dated
- * section immediately below it. Requires an ALREADY-EMPTY `### Unreleased`
- * (see the header) and at least one fragment.
+ * Insert a release using the legacy empty-Unreleased route, or immediately
+ * before the newest recognised ISO-dated release. Requires fragments; the
+ * dated route also requires an explicit valid date, never a clock default.
  */
 export function collateIntoChangelog(
   changelog: string,
   version: string,
   theme: string,
   fragments: readonly Fragment[],
+  date?: string,
 ): string {
   if (fragments.length === 0) {
     throw new CollateError("no fragment files were given -- nothing to collate.");
   }
   const lines = changelog.split("\n");
+  const heading = collationHeading(changelog, version, theme, date);
   const unreleasedIndex = lines.findIndex((line): boolean => /^### Unreleased/.test(line));
   if (unreleasedIndex === -1) {
-    throw new CollateError("the changelog has no '### Unreleased' header to anchor the collation on.");
+    const newestIndex = lines.findIndex((line): boolean => /^#{2,3} v\d+\.\d+\.\d+ — /.test(line));
+    const section = renderDatedSection(version, date ?? "", sortFragments(fragments)).replace(/^### [^\n]+/, heading);
+    return [...lines.slice(0, newestIndex), section, ...lines.slice(newestIndex)].join("\n");
   }
   const existing = unreleasedEntryCount(changelog);
   if (existing > 0) {

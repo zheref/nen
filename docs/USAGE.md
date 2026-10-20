@@ -8091,7 +8091,7 @@ without touching disk or deleting fragments.
 **Usage**
 
 ```text
-nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--write]
+nen changelog collate --version <vX.Y.Z> (--theme <text> | --date <YYYY-MM-DD>) --changelog <path> --fragment-dir <dir> [--write]
 ```
 
 **Arguments**
@@ -8099,7 +8099,8 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--version <vX.Y.Z>` | yes | the new release version | — |
-| `--theme <text>` | yes | the release's one-line theme | — |
+| `--theme <text>` | legacy shape | the release's one-line theme | requires an empty `### Unreleased`; excludes `--date` |
+| `--date <YYYY-MM-DD>` | dated shape | explicit calendar date for the new release | requires an existing `##` or `### vX.Y.Z — YYYY-MM-DD` section; excludes `--theme` |
 | `--changelog <path>` | yes | the `CHANGELOG.md` to rewrite | — |
 | `--fragment-dir <dir>` | yes | the fragment directory | a missing directory contributes zero fragments rather than refusing |
 | `--write` | no | actually rewrite the changelog and delete the collated fragments | default off (dry-run) |
@@ -8107,11 +8108,12 @@ nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fra
 | `--json` | no | machine-readable collation result | — |
 
 **Output and exit codes** — human lines: `(no --write) would collate` or
-`collated <n> fragment(s) into <path> ### v<version> — <theme>`, then each
+`collated <n> fragment(s) into <path> <actual heading>`, then each
 fragment name **in the order it was written into the section** — newest-first
 by the leading `<n>-` prefix, the same order the section itself reads, so the
 manifest can be cross-checked against it line for line. `--json` top-level
-keys: `version`, `theme`, `fragments[]` (that same order), `written`. Exit 0 on any completed run — there is no "drift" verdict here,
+keys: `version`, `theme` (empty for dated shapes), `date` (null for legacy),
+`heading` (the actual rendered heading), `fragments[]` (that same order), `written`. Exit 0 on any completed run — there is no "drift" verdict here,
 only "wrote/didn't write". Exit **2** on a missing required flag, and on an
 unreadable `--changelog` or fragment: the read goes through the shared reader,
 so a mistyped path is the named refusal every other path flag gives —
@@ -8119,6 +8121,20 @@ so a mistyped path is the named refusal every other path flag gives —
 verb REWRITES, so an unreadable one is refused rather than collated into
 nothing.` It used to escape as a raw errno at exit 1
 ([#101](https://github.com/zheref/nen/issues/101)).
+
+Without `### Unreleased`, the newest release heading determines the shape:
+`## vX.Y.Z — YYYY-MM-DD` or `### vX.Y.Z — YYYY-MM-DD`. Supply `--date`
+explicitly; the clock is never consulted. The new section goes immediately
+before the newest release, preserving the preamble and previous releases.
+Unknown heading levels, separators or date formats refuse with the supported
+shapes named. The legacy `### Unreleased` route still requires `--theme` and
+refuses nonempty Unreleased content. Fragment bodies and their existing PR
+citations are copied verbatim; filenames determine order, never citation numbers.
+For nen's own shape, preview with:
+
+```bash
+nen changelog collate --repo . --version v0.24.0 --date 2026-10-21 --changelog CHANGELOG.md --fragment-dir changelog.d
+```
 
 **Example**
 

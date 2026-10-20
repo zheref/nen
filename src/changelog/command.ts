@@ -12,7 +12,7 @@ import {
   type CommandContext,
 } from "../cli/command.js";
 import { changedFiles, changedFilesUsage, CHANGED_FILE_FLAGS, optionalDirectoryFlag, readTextFile, splitList } from "../cli/inputs.js";
-import { collateIntoChangelog, sortFragments, type Fragment } from "./collate.js";
+import { collationHeading, collateIntoChangelog, sortFragments, type Fragment } from "./collate.js";
 import { DEFAULT_FRAGMENT_DIR, describeReleasePrAllowance } from "./completeness.js";
 import {
   fragmentRequired,
@@ -25,7 +25,7 @@ import { reconcileChangelog } from "./reconcile.js";
 import { resolveRepoRoot } from "../repo/root.js";
 
 const USAGE = `nen changelog fragment-required --spec-paths <a,b> --fragment-dir <dir> (--files ... | --files-from ... | --range ...) [--body-from <path>] [--base-changelog <path>] --head-changelog <path> [--base-repos <path>] [--head-repos <path>]
-nen changelog collate --version <vX.Y.Z> --theme <text> --changelog <path> --fragment-dir <dir> [--write]
+nen changelog collate --version <vX.Y.Z> (--theme <text> | --date <YYYY-MM-DD>) --changelog <path> --fragment-dir <dir> [--write]
 nen changelog completeness --range <vPrev>..<vNew> --changelog <path> --owner-repo <owner/name> [--fragment-dir <dir>]
 
 fragment-required:
@@ -36,6 +36,10 @@ collate:
   CON-33(b): collate every fragment in --fragment-dir into a new dated section
   of --changelog. Without --write, reports the rendered result without
   touching disk or deleting fragments.
+  --theme retains the empty ### Unreleased route. Without that anchor, infer
+  ## or ### vX.Y.Z — YYYY-MM-DD from the newest release and require --date.
+  The date is explicit, never taken from the clock; --date and --theme exclude
+  each other. Fragment text (including PR citations) is preserved verbatim.
 
 completeness:
   CON-33(c): every PR merged in --range has a CHANGELOG entry or an
@@ -139,7 +143,14 @@ function latestOf(path: string | undefined, cwd: string): string | null {
 
 function collateCmd(context: CommandContext): number {
   const version = requireValue(context.args, "version", "The new release version.");
-  const theme = requireValue(context.args, "theme", "The release's one-line theme.");
+  const theme = context.args.values["theme"] === undefined ? "" : requireValue(context.args, "theme", "The release's one-line theme.");
+  const date = context.args.values["date"];
+  if (context.args.values["theme"] === undefined && date === undefined) {
+    throw new VerbUsageError("collate requires --theme for ### Unreleased, or --date YYYY-MM-DD for an existing dated changelog.");
+  }
+  if (context.args.values["theme"] !== undefined && date !== undefined) {
+    throw new VerbUsageError("collate accepts either --theme or --date, never both.");
+  }
   const changelogPath = requireValue(context.args, "changelog", "The CHANGELOG.md to rewrite.");
   const fragmentDir = requireValue(context.args, "fragment-dir", "The fragment directory.");
   const write = context.args.booleans.has("write");
@@ -195,7 +206,8 @@ function collateCmd(context: CommandContext): number {
   // the ORDER is decided in one place and everything this verb reports is read
   // off that one decision.
   const ordered = sortFragments(fragments);
-  const rewritten = collateIntoChangelog(changelogText, version, theme, ordered);
+  const rewritten = collateIntoChangelog(changelogText, version, theme, ordered, date);
+  const heading = collationHeading(changelogText, version, theme, date);
 
   if (write) {
     writeFileSync(changelogFull, rewritten, "utf8");
@@ -204,14 +216,14 @@ function collateCmd(context: CommandContext): number {
 
   const collated = ordered.map((fragment): string => fragment.name);
   const lines = [
-    `${write ? "collated" : "(no --write) would collate"} ${fragments.length} fragment(s) into ${changelogPath} ### v${version.replace(/^v/, "")} — ${theme}`,
+    `${write ? "collated" : "(no --write) would collate"} ${fragments.length} fragment(s) into ${changelogPath} ${heading}`,
     ...collated.map((name): string => `  ${name}`),
   ];
   // `--json`'s `fragments[]` moves with it. It is the same claim in machine
   // form -- "these, in this order, are what was written" -- so leaving it in
   // readdir order while the text was corrected would be keeping the defect for
   // the consumer least able to notice it.
-  emit(context.io, context.json, { version, theme, fragments: collated, written: write }, lines);
+  emit(context.io, context.json, { version, theme, date: date ?? null, heading, fragments: collated, written: write }, lines);
   return 0;
 }
 
@@ -284,6 +296,7 @@ export const changelogCommand: Command = {
       "head-repos",
       "version",
       "theme",
+      "date",
       "changelog",
       "owner-repo",
     ],
@@ -291,6 +304,9 @@ export const changelogCommand: Command = {
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("changelog", context.args, ["fragment-required", "collate", "completeness"]);
+    if (subcommand !== "collate" && context.args.values["date"] !== undefined) {
+      throw new VerbUsageError("--date is only supported by changelog collate.");
+    }
     if (subcommand === "fragment-required") return fragmentRequiredCmd(context);
     if (subcommand === "collate") return collateCmd(context);
     return completenessCmd(context);

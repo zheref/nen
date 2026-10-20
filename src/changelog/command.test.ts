@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -142,6 +142,65 @@ describe("nen changelog collate", () => {
       "30-c.md",
       "10-a.md",
     ]);
+  });
+});
+
+describe("nen changelog collate — dated shape", () => {
+  it("rejects --date on unrelated subcommands", async () => {
+    const result = await capture(["changelog", "completeness", "--date", "2026-10-21"], null);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("only supported by changelog collate");
+  });
+  function fixture(header = "## v0.23.0 — 2026-10-20"): { dir: string; changelog: string; original: string; fragment: string; argv: string[] } {
+    const dir = mkdtempSync(join(tmpdir(), "nen-cl-dated-"));
+    const changelog = join(dir, "CHANGELOG.md");
+    const original = `# Changelog\n\nPreamble stays.\n\n${header}\n\n- Old entry.\n`;
+    writeFileSync(changelog, original);
+    mkdirSync(join(dir, "changelog.d"));
+    const fragment = join(dir, "changelog.d", "446-issue.md");
+    writeFileSync(fragment, "- Fixed ([#470](https://github.com/zheref/nen/pull/470)).\n");
+    writeFileSync(join(dir, "changelog.d", "12-other.md"), "- Earlier delivery.\n");
+    return { dir, changelog, original, fragment, argv: ["changelog", "collate", "--version", "v0.24.0", "--changelog", "CHANGELOG.md", "--fragment-dir", "changelog.d"] };
+  }
+
+  it("previews the actual heading and manifest, then writes exactly that heading and order", async () => {
+    const f = fixture();
+    const args = [...f.argv, "--date", "2026-10-21"];
+    const human = await capture(args, f.dir);
+    expect(human.code).toBe(0);
+    expect(human.out).toEqual([
+      "(no --write) would collate 2 fragment(s) into CHANGELOG.md ## v0.24.0 — 2026-10-21",
+      "  446-issue.md", "  12-other.md",
+    ]);
+    const preview = await capture([...args, "--json"], f.dir);
+    expect(preview.code).toBe(0);
+    const report = JSON.parse(preview.out.join("\n")) as { heading: string; fragments: string[]; written: boolean };
+    expect(report).toMatchObject({ heading: "## v0.24.0 — 2026-10-21", date: "2026-10-21", fragments: ["446-issue.md", "12-other.md"], written: false });
+    expect(readFileSync(f.changelog, "utf8")).toBe(f.original);
+    expect(existsSync(f.fragment)).toBe(true);
+    const written = await capture([...args, "--write", "--json"], f.dir);
+    expect(written.code).toBe(0);
+    expect(JSON.parse(written.out.join("\n"))).toEqual({ ...report, written: true });
+    expect(readFileSync(f.changelog, "utf8")).toBe("# Changelog\n\nPreamble stays.\n\n" + report.heading + "\n- Fixed ([#470](https://github.com/zheref/nen/pull/470)).\n- Earlier delivery.\n\n## v0.23.0 — 2026-10-20\n\n- Old entry.\n");
+    expect(existsSync(f.fragment)).toBe(false);
+    expect(existsSync(join(f.dir, "changelog.d", "12-other.md"))).toBe(false);
+  });
+
+  it.each([
+    ["## v0.23.0 - 2026-10-20", ["--date", "2026-10-21"], /supported shapes/],
+    ["## v0.23.0 — 2026-10-20", ["--date", "2026-02-30"], /valid calendar date/],
+    ["## v0.23.0 — 2026-10-20", ["--theme", "theme"], /requires --date/],
+    ["### Unreleased", ["--date", "2026-10-21"], /requires --theme/],
+    ["### Unreleased", [], /requires --theme/],
+    ["## v0.23.0 — 2026-10-20", ["--theme", "t", "--date", "2026-10-21"], /never both/],
+  ] as const)("refuses %s / %j without writes or deletions", async (header, flags, message) => {
+    const f = fixture(header);
+    const result = await capture([...f.argv, ...flags, "--write"], f.dir);
+    expect(result.code).not.toBe(0);
+    expect(result.err.join("\n")).toMatch(message);
+    expect(readFileSync(f.changelog, "utf8")).toBe(f.original);
+    expect(readFileSync(f.fragment, "utf8")).toContain("pull/470");
+    expect(existsSync(join(f.dir, "changelog.d", "12-other.md"))).toBe(true);
   });
 });
 

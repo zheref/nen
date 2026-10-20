@@ -67,3 +67,50 @@ describe("collateIntoChangelog", () => {
     expect(() => collateIntoChangelog("no header here", "v1.1.0", "theme", [{ name: "1-a.md", content: "x\n" }])).toThrow(CollateError);
   });
 });
+
+describe("collateIntoChangelog — existing dated sections", () => {
+  const fragments = [
+    { name: "446-issue.md", content: "- Newest delivery ([#470](https://github.com/zheref/nen/pull/470)).\n\n  Detail retained.\n" },
+    { name: "12-older.md", content: "- Older delivery ([#460](https://github.com/zheref/nen/pull/460))." },
+  ];
+
+  it.each(["##", "###"])("preserves %s date shape, preamble, historical text and real PR citations", (level) => {
+    const preamble = "# Changelog\n\nRelease notes, newest first.\n\n";
+    const history = `${level} v0.23.0 — 2026-10-20\n\n### Added\n\n- Old text.\n\n## v0.22.0 — 2026-10-18\n- Earlier.\n`;
+    const base = preamble + history;
+    const expected = preamble + `${level} v0.24.0 — 2026-10-21\n` + fragments[0]?.content + fragments[1]?.content + "\n\n" + history;
+    expect(collateIntoChangelog(base, "0.24.0", "", [...fragments].reverse(), "2026-10-21")).toBe(expected);
+    expect(collateIntoChangelog(base, "v0.24.0", "", fragments, "2026-10-21")).toBe(expected);
+    expect(expected).not.toContain("pull/446");
+  });
+
+  it.each([
+    "# v0.23.0 — 2026-10-20",
+    "#### v0.23.0 — 2026-10-20",
+    "## v0.23.0 - 2026-10-20",
+    "## v0.23.0 — October 20, 2026",
+    "## [v0.23.0] — 2026-10-20",
+    "## v0.23.0 — 2026-02-30",
+    "## Unreleased",
+  ])("refuses unsupported newest shape %s, even with a supported older release", (header) => {
+    // A bracketed release must also be recognised as a candidate, not skipped.
+    const base = `${header}\n\n## v0.22.0 — 2026-10-18\n- old\n`;
+    expect(() => collateIntoChangelog(base, "v0.24.0", "", fragments, "2026-10-21")).toThrow(/supported shapes/);
+  });
+
+  it.each([undefined, "", "2026-2-01", "2026-02-29", "2026-04-31", "2026-13-01", "today", "2026-10-21\n## injected"])("requires an explicit valid deterministic date: %s", (date) => {
+    expect(() => collateIntoChangelog("## v0.23.0 — 2026-10-20\n", "v0.24.0", "", fragments, date)).toThrow(/requires --date/);
+  });
+
+  it("accepts leap days and refuses --theme on the dated route", () => {
+    const base = "## v0.23.0 — 2026-10-20\n";
+    expect(collateIntoChangelog(base, "v0.24.0", "", fragments, "2028-02-29")).toContain("## v0.24.0 — 2028-02-29\n");
+    expect(() => collateIntoChangelog(base, "v0.24.0", "theme", fragments, "2028-02-29")).toThrow(/without --theme/);
+  });
+
+  it("does not bypass the legacy nonempty-Unreleased guard with --date", () => {
+    const base = "### Unreleased\n- **Must** survive.\n\n## v0.23.0 — 2026-10-20\n";
+    expect(() => collateIntoChangelog(base, "v0.24.0", "", fragments, "2026-10-21")).toThrow(/Unreleased/);
+    expect(() => collateIntoChangelog(base, "v0.24.0", "theme", fragments)).toThrow(/refusing to overwrite/);
+  });
+});
