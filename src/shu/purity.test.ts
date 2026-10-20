@@ -25,9 +25,9 @@
 //     reference pack, and ../profiles/inertness.test.ts is what holds it to
 //     spawning nothing.
 //   * `*.test.ts` and `fixtures/` are not shipped code. A test naming a tool is
-//     how the rule is PROVED (./fixtures/toolchain.ts names twenty-eight), and a
+//     how the rule is PROVED (./fixtures/toolchain.ts names the toolchain vocabulary), and a
 //     fixture naming one is test data.
-//   * `install.ts` NAMES THE ONE INSTALLER NEN IMPLEMENTS, and it is the only
+//   * `install.ts` NAMES THE CLOSED INSTALLER IMPLEMENTATIONS NEN ENABLES, and it is the only
 //     exclusion added since this sweep was written. `nen shu tools --install`
 //     is the one verb in this family that spawns a program NEN chose rather
 //     than one a declaration named: a declaration names an installer ID out of

@@ -166,6 +166,8 @@ export interface ToolRow {
    * (a branch, a SHA, a bare year). Null is never "not behind".
    */
   readonly behindPinnedRef: boolean | null;
+  /** Installer-owned prerequisites, separate from the declaration's reason. */
+  readonly installPreconditions: string | null;
 }
 
 /**
@@ -379,7 +381,7 @@ export function buildPlans(
       pinned: renderPin(pin),
       satisfiedBy: (found): boolean => satisfiesPin(pin, found),
       install,
-      why: [entry.why, install.kind === "runnable" ? install.preconditions : null].filter(Boolean).join(" ") || null,
+      why: entry.why,
       // A toolchain entry pins a VERSION, never a ref: there is nothing to be
       // behind, and `null` says the comparison does not apply.
       pinnedRef: null,
@@ -647,6 +649,7 @@ export function assembleToolsReport(
     why: entry.plan.why,
     pinnedRef: entry.plan.pinnedRef,
     behindPinnedRef: entry.assessment.behindPinnedRef,
+    installPreconditions: entry.plan.install.kind === "runnable" ? entry.plan.install.preconditions ?? null : null,
   }));
   return {
     contract: TOOLS_CONTRACT,
@@ -785,6 +788,7 @@ export function renderToolsReport(report: ToolsReport): readonly string[] {
       );
     }
     if (mode === "dry-run") lines.push(`${indent}would probe: ${row.probe}`);
+    if (row.installPreconditions != null) lines.push(`${indent}preconditions: ${row.installPreconditions}`);
     // THE LINE THAT MAKES `unknown` ACTIONABLE. A row that says "present,
     // version unknown" and quotes nothing sends a reader to run the probe by
     // hand to see what nen saw.

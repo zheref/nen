@@ -507,8 +507,8 @@ environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
 a `nen/contract.json` project block from the markers on disk and never writes
 one without `--write`; `nen shu tools` checks the **host** toolchain the
 declaration pins, exits 5 naming the install command per tool, and installs only
-through `corepack` with `--install` — every other declared installer is
-verify-only in this release. `nen shu coverage` and `nen shu test-report` each
+through the closed `corepack` and Bashcov-only `gem` modes with `--install`
+— other declared installers remain verify-only in this release. `nen shu coverage` and `nen shu test-report` each
 run a lane's declared command and then **parse what it wrote** — a coverage
 report, a results file or a whole directory of JUnit XML — into one shape, and
 refuse a damaged report by name rather than printing a plausible number for it.
