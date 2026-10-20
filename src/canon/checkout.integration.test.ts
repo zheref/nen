@@ -117,6 +117,43 @@ async function run(argv: readonly string[], seams: Seams, json = false): Promise
 }
 
 describe.skipIf(!HAVE_GIT)("canon checkout + mirror -- one literal argv, two machines (zheref/nen#294)", () => {
+  // zheref/nen#373, Feitan round 2: a credential in the canon's origin never reaches the
+  // SUCCESS path's text or --json, whatever whitespace sits inside the userinfo; and an '@'
+  // in the origin's PATH never moves its host onto the consumer's (SEC-7).
+  it("redacts a token-bearing origin on the success path, text and --json, with a space, a TAB or a CR inside its userinfo", async () => {
+    try {
+      for (const url of ["https://u:pa ssFAKE0000@github.com/owner/handbooks.git", "https://u:pa\tssFAKE0000@github.com/owner/handbooks.git", "https://FAKE0000\r@github.com/owner/handbooks.git"]) {
+        git(canonA, ["remote", "set-url", "origin", url]);
+        for (const json of [false, true]) {
+          const result = await run(["canon", "checkout"], MACHINE_A(), json);
+          expect(result.code, `${JSON.stringify(url)} ${result.err}`).toBe(0);
+          expect((result.out + result.err).toLowerCase(), JSON.stringify(url)).not.toContain("fake0000");
+          if (json) expect((JSON.parse(result.out) as { verified: { origin: string } }).verified.origin).toBe("https://***@github.com/owner/handbooks.git");
+          else expect(result.out).toContain("verified: origin https://***@github.com/owner/handbooks.git names owner/handbooks on github.com");
+        }
+      }
+    } finally {
+      git(canonA, ["remote", "set-url", "origin", ORIGIN]);
+    }
+  });
+
+  it("refuses wrong-host, text and --json, for the path-'@', bracket and fragment spoofs (SEC-7, Feitan rounds 2-3)", async () => {
+    try {
+      for (const url of ["https://evil.example/x@github.com:owner/handbooks", "ssh://[evil.invalid]@github.com/owner/handbooks", "ssh://github.com:22#@evil.invalid/owner/handbooks"]) {
+        git(canonA, ["remote", "set-url", "origin", url]);
+        const json = await run(["canon", "checkout"], MACHINE_A(), true);
+        expect(json.code, url).toBe(1);
+        expect(JSON.parse(json.out), url).toMatchObject({ ok: false, verified: null, failure: { code: "wrong-host" } });
+        const text = await run(["canon", "checkout"], MACHINE_A());
+        expect(text.code, url).toBe(1);
+        expect(text.out + text.err, url).toMatch(/wrong-host: .* is on no host, but the consumer's origin is on github\.com/);
+        expect(text.out, url).not.toContain("verified:");
+      }
+    } finally {
+      git(canonA, ["remote", "set-url", "origin", ORIGIN]);
+    }
+  });
+
   it("machine A resolves its checkout from the variable the registry names", async () => {
     const result = await run(["canon", "checkout"], MACHINE_A(), true);
     expect(result.code, result.err).toBe(0);

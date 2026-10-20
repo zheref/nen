@@ -6903,6 +6903,9 @@ nen repo resolve [--from <dir>] [--repo <path>]
 
 **Output and exit codes** — human rendering: an `"origin: <url>"` line (no-token form only), then one
 line per resolved repo: `"<repo>[  (<code>)]  via <kind>"`. `--json` prints `{ token, origin, repos }`.
+The origin URL — in that line, in `--json` and in every refusal that names it — is shown with its
+whole userinfo redacted (`https://***@host/owner/name`, `***@host:owner/name`), so a credential
+embedded in a remote never reaches the terminal or a log.
 Exit 0 on any successful resolution (including `all`); exit 1 when the token (or the resolved origin)
 names nothing in the registry, or when there is no readable `origin` remote to fall back to; exit 2
 when `--from` is combined with an explicit token.
@@ -9088,7 +9091,7 @@ nen canon checkout --repo <consumer> [--source <owner/name>] [--ref <tag>]
 
 Every other `canon` flag (`--rules-dir`, `--stack-dir`, `--canon-values`, ...) is refused here at exit 2: a flag accepted and ignored would read as though it steered the resolution. For the same reason `--canon-checkout` is refused on [`canon pin`](#nen-canon-pin) without `--write` and on [`canon resolve`](#nen-canon-resolve).
 
-**Output and exit codes** -- prints `source: <owner/name>@<tag>`, `checkout: <path>` (or `(unresolved)`), `resolved from: <kind> <what>`, one `  passed over: <kind> <what> (<why>)` line per absent step, then `verified: origin <url> names <owner/name> on <host>; HEAD <sha12> is <tag>; clean` -- or `failed: <code>: <reason>`. Credentials in an origin URL are redacted. Every text line, and the `nen:` refusal on stderr, has its control characters stripped -- an origin, a path or a status line can carry an escape sequence -- while `--json` keeps the raw bytes; `canon mirror`'s checkout refusal is stripped the same way. `--json`, the same document on success and failure: `{ contract: "nen.canon.checkout/v0.1", ok, source, ref, path, resolvedFrom: { kind, status, from } | null, steps: [{ kind, status, from, note? }], verified: { origin, originSlug, host, head, tag, tagCommit, clean } | null, failure: { code, message } | null }`. `kind` is `flag`, `env` or `declared-path`. Exit 0 on a verified checkout; exit **1** on any resolution or verification failure, with `nen: <code>: <reason>` on stderr; exit 2 on an omitted `--repo`, an empty or foreign flag, no pin to take `--source`/`--ref` from (the same refusal `mirror` gives), or a malformed `nen/repos.json` (the loader's pointer, as on `mirror`). **A usage error carries no `--json` document**, even under `--json`: its refusal is on stderr alone, because there is no resolved source or ref to fill one with.
+**Output and exit codes** -- prints `source: <owner/name>@<tag>`, `checkout: <path>` (or `(unresolved)`), `resolved from: <kind> <what>`, one `  passed over: <kind> <what> (<why>)` line per absent step, then `verified: origin <url> names <owner/name> on <host>; HEAD <sha12> is <tag>; clean` -- or `failed: <code>: <reason>`. An origin URL's whole userinfo is redacted (`https://***@host/owner/name`), in the text, in `--json` and in every refusal. Every text line, and the `nen:` refusal on stderr, has its control characters stripped -- an origin, a path or a status line can carry an escape sequence -- while `--json` keeps the raw bytes; `canon mirror`'s checkout refusal is stripped the same way. `--json`, the same document on success and failure: `{ contract: "nen.canon.checkout/v0.1", ok, source, ref, path, resolvedFrom: { kind, status, from } | null, steps: [{ kind, status, from, note? }], verified: { origin, originSlug, host, head, tag, tagCommit, clean } | null, failure: { code, message } | null }`. `kind` is `flag`, `env` or `declared-path`. Exit 0 on a verified checkout; exit **1** on any resolution or verification failure, with `nen: <code>: <reason>` on stderr; exit 2 on an omitted `--repo`, an empty or foreign flag, no pin to take `--source`/`--ref` from (the same refusal `mirror` gives), or a malformed `nen/repos.json` (the loader's pointer, as on `mirror`). **A usage error carries no `--json` document**, even under `--json`: its refusal is on stderr alone, because there is no resolved source or ref to fill one with.
 
 **Example** -- on a machine with no `MY_CANON_CHECKOUT`, whose cache slot holds a clone at the pin:
 
@@ -14592,7 +14595,12 @@ matches); and no other `*@<marketplace>` key is in `installed_plugins.json`.
 The last two are checked **again** from a fresh read right after the
 uninstall: a plugin installed from the marketplace meanwhile, or a source that
 changed, leaves it known as an action owed. A recorded source URL is shown only
-in that normalised form, so a `user:token@` in it never reaches any output; any
+in that normalised form, its host read off the raw authority as git reads it
+(the authority ends at the first `/`, the host follows its last `@`); one git
+and curl could read differently -- an `@` in the path, a secret carrying a `/`,
+a `?` or `#` before the first `/`, a bracket other than one whole IPv6
+literal, a `file://` URL -- has no host, never matches, and is shown as `a git source that is not a remote URL`, so no part of
+a `user:token@` reaches any output; any
 other root or path a surface reports is printed with credentials redacted. A known marketplace of the same name whose
 source is anything else is **refused** (exit 3: installing beside it is not
 safe either). One that other plugins depend on is left known, and its removal is
