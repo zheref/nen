@@ -180,7 +180,7 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
   });
 
   it("enables only the reviewed installer inventory", () => {
-    expect(ENABLED_INSTALLERS).toEqual(["corepack", "gem"]);
+    expect(ENABLED_INSTALLERS).toEqual(["corepack", "gem", "gem-user"]);
     // Every enabled id is a member of the contract's closed set -- an installer
     // nen runs that the loader would refuse to read is not reachable at all.
     expect(ENABLED_INSTALLERS.every((id): boolean => INSTALLERS.includes(id))).toBe(true);
