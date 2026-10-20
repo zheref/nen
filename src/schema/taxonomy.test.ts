@@ -93,6 +93,8 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#deploy.defaultTarget",
       "nen/workflow.json#release",
       "nen/decisions.json",
+      // The canon mirror row (zheref/nen#262): absent bindings read absent (optional).
+      ".claude/rules/",
     ]);
     expect(report.checks.every((c): boolean => c.ok)).toBe(true);
     expect(report.checks[0]?.detail).toMatch(/\d+ labels/);
@@ -119,6 +121,8 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#release",
       "nen/colors.yml",
       "nen/decisions.json",
+      // Absent bindings: the canon mirror row (zheref/nen#262) is ok.
+      ".claude/rules/",
     ];
     for (const check of report.checks.filter((c): boolean => !optional.includes(c.file))) {
       expect(check.detail).toMatch(/no such file/);
