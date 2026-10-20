@@ -862,9 +862,43 @@ describe("futon.advanceGo -- duplicate names after namespace normalization are r
   });
 });
 
-describe("a workflow's SEVENTEEN blocks", () => {
-  it("says eighteen, including the CI declaration", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's eighteen blocks are/);
+describe("a workflow's NINETEEN blocks", () => {
+  it("says nineteen, including privateNames and the CI declaration", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's nineteen blocks are/);
+  });
+});
+
+describe("privateNames -- the guard's committed named list (zheref/nen#441)", () => {
+  it("is null by default, and the declared path otherwise", () => {
+    expect(parseWorkflow("<doc>", {}).privateNames).toEqual({ namedFile: null, raw: {} });
+    expect(parseWorkflow("<doc>", { privateNames: { namedFile: null } }).privateNames.namedFile).toBeNull();
+    const declared = parseWorkflow("<doc>", { privateNames: { namedFile: "scripts/private_name_named.txt" } });
+    expect(declared.privateNames.namedFile).toBe("scripts/private_name_named.txt");
+    expect(declared.privateNames.raw).toEqual({ namedFile: "scripts/private_name_named.txt" });
+  });
+
+  it("refuses a near-miss key by pointer", () => {
+    expect(() => parseWorkflow("<doc>", { privateNames: { namedFiles: "x" } })).toThrow(/privateNames\.namedFiles.*one letter away from 'namedFile'/);
+    expect(() => parseWorkflow("<doc>", { privateName: { namedFile: "x" } })).toThrow(/one letter away from 'privateNames'/);
+  });
+
+  it.each([
+    [42, "expected a non-empty string, got number (42)"],
+    ["", "expected a non-empty string"],
+    ["/etc/named.txt", "is not a path the private-name guard can read"],
+    ["../elsewhere/named.txt", "is not a path the private-name guard can read"],
+    ["scripts/", "is not a path the private-name guard can read"],
+    ["scripts/named txt", "is not a path the private-name guard can read"],
+  ])("refuses %j by pointer", (value, reason) => {
+    let thrown: unknown;
+    try {
+      parseWorkflow("<doc>", { privateNames: { namedFile: value } });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SchemaError);
+    expect((thrown as SchemaError).pointer).toBe("privateNames.namedFile");
+    expect((thrown as SchemaError).message).toContain(reason);
   });
 });
 

@@ -37,6 +37,32 @@
 // its own is an exemption nobody passed. An ignored hit is NEVER silent -- it is
 // reported (stderr, and `ignored: true` under --json), it just does not block.
 //
+// THE NAMED LIST, and only when the `--repo` checkout declares it
+// (zheref/nen#441). `nen/workflow.json` -> `privateNames.namedFile` names a
+// COMMITTED file of private repositories whose NAME a recorded ruling made
+// public while their code stays private (Hatsu's `scripts/private_name_named.txt`,
+// the ruling of 2026-10-19). One exact `owner/name` per line, `#` comments and
+// blanks ignored; a bare `name` is refused (exit 2), because a ruling names ONE
+// repository and a bare name would exempt every owner's repository of that
+// name -- so a same-named private repository under another owner is still a
+// hit. It is read AT THE REMOTE'S DEFAULT BRANCH, never from the checkout: F8
+// below holds for it exactly as for the ignore file, since a committed file is
+// what a branch can edit. Both the ref and the path are decided there too
+// (Feitan, this change's review): the checkout's `nen/workflow.json` is head
+// content, so a branch that retargeted `branch.base` at itself, or declared
+// its own `namedFile`, would otherwise make its own unmerged file "the base".
+// So the checkout's declaration is only the SWITCH -- declared there, the read
+// runs; undeclared, nothing is read -- and the SOURCE is
+// `refs/remotes/origin/HEAD` (the remote's default branch, what git recorded
+// at clone or `git remote set-head`): `nen/workflow.json` is shown at that
+// ref, ITS `privateNames.namedFile` is the path, and the list is shown at the
+// same ref. A line reaches the guard once merged to the default branch.
+// Anything that cannot be read on that route names nothing (stricter, never
+// looser) and the run says so. An exemption by either list
+// is reported with WHICH list made it (`ignoredBy`, and `(named list)` or
+// `(ignore file)` on the stderr line); when both exempt an entry the named
+// list, the exact-slug one, is the one named.
+//
 // WHAT IS NOT CARRIED OVER, deliberately: the script's one named exemption (a
 // marker quoted byte for byte by one consumer's generator). That is the
 // consumer's policy, not a property of the check, and an exemption nen invented
@@ -51,9 +77,11 @@
 
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join as joinPath, resolve as resolvePath, sep } from "node:path";
-import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { GH, GIT, outputLines, type Seams } from "../seam/exec.js";
 import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
+import { SchemaError } from "../schema/errors.js";
+import { parseWorkflow } from "../schema/workflow.js";
 
 /** The exit code a private-name refusal answers with, in every verb that runs the check. */
 export const PRIVATE_NAME_EXIT = 4;
@@ -110,9 +138,17 @@ export interface PrivateNameHit {
   readonly index: number;
   /** True when it was found only once the line was normalised. */
   readonly normalised: boolean;
-  /** True when the caller's ignore file exempts this name: reported, never blocking. */
+  /** True when the caller's ignore file or the committed named list exempts this name: reported, never blocking. */
   readonly ignored: boolean;
+  /** Which list exempted it (zheref/nen#441); null when `ignored` is false. */
+  readonly ignoredBy: ExemptionSource | null;
 }
+
+/**
+ * Which list exempted a hit: the caller's `--private-names-ignore-file`, or
+ * the `--repo` checkout's committed named list (`privateNames.namedFile`).
+ */
+export type ExemptionSource = "ignore-file" | "named-list";
 
 /**
  * The caller's ignore list: bare names (exempt under every owner) and
@@ -138,6 +174,166 @@ export function parseIgnoreList(text: string): IgnoreList {
   }
   return { names, slugs };
 }
+
+/**
+ * The committed named list (zheref/nen#441): exact `owner/name` slugs, lowercase.
+ * Never bare names -- `parseNamedList` refuses them.
+ */
+export interface NamedList {
+  readonly slugs: ReadonlySet<string>;
+}
+
+/**
+ * A named-list line that is not an exact `owner/name`. Carries the LINE, never
+ * the entry: a bare name there may itself be a private repository's name.
+ */
+export class NamedListError extends Error {
+  readonly line: number;
+  constructor(line: number) {
+    super(
+      `line ${line} is not an exact owner/name. A ruling names one repository; a bare name would exempt every owner's repository of that name, so only the exact slug belongs on the list (a same-named private repository under another owner stays a hit).`,
+    );
+    this.name = "NamedListError";
+    this.line = line;
+  }
+}
+
+/**
+ * Parse the named list's text: one exact `owner/name` per line, `#` to end of
+ * line a comment, surrounding whitespace removed, blank lines skipped,
+ * compared lowercase. Any other line throws NamedListError naming its number.
+ */
+export function parseNamedList(text: string): NamedList {
+  const slugs = new Set<string>();
+  text.split(/\r?\n/).forEach((raw, offset): void => {
+    const entry = raw.replace(/#.*/, "").trim();
+    if (entry === "") return;
+    if (!VALID_FULL_NAME.test(entry)) throw new NamedListError(offset + 1);
+    slugs.add(entry.toLowerCase());
+  });
+  return { slugs };
+}
+
+/** The symbolic ref git keeps for the remote's default branch. */
+export const REMOTE_HEAD_REF = "refs/remotes/origin/HEAD";
+
+/**
+ * The remote's default branch as a remote-tracking ref
+ * (`refs/remotes/origin/main`), from `git symbolic-ref REMOTE_HEAD_REF`; null
+ * when it is unset (a clone that never recorded it, `git remote set-head
+ * origin --auto` sets it), unreadable, or not an `origin` ref.
+ */
+export function resolveRemoteDefaultRef(seams: GuardSeams, root: string): string | null {
+  const result = seams.run(GIT, ["-C", root, "symbolic-ref", "-q", REMOTE_HEAD_REF]);
+  if (result.spawnFailed || result.code !== 0) return null;
+  const ref = result.stdout.trim();
+  return /^refs\/remotes\/origin\/[^\s]+$/.test(ref) ? ref : null;
+}
+
+/**
+ * A committed file's bytes at `<ref>:<path>`, or null when git cannot show
+ * them (no such ref, no such path at it, git not startable). Null is "names
+ * nothing", stricter than any list; the caller says so.
+ */
+export function showAtRef(seams: GuardSeams, root: string, ref: string, path: string): string | null {
+  const result = seams.run(GIT, ["-C", root, "show", `${ref}:${path}`]);
+  if (result.spawnFailed || result.code !== 0) return null;
+  return result.stdout;
+}
+
+/** What the base-branch read answered: the list, or null with the reason it names nothing. */
+export interface CommittedNamedListRead {
+  readonly named: NamedList | null;
+  /** The ref the list was read at, or null when none could be. */
+  readonly ref: string | null;
+  /** The path the DEFAULT BRANCH's policy declares, or null. */
+  readonly path: string | null;
+  /** One sentence, without a verb prefix, when `named` is null; "" otherwise. */
+  readonly reason: string;
+}
+
+/**
+ * The committed named list as the guard reads it (zheref/nen#441; Feitan's
+ * finding on this change): the remote's default branch decides EVERYTHING --
+ * the ref, the policy copy and the path -- and the checkout decides nothing
+ * but whether to look. `declared` is the checkout's own `privateNames.namedFile`,
+ * the switch; it is compared, never used as the path. A `nen/workflow.json`
+ * at the ref that this build cannot parse names nothing, said. A list line that
+ * is not an exact `owner/name` throws NamedListError (the caller's exit 2).
+ */
+export function readCommittedNamedList(seams: GuardSeams, root: string, declared: string): CommittedNamedListRead {
+  const ref = resolveRemoteDefaultRef(seams, root);
+  if (ref === null) {
+    return {
+      named: null,
+      ref: null,
+      path: null,
+      reason: `${REMOTE_HEAD_REF} is not set in this checkout (git remote set-head origin --auto records the remote's default branch), so the committed named list is read nowhere`,
+    };
+  }
+  const policyText = showAtRef(seams, root, ref, WORKFLOW_POLICY_PATH);
+  if (policyText === null) {
+    return { named: null, ref, path: null, reason: `${WORKFLOW_POLICY_PATH} is not at ${ref}, so no committed named list is declared there` };
+  }
+  let path: string | null;
+  try {
+    const value: unknown = JSON.parse(policyText);
+    path = parseWorkflow(`${ref}:${WORKFLOW_POLICY_PATH}`, value).privateNames.namedFile;
+  } catch (error) {
+    const message = error instanceof SchemaError ? error.message : `${ref}:${WORKFLOW_POLICY_PATH} is not valid JSON`;
+    return { named: null, ref, path: null, reason: `the policy at the default branch could not be read -- ${message}` };
+  }
+  if (path === null) {
+    return {
+      named: null,
+      ref,
+      path: null,
+      reason: `${ref}:${WORKFLOW_POLICY_PATH} declares no privateNames.namedFile; the checkout's own declaration ('${declared}') is head content and decides nothing`,
+    };
+  }
+  // A REGULAR FILE, proved before it is shown: `git show <ref>:<dir>` prints a
+  // tree listing and a symlink's entry prints its target path, and either
+  // would reach the parser as "line 1 is not an exact owner/name", which
+  // misdirects the reader (Nobunaga, this change's review).
+  const kind = objectKindAtRef(seams, root, ref, path);
+  if (kind !== "file") {
+    return {
+      named: null,
+      ref,
+      path,
+      reason:
+        kind === "absent"
+          ? `named list '${path}' is not at ${ref} (it is read at the remote's default branch, never from the checkout)`
+          : `named list '${path}' at ${ref} is a ${kind}, not a regular file`,
+    };
+  }
+  const text = showAtRef(seams, root, ref, path);
+  if (text === null) {
+    return { named: null, ref, path, reason: `named list '${path}' could not be shown at ${ref}` };
+  }
+  return { named: parseNamedList(text), ref, path, reason: "" };
+}
+
+/**
+ * What `<ref>:<path>` is: a regular file (mode 100644/100755), a `tree`, a
+ * `symlink`, a `submodule` (160000), or `absent` -- from `git ls-tree`, whose
+ * first column is the mode. Anything unreadable is `absent`.
+ */
+export function objectKindAtRef(seams: GuardSeams, root: string, ref: string, path: string): "file" | "tree" | "symlink" | "submodule" | "absent" {
+  const result = seams.run(GIT, ["-C", root, "ls-tree", ref, "--", path]);
+  if (result.spawnFailed || result.code !== 0) return "absent";
+  const line = outputLines(result.stdout)[0];
+  if (line === undefined) return "absent";
+  const mode = line.split(/\s+/)[0] ?? "";
+  if (mode === "100644" || mode === "100755") return "file";
+  if (mode === "040000") return "tree";
+  if (mode === "120000") return "symlink";
+  if (mode === "160000") return "submodule";
+  return "absent";
+}
+
+/** Where a repository states its workflow policy, as ../schema/workflow.ts resolves it. */
+const WORKFLOW_POLICY_PATH = "nen/workflow.json";
 
 /** One field of text to check, named for the report. */
 export interface CheckedText {
@@ -391,11 +587,18 @@ export interface NameMatcher {
    */
   readonly policedIndexOf: ReadonlyMap<string, number>;
   /**
-   * Lowercase names the ignore list exempts: a name is exempt only when EVERY
-   * list entry carrying it is -- ignoring `a/thing` leaves `b/thing` policed,
-   * and the two share one index, so the name still blocks.
+   * Lowercase names the ignore list or the named list exempts: a name is
+   * exempt only when EVERY list entry carrying it is -- ignoring `a/thing`
+   * leaves `b/thing` policed, and the two share one index, so the name still
+   * blocks.
    */
   readonly ignored: ReadonlySet<string>;
+  /**
+   * Which list exempted the FIRST entry carrying each exempt name -- the entry
+   * `index` points at. The named list is tried first, so an entry both lists
+   * exempt reports the exact-slug one.
+   */
+  readonly exemptedBy: ReadonlyMap<string, ExemptionSource>;
 }
 
 function escapeRegExp(text: string): string {
@@ -406,28 +609,43 @@ function escapeRegExp(text: string): string {
  * Compile the list. Each entry's NAME (after the `/`) is matched; the first
  * entry wins a case twin across owners, so they share one index.
  */
-export function compileMatcher(list: readonly string[], ignore: IgnoreList | null = null): NameMatcher {
+export function compileMatcher(
+  list: readonly string[],
+  ignore: IgnoreList | null = null,
+  named: NamedList | null = null,
+): NameMatcher {
   const indexOf = new Map<string, number>();
   const names: string[] = [];
   const policedIndexOf = new Map<string, number>();
+  const exemptedBy = new Map<string, ExemptionSource>();
   list.forEach((entry, position): void => {
     const name = entry.replace(/^.*\//, "");
     const key = name.toLowerCase();
     if (name === "") return;
-    const exempt = ignore !== null && (ignore.names.has(key) || ignore.slugs.has(entry.toLowerCase()));
-    if (!exempt && !policedIndexOf.has(key)) policedIndexOf.set(key, position + 1);
+    const slug = entry.toLowerCase();
+    // The named list holds exact slugs only, so it can never exempt a twin
+    // under another owner; the ignore file's bare names can.
+    const source: ExemptionSource | null =
+      named !== null && named.slugs.has(slug)
+        ? "named-list"
+        : ignore !== null && (ignore.names.has(key) || ignore.slugs.has(slug))
+          ? "ignore-file"
+          : null;
+    if (source === null && !policedIndexOf.has(key)) policedIndexOf.set(key, position + 1);
     if (indexOf.has(key)) return;
     indexOf.set(key, position + 1);
+    if (source !== null) exemptedBy.set(key, source);
     names.push(name);
   });
   const ignored = new Set([...indexOf.keys()].filter((key): boolean => !policedIndexOf.has(key)));
+  for (const key of exemptedBy.keys()) if (!ignored.has(key)) exemptedBy.delete(key);
   const patterns = new Map<string, RegExp>(
     names.map((name): [string, RegExp] => [
       name.toLowerCase(),
       new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(name)}(?![A-Za-z0-9-])`, "i"),
     ]),
   );
-  return { patterns, indexOf, policedIndexOf, ignored };
+  return { patterns, indexOf, policedIndexOf, ignored, exemptedBy };
 }
 
 /**
@@ -533,7 +751,7 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
           const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (index === undefined) continue;
           reported.add(key);
-          hits.push({ field, line: offset + 1, index, normalised, ignored });
+          hits.push({ field, line: offset + 1, index, normalised, ignored, ignoredBy: ignored ? (matcher.exemptedBy.get(key) ?? null) : null });
         }
       };
       scan(line, false);
@@ -566,6 +784,7 @@ export function checkPrivateNames(
   skip: boolean,
   ignore: IgnoreList | null = null,
   allowAllIgnored: boolean = false,
+  named: NamedList | null | (() => NamedList | null) = null,
 ): PrivateNameCheck {
   const unread = { listSize: null, owners: null };
   if (skip) return { result: "skipped-by-flag", targetVisibility: null, ...unread, hits: [], error: null };
@@ -591,16 +810,27 @@ export function checkPrivateNames(
     listSize: list.length,
     owners: new Set(list.map((entry): string => entry.replace(/\/.*$/, "").toLowerCase())).size,
   };
-  const matcher = compileMatcher(list, ignore);
+  // THE NAMED LIST IS READ LAZILY, here, after the visibility row: a write to
+  // a PRIVATE target spends no `git show` and cannot be refused over a
+  // committed list it would never have compared against (Nobunaga). A thunk's
+  // throw (a bare name on the list, the caller's exit 2) therefore reaches a
+  // public target only.
+  const resolvedNamed = typeof named === "function" ? named() : named;
+  const matcher = compileMatcher(list, ignore, resolvedNamed);
   // EVERY NAME IGNORED is a check that polices nothing: refused as
-  // unavailable, the script's rule, unless the caller says it means it.
+  // unavailable, the script's rule, unless the caller says it means it. Both
+  // lists are counted: the refusal names whichever did the exempting.
   if (matcher.policedIndexOf.size === 0 && !allowAllIgnored) {
+    const exemptors = [ignore !== null ? "the ignore file" : null, resolvedNamed !== null ? "the named list" : null].filter(
+      (name): name is string => name !== null,
+    );
+    const subject = exemptors.length === 0 ? "the lists" : exemptors.join(" and ");
     return {
       result: "unavailable",
       targetVisibility: visibility,
       ...counts,
       hits: [],
-      error: `every private name is ignored (the ignore file exempts all ${counts.listSize}), so nothing would be checked; pass --allow-all-ignored if that is meant`,
+      error: `every private name is ignored (${subject} exempt${exemptors.length === 1 ? "s" : ""} all ${counts.listSize}), so nothing would be checked; pass --allow-all-ignored if that is meant`,
     };
   }
   const hits = findPrivateNames(matcher, fields);
@@ -634,7 +864,7 @@ export function privateNameLines(check: PrivateNameCheck, target: Target, verb: 
   // An ignored hit is never silent, whatever the verdict.
   const ignoredLines = check.hits
     .filter((hit): boolean => hit.ignored)
-    .map((hit): string => `${verb}: ignored: ${where(hit)} (ignore file)`);
+    .map((hit): string => `${verb}: ignored: ${where(hit)} (${hit.ignoredBy === "named-list" ? "named list" : "ignore file"})`);
   switch (check.result) {
     case "clean":
       return ignoredLines;

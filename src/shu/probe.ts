@@ -103,10 +103,10 @@ export function probeTool(
  * Run an install plan, in order, stopping at the first step that does not
  * succeed.
  *
- * NOTHING AFTER A FAILED STEP RUNS. The two steps of the one enabled installer
- * are a sequence, not a set: the second one activates what the first one turned
- * on, and running it anyway would produce a second, more confusing error about
- * a state the first step was supposed to establish.
+ * NOTHING AFTER A FAILED STEP RUNS. Installer steps are a sequence, not a set:
+ * later steps can depend on earlier preflights or activation. Running them
+ * after a failure would produce a second, more confusing error about a state
+ * the earlier step was supposed to establish.
  */
 export function runInstallSteps(
   seams: Seams,

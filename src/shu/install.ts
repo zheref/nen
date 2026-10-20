@@ -27,10 +27,60 @@ export type InstallPlan =
   | { readonly kind: "refused"; readonly why: string };
 
 /** Installer ids `--install` acts on in this release. */
-export const ENABLED_INSTALLERS: readonly Installer[] = ["corepack", "gem"];
+export const ENABLED_INSTALLERS: readonly Installer[] = ["corepack", "gem", "gem-user"];
 
 /** The package-manager activator that ships with the runtime it manages. */
 const COREPACK = "corepack";
+const RUBY = "ruby";
+
+/** A pinned RubyGems tool installed only into the current user's gem home. */
+function gemUserPlan(entry: ToolchainEntry, host: NodeJS.Platform): InstallPlan {
+  const pin = parsePin(entry.version, `project.toolchain.${entry.tool}.version`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(entry.tool)) {
+    return {
+      kind: "refused",
+      why: `project.toolchain.${entry.tool} is not an unscoped Ruby gem name; gem-user never passes a scoped or path-shaped tool name to RubyGems.`,
+    };
+  }
+  if (entry.versionFrom === "path-exists") {
+    return { kind: "refused", why: "gem-user requires a version-reading probe; path-exists cannot verify the pinned version." };
+  }
+  if (pin.kind !== "exact") {
+    return {
+      kind: "refused",
+      why: `project.toolchain.${entry.tool}.version pins the range '${entry.version}', but gem-user installs one exact version. Pin the Ruby gem version exactly or use verify-only.`,
+    };
+  }
+  const gemVersion = pin.version.replace(/^[vV]/, "");
+  if (!/^\d+(?:\.\d+)+$/.test(gemVersion)) {
+    return {
+      kind: "refused",
+      why: `project.toolchain.${entry.tool}.version pins '${entry.version}', but gem-user installs only stable dotted-numeric RubyGems versions. Remove prerelease or build metadata, or use verify-only.`,
+    };
+  }
+  if (host !== "darwin" && host !== "linux") {
+    return {
+      kind: "refused",
+      why: `gem-user is supported only on darwin and linux; ${host} needs a separate installer decision. The declared probe still works without --install.`,
+    };
+  }
+  return {
+    kind: "runnable",
+    preconditions: "Requires existing Ruby >=3.2 and RubyGems, a writable user gem home, network access to the configured gem source, and a declared version probe resolving the user gem on the existing PATH. Bashcov coverage also needs existing Bash 4.1+.",
+    steps: [
+      {
+        exe: RUBY,
+        argv: ["-rrubygems", "-e", 'abort "Ruby >=3.2.0 is required for gem-user" if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("3.2.0")'],
+        stdoutTo: null,
+      },
+      {
+        exe: RUBY,
+        argv: ["-S", "gem", "install", entry.tool, "--version", gemVersion, "--user-install", "--no-document", "--norc"],
+        stdoutTo: null,
+      },
+    ],
+  };
+}
 
 /**
  * The host this release will not run the enabled installer on, and the whole
@@ -262,6 +312,8 @@ export function resolveInstall(
       return corepackPlan(entry, manifest, host);
     case "gem":
       return gemPlan(entry, host);
+    case "gem-user":
+      return gemUserPlan(entry, host);
     case "wrapper":
       return {
         kind: "nothing-to-install",

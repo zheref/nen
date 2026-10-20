@@ -195,12 +195,13 @@ function source(snapshot: Snapshot): PrStateSource {
       headRefOid: HEAD,
       headRefName: "feature/x",
       baseRefName: "main",
-      baseRefOid: "basebase",
+      baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       author: { login: "someone" },
       labels: [],
       reviewRequests: [],
     },
     defaultBranch: "main",
+    defaultBranchOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     checkRollup: [
       ...CHECK_NAMES.map((name) => ({ name, status: "COMPLETED", conclusion: "SUCCESS" })),
       snapshot.pending
@@ -422,7 +423,7 @@ describe("nen watch until --pr -- the native compound predicate (zheref/nen#264)
     };
     const result = await watch(argv, depsAtBase([COMMENTED, COMMENTED, COMMENTED], failing));
     expect(result.code).toBe(1);
-    expect(result.out[0]).toMatch(/^\[1\] observation failed: ready was not judged on the pull request's base gate \(meta\.identities\.read: flags-unverified\) -- not a merge signal; the pull request's base \(zheref\/example@basebase:nen\/gates\.json\) could not be read/);
+    expect(result.out[0]).toMatch(/^\[1\] observation failed: ready was not judged on the pull request's base gate \(meta\.identities\.read: flags-unverified\) -- not a merge signal; the pull request's base \(zheref\/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen\/gates\.json\) could not be read/);
   });
 
   it("--require-base-gates passes through to the read: a local-fallback ready is an observation error on every predicate", async () => {

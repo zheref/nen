@@ -25,9 +25,9 @@
 //     reference pack, and ../profiles/inertness.test.ts is what holds it to
 //     spawning nothing.
 //   * `*.test.ts` and `fixtures/` are not shipped code. A test naming a tool is
-//     how the rule is PROVED (./fixtures/toolchain.ts names twenty-eight), and a
+//     how the rule is PROVED (./fixtures/toolchain.ts names the toolchain vocabulary), and a
 //     fixture naming one is test data.
-//   * `install.ts` NAMES THE ONE INSTALLER NEN IMPLEMENTS, and it is the only
+//   * `install.ts` NAMES THE CLOSED INSTALLER IMPLEMENTATIONS NEN ENABLES, and it is the only
 //     exclusion added since this sweep was written. `nen shu tools --install`
 //     is the one verb in this family that spawns a program NEN chose rather
 //     than one a declaration named: a declaration names an installer ID out of
@@ -152,9 +152,9 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
 
   it("names only the reviewed installer executables and supported tool", () => {
     // AN EXCLUSION THAT ONLY SUBTRACTS WIDENS SILENTLY. This is the positive
-    // half: whatever toolchain names that file carries, every one of them is an
-    // installer ID the contract already publishes -- a name nen refuses an
-    // unknown of, which is the opposite of a name nen decided to spawn.
+    // half: every toolchain name that file carries belongs to the reviewed
+    // installer, runtime-preflight or supported-tool vocabulary below. Unknown
+    // names remain refused rather than silently becoming executable choices.
     const named = [
       ...new Set(
         readFileSync(join(SHU, INSTALLER_MODULE), "utf8")
@@ -180,7 +180,7 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
   });
 
   it("enables only the reviewed installer inventory", () => {
-    expect(ENABLED_INSTALLERS).toEqual(["corepack", "gem"]);
+    expect(ENABLED_INSTALLERS).toEqual(["corepack", "gem", "gem-user"]);
     // Every enabled id is a member of the contract's closed set -- an installer
     // nen runs that the loader would refuse to read is not reachable at all.
     expect(ENABLED_INSTALLERS.every((id): boolean => INSTALLERS.includes(id))).toBe(true);
