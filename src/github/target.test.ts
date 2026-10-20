@@ -74,6 +74,22 @@ describe("targetFromRemote", () => {
     expect(() => targetFromRemote(seams, "/repo")).toThrow(/does not read as a GitHub repository/);
   });
 
+  it("echoes an unparseable origin without its userinfo -- the token never reaches the message (SEC-5, zheref/nen#373)", () => {
+    for (const url of ["https://ghp_FAKE0000@github.com/owner/name/extra", "https://user:ghp_FAKE0000@github.com/owner/name/extra"]) {
+      const seams = new ScriptedSeams([{ match: "git remote get-url origin", result: { stdout: `${url}\n` } }]);
+      let message = "";
+      try {
+        targetFromRemote(seams, "/repo");
+      } catch (error) {
+        expect(error).toBeInstanceOf(TargetError);
+        message = (error as Error).message;
+      }
+      expect(message).toContain("'https://***@github.com/owner/name/extra'");
+      expect(message).not.toMatch(/fake0000/i);
+      expect(message).not.toContain("user:");
+    }
+  });
+
   it("takes a named remote, not just origin", () => {
     const seams = new ScriptedSeams([
       { match: "git remote get-url upstream", result: { stdout: "https://github.com/a/b\n" } },
