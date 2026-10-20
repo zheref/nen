@@ -1,1 +1,0 @@
-nen/workflow.json sets `classify.publish` and `direct.publish` to `label+comment` (the maintainer's request of 2026-10-20): hatsu:classify and hatsu:direct now label the issue and also post their resolved criteria as one marker-keyed comment each.
