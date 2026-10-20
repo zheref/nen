@@ -105,6 +105,7 @@ export const GATE_SCOPES: readonly GateScope[] = [
   anywhere("pinned_ref", "pinned_ref is the nen release this repository runs"),
   under(WORKFLOW_FILE, ["branch"], "branch is the trunk and the shape every branch is cut on"),
   under(WORKFLOW_FILE, ["review"], "review decides which scopes a change is reviewed under"),
+  under(WORKFLOW_FILE, ["privateNames"], "privateNames decides which private repository names the private-name guard lets through"),
   under(WORKFLOW_FILE, ["coverage"], "coverage is the ladder a change must meet"),
   under(WORKFLOW_FILE, ["tests"], "tests are the suites a change must pass"),
   under(WORKFLOW_FILE, ["iteration"], "iteration is the checks every turn runs"),
