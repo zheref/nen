@@ -552,8 +552,11 @@ async function runData(context: CommandContext): Promise<number> {
   const filterLines = filter === null ? [] : [`  ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`];
   const filtered = filter === null ? null : { of: assembled.length };
   const filterKey = objectsFilter === null ? {} : { objectsFilter };
+  // Keep the entire published prefix intact; sessions is new information
+  // after existing context/register keys and before objectsFilter (always last).
+  const { sessions, ...legacyDocument } = document;
   if (desk === null) {
-    const full = { ...document, objects, ...derived, ...filterKey };
+    const full = { ...legacyDocument, objects, ...derived, sessions, ...filterKey };
     emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects, filtered), ...filterLines]);
     return 0;
   }
@@ -578,9 +581,10 @@ async function runData(context: CommandContext): Promise<number> {
   // `objectsFilter` IS THE LAST KEY ON THIS PATH TOO, so one rule describes
   // both documents (Nobunaga f1 on NN-PR for #410).
   const full = {
-    ...document,
+    ...legacyDocument,
     ...register,
     ...(deskOwnsClock ? { ...tail, generatedDateLocal: null, timeZone: null } : tail),
+    sessions,
     ...filterKey,
   };
   emit(context.io, context.json, full, [

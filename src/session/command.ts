@@ -1,4 +1,4 @@
-import { emit, requireSubcommand, VerbUsageError, type Command } from "../cli/command.js";
+import { emit, refuseExtraPositionals, requireSubcommand, VerbUsageError, type Command } from "../cli/command.js";
 import { plainLine } from "../cli/plain.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { EFFORT_ID } from "../usage/ledger.js";
@@ -27,7 +27,8 @@ nen reads no title, id, model or dial from the environment or a harness.
 
 At least one of --title or --id must contain non-whitespace text; neither
 identifies anything otherwise (exit 2, no write). An unreadable ledger is
-refused, never overwritten (exit 1). 'nen report data' merges sessions[].`;
+refused, never overwritten (exit 1), including a dangling ledger link.
+Stray positional arguments and passthrough tokens refuse at exit 2 before work. 'nen report data' merges sessions[].`;
 
 export function renderSessions(ledger: SessionLedger): string[] {
   return [
@@ -44,6 +45,7 @@ export const sessionCommand: Command = {
   flags: { values: ["effort", "surface", "model", "dial", "title", "id", "source"], booleans: [] },
   run(context): number {
     const sub = requireSubcommand("session", context.args, ["record", "show"]);
+    refuseExtraPositionals(context.args, 2);
     const effort = context.args.values["effort"];
     if (effort === undefined || !EFFORT_ID.test(effort)) throw new VerbUsageError("--effort <id> is required: letters, digits, '.', '_', '-' and '/' only, starting with a letter or digit.");
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });

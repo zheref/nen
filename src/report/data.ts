@@ -41,7 +41,7 @@
 // that ran it (the leak ../shu/coverage.ts's `relativiseName` closes).
 
 import { join } from "node:path";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
 import { proofRelativePath } from "../shu/proof.js";
@@ -687,7 +687,19 @@ export function readSessionLedgers(root: string, warn: (line: string) => void): 
   let names: string[];
   try {
     names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
-  } catch {
+  } catch (error) {
+    // Only a missing directory entry is absence. ENOENT from following an
+    // existing dangling directory symlink is an unreadable ledger source.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        lstatSync(dir);
+      } catch (probeError) {
+        if ((probeError as NodeJS.ErrnoException).code === "ENOENT") return [];
+        warn(`${SESSION_LEDGER_DIR}: could not inspect directory (${probeError instanceof Error ? probeError.message : String(probeError)}) -- sessions not read`);
+        return [];
+      }
+    }
+    warn(`${SESSION_LEDGER_DIR}: could not read directory (${error instanceof Error ? error.message : String(error)}) -- sessions not read`);
     return [];
   }
   const rows: ReportSession[] = [];

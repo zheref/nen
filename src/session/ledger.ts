@@ -1,5 +1,5 @@
 // Caller-reported session identity only: no environment, harness or process reads.
-import { existsSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { withLedgerLock, writeLedgerAtomically, type LedgerLockOptions } from "../ledger/lock.js";
 import { encodeEffortId } from "../usage/ledger.js";
@@ -38,7 +38,14 @@ export function sessionLedgerPath(root: string, effort: string): string {
 }
 
 export function readSessionLedger(path: string, effort: string): SessionLedger {
-  if (!existsSync(path)) return { contract: SESSION_CONTRACT, effort, entries: [] };
+  // A dangling symlink is an existing entry whose target cannot be read.
+  // existsSync follows it and would incorrectly permit replacing that ledger.
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { contract: SESSION_CONTRACT, effort, entries: [] };
+    throw new Error(`'${path}' could not be inspected (${error instanceof Error ? error.message : String(error)}). A session ledger nen cannot read is not rewritten over.`);
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, "utf8"));

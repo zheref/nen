@@ -226,7 +226,7 @@ describe("nen report data --objects-from", () => {
     const keys = Object.keys(document);
     expect(keys.slice(keys.indexOf("objects"))).toEqual([
       "objects", "worktree", "effortStage", "gate", "stageClass", "turnNumber",
-      "generatedAtLocal", "generatedDateLocal", "timeZone",
+      "generatedAtLocal", "generatedDateLocal", "timeZone", "sessions",
     ]);
     const objects = document["objects"] as ReportObject[];
     expect(objects.map((row): number => row.number)).toEqual([85, 87]);

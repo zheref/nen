@@ -211,7 +211,7 @@ describe("nen report data --register", () => {
     const keys = Object.keys(document);
     expect(keys.slice(0, keys.indexOf("objects") + 1)).toEqual([
       "contract", "repo", "branch", "base", "generatedAt", "commits", "files", "evidence",
-      "coverage", "proof", "phases", "lastStop", "usage", "sessions", "objects",
+      "coverage", "proof", "phases", "lastStop", "usage", "objects",
     ]);
     expect(keys.slice(keys.indexOf("objects") + 1)).toEqual([
       "variant", "title", "scope", "gate", "generatedAtLocal", "footerNote", "footerCount",
@@ -221,6 +221,7 @@ describe("nen report data --register", () => {
       // The derived context (zheref/nen#258), AFTER the register; its `gate`
       // and `generatedAtLocal` are the register's own, in their places above.
       "worktree", "effortStage", "stageClass", "turnNumber", "generatedDateLocal", "timeZone",
+      "sessions",
     ]);
     // The offline path stays offline.
     expect(captured.seams.calls.every((call): boolean => call.command === "git")).toBe(true);
@@ -856,4 +857,15 @@ describe("a spend note nobody will show is refused (Copilot #365)", () => {
     expect(captured.code).toBe(2);
     expect(captured.err.join("\n")).toMatch(/spendNotes name 'el', which is not among the efforts this page shows \('e1'\)/);
   });
+});
+
+
+it("C437-3 appends sessions after the complete register and context prefix", async () => {
+  const { captured, document } = await registerDocument(repo());
+  expect(captured.code).toBe(0);
+  const keys = Object.keys(document);
+  expect(keys.at(-1)).toBe("sessions");
+  expect(keys.slice(0, keys.indexOf("objects") + 1)).toEqual([
+    "contract", "repo", "branch", "base", "generatedAt", "commits", "files", "evidence", "coverage", "proof", "phases", "lastStop", "usage", "objects",
+  ]);
 });

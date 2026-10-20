@@ -16,7 +16,7 @@
 // what an lcov file says, and they cannot, because they share the parser.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -111,7 +111,6 @@ describe("nen report data", () => {
       // earlier key to make room would be the reshuffle this test exists to
       // prevent.
       "usage",
-      "sessions",
       "objects",
       // THE DERIVED CONTEXT (zheref/nen#258), appended after `objects` for the
       // same reason `objects` was appended after `usage`.
@@ -123,6 +122,7 @@ describe("nen report data", () => {
       "generatedAtLocal",
       "generatedDateLocal",
       "timeZone",
+      "sessions",
     ]);
     expect(document["sessions"]).toEqual([]);
     expect(document["contract"]).toBe("nen.report.data/v0.1");
@@ -537,4 +537,36 @@ describe("session and dial report facts (#437)", () => {
     expect(result.err.join("\n")).toContain("not a 'nen.session.ledger/v0.1' ledger");
     expect(result.err.join("\n")).toContain("invalid session entry");
   });
+});
+
+
+describe("Hanten report regressions (#437)", () => {
+  it("N437-1 warns with path and reason when the sessions directory is a regular file", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-session-notdir-"));
+    mkdirSync(join(root, ".nen"));
+    writeFileSync(join(root, ".nen/sessions"), "not a directory");
+    const result = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script());
+    expect(result.code).toBe(0);
+    expect(documentFrom(result)["sessions"]).toEqual([]);
+    expect(result.err.join("\n")).toMatch(/\.nen\/sessions:.*ENOTDIR/);
+  });
+  it("C437-3 preserves the entire existing unfiltered prefix before appending sessions", async () => {
+    const result = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--json"], script());
+    expect(result.code).toBe(0);
+    expect(Object.keys(documentFrom(result))).toEqual([
+      "contract", "repo", "branch", "base", "generatedAt", "commits", "files", "evidence", "coverage", "proof", "phases", "lastStop", "usage", "objects",
+      "worktree", "effortStage", "gate", "stageClass", "turnNumber", "generatedAtLocal", "generatedDateLocal", "timeZone", "sessions",
+    ]);
+  });
+});
+
+
+it.skipIf(process.platform === "win32")("N437-1 warns for an existing dangling sessions-directory symlink", async () => {
+  const root = mkdtempSync(join(tmpdir(), "nen-session-danglingdir-"));
+  mkdirSync(join(root, ".nen"));
+  symlinkSync("missing-directory", join(root, ".nen/sessions"));
+  const result = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script());
+  expect(result.code).toBe(0);
+  expect(documentFrom(result)["sessions"]).toEqual([]);
+  expect(result.err.join("\n")).toMatch(/\.nen\/sessions:.*ENOENT/);
 });

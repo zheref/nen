@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runFamily, type Io } from "../index.js";
@@ -75,5 +75,36 @@ describe("session record/show", () => {
     writeFileSync(path, "broken JSON");
     expect((await capture(["session", "record", "--effort", "e", "--surface", "codex", "--id", "b"], repo)).code).toBe(1);
     expect(readFileSync(path, "utf8")).toBe("broken JSON");
+  });
+});
+
+
+describe("Hanten session regressions (#437)", () => {
+  it.skipIf(process.platform === "win32").each(["show", "record"])("C437-1 refuses a dangling ledger link on %s, preserving the link", async (verb) => {
+    // Creating a symlink requires a Windows host privilege this fixture does not assume.
+    const repo = root(), path = sessionLedgerPath(repo, "e");
+    mkdirSync(join(repo, ".nen/sessions"), { recursive: true });
+    symlinkSync("missing-ledger.json", path);
+    for (const argv of [verb === "show" ? ["session", "show", "--effort", "e", "--json"] : ["session", "record", "--effort", "e", "--surface", "codex", "--title", "Session"]]) {
+      const result = await capture(argv, repo);
+      expect(result.code, result.out.join("\n")).toBe(1);
+      expect(result.err.join("\n")).toContain(path);
+      expect(lstatSync(path).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(path)).toBe("missing-ledger.json");
+    }
+  });
+
+  it.each([{ tail: ["tail"] }, { tail: ["--", "tail"] }])("C437-2 refuses stray ordinary/passthrough tokens before any append: %j", async ({ tail }) => {
+    const repo = root();
+    const record = ["session", "record", "--effort", "e", "--surface", "codex", "--title", "Session"];
+    expect((await capture(record, repo)).code).toBe(0);
+    const path = sessionLedgerPath(repo, "e"), before = readFileSync(path, "utf8");
+    for (const argv of [[...record, ...tail], ["session", "show", "--effort", "e", ...tail]]) {
+      const result = await capture(argv, repo);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain('Unexpected positional "tail"');
+      expect(result.out).toEqual([]);
+      expect(readFileSync(path, "utf8")).toBe(before);
+    }
   });
 });
