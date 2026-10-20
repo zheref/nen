@@ -140,3 +140,15 @@ describe("normalizeEol pins the windows-latest checkout failure", () => {
     expect(normalizeEol(lf)).toBe(lf);
   });
 });
+
+describe("effort ledger contract inventory (#437)", () => {
+  it("lists phase, usage and session once and keeps the inventory counts accurate", () => {
+    const inventory = USAGE.slice(USAGE.indexOf("Thirty-five shapes"), USAGE.indexOf("Every one of them is read"));
+    const ids = [...inventory.matchAll(/`(nen\.[^`]+\/v[0-9.]+)`/g)].map((match): string => match[1] as string);
+    expect(ids).toHaveLength(37);
+    expect(new Set(ids).size).toBe(37);
+    expect(new Set(ids.map((id): string => id.split("/v")[0] as string)).size).toBe(35);
+    expect(inventory).toContain("thirty-seven ids");
+    for (const name of ["phase", "usage", "session"]) expect(ids).toContain(`nen.${name}.ledger/v0.1`);
+  });
+});

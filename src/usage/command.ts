@@ -32,7 +32,7 @@ import {
 
 export { USAGE_CONTRACT, USAGE_LEDGER_DIR };
 
-const USAGE = `nen usage record --effort <id> --surface <s> [--model <alias>]
+const USAGE = `nen usage record --effort <id> --surface <s> [--model <alias>] [--dial <level>]
                  [--input <n>] [--output <n>] [--cache-read <n>] [--cache-write <n>]
                  [--minutes <n>] [--source <text>] [--note <text>] [--not-reported]
 nen usage show   --effort <id> [--repo <path>] [--json]
@@ -50,6 +50,8 @@ clock; 'show' prints the ledger and the totals per surface and model.
   --surface <s>      Which surface ran (claude-code, codex, cursor, antigravity).
                      Recorded verbatim.
   --model <alias>    Which model alias ran. Recorded verbatim; null when absent.
+  --dial <level>     The surface's effort level, verbatim; null when absent,
+                     including on older ledgers. It is not a usage number.
   --input <n>        Input tokens.           Non-negative whole number.
   --output <n>       Output tokens.          Non-negative whole number.
   --cache-read <n>   Cache-read tokens.      Non-negative whole number.
@@ -134,6 +136,7 @@ function record(context: CommandContext): number {
     source: context.args.values["source"] ?? null,
     note: context.args.values["note"] ?? null,
     notReported,
+    dial: context.args.values["dial"] ?? null,
   };
   appendUsageEntry(path, effort, entry);
   emit(context.io, context.json, { path, entry }, [
@@ -213,7 +216,7 @@ export const usageCommand: Command = {
   usage: USAGE,
   subcommands: ["record", "show"],
   flags: {
-    values: ["effort", "surface", "model", "input", "output", "cache-read", "cache-write", "minutes", "source", "note"],
+    values: ["effort", "surface", "model", "dial", "input", "output", "cache-read", "cache-write", "minutes", "source", "note"],
     booleans: ["not-reported"],
   },
   run(context: CommandContext): number {

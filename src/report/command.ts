@@ -54,7 +54,10 @@ data      One document describing this branch against --base: the commits, the
           changed files (with a tier from --tiers, or null), the evidence rows
           (empty in this release -- 'nen shu evidence' owns them), the lane's
           coverage report if one is on disk, the build proof, and the last
-          recorded stop. READ-ONLY: it runs git and opens files, and writes
+          recorded stop. It also merges phases[], usage[] (each carrying the
+          caller's dial, null on older entries), and sessions[] (caller-reported
+          title/id, surface, model, dial, source and recordedAt with effort).
+          --json carries these arrays; an absent directory yields []. READ-ONLY: it runs git and opens files, and writes
           nothing, ever.
 
   --base <ref>     Required. What this branch is measured against -- the trunk,

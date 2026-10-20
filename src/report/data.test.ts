@@ -16,7 +16,7 @@
 // what an lcov file says, and they cannot, because they share the parser.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -111,6 +111,7 @@ describe("nen report data", () => {
       // earlier key to make room would be the reshuffle this test exists to
       // prevent.
       "usage",
+      "sessions",
       "objects",
       // THE DERIVED CONTEXT (zheref/nen#258), appended after `objects` for the
       // same reason `objects` was appended after `usage`.
@@ -123,6 +124,7 @@ describe("nen report data", () => {
       "generatedDateLocal",
       "timeZone",
     ]);
+    expect(document["sessions"]).toEqual([]);
     expect(document["contract"]).toBe("nen.report.data/v0.1");
     expect(document["branch"]).toBe("feat/report");
     expect(document["base"]).toBe("main");
@@ -371,7 +373,7 @@ describe("the phase ledgers carry note and steps (zheref/nen#227)", () => {
     );
     const captured = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script({ log: LOG }));
     const phases = documentFrom(captured)["phases"] as Record<string, unknown>[];
-    expect(Object.keys(phases[0] ?? {})).toEqual(["effort", "phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps"]);
+    expect(Object.keys(phases[0] ?? {})).toEqual(["effort", "phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps", "dial"]);
     expect(phases[0]).toMatchObject({ effort: "e", note: "kept", steps: [] });
     expect(phases[1]?.["steps"]).toEqual([{ verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1000, stalled: false }]);
   });
@@ -397,7 +399,7 @@ describe("the usage ledgers (zheref/nen#227)", () => {
     expect(captured.code).toBe(0);
     const usage = documentFrom(captured)["usage"] as Record<string, unknown>[];
     expect(usage).toHaveLength(2);
-    expect(Object.keys(usage[0] ?? {})).toEqual(["effort", "recordedAt", "surface", "model", "input", "output", "cacheRead", "cacheWrite", "minutes", "source", "note", "notReported"]);
+    expect(Object.keys(usage[0] ?? {})).toEqual(["effort", "recordedAt", "surface", "model", "input", "output", "cacheRead", "cacheWrite", "minutes", "source", "note", "notReported", "dial"]);
     expect(usage[0]?.["notReported"]).toBe(true);
     expect(usage[1]).toMatchObject({ effort: "e", surface: "claude-code", model: "opus", input: 12, minutes: 1.5 });
     expect(captured.err.join("\n")).toMatch(/usage\/other\.json: not a 'nen.usage.ledger\/v0.1' ledger -- skipped/);
@@ -497,5 +499,42 @@ describe("--tiers", () => {
     const captured = await capture(["report", "data", "--repo", COVERAGE_REPO, "--base", "main", "--lane", ""], []);
     expect(captured.code).toBe(2);
     expect(captured.err.join("\n")).toMatch(/--lane was given an empty value/);
+  });
+});
+
+describe("session and dial report facts (#437)", () => {
+  it("merges sessions in filename/entry order, carries nullable dial and renders titles", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-report-session-"));
+    for (const dir of ["sessions", "phases", "usage"]) mkdirSync(join(root, ".nen", dir), { recursive: true });
+    const session = { recordedAt: NOW.toISOString(), surface: "codex", model: "sol", dial: "high", title: "Shibari attribution metadata", id: "local_abc", source: null };
+    writeFileSync(join(root, ".nen/sessions/z.json"), JSON.stringify({ contract: "nen.session.ledger/v0.1", effort: "z", entries: [{ ...session, title: "Second" }, { ...session, title: "Third" }] }));
+    writeFileSync(join(root, ".nen/sessions/a.json"), JSON.stringify({ contract: "nen.session.ledger/v0.1", effort: "a", entries: [session] }));
+    writeFileSync(join(root, ".nen/phases/e.json"), JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: "e", phases: [{ phase: "old" }, { phase: "new", dial: "high" }] }));
+    writeFileSync(join(root, ".nen/usage/e.json"), JSON.stringify({ contract: "nen.usage.ledger/v0.1", effort: "e", entries: [{ surface: "old" }, { surface: "new", dial: "max" }] }));
+    const result = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script());
+    expect(result.code).toBe(0);
+    const doc = documentFrom(result);
+    expect(doc["sessions"]).toEqual([{ effort: "a", ...session }, { effort: "z", ...session, title: "Second" }, { effort: "z", ...session, title: "Third" }]);
+    expect((doc["phases"] as { dial: unknown }[]).map((r) => r.dial)).toEqual([null, "high"]);
+    expect((doc["usage"] as { dial: unknown }[]).map((r) => r.dial)).toEqual([null, "max"]);
+    const data = join(root, "data.json"), template = join(root, "template.html"), out = join(root, "report.html");
+    writeFileSync(data, JSON.stringify(doc));
+    writeFileSync(template, "{{#each sessions}}{{title}}{{/each}}");
+    const rendered = await capture(["report", "render", "--repo", root, "--template", template, "--data", data, "--out", out], []);
+    expect(rendered.code).toBe(0);
+    expect(readFileSync(out, "utf8")).toBe("Shibari attribution metadataSecondThird");
+  });
+
+  it("warns and skips malformed/foreign session ledgers and invalid entries", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-report-session-bad-"));
+    mkdirSync(join(root, ".nen/sessions"), { recursive: true });
+    writeFileSync(join(root, ".nen/sessions/a.json"), "bad JSON");
+    writeFileSync(join(root, ".nen/sessions/b.json"), JSON.stringify({ contract: "foreign", entries: [] }));
+    writeFileSync(join(root, ".nen/sessions/c.json"), JSON.stringify({ contract: "nen.session.ledger/v0.1", effort: "e", entries: [null] }));
+    const result = await capture(["report", "data", "--repo", root, "--base", "main", "--json"], script());
+    expect(result.code).toBe(0);
+    expect(documentFrom(result)["sessions"]).toEqual([]);
+    expect(result.err.join("\n")).toContain("not a 'nen.session.ledger/v0.1' ledger");
+    expect(result.err.join("\n")).toContain("invalid session entry");
   });
 });

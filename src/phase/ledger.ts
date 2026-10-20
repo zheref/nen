@@ -57,6 +57,8 @@ export interface PhaseEntry {
    * every reader treats as `[]`.
    */
   readonly steps?: readonly PhaseStep[];
+  /** Caller-reported effort level; null on ledgers written before #437. */
+  readonly dial: string | null;
 }
 
 export interface PhaseLedger {
@@ -89,7 +91,7 @@ export function readLedger(path: string, effort: string): PhaseLedger {
   }
   const phases = (parsed as { phases?: unknown }).phases;
   if (!Array.isArray(phases)) throw new Error(`'${path}': 'phases' is not an array.`);
-  return { contract: PHASE_CONTRACT, effort, phases: phases as PhaseEntry[] };
+  return { contract: PHASE_CONTRACT, effort, phases: (phases as PhaseEntry[]).map((entry): PhaseEntry => ({ ...entry, dial: entry.dial ?? null })) };
 }
 
 /** The ledger, written through ../ledger/lock.ts's temp-file-and-rename, so a reader never sees it torn. */

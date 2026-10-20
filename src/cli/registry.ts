@@ -55,6 +55,7 @@ import { reviewCommand } from "../review/command.js";
 import { runCommand } from "../run/command.js";
 import { runnerCommand } from "../runner/command.js";
 import { scaffoldCommand } from "../scaffold/command.js";
+import { sessionCommand } from "../session/command.js";
 import { shuCommand } from "../shu/command.js";
 import { splitCommand } from "../split/command.js";
 import { stageCommand } from "../stage/command.js";
@@ -98,6 +99,7 @@ export const COMMANDS: readonly Command[] = [
   runCommand,
   runnerCommand,
   scaffoldCommand,
+  sessionCommand,
   shuCommand,
   splitCommand,
   stageCommand,

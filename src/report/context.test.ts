@@ -312,7 +312,7 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
 
 describe("turnNumber", () => {
   function phase(effort: string, name: string): ReportPhase {
-    return { effort, phase: name, startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [] };
+    return { effort, phase: name, startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] };
   }
 
   it("counts the 'report' entries of the ledger named after the branch -- and only that one (N3)", () => {
@@ -340,7 +340,7 @@ describe("turnNumber", () => {
   it("reads the ledger end to end", async () => {
     const root = repo();
     mkdirSync(join(root, ".nen", "phases"), { recursive: true });
-    const entry = { startedAt: "2026-09-22T18:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null };
+    const entry = { startedAt: "2026-09-22T18:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null };
     writeFileSync(
       join(root, ".nen", "phases", `${encodeURIComponent(BRANCH)}.json`),
       JSON.stringify({ contract: "nen.phase.ledger/v0.1", effort: BRANCH, phases: [{ phase: "report", ...entry }, { phase: "kokusen", ...entry }, { phase: "report", ...entry }, { phase: "report", ...entry }] }),

@@ -211,7 +211,7 @@ describe("nen report data --register", () => {
     const keys = Object.keys(document);
     expect(keys.slice(0, keys.indexOf("objects") + 1)).toEqual([
       "contract", "repo", "branch", "base", "generatedAt", "commits", "files", "evidence",
-      "coverage", "proof", "phases", "lastStop", "usage", "objects",
+      "coverage", "proof", "phases", "lastStop", "usage", "sessions", "objects",
     ]);
     expect(keys.slice(keys.indexOf("objects") + 1)).toEqual([
       "variant", "title", "scope", "gate", "generatedAtLocal", "footerNote", "footerCount",
@@ -511,12 +511,12 @@ describe("spend", () => {
   });
 
   const PHASES: ReportPhase[] = [
-    { effort: "e1", phase: "build", startedAt: "", endedAt: "", durationMs: 200_000, exitCode: 0, surface: null, model: null, note: null, steps: [{ verb: "build", argv: "", exitCode: 0, durationMs: 41_200, stalled: false }, { verb: "lint", argv: "", exitCode: 0, durationMs: null, stalled: false }] },
-    { effort: "e1", phase: "review", startedAt: "", endedAt: null, durationMs: 50_000, exitCode: null, surface: null, model: null, note: null, steps: [] },
-    { effort: "e1", phase: "open", startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [] },
+    { effort: "e1", phase: "build", startedAt: "", endedAt: "", durationMs: 200_000, exitCode: 0, surface: null, model: null, dial: null, note: null, steps: [{ verb: "build", argv: "", exitCode: 0, durationMs: 41_200, stalled: false }, { verb: "lint", argv: "", exitCode: 0, durationMs: null, stalled: false }] },
+    { effort: "e1", phase: "review", startedAt: "", endedAt: null, durationMs: 50_000, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] },
+    { effort: "e1", phase: "open", startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] },
   ];
   const usage = (over: Partial<ReportUsage>): ReportUsage => ({
-    effort: "e1", recordedAt: "", surface: "claude-code", model: "opus", input: null, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: false, ...over,
+    effort: "e1", recordedAt: "", surface: "claude-code", model: "opus", input: null, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: false, dial: null, ...over,
   });
 
   it("bars each phase against the longest, and groups usage by surface and model", () => {
