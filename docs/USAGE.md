@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 44 command
-families, 137 verbs, every flag checked against the binary this repository
+families, 139 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **72 shapes** and **75 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **73 shapes** and **76 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -251,7 +251,7 @@ file formats).
 - **`issue`** — `nen.issue.edit-body/v0.3` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
@@ -816,7 +816,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 137 verbs, grouped as the README groups them. **Reads** is what a
+All 139 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -827,6 +827,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | nen/gates.json + nen/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
 | [`pr`](#family-pr) | [`nen pr staleness`](#nen-pr-staleness) | stale + Ready merge-permission arithmetic over a verified-wake history | caller-supplied --wakes-from JSON file, no schema/git/gh | yes |
 | [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns, or, with no `--requirements-from`, against the headings of the repository's own PR template, each required present and filled (named as derived, with where it was read) | caller-supplied --body-from/--requirements-from files; else the PR template (`pull_request_template.md`/`.txt` at the root, `.github/` or `docs/`, or `PULL_REQUEST_TEMPLATE/*.md`/`.txt`) in the working tree, or at `--base <ref>` through git (`rev-parse`, `ls-tree`, `cat-file`) | yes |
+| [`pr`](#family-pr) | [`nen pr sections resolve`](#nen-pr-sections-resolve) | resolves a caller-owned section catalogue by kind, family and conditional facts | --catalogue JSON; optional workflow.json pr.sections overrides | yes |
+| [`pr`](#family-pr) | [`nen pr sections family`](#nen-pr-sections-family) | folds taxonomy jobs into the catalogue family with the most jobs, ties by declared precedence | --taxonomy and --catalogue JSON | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
@@ -948,7 +950,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code; `--touched --base <ref>` narrows the rows to the files a change touched (a git-diff read after the run) and, with `--threshold` absent, bands each row against `nen/workflow.json`'s coverage ladder -- or, where that file is absent, nen's published 80/85/90 defaults -- instead; never gating either way | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name (and, under `--touched` with no `--threshold`, `nen/workflow.json` through the shared loader) | yes |
 | [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu evidence`](#nen-shu-evidence) | match `git diff --name-status <base>...HEAD` against project.evidence.globs, deriving each survivor's suite/scene and grouping suite -> scenes; empty is exit 0, never an error | git diff (through the seam only -- no declared invocation, no lane); nen/contract.json (project.evidence) | yes |
-| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong, exit 7 when nen is behind the dependency block's pinned_ref inside its minimum), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
+| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong, exit 7 when nen is behind the dependency block's pinned_ref inside its minimum), and with --install use the closed corepack and Bashcov-only gem modes | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
@@ -2166,6 +2168,79 @@ merge PERMITTED (stale + Ready)
 ```
 (from a real run, `wakes.json` = `[{"at":"2026-09-07T18:00:00Z","noCommit":true},{"at":"2026-09-07T19:00:00Z","noCommit":true}]`)
 
+### `nen pr sections resolve`
+
+```text
+nen pr sections resolve --catalogue <path> --kind <kind> --family <family>
+                        [--with a,b] [--overrides <workflow.json>] [--json]
+nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
+```
+
+The caller owns the vocabulary and the default matrix. Nen ships no section,
+family or job membership. Paths resolve against `--repo` (default cwd).
+Both actions emit `nen.pr.sections/v0.1` with `--json`.
+
+A catalogue has this shape (the names here are examples):
+
+```json
+{
+  "sections": [
+    { "id": "effect", "title": "✨ What changes", "level": 1 },
+    { "id": "verify", "title": { "process": "What the guards prove", "library": "How a consumer verifies" } },
+    { "id": "economics", "title": "Economics", "when": "economics" }
+  ],
+  "footer": [{ "id": "ledger", "title": "Agent attribution" }],
+  "families": { "maintain": ["machinery", "schema"], "canon": ["prose-authoring"] },
+  "precedence": ["maintain", "canon"],
+  "variants": { "process.canon": ["effect", "verify"], "library.canon": ["effect", "verify"] },
+  "max": 7
+}
+```
+
+`sections` and `footer` are arrays of entries with unique, nonempty `id`s and
+`title` strings (or kind-to-title maps). `level` is 1 or 2, default 2. An optional
+`pattern` supplies the requirement regex verbatim; otherwise the generated regex
+matches the declared title literally, including its glyph. Callers that allow
+varying glyph prefixes supply that tolerance in `pattern`. No glyph is stripped.
+`when` is an optional run-fact key admitted by `--with`; a selected conditional
+section without its fact is omitted, and an admitted conditional section absent
+from the cell appends in catalogue order. Footer entries use the same admission
+rule and remain outside the reader-section cap.
+
+`families` maps family names to job-key arrays. A job belongs to at most one
+family, and `precedence` lists every family exactly once. `family` validates jobs
+against the taxonomy, counts distinct jobs per family, and prints the winning
+family and the tie rule when applied. With the example vocabulary,
+`--jobs prose-authoring,schema,machinery` selects `maintain` (two of three).
+An empty list, unknown taxonomy job, or unmapped job refuses.
+
+`variants` maps `<kind>.<family>` to ordered reader ids. Every cell is validated
+when the catalogue loads, including unselected cells; an unknown id refuses.
+No missing cell is guessed. A consumer may replace cells through
+`workflow.json`'s `pr.sections`, using the same flat cell map; `$` metadata
+siblings are ignored. Overrides are validated even when unselected.
+
+Resolve JSON is `{ contract, kind, family, cell, overridden, sections, footer,
+requirements, max }`; each resolved section is `{ id, title, level }`, and
+`requirements` is the ordered `{ name, pattern }` array consumed by `body-check`.
+Family JSON is `{ contract, family, counts, tied, rule }`. Human resolve output
+includes ids, titles and the requirements array. A cell exceeding `max` after
+conditional admission exits 1 naming the cell and count; invalid catalogues or
+unknown ids also exit 1. Bad CLI arguments exit 2. No action calls GitHub.
+
+### `nen pr sections family`
+
+```text
+nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
+```
+
+Counts distinct known job keys by the catalogue's family membership. Most jobs
+wins; ties follow the catalogue's `precedence` order and name that rule in human
+output. `--json` emits `{ contract, family, counts, tied, rule }`, contract
+`nen.pr.sections/v0.1`. Unknown or unmapped jobs refuse; an empty job list refuses.
+See [section resolution](#nen-pr-sections-resolve) for the catalogue format,
+file resolution, validation and exit codes.
+
 ### `nen pr body-check`
 
 Checks a pull-request body against this repository's own template
@@ -2178,6 +2253,7 @@ absent, are **derived** from the repository's own pull-request template.
 
 ```text
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
+                  [--exact [--max <n>]] [--prose-budget <words>]
 ```
 
 **Arguments**
@@ -2189,6 +2265,22 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 | `--base <ref>` | no | read the PR template from git at `<ref>`, never from the working tree | only with a derived set; with `--requirements-from` it is refused, exit 2. A ref that does not resolve to a single commit (a range such as `main..feat` included), or that begins with `-`, exits 2 |
 | `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root, and is where the PR template is looked for (the working tree, or the git checkout `--base` is read in) | default cwd |
 | `--json` | no | machine-readable report | — |
+
+**Exact shape and prose measurement** (zheref/nen#448). `--exact` checks
+visible headings outside fenced code and HTML comments. Every level-2 heading
+must match exactly one requirement in array order; undeclared, ambiguous,
+repeated and out-of-order headings produce line-numbered findings and exit 1.
+`--max <n>` requires `--exact` and caps matched level-2 headings (including
+footer headings). The catalogue cap above counts reader sections separately.
+Requirement presence in exact mode is tested against visible headings; supplied
+patterns still decide glyph tolerance. Without `--exact`, existing presence
+checks and verdicts are unchanged.
+
+`--prose-budget <words>` emits one `WARN` per over-budget section, excluding
+headings, tables, comments and fenced code (including Mermaid). It adds no
+failure to the verdict. Both numeric flags require positive safe integers.
+JSON adds `findings: [{ line, message }]` only in exact mode, and
+`warnings: [{ section, words, budget }]` only when a budget was given.
 
 **Which template** (zheref/nen#239). With no `--requirements-from`, the
 verb looks for the template in GitHub's own locations under the `--repo`
@@ -2418,7 +2510,10 @@ the round owed. It is stricter than `pr ready` there, never looser.
 **Declared check exclusions ([#403](https://github.com/zheref/nen/issues/403)).**
 The red-check step uses `pr ready`'s complete-declaration intersection at the
 base and default-tip commits. Both OIDs are selected together over GraphQL;
-file reads pin those OIDs, confirm commit readability, and reuse the read when
+that policy snapshot must still match the fetched PR's head and base. Drift or
+unconfirmed refs authorize no exclusion, with a diagnostic; the original
+fetched base still owns reviewer identities even if the later ref read fails.
+File reads pin the OIDs, confirm commit readability, and reuse the read when
 they coincide. An absent, unreadable, or invalid side authorizes none. Output
 names the rejecting side and pinned source for every removed declaration;
 honored exclusions retain their notices, dates, and condition warnings.
@@ -12466,10 +12561,15 @@ test computes that rule from the seam rather than from a list of names.
 | Installer | `--install` runs | Why |
 |---|---|---|
 | `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` — **on `darwin` and `linux` only** | The package-manager install nen performs. The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. On **`win32` it is REFUSED**, with those two commands printed to run by hand: there `corepack` is a batch shim (`corepack.cmd`), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a `.bat`/`.cmd` without one (node, since the fix for CVE-2024-27980) fails; a runtime that starts it anyway starts it *through* the command interpreter, which re-parses the argument list nen assembled element by element — a shell by another name. Nen will not guess which of the two this host does, and an install that "works on POSIX and is untested on Windows" is a claim nobody checked. The **check** is unaffected on every host: it spawns only the probe the repository declared. |
-| `gem` | `ruby --version`, `gem --version`, then `gem install bashcov --version <pin> --install-dir .nen/tools/gems --bindir .nen/tools/bin --no-document --norc` | Only the declared `bashcov` tool, with an exact numeric `MAJOR.MINOR.PATCH` release, on **darwin/linux**. Other tools, ranges, abbreviated pins and hosts refuse. Ruby/RubyGems must already exist; the preflight steps stop on failure. RubyGems checks release/runtime compatibility. Tool runtime dependencies are installed in the same lane-local directory; project dependencies are never installed. `--norc` bypasses `.gemrc`. No elevation, PATH or shell profile edits; use the declared Ruby activation probe below. The report's `why` states the prerequisites, including **Bash 4.1+** for coverage (macOS system Bash 3.2 lacks `BASH_XTRACEFD`). |
+| `gem` | `ruby --version`, `gem --version`, then `gem install bashcov --version <pin> --install-dir .nen/tools/gems --bindir .nen/tools/bin --no-document --norc` | Only the declared `bashcov` tool, with an exact numeric `MAJOR.MINOR.PATCH` release, on **darwin/linux**. Other tools, ranges, abbreviated pins and hosts refuse. Ruby/RubyGems must already exist; the preflight steps stop on failure. RubyGems checks release/runtime compatibility. Tool runtime dependencies are installed in the same lane-local directory; project dependencies are never installed. `--norc` bypasses `.gemrc`. No elevation, PATH or shell profile edits; use the declared Ruby activation probe below. The report's `installPreconditions` field and human preconditions line state the prerequisites, including **Bash 4.1+** for coverage (macOS system Bash 3.2 lacks `BASH_XTRACEFD`). |
 | `verify-only` | nothing | Reported with the pin and the sentence *"install by hand"*. A system-wide install with five common answers is exactly the choice nen does not make for you. |
 | `wrapper`, `npx` | nothing | There is nothing to install: the repository's own committed wrapper, or its own dependency graph, resolves the tool. |
 | `sdkmanager`, `dotnet-install`, `winget` | nothing | Declared, and **not enabled in this release**: every installer that fetches and executes vendor code, or writes into an SDK root, ships behind its own explicit decision. The row names the tool, the pin and the installer a human runs. |
+
+RubyGems prerelease observations (for example `4.0.0.pre.1`, `4.0.0pre` or
+`4.0.0.0pre`) retain their full alphanumeric components and cannot satisfy an
+exact stable pin. A pre-existing prerelease
+still requires installation; a post-install prerelease remains unsatisfied.
 
 The `gem` report lists runtime preflights and the exact install argv in check and
 dry-run modes. `--dry-run` spawns neither preflights nor probes. `--install`
@@ -12571,7 +12671,7 @@ is still not ready, and the text prints it as a footer for the same reason.
 
 Each `tools[]` row is `{ name, required, packMinimum, pinned, versionFrom,
 probe, found, probeOutput, satisfied, state, installer, installCommand, remedy,
-install, why, pinnedRef, behindPinnedRef }`, in that order:
+install, why, pinnedRef, behindPinnedRef, installPreconditions }`, in that order:
 
 | Field | Meaning |
 |---|---|
@@ -12583,6 +12683,7 @@ install, why, pinnedRef, behindPinnedRef }`, in that order:
 | `remedy` | The way out **in words**, for a row with no command: `verify-only: install by hand — …`, `corepack: REFUSED — …`, `sdkmanager: not enabled in this release — …`, `wrapper: nothing to install — …`. Exactly one of `installCommand` and `remedy` is non-null on a row that needs a way out; both are null on a row that passes. Without it a refused `corepack` row and a `verify-only` row were the same row to a machine reader, because `why` is the *declaration's* reason for the pin and is null on most refusing rows. |
 | `pinnedRef` | `dependency.pinned_ref`, verbatim, on the `dependency` row; `null` on every `project.toolchain` row, which pins a version rather than a ref. |
 | `behindPinnedRef` | The host version against `pinnedRef`: `true` behind it (the `BEHIND` row), `false` at or above it, `null` when **no comparison was made** — no ref on the row, nothing observed or no version read, or a `pinned_ref` that is not a release tag. `null` never means "not behind". |
+| `installPreconditions` | Installer-owned prerequisites, rendered in the human check, dry-run and install report too; `null` when the plan has none. Appended in the next minor without reordering existing fields. `why` remains the declaration’s own reason verbatim. |
 | `install` | What `--install` ran for this row — `{ steps: [{ exe, argv, exitCode, durationMs }], outcome, failure }` — and `null` in every mode that installs nothing. `outcome` is `installed` (every step nen ran exited 0), `failed`, or `skipped` (nen acted on nothing here). It describes the **installer**, never the host: `installed` beside `state: "missing"` is the real finding "it installed somewhere not on this `PATH`", which is why this verb re-probes. There is no `refused` outcome, because a refusal stops the run before the first install and this CLI answers a refusal with a stderr line and exit 2 rather than a document (below). |
 
 **A refusal prints no document.** Every family in this CLI answers exit 2 with a
@@ -16721,7 +16822,7 @@ rather than the reader. See [per-stack notes](#nen-shu-detect) under
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. It is `compose-desktop`'s **only** row — `{gw} run`, the one invocation that lane has, which `detect` proposes end to end. On `expo` it is the verb that *builds and launches* a native lane, which is why `detect` proposes no `build` there and withholds `run` itself until the declaration names a platform — `expo run:{platform}` unedited is exit **2**. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
 | deploy | **the verb exists; `--target` and `--run` are both mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`, with the target's own `args` appended and the variables its `requiresEnv` names asserted (never read). Two flags and no single-flag path to acting: there is no default target, ever, and without `--run` the verb prints the fully resolved plan and spawns nothing at exit 0. The destination is resolved **after** the lane, the verb and the host, so a lane whose `deploy` is a seat answers exit 4 with its own reason whatever `--target` says, while a runnable row with no target is exit 2 naming what is declared. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push, proposed only where the tree declares the publishing tool); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. `detect` proposes `"targets": {}` on every stack and a destination on none. |
 | coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s two-step row is withheld naming the **simulator**, not the result bundle: the bundle path is the one value `detect` contributes rather than reads (it is an *output*, and nen's own generated output lives under `.nen/`). The note says so, and says four more things a maintainer would otherwise meet as a failure — the path is **lane-relative** (an `ios/` lane writes `ios/.nen/`); `.nen/` is the line [`nen scaffold init`](#nen-scaffold-init) appends to your `.gitignore`, so a repository stood up another way must ignore it itself; `xcodebuild` **refuses an existing `-resultBundlePath`**, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value carries something per-run; and the value must move in every step of the row at once. **The bundle is not the report.** When you fill that row in, the path to declare under `project.verbs.<lane>.coverage.artifacts` is the file the *second* step's JSON lands in — `xcrun xccov view --report --json` writes to stdout, so give that step a `stdoutTo` naming the same path (nen writes the captured bytes itself; there is no shell and no redirection operator), and give the file a name with `xccov` in it — because an `.xcresult` is a **directory** and the coverage reader recognises a report by its name. What a run produced is then **parsed**: nen reads the first path under the verb's own `artifacts` whose format it recognises — the Istanbul/Vitest JSON summary, `xccov` JSON, Cobertura XML, JaCoCo XML, LCOV — into a total and a row per target, and refuses a report it cannot honestly read (truncated, or claiming more covered lines than lines) by name rather than printing a plausible number for it. `--threshold` reports `met` against the **counts** and never changes the exit code, in either direction. |
-| host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, or **7** when everything passes but nen is `BEHIND` — inside the dependency block's `minimum` and below its `pinned_ref` ([behind the pinned ref](#behind-the-pinned-ref)) — naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. |
+| host toolchain | **yes to check; two closed installers** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, or **7** when everything passes but nen is `BEHIND` — inside the dependency block's `minimum` and below its `pinned_ref` ([behind the pinned ref](#behind-the-pinned-ref)) — naming the exact command per tool. `--install` acts through `corepack` and the Bashcov-only `gem` mode with exact pins; other declared installers remain verify-only, reported with their pin for a human to run. |
 | start a piece of work (clean, fetch, branch, prove it builds) | **yes — the git half everywhere, the build half where a lane declares one** | [`shu warmup`](#nen-shu-warmup) | One line for the five things a developer does by hand at the start of every task: refuse (or, with `--discard`, destroy) uncommitted work, fetch, fast-forward the trunk, cut the branch **you** name from its fresh tip, then run the lane's declared `build` — and its `test` with `--tests`. The **only** `shu` verb that mutates git state, so `--repo` is required and every step refuses rather than guessing; `--dry-run` prints every git and toolchain command and runs none of them. A repository with no `project` block still gets the git half and exits 0. Not [`warmup`](#nen-warmup), which sweeps a registry for stale pins and reads only. |
 | report on a piece of work | **yes — the facts and the fill** | [`report data`](#nen-report-data), [`report render`](#nen-report-render) | `report data` gathers what is on the branch against a base — commits, changed files (with a tier from your own `--tiers` table), the lane's coverage report **if one is already on disk**, the build proof under `.nen/proof/<lane>.json`, the last recorded stop — into one document, reading and never writing. `report render` fills a template with it: four constructs and nothing else, an unknown token refused **naming it** rather than published as a blank cell, and `--out` refused unless it resolves inside the repository with symlinks resolved. It never runs the coverage command — [`shu coverage`](#nen-shu-coverage) is the verb that produces the report this one reads, and both parse it with the same reader. `evidence` is an empty list until `nen shu evidence` lands; the field ships now so a template written today does not change shape when it does. |
 

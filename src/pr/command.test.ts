@@ -817,6 +817,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const view = {
         number: 9,
         headRefOid: "abc123",
+        baseRefOid: baseSha,
         baseRefName: "main",
         headRefName: "feature/x",
         author: { login: "alice" },
@@ -848,7 +849,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         { match: `gh ${viewArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(view) } },
         { match: `gh ${reviewsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(reviews) } },
         { match: `gh ${reviewThreadsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(threads) } },
-        { match: `gh ${gateRefsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify({ data: { repository: { pullRequest: { baseRefOid: baseSha }, defaultBranchRef: { target: { oid: defaultSha } } } } }) } },
+        { match: `gh ${gateRefsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify({ data: { repository: { pullRequest: { baseRefOid: baseSha, headRefOid: "abc123" }, defaultBranchRef: { target: { oid: defaultSha } } } } }) } },
         ...[...new Set([baseSha, defaultSha])].filter((sha) => sha !== "").map((sha) => ({ match: `gh ${commitArgv(TARGET, sha).join(" ")}`, result: { stdout: "{}" } })),
       ];
     }
@@ -971,7 +972,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(JSON.stringify({ ...alt, checks: { excluded: entries } })).toString("base64") }) },
       });
       const seams = new ScriptedSeams([
-        { match: view?.match ?? "", result: { stdout: JSON.stringify({ ...body, baseRefOid: "older-view", statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }, { name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] }) } },
+        { match: view?.match ?? "", result: { stdout: JSON.stringify({ ...body, baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }, { name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] }) } },
         ...rest,
         content("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", scenario === "default-only" ? [] : [ruling]),
         scenario === "failed-default" ? { match: `gh ${gatesAtArgv(TARGET, "dddddddddddddddddddddddddddddddddddddddd").join(" ")}`, result: { code: 1, stderr: "HTTP 403" } } : content("dddddddddddddddddddddddddddddddddddddddd", scenario === "base-only" ? [] : [ruling]),
@@ -983,6 +984,59 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       expect(parsed.declaredExclusionsSource).toContain("o/n@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen/gates.json and o/n@");
       if (scenario !== "shared") expect(parsed.warnings.join("\n")).toContain(scenario === "default-only" ? "pull request's base" : "default-branch tip");
       expect(seams.calls.filter((call) => call.args.some((arg) => arg.includes("contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))).toHaveLength(1);
+    });
+
+    it.each(["base", "head", "missing-head", "unknown-original-base"])("a %s policy-snapshot drift cannot clear the original red check", async (drift) => {
+      const first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      const later = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      const tip = "dddddddddddddddddddddddddddddddddddddddd";
+      const alt = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const ruling = { name: "ci / red", reason: "ruled out", ruled: "2020-01-01", until: "2099-12-31" };
+      const calls = greenAltApprovedScript(first, tip).map((call): ScriptedCall => {
+        if (call.match === `gh ${viewArgv(TARGET, 9).join(" ")}`) {
+          const view = JSON.parse(String(call.result.stdout)) as Record<string, unknown>;
+          return { ...call, result: { stdout: JSON.stringify({ ...view, baseRefOid: drift === "unknown-original-base" ? "older-view" : first,
+            statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }, { name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] }) } };
+        }
+        if (call.match === `gh ${gateRefsArgv(TARGET, 9).join(" ")}`) return { ...call, result: { stdout: JSON.stringify({ data: { repository: {
+          pullRequest: { baseRefOid: drift === "base" ? later : first, ...(drift === "missing-head" ? {} : { headRefOid: drift === "head" ? "new-head" : "abc123" }) },
+          defaultBranchRef: { target: { oid: tip } },
+        } } }) } };
+        return call;
+      });
+      const contents = [first, later, tip].map((sha): ScriptedCall => ({ match: `gh ${gatesAtArgv(TARGET, sha).join(" ")}`,
+        result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(JSON.stringify({ ...alt, checks: { excluded: [ruling] } })).toString("base64") }) } }));
+      const seams = new ScriptedSeams([...calls, { match: `gh ${commitArgv(TARGET, later).join(" ")}`, result: { stdout: "{}" } }, ...contents]);
+      const checkout = mkdtempSync(join(tmpdir(), "nen-403-drift-"));
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", join(ALT_REPO, "nen", "gates.json"), "--json"], checkout, seams);
+      const parsed = JSON.parse(result.out.join("\n")) as { kind: string; warnings: string[]; notes: string[] };
+      expect(result.code).toBe(1);
+      expect(parsed.kind).toBe("red-check");
+      expect([...parsed.warnings, ...parsed.notes].join("\n")).toMatch(/snapshot.*(changed|unconfirmed)/);
+      expect(seams.calls.some((call) => call.args.some((arg) => arg.includes(`contents/nen/gates.json?ref=${later}`)))).toBe(false);
+      expect(seams.calls.some((call) => call.args.some((arg) => arg.includes(`contents/nen/gates.json?ref=${tip}`)))).toBe(false);
+    });
+
+    it.each(["base drift", "unreadable refs"])("policy-snapshot %s cannot replace the original base's reviewer identities", async (change) => {
+      const first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      const later = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      const calls = greenAltApprovedScript(first, later).map((call): ScriptedCall => call.match !== `gh ${gateRefsArgv(TARGET, 9).join(" ")}` ? call : {
+        ...call, result: change === "unreadable refs" ? { code: 1, stderr: "HTTP 403 while reading policy refs" } : { stdout: JSON.stringify({ data: { repository: { pullRequest: { baseRefOid: later, headRefOid: "abc123" }, defaultBranchRef: { target: { oid: later } } } } }) },
+      });
+      const contents = [[first, BANKAI_REPO], [later, ALT_REPO]].map(([sha, fixture]): ScriptedCall => ({
+        match: `gh ${gatesAtArgv(TARGET, sha ?? "").join(" ")}`,
+        result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(readFileSync(join(fixture ?? "", "nen", "gates.json"), "utf8")).toString("base64") }) },
+      }));
+      const seams = new ScriptedSeams([...calls, ...contents]);
+      const checkout = mkdtempSync(join(tmpdir(), "nen-403-identities-"));
+      mkdirSync(join(checkout, "nen"));
+      copyFileSync(join(ALT_REPO, "nen", "gates.json"), join(checkout, "nen", "gates.json"));
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--json"], checkout, seams);
+      const parsed = JSON.parse(result.out.join("\n")) as { kind: string; identities: { path: string; read: string } };
+      expect(result.code).toBe(1);
+      expect(parsed.kind).toBe("owed-round");
+      expect(parsed.identities).toEqual({ path: `o/n@${first}:nen/gates.json`, read: "base" });
+      expect(seams.calls.some((call) => call.args.some((arg) => arg.includes(`contents/nen/gates.json?ref=${later}`)))).toBe(false);
     });
 
     it.each([
@@ -3106,7 +3160,8 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
         lists: ["exclude-check", "reviewer-login"],
       },
       staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
-      "body-check": { values: ["body-from", "requirements-from", "base"] },
+      "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
+      sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
       fetch: { values: ["target", "pr"] },
       "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
       "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
@@ -3198,5 +3253,30 @@ describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
     const result = await capture(argvFor("x", "--private-names-ignore-file", "/no/such/ignore-file"), null, seams, "scripted");
     expect(result.code).toBe(2);
     expect(seams.calls).toEqual([]);
+  });
+});
+
+
+describe("body-check exact and prose flags", () => {
+  it("returns line findings, warning counts and retains legacy success", async () => {
+    const requirements = tempFile("requirements.json", JSON.stringify([{ name: "summary", pattern: "^## Summary$" }]));
+    const body = tempFile("body.md", "## Summary\n" + "word ".repeat(151) + "\n## Extra\n");
+    const argv = ["pr", "body-check", "--body-from", body, "--requirements-from", requirements];
+    expect((await capture(argv, process.cwd())).code).toBe(0);
+    const exact = await capture([...argv, "--exact", "--max", "1", "--prose-budget", "150", "--json"], process.cwd());
+    expect(exact.code).toBe(1);
+    expect(JSON.parse(exact.out.join("\n"))).toMatchObject({ findings: [{ line: 3, message: expect.stringContaining("undeclared") }], warnings: [{ words: 151 }] });
+    const warning = await capture([...argv, "--prose-budget", "150"], process.cwd());
+    expect(warning.code).toBe(0); expect(warning.out.join("\n")).toContain("WARN Summary: 151");
+    expect((await capture([...argv, "--max", "1"], process.cwd())).code).toBe(2);
+    expect((await capture([...argv, "--exact", "--max", "1.5"], process.cwd())).code).toBe(2);
+  });
+  it("applies exact findings to derived requirements too", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "nen-derived-exact-"));
+    writeFileSync(join(repo, "pull_request_template.md"), "## Summary\n<!-- Explain -->\n");
+    const body = tempFile("body.md", "## Summary\nReal content\n## Extra\nContent\n");
+    const result = await capture(["pr", "body-check", "--body-from", body, "--exact", "--json"], repo);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ source: { kind: "derived" }, findings: [{ line: 3 }] });
   });
 });

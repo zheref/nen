@@ -174,6 +174,7 @@ interface Row {
   readonly why: string | null;
   readonly pinnedRef: string | null;
   readonly behindPinnedRef: boolean | null;
+  readonly installPreconditions: string | null;
 }
 
 interface Summary {
@@ -372,6 +373,24 @@ describe("versionFrom -- all four members, each read the way the enum says", () 
     // A line with only two-component tokens is unchanged -- MAJOR.MINOR is what
     // several real probes answer, and reading none would be worse.
     expect(extractVersion("first-semver-on-stdout", "Tool 15.0 (build 15A240d)\n", "")).toBe("15.0");
+  });
+
+  it.each(["4.0.0.pre.1", "4.0.0.rc1", "4.0.0.beta"].flatMap((version) =>
+    (["first-semver-on-stdout", "first-semver-on-stderr"] as const).map((mode) => ({ version, mode })),
+  ))("keeps the entire dotted prerelease $version from $mode", ({ version, mode }) => {
+    const banner = `Build 2024.01 -- tool ${version} (other runtime 9.9.9)`;
+    const found = extractVersion(mode, mode === "first-semver-on-stdout" ? banner : "", mode === "first-semver-on-stderr" ? banner : "");
+    expect(found).toBe(version);
+    expect(satisfiesPin(parsePin("4.0.0", "fixture.version"), found ?? "")).toBe(false);
+  });
+
+  it.each(["4.0.0pre", "4.0.0.0pre", "4.0.0.0beta1", "4.0pre.0"].flatMap((version) =>
+    (["first-semver-on-stdout", "first-semver-on-stderr"] as const).map((mode) => ({ version, mode })),
+  ))("keeps numeric-attached prerelease $version from $mode", ({ version, mode }) => {
+    const banner = `Tool ${version}`;
+    const found = extractVersion(mode, mode === "first-semver-on-stdout" ? banner : "", mode === "first-semver-on-stderr" ? banner : "");
+    expect(found).toBe(version);
+    expect(satisfiesPin(parsePin("4.0.0", "fixture.version"), found ?? "")).toBe(false);
   });
 
   it("whole-line-stdout takes the first non-empty line verbatim", () => {
@@ -1182,7 +1201,7 @@ describe("the nen row -- behind dependency.pinned_ref, inside the minimum (#327)
 
 // ── (e) --install, and everything it will not do ───────────────────────────
 
-describe("--install -- the one installer nen runs, at the version the declaration pins", () => {
+describe("--install -- Corepack at the version the declaration pins", () => {
   const INSTALL_STEPS: readonly string[] = [
     "corepack enable",
     "corepack prepare pnpm@9.15.9 --activate",
@@ -1564,6 +1583,7 @@ describe("--json -- one object, in one key order", () => {
         "why",
         "pinnedRef",
         "behindPinnedRef",
+        "installPreconditions",
       ]);
     }
   });
@@ -2374,13 +2394,51 @@ describe("the pinned shell coverage installer", () => {
     expect(row(result, "bashcov")).toMatchObject({ found: "4.0.0", satisfied: true });
     expect(result.seams.calls.every((call): boolean => call.env === null)).toBe(true);
   });
+  it.each(["4.0.0.pre.1", "4.0.0.rc1", "4.0.0.beta", "4.0.0pre", "4.0.0.0pre", "4.0.0.0beta1", "4.0pre.0"])("rejects a post-install prerelease observation %s", async (version) => {
+    const result = await withDeclaration(oneTool(entry), ["--install", "--json"], { script: [missing, ...ok, installed(version)] });
+    expect(result.code).toBe(5);
+    expect(row(result, "bashcov")).toMatchObject({ found: version, satisfied: false });
+    expect(spawned(result.seams)).toEqual([missing.match, ...steps, missing.match]);
+  });
+  it.each(["4.0.0.pre.1", "4.0.0.rc1", "4.0.0.beta", "4.0.0pre", "4.0.0.0pre", "4.0.0.0beta1", "4.0pre.0"])("replaces an existing prerelease %s instead of certifying it as stable", async (version) => {
+    const result = await withDeclaration(oneTool(entry), ["--install", "--json"], { script: [installed(version), ...ok, installed("4.0.0")] });
+    expect(result.code).toBe(0);
+    expect(row(result, "bashcov")).toMatchObject({ found: "4.0.0", satisfied: true });
+    expect(spawned(result.seams)).toEqual([missing.match, ...steps, missing.match]);
+  });
   it("dry-runs the plan and runtime preconditions without spawning", async () => {
     const result = await withDeclaration(oneTool(entry), ["--install", "--dry-run", "--json"]);
     expect(result.code).toBe(0);
     expect(spawned(result.seams)).toEqual([]);
     expect(row(result, "bashcov").installCommand).toEqual(steps);
-    expect(row(result, "bashcov").why).toContain("Bash 4.1+");
-    expect(row(result, "bashcov").why).toContain("Ruby and RubyGems");
+    expect(row(result, "bashcov").why).toBeNull();
+    expect(row(result, "bashcov").installPreconditions).toContain("Bash 4.1+");
+    expect(row(result, "bashcov").installPreconditions).toContain("Ruby and RubyGems");
+  });
+  it("preserves the declaration reason separately from installer prerequisites", async () => {
+    const result = await withDeclaration(oneTool({ ...entry, why: "Consumer reason." }), ["--dry-run", "--json"]);
+    expect(result.code).toBe(0);
+    expect(row(result, "bashcov").why).toBe("Consumer reason.");
+    expect(row(result, "bashcov").installPreconditions).toContain("Requires existing Ruby and RubyGems");
+    expect(spawned(result.seams)).toEqual([]);
+  });
+  it.each([
+    { argv: [] },
+    { argv: ["--dry-run"] },
+    { argv: ["--install", "--dry-run"] },
+    { argv: ["--install"] },
+  ])("prints human installer prerequisites for $argv", async ({ argv }) => {
+    const dry = argv.includes("--dry-run");
+    const install = argv.includes("--install") && !dry;
+    const script = dry ? [] : install ? [missing, ...ok, installed("4.0.0")] : [missing];
+    const result = await withDeclaration(oneTool(entry), argv, { script, staged: install });
+    expect(result.code).toBe(dry || install ? 0 : 5);
+    const text = result.out.join("\n");
+    expect(text).toContain("preconditions: Requires existing Ruby and RubyGems");
+    expect(text).toContain("Bash 4.1+");
+    expect(text).toContain("network access");
+    expect(text).toContain("writable lane-local .nen/tools");
+    expect(spawned(result.seams)).toEqual(dry ? [] : install ? [missing.match, ...steps, missing.match] : [missing.match]);
   });
   it("check mode only probes and does not install", async () => {
     const result = await withDeclaration(oneTool(entry), ["--json"], { script: [missing] });

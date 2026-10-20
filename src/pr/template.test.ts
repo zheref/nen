@@ -408,3 +408,15 @@ describe("workingTreeReader -- reads refuse as usage errors (exit 2), never 1", 
     }
   });
 });
+
+
+describe("opt-in strict fence recognition", () => {
+  it("preserves the legacy reader while exposing headings behind invalid fence info", () => {
+    const source = "```bad`\n## Visible\ncontent\n";
+    expect(readLines(source).some((line): boolean => line.kind === "heading")).toBe(false);
+    expect(readLines(source, { strictFences: true })[1]).toMatchObject({ kind: "heading", title: "Visible" });
+    const requirements = deriveRequirements("## Visible\n<!-- Fill -->");
+    expect(checkDerivedBody(source, requirements).ok).toBe(false);
+    expect(checkDerivedBody(source, requirements, { strictFences: true }).ok).toBe(true);
+  });
+});
