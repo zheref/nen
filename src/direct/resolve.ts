@@ -365,7 +365,7 @@ export interface Aggregate {
   readonly tally: Readonly<Record<string, number>>;
 }
 
-function isReviewer(registry: DirectRegistry, alias: string): boolean {
+export function isReviewer(registry: DirectRegistry, alias: string): boolean {
   return own(registry.aliases, alias)?.reviewer === true;
 }
 
@@ -695,12 +695,29 @@ export function checkRegistryAgainstTaxonomy(registry: DirectRegistry, taxonomy:
 }
 
 export function resolveDirection(context: ResolveContext, inputs: DirectInputs, session: SessionValues): Resolution {
-  const { registry, taxonomy, models } = context;
+  const { registry, taxonomy } = context;
   checkRegistryAgainstTaxonomy(registry, taxonomy);
   if (inputs.jobs.length === 0) {
     return { inputs, session, undirectable: UNDIRECTABLE_JOB, domain: null, pairs: [], aggregate: null, winner: null, runnerUp: null, effort: null, mismatch: null };
   }
-  const derived = deriveDomain(taxonomy, inputs);
+  return resolveInDomain(context, inputs, session, deriveDomain(taxonomy, inputs));
+}
+
+/**
+ * Steps 2 to 6 for a domain already derived: the cells, the aggregate, both sides,
+ * the effort and the mismatch. `resolveDirection` calls it with the domain step 1
+ * derived from the inputs; `nen direct matrix` (./matrix.ts) calls it with the
+ * domain a witness issue derived through that same step 1, so the matrix answers
+ * with this function and owns no rule of its own. The caller has already checked
+ * the registry against the taxonomy and that the job axis is not empty.
+ */
+export function resolveInDomain(
+  context: ResolveContext,
+  inputs: DirectInputs,
+  session: SessionValues,
+  derived: Omit<DomainVerdict, "fallbacks">,
+): Resolution {
+  const { registry, taxonomy, models } = context;
   const { pairs, fallbacks } = collectPairs(registry, taxonomy, inputs, derived.domain);
   const decided = aggregate(registry, pairs);
   const scored = scoreEffort(registry, taxonomy, inputs, derived.domain);

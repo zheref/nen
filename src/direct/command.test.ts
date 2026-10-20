@@ -23,11 +23,11 @@ const verdict = (...rest: string[]): ReturnType<typeof capture> =>
 const CLASSIFIED = ["--lang", "swift", "--job", "implementation", "--kind", "product"];
 
 describe("nen direct -- registration and dispatch", () => {
-  it("is registered between dev and effort, with its three subcommands", () => {
+  it("is registered between dev and effort, with its four subcommands", () => {
     const names = COMMANDS.map((command): string => command.name);
     expect(names.indexOf("direct")).toBe(names.indexOf("dev") + 1);
     expect(names.indexOf("direct")).toBe(names.indexOf("effort") - 1);
-    expect(directCommand.subcommands).toEqual(["registry", "resolve", "answer"]);
+    expect(directCommand.subcommands).toEqual(["registry", "resolve", "matrix", "answer"]);
   });
 
   it("refuses a bare family, an unknown subcommand and a help request on one it lacks, at exit 2", async () => {
@@ -40,7 +40,7 @@ describe("nen direct -- registration and dispatch", () => {
 });
 
 describe("nen direct --help -- the usage text names what the verbs take", () => {
-  it("names both verbs and every flag the family declares", async () => {
+  it("names every verb and every flag the family declares", async () => {
     const result = await capture(["direct", "--help"]);
     expect(result.code).toBe(0);
     const text = result.out.join("\n");
