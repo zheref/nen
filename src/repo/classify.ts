@@ -29,7 +29,7 @@
 import { loadContract, type RepositoryContract } from "../schema/contract.js";
 import { SchemaError } from "../schema/errors.js";
 import { loadRepoRegistry, type RepoRegistry } from "../schema/repos.js";
-import type { Seams } from "../seam/exec.js";
+import { redactRemoteUrl, type Seams } from "../seam/exec.js";
 import { ownerNameFromRemote } from "./resolve.js";
 
 export const CLASSIFY_CONTRACT = "nen.repo.classify/v0.1";
@@ -82,7 +82,8 @@ export function readOrigin(seams: Seams, cwd: string): string {
     );
   }
   const slug = ownerNameFromRemote(result.stdout.trim());
-  if (slug === null) throw new ClassifyError(`'${cwd}' has an origin nen cannot read as owner/name: ${result.stdout.trim()}`);
+  // Echoed without its userinfo (SEC-5, zheref/nen#373).
+  if (slug === null) throw new ClassifyError(`'${cwd}' has an origin nen cannot read as owner/name: ${redactRemoteUrl(result.stdout.trim())}`);
   return slug;
 }
 

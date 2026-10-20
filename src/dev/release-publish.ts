@@ -61,6 +61,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { parseRemoteUrl } from "../github/target.js";
+import { readRemoteAuthority } from "../seam/exec.js";
 import { looksLikeOwnerSlug } from "../repo/root.js";
 import { renderArgv } from "../shu/render.js";
 
@@ -155,11 +156,14 @@ export const GITHUB_HOST = "github.com";
  * `scheme://[user@]host[:port]/path` -- lowercased, or `undefined` for anything else.
  */
 export function remoteHost(url: string): string | undefined {
-  const trimmed = url.trim();
-  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)(?::\d*)?\//i.exec(trimmed);
-  if (scheme !== null) return scheme[1]?.toLowerCase();
-  const scp = /^[^@/:]+@([^:/]+):/.exec(trimmed);
-  return scp?.[1]?.toLowerCase();
+  // Read off the RAW authority as git reads it (SEC-7, zheref/nen#373 round
+  // 2), never off the display form: an ambiguous `https://evil.example/x@
+  // github.com/o/r` and a host-less `https://<token>@/o/r` have no host. A
+  // scheme URL needs a path after the host; scp syntax needs a `user@`.
+  const authority = readRemoteAuthority(url);
+  if (authority === null) return undefined;
+  if (authority.form === "scheme" ? !authority.path.startsWith("/") : !authority.userinfo) return undefined;
+  return authority.host.toLowerCase();
 }
 
 /** The tag immediately BELOW `tag` in descending version order -- not merely the newest other one. */
@@ -552,6 +556,24 @@ export function selfTest(): SelfTestResult {
       const code = releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsHost), err.io);
       ok(code === 2 && err.text().includes("git.example.com") && callsHost.length === 0, `an origin on another host (${remote}) refuses (2) before any gh call`);
     }
+    // zheref/nen#373: a credential with no host after it is never read as the host.
+    for (const remote of ["https://FAKE0000@/acme/widget.git", "https://FAKE0000@:443/acme/widget.git", "https://user:FAKE0000@/acme/widget.git"]) {
+      gg("remote", "set-url", "origin", remote);
+      const callsTok: string[][] = [];
+      const err = capture();
+      const code = releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsTok), err.io);
+      ok(code === 2 && !/fake0000/i.test(err.text()) && callsTok.length === 0, `a host-less origin carrying a credential (${remote.replace("FAKE0000", "***")}) refuses (2) without echoing it`);
+    }
+    // SEC-7 (Feitan round 2): an '@' in the PATH moves no host -- this one connects to evil.example.
+    ok(remoteHost("https://evil.example/x@github.com/acme/widget") === undefined, "an origin whose path carries '@github.com/...' has no host, never github.com");
+    // Feitan round 3: git connects inside the brackets, and ends an ssh host at '/' only.
+    for (const spoof of ["ssh://[evil.invalid]@github.com/acme/widget", "ssh://git@[evil.invalid]@github.com/acme/widget", "ssh://github.com:22#@evil.invalid/acme/widget"]) {
+      ok(remoteHost(spoof) === undefined && slugFromRemote(spoof) === undefined, `${spoof} has no host and no slug, never github.com`);
+    }
+    gg("remote", "set-url", "origin", "https://evil.example/x@github.com/acme/widget.git");
+    const callsAt: string[][] = [];
+    const errAt = capture();
+    ok(releasePublishMain(["--repo", ghe, "--tag", "v2.0.0"], fakeGh(["v2.0.0"], [], callsAt), errAt.io) === 2 && callsAt.length === 0, "an origin whose path carries '@github.com/...' refuses (2) before any gh call");
     const calls2i: string[][] = [];
     ok(outcome(() => publish(base({ tag: "v2.0.0" }), fakeGh(["v2.0.0"], [], calls2i), quiet)) === 0 &&
       calls2i.length > 0 && calls2i.every((c): boolean => c.includes("--hostname") ? c[c.indexOf("--hostname") + 1] === "github.com" : c[c.indexOf("--repo") + 1] === "github.com/acme/widget"),
