@@ -2473,7 +2473,10 @@ the round owed. It is stricter than `pr ready` there, never looser.
 **Declared check exclusions ([#403](https://github.com/zheref/nen/issues/403)).**
 The red-check step uses `pr ready`'s complete-declaration intersection at the
 base and default-tip commits. Both OIDs are selected together over GraphQL;
-file reads pin those OIDs, confirm commit readability, and reuse the read when
+that policy snapshot must still match the fetched PR's head and base. Drift or
+unconfirmed refs authorize no exclusion, with a diagnostic; the original
+fetched base still owns reviewer identities even if the later ref read fails.
+File reads pin the OIDs, confirm commit readability, and reuse the read when
 they coincide. An absent, unreadable, or invalid side authorizes none. Output
 names the rejecting side and pinned source for every removed declaration;
 honored exclusions retain their notices, dates, and condition warnings.

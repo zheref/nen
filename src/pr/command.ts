@@ -1370,13 +1370,12 @@ function blocker(context: CommandContext): number {
   // checkout is head content, applied with a warning. The exclusions are the
   // intersection with the default tip on every path.
   const now = new Date().toISOString();
-  // Both policy commits are selected together, then read only by immutable OID.
-  const refs = readGateRefs(context.seams, target, prNumber);
+  // Keep the fetched PR's base for identities. The separate default-tip read
+  // may authorise exclusions only while its head/base still match that snapshot.
+  const refs = readGateRefs(context.seams, target, prNumber, snapshot);
   const baseSha = refs.baseSha;
   const where = `${target.slug}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
-  const baseRead: BaseGatesRead = refs.failure === undefined
-    ? readGatesAt(context.seams, target, baseSha)
-    : { kind: "failed", message: refs.failure };
+  const baseRead = readGatesAt(context.seams, target, baseSha);
   const gatesClass = gatesFlag === undefined ? null : classifyGatesPath(root, local.path);
   let applied: { identities: GateIdentities; path: string; read: "base" | "local-fallback" | "gates-flag"; warnings: readonly string[] };
   if (gatesClass === null || gatesClass === "own") {
@@ -1446,20 +1445,27 @@ function blocker(context: CommandContext): number {
 /** Both trusted policy OIDs from one GitHub snapshot; no moving ref is used for file reads. */
 export function gateRefsArgv(target: Target, prNumber: number): readonly string[] {
   return ["api", "--method", "POST", "graphql", "-f",
-    "query=query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{target{oid}} pullRequest(number:$pr){baseRefOid}}}",
+    "query=query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{target{oid}} pullRequest(number:$pr){baseRefOid headRefOid}}}",
     "-f", `owner=${target.owner}`, "-f", `name=${target.repo}`, "-F", `pr=${prNumber}`];
 }
 
-function readGateRefs(seams: Seams, target: Target, prNumber: number): { baseSha: string; defaultSha: string; failure?: string } {
+function readGateRefs(seams: Seams, target: Target, prNumber: number, snapshot: PrSnapshot): { baseSha: string; defaultSha: string; failure?: string } {
+  const baseSha = typeof snapshot.baseRefOid === "string" && /^[0-9a-f]{40}$/i.test(snapshot.baseRefOid) ? snapshot.baseRefOid : "";
   try {
     const result = must(seams, GH, [...gateRefsArgv(target, prNumber)]);
-    const raw = JSON.parse(result.stdout) as { data?: { repository?: { pullRequest?: { baseRefOid?: unknown }; defaultBranchRef?: { target?: { oid?: unknown } } } }; errors?: unknown };
-    if (raw.errors !== undefined) return { baseSha: "", defaultSha: "", failure: "GitHub reported errors while reading the pinned gate-ref snapshot" };
+    const raw = JSON.parse(result.stdout) as { data?: { repository?: { pullRequest?: { baseRefOid?: unknown; headRefOid?: unknown }; defaultBranchRef?: { target?: { oid?: unknown } } } }; errors?: unknown };
+    if (raw.errors !== undefined) return { baseSha, defaultSha: "", failure: "GitHub reported errors while reading the pinned gate-ref snapshot" };
     const base = raw.data?.repository?.pullRequest?.baseRefOid;
+    const head = raw.data?.repository?.pullRequest?.headRefOid;
     const tip = raw.data?.repository?.defaultBranchRef?.target?.oid;
-    return { baseSha: typeof base === "string" && /^[0-9a-f]{40}$/i.test(base) ? base : "", defaultSha: typeof tip === "string" && /^[0-9a-f]{40}$/i.test(tip) ? tip : "" };
+    const defaultSha = typeof tip === "string" && /^[0-9a-f]{40}$/i.test(tip) ? tip : "";
+    const selectedBase = typeof base === "string" && /^[0-9a-f]{40}$/i.test(base) ? base : "";
+    if (selectedBase !== baseSha || typeof head !== "string" || head === "" || head !== snapshot.pr.headSha) {
+      return { baseSha, defaultSha, failure: "the policy snapshot changed or is unconfirmed against the fetched PR head/base; no later policy can exempt that snapshot's checks" };
+    }
+    return { baseSha, defaultSha };
   } catch (error) {
-    return { baseSha: "", defaultSha: "", failure: `could not read pinned gate refs (${redactRemoteCredentials(error instanceof Error ? error.message : String(error))})` };
+    return { baseSha, defaultSha: "", failure: `could not read pinned gate refs (${redactRemoteCredentials(error instanceof Error ? error.message : String(error))})` };
   }
 }
 
