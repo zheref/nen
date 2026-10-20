@@ -2,6 +2,21 @@
 
 All notable changes to nen. Versions are git tags on `main`; a tag is not a release — see [Install](README.md#install).
 
+## v0.25.0 — 2026-10-20
+
+Release unit for `v0.24.0..v0.25.0`: [#455](https://github.com/zheref/nen/pull/455), [#466](https://github.com/zheref/nen/pull/466). Consumer PR-section envelopes and user gem installs.
+
+### Breaking / consumer notes
+
+- **No repin: the compatibility floor stays `0.24`.** Both additions are compatible with existing pins and flat PR-section overrides remain supported.
+
+### Fixed
+
+- `pr sections resolve --overrides` reads Hatsu's `pr.sections` envelope (`max`, `variants`, `$canon`), honors a consumer cap within the catalogue cap, and reports invalid nested cells at their actual pointers. Existing flat cell maps remain supported; metadata does not affect resolution. (NN-IS-#464)
+### Added
+
+- `shu tools --install` adds `gem-user` alongside the existing lane-local Bashcov-only `gem` installer. It installs any declared unscoped Ruby gem with an exact stable pin into the current user’s gem home on macOS/Linux, checks Ruby >=3.2, bypasses `.gemrc`, reports prerequisites separately from the consumer reason, and verifies the declared version after installation. Presence-only probes, incompatible pins and unsupported hosts refuse before installation. Nen never installs a runtime, edits PATH/profiles, or installs project dependencies.
+
 ## v0.24.0 — 2026-10-20
 
 Release unit for `v0.23.0..v0.24.0`. Includes [#421](https://github.com/zheref/nen/pull/421), [#428](https://github.com/zheref/nen/pull/428), [#438](https://github.com/zheref/nen/pull/438), [#439](https://github.com/zheref/nen/pull/439), [#449](https://github.com/zheref/nen/pull/449), [#451](https://github.com/zheref/nen/pull/451), [#452](https://github.com/zheref/nen/pull/452), [#459](https://github.com/zheref/nen/pull/459), [#460](https://github.com/zheref/nen/pull/460). PR #439 provides the ledgers required by Hatsu HA#321.
