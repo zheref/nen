@@ -551,6 +551,7 @@ a program.
   "coverage": { "minimum": 80, "recommended": 85, "ideal": 90, "scope": "touched" },
   "launch": { "default": null, "fallback": null },
   "deploy": { "defaultTarget": null },
+  "privateNames": { "namedFile": null },
   "reports": { "dir": "Reports", "retain": "final-only", "template": "rikugan", "captures": "Reports/captures" },
   "notifications": { "rungs": ["push", "os", "sound"], "sound": "Glass", "turn": "rung1" },
   "commits": { "allowedAttributionTrailers": [], "forbiddenTrailers": [], "runTrailer": null, "subjectCase": null, "bodyMaxLineLength": null },
@@ -586,7 +587,7 @@ or a caller override — `commits.runTrailer` set to `--run-trailer`'s key when
 one was named, and a starting `models` matrix; it never declares
 `commits.subjectCase` or `commits.bodyMaxLineLength`, which are the
 repository's call). **Several fields have no default at all** — among them `models`,
-`launch.default`, `deploy.defaultTarget`, `iteration.lane`, `commits.runTrailer`,
+`launch.default`, `deploy.defaultTarget`, `privateNames.namedFile`, `iteration.lane`, `commits.runTrailer`,
 `commits.subjectCase` and `commits.bodyMaxLineLength` — because each would be
 nen inventing a name or a convention rather than a number (the last IS a
 number, but it is the repository's own width, and absent it the verbs say what
@@ -601,6 +602,7 @@ they assumed instead); they come back empty or `null`.
 | `coverage.minimum` / `recommended` / `ideal` / `scope` | the ladder. Whole percentages `0`–`100`, and they must **ascend** — three rungs whose order is the whole of their meaning | callers |
 | `launch.default` / `launch.fallback` | which `project.launch` target a bare launch uses. No default ever | callers |
 | `deploy.defaultTarget` | the `project.targets` key a caller's **own** tooling sends to when it is told no target ([#300](https://github.com/zheref/nen/issues/300); Hatsu's `kagutsuchi`). `null` or absent means *ask*. **No default ever**, and **nen never reads it to choose anything**: [`shu deploy`](#nen-shu-deploy) still requires `--target`. A non-string, an empty string or a near-miss key (`defaultTaget`) is refused **by pointer** at load; a name that is no key of `nen/contract.json` → `project.targets`, or names one not marked `"nonProduction": true`, FAILs its own [`schema check`](#nen-schema-check) row | callers; [`schema check`](#nen-schema-check) validates it, [`shu detect`](#nen-shu-detect) proposes it |
+| `privateNames.namedFile` | the [private-name guard](#the-private-name-guard)'s committed NAMED LIST ([#441](https://github.com/zheref/nen/issues/441)): a repo-relative path (no leading `/`, no `..`, not a directory) to a file of exact `owner/name` slugs a recorded ruling made public. Every guarded verb reads it **at the base tip**, `refs/remotes/origin/<branch.base>:<namedFile>`, never from the checkout, and exempts those slugs beside the caller's ignore file. A non-string or a path outside the allowlist is refused **by pointer** at load. `null` or absent means no named list. **No default ever**: the file publishes what it names, and only a ruling may | every guarded verb ([`issue file`](#nen-issue-file) and the rest of the guard's table), `release-publish` |
 | `reports.sections` | which blocks each report VARIANT renders, and with which template. No default ever | [`report render --variant`](#nen-report-render) |
 | `review.scopes` | which reviewer, at which tier, within which budget, over which paths. No default ever | [`review scopes`](#nen-review-scopes) |
 | `reports.dir` / `retain` / `template` / `captures` | where reports go. `dir` is what [`scaffold init`](#nen-scaffold-init) appends to `.gitignore`, beside `.nen/` | callers |
@@ -8718,7 +8720,30 @@ which is the API text fields, not exempt from the rule:
   error (exit 2). An
   ignored hit does not block and is **never silent**: stderr prints `<verb>:
   ignored: <field>:<line>: private repository #<k> (ignore file)`, without the
-  name, and `--json` records it with `ignored: true`.
+  name, and `--json` records it with `ignored: true` and `ignoredBy:
+  "ignore-file"`.
+- **The named list** ([#441](https://github.com/zheref/nen/issues/441)) is the
+  `--repo` checkout's **committed** list of private repositories whose NAME a
+  recorded ruling made public while their code stays private (zheref/hatsu's
+  `scripts/private_name_named.txt`, the ruling of 2026-10-19), declared as
+  `nen/workflow.json` → `privateNames.namedFile` (a repo-relative path; no
+  default, nothing is read where it is absent). One exact `owner/name` per
+  line, `#` comments and blank lines ignored, case-insensitive; **a bare
+  `name` is a usage error (exit 2)** naming the line and never the entry — a
+  ruling names one repository, a bare name would exempt every owner's
+  repository of that name, and a same-named private repository under another
+  owner is still a hit. Every guarded verb honours it beside the ignore file
+  in one call, with no flag. **It is read at the base tip,
+  `refs/remotes/origin/<branch.base>:<namedFile>`, never from the checkout**:
+  the same rule as the ignore file's (a committed file is exactly what the
+  change under review can edit), so a line reaches the guard once it has been
+  merged. Declared and not at that ref, or a `nen/workflow.json` nen cannot
+  read, it names nothing — stricter, never looser — and the run says so on
+  stderr with the verb's prefix. Nothing is read under the opt-out. An
+  every-name-exempted refusal counts both lists (`the ignore file and the
+  named list exempt all <n>`). A hit it exempts is reported `ignored: <field>:<line>:
+  private repository #<k> (named list)` and `ignoredBy: "named-list"`; an
+  entry both lists exempt reports the named list, the exact-slug one.
 - **The opt-out** is `--skip-private-name-check`, for a caller that has run its
   own check. Nothing is read, the run says so on stderr every time, and
   `--json` reports it.
@@ -8750,8 +8775,9 @@ other guarded verb used no `4` before.
 
 Every `--json` report of a guarded verb carries `privateNameCheck: { result,
 targetVisibility, listSize, owners, hits: [{ field, line, index, normalised,
-ignored }], error }` — `listSize` and `owners` are counts (never names), `null`
-when the list was not read — where `result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
+ignored, ignoredBy }], error }` — `listSize` and `owners` are counts (never names), `null`
+when the list was not read; `ignoredBy` is `"ignore-file"`, `"named-list"` or
+`null` — where `result` is `clean` | `skipped-private-target` | `skipped-by-flag` |
 `refused` | `unavailable`; a run whose only hits are ignored is `clean` and
 still lists them. A clean run with no hits and a private target add nothing to
 the human output. A refusal's `--json` report is the verb's own refusal shape

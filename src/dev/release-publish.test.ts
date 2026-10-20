@@ -4,7 +4,22 @@
 // carries it, and pins the pure helpers it rests on.
 
 import { describe, expect, it } from "vitest";
-import { composeNotes, parseArgs, previousTagOf, releasePublishMain, remoteHost, selfTest, slugFromRemote, unreleasedHeading } from "./release-publish.js";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  composeNotes,
+  parseArgs,
+  previousTagOf,
+  readNamedListOption,
+  releasePublishMain,
+  remoteHost,
+  selfTest,
+  slugFromRemote,
+  unreleasedHeading,
+  type Options,
+  type Run,
+} from "./release-publish.js";
 
 describe("release-publish --self-test", () => {
   it("is all green", () => {
@@ -65,5 +80,67 @@ describe("release-publish helpers", () => {
     expect(() => parseArgs(["--slug", "a/b", "--slug", "c/d"])).toThrow(/--slug is given more than once/);
     expect(() => parseArgs(["--repo", ".", "--repo", ".."])).toThrow(/--repo is given more than once/);
     expect(parseArgs(["--json", "--json"]).json).toBe(true);
+  });
+});
+
+describe("release-publish reads the committed named list as every guarded verb does (zheref/nen#441)", () => {
+  function repo(workflow: string | null): string {
+    const dir = mkdtempSync(join(tmpdir(), "nen-release-named-"));
+    if (workflow !== null) {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "workflow.json"), workflow);
+    }
+    return dir;
+  }
+  function options(repo: string): Options {
+    return { repo, dryRun: false, json: false, selfTest: false, skipPrivateNameCheck: false, allowAllIgnored: false };
+  }
+  /** A `run` answering `git show` with `stdout`, recording every call. */
+  function fakeRun(stdout: string | null): { run: Run; calls: string[] } {
+    const calls: string[] = [];
+    const run: Run = (exe, args): ReturnType<Run> => {
+      calls.push([exe, ...args].join(" "));
+      return stdout === null ? { status: 128, stdout: "", stderr: "fatal: path does not exist" } : { status: 0, stdout, stderr: "" };
+    };
+    return { run, calls };
+  }
+  const io = (): { io: { out: (line: string) => void; err: (line: string) => void }; err: string[] } => {
+    const err: string[] = [];
+    return { io: { out: (): void => undefined, err: (line): void => void err.push(line) }, err };
+  };
+
+  it("reads nothing where the checkout declares no named list", () => {
+    const { run, calls } = fakeRun("x/y\n");
+    const { io: sink, err } = io();
+    expect(readNamedListOption(options(repo(null)), run, sink)).toBeNull();
+    expect(calls).toEqual([]);
+    expect(err).toEqual([]);
+  });
+
+  it("shows the declared file at refs/remotes/origin/<branch.base>", () => {
+    const { run, calls } = fakeRun("# ruled\nAcme/Thing\n");
+    const { io: sink } = io();
+    const list = readNamedListOption(options(repo('{"privateNames":{"namedFile":"scripts/named.txt"}}')), run, sink);
+    expect([...(list?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect(calls).toEqual(["git show refs/remotes/origin/main:scripts/named.txt"]);
+  });
+
+  it("a file not at the tip names nothing and says so; a bare name is a usage defect (2)", () => {
+    const declared = '{"privateNames":{"namedFile":"scripts/named.txt"}}';
+    const missing = fakeRun(null);
+    const first = io();
+    expect(readNamedListOption(options(repo(declared)), missing.run, first.io)).toBeNull();
+    expect(first.err).toEqual([
+      "release-publish: named list 'scripts/named.txt' is not at refs/remotes/origin/main (it is read at the base tip, never from the checkout), so it names nothing in this run.",
+    ]);
+    const bare = fakeRun("vault\n");
+    let thrown: unknown;
+    try {
+      readNamedListOption(options(repo(declared)), bare.run, io().io);
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as { exit?: number; code?: number; message: string }).message).toMatch(/line 1 is not an exact owner\/name/);
+    expect((thrown as Error).message).not.toContain("vault");
   });
 });

@@ -210,6 +210,27 @@ export interface DeployPolicy {
 }
 
 /**
+ * `privateNames` -- the private-name guard's COMMITTED NAMED LIST
+ * (zheref/nen#441): private repositories whose NAME a recorded ruling made
+ * public while their code stays private.
+ *
+ * ONE KEY, A REPO-RELATIVE PATH, AND NO DEFAULT EVER. The guard
+ * (../issue/privacy.ts) exempts the exact `owner/name` slugs that file lists,
+ * beside the caller's own `--private-names-ignore-file`. It is read AT THE
+ * BASE TIP (`refs/remotes/origin/<branch.base>:<namedFile>`), never from the
+ * checkout: a list the change under review can edit is an exemption it wrote
+ * for itself (zheref/nen#363, Feitan F8), and a committed file is exactly
+ * what a branch can edit. A line of it reaches the guard once it has been
+ * merged, which is the same bound Hatsu's own fixture puts on the file. No
+ * default, because the file publishes what it names and only a ruling may.
+ */
+export interface PrivateNamesPolicy {
+  /** The committed named list's repo-relative path, or null for "none declared". No default ever. */
+  readonly namedFile: string | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/**
  * ONE REPORT VARIANT: which template renders it, and which blocks it carries.
  *
  * WHICH BLOCKS A REPORT SHOWS IS CONFIGURATION, NOT CODE (zheref/nen#220). A
@@ -509,6 +530,8 @@ export interface Workflow {
   readonly launch: LaunchPolicy;
   /** `deploy` -- see DeployPolicy. `defaultTarget` is null unless declared. */
   readonly deploy: DeployPolicy;
+  /** `privateNames` -- see PrivateNamesPolicy. `namedFile` is null unless declared. */
+  readonly privateNames: PrivateNamesPolicy;
   readonly reports: ReportsPolicy;
   readonly notifications: NotificationsPolicy;
   readonly commits: CommitsPolicy;
@@ -594,6 +617,7 @@ export function defaultWorkflow(): Workflow {
     launch: { default: null, fallback: null, raw: empty },
     // NO DEFAULT DESTINATION, EVER -- see DeployPolicy.
     deploy: { defaultTarget: null, raw: empty },
+    privateNames: { namedFile: null, raw: empty },
     reports: {
       dir: DEFAULT_REPORTS_DIR,
       retain: DEFAULT_RETAIN,
@@ -631,6 +655,7 @@ const ROOT_KEYS: readonly string[] = [
   "coverage",
   "launch",
   "deploy",
+  "privateNames",
   "reports",
   "notifications",
   "commits",
@@ -649,6 +674,7 @@ const TESTS_KEYS: readonly string[] = ["required", "extra"];
 const COVERAGE_KEYS: readonly string[] = ["minimum", "recommended", "ideal", "scope"];
 const LAUNCH_KEYS: readonly string[] = ["default", "fallback"];
 const DEPLOY_KEYS: readonly string[] = ["defaultTarget"];
+const PRIVATE_NAMES_KEYS: readonly string[] = ["namedFile"];
 const REPORTS_KEYS: readonly string[] = ["dir", "retain", "template", "captures", "sections"];
 const REVIEW_KEYS: readonly string[] = ["scopes"];
 const RELEASE_KEYS: readonly string[] = ["unitPaths"];
@@ -902,6 +928,25 @@ function parseDeploy(path: string, value: unknown): DeployPolicy {
         : requireString(path, "deploy.defaultTarget", stated),
     raw,
   };
+}
+
+function parsePrivateNames(path: string, value: unknown): PrivateNamesPolicy {
+  const raw = block(path, "privateNames", value, PRIVATE_NAMES_KEYS, "A privateNames policy's one key is");
+  const stated = raw["namedFile"];
+  if (stated === undefined || stated === null) return { namedFile: null, raw };
+  const file = requireString(path, "privateNames.namedFile", stated);
+  // The same allowlist `reports.dir` is held to, and for the same reason: this
+  // value becomes a path in a `git show <ref>:<path>` argument, so a leading
+  // `/`, a `..` segment or a character outside the set is refused where it is
+  // read, by pointer, rather than resolved to a file nobody declared.
+  if (!REPO_RELATIVE_PATH.test(file) || file.split("/").includes("..") || file.endsWith("/")) {
+    throw new SchemaError(
+      path,
+      "privateNames.namedFile",
+      `'${file}' is not a path the private-name guard can read. It names a FILE committed in this repository, read at the base tip as 'refs/remotes/origin/<branch.base>:<namedFile>', so it is repo-relative (no leading '/'), has no '..' segment, does not end in '/', and carries only letters, digits, '.', '_', '-' and '/'`,
+    );
+  }
+  return { namedFile: file, raw };
 }
 
 /** One path this policy states, held to `REPO_RELATIVE_PATH`. */
@@ -2157,7 +2202,7 @@ function parseSeverity(path: string, value: unknown): SeverityPolicy | null {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's seventeen blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's eighteen blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -2170,6 +2215,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     coverage: parseCoverage(path, raw["coverage"]),
     launch: parseLaunch(path, raw["launch"]),
     deploy: parseDeploy(path, raw["deploy"]),
+    privateNames: parsePrivateNames(path, raw["privateNames"]),
     reports: parseReports(path, raw["reports"]),
     notifications: parseNotifications(path, raw["notifications"]),
     commits: parseCommits(path, raw["commits"]),

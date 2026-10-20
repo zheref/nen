@@ -37,6 +37,23 @@
 // its own is an exemption nobody passed. An ignored hit is NEVER silent -- it is
 // reported (stderr, and `ignored: true` under --json), it just does not block.
 //
+// THE NAMED LIST, and only when the `--repo` checkout declares it
+// (zheref/nen#441). `nen/workflow.json` -> `privateNames.namedFile` names a
+// COMMITTED file of private repositories whose NAME a recorded ruling made
+// public while their code stays private (Hatsu's `scripts/private_name_named.txt`,
+// the ruling of 2026-10-19). One exact `owner/name` per line, `#` comments and
+// blanks ignored; a bare `name` is refused (exit 2), because a ruling names ONE
+// repository and a bare name would exempt every owner's repository of that
+// name -- so a same-named private repository under another owner is still a
+// hit. It is read AT THE BASE TIP, `refs/remotes/origin/<branch.base>:<path>`,
+// never from the checkout: F8 below holds for it exactly as for the ignore
+// file, since a committed file is what a branch can edit; a line reaches the
+// guard once merged. Declared and not there at the tip, it names nothing
+// (stricter, never looser) and the run says so. An exemption by either list
+// is reported with WHICH list made it (`ignoredBy`, and `(named list)` or
+// `(ignore file)` on the stderr line); when both exempt an entry the named
+// list, the exact-slug one, is the one named.
+//
 // WHAT IS NOT CARRIED OVER, deliberately: the script's one named exemption (a
 // marker quoted byte for byte by one consumer's generator). That is the
 // consumer's policy, not a property of the check, and an exemption nen invented
@@ -51,7 +68,7 @@
 
 import { existsSync, realpathSync } from "node:fs";
 import { dirname, join as joinPath, resolve as resolvePath, sep } from "node:path";
-import { GH, outputLines, type Seams } from "../seam/exec.js";
+import { GH, GIT, outputLines, type Seams } from "../seam/exec.js";
 import { plainLine } from "../cli/plain.js";
 import type { Target } from "../github/target.js";
 
@@ -110,9 +127,17 @@ export interface PrivateNameHit {
   readonly index: number;
   /** True when it was found only once the line was normalised. */
   readonly normalised: boolean;
-  /** True when the caller's ignore file exempts this name: reported, never blocking. */
+  /** True when the caller's ignore file or the committed named list exempts this name: reported, never blocking. */
   readonly ignored: boolean;
+  /** Which list exempted it (zheref/nen#441); null when `ignored` is false. */
+  readonly ignoredBy: ExemptionSource | null;
 }
+
+/**
+ * Which list exempted a hit: the caller's `--private-names-ignore-file`, or
+ * the `--repo` checkout's committed named list (`privateNames.namedFile`).
+ */
+export type ExemptionSource = "ignore-file" | "named-list";
 
 /**
  * The caller's ignore list: bare names (exempt under every owner) and
@@ -137,6 +162,56 @@ export function parseIgnoreList(text: string): IgnoreList {
     else names.add(entry);
   }
   return { names, slugs };
+}
+
+/**
+ * The committed named list (zheref/nen#441): exact `owner/name` slugs, lowercase.
+ * Never bare names -- `parseNamedList` refuses them.
+ */
+export interface NamedList {
+  readonly slugs: ReadonlySet<string>;
+}
+
+/**
+ * A named-list line that is not an exact `owner/name`. Carries the LINE, never
+ * the entry: a bare name there may itself be a private repository's name.
+ */
+export class NamedListError extends Error {
+  readonly line: number;
+  constructor(line: number) {
+    super(
+      `line ${line} is not an exact owner/name. A ruling names one repository; a bare name would exempt every owner's repository of that name, so only the exact slug belongs on the list (a same-named private repository under another owner stays a hit).`,
+    );
+    this.name = "NamedListError";
+    this.line = line;
+  }
+}
+
+/**
+ * Parse the named list's text: one exact `owner/name` per line, `#` to end of
+ * line a comment, surrounding whitespace removed, blank lines skipped,
+ * compared lowercase. Any other line throws NamedListError naming its number.
+ */
+export function parseNamedList(text: string): NamedList {
+  const slugs = new Set<string>();
+  text.split(/\r?\n/).forEach((raw, offset): void => {
+    const entry = raw.replace(/#.*/, "").trim();
+    if (entry === "") return;
+    if (!VALID_FULL_NAME.test(entry)) throw new NamedListError(offset + 1);
+    slugs.add(entry.toLowerCase());
+  });
+  return { slugs };
+}
+
+/**
+ * The named list's bytes at `refs/remotes/origin/<base>:<path>`, or null when
+ * git cannot show them (no such ref, no such path at it, git not startable).
+ * Null is "names nothing", stricter than any list; the caller says so.
+ */
+export function readNamedListAtBase(seams: GuardSeams, root: string, base: string, path: string): string | null {
+  const result = seams.run(GIT, ["-C", root, "show", `refs/remotes/origin/${base}:${path}`]);
+  if (result.spawnFailed || result.code !== 0) return null;
+  return result.stdout;
 }
 
 /** One field of text to check, named for the report. */
@@ -391,11 +466,18 @@ export interface NameMatcher {
    */
   readonly policedIndexOf: ReadonlyMap<string, number>;
   /**
-   * Lowercase names the ignore list exempts: a name is exempt only when EVERY
-   * list entry carrying it is -- ignoring `a/thing` leaves `b/thing` policed,
-   * and the two share one index, so the name still blocks.
+   * Lowercase names the ignore list or the named list exempts: a name is
+   * exempt only when EVERY list entry carrying it is -- ignoring `a/thing`
+   * leaves `b/thing` policed, and the two share one index, so the name still
+   * blocks.
    */
   readonly ignored: ReadonlySet<string>;
+  /**
+   * Which list exempted the FIRST entry carrying each exempt name -- the entry
+   * `index` points at. The named list is tried first, so an entry both lists
+   * exempt reports the exact-slug one.
+   */
+  readonly exemptedBy: ReadonlyMap<string, ExemptionSource>;
 }
 
 function escapeRegExp(text: string): string {
@@ -406,28 +488,43 @@ function escapeRegExp(text: string): string {
  * Compile the list. Each entry's NAME (after the `/`) is matched; the first
  * entry wins a case twin across owners, so they share one index.
  */
-export function compileMatcher(list: readonly string[], ignore: IgnoreList | null = null): NameMatcher {
+export function compileMatcher(
+  list: readonly string[],
+  ignore: IgnoreList | null = null,
+  named: NamedList | null = null,
+): NameMatcher {
   const indexOf = new Map<string, number>();
   const names: string[] = [];
   const policedIndexOf = new Map<string, number>();
+  const exemptedBy = new Map<string, ExemptionSource>();
   list.forEach((entry, position): void => {
     const name = entry.replace(/^.*\//, "");
     const key = name.toLowerCase();
     if (name === "") return;
-    const exempt = ignore !== null && (ignore.names.has(key) || ignore.slugs.has(entry.toLowerCase()));
-    if (!exempt && !policedIndexOf.has(key)) policedIndexOf.set(key, position + 1);
+    const slug = entry.toLowerCase();
+    // The named list holds exact slugs only, so it can never exempt a twin
+    // under another owner; the ignore file's bare names can.
+    const source: ExemptionSource | null =
+      named !== null && named.slugs.has(slug)
+        ? "named-list"
+        : ignore !== null && (ignore.names.has(key) || ignore.slugs.has(slug))
+          ? "ignore-file"
+          : null;
+    if (source === null && !policedIndexOf.has(key)) policedIndexOf.set(key, position + 1);
     if (indexOf.has(key)) return;
     indexOf.set(key, position + 1);
+    if (source !== null) exemptedBy.set(key, source);
     names.push(name);
   });
   const ignored = new Set([...indexOf.keys()].filter((key): boolean => !policedIndexOf.has(key)));
+  for (const key of exemptedBy.keys()) if (!ignored.has(key)) exemptedBy.delete(key);
   const patterns = new Map<string, RegExp>(
     names.map((name): [string, RegExp] => [
       name.toLowerCase(),
       new RegExp(`(?<![A-Za-z0-9-])${escapeRegExp(name)}(?![A-Za-z0-9-])`, "i"),
     ]),
   );
-  return { patterns, indexOf, policedIndexOf, ignored };
+  return { patterns, indexOf, policedIndexOf, ignored, exemptedBy };
 }
 
 /**
@@ -533,7 +630,7 @@ export function findPrivateNames(matcher: NameMatcher, fields: readonly CheckedT
           const index = ignored ? matcher.indexOf.get(key) : matcher.policedIndexOf.get(key);
           if (index === undefined) continue;
           reported.add(key);
-          hits.push({ field, line: offset + 1, index, normalised, ignored });
+          hits.push({ field, line: offset + 1, index, normalised, ignored, ignoredBy: ignored ? (matcher.exemptedBy.get(key) ?? null) : null });
         }
       };
       scan(line, false);
@@ -566,6 +663,7 @@ export function checkPrivateNames(
   skip: boolean,
   ignore: IgnoreList | null = null,
   allowAllIgnored: boolean = false,
+  named: NamedList | null = null,
 ): PrivateNameCheck {
   const unread = { listSize: null, owners: null };
   if (skip) return { result: "skipped-by-flag", targetVisibility: null, ...unread, hits: [], error: null };
@@ -591,16 +689,21 @@ export function checkPrivateNames(
     listSize: list.length,
     owners: new Set(list.map((entry): string => entry.replace(/\/.*$/, "").toLowerCase())).size,
   };
-  const matcher = compileMatcher(list, ignore);
+  const matcher = compileMatcher(list, ignore, named);
   // EVERY NAME IGNORED is a check that polices nothing: refused as
-  // unavailable, the script's rule, unless the caller says it means it.
+  // unavailable, the script's rule, unless the caller says it means it. Both
+  // lists are counted: the refusal names whichever did the exempting.
   if (matcher.policedIndexOf.size === 0 && !allowAllIgnored) {
+    const exemptors = [ignore !== null ? "the ignore file" : null, named !== null ? "the named list" : null].filter(
+      (name): name is string => name !== null,
+    );
+    const subject = exemptors.length === 0 ? "the lists" : exemptors.join(" and ");
     return {
       result: "unavailable",
       targetVisibility: visibility,
       ...counts,
       hits: [],
-      error: `every private name is ignored (the ignore file exempts all ${counts.listSize}), so nothing would be checked; pass --allow-all-ignored if that is meant`,
+      error: `every private name is ignored (${subject} exempt${exemptors.length === 1 ? "s" : ""} all ${counts.listSize}), so nothing would be checked; pass --allow-all-ignored if that is meant`,
     };
   }
   const hits = findPrivateNames(matcher, fields);
@@ -634,7 +737,7 @@ export function privateNameLines(check: PrivateNameCheck, target: Target, verb: 
   // An ignored hit is never silent, whatever the verdict.
   const ignoredLines = check.hits
     .filter((hit): boolean => hit.ignored)
-    .map((hit): string => `${verb}: ignored: ${where(hit)} (ignore file)`);
+    .map((hit): string => `${verb}: ignored: ${where(hit)} (${hit.ignoredBy === "named-list" ? "named list" : "ignore file"})`);
   switch (check.result) {
     case "clean":
       return ignoredLines;

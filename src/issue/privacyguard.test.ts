@@ -11,7 +11,8 @@ import { VerbUsageError, type CommandContext } from "../cli/command.js";
 import { ScriptedSeams } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import { GUARDED_VERBS, privateNameLines, type PrivateNameCheck } from "./privacy.js";
-import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "./privacyguard.js";
+import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag, readNamedList } from "./privacyguard.js";
+import { resolveRepoRoot } from "../repo/root.js";
 import { FULL_REACH_ROW, privateListRow, visibilityRow } from "./privacy.testkit.js";
 import { ISSUE_SUBCOMMAND_FLAGS, issueCommand } from "./command.js";
 import { ideaCommand } from "../idea/command.js";
@@ -113,8 +114,8 @@ describe("privateNameLines -- the verb that refused, on every line", () => {
     listSize: 2,
     owners: 1,
     hits: [
-      { field: "body", line: 3, index: 2, normalised: false, ignored: false },
-      { field: "title", line: 1, index: 1, normalised: false, ignored: true },
+      { field: "body", line: 3, index: 2, normalised: false, ignored: false, ignoredBy: null },
+      { field: "title", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file" },
     ],
     error: null,
   };
@@ -183,5 +184,92 @@ describe("the shared adapter", () => {
     expect(guardPrivateNames(ctx, TARGET, [{ field: "body", text: "x" }], null, "nen idea file").result).toBe("skipped-by-flag");
     expect(seams.calls).toEqual([]);
     expect(err[0]).toMatch(/^nen idea file: private-name check SKIPPED by --skip-private-name-check/);
+  });
+});
+
+describe("the committed named list, read by every guarded verb (zheref/nen#441)", () => {
+  /** A `--repo` root with the given `nen/workflow.json` text, or none. */
+  function repo(workflow: string | null): { dir: string; root: string } {
+    const dir = mkdtempSync(join(tmpdir(), "nen-named-"));
+    if (workflow !== null) {
+      mkdirSync(join(dir, "nen"));
+      writeFileSync(join(dir, "nen", "workflow.json"), workflow);
+    }
+    return { dir, root: resolveRepoRoot({ repoFlag: dir }) };
+  }
+  const DECLARED = '{"privateNames":{"namedFile":"scripts/named.txt"}}';
+  const show = (root: string, base = "main"): string => `git -C ${root} show refs/remotes/origin/${base}:scripts/named.txt`;
+
+  it("reads nothing, and runs no git, where the checkout declares no named list", () => {
+    const { dir } = repo(null);
+    const seams = new ScriptedSeams([]);
+    const { context: ctx, err } = context([], seams, dir);
+    expect(readNamedList(ctx, "nen issue")).toBeNull();
+    expect(seams.calls).toEqual([]);
+    expect(err).toEqual([]);
+  });
+
+  it("reads the declared file at refs/remotes/origin/<branch.base>, never from the checkout", () => {
+    const { dir, root } = repo('{"branch":{"base":"develop"},"privateNames":{"namedFile":"scripts/named.txt"}}');
+    // The checkout's own copy says something else: it is never read.
+    mkdirSync(join(dir, "scripts"));
+    writeFileSync(join(dir, "scripts", "named.txt"), "evil/other\n");
+    const seams = new ScriptedSeams([{ match: show(root, "develop"), result: { stdout: "# ruled\nAcme/Thing\n" } }]);
+    const list = readNamedList(context([], seams, dir).context, "nen issue");
+    expect([...(list?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([show(root, "develop")]);
+  });
+
+  it("a declared file not at the base tip names nothing, and says so with the verb's prefix", () => {
+    const { dir, root } = repo(DECLARED);
+    const seams = new ScriptedSeams([{ match: show(root), result: { code: 128, stderr: "fatal: path 'scripts/named.txt' does not exist" } }]);
+    const { context: ctx, err } = context([], seams, dir);
+    expect(readNamedList(ctx, "nen pr open")).toBeNull();
+    expect(err).toEqual([
+      "nen pr open: named list 'scripts/named.txt' is not at refs/remotes/origin/main (it is read at the base tip, never from the checkout), so it names nothing in this run.",
+    ]);
+  });
+
+  it("a bare name on the list is a usage error (exit 2) naming the line, never the entry", () => {
+    const { dir, root } = repo(DECLARED);
+    const seams = new ScriptedSeams([{ match: show(root), result: { stdout: "acme/thing\nvault\n" } }]);
+    let thrown: unknown;
+    try {
+      readNamedList(context([], seams, dir).context, "nen issue");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(VerbUsageError);
+    expect((thrown as Error).message).toMatch(/named list 'scripts\/named.txt' at refs\/remotes\/origin\/main: line 2 is not an exact owner\/name/);
+    expect((thrown as Error).message).not.toContain("vault");
+  });
+
+  it("a nen/workflow.json nen cannot read names nothing, said -- never a silent default and never a refusal of the write", () => {
+    const { dir } = repo('{"coverage":{"minimun":90}}');
+    const seams = new ScriptedSeams([]);
+    const { context: ctx, err } = context([], seams, dir);
+    expect(readNamedList(ctx, "nen issue")).toBeNull();
+    expect(err).toHaveLength(1);
+    expect(err[0]).toMatch(/^nen issue: named list not read -- .*coverage\.minimun/);
+    expect(seams.calls).toEqual([]);
+  });
+
+  it("guardPrivateNames hands the named list to the check, and skips the read under the opt-out", () => {
+    const { dir, root } = repo(DECLARED);
+    const seams = new ScriptedSeams([
+      { match: show(root), result: { stdout: "o/thing\n" } },
+      visibilityRow(TARGET.slug, "public"),
+      FULL_REACH_ROW,
+      privateListRow(["o/thing", "o/vault"]),
+    ]);
+    const { context: ctx, err } = context([], seams, dir);
+    const check = guardPrivateNames(ctx, TARGET, [{ field: "body", text: "thing" }], null, "nen issue");
+    expect(check.result).toBe("clean");
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
+    expect(err).toEqual(["nen issue: ignored: body:1: private repository #1 (named list)"]);
+    const skipped = new ScriptedSeams([]);
+    const skippedCheck = guardPrivateNames(context(["--skip-private-name-check"], skipped, dir).context, TARGET, [{ field: "body", text: "thing" }], null, "nen issue");
+    expect(skippedCheck.result).toBe("skipped-by-flag");
+    expect(skipped.calls).toEqual([]);
   });
 });

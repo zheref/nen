@@ -7,9 +7,12 @@ import {
   checkPrivateNames,
   compileMatcher,
   findPrivateNames,
+  NamedListError,
   normalise,
   parseIgnoreList,
+  parseNamedList,
   privateNameLines,
+  readNamedListAtBase,
   readPrivateList,
   readTargetVisibility,
   PrivateListUnavailableError,
@@ -110,14 +113,14 @@ describe("private-name matching (zheref/nen#329)", () => {
     // Prefix: `vault` is policed, `vault.tools` ignored; `.` bounds a word, so `vault` occurs.
     const prefix = compileMatcher(["a/vault", "b/vault.tools"], parseIgnoreList("vault.tools\n"));
     expect(findPrivateNames(prefix, [{ field: "body", text: "see vault.tools" }])).toEqual([
-      { field: "body", line: 1, index: 1, normalised: false, ignored: false },
-      { field: "body", line: 1, index: 2, normalised: false, ignored: true },
+      { field: "body", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" },
     ]);
     // Suffix: `vault` is policed, `my_vault` ignored; `_` bounds a word.
     const suffix = compileMatcher(["a/my_vault", "b/vault"], parseIgnoreList("my_vault\n"));
     expect(findPrivateNames(suffix, [{ field: "body", text: "in my_vault today" }])).toEqual([
-      { field: "body", line: 1, index: 1, normalised: false, ignored: true },
-      { field: "body", line: 1, index: 2, normalised: false, ignored: false },
+      { field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file" },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null },
     ]);
   });
 
@@ -149,7 +152,7 @@ describe("the ignore list", () => {
   it("a blocking hit reports the first STILL-POLICED entry's index, never an exempt twin's (N7)", () => {
     const matcher = compileMatcher(["a/thing", "b/thing"], parseIgnoreList("a/thing\n"));
     expect(findPrivateNames(matcher, [{ field: "body", text: "thing" }])).toEqual([
-      { field: "body", line: 1, index: 2, normalised: false, ignored: false },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null },
     ]);
   });
 
@@ -163,7 +166,7 @@ describe("the ignore list", () => {
     expect(blockingExit(refused)).toBe(1);
     const allowed = checkPrivateNames(script(), TARGET, [{ field: "body", text: "vault" }], false, ignoreAll, true);
     expect(allowed.result).toBe("clean");
-    expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true }]);
+    expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file" }]);
   });
 
   it("reports the list's size and owner count, and never a name (N13)", () => {
@@ -181,7 +184,7 @@ describe("the ignore list", () => {
     const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/other", "acme/vault"])]);
     const check = checkPrivateNames(seams, TARGET, [{ field: "body", text: "vault" }], false, parseIgnoreList("vault"));
     expect(check.result).toBe("clean");
-    expect(check.hits).toEqual([{ field: "body", line: 1, index: 2, normalised: false, ignored: true }]);
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" }]);
     expect(privateNameLines(check, TARGET)).toEqual(["nen issue: ignored: body:1: private repository #2 (ignore file)"]);
   });
 });
@@ -361,5 +364,87 @@ describe("checkPrivateNames -- the verdict a verb acts on", () => {
     expect(emptyList.result).toBe("unavailable");
     expect(emptyList.error).toMatch(/EMPTY/);
     expect(privateNameLines(emptyList, TARGET).join("\n")).toMatch(/never a pass/);
+  });
+});
+
+describe("the named list (zheref/nen#441)", () => {
+  it("parses exact owner/name slugs, lowercase, skipping comments, blanks and whitespace", () => {
+    const list = parseNamedList("# ruled public\n\n  Acme/Thing  # the ruling\r\nb/other\n");
+    expect([...list.slugs]).toEqual(["acme/thing", "b/other"]);
+  });
+
+  it("refuses a bare name, naming the line and never the entry", () => {
+    let thrown: unknown;
+    try {
+      parseNamedList("# header\nacme/thing\nvault\n");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(NamedListError);
+    expect((thrown as NamedListError).line).toBe(3);
+    expect((thrown as NamedListError).message).toMatch(/line 3 is not an exact owner\/name/);
+    expect((thrown as NamedListError).message).not.toContain("vault");
+    expect(() => parseNamedList("a/b/c\n")).toThrow(NamedListError);
+    expect(() => parseNamedList("acme/\n")).toThrow(NamedListError);
+  });
+
+  it("exempts exactly that repository: a same-named private repository under another owner is still a hit", () => {
+    const named = parseNamedList("a/thing\n");
+    const matcher = compileMatcher(["a/thing", "b/thing"], null, named);
+    expect(matcher.ignored.has("thing")).toBe(false);
+    expect(findPrivateNames(matcher, [{ field: "body", text: "thing" }])).toEqual([
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null },
+    ]);
+  });
+
+  it("honours both lists in one call, and each ignored hit says which list exempted it", () => {
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/thing", "acme/vault", "b/zeta"])]);
+    const check = checkPrivateNames(
+      seams,
+      TARGET,
+      [{ field: "body", text: "thing, vault and zeta" }],
+      false,
+      parseIgnoreList("vault\n"),
+      false,
+      parseNamedList("acme/thing\n"),
+    );
+    expect(check.result).toBe("refused");
+    expect(check.hits).toEqual([
+      { field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" },
+      { field: "body", line: 1, index: 3, normalised: false, ignored: false, ignoredBy: null },
+    ]);
+    expect(privateNameLines(check, TARGET).slice(0, 3)).toEqual([
+      "nen issue: ignored: body:1: private repository #1 (named list)",
+      "nen issue: ignored: body:1: private repository #2 (ignore file)",
+      "nen issue: body:1: private repository #3",
+    ]);
+  });
+
+  it("names the named list when both lists exempt one entry", () => {
+    const matcher = compileMatcher(["acme/thing"], parseIgnoreList("thing\n"), parseNamedList("acme/thing\n"));
+    expect(matcher.exemptedBy.get("thing")).toBe("named-list");
+  });
+
+  it("counts both lists in the every-name-exempted refusal", () => {
+    const script = (): ScriptedSeams =>
+      new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/thing", "acme/vault"])]);
+    const both = checkPrivateNames(script(), TARGET, [{ field: "body", text: "x" }], false, parseIgnoreList("vault\n"), false, parseNamedList("acme/thing\n"));
+    expect(both.result).toBe("unavailable");
+    expect(both.error).toMatch(/every private name is ignored \(the ignore file and the named list exempt all 2\)/);
+    const namedOnly = checkPrivateNames(script(), TARGET, [{ field: "body", text: "x" }], false, null, false, parseNamedList("acme/thing\nacme/vault\n"));
+    expect(namedOnly.error).toMatch(/\(the named list exempts all 2\)/);
+    const allowed = checkPrivateNames(script(), TARGET, [{ field: "body", text: "thing" }], false, null, true, parseNamedList("acme/thing\nacme/vault\n"));
+    expect(allowed.result).toBe("clean");
+    expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
+  });
+
+  it("reads the list at the base tip through git show, and answers null when git cannot show it", () => {
+    const shown = new ScriptedSeams([{ match: "git -C /r show refs/remotes/origin/main:scripts/named.txt", result: { stdout: "acme/thing\n" } }]);
+    expect(readNamedListAtBase(shown, "/r", "main", "scripts/named.txt")).toBe("acme/thing\n");
+    const missing = new ScriptedSeams([{ match: "git -C /r show refs/remotes/origin/main:scripts/named.txt", result: { code: 128, stderr: "fatal: path 'scripts/named.txt' does not exist in 'refs/remotes/origin/main'" } }]);
+    expect(readNamedListAtBase(missing, "/r", "main", "scripts/named.txt")).toBeNull();
+    const unstartable = new ScriptedSeams([{ match: "git -C /r show refs/remotes/origin/main:scripts/named.txt", result: { code: 1, spawnFailed: true } }]);
+    expect(readNamedListAtBase(unstartable, "/r", "main", "scripts/named.txt")).toBeNull();
   });
 });

@@ -83,12 +83,17 @@ import {
   blocksWrite,
   checkPrivateNames,
   ignoreFileInsideTree,
+  NamedListError,
   parseIgnoreList,
+  parseNamedList,
   privateNameLines,
   type GuardSeams,
   type IgnoreList,
+  type NamedList,
   type PrivateNameCheck,
 } from "../issue/privacy.js";
+import { SchemaError } from "../schema/errors.js";
+import { loadWorkflow, type LoadedWorkflow } from "../schema/workflow.js";
 
 export const USAGE =
   "usage: bun src/dev/release-publish.ts [--tag <vX.Y.Z>] [--repo <path>] [--slug <owner/name>] [--changelog <path>] [--previous-tag <vX.Y.Z>] [--title <text>] [--dry-run] [--json] [--skip-private-name-check] [--private-names-ignore-file <path> [--allow-all-ignored]] | --self-test";
@@ -355,6 +360,39 @@ export function readIgnoreOption(options: Options): IgnoreList | null {
  * `gh api` call it makes is pinned to github.com, as every other call here is,
  * so GH_HOST cannot redirect the visibility or the private-list read.
  */
+/**
+ * The checkout's committed named list (zheref/nen#441), as
+ * ../issue/privacyguard.ts's readNamedList reads it for every `Command`:
+ * `nen/workflow.json` -> `privateNames.namedFile`, shown at
+ * `refs/remotes/origin/<branch.base>`, never from the checkout. Unreadable
+ * policy or a file not at the tip is said and names nothing; a line that is
+ * not an exact `owner/name` is a usage defect (2).
+ */
+export function readNamedListOption(options: Options, run: Run, io: Io): NamedList | null {
+  let loaded: LoadedWorkflow;
+  try {
+    loaded = loadWorkflow(options.repo);
+  } catch (error) {
+    if (!(error instanceof SchemaError)) throw error;
+    io.err(`release-publish: named list not read -- ${error.message}; no committed named list exempts anything in this run (the ignore file, if any, still does).`);
+    return null;
+  }
+  const path = loaded.workflow.privateNames.namedFile;
+  if (path === null) return null;
+  const base = loaded.workflow.branch.base;
+  const shown = git(run, options.repo, ["show", `refs/remotes/origin/${base}:${path}`]);
+  if (shown.status !== 0) {
+    io.err(`release-publish: named list '${path}' is not at refs/remotes/origin/${base} (it is read at the base tip, never from the checkout), so it names nothing in this run.`);
+    return null;
+  }
+  try {
+    return parseNamedList(shown.stdout);
+  } catch (error) {
+    if (!(error instanceof NamedListError)) throw error;
+    throw new Refusal(`named list '${path}' at refs/remotes/origin/${base}: ${error.message}`, 2);
+  }
+}
+
 function guardSeams(run: Run, repo: string): GuardSeams {
   return {
     run: (command, args): ReturnType<GuardSeams["run"]> => {
@@ -454,6 +492,7 @@ export function publish(options: Options, run: Run = defaultRun, io: Io = defaul
     options.skipPrivateNameCheck,
     ignore,
     options.allowAllIgnored,
+    options.skipPrivateNameCheck ? null : readNamedListOption(options, run, io),
   );
   for (const line of privateNameLines(privateNameCheck, target, "release-publish")) io.err(line);
   if (blocksWrite(privateNameCheck)) {

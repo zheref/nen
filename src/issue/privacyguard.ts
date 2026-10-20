@@ -21,15 +21,21 @@ import { VerbUsageError, type CommandContext } from "../cli/command.js";
 import type { FlagSpec } from "../cli/args.js";
 import { readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
+import { SchemaError } from "../schema/errors.js";
+import { loadWorkflow, type LoadedWorkflow } from "../schema/workflow.js";
 import type { Target } from "../github/target.js";
 import {
   checkPrivateNames,
   ignoreFileInsideTree,
+  NamedListError,
   parseIgnoreList,
+  parseNamedList,
   privateNameLines,
+  readNamedListAtBase,
   SKIP_PRIVATE_NAME_CHECK_FLAG,
   type CheckedText,
   type IgnoreList,
+  type NamedList,
   type PrivateNameCheck,
 } from "./privacy.js";
 
@@ -81,8 +87,52 @@ export function readIgnoreFlag(context: CommandContext): IgnoreList | null {
 }
 
 /**
+ * The `--repo` checkout's committed named list (zheref/nen#441), or null when
+ * `nen/workflow.json` declares none. Read AT THE BASE TIP
+ * (`refs/remotes/origin/<branch.base>:<privateNames.namedFile>`), never from
+ * the checkout, so the change under review cannot write its own exemption
+ * (Feitan F8). Three things are said rather than failed, each one stderr
+ * line prefixed with `verb`, because each leaves the guard STRICTER than a
+ * read list would: a `nen/workflow.json` nen cannot read, a declared file
+ * not at the base tip, and -- not said, nothing to say -- no declaration at
+ * all. A line that is not an exact `owner/name` is the one refusal (exit 2):
+ * a bare name would exempt every owner's repository of that name.
+ */
+export function readNamedList(context: CommandContext, verb: string): NamedList | null {
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  let loaded: LoadedWorkflow;
+  try {
+    loaded = loadWorkflow(root);
+  } catch (error) {
+    if (!(error instanceof SchemaError)) throw error;
+    context.io.err(
+      `${verb}: named list not read -- ${error.message}; no committed named list exempts anything in this run (the ignore file, if any, still does).`,
+    );
+    return null;
+  }
+  const path = loaded.workflow.privateNames.namedFile;
+  if (path === null) return null;
+  const base = loaded.workflow.branch.base;
+  const text = readNamedListAtBase(context.seams, root, base, path);
+  if (text === null) {
+    context.io.err(
+      `${verb}: named list '${path}' is not at refs/remotes/origin/${base} (it is read at the base tip, never from the checkout), so it names nothing in this run.`,
+    );
+    return null;
+  }
+  try {
+    return parseNamedList(text);
+  } catch (error) {
+    if (!(error instanceof NamedListError)) throw error;
+    throw new VerbUsageError(`named list '${path}' at refs/remotes/origin/${base}: ${error.message}`);
+  }
+}
+
+/**
  * Run the check for one write and print its lines to stderr, prefixed with
- * `verb` (./privacy.ts's privateNameLines). Runs on a dry run too: a dry run
+ * `verb` (./privacy.ts's privateNameLines). The committed named list, where
+ * the `--repo` checkout declares one, is read here (readNamedList) so every
+ * guarded verb honours it without a call-site change (zheref/nen#441). Runs on a dry run too: a dry run
  * whose verdict differs from the real run's is not a dry run. Stderr in every
  * mode, so a passing run's stdout is unchanged and the opt-out is named even
  * under --json. The caller refuses on `blocksWrite`, with `blockingExit`.
@@ -94,13 +144,17 @@ export function guardPrivateNames(
   ignore: IgnoreList | null,
   verb: string,
 ): PrivateNameCheck {
+  const skip = context.args.booleans.has(SKIP_PRIVATE_NAME_CHECK_FLAG);
+  // Nothing is read under the opt-out: the run compares against nothing.
+  const named = skip ? null : readNamedList(context, verb);
   const check = checkPrivateNames(
     context.seams,
     target,
     fields,
-    context.args.booleans.has(SKIP_PRIVATE_NAME_CHECK_FLAG),
+    skip,
     ignore,
     context.args.booleans.has(ALLOW_ALL_IGNORED_FLAG),
+    named,
   );
   for (const line of privateNameLines(check, target, verb)) context.io.err(line);
   return check;

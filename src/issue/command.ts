@@ -501,10 +501,24 @@ usage:
       EVERY private name refuses (exit 1, "every private name is ignored")
       unless --allow-all-ignored is given. An ignored hit never blocks
       and is never silent: 'ignored: <field>:<line>: private repository #k
-      (ignore file)' on stderr, without the name. --json carries
+      (ignore file)' on stderr, without the name.
+      The --repo checkout's COMMITTED NAMED LIST is honoured beside it
+      (zheref/nen#441): nen/workflow.json -> privateNames.namedFile names
+      a file of private repositories whose NAME a recorded ruling made
+      public, one exact 'owner/name' per line ('#' comments, blanks
+      ignored, case-insensitive). A bare 'name' there is a usage error
+      (exit 2) naming the line: it would exempt every owner's repository of
+      that name, and a same-named private repository under another owner
+      stays a hit. It is read at the base tip, 'refs/remotes/origin/
+      <branch.base>:<namedFile>', never from the checkout; declared and not
+      there, or a nen/workflow.json nen cannot read, it names nothing and
+      the run says so. Every-name-exempted counts both lists. An ignored hit
+      says which list: '(named list)' or '(ignore file)' on stderr,
+      'ignoredBy: named-list | ignore-file' under --json. --json carries
       'privateNameCheck: { result: clean | skipped-private-target |
       skipped-by-flag | refused | unavailable, targetVisibility, listSize,
-      owners, hits: [{ field, line, index, normalised, ignored }], error }'
+      owners, hits: [{ field, line, index, normalised, ignored, ignoredBy }],
+      error }'
       (listSize/owners are counts, null when the list was not read); a
       refused 'comment' report carries no 'body'.
 
