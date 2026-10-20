@@ -6,6 +6,9 @@
 // missing permission, and THE VERDICT AND EXIT ARE UNCHANGED in every case.
 
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { prReady, type Io, type PrReadyDeps, type PrReadyInput, type ReadyReport } from "./pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
 import type {
@@ -119,12 +122,17 @@ function deps(src: PrStateSource, env: Record<string, string> = {}): PrReadyDeps
   };
 }
 
+// An empty --repo OUTSIDE this checkout (zheref/nen#372, Feitan 4): with
+// none, the fixture --gates would sit inside this repository and read as
+// head content rather than the caller's file.
+const OUTSIDE_ROOT = mkdtempSync(join(tmpdir(), "nen-224-outside-"));
+
 function input(booleans: readonly string[]): PrReadyInput {
   return {
     positionals: ["pr", "ready", "9"],
     values: { "gh-repo": "zheref/example", gates: schemaPath(BANKAI_REPO, GATES_FILE) },
     booleans: new Set(booleans),
-    repoFlag: null,
+    repoFlag: OUTSIDE_ROOT,
   };
 }
 

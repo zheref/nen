@@ -5,6 +5,9 @@
 // where "repeatable" is actually decided.
 
 import { describe, expect, it } from "vitest";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ExcludeCheckError, parseExcludeCheckNames, splitCheckNames } from "./excludecheck.js";
 import { prReady, type LocalCheckout, type PrReadyDeps, type PrReadyInput, type ReadyReport } from "../verbs/pr_ready.js";
 import type { PrStateSource } from "../github/pr_state.js";
@@ -151,12 +154,17 @@ function stubDeps(source: PrStateSource): PrReadyDeps {
   };
 }
 
+// An empty --repo OUTSIDE this checkout (zheref/nen#372, Feitan 4): with
+// none, the root is this repository and the fixture --gates would sit inside
+// it, which reads as head content. Here it is a file the caller vouches for.
+const OUTSIDE_ROOT = mkdtempSync(join(tmpdir(), "nen-243-outside-"));
+
 function input(overrides: Partial<PrReadyInput> = {}): PrReadyInput {
   return {
     positionals: ["pr", "ready", "9"],
     values: { "gh-repo": "zheref/example", gates: schemaPath(BANKAI_REPO, GATES_FILE) },
     booleans: new Set(["json"]),
-    repoFlag: null,
+    repoFlag: OUTSIDE_ROOT,
     ...overrides,
   };
 }

@@ -17,7 +17,7 @@
 // and gets a named failure when the remote resolves to nothing.
 
 import { looksLikeOwnerSlug } from "../repo/root.js";
-import { GIT, outputLines, type Seams } from "../seam/exec.js";
+import { GIT, outputLines, redactRemoteUrl, type Seams } from "../seam/exec.js";
 
 export interface Target {
   readonly owner: string;
@@ -66,8 +66,12 @@ export function targetFromRemote(
   }
   const parsed = parseRemoteUrl(url);
   if (parsed === null) {
+    // THE URL IS ECHOED WITHOUT ITS USERINFO (SEC-5, zheref/nen#373): an
+    // origin that does not parse is exactly the one a caller pastes a token
+    // into, and this message reaches a terminal, a log and every caller that
+    // re-raises it as a usage error (`pr merge --delivery`).
     throw new TargetError(
-      `the '${remote}' remote is '${url}', which does not read as a GitHub repository. Name it with --target owner/name.`,
+      `the '${remote}' remote is '${redactRemoteUrl(url)}', which does not read as a GitHub repository. Name it with --target owner/name.`,
     );
   }
   return parsed;

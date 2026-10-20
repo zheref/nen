@@ -16,6 +16,7 @@ import { parseTarget } from "../github/target.js";
 import { prCommand } from "./command.js";
 import { MAX_BATCH_FILE_BYTES, MAX_BODY_CHARS, readSettleFile, SETTLE_CONTRACT } from "./settle.js";
 import { listArgv, listPageArgv, replyArgv, resolveArgv } from "./threads.js";
+import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
 const TARGET = parseTarget("zheref/nen");
 const HEAD_SHA = "1f4bb2c0a1b2c3d4e5f60718293a4b5c6d7e8f90";
@@ -47,12 +48,22 @@ interface Captured {
   readonly seams: ScriptedSeams;
 }
 
-async function capture(argv: readonly string[], calls: readonly ScriptedCall[], repoFlag: string | null = null): Promise<Captured> {
+/**
+ * `guard`: by default the private-name guard's visibility read
+ * (zheref/nen#363) answers "private" and is not recorded
+ * (../issue/privacy.testkit.ts); the guard's own tests pass "scripted".
+ */
+async function capture(
+  argv: readonly string[],
+  calls: readonly ScriptedCall[],
+  repoFlag: string | null = null,
+  guard: "private-target" | "scripted" = "private-target",
+): Promise<Captured> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = { out: (line): void => void out.push(line), err: (line): void => void err.push(line) };
   const seams = new ScriptedSeams(calls);
-  const code = await runFamily(prCommand, argv, repoFlag, false, io, seams);
+  const code = await runFamily(prCommand, argv, repoFlag, false, io, guard === "scripted" ? seams : withPrivateTarget(seams, "zheref/nen"));
   return { code, out, err, seams };
 }
 
@@ -89,7 +100,8 @@ describe("nen pr threads settle -- the batch", () => {
     expect(captured.seams.calls).toHaveLength(5);
     expect(ghCalls(captured.seams).filter((call): boolean => call.includes("reviewThreads"))).toHaveLength(1);
     const doc = JSON.parse(captured.out.join("\n")) as Record<string, unknown> & { entries: Record<string, unknown>[] };
-    expect(Object.keys(doc)).toEqual(["contract", "target", "pr", "head", "from", "dryRun", "ok", "stoppedAt", "entries"]);
+    // privateNameCheck appended by the private-name guard (zheref/nen#363).
+    expect(Object.keys(doc)).toEqual(["contract", "target", "pr", "head", "from", "dryRun", "ok", "stoppedAt", "entries", "privateNameCheck"]);
     expect(doc).toMatchObject({ contract: SETTLE_CONTRACT, target: "zheref/nen", pr: 217, head: HEAD_SHA, from, dryRun: false, ok: true, stoppedAt: null });
     expect(Object.keys(doc.entries[0] ?? {})).toEqual(["thread", "disposition", "replied", "resolved", "bodyBytes", "bodyFrom", "replyArgv", "resolveArgv", "error"]);
     expect(doc.entries.map((entry): unknown => [entry["thread"], entry["disposition"], entry["replied"], entry["resolved"]])).toEqual([
@@ -546,5 +558,59 @@ describe("nen pr threads settle -- the realpath/open race (Feitan F5)", () => {
       return realpathSync(path);
     };
     expect(() => readSettleFile(from, failing)).toThrow(/could not resolve the directory of --from '.*batch\.json' \(ENOENT\)/);
+  });
+});
+
+describe("nen pr threads settle -- the private-name guard (zheref/nen#363)", () => {
+  const LIST = privateListRow(["acme/hidden-thing", "acme/vault"]);
+  const ARGS = (from: string, ...extra: string[]): string[] => ["pr", "threads", "settle", "--target", "zheref/nen", "--pr", "217", "--from", from, ...extra];
+
+  it("a private name in ANY entry refuses the whole batch with exit 4 before the walk, and never prints the name", async () => {
+    const from = batch([
+      { thread: "T1", body: "Fixed." },
+      { thread: "T2", body: "Moved to\nthe vault." },
+    ]);
+    const result = await capture(ARGS(from), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST], null, "scripted");
+    expect(result.code).toBe(4);
+    expect(result.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual(["gh api repos/zheref/nen", SCOPES_CALL, PRIVATE_LIST_PAGE]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen pr threads settle: entry[2]:2: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("--json: the refusal carries the verdict and ok: false", async () => {
+    const from = batch([{ thread: "T1", body: "see hidden-thing" }]);
+    const result = await capture(ARGS(from, "--json", "--dry-run"), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST], null, "scripted");
+    expect(result.code).toBe(4);
+    const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(doc).toMatchObject({ contract: SETTLE_CONTRACT, ok: false, dryRun: true });
+    expect((doc["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "entry[1]", line: 1, index: 1, normalised: false, ignored: false }]);
+  });
+
+  it("a PRIVATE target is not checked: the list is never read and the batch settles", async () => {
+    const from = batch([{ thread: "T1", body: "the vault" }]);
+    const result = await capture(
+      ARGS(from),
+      [visibilityRow("zheref/nen", "private"), listCall(pageBody([node("T1", false)])), replyOk("T1", "the vault"), resolveOk("T1")],
+      null,
+      "scripted",
+    );
+    expect(result.code).toBe(0);
+    expect(result.seams.calls.some((call): boolean => call.args.join(" ").startsWith("api user/repos"))).toBe(false);
+  });
+
+  it("an unreadable private list fails closed (exit 1) with nothing walked or sent", async () => {
+    const from = batch([{ thread: "T1", body: "Fixed." }]);
+    const result = await capture(ARGS(from), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, UNREADABLE_PRIVATE_LIST], null, "scripted");
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/nen pr threads settle: private-name check could not run/);
+    expect(result.seams.calls).toHaveLength(3);
+  });
+
+  it("the file's own refusals still come first: a malformed batch is exit 2 with no guard read", async () => {
+    const from = batch([{ thread: "T1" }]);
+    const result = await capture(ARGS(from), [], null, "scripted");
+    expect(result.code).toBe(2);
+    expect(result.seams.calls).toEqual([]);
   });
 });

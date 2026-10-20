@@ -15,6 +15,7 @@ import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import { parseTarget } from "../github/target.js";
 import { prCommand } from "./command.js";
 import { listArgv, listPageArgv, looksLikeAuthFailure, printableArgv, replyArgv, resolveArgv } from "./threads.js";
+import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
 const TARGET = parseTarget("zheref/nen");
 /** A REAL 40-hex head: the summary line refuses to abbreviate anything else. */
@@ -64,11 +65,17 @@ async function capture(argv: readonly string[], calls: readonly ScriptedCall[]):
   return captureIn(argv, calls, null);
 }
 
-/** The same, with a `--repo` root -- what `--body-file` resolves against. */
+/**
+ * The same, with a `--repo` root -- what `--body-file` resolves against.
+ * `guard`: by default `reply` meets the private-name guard (zheref/nen#363)
+ * with its visibility read answered "private" and unrecorded
+ * (../issue/privacy.testkit.ts); the guard's own tests pass "scripted".
+ */
 async function captureIn(
   argv: readonly string[],
   calls: readonly ScriptedCall[],
   repoFlag: string | null,
+  guard: "private-target" | "scripted" = "private-target",
 ): Promise<Captured> {
   const out: string[] = [];
   const err: string[] = [];
@@ -77,7 +84,7 @@ async function captureIn(
     err: (line): void => void err.push(line),
   };
   const seams = new ScriptedSeams(calls, { now: (): Date => NOW, platform: "linux" });
-  const code = await runFamily(prCommand, argv, repoFlag, false, io, seams);
+  const code = await runFamily(prCommand, argv, repoFlag, false, io, guard === "scripted" ? seams : withPrivateTarget(seams, "zheref/nen"));
   return { code, out, err, seams };
 }
 
@@ -514,6 +521,8 @@ describe("the --json argv (Nobunaga N9)", () => {
       "dryRun",
       "threads",
       "argv",
+      // 'reply' only, appended by the private-name guard (zheref/nen#363).
+      "privateNameCheck",
     ]);
     // The full argv, body and all -- the summary is for the human line only.
     expect(document["argv"]).toEqual([...replyArgv("T2", "Fixed in 2a6539c.")]);
@@ -693,6 +702,67 @@ describe("the summary line's head SHA (Copilot #221 round 3)", () => {
       expect(captured.out[0], `'${head}' was printed as a SHA`).toContain("@ unknown head:");
       // And no control character reaches the terminal on the way.
       expect(captured.out.join("\n")).not.toContain(String.fromCharCode(27));
+    }
+  });
+});
+
+describe("nen pr threads reply -- the private-name guard (zheref/nen#363)", () => {
+  const LIST = privateListRow(["acme/hidden-thing", "acme/vault"]);
+  const args = (file: string, ...extra: string[]): string[] => [
+    "pr", "threads", "reply", "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--body-file", file, ...extra,
+  ];
+
+  it("a private name on a PUBLIC target refuses with exit 4 before the walk and the reply, and never prints the name", async () => {
+    const captured = await captureIn(args(bodyFile("Fixed; see acme/vault.")), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST], null, "scripted");
+    expect(captured.code).toBe(4);
+    expect(captured.seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual(["gh api repos/zheref/nen", SCOPES_CALL, PRIVATE_LIST_PAGE]);
+    const all = [...captured.out, ...captured.err].join("\n");
+    expect(all).toContain("nen pr threads reply: body:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("--json: the refusal carries the verdict, replied: false -- told apart from an unknown thread's 4 by it", async () => {
+    const captured = await captureIn(args(bodyFile("the vault"), "--json", "--dry-run"), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST], null, "scripted");
+    expect(captured.code).toBe(4);
+    const document = JSON.parse(captured.out.join("\n")) as Record<string, unknown>;
+    expect(document).toMatchObject({ replied: false, dryRun: true, thread: "T2" });
+    expect((document["privateNameCheck"] as { result: string }).result).toBe("refused");
+  });
+
+  it("a PRIVATE target is not checked: the list is never read and the reply is sent", async () => {
+    const captured = await captureIn(
+      args(bodyFile("the vault")),
+      [
+        visibilityRow("zheref/nen", "private"),
+        listCall(pageBody([node("T2", false)], false)),
+        { match: `gh ${replyArgv("T2", "the vault").join(" ")}`, result: { code: 0, stdout: JSON.stringify({ data: { addPullRequestReviewThreadReply: { comment: { id: "C1", url: "u" } } } }) } },
+      ],
+      null,
+      "scripted",
+    );
+    expect(captured.code).toBe(0);
+    expect(captured.seams.calls.some((call): boolean => call.args.join(" ").startsWith("api user/repos"))).toBe(false);
+  });
+
+  it("an unreadable private list fails closed (exit 1) with nothing walked or sent", async () => {
+    const captured = await captureIn(args(bodyFile("anything")), [visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, UNREADABLE_PRIVATE_LIST], null, "scripted");
+    expect(captured.code).toBe(1);
+    expect(captured.err.join("\n")).toMatch(/nen pr threads reply: private-name check could not run/);
+    expect(captured.seams.calls).toHaveLength(3);
+  });
+
+  it("refuses the guard's flags on 'list' and 'resolve', which write no text (exit 2)", async () => {
+    for (const action of ["list", "resolve"]) {
+      const captured = await captureIn(
+        ["pr", "threads", action, "--target", "zheref/nen", "--pr", "217", "--thread", "T2", "--skip-private-name-check"].filter(
+          (arg, index, all): boolean => !(action === "list" && (arg === "--thread" || all[index - 1] === "--thread")),
+        ),
+        [],
+        null,
+        "scripted",
+      );
+      expect(captured.code, action).toBe(2);
+      expect(captured.err.join("\n"), action).toMatch(/--skip-private-name-check is not read by 'pr threads/);
     }
   });
 });
