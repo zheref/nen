@@ -23,6 +23,7 @@
 // NOTHING IS SPAWNED. This family reads and writes one JSON file.
 
 import { emit, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { plainLine } from "../cli/plain.js";
 import { resolveRepoRoot } from "../repo/root.js";
 
 import {
@@ -40,7 +41,7 @@ import {
 export { PHASE_CONTRACT, PHASE_LEDGER_DIR, readLedger };
 export type { PhaseEntry, PhaseLedger, PhaseStep };
 
-const USAGE = `nen phase begin --effort <id> --phase <name> [--surface <s>] [--model <alias>] [--note <text>]
+const USAGE = `nen phase begin --effort <id> --phase <name> [--surface <s>] [--model <alias>] [--dial <level>] [--note <text>]
 nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
 nen phase show  --effort <id> [--repo <path>] [--json]
 
@@ -63,6 +64,8 @@ milliseconds and the exit code the caller reports. 'show' prints the ledger.
   --surface <s>    Which surface ran it (claude-code, codex, cursor,
                    antigravity). Recorded verbatim.
   --model <alias>  Which model tier or alias ran it. Recorded verbatim.
+  --dial <level>   The effort level, in the surface's vocabulary. Recorded
+                   verbatim; null when absent, including on older ledgers.
   --exit <code>    The phase's exit code, for 'end'. Omitted = null.
   --note <text>    One free-text line kept on the entry.
 
@@ -88,7 +91,7 @@ export const phaseCommand: Command = {
   summary: "Record when a workflow phase began and ended, per effort.",
   usage: USAGE,
   subcommands: ["begin", "end", "show"],
-  flags: { values: ["effort", "phase", "surface", "model", "exit", "note"], booleans: [] },
+  flags: { values: ["effort", "phase", "surface", "model", "dial", "exit", "note"], booleans: [] },
   run(context: CommandContext): number {
     const sub = requireSubcommand("phase", context.args, ["begin", "end", "show"]);
     const effort = requireEffort(context);
@@ -129,6 +132,7 @@ export const phaseCommand: Command = {
           // entry sees the key and knows nothing has run yet, rather than
           // wondering whether this ledger predates it.
           steps: [],
+          dial: context.args.values["dial"] ?? null,
         };
         const next: PhaseLedger = { ...ledger, phases: [...ledger.phases, entry] };
         writeLedger(path, next);
@@ -177,7 +181,7 @@ export function renderLedger(ledger: PhaseLedger): string[] {
   const lines = [`effort: ${ledger.effort} (${ledger.phases.length} phase entr${ledger.phases.length === 1 ? "y" : "ies"})`];
   for (const entry of ledger.phases) {
     const duration = entry.durationMs === null ? "open" : `${entry.durationMs}ms`;
-    const tail = [entry.exitCode === null ? null : `exit ${entry.exitCode}`, entry.surface, entry.model].filter((v): v is string => v !== null).join(" · ");
+    const tail = [entry.exitCode === null ? null : `exit ${entry.exitCode}`, entry.surface, entry.model, entry.dial === null ? null : plainLine(entry.dial)].filter((v): v is string => v !== null).join(" · ");
     lines.push(`  ${entry.phase.padEnd(14)} ${duration.padStart(9)}  ${entry.startedAt}${tail === "" ? "" : `  ${tail}`}`);
     // THE STEPS, INDENTED UNDER THE PHASE THEY RAN IN. A step is never a row
     // of its own at the phase's level: it is detail about that phase, and

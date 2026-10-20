@@ -24,6 +24,7 @@ const entry = (n: number, who: string): UsageEntry => ({
   source: null,
   note: null,
   notReported: false,
+  dial: null,
 });
 
 function haveBun(): boolean {
@@ -45,7 +46,7 @@ describe("appendUsageEntry under contention (zheref/nen#231)", () => {
       `import { appendUsageEntry } from ${JSON.stringify(ledgerModule)};`,
       `const who = process.argv[2];`,
       `for (let n = 0; n < ${COUNT}; n += 1) {`,
-      `  appendUsageEntry(${JSON.stringify(path)}, "race", { recordedAt: "2026-09-20T10:00:00.000Z", surface: who, model: null, input: n, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: false });`,
+      `  appendUsageEntry(${JSON.stringify(path)}, "race", { recordedAt: "2026-09-20T10:00:00.000Z", surface: who, model: null, input: n, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: false, dial: null });`,
       `}`,
     ].join("\n"));
     const run = (who: string): Promise<{ code: number | null; stderr: string }> =>

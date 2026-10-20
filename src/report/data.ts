@@ -41,11 +41,12 @@
 // that ran it (the leak ../shu/coverage.ts's `relativiseName` closes).
 
 import { join } from "node:path";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
 import { proofRelativePath } from "../shu/proof.js";
 import { PHASE_CONTRACT, PHASE_LEDGER_DIR } from "../phase/ledger.js";
+import { SESSION_CONTRACT, SESSION_LEDGER_DIR, isSessionEntry, readSessionLedgerText, type SessionEntry } from "../session/ledger.js";
 import { USAGE_CONTRACT, USAGE_LEDGER_DIR } from "../usage/ledger.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
@@ -116,6 +117,7 @@ export interface ReportPhase {
   readonly note: string | null;
   /** The `nen shu` steps that ran inside the phase, verbatim from the ledger; `[]` when none. */
   readonly steps: readonly ReportPhaseStep[];
+  readonly dial: string | null;
 }
 
 export interface ReportPhaseStep {
@@ -161,6 +163,12 @@ export interface ReportData {
    * read.
    */
   readonly usage: readonly ReportUsage[];
+  /** Caller-reported session identities, filename then entry order. */
+  readonly sessions: readonly ReportSession[];
+}
+
+export interface ReportSession extends SessionEntry {
+  readonly effort: string;
 }
 
 /** KEY ORDER IS THE CONTRACT; ./data.test.ts pins it. */
@@ -177,6 +185,7 @@ export interface ReportUsage {
   readonly source: string | null;
   readonly note: string | null;
   readonly notReported: boolean;
+  readonly dial: string | null;
 }
 
 export interface DataOptions {
@@ -424,10 +433,10 @@ export { matchesPattern } from "./patterns.js";
  * A file that is not JSON at all is `null` with the reason on stderr: a report
  * is not the place to fail a run over a marker file.
  */
-export function readJsonArtifact(absolute: string, display: string, warn: (line: string) => void): unknown {
+export function readJsonArtifact(absolute: string, display: string, warn: (line: string) => void, readText: (path: string) => string = (path): string => readFileSync(path, "utf8")): unknown {
   if (!existsSync(absolute)) return null;
   try {
-    return JSON.parse(normalizeEol(readFileSync(absolute, "utf8"))) as unknown;
+    return JSON.parse(normalizeEol(readText(absolute))) as unknown;
   } catch (error) {
     warn(`${display} is present and is not valid JSON (${error instanceof Error ? error.message : String(error)}); reported as null.`);
     return null;
@@ -582,6 +591,7 @@ export function assembleData(
     /* c8 ignore next -- containedPath cannot reject a literal relative path */
     lastStop: lastStop === null ? null : readJsonArtifact(lastStop, ".nen/last-stop.json", warn),
     usage: readUsageLedgers(root, warn),
+    sessions: readSessionLedgers(root, warn),
   };
 }
 
@@ -619,6 +629,7 @@ export function readUsageLedgers(root: string, warn: (line: string) => void): re
         source: string(entry["source"]),
         note: string(entry["note"]),
         notReported: entry["notReported"] === true,
+        dial: string(entry["dial"]),
       });
     }
   }
@@ -663,7 +674,49 @@ export function readPhaseLedgers(root: string, warn: (line: string) => void): re
               stalled: step["stalled"] === true,
             }))
           : [],
+        dial: typeof entry["dial"] === "string" ? entry["dial"] : null,
       });
+    }
+  }
+  return rows;
+}
+
+/** Every session entry, flattened with its effort, in filename then entry order. */
+export function readSessionLedgers(root: string, warn: (line: string) => void): readonly ReportSession[] {
+  const dir = join(root, ...SESSION_LEDGER_DIR.split("/"));
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name): boolean => name.endsWith(".json")).sort();
+  } catch (error) {
+    // Only a missing directory entry is absence. ENOENT from following an
+    // existing dangling directory symlink is an unreadable ledger source.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      try {
+        lstatSync(dir);
+      } catch (probeError) {
+        if ((probeError as NodeJS.ErrnoException).code === "ENOENT") return [];
+        warn(`${SESSION_LEDGER_DIR}: could not inspect directory (${probeError instanceof Error ? probeError.message : String(probeError)}) -- sessions not read`);
+        return [];
+      }
+    }
+    warn(`${SESSION_LEDGER_DIR}: could not read directory (${error instanceof Error ? error.message : String(error)}) -- sessions not read`);
+    return [];
+  }
+  const rows: ReportSession[] = [];
+  for (const name of names) {
+    const display = `${SESSION_LEDGER_DIR}/${name}`;
+    const doc = readJsonArtifact(join(dir, name), display, warn, readSessionLedgerText) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
+    if (doc === null) continue;
+    if (doc.contract !== SESSION_CONTRACT || typeof doc.effort !== "string" || !Array.isArray(doc.entries)) {
+      warn(`${display}: not a '${SESSION_CONTRACT}' ledger -- skipped`);
+      continue;
+    }
+    for (const entry of doc.entries as SessionEntry[]) {
+      if (!isSessionEntry(entry)) {
+        warn(`${display}: invalid session entry -- skipped`);
+        continue;
+      }
+      rows.push({ effort: doc.effort, recordedAt: entry.recordedAt, surface: entry.surface, model: entry.model, dial: entry.dial, title: entry.title, id: entry.id, source: entry.source });
     }
   }
   return rows;
@@ -691,6 +744,7 @@ export function renderData(data: ReportData): readonly string[] {
   lines.push(`last stop: ${data.lastStop === null ? "none" : "present"}`);
   const notReported = data.usage.filter((entry): boolean => entry.notReported).length;
   lines.push(`usage: ${data.usage.length} entr${data.usage.length === 1 ? "y" : "ies"}, ${notReported} not reported`);
+  lines.push(`sessions: ${data.sessions.length} entr${data.sessions.length === 1 ? "y" : "ies"}`);
   return lines;
 }
 

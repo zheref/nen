@@ -1073,3 +1073,22 @@ describe("nen schema check --ledger (#216)", () => {
     expect(result.err.join("\n")).toContain("unknown option '--ledger'");
   });
 });
+
+describe("delivery ledger contract help (#437)", () => {
+  it("names phase, usage and session contracts in schema/check help", async () => {
+    for (const argv of [["schema", "--help"], ["schema", "check", "--help"]]) {
+      const result = await capture(argv);
+      expect(result.code).toBe(0);
+      for (const name of ["phase", "usage", "session"]) expect(result.out.join("\n")).toContain(`nen.${name}.ledger/v0.1`);
+    }
+  });
+  it("documents nullable phase/usage dial and report session JSON facts", async () => {
+    for (const name of ["phase", "usage", "session"]) {
+      const result = await capture([name, "--help"]);
+      expect(result.code).toBe(0);
+      expect(result.out.join("\n")).toContain("--dial <level>");
+    }
+    const report = await capture(["report", "data", "--help"]);
+    for (const key of ["phases[]", "usage[]", "sessions[]", "--json", "dial"]) expect(report.out.join("\n")).toContain(key);
+  });
+});

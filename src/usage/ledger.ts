@@ -37,6 +37,8 @@ export interface UsageEntry {
   readonly source: string | null;
   readonly note: string | null;
   readonly notReported: boolean;
+  /** Caller-reported effort level; null on ledgers written before #437. */
+  readonly dial: string | null;
 }
 
 export interface UsageLedger {
@@ -83,7 +85,7 @@ export function readUsageLedger(path: string, effort: string): UsageLedger {
   }
   const entries = (parsed as { entries?: unknown }).entries;
   if (!Array.isArray(entries)) throw new Error(`'${path}': 'entries' is not an array.`);
-  return { contract: USAGE_CONTRACT, effort, entries: entries as UsageEntry[] };
+  return { contract: USAGE_CONTRACT, effort, entries: (entries as UsageEntry[]).map((entry): UsageEntry => ({ ...entry, dial: entry.dial ?? null })) };
 }
 
 /**

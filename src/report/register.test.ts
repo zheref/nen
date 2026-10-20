@@ -221,6 +221,7 @@ describe("nen report data --register", () => {
       // The derived context (zheref/nen#258), AFTER the register; its `gate`
       // and `generatedAtLocal` are the register's own, in their places above.
       "worktree", "effortStage", "stageClass", "turnNumber", "generatedDateLocal", "timeZone",
+      "sessions",
     ]);
     // The offline path stays offline.
     expect(captured.seams.calls.every((call): boolean => call.command === "git")).toBe(true);
@@ -511,12 +512,12 @@ describe("spend", () => {
   });
 
   const PHASES: ReportPhase[] = [
-    { effort: "e1", phase: "build", startedAt: "", endedAt: "", durationMs: 200_000, exitCode: 0, surface: null, model: null, note: null, steps: [{ verb: "build", argv: "", exitCode: 0, durationMs: 41_200, stalled: false }, { verb: "lint", argv: "", exitCode: 0, durationMs: null, stalled: false }] },
-    { effort: "e1", phase: "review", startedAt: "", endedAt: null, durationMs: 50_000, exitCode: null, surface: null, model: null, note: null, steps: [] },
-    { effort: "e1", phase: "open", startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [] },
+    { effort: "e1", phase: "build", startedAt: "", endedAt: "", durationMs: 200_000, exitCode: 0, surface: null, model: null, dial: null, note: null, steps: [{ verb: "build", argv: "", exitCode: 0, durationMs: 41_200, stalled: false }, { verb: "lint", argv: "", exitCode: 0, durationMs: null, stalled: false }] },
+    { effort: "e1", phase: "review", startedAt: "", endedAt: null, durationMs: 50_000, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] },
+    { effort: "e1", phase: "open", startedAt: "", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] },
   ];
   const usage = (over: Partial<ReportUsage>): ReportUsage => ({
-    effort: "e1", recordedAt: "", surface: "claude-code", model: "opus", input: null, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: false, ...over,
+    effort: "e1", recordedAt: "", surface: "claude-code", model: "opus", input: null, output: null, cacheRead: null, cacheWrite: null, minutes: null, source: null, note: null, notReported: false, dial: null, ...over,
   });
 
   it("bars each phase against the longest, and groups usage by surface and model", () => {
@@ -856,4 +857,15 @@ describe("a spend note nobody will show is refused (Copilot #365)", () => {
     expect(captured.code).toBe(2);
     expect(captured.err.join("\n")).toMatch(/spendNotes name 'el', which is not among the efforts this page shows \('e1'\)/);
   });
+});
+
+
+it("C437-3 appends sessions after the complete register and context prefix", async () => {
+  const { captured, document } = await registerDocument(repo());
+  expect(captured.code).toBe(0);
+  const keys = Object.keys(document);
+  expect(keys.at(-1)).toBe("sessions");
+  expect(keys.slice(0, keys.indexOf("objects") + 1)).toEqual([
+    "contract", "repo", "branch", "base", "generatedAt", "commits", "files", "evidence", "coverage", "proof", "phases", "lastStop", "usage", "objects",
+  ]);
 });

@@ -54,7 +54,10 @@ data      One document describing this branch against --base: the commits, the
           changed files (with a tier from --tiers, or null), the evidence rows
           (empty in this release -- 'nen shu evidence' owns them), the lane's
           coverage report if one is on disk, the build proof, and the last
-          recorded stop. READ-ONLY: it runs git and opens files, and writes
+          recorded stop. It also merges phases[], usage[] (each carrying the
+          caller's dial, null on older entries), and sessions[] (caller-reported
+          title/id, surface, model, dial, source and recordedAt with effort).
+          --json carries these arrays; an absent directory yields []. READ-ONLY: it runs git and opens files, and writes
           nothing, ever.
 
   --base <ref>     Required. What this branch is measured against -- the trunk,
@@ -549,8 +552,11 @@ async function runData(context: CommandContext): Promise<number> {
   const filterLines = filter === null ? [] : [`  ${describeFilter(filter)} -- kept ${objects.length} of ${assembled.length} object(s)`];
   const filtered = filter === null ? null : { of: assembled.length };
   const filterKey = objectsFilter === null ? {} : { objectsFilter };
+  // Keep the entire published prefix intact; sessions is new information
+  // after existing context/register keys and before objectsFilter (always last).
+  const { sessions, ...legacyDocument } = document;
   if (desk === null) {
-    const full = { ...document, objects, ...derived, ...filterKey };
+    const full = { ...legacyDocument, objects, ...derived, sessions, ...filterKey };
     emit(context.io, context.json, full, [...renderData(document), ...renderObjects(objects, filtered), ...filterLines]);
     return 0;
   }
@@ -575,9 +581,10 @@ async function runData(context: CommandContext): Promise<number> {
   // `objectsFilter` IS THE LAST KEY ON THIS PATH TOO, so one rule describes
   // both documents (Nobunaga f1 on NN-PR for #410).
   const full = {
-    ...document,
+    ...legacyDocument,
     ...register,
     ...(deskOwnsClock ? { ...tail, generatedDateLocal: null, timeZone: null } : tail),
+    sessions,
     ...filterKey,
   };
   emit(context.io, context.json, full, [
