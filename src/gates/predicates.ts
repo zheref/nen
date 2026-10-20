@@ -1135,11 +1135,11 @@ export interface EventRoundFacts {
   readonly startedAt: string | null;
 }
 
-/** Event checks prove activity only. A formal submitted review is the round. */
-export function eventRoundFacts(
+/** Event activity and the round it permits must use the same delivery-aware reading. */
+function eventRoundDecision(
   identity: ReviewerIdentity | undefined, reviews: readonly Review[],
-  checks: readonly RollupEntry[], headSha: string, policy: RoundPolicy,
-): EventRoundFacts | null {
+  checks: readonly RollupEntry[], headSha: string, policy: RoundPolicy, deliveryPr: boolean,
+): { event: EventRoundFacts; outcome: RoundOutcome } | null {
   if ((identity?.wake ?? "request") !== "event" || identity === undefined) return null;
   const matching = latestChecks(checks).filter((entry): boolean => {
     const name = rollupEntryCheckName(entry);
@@ -1148,13 +1148,32 @@ export function eventRoundFacts(
   // Any live matching job binds, even if a sibling job has completed.
   const active = matching.find((entry): boolean => lifecycleStatus(entry) !== "COMPLETED");
   const posted = reviews.some((review): boolean => isPostedReviewBy(review, identity.loginPattern) && review.commitId === headSha);
-  if (active !== undefined) return { state: "in-flight", startedAt: active.startedAt ?? null };
-  if (posted) return { state: "posted", startedAt: null };
-  if (matching.length > 0) return { state: "completed-without-review", startedAt: null };
-  if (policy === "bounded" && reviews.some((review): boolean => isPostedReviewBy(review, identity.loginPattern))) {
-    return { state: "posted", startedAt: null };
+  if (active !== undefined) return { event: { state: "in-flight", startedAt: active.startedAt ?? null }, outcome: { had: false, reason: "no-round-at-head" } };
+  if (posted) return { event: { state: "posted", startedAt: null }, outcome: { had: true, via: "review" } };
+  const unposted: EventRoundFacts = { state: matching.length > 0 ? "completed-without-review" : "no-run", startedAt: null };
+  const anyPosted = reviews.some((review): boolean => isPostedReviewBy(review, identity.loginPattern));
+  if (deliveryPr && identity.deliveryHolisticPass) {
+    // CON-40 is not ordinary bounded any-head leniency. The prior formal
+    // holistic pass needs a definitive current-head abstain-green SUCCESS.
+    if (identity.reviewCheckPattern === null || !hasDefinitiveSuccessCheck(matching, identity.reviewCheckPattern)) {
+      return { event: unposted, outcome: { had: false, reason: "delivery-no-definitive-success-review-check" } };
+    }
+    return anyPosted
+      ? { event: { state: "posted", startedAt: null }, outcome: { had: true, via: "delivery-holistic-pass" } }
+      : { event: unposted, outcome: { had: false, reason: "delivery-holistic-pass-never-posted" } };
   }
-  return { state: "no-run", startedAt: null };
+  if (matching.length === 0 && policy === "bounded" && anyPosted) {
+    return { event: { state: "posted", startedAt: null }, outcome: { had: true, via: "review" } };
+  }
+  return { event: unposted, outcome: { had: false, reason: "no-round-at-head" } };
+}
+
+/** Event checks prove activity; even CON-40's abstain-green requires a posted formal review. */
+export function eventRoundFacts(
+  identity: ReviewerIdentity | undefined, reviews: readonly Review[],
+  checks: readonly RollupEntry[], headSha: string, policy: RoundPolicy, deliveryPr: boolean,
+): EventRoundFacts | null {
+  return eventRoundDecision(identity, reviews, checks, headSha, policy, deliveryPr)?.event ?? null;
 }
 
 export interface OwedRound {
@@ -1216,9 +1235,9 @@ export function pendingRounds(
     const identity: ReviewerIdentity | undefined = identities.reviewer(name);
     const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
 
-    const event = eventRoundFacts(identity, inputs.reviews, checks, headSha, policy);
+    const event = eventRoundDecision(identity, inputs.reviews, checks, headSha, policy, deliveryPr);
     if (event !== null) {
-      if (event.state !== "posted") owed.push({ reviewer: name, reason: "no-round-at-head", state: event.state });
+      if (!event.outcome.had) owed.push({ reviewer: name, reason: event.outcome.reason, state: event.event.state });
       continue;
     }
 
@@ -1396,10 +1415,8 @@ function reviewerRound(
   policy: RoundPolicy,
   deliveryPr: boolean,
 ): RoundOutcome {
-  const event = eventRoundFacts(identity, reviews, checks, headSha, policy);
-  if (event !== null) return event.state === "posted"
-    ? { had: true, via: "review" }
-    : { had: false, reason: "no-round-at-head" };
+  const event = eventRoundDecision(identity, reviews, checks, headSha, policy, deliveryPr);
+  if (event !== null) return event.outcome;
   // BOUNDED ROUND POLICY, ANY-HEAD LIMB (zheref/nen#214). `strict` keeps the
   // ORIGINAL rule exactly: a round only counts at the CURRENT head, so a
   // remediation push re-opens the owed limb until the reviewer shows up
@@ -1816,7 +1833,7 @@ export function roundQuorum(
         requestMatches(request, loginPattern),
       ),
       roundCheck,
-      ...(identity?.wake === "event" ? { eventRun: eventRoundFacts(identity, inputs.reviews, checks, headSha, policy)! } : {}),
+      ...(identity?.wake === "event" ? { eventRun: eventRoundFacts(identity, inputs.reviews, checks, headSha, policy, deliveryPr)! } : {}),
     };
   });
   const count = members.filter((member): boolean => member.round !== null).length;

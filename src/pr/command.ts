@@ -54,7 +54,7 @@ import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { classifyGatesPath, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import type { FlagSpec } from "../cli/args.js";
 import { conjoin } from "../cli/prose.js";
-import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
+import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement, type BodyCheckOptions } from "./bodycheck.js";
 import {
   checkDerivedBody,
   deriveRequirements,
@@ -101,6 +101,7 @@ import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbo
 import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
+import { sectionsCommand } from "./sections_command.js";
 import { plainLine } from "../cli/plain.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
 import {
@@ -149,6 +150,9 @@ const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready optio
 nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
+                  [--exact [--max <n>]] [--prose-budget <words>]
+nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--with a,b] [--overrides <workflow.json>] [--json]
+nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
@@ -349,7 +353,19 @@ staleness:
   permitted without a human.
   --wakes-from <path>   A JSON array of { at, noCommit }.
 
+sections:
+  resolve reads caller-owned sections[], footer[], families{}, precedence[],
+  variants{"<kind>.<family>": [ids]} and max. The JSON contract is
+  'nen.pr.sections/v0.1'. --with admits sections whose 'when' names a run fact;
+  --overrides reads workflow.json's pr.sections cell map. Only reader sections
+  count against the catalogue max; footer blocks remain outside it.
+  family counts distinct taxonomy job keys; ties use catalogue precedence.
+
 body-check:
+  --exact refuses undeclared, repeated, ambiguous or out-of-order level-2
+  headings outside fences/comments, naming the line. --max requires --exact.
+  --prose-budget warns per section over the budget, excluding tables, code
+  (including Mermaid) and comments, without changing the verdict.
   Every requirement is checked; never stops at the first miss.
   --requirements-from <path>  A JSON array of { name, pattern } -- this
                               repository's own template convention, never a
@@ -464,15 +480,16 @@ request-reviews:
   ([{ id, login, requested, next, maxRounds, refused }]) when a bot is
   named.
   A bot is reported as requested only when the mutation's OWN response
-  lists it, by node id, as pending review (zheref/nen#277): GitHub has
-  been seen to accept the call and record nothing, and no review then
-  arrives. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
+  lists it, by node id, as pending review (zheref/nen#277). A successful
+  response may omit a requested bot; it does not prove whether GitHub
+  recorded it. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
   named, or a route's gh call failed or answered something unreadable,
   or the round ceiling could not be checked; 2 usage (a missing --pr, an
   unresolved --add-reviewers or --add-bots login, or an invalid explicit
   Bot node id) or a bot past
   round_policy.maxRounds; 9 every
-  call was ACCEPTED but at least one requested bot is not pending review
+  call was ACCEPTED but at least one requested bot is absent from the
+  response's pending-review page
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
   }], login null for a bot this pull request has never seen). The response cannot determine allowance exhaustion versus an otherwise
   unrecorded request; its first:100 page may omit a pending bot. When a call also failed outright, 1 wins and
@@ -876,6 +893,21 @@ function derivedRequirements(reader: TemplateReader, root: string): { requiremen
 }
 
 function bodyCheck(context: CommandContext): number {
+  const integer = (flag: string): number | undefined => {
+    const value = context.args.values[flag];
+    if (value === undefined) return undefined;
+    if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new VerbUsageError(`--${flag} requires a positive safe integer`);
+    return Number(value);
+  };
+  const exact = context.args.booleans.has("exact");
+  const max = integer("max");
+  const proseBudget = integer("prose-budget");
+  if (max !== undefined && !exact) throw new VerbUsageError("--max requires --exact");
+  const options: BodyCheckOptions = { exact, ...(max === undefined ? {} : { max }), ...(proseBudget === undefined ? {} : { proseBudget }) };
+  const extraLines = (report: ReturnType<typeof checkBody>): string[] => [
+    ...(report.findings ?? []).map((row): string => `FINDING line ${row.line}: ${row.message}`),
+    ...(report.warnings ?? []).map((row): string => `WARN ${row.section}: ${row.words} prose words (budget ${row.budget})`),
+  ];
   const bodyPath = requireValue(context.args, "body-from", "The pull-request body to check.");
   // Given at all -> read exactly as before (an explicitly EMPTY value is still
   // requireValue's refusal, never a quiet fall-through to derivation).
@@ -895,7 +927,7 @@ function bodyCheck(context: CommandContext): number {
 
   // A SHIPPED FILE: exactly the check it always was, plus the source field.
   if (requirementsPath !== undefined) {
-    const report = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd));
+    const report = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd), options);
     const source: RequirementSource = { kind: "shipped", path: requirementsPath, ref: null, commit: null };
     const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
     // A VERDICT LINE ALWAYS PRINTS (review finding): zero output must never be a
@@ -903,7 +935,8 @@ function bodyCheck(context: CommandContext): number {
     const lines = [
       `${satisfiedCount}/${report.results.length} requirement(s) satisfied`,
       ...report.results.map((result): string => `${result.satisfied ? "ok" : "MISSING"}  ${result.name}`),
-    ];
+      ...extraLines(report),
+    ].map(plainLine);
     emit(context.io, context.json, { ...report, source }, lines);
     return report.ok ? 0 : 1;
   }
@@ -927,12 +960,15 @@ function bodyCheck(context: CommandContext): number {
     throw error;
   }
   const { requirements, source } = derived;
-  const report = checkDerivedBody(body, requirements);
+  const derivedReport = checkDerivedBody(body, requirements, { strictFences: exact });
+  const extra = exact || proseBudget !== undefined ? checkBody(body, requirements, options) : undefined;
+  const report = { ...derivedReport, ...(extra?.findings === undefined ? {} : { findings: extra.findings }), ...(extra?.warnings === undefined ? {} : { warnings: extra.warnings }), ok: derivedReport.ok && (extra?.ok ?? true) };
   const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
   const label = { ok: "ok", missing: "MISSING", empty: "EMPTY" } as const;
   const lines = [
     `${satisfiedCount}/${report.results.length} requirement(s) satisfied (DERIVED from the pull-request template '${source.path}' ${describeReader(reader)}; no --requirements-from given)`,
     ...report.results.map((result): string => `${label[result.status]}  ${result.name}`),
+    ...(extra === undefined ? [] : extraLines(extra)),
   ].map(plainLine);
   emit(context.io, context.json, { ...report, source }, lines);
   return report.ok ? 0 : 1;
@@ -1002,7 +1038,8 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
     lists: [...PR_READY_FLAGS.lists],
   },
   staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
-  "body-check": { values: ["body-from", "requirements-from", "base"] },
+  "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
+  sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
   "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
@@ -1108,6 +1145,7 @@ const GH_RESOLVES = "runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TO
  */
 const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   staleness: "staleness reads local files only and calls no GitHub API, so there is no credential to name.",
+  sections: "sections reads local JSON files only and calls no GitHub API.",
   "body-check": "body-check reads local files and git only and calls no GitHub API, so there is no credential to name.",
   fetch: `fetch ${GH_RESOLVES}`,
   "next-blocker": `next-blocker ${GH_RESOLVES}`,
@@ -1215,6 +1253,8 @@ export const prCommand: Command = {
         return staleness(context);
       case "body-check":
         return bodyCheck(context);
+      case "sections":
+        return sectionsCommand(context);
       case "fetch":
         return fetch(context);
       case "next-blocker":
@@ -1337,13 +1377,12 @@ function blocker(context: CommandContext): number {
   // checkout is head content, applied with a warning. The exclusions are the
   // intersection with the default tip on every path.
   const now = new Date().toISOString();
-  // Both policy commits are selected together, then read only by immutable OID.
-  const refs = readGateRefs(context.seams, target, prNumber);
+  // Keep the fetched PR's base for identities. The separate default-tip read
+  // may authorise exclusions only while its head/base still match that snapshot.
+  const refs = readGateRefs(context.seams, target, prNumber, snapshot);
   const baseSha = refs.baseSha;
   const where = `${target.slug}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
-  const baseRead: BaseGatesRead = refs.failure === undefined
-    ? readGatesAt(context.seams, target, baseSha)
-    : { kind: "failed", message: refs.failure };
+  const baseRead = readGatesAt(context.seams, target, baseSha);
   const gatesClass = gatesFlag === undefined ? null : classifyGatesPath(root, local.path);
   let applied: { identities: GateIdentities; path: string; read: "base" | "local-fallback" | "gates-flag"; warnings: readonly string[] };
   if (gatesClass === null || gatesClass === "own") {
@@ -1413,20 +1452,41 @@ function blocker(context: CommandContext): number {
 /** Both trusted policy OIDs from one GitHub snapshot; no moving ref is used for file reads. */
 export function gateRefsArgv(target: Target, prNumber: number): readonly string[] {
   return ["api", "--method", "POST", "graphql", "-f",
-    "query=query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{target{oid}} pullRequest(number:$pr){baseRefOid}}}",
+    "query=query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{target{oid}} pullRequest(number:$pr){baseRefOid headRefOid}}}",
     "-f", `owner=${target.owner}`, "-f", `name=${target.repo}`, "-F", `pr=${prNumber}`];
 }
 
-function readGateRefs(seams: Seams, target: Target, prNumber: number): { baseSha: string; defaultSha: string; failure?: string } {
+function readGateRefs(seams: Seams, target: Target, prNumber: number, snapshot: PrSnapshot): { baseSha: string; defaultSha: string; failure?: string } {
+  const baseSha = typeof snapshot.baseRefOid === "string" && /^[0-9a-f]{40}$/i.test(snapshot.baseRefOid) ? snapshot.baseRefOid : "";
   try {
     const result = must(seams, GH, [...gateRefsArgv(target, prNumber)]);
-    const raw = JSON.parse(result.stdout) as { data?: { repository?: { pullRequest?: { baseRefOid?: unknown }; defaultBranchRef?: { target?: { oid?: unknown } } } }; errors?: unknown };
-    if (raw.errors !== undefined) return { baseSha: "", defaultSha: "", failure: "GitHub reported errors while reading the pinned gate-ref snapshot" };
+    const raw = JSON.parse(result.stdout) as { data?: { repository?: { pullRequest?: { baseRefOid?: unknown; headRefOid?: unknown }; defaultBranchRef?: { target?: { oid?: unknown } } } }; errors?: unknown };
+    if (raw.errors !== undefined) return { baseSha, defaultSha: "", failure: "GitHub reported errors while reading the pinned gate-ref snapshot" };
     const base = raw.data?.repository?.pullRequest?.baseRefOid;
+    const head = raw.data?.repository?.pullRequest?.headRefOid;
     const tip = raw.data?.repository?.defaultBranchRef?.target?.oid;
-    return { baseSha: typeof base === "string" && /^[0-9a-f]{40}$/i.test(base) ? base : "", defaultSha: typeof tip === "string" && /^[0-9a-f]{40}$/i.test(tip) ? tip : "" };
+    const defaultSha = typeof tip === "string" && /^[0-9a-f]{40}$/i.test(tip) ? tip : "";
+    const selectedBase = typeof base === "string" && /^[0-9a-f]{40}$/i.test(base) ? base : "";
+    if (selectedBase !== baseSha || typeof head !== "string" || head === "" || head !== snapshot.pr.headSha) {
+      return { baseSha, defaultSha, failure: "the policy snapshot changed or is unconfirmed against the fetched PR head/base; no later policy can exempt that snapshot's checks" };
+    }
+    return { baseSha, defaultSha };
   } catch (error) {
-    return { baseSha: "", defaultSha: "", failure: `could not read pinned gate refs (${redactRemoteCredentials(error instanceof Error ? error.message : String(error))})` };
+    return { baseSha, defaultSha: "", failure: `could not read pinned gate refs (${redactRemoteCredentials(error instanceof Error ? error.message : String(error))})` };
+  }
+}
+
+/** Wake routing trusts only the pinned default tip; this read cannot authorise check exclusions. */
+function readWakePolicyRef(seams: Seams, target: Target, prNumber: number): { kind: "read"; defaultSha: string } | { kind: "failed"; message: string } {
+  try {
+    const result = must(seams, GH, [...gateRefsArgv(target, prNumber)]);
+    const raw = JSON.parse(result.stdout) as { data?: { repository?: { defaultBranchRef?: { target?: { oid?: unknown } } } }; errors?: unknown };
+    if (raw.errors !== undefined) return { kind: "failed", message: "GitHub reported errors while reading the pinned wake-policy ref" };
+    const tip = raw.data?.repository?.defaultBranchRef?.target?.oid;
+    if (typeof tip !== "string" || !/^[0-9a-f]{40}$/i.test(tip)) return { kind: "failed", message: "no valid default-branch OID in the wake-policy snapshot" };
+    return { kind: "read", defaultSha: tip };
+  } catch (error) {
+    return { kind: "failed", message: `could not read pinned wake-policy ref (${redactRemoteCredentials(error instanceof Error ? error.message : String(error))})` };
   }
 }
 
@@ -1616,9 +1676,9 @@ function doRequestReviews(context: CommandContext): number {
 
   // Wake policy is trusted default-branch content, pinned by one snapshot.
   // Partition before routing, ceilings, mutations or pending-request verification.
-  const refs = readGateRefs(context.seams, target, prNumber);
-  if (refs.failure !== undefined || refs.defaultSha === "") {
-    throw new VerbUsageError(`could not read reviewer wake policy: ${refs.failure ?? "no default-branch OID"}. Nothing was requested.`);
+  const refs = readWakePolicyRef(context.seams, target, prNumber);
+  if (refs.kind === "failed") {
+    throw new VerbUsageError(`could not read reviewer wake policy: ${refs.message}. Nothing was requested.`);
   }
   const policy = readGatesAt(context.seams, target, refs.defaultSha);
   if (policy.kind === "failed") throw new VerbUsageError(`could not read reviewer wake policy: ${policy.message}. Nothing was requested.`);
@@ -1777,11 +1837,11 @@ function doRequestReviews(context: CommandContext): number {
   const unrecordedBots = results.flatMap((result): readonly UnrecordedBot[] => result.unrecordedBots ?? []);
   // A FAILED CALL OUTRANKS AN UNRECORDED BOT (zheref/nen#277). When one route's
   // `gh` call failed outright (exit 1's meaning) and, in the same invocation,
-  // the bot route was accepted but not recorded, the code says the louder
+  // the bot route was accepted but absent from the response, the code says the louder
   // fact -- something needs fixing before anything is retried -- and
   // `unrecordedBots` in --json still carries the bot half. EXIT 9 therefore
   // means exactly one thing: every call this verb made was accepted, and at
-  // least one requested bot is not pending review.
+  // least one requested bot is absent from the response's pending-review page.
   const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
   const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
   const lines = [...skippedLines, ...results.map((result): string => result.message), ...ceilingLines];
