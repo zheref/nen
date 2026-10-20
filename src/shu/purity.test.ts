@@ -152,9 +152,9 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
 
   it("names only the reviewed installer executables and supported tool", () => {
     // AN EXCLUSION THAT ONLY SUBTRACTS WIDENS SILENTLY. This is the positive
-    // half: whatever toolchain names that file carries, every one of them is an
-    // installer ID the contract already publishes -- a name nen refuses an
-    // unknown of, which is the opposite of a name nen decided to spawn.
+    // half: every toolchain name that file carries belongs to the reviewed
+    // installer, runtime-preflight or supported-tool vocabulary below. Unknown
+    // names remain refused rather than silently becoming executable choices.
     const named = [
       ...new Set(
         readFileSync(join(SHU, INSTALLER_MODULE), "utf8")

@@ -149,7 +149,7 @@ nen scaffold init --repo /path/to/repo --accept-detected --directories src,tests
 It ends by running `nen shu tools` in **check** mode and printing what this
 machine is missing, without installing anything. Run it yourself for the host
 verdict — exit 5 with the install command per tool when something is missing or
-is the wrong version, and `--install` (corepack only, in this release) to fix
+is the wrong version, and `--install` (corepack, or the closed Bashcov-only gem mode) to fix
 what nen is allowed to fix:
 
 ```bash

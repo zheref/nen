@@ -29,9 +29,9 @@
 // is far above everything still exits 0 when the declaration's own pin is met.
 //
 // NO TOOLCHAIN NAME LIVES HERE. ./purity.test.ts sweeps this file with the rest
-// of the execution path; the one installer nen implements is named in
+// of the execution path; the reviewed installer vocabulary lives in
 // ./install.ts alone, which that sweep excludes by name and then holds to
-// naming exactly one.
+// its closed list of installer, preflight and supported-tool names.
 
 import { VerbUsageError } from "../cli/command.js";
 import { loadProfilesPack, profileById } from "../profiles/pack.js";
