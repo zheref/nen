@@ -290,6 +290,12 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen --version").classification).toBe("read-only");
   });
 
+  it("classifies session writes and reads by subcommand (#437)", () => {
+    expect(classifyCommand("nen session record --effort e --surface codex --title title").classification).toBe("mutating");
+    expect(classifyCommand("nen session show --effort e --json").classification).toBe("read-only");
+    expect(classifyCommand("nen session").classification).toBe("unknown");
+  });
+
   it("classifies schema per subcommand: check reads, set is dry-run-gated, anything else is unknown (#338)", () => {
     expect(classifyCommand("nen schema check --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen schema set --repo . --file nen/workflow.json --pointer /coverage/minimum --value 85 --dry-run").classification).toBe("read-only");

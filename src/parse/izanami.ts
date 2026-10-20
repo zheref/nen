@@ -1497,6 +1497,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       until: RO("re-classifies its own --command against this very table before the first observation; --pr reads only, through pr ready's own read"),
     },
   },
+  session: {
+    subcommands: {
+      record: MUT("appends a caller-reported identity to .nen/sessions/<effort>.json -- a local write"),
+      show: RO("prints the session ledger; reads one file"),
+    },
+  },
   usage: {
     subcommands: {
       record: MUT("appends an entry to the .nen/usage/<effort>.json ledger -- a local write, but a write"),

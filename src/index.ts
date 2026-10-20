@@ -162,6 +162,11 @@ published contract (zheref/nen#338), held by a test per file.
 
 schema check
 
+Effort ledger contracts: nen.phase.ledger/v0.1 (phases),
+nen.usage.ledger/v0.1 (usage), nen.session.ledger/v0.1 (sessions).
+These generated ledgers are read by report data; schema check validates
+the declaration files below, and --ledger additionally checks last-stop.
+
 Load and validate the target repository's nen/ files -- nen/labels.json,
 nen/repos.json, the optional nen/colors.yml, nen/gates.json, the optional
 nen/contract.json, the optional nen/workflow.json and the optional

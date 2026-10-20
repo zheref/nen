@@ -88,7 +88,7 @@ describe("nen phase begin|end -- the per-phase timing ledger", () => {
     const path = join(root, PHASE_LEDGER_DIR, "x.json");
     const fresh = JSON.parse(readFileSync(path, "utf8")) as { phases: { steps: unknown[] }[] };
     expect(fresh.phases[0]?.steps).toEqual([]);
-    expect(Object.keys(fresh.phases[0] ?? {})).toEqual(["phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps"]);
+    expect(Object.keys(fresh.phases[0] ?? {})).toEqual(["phase", "startedAt", "endedAt", "durationMs", "exitCode", "surface", "model", "note", "steps", "dial"]);
     expect(appendStepsToOpenPhase(root, "x", [
       { verb: "build", argv: "placeholder-tool go", exitCode: 0, durationMs: 1200, stalled: false },
       { verb: "lint", argv: "placeholder-tool lint", exitCode: null, durationMs: null, stalled: true },
@@ -115,5 +115,24 @@ describe("nen phase begin|end -- the per-phase timing ledger", () => {
     expect((await capture(["phase", "begin", "--effort", "../x", "--phase", "a"], root, "2026-01-01T00:00:00Z")).code).toBe(2);
     await capture(["phase", "begin", "--effort", "x", "--phase", "a"], root, "2026-01-01T00:00:00Z");
     expect((await capture(["phase", "end", "--effort", "x", "--exit", "-1"], root, "2026-01-01T00:00:00Z")).code).toBe(2);
+  });
+});
+
+describe("phase effort dial (#437)", () => {
+  it("records verbatim, defaults null, and normalizes a legacy ledger on show/end", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-phase-dial-"));
+    await capture(["phase", "begin", "--effort", "e", "--phase", "p", "--surface", "claude-code", "--dial", " high custom "], root, "2026-01-01T00:00:00Z");
+    let result = await capture(["phase", "show", "--effort", "e", "--json"], root, "2026-01-01T00:00:01Z");
+    expect(JSON.parse(result.out.join("\n")).phases[0].dial).toBe(" high custom ");
+    await capture(["phase", "begin", "--effort", "e", "--phase", "other"], root, "2026-01-01T00:00:01Z");
+    const path = join(root, PHASE_LEDGER_DIR, "e.json");
+    const doc = JSON.parse(readFileSync(path, "utf8"));
+    expect(doc.phases[1].dial).toBeNull();
+    delete doc.phases[0].dial;
+    writeFileSync(path, JSON.stringify(doc));
+    result = await capture(["phase", "show", "--effort", "e", "--json"], root, "2026-01-01T00:00:02Z");
+    expect(JSON.parse(result.out.join("\n")).phases[0].dial).toBeNull();
+    await capture(["phase", "end", "--effort", "e", "--phase", "p"], root, "2026-01-01T00:00:03Z");
+    expect(JSON.parse(readFileSync(path, "utf8")).phases[0].dial).toBeNull();
   });
 });

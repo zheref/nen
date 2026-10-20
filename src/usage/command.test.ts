@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -64,6 +64,7 @@ describe("nen usage record -- the per-effort usage ledger", () => {
       "source",
       "note",
       "notReported",
+      "dial",
     ]);
     expect(ledger.entries[0]).toMatchObject({
       recordedAt: "2026-09-20T10:00:00.000Z",
@@ -167,4 +168,32 @@ describe("nen usage show -- the ledger and its totals", () => {
     expect(show.code).toBe(0);
     expect(show.out.join("\n")).toContain("(0 usage entries)");
   });
+});
+
+describe("usage effort dial (#437)", () => {
+  it("records the dial verbatim without counting it as usage", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-usage-dial-"));
+    const flags = ["usage", "record", "--effort", "e", "--surface", "claude-code", "--dial", " max "];
+    const missing = await capture(flags, root);
+    expect(missing.code).toBe(2);
+    expect(existsSync(join(root, USAGE_LEDGER_DIR, "e.json"))).toBe(false);
+    expect((await capture([...flags, "--not-reported"], root)).code).toBe(0);
+    const result = await capture(["usage", "show", "--effort", "e", "--json"], root);
+    expect(JSON.parse(result.out.join("\n")).entries[0].dial).toBe(" max ");
+  });
+});
+
+
+it("normalizes legacy usage dial to null on show and the next append", async () => {
+  const root = mkdtempSync(join(tmpdir(), "nen-usage-legacy-"));
+  const flags = ["usage", "record", "--effort", "e", "--surface", "codex", "--not-reported"];
+  await capture(flags, root);
+  const path = join(root, USAGE_LEDGER_DIR, "e.json");
+  const ledger = JSON.parse(readFileSync(path, "utf8"));
+  delete ledger.entries[0].dial;
+  writeFileSync(path, JSON.stringify(ledger));
+  const shown = await capture(["usage", "show", "--effort", "e", "--json"], root);
+  expect(JSON.parse(shown.out.join("\n")).entries[0].dial).toBeNull();
+  await capture(flags, root);
+  expect(JSON.parse(readFileSync(path, "utf8")).entries.map((entry: { dial: unknown }) => entry.dial)).toEqual([null, null]);
 });

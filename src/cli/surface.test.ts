@@ -140,3 +140,16 @@ describe("normalizeEol pins the windows-latest checkout failure", () => {
     expect(normalizeEol(lf)).toBe(lf);
   });
 });
+
+describe("effort ledger contract inventory (#437)", () => {
+  it("lists phase, usage and session once in the code-derived inventory", () => {
+    const inventory = USAGE.slice(USAGE.indexOf("<!-- contract-ids:begin -->"), USAGE.indexOf("<!-- contract-ids:end -->"));
+    const ids = [...inventory.matchAll(/`(nen\.[^`]+\/v[0-9.]+)`/g)].map((match): string => match[1] as string);
+    expect(ids.length).toBeGreaterThan(0);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const name of ["phase", "usage", "session"]) {
+      expect(ids.filter((id) => id === `nen.${name}.ledger/v0.1`)).toHaveLength(1);
+    }
+    // usage-contracts.test.ts derives and verifies the complete inventory and counts.
+  });
+});

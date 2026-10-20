@@ -27,7 +27,7 @@ function openLedgerAt(root: string, effort: string): string {
   writeLedger(path, {
     contract: PHASE_CONTRACT,
     effort,
-    phases: [{ phase: "rasengan", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, note: null, steps: [] }],
+    phases: [{ phase: "rasengan", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, durationMs: null, exitCode: null, surface: null, model: null, dial: null, note: null, steps: [] }],
   });
   return path;
 }

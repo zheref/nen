@@ -209,3 +209,15 @@ it("report data reads the same severity declaration as backlog fetch", async () 
   expect(result.code).toBe(0);
   expect(numbers(JSON.parse(result.out.join("\n")).objects)).toEqual([2, 3]);
 });
+
+
+it.each([{ register: false }, { register: true }])("C437-3 appends sessions immediately before objectsFilter while preserving the old prefix: %j", async ({ register }) => {
+  const extra = ["--objects-from", "@objects", ...(register ? ["--register", "@desk"] : [])];
+  const before = await data([...extra, "--json"]);
+  const filtered = await data([...extra, "--label", "model/gpt", "--json"]);
+  expect(before.code).toBe(0);
+  expect(filtered.code).toBe(0);
+  const keys = Object.keys(JSON.parse(filtered.out.join("\n")) as object);
+  expect(keys.slice(-2)).toEqual(["sessions", "objectsFilter"]);
+  expect(keys.slice(0, -2)).toEqual(Object.keys(JSON.parse(before.out.join("\n")) as object).filter((key): boolean => key !== "sessions"));
+});
