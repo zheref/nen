@@ -55,7 +55,7 @@ import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { classifyGatesPath, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import type { FlagSpec } from "../cli/args.js";
 import { conjoin } from "../cli/prose.js";
-import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
+import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement, type BodyCheckOptions } from "./bodycheck.js";
 import {
   checkDerivedBody,
   deriveRequirements,
@@ -101,6 +101,7 @@ import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbo
 import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
+import { sectionsCommand } from "./sections_command.js";
 import { plainLine } from "../cli/plain.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
 import {
@@ -149,6 +150,9 @@ const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready optio
 nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
+                  [--exact [--max <n>]] [--prose-budget <words>]
+nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--with a,b] [--overrides <workflow.json>] [--json]
+nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
@@ -334,7 +338,19 @@ staleness:
   permitted without a human.
   --wakes-from <path>   A JSON array of { at, noCommit }.
 
+sections:
+  resolve reads caller-owned sections[], footer[], families{}, precedence[],
+  variants{"<kind>.<family>": [ids]} and max. The JSON contract is
+  'nen.pr.sections/v0.1'. --with admits sections whose 'when' names a run fact;
+  --overrides reads workflow.json's pr.sections cell map. Only reader sections
+  count against the catalogue max; footer blocks remain outside it.
+  family counts distinct taxonomy job keys; ties use catalogue precedence.
+
 body-check:
+  --exact refuses undeclared, repeated, ambiguous or out-of-order level-2
+  headings outside fences/comments, naming the line. --max requires --exact.
+  --prose-budget warns per section over the budget, excluding tables, code
+  (including Mermaid) and comments, without changing the verdict.
   Every requirement is checked; never stops at the first miss.
   --requirements-from <path>  A JSON array of { name, pattern } -- this
                               repository's own template convention, never a
@@ -859,6 +875,21 @@ function derivedRequirements(reader: TemplateReader, root: string): { requiremen
 }
 
 function bodyCheck(context: CommandContext): number {
+  const integer = (flag: string): number | undefined => {
+    const value = context.args.values[flag];
+    if (value === undefined) return undefined;
+    if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new VerbUsageError(`--${flag} requires a positive safe integer`);
+    return Number(value);
+  };
+  const exact = context.args.booleans.has("exact");
+  const max = integer("max");
+  const proseBudget = integer("prose-budget");
+  if (max !== undefined && !exact) throw new VerbUsageError("--max requires --exact");
+  const options: BodyCheckOptions = { exact, ...(max === undefined ? {} : { max }), ...(proseBudget === undefined ? {} : { proseBudget }) };
+  const extraLines = (report: ReturnType<typeof checkBody>): string[] => [
+    ...(report.findings ?? []).map((row): string => `FINDING line ${row.line}: ${row.message}`),
+    ...(report.warnings ?? []).map((row): string => `WARN ${row.section}: ${row.words} prose words (budget ${row.budget})`),
+  ];
   const bodyPath = requireValue(context.args, "body-from", "The pull-request body to check.");
   // Given at all -> read exactly as before (an explicitly EMPTY value is still
   // requireValue's refusal, never a quiet fall-through to derivation).
@@ -878,7 +909,7 @@ function bodyCheck(context: CommandContext): number {
 
   // A SHIPPED FILE: exactly the check it always was, plus the source field.
   if (requirementsPath !== undefined) {
-    const report = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd));
+    const report = checkBody(body, readJsonFile<readonly BodyRequirement[]>(requirementsPath, cwd), options);
     const source: RequirementSource = { kind: "shipped", path: requirementsPath, ref: null, commit: null };
     const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
     // A VERDICT LINE ALWAYS PRINTS (review finding): zero output must never be a
@@ -886,7 +917,8 @@ function bodyCheck(context: CommandContext): number {
     const lines = [
       `${satisfiedCount}/${report.results.length} requirement(s) satisfied`,
       ...report.results.map((result): string => `${result.satisfied ? "ok" : "MISSING"}  ${result.name}`),
-    ];
+      ...extraLines(report),
+    ].map(plainLine);
     emit(context.io, context.json, { ...report, source }, lines);
     return report.ok ? 0 : 1;
   }
@@ -910,12 +942,15 @@ function bodyCheck(context: CommandContext): number {
     throw error;
   }
   const { requirements, source } = derived;
-  const report = checkDerivedBody(body, requirements);
+  const derivedReport = checkDerivedBody(body, requirements, { strictFences: exact });
+  const extra = exact || proseBudget !== undefined ? checkBody(body, requirements, options) : undefined;
+  const report = { ...derivedReport, ...(extra?.findings === undefined ? {} : { findings: extra.findings }), ...(extra?.warnings === undefined ? {} : { warnings: extra.warnings }), ok: derivedReport.ok && (extra?.ok ?? true) };
   const satisfiedCount = report.results.filter((result): boolean => result.satisfied).length;
   const label = { ok: "ok", missing: "MISSING", empty: "EMPTY" } as const;
   const lines = [
     `${satisfiedCount}/${report.results.length} requirement(s) satisfied (DERIVED from the pull-request template '${source.path}' ${describeReader(reader)}; no --requirements-from given)`,
     ...report.results.map((result): string => `${label[result.status]}  ${result.name}`),
+    ...(extra === undefined ? [] : extraLines(extra)),
   ].map(plainLine);
   emit(context.io, context.json, { ...report, source }, lines);
   return report.ok ? 0 : 1;
@@ -985,7 +1020,8 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
     lists: [...PR_READY_FLAGS.lists],
   },
   staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
-  "body-check": { values: ["body-from", "requirements-from", "base"] },
+  "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
+  sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
   "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
@@ -1091,6 +1127,7 @@ const GH_RESOLVES = "runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TO
  */
 const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   staleness: "staleness reads local files only and calls no GitHub API, so there is no credential to name.",
+  sections: "sections reads local JSON files only and calls no GitHub API.",
   "body-check": "body-check reads local files and git only and calls no GitHub API, so there is no credential to name.",
   fetch: `fetch ${GH_RESOLVES}`,
   "next-blocker": `next-blocker ${GH_RESOLVES}`,
@@ -1198,6 +1235,8 @@ export const prCommand: Command = {
         return staleness(context);
       case "body-check":
         return bodyCheck(context);
+      case "sections":
+        return sectionsCommand(context);
       case "fetch":
         return fetch(context);
       case "next-blocker":
