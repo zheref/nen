@@ -911,12 +911,29 @@ file, or a reduced `--reviewers` set with no default); `ready`'s ref
 resolution also reads `nen/repos.json`'s `product_codes`. This family
 never merges, labels, or comments on a pull request.
 
+**Flags are per subcommand** ([#351](https://github.com/zheref/nen/issues/351)).
+Every `pr` subcommand refuses, at exit 2 and before any `gh` call, each flag it
+does not read, and the refusal names the subcommands that do read it:
+`nen pr edit-body … --token-env NARROW` answers *"--token-env is not read by
+'pr edit-body'. --token-env is only read by 'pr ready'; edit-body runs on
+whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its
+stored login), never on the variable --token-env names."*. An unknown flag is
+unknown to the **subcommand** — a `threads` action to its own action's flags:
+another subcommand's flag is refused exactly as a misspelt one is, and every
+foreign flag of one invocation is named at once. Tokens after a bare `--` are
+refused too (no `pr` subcommand forwards arguments), naming only flag-shaped
+tokens, never a value. Through v0.22.0 the family shared one flag table with
+`pr ready`'s set spread onto it, so every subcommand but `ready`, `mark-ready`
+and `merge` accepted `--token-env` and `--gh-repo` and ignored them — a caller
+naming a narrower credential still wrote with `gh`'s own. The global `--repo`,
+`--json` and `--help` are never refused.
+
 **Authentication for every `nen pr` verb**
 
 | Verb | Credential source |
 |---|---|
 | `ready` | Nen's direct GitHub client reads the explicitly selected environment variable: `GH_TOKEN` by default, or `--token-env <VAR>`. It never imports `gh`'s stored credential or discovers a token from the checkout. An unset/unusable token produces `unevaluated`, exit 1, with both token spellings in the remedy. |
-| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls. `open` and `merge` also use Git's configured transport where they perform Git operations. |
+| `fetch`, `next-blocker`, `retarget`, `request-reviews`, `edit-body`, `mark-ready`, `threads list/reply/resolve/settle`, `open`, `merge` | These invoke `gh`; its configured authentication and environment decide the credential. `threads` already uses this path and needs no separate Nen token export. `--token-env` selects only `ready`'s client, never the credential for these calls, and every one of them refuses it at exit 2 ([#351](https://github.com/zheref/nen/issues/351)). `open` and `merge` also use Git's configured transport where they perform Git operations. |
 | `cascade-main` | Git's configured transport credentials for fetch/push; no direct Nen API token. |
 | `staleness`, `body-check` | Local inputs and files; no GitHub authentication. |
 
@@ -2265,7 +2282,7 @@ nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 |---|---|---|---|
 | `--repo <path>` | **yes** | the repository whose current branch the trunk is merged into | unbracketed in usage; omitted is refused at exit 2 — this verb mutates whatever it is pointed at (#28) |
 | `--trunk <branch>` | no | the trunk branch | default `main` |
-| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every OTHER `pr` subcommand — this family has no per-subcommand flag table yet, so it would otherwise parse cleanly and be silently ignored |
+| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every other `pr` subcommand, naming 'pr cascade-main' (the family's per-subcommand flag table, [#351](https://github.com/zheref/nen/issues/351)) |
 | `--json` | no | machine-readable cascade result | — |
 
 **Output and exit codes** — human lines are the `log[]` entries (`fetched
@@ -2656,11 +2673,14 @@ GitHub. With `--require-head`, a head that moved by the read back is
 no longer holds. Without `--require-head`, `headMoved: true` is only reported.
 
 Every family flag this verb does not read is refused at exit 2 before any
-`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on gh's own
-credential"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
+`gh` call: `pr ready`'s `--token-env` ("mark-ready runs on whatever
+credential gh resolves … never on the variable --token-env names"), `--gh-repo`, `--reviewers`, `--gates`, `--explain`,
 `--exclude-check` and the rest, and other verbs' `--base`,
 `--add-reviewers`, `--policy` and so on. Accepted silently, `--token-env`
-would read as "this ran on that token" when the write ran on gh's.
+would read as "this ran on that token" when the write ran on gh's. From
+[#351](https://github.com/zheref/nen/issues/351) this is the whole family's
+rule rather than this verb's alone, and each refusal names every subcommand
+that does read the flag (`--reviewers`: `pr ready` and `pr next-blocker`).
 
 **Usage**
 
@@ -3121,7 +3141,9 @@ an unknown product code or an unreadable `nen/repos.json`,
 missing/empty/unparseable `--requirements-from`, `--repo`'s origin naming a
 different repository than the ref or its code resolves to, or an unknown
 flag such as
-`--admin`/`--auto`); 5 `gh` REFUSED the merge (branch protection, a
+`--admin`/`--auto` — unknown to `pr merge` itself, as on every `pr`
+subcommand: a flag another subcommand reads is refused here exactly as a
+misspelt one, [#351](https://github.com/zheref/nen/issues/351)); 5 `gh` REFUSED the merge (branch protection, a
 required review, …) — its stderr and the exact command are printed for a
 human to run once the refusal is resolved; 6 `gh` could not be RUN at all
 (not on `PATH`, no permission) — distinct from 5, which means `gh` ran and
