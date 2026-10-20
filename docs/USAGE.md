@@ -1651,7 +1651,7 @@ An empty `satisfied_by_context` is refused at load: a carve-out satisfied by no
 context is satisfied by nothing, and would clear the review rounds for that
 author on no evidence at all.
 
-**Event lanes (`wake: "event"`, nen >= 0.24.0).** An omitted `wake` means
+**Event lanes (`wake: "event"`, nen >= 0.26.0).** An omitted `wake` means
 `request`; any other value is refused at `reviewers[i].wake`. An event lane
 runs on repository events and posts a formal review under its `login_pattern`.
 Its `review_check_pattern` proves activity; a successful job alone never
@@ -1665,6 +1665,16 @@ by a met quorum. `rounds-owed.owedRounds[]` retains `reviewer`, `reason`,
 `coveredByQuorum`, and optional `kind`, adding `state` for event lanes; excused
 entries retain that state. Quorum members also expose `eventRun` with `state`
 and `startedAt`; `roundCheck` retains its check-is-the-round meaning.
+
+An event reviewer that also declares `delivery_holistic_pass` keeps CON-40's
+delivery rule on a delivery PR under both round policies. A submitted review
+at the current head counts; otherwise a prior submitted holistic review needs
+a definitive current-head review-check `SUCCESS`. That exception reports
+`round: "delivery-holistic-pass"` and `eventRun.state: "posted"`, identifying
+the satisfied holistic round rather than claiming a new review at head.
+Without that success the lane remains owed, with its delivery-specific reason
+and `no-run` or `completed-without-review` state. Any live matching run still
+supersedes the prior round, remains owed across a met quorum, and can stall.
 
 For an event lane, `round-stalled` measures `stallMinutes` from the selected
 live run's start, firing at the boundary. Before then the lane is owed, in
@@ -1809,7 +1819,7 @@ gate, and said nothing.
 | `approval_policy` | 0.10.0 |
 | `round_policy.stallMinutes` | 0.11.0 |
 | `reviewers[].kind` (`bot` or `human`, optional) | 0.24.0 |
-| `reviewers[].wake` (`request` or `event`, defaults to `request`) | 0.24.0 |
+| `reviewers[].wake` (`request` or `event`, defaults to `request`) | 0.26.0 |
 | `round_policy.minRounds`, `round_policy.maxRounds` | 0.21.0 |
 | `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
 | `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
