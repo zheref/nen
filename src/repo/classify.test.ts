@@ -144,3 +144,21 @@ describe("readOrigin -- an unreadable origin is refused without its userinfo (SE
     expect(message).not.toMatch(/fake0000/i);
   });
 });
+
+describe("family specification roles (#453)", () => {
+  it("classifies spec-only and consumer-listed specs at G2 in text and JSON; remote kind stays unknown", async () => {
+    for (const consumer of [false, true]) {
+      const root = mkdtempSync(join(tmpdir(), "nen-spec-classify-"));
+      mkdirSync(join(root, "nen"));
+      writeFileSync(join(root, "nen/repos.json"), JSON.stringify({ consumers: consumer ? [{ repo: "owner/product-spec", consumes: [] }] : [], families: [{ name: "sample-product", spec: { repo: "owner/product-spec", role: "spec", gate: "G2" }, members: [] }] }));
+      const text = await capture(["repo", "classify", "--target", "OWNER/product-spec"], root, seams(null));
+      expect(text.code).toBe(0);
+      expect(text.out[0]).toContain("role spec · kind unknown · stack none · gate G2");
+      const json = await capture(["repo", "classify", "--target", "owner/product-spec"], root, seams(null), true);
+      expect(JSON.parse(json.out.join("\n"))).toMatchObject({ role: "spec", defaultGate: "G2", kind: "unknown", sources: { role: expect.stringContaining("families[0].spec.repo") } });
+      writeFileSync(join(root, "nen/repos.json"), JSON.stringify({ consumers: [], maintained_tools: [{ repo: "owner/product-spec" }], families: [{ name: "sample-product", spec: { repo: "owner/product-spec", role: "spec", gate: "G2" }, members: [] }] }));
+      const canon = await capture(["repo", "classify", "--target", "owner/product-spec"], root, seams(null), true);
+      expect(JSON.parse(canon.out.join("\n"))).toMatchObject({ role: "canon", defaultGate: "G4" });
+    }
+  });
+});

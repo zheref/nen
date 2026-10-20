@@ -880,7 +880,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`repo`](#family-repo) | [`nen repo resolve`](#nen-repo-resolve) | resolves a repository token (code, slug, short name, or 'all') against the registry, or the cwd's own origin | nen/repos.json; git (no-token form) | yes |
 | [`repo`](#family-repo) | [`nen repo inventory`](#nen-repo-inventory) | senkei's live enumeration: epics + children, integration branches, open PRs | gh (issue list, api sub_issues/branches/compare, pr list) | yes |
 | [`repo`](#family-repo) | [`nen repo scenario`](#nen-repo-scenario) | reads back the scenario recorded for one --target in the registry | nen/repos.json | yes |
-| [`repo`](#family-repo) | [`nen repo classify`](#nen-repo-classify) | one verdict about a repository: role (canon / consumer / unregistered), kind (product / process / library / unknown), stack, lanes, and the gate a change there stands at | nen/repos.json + nen/contract.json under --repo; `git remote get-url origin` when no --target | yes |
+| [`repo`](#family-repo) | [`nen repo classify`](#nen-repo-classify) | one verdict about a repository: role (canon / spec / consumer / unregistered), kind (product / process / library / unknown), stack, lanes, and the gate a change there stands at | nen/repos.json + nen/contract.json under --repo; `git remote get-url origin` when no --target | yes |
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance) | yes |
@@ -7059,6 +7059,7 @@ without `--gate-change`, naming the pointer and the reason:
 
 | File | Gated scope | Why |
 |---|---|---|
+| `nen/repos.json` | `/families/**` | specification repository identities and their G2 role |
 | `nen/gates.json` | every pointer | whose review and approval readiness owes, and what it excuses |
 | `nen/decisions.json` | every pointer | which stops a person answers and which run on their own |
 | `nen/contract.json` | `/dependency/**`, `/project/verbs/**`, `/project/lanes/**`, `/project/toolchain/**`, `/project/targets/**` | which nen runs here, what it runs, where, with what tools, and where it deploys |
@@ -7224,6 +7225,46 @@ does contain, never a guess at "the closest match".
 
 
 `--json`: the resolution — `{ category, precedence[], present[], unknown[], resolved, outranked[], reason }`. `resolved` is `null` and `reason` says why when the precedence cannot rank the set.
+### Product families in `nen/repos.json`
+
+The optional `families` array declares one specification repository and N platform members.
+Each member code must be an exact, own, non-metadata key of `product_codes`; a code may
+occur only once across the families (case aliases count as the same code). Family names
+are unique case-insensitively. Names, codes and platforms must be nonblank strings without
+control or invisible characters. Platforms are free text, not stack or scenario names.
+
+```json
+{
+  "consumers": [
+    { "repo": "owner/product-ios", "consumes": [], "scenario": "ios-scenario" },
+    { "repo": "owner/product-android", "consumes": [] }
+  ],
+  "product_codes": { "RA": "owner/product-ios", "RB": "owner/product-android" },
+  "families": [
+    {
+      "name": "sample-product",
+      "spec": { "repo": "owner/product-spec", "role": "spec", "gate": "G2" },
+      "members": [
+        { "code": "RA", "platform": "ios" },
+        { "code": "RB", "platform": "android" }
+      ]
+    }
+  ]
+}
+```
+
+`spec.repo` must be exactly `owner/name`, `spec.role` exactly `spec`, and `spec.gate`
+exactly `G2`. `members` is required and may be empty. An absent `families` means none;
+an explicit `null` or a malformed declaration fails `schema check` with the nested pointer,
+for example `families[0].members[1].code`. Unknown legacy keys remain compatible and
+`$` metadata is ignored at every level. The shared loader also validates `schema set`;
+family edits require [`--gate-change`](#gate-changes).
+
+A family does not add consumer rows or fan-out relationships. Member scenarios remain
+on their existing registry rows and are read by `repo scenario`; `platform` never supplies
+one. A spec declared under `consumers` still classifies as `spec`; `maintained_tools`
+continues to take precedence as canon at G4.
+
 ### `nen repo resolve`
 
 Answers "which repository/repositories does this token name, per this registry" — a product code
@@ -7236,6 +7277,7 @@ list. With no token, it reads the CALL SITE's own `origin` remote and resolves t
 
 ```text
 nen repo resolve [<token>] [--repo <path>]
+nen repo resolve --family <name> [--repo <path>]
 nen repo resolve [--from <dir>] [--repo <path>]
 ```
 
@@ -7265,6 +7307,31 @@ nen repo resolve KP --repo src/schema/fixtures/bankai-repo
 zheref/KroApple  (KP)  via code
 ```
 (from a real run against the bundled fixture registry)
+
+**Family selection.** `nen repo resolve --family sample-product --repo <path>` reads only
+that checkout's registry, with no origin or GitHub lookup. Names match exactly and
+case-insensitively. A family is rendered spec first, then members in declaration order:
+
+```text
+- owner/product-spec spec
+RA owner/product-ios ios
+RB owner/product-android android
+```
+
+Each row is `<code> <owner/name> <platform>`. The spec's platform column is `spec`;
+its code is `-` unless exactly one full-slug `product_codes` value names the spec.
+Members resolve through `product_codes`, even if a consumer's separate `code` disagrees.
+A full slug is retained as recorded. A legacy bare value needs exactly one matching slug
+among `consumers`, `maintained_tools` and `pending_onboarding`; missing or ambiguous owners
+exit 1, naming the member pointer and asking for the full slug in `product_codes`.
+The spec's owner is never assumed for members.
+
+Family `--json` is `{ family, spec: { repo, code, role, gate }, members: [{ code, repo,
+platform }] }` (`spec.code` is `null` for the human `-`). Ordinary resolve JSON and token
+semantics stay unchanged; the flag keeps even a literal `family:sample-product` product code
+available. An unknown or blank family exits **2**, listing declared family names (or
+`(none declared)`). A token or `--from` alongside `--family` is refused at exit 2 before
+opening the registry; use `--repo` to choose it.
 
 ### `nen repo inventory`
 
@@ -7385,7 +7452,7 @@ target repository's own registry before emitting; `parse` never guesses at a mal
 
 ONE verdict about what kind of repository this is (v0.11.0, zheref/nen#216), contract
 `nen.repo.classify/v0.1`, so a reviewer or a gate reads a fact rather than carrying a list of repositories
-in its own prose.
+in its own prose. The role enum now includes `spec`; consumers of the existing JSON contract must accept it. Role sources name the family declaration pointer.
 
 ```
 nen repo classify [--target <owner/name>] [--repo <path>] [--json]
@@ -7393,10 +7460,10 @@ nen repo classify [--target <owner/name>] [--repo <path>] [--json]
 
 | Fact | Source | Values |
 |---|---|---|
-| `role` | `nen/repos.json` under `--repo`: a repository under `maintained_tools` is **canon** (its product is the process -- a merge there changes how OTHER repositories behave, and `maintained_tools` wins over a `consumers` entry for the same slug); one under `consumers` or `pending_onboarding` is a **consumer**; one the registry does not know is **unregistered**, reported as such with a note and never rounded to consumer | `canon` · `consumer` · `unregistered` |
+| `role` | `nen/repos.json` under `--repo`: a repository under `maintained_tools` is **canon** (its product is the process -- a merge there changes how OTHER repositories behave, and `maintained_tools` wins over all other roles for the same slug); a `families[].spec.repo` is **spec**, ahead of a consumer listing; one under `consumers` or `pending_onboarding` is a **consumer**; one the registry does not know is **unregistered**, reported as such with a note and never rounded to consumer | `canon` · `spec` · `consumer` · `unregistered` |
 | `kind` | A declared `project.kind` (`product`, `process` or `library`) wins, with `sources.kind` naming what the lanes alone read -- it is the only way to be a **library** (reusable code shared across repositories, any stack). Otherwise `nen/contract.json`'s lane stacks: any application stack (`xcode-ios`, `gradle-android`, `nextjs`, `expo`, `gatsby`, `compose-desktop`, `dotnet-winui`, …) makes it a **product**; tooling stacks only make it a **process** repository; no `project` block is **unknown** | `product` · `process` · `library` · `unknown` |
 | `stack`, `lanes` | the default lane's stack and every lane name | — |
-| `defaultGate` | the maintainer's ruling of 2026-09-18: the gate is the repository's ROLE, not the file's kind | `G4` for canon, `G2` for a consumer, `null` (not derived) for an unregistered repository |
+| `defaultGate` | the maintainer's ruling of 2026-09-18: the gate is the repository's ROLE, not the file's kind | `G4` for canon, `G2` for a spec or consumer, `null` (not derived) for an unregistered repository |
 
 `--target` names the repository; omitted, the checkout's own `origin` is read (exit 1 when it cannot be).
 **`kind`, `stack` and `lanes` are derived only when the target IS this checkout** -- proved by the origin
@@ -13788,7 +13855,7 @@ nen report data … [--tz <zone>] [--open-stop]
 | Field | Derived from |
 |---|---|
 | `worktree` | the checkout's directory name when `git rev-parse --git-dir` and `--git-common-dir` differ (a linked worktree), else `"core"`. A name, never a path |
-| `effortStage`, `gate`, `stageClass` | the table below. *On origin* is `refs/remotes/origin/<branch>` (no fetch is made); *the PR* is the **one** `objects[]` row whose `head` is `HEAD` or `origin/<branch>` — never "the only PR in scope" — so it needs `--target … --prs <n>` (or `--backlog`, or `--objects-from`); stderr warns when the matched head is `origin/<branch>` and `HEAD` has moved on; *ready* is that row's `readiness.verdict`; `G2`/`G4` is the repository's role in `--repo`'s `nen/repos.json` (`maintained_tools` → G4, `consumers`/`pending_onboarding` → G2), the 2026-09-18 ruling [`repo classify`](#nen-repo-classify) applies. **All three are `null`**, with the reason, on a detached HEAD; an `origin/<branch>` probe that **failed** (only exit 1 means absent); a branch **on origin** with no PR matched (no PR looked for — *pass `--target --prs`*; `--target` alone selects nothing and is no lookup — or `--backlog`/`--issues` scopes where no PR row matched this branch); a PR in scope whose head matches **neither** `HEAD` nor `origin/<branch>` (the reason names the PR and both heads: *fetch, or the PR's head moved*); two PRs on this head; a PR whose head could not be read; an open PR whose **readiness was not read**; and a PR closed without merging. An unregistered repository nulls only `gate`. `authoring` with no PR lookup carries a stderr caveat that none was looked for |
+| `effortStage`, `gate`, `stageClass` | the table below. *On origin* is `refs/remotes/origin/<branch>` (no fetch is made); *the PR* is the **one** `objects[]` row whose `head` is `HEAD` or `origin/<branch>` — never "the only PR in scope" — so it needs `--target … --prs <n>` (or `--backlog`, or `--objects-from`); stderr warns when the matched head is `origin/<branch>` and `HEAD` has moved on; *ready* is that row's `readiness.verdict`; `G2`/`G4` is the repository's role in `--repo`'s `nen/repos.json` (`maintained_tools` → G4, `families[].spec.repo`/`consumers`/`pending_onboarding` → G2), the 2026-09-18 ruling [`repo classify`](#nen-repo-classify) applies. **All three are `null`**, with the reason, on a detached HEAD; an `origin/<branch>` probe that **failed** (only exit 1 means absent); a branch **on origin** with no PR matched (no PR looked for — *pass `--target --prs`*; `--target` alone selects nothing and is no lookup — or `--backlog`/`--issues` scopes where no PR row matched this branch); a PR in scope whose head matches **neither** `HEAD` nor `origin/<branch>` (the reason names the PR and both heads: *fetch, or the PR's head moved*); two PRs on this head; a PR whose head could not be read; an open PR whose **readiness was not read**; and a PR closed without merging. An unregistered repository nulls only `gate`. `authoring` with no PR lookup carries a stderr caveat that none was looked for |
 | `turnNumber` | the `report` entries in the `.nen/phases/` ledger whose effort id **is this branch's name** — never another effort's, even a lone one; `null` (never `0`) with no such ledger, no `report` entry in it, or a detached HEAD |
 | `generatedAtLocal`, `generatedDateLocal`, `timeZone` | `generatedAt`'s instant in `--tz`, else `$TZ`, else the host's zone: `Tue 22 Sep 2026 · 14:05 America/Bogota (UTC-05:00)`, `2026-09-22`, `America/Bogota` |
 

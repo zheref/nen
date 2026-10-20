@@ -234,6 +234,13 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
     expect(atG4.doc).toMatchObject({ effortStage: "in review", gate: "G4 — pending" });
   });
 
+  it("a declared family specification reports its G2 gate (#453)", async () => {
+    const root = repo({ consumers: [], families: [{ name: "sample-product", spec: { repo: "owner/product-spec", role: "spec", gate: "G2" }, members: [] }] });
+    const result = await capture(data(root, "--objects-from", objectsFile(root, [prRow()])), script({ pushed: true, origin: "https://github.com/owner/product-spec.git" }));
+    expect(result.code).toBe(0);
+    expect(result.doc).toMatchObject({ effortStage: "in review", gate: "G2 — pending", stageClass: "warn" });
+  });
+
   it("warns when the matched PR's head is origin/<branch> and HEAD has moved on (N12)", async () => {
     const root = repo(CONSUMER);
     const captured = await capture(data(root, "--objects-from", objectsFile(root, [prRow()])), script({ pushed: true }));

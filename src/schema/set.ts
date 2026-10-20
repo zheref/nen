@@ -88,6 +88,7 @@ const anywhere = (key: string, reason: string): GateScope => ({ file: CONTRACT_F
  * than a list of keys known to loosen a gate, which a new key slips past.
  */
 export const GATE_SCOPES: readonly GateScope[] = [
+  under(REPOS_FILE, ["families"], "families identifies specification repositories and their G2 role"),
   whole(GATES_FILE, "nen/gates.json decides whose review and approval readiness owes, and what it excuses"),
   whole(DECISIONS_FILE, "nen/decisions.json decides which stops a person answers and which run on their own"),
   under(CONTRACT_FILE, ["dependency"], "the dependency block decides which nen runs here and how it is fetched"),

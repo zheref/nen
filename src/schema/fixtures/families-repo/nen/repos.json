@@ -1,0 +1,17 @@
+{
+  "consumers": [
+    { "repo": "owner/product-ios", "code": "LEGACY", "consumes": [], "scenario": "ios-scenario" },
+    { "repo": "owner/product-android", "consumes": [] }
+  ],
+  "product_codes": { "RA": "owner/product-ios", "RB": "product-android" },
+  "families": [
+    {
+      "name": "sample-product",
+      "spec": { "repo": "owner/product-spec", "role": "spec", "gate": "G2" },
+      "members": [
+        { "code": "RA", "platform": "ios" },
+        { "code": "RB", "platform": "android" }
+      ]
+    }
+  ]
+}

@@ -2,11 +2,12 @@
 // repository this is (zheref/nen#216).
 //
 // FOUR FACTS, EACH FROM ONE SOURCE, NEVER GUESSED.
-//   role   -- canon | consumer | unregistered, from `nen/repos.json`: a
+//   role   -- canon | spec | consumer | unregistered, from `nen/repos.json`: a
 //             repository listed under `maintained_tools` is canon (its product
 //             is the process; a merge there changes how OTHER repositories
 //             behave); one listed under `consumers` or `pending_onboarding`
-//             is a consumer; one the registry does not know is unregistered,
+//             is a consumer; a family specification is spec (after canon);
+//             one the registry does not know is unregistered,
 //             and that is reported, not rounded to consumer.
 //   kind   -- product | process | library | unknown, from `nen/contract.json`:
 //             a declared `project.kind` is the repository's own word and wins
@@ -17,10 +18,8 @@
 //             `project` block is unknown. A declaration that disagrees with
 //             the stacks is kept and noted, never overruled.
 //   stack  -- the default lane's stack, or null.
-//   gate   -- G4 for canon, G2 otherwise (the maintainer's ruling of
-//             2026-09-18: the gate is the repository's ROLE, not the file's
-//             kind), with an unregistered repository reported at G2 and
-//             flagged so the caller can ask rather than assume.
+//   gate   -- G4 for canon, G2 for spec/consumer, null for unregistered.
+//             The gate follows the repository's ROLE, never the file's kind.
 //
 // THE REGISTRY IS THE CALLER'S. `--repo` names the checkout whose
 // `nen/repos.json` is read; the repository being classified is `--target
@@ -34,7 +33,7 @@ import { ownerNameFromRemote } from "./resolve.js";
 
 export const CLASSIFY_CONTRACT = "nen.repo.classify/v0.1";
 
-export type RepoRole = "canon" | "consumer" | "unregistered";
+export type RepoRole = "canon" | "spec" | "consumer" | "unregistered";
 export type RepoKind = "product" | "process" | "library" | "unknown";
 
 export interface RepoClassification {
@@ -44,7 +43,7 @@ export interface RepoClassification {
   readonly kind: RepoKind;
   readonly stack: string | null;
   readonly lanes: readonly string[];
-  /** G4 for canon, G2 for a consumer, null for an unregistered repository -- never a guess. */
+  /** G4 for canon, G2 for a spec or consumer, null for an unregistered repository -- never a guess. */
   readonly defaultGate: "G2" | "G4" | null;
   readonly sources: {
     readonly role: string;
@@ -92,6 +91,8 @@ export function roleOf(registry: RepoRegistry, target: string): { role: RepoRole
   if (registry.maintainedTools.some((repo): boolean => repo.toLowerCase() === lower)) {
     return { role: "canon", source: `${registry.path}: maintained_tools` };
   }
+  const familyIndex = (registry.families ?? []).findIndex((family): boolean => family.spec.repo.toLowerCase() === lower);
+  if (familyIndex !== -1) return { role: "spec", source: `${registry.path}: families[${familyIndex}].spec.repo` };
   if (registry.consumers.some((entry): boolean => entry.repo.toLowerCase() === lower)) {
     return { role: "consumer", source: `${registry.path}: consumers` };
   }
@@ -99,6 +100,11 @@ export function roleOf(registry: RepoRegistry, target: string): { role: RepoRole
     return { role: "consumer", source: `${registry.path}: pending_onboarding` };
   }
   return { role: "unregistered", source: `${registry.path}: not listed` };
+}
+
+/** One gate policy for classification and report context. */
+export function gateForRole(role: RepoRole): "G2" | "G4" | null {
+  return role === "canon" ? "G4" : role === "consumer" || role === "spec" ? "G2" : null;
 }
 
 function kindOf(contract: RepositoryContract | null, contractPath: string): { kind: RepoKind; stack: string | null; lanes: string[]; source: string } {
@@ -191,7 +197,7 @@ export function classifyRepo(options: ClassifyOptions): RepoClassification {
     kind,
     stack,
     lanes,
-    defaultGate: role === "canon" ? "G4" : role === "consumer" ? "G2" : null,
+    defaultGate: gateForRole(role),
     sources: { role: roleSource, kind: kindSource },
     notes,
   };

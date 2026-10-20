@@ -10,6 +10,7 @@ import { resolve, RepoResolutionError, type Resolution } from "./resolve.js";
 import { assertRepoRoot, resolveRepoRoot } from "./root.js";
 import { inventoryRepo } from "./inventory.js";
 import { resolveScenario } from "./scenario.js";
+import { resolveFamily, renderFamily, FamilySelectionError } from "./family.js";
 import { classifyRepo, ClassifyError, renderClassification } from "./classify.js";
 
 function requireTarget(context: CommandContext): Target {
@@ -59,18 +60,19 @@ function requireRegistry(load: () => RepoRegistry): RepoRegistry {
 
 const USAGE = `nen repo classify [--target <owner/name>] [--repo <path>] [--json]
 nen repo resolve [<token>] [--repo <path>]
+nen repo resolve --family <name> [--repo <path>]
 nen repo resolve [--from <dir>] [--repo <path>]
 nen repo inventory --target <owner/name> --epic-label <label> --integration-prefix <prefix> [--trunk main]
 nen repo scenario --repo <path> --target <owner/name>
 
 classify:
   ONE verdict about what kind of repository this is (zheref/nen#216): role
-  (canon | consumer | unregistered, from nen/repos.json -- maintained_tools is
-  canon, consumers and pending_onboarding are consumers), kind (product |
+  (canon | spec | consumer | unregistered, from nen/repos.json -- maintained_tools is
+  canon, families[].spec.repo is spec, consumers and pending_onboarding are consumers), kind (product |
   process | library | unknown: a declared project.kind wins -- the only way
   to read library -- else nen/contract.json's lane stacks), the default lane's
   stack, the lanes, and the gate a change there stands at -- G4 for canon,
-  G2 otherwise, by the maintainer's ruling of 2026-09-18 that the gate is the
+  G2 for spec/consumer, null for unregistered, by the ruling that the gate is the
   repository's ROLE, not the file's kind. Every fact names its source; an
   unregistered repository is reported as such with a note, never rounded to
   consumer. --target names the repository; omitted, the checkout's own
@@ -89,6 +91,12 @@ resolve:
                    from EVERYTHING the registry records: consumers,
                    product_codes (keys and values), maintained_tools and
                    pending_onboarding.
+  --family <name>  Resolve one declared family, case-insensitively and exactly:
+                   spec first, then members in declaration order, each printed
+                   as <code> <owner/name> <platform> (spec: platform 'spec',
+                   code '-' when no unique full-slug code is recorded).
+                   Reads only this registry; unknown family exits 2 and lists
+                   declared names. Cannot combine with a token or --from.
   (no token)       Resolve the working directory's 'origin' remote instead.
   --repo <path>    The checkout whose nen/repos.json is the registry
                    resolved against -- the same flag its siblings (repo
@@ -158,7 +166,7 @@ export const repoCommand: Command = {
   summary: "Resolve a repository token, inventory a consumer's backlog, or read its recorded scenario.",
   usage: USAGE,
   flags: {
-    values: ["from", "target", "epic-label", "integration-prefix", "trunk"],
+    values: ["family", "from", "target", "epic-label", "integration-prefix", "trunk"],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("repo", context.args, ["resolve", "inventory", "scenario", "classify"]);
@@ -167,6 +175,10 @@ export const repoCommand: Command = {
     if (subcommand === "classify") return classify(context);
 
     const token = context.args.positionals[2] ?? null;
+    const family = context.args.values["family"];
+    if (family !== undefined && (token !== null || context.args.values["from"] !== undefined)) {
+      throw new VerbUsageError("--family cannot be combined with a repository token or --from; use --repo to select its registry.");
+    }
     // `--from` FEEDS THE NO-TOKEN FORM ONLY: it names the directory whose
     // `origin` becomes the token, and a token given explicitly means no origin
     // is read at all. It used to be silently IGNORED next to a token, which
@@ -185,6 +197,16 @@ export const repoCommand: Command = {
 
     const taxonomy = openTaxonomy({ repoFlag: context.repoFlag });
     const registry = requireRegistry((): RepoRegistry => taxonomy.repos());
+    if (family !== undefined) {
+      try {
+        const result = resolveFamily(registry, family);
+        emit(context.io, context.json, result, renderFamily(result));
+        return 0;
+      } catch (error) {
+        if (error instanceof FamilySelectionError) throw new VerbUsageError(error.message);
+        throw error;
+      }
+    }
     // `--from` defaults to the CALL SITE's cwd, not to the target repository:
     // "which repository am I standing in" and "whose taxonomy am I reading" are
     // different questions, and a verb that answered the first with the second

@@ -23,7 +23,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
-import { roleOf } from "../repo/classify.js";
+import { gateForRole, roleOf } from "../repo/classify.js";
 import { isContained } from "../repo/contain.js";
 import { rawLines } from "../seam/lines.js";
 import { loadRepoRegistry } from "../schema/repos.js";
@@ -190,8 +190,8 @@ function declarationGate(root: string, repo: string | null): { readonly gate: "G
   if (repo === null) return { why: "this checkout has no owner/name (see 'repo:' above), so its role is not known" };
   try {
     const { role } = roleOf(loadRepoRegistry(root), repo);
-    if (role === "canon") return { gate: "G4" };
-    if (role === "consumer") return { gate: "G2" };
+    const gate = gateForRole(role);
+    if (gate !== null) return { gate };
     return { why: `'${repo}' is not in this checkout's nen/repos.json, so whether its gate is G2 or G4 is not derived -- register it rather than inferring` };
   } catch (error) {
     return { why: `no readable nen/repos.json to read '${repo}''s role from (${error instanceof Error ? error.message : String(error)})` };

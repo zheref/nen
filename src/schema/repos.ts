@@ -24,6 +24,7 @@
 // affected-set computation -- which is precisely how a consumer silently sits
 // several tags behind.
 
+import { plainLine } from "../cli/plain.js";
 import { requireArray, requireRecord, requireString, SchemaError } from "./errors.js";
 import { optionalString } from "./errors.js";
 import { readSchemaJson, REPOS_FILE } from "./source.js";
@@ -82,7 +83,16 @@ export interface ListedEntry {
   readonly scenario: string | null;
 }
 
+/** One product specification and its platform repositories, in declaration order. */
+export interface RepoFamily {
+  readonly name: string;
+  readonly spec: { readonly repo: string; readonly role: "spec"; readonly gate: "G2" };
+  readonly members: readonly { readonly code: string; readonly platform: string }[];
+}
+
 export interface RepoRegistry {
+  /** Optional for older structural test registries; the loader always sets it. */
+  readonly families?: readonly RepoFamily[];
   readonly path: string;
   /** Newest tag of the registry's own repository, as recorded. */
   readonly latest: string | null;
@@ -261,6 +271,46 @@ function checkoutField(path: string, pointer: string, raw: unknown): string | nu
   return value;
 }
 
+function familyString(path: string, pointer: string, value: unknown): string {
+  const text = requireString(path, pointer, value);
+  if (text.trim() === "" || plainLine(text) !== text) {
+    throw new SchemaError(path, pointer, "expected nonblank text without control or invisible characters");
+  }
+  return text;
+}
+
+function parseFamilies(path: string, raw: unknown, codes: Readonly<Record<string, string>>): readonly RepoFamily[] {
+  if (raw === undefined) return [];
+  const names = new Map<string, string>();
+  const members = new Map<string, string>();
+  return requireArray(path, "families", raw).map((item, index): RepoFamily => {
+    const pointer = `families[${index}]`;
+    const row = requireRecord(path, pointer, item);
+    const name = familyString(path, `${pointer}.name`, row["name"]);
+    const previous = names.get(name.toLowerCase());
+    if (previous !== undefined) throw new SchemaError(path, `${pointer}.name`, `duplicates ${previous}`);
+    names.set(name.toLowerCase(), `${pointer}.name`);
+    const spec = requireRecord(path, `${pointer}.spec`, row["spec"]);
+    const repo = familyString(path, `${pointer}.spec.repo`, spec["repo"]);
+    if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new SchemaError(path, `${pointer}.spec.repo`, "expected an 'owner/name' slug");
+    if (spec["role"] !== "spec") throw new SchemaError(path, `${pointer}.spec.role`, "expected exactly 'spec'");
+    if (spec["gate"] !== "G2") throw new SchemaError(path, `${pointer}.spec.gate`, "expected exactly 'G2'");
+    const parsedMembers = requireArray(path, `${pointer}.members`, row["members"]).map((item, memberIndex): RepoFamily["members"][number] => {
+      const at = `${pointer}.members[${memberIndex}]`;
+      const member = requireRecord(path, at, item);
+      const code = familyString(path, `${at}.code`, member["code"]);
+      if (code.startsWith("$") || !Object.hasOwn(codes, code)) {
+        throw new SchemaError(path, `${at}.code`, `expected a key of product_codes, got ${JSON.stringify(code)}`);
+      }
+      const first = members.get(code.toLowerCase());
+      if (first !== undefined) throw new SchemaError(path, `${at}.code`, `already assigned at ${first}`);
+      members.set(code.toLowerCase(), `${at}.code`);
+      return { code, platform: familyString(path, `${at}.platform`, member["platform"]) };
+    });
+    return { name, spec: { repo, role: "spec", gate: "G2" }, members: parsedMembers };
+  });
+}
+
 export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
   const root = requireRecord(path, "$", value);
   const latest = optionalString(path, "latest", root["latest"]);
@@ -324,7 +374,7 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     });
   });
 
-  const productCodes: Record<string, string> = {};
+  const productCodes: Record<string, string> = Object.create(null) as Record<string, string>;
   const rawCodes = root["product_codes"];
   if (rawCodes !== undefined && rawCodes !== null) {
     const codes = requireRecord(path, "product_codes", rawCodes);
@@ -339,6 +389,8 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
       productCodes[code] = requireString(path, `product_codes.${code}`, name);
     }
   }
+
+  const families = parseFamilies(path, root["families"], productCodes);
 
   const byRepoIndex = new Map(
     consumers.map((entry): [string, ConsumerEntry] => [entry.repo, entry]),
@@ -401,6 +453,7 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     latest,
     consumers,
     productCodes,
+    families,
     maintainedTools: slugs(maintained),
     pendingOnboarding: slugs(pending),
     listed: [...maintained, ...pending].map(asEntry),

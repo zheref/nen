@@ -224,3 +224,16 @@ describe("each row's validate is its loader's verdict", () => {
     });
   }
 });
+
+it("family metadata is ignored, and declaration validation equals loading (#453)", () => {
+  const root = tempRoot();
+  const path = join(root, "nen/repos.json");
+  const raw = JSON.parse(readFileSync(join(process.cwd(), "src/schema/fixtures/families-repo/nen/repos.json"), "utf8")) as unknown;
+  const row = declarationFor("nen/repos.json") as Declaration;
+  const annotated = JSON.stringify(inject(raw));
+  writeFileSync(path, annotated);
+  const annotatedModel = model(row, root);
+  expect(JSON.stringify(canonicalModel(row.validate(path, annotated), row.file))).toBe(JSON.stringify(canonicalModel(row.load(root), row.file)));
+  writeFileSync(path, JSON.stringify(raw));
+  expect(model(row, root)).toBe(annotatedModel);
+});

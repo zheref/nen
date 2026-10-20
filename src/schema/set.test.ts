@@ -454,3 +454,47 @@ describe("nen schema set -- the subcommand after flags (N4)", () => {
     expect(result.err.join("\n")).not.toContain("\u001b");
   });
 });
+
+describe("schema set -- families (#453)", () => {
+  const family = { name: "sample-product", spec: { repo: "owner/product-spec", role: "spec", gate: "G2" }, members: [{ code: "RA", platform: "ios" }] };
+  it("requires --gate-change for nested and whole family declarations", async () => {
+    const root = site();
+    const text = JSON.stringify({ consumers: [], product_codes: { RA: "owner/product-ios" }, families: [family] });
+    writeFileSync(join(root, "nen/repos.json"), text);
+    for (const [pointer, value] of [["/families/0/spec/repo", '"owner/other-spec"'], ["/families", JSON.stringify([{ ...family, name: "other" }])]]) {
+      const refused = await capture(set(root, "--file", "nen/repos.json", "--pointer", pointer as string, "--value", value as string, "--dry-run"));
+      expect(refused.code).toBe(2);
+      expect(refused.err.join("\n")).toContain("--gate-change");
+      const allowed = await capture(set(root, "--file", "nen/repos.json", "--pointer", pointer as string, "--value", value as string, "--dry-run", "--gate-change", "--json"));
+      if (pointer === "/families") {
+        // Gate acknowledgement does not widen schema set's scalar-only replacement contract.
+        expect(allowed.code).toBe(1);
+        expect(JSON.parse(allowed.out.join("\n"))).toMatchObject({ written: false, failure: { code: "refused-edit" } });
+      } else {
+        expect(allowed.code).toBe(0);
+        expect(JSON.parse(allowed.out.join("\n"))).toMatchObject({ read: true, gateChange: true, written: false });
+      }
+      expect(read(root, "nen/repos.json")).toBe(text);
+    }
+  });
+  it("gates adding a previously absent whole family block, then validates it", async () => {
+    const root = site();
+    const text = JSON.stringify({ consumers: [], product_codes: { RA: "owner/product-ios" } });
+    writeFileSync(join(root, "nen/repos.json"), text);
+    const args = ["--file", "nen/repos.json", "--pointer", "/families", "--value", JSON.stringify([family]), "--dry-run", "--json"];
+    expect((await capture(set(root, ...args))).code).toBe(2);
+    const allowed = await capture(set(root, ...args, "--gate-change"));
+    expect(allowed.code).toBe(0);
+    expect(JSON.parse(allowed.out.join("\n"))).toMatchObject({ read: true, gateChange: true, written: false });
+    expect(read(root, "nen/repos.json")).toBe(text);
+  });
+  it("refuses invalid member codes in a dry run through the shared loader, with no write", async () => {
+    const root = site();
+    const text = JSON.stringify({ consumers: [], product_codes: { RA: "owner/product-ios" }, families: [family] });
+    writeFileSync(join(root, "nen/repos.json"), text);
+    const result = await capture(set(root, "--file", "nen/repos.json", "--pointer", "/families/0/members/0/code", "--value", '"missing"', "--dry-run", "--gate-change"));
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toContain("families[0].members[0].code");
+    expect(read(root, "nen/repos.json")).toBe(text);
+  });
+});

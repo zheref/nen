@@ -395,3 +395,61 @@ describe("toolPins + toolCheckouts -- one tool whatever the slug's case (Copilot
     expect(registry.toolCheckouts).toEqual({ "owner/handbooks": { index: 1, checkoutEnv: "CANON", checkout: null } });
   });
 });
+
+describe("product families -- shared registry validation (#453)", () => {
+  const at = "/fake/nen/repos.json";
+  const family = (): Record<string, unknown> => ({ name: "sample-product", spec: { repo: "owner/product-spec", role: "spec", gate: "G2" }, members: [{ code: "RA", platform: "ios" }, { code: "RB", platform: "android" }] });
+  const parse = (families: unknown, codes: Record<string, unknown> = { RA: "owner/product-ios", RB: "owner/product-android" }): ReturnType<typeof parseRepoRegistry> => parseRepoRegistry(at, { consumers: [], product_codes: codes, families });
+
+  it("is optional, permits empty members, and keeps unknown legacy keys compatible", () => {
+    expect(parseRepoRegistry(at, { consumers: [], unknown: true }).families).toEqual([]);
+    expect(parse([]).families).toEqual([]);
+    expect(parse([{ ...family(), members: [] }]).families?.[0]?.members).toEqual([]);
+    expect(parse([family()]).families?.[0]).toEqual(family());
+  });
+
+  it.each([
+    [null, "families"], [{}, "families"], [[null], "families[0]"],
+    [[{ ...family(), name: " " }], "families[0].name"],
+    [[{ ...family(), name: "bad\nrow" }], "families[0].name"],
+    [[{ ...family(), spec: undefined }], "families[0].spec"],
+    ...["repo", "role", "gate"].flatMap((key): [unknown, string][] => [undefined, 7, "wrong"].map((value): [unknown, string] => [[{ ...family(), spec: { repo: "owner/product-spec", role: "spec", gate: "G2", [key]: value } }], `families[0].spec.${key}`])),
+    [[{ ...family(), spec: { repo: "owner/a/b", role: "spec", gate: "G2" } }], "families[0].spec.repo"],
+    [[{ ...family(), members: undefined }], "families[0].members"],
+    [[{ ...family(), members: {} }], "families[0].members"],
+    [[{ ...family(), members: [null] }], "families[0].members[0]"],
+    ...["code", "platform"].flatMap((key): [unknown, string][] => [undefined, 7, "", " ", "bad\nrow"].map((value): [unknown, string] => [[{ ...family(), members: [{ code: "RA", platform: "ios", [key]: value }] }], `families[0].members[0].${key}`])),
+  ])("refuses invalid nested data by its pointer: %j", (raw, pointer) => {
+    expect(() => parse(raw)).toThrow(`at ${pointer},`);
+  });
+
+  it("checks exact own product-code keys, never metadata or inherited properties", () => {
+    for (const code of ["missing", "$comment", "toString", "constructor", "__proto__", "ra"]) {
+      expect(() => parse([{ ...family(), members: [{ code, platform: "ios" }] }], { RA: "owner/product-ios", $comment: "metadata" })).toThrow("at families[0].members[0].code,");
+    }
+    const codes = JSON.parse('{"__proto__":"owner/product-ios","constructor":"owner/product-android"}') as Record<string, string>;
+    expect(parse([{ ...family(), members: [{ code: "__proto__", platform: "ios" }] }], codes).families?.[0]?.members[0]?.code).toBe("__proto__");
+    expect({}.constructor).toBe(Object);
+  });
+
+  it("refuses duplicate names and member assignments, including case aliases", () => {
+    expect(() => parse([family(), { ...family(), name: "SAMPLE-PRODUCT", members: [] }])).toThrow("at families[1].name, duplicates families[0].name");
+    expect(() => parse([family(), { ...family(), name: "other" }])).toThrow("at families[1].members[0].code, already assigned at families[0].members[0].code");
+    expect(() => parse([{ ...family(), members: [{ code: "RA", platform: "ios" }, { code: "RA", platform: "web" }] }])).toThrow("at families[0].members[1].code,");
+    expect(() => parse([{ ...family(), members: [{ code: "RA", platform: "ios" }, { code: "ra", platform: "web" }] }], { RA: "owner/product-ios", ra: "owner/product-ios" })).toThrow("at families[0].members[1].code,");
+  });
+
+  it("ignores $ metadata at every new object level", () => {
+    const annotated = { ...family(), $name: 5, spec: { repo: "owner/product-spec", role: "spec", gate: "G2", $gate: null }, members: [{ code: "RA", platform: "ios", $code: {} }, { code: "RB", platform: "android", $platform: false }] };
+    expect(parse([annotated]).families).toEqual(parse([family()]).families);
+  });
+
+  it("schema check reports FAIL and the bad second-member pointer", () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-family-check-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "repos.json"), JSON.stringify({ consumers: [], product_codes: { RA: "owner/product-ios" }, families: [family()] }));
+    const row = checkTaxonomy({ repoFlag: root }).checks.find((row): boolean => row.file === "nen/repos.json");
+    expect(row).toMatchObject({ ok: false });
+    expect(row?.detail).toContain("families[0].members[1].code");
+  });
+});

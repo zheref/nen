@@ -395,3 +395,35 @@ describe("nen repo scenario -- maintained_tools[] and pending_onboarding[] carry
     expect(help).toMatch(/A product_codes value is a name, not a row, and\s+carries none/);
   });
 });
+
+describe("nen repo resolve --family (#453)", () => {
+  const root = join(process.cwd(), "src/schema/fixtures/families-repo");
+  it("prints spec then members, and emits the same resolved JSON without subprocesses", async () => {
+    const text = await capture(["repo", "resolve", "--family", "SAMPLE-PRODUCT"], undefined, root);
+    expect(text).toMatchObject({ code: 0, out: ["- owner/product-spec spec", "RA owner/product-ios ios", "RB owner/product-android android"] });
+    const json = await capture(["repo", "resolve", "--family", "sample-product"], undefined, root, true);
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.out.join("\n"))).toMatchObject({ family: "sample-product", spec: { repo: "owner/product-spec", role: "spec", gate: "G2" }, members: [{ code: "RA", repo: "owner/product-ios", platform: "ios" }, { code: "RB", repo: "owner/product-android", platform: "android" }] });
+  });
+  it("unknown and blank family selectors exit 2 and list names, ordinary misses stay exit 1", async () => {
+    for (const name of ["sample", "", "unknown"]) {
+      const result = await capture(["repo", "resolve", `--family=${name}`], undefined, root);
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain('Declared families: "sample-product"');
+    }
+    expect((await capture(["repo", "resolve", "missing"], undefined, root)).code).toBe(1);
+  });
+  it("rejects --family with a token or --from before opening any registry", async () => {
+    for (const args of [["RA", "--family", "sample-product"], ["--family", "sample-product", "--from", "/no/checkout"]]) {
+      const result = await capture(["repo", "resolve", ...args], undefined, "/no/registry");
+      expect(result.code).toBe(2);
+      expect(result.err.join("\n")).toContain("--family cannot be combined");
+    }
+  });
+  it("keeps family-shaped product codes available as ordinary tokens", async () => {
+    const target = mkdtempSync(join(tmpdir(), "nen-family-token-"));
+    mkdirSync(join(target, "nen"));
+    writeFileSync(join(target, "nen/repos.json"), JSON.stringify({ consumers: [], product_codes: { "family:sample-product": "owner/product-ios" } }));
+    expect((await capture(["repo", "resolve", "family:sample-product"], undefined, target)).out).toEqual(["owner/product-ios  (family:sample-product)  via code"]);
+  });
+});
