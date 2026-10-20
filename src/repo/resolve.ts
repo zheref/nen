@@ -49,7 +49,7 @@
 // which exist, which is the §3 discipline applied to the one place a two-letter
 // code feels most like a constant.
 
-import { GIT, outputLines, type Seams } from "../seam/exec.js";
+import { GIT, outputLines, redactRemoteUrl, type Seams } from "../seam/exec.js";
 import type { ConsumerEntry, RepoRegistry } from "../schema/repos.js";
 
 /** How a token was matched. Reported, because "it matched" is not the same claim as "it matched as a code". */
@@ -346,10 +346,14 @@ export function resolve(options: ResolveOptions): Resolution {
     );
   }
   const url = outputLines(result.stdout)[0] ?? "";
+  // The origin is PARSED from the URL as git holds it and SHOWN only without
+  // its userinfo -- in both refusals and in the `origin:` line and `--json`
+  // field a resolution carries (SEC-5, zheref/nen#373).
+  const shown = redactRemoteUrl(url);
   const slug = ownerNameFromRemote(url);
   if (slug === null) {
     throw new RepoResolutionError(
-      `'${options.cwd}' has an 'origin' of '${url}', which does not read as an owner/name repository. ${known(registry)}`,
+      `'${options.cwd}' has an 'origin' of '${shown}', which does not read as an owner/name repository. ${known(registry)}`,
     );
   }
   let repos;
@@ -357,8 +361,8 @@ export function resolve(options: ResolveOptions): Resolution {
     repos = resolveToken(registry, slug);
   } catch {
     throw new RepoResolutionError(
-      `'${options.cwd}' has an 'origin' of '${url}', which resolves to '${slug}' -- and that is not in this registry (${registry.path}). An origin is a token like any other: it is an error, never a fallback to every repository. ${known(registry)}`,
+      `'${options.cwd}' has an 'origin' of '${shown}', which resolves to '${slug}' -- and that is not in this registry (${registry.path}). An origin is a token like any other: it is an error, never a fallback to every repository. ${known(registry)}`,
     );
   }
-  return { token: null, origin: url, repos: repos.map((item): ResolvedRepo => ({ ...item, kind: "origin" })) };
+  return { token: null, origin: shown, repos: repos.map((item): ResolvedRepo => ({ ...item, kind: "origin" })) };
 }

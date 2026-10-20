@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
-import { noPortProbe } from "../seam/scripted.js";
+import { noPortProbe, ScriptedSeams } from "../seam/scripted.js";
+import { ClassifyError, readOrigin } from "./classify.js";
 import { repoCommand } from "./command.js";
 
 const ORIGIN_BANKAI: CommandResult = { code: 0, stdout: "git@github.com:zheref/bankai-scaffold.git\n", stderr: "", spawnFailed: false };
@@ -126,5 +127,20 @@ describe("nen repo classify (zheref/nen#216)", () => {
 
   it("refuses a malformed --target at 2", async () => {
     expect((await capture(["repo", "classify", "--target", "nope"], BANKAI_REPO, seams(null))).code).toBe(2);
+  });
+});
+
+describe("readOrigin -- an unreadable origin is refused without its userinfo (SEC-5, zheref/nen#373)", () => {
+  it("names the origin as https://***@host/..., never with the token", () => {
+    const seams = new ScriptedSeams([{ match: "git remote get-url origin", result: { stdout: "https://ghp_FAKE0000@github.com/only\n" } }]);
+    let message = "";
+    try {
+      readOrigin(seams, "/repo");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ClassifyError);
+      message = (error as Error).message;
+    }
+    expect(message).toContain("https://***@github.com/only");
+    expect(message).not.toMatch(/fake0000/i);
   });
 });
