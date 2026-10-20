@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import { BodyCheckError, checkBody } from "./bodycheck.js";
 
 describe("checkBody", () => {
+  const requirements = [{ name: "summary", pattern: "^## (?:✨ )?Summary$" }, { name: "tests", pattern: "^## Tests$" }];
+  it("reports exact heading findings by line without changing legacy verdicts", () => {
+    const body = "## Summary\n## Extra\n## Tests\n";
+    expect(checkBody(body, requirements).ok).toBe(true);
+    expect(checkBody(body, requirements, { exact: true })).toMatchObject({ ok: false, findings: [{ line: 2, message: expect.stringContaining("undeclared") }] });
+    expect(checkBody("## Tests\n## Summary", requirements, { exact: true }).findings?.[0]).toMatchObject({ line: 2, message: expect.stringContaining("out-of-order") });
+    expect(checkBody("## Summary\n## Summary\n## Tests", requirements, { exact: true }).ok).toBe(false);
+  });
+  it("ignores fenced and commented headings, retains glyphs and physical line numbers", () => {
+    const body = "<!--\n## Hidden\n-->\n```md\n## Code\n```\n~~~\n## Code2\n~~~\n## ✨ Summary\n## Tests\n";
+    expect(checkBody(body, requirements, { exact: true }).ok).toBe(true);
+    expect(checkBody(body + "## Extra", requirements, { exact: true }).findings?.[0]?.line).toBe(12);
+    expect(checkBody("```\n## Summary\n## Tests\n```", requirements, { exact: true }).ok).toBe(false);
+    expect(checkBody("## ✨ Summary\n## Tests", [{ name: "s", pattern: "^## Summary$" }, requirements[1] as { name: string; pattern: string }], { exact: true }).ok).toBe(false);
+  });
+  it("caps matched headings and reports ambiguous patterns", () => {
+    const eight = Array.from({ length: 8 }, (_, at): { name: string; pattern: string } => ({ name: `h${at}`, pattern: `^## H${at}$` }));
+    expect(checkBody(eight.map((_, at): string => `## H${at}`).join("\n"), eight, { exact: true, max: 7 }).findings?.[0]).toMatchObject({ line: 8, message: expect.stringContaining("--max 7") });
+    expect(checkBody("## Summary", [requirements[0] as { name: string; pattern: string }, { name: "same", pattern: "Summary" }], { exact: true }).findings?.[0]?.message).toContain("ambiguous");
+    expect(() => checkBody("x", requirements, { max: 7 })).toThrow(/requires --exact/);
+    expect(() => checkBody("x", requirements, { proseBudget: 0 })).toThrow(/positive/);
+  });
+  it("measures prose without changing the verdict or counting tables, comments, fences or Mermaid", () => {
+    const body = `## Summary\n${"word ".repeat(151)}\n| Table words | Ignored |\n| --- | --- |\n<!-- ${"hidden ".repeat(200)} -->\n\`\`\`mermaid\n${"diagram ".repeat(200)}\n\`\`\`\n## Tests\none two`;
+    expect(checkBody(body, requirements, { proseBudget: 150 })).toMatchObject({ ok: true, warnings: [{ section: "Summary", words: 151, budget: 150 }] });
+  });
   it("checks every requirement, never stopping at the first miss", () => {
     const report = checkBody("## Summary\nsomething", [
       { name: "summary", pattern: "^## Summary" },

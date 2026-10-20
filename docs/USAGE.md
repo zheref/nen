@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **71 shapes** and **74 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **72 shapes** and **75 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -251,7 +251,7 @@ file formats).
 - **`issue`** — `nen.issue.edit-body/v0.3` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
-- **`pr`** — `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`pr`** — `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
@@ -2076,6 +2076,66 @@ merge PERMITTED (stale + Ready)
 ```
 (from a real run, `wakes.json` = `[{"at":"2026-09-07T18:00:00Z","noCommit":true},{"at":"2026-09-07T19:00:00Z","noCommit":true}]`)
 
+### `nen pr sections resolve` and `nen pr sections family`
+
+```text
+nen pr sections resolve --catalogue <path> --kind <kind> --family <family>
+                        [--with a,b] [--overrides <workflow.json>] [--json]
+nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
+```
+
+The caller owns the vocabulary and the default matrix. Nen ships no section,
+family or job membership. Paths resolve against `--repo` (default cwd).
+Both actions emit `nen.pr.sections/v0.1` with `--json`.
+
+A catalogue has this shape (the names here are examples):
+
+```json
+{
+  "sections": [
+    { "id": "effect", "title": "✨ What changes", "level": 1 },
+    { "id": "verify", "title": { "process": "What the guards prove", "library": "How a consumer verifies" } },
+    { "id": "economics", "title": "Economics", "when": "economics" }
+  ],
+  "footer": [{ "id": "ledger", "title": "Agent attribution" }],
+  "families": { "maintain": ["machinery", "schema"], "canon": ["prose-authoring"] },
+  "precedence": ["maintain", "canon"],
+  "variants": { "process.canon": ["effect", "verify"], "library.canon": ["effect", "verify"] },
+  "max": 7
+}
+```
+
+`sections` and `footer` are arrays of entries with unique, nonempty `id`s and
+`title` strings (or kind-to-title maps). `level` is 1 or 2, default 2. An optional
+`pattern` supplies the requirement regex verbatim; otherwise the generated regex
+matches the declared title literally, including its glyph. Callers that allow
+varying glyph prefixes supply that tolerance in `pattern`. No glyph is stripped.
+`when` is an optional run-fact key admitted by `--with`; a selected conditional
+section without its fact is omitted, and an admitted conditional section absent
+from the cell appends in catalogue order. Footer entries use the same admission
+rule and remain outside the reader-section cap.
+
+`families` maps family names to job-key arrays. A job belongs to at most one
+family, and `precedence` lists every family exactly once. `family` validates jobs
+against the taxonomy, counts distinct jobs per family, and prints the winning
+family and the tie rule when applied. With the example vocabulary,
+`--jobs prose-authoring,schema,machinery` selects `maintain` (two of three).
+An empty list, unknown taxonomy job, or unmapped job refuses.
+
+`variants` maps `<kind>.<family>` to ordered reader ids. Every cell is validated
+when the catalogue loads, including unselected cells; an unknown id refuses.
+No missing cell is guessed. A consumer may replace cells through
+`workflow.json`'s `pr.sections`, using the same flat cell map; `$` metadata
+siblings are ignored. Overrides are validated even when unselected.
+
+Resolve JSON is `{ contract, kind, family, cell, overridden, sections, footer,
+requirements, max }`; each resolved section is `{ id, title, level }`, and
+`requirements` is the ordered `{ name, pattern }` array consumed by `body-check`.
+Family JSON is `{ contract, family, counts, tied, rule }`. Human resolve output
+includes ids, titles and the requirements array. A cell exceeding `max` after
+conditional admission exits 1 naming the cell and count; invalid catalogues or
+unknown ids also exit 1. Bad CLI arguments exit 2. No action calls GitHub.
+
 ### `nen pr body-check`
 
 Checks a pull-request body against this repository's own template
@@ -2088,6 +2148,7 @@ absent, are **derived** from the repository's own pull-request template.
 
 ```text
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
+                  [--exact [--max <n>]] [--prose-budget <words>]
 ```
 
 **Arguments**
@@ -2099,6 +2160,22 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 | `--base <ref>` | no | read the PR template from git at `<ref>`, never from the working tree | only with a derived set; with `--requirements-from` it is refused, exit 2. A ref that does not resolve to a single commit (a range such as `main..feat` included), or that begins with `-`, exits 2 |
 | `--repo <path>` | no | resolves `--body-from`/`--requirements-from` against this root, and is where the PR template is looked for (the working tree, or the git checkout `--base` is read in) | default cwd |
 | `--json` | no | machine-readable report | — |
+
+**Exact shape and prose measurement** (zheref/nen#448). `--exact` checks
+visible headings outside fenced code and HTML comments. Every level-2 heading
+must match exactly one requirement in array order; undeclared, ambiguous,
+repeated and out-of-order headings produce line-numbered findings and exit 1.
+`--max <n>` requires `--exact` and caps matched level-2 headings (including
+footer headings). The catalogue cap above counts reader sections separately.
+Requirement presence in exact mode is tested against visible headings; supplied
+patterns still decide glyph tolerance. Without `--exact`, existing presence
+checks and verdicts are unchanged.
+
+`--prose-budget <words>` emits one `WARN` per over-budget section, excluding
+headings, tables, comments and fenced code (including Mermaid). It adds no
+failure to the verdict. Both numeric flags require positive safe integers.
+JSON adds `findings: [{ line, message }]` only in exact mode, and
+`warnings: [{ section, words, budget }]` only when a budget was given.
 
 **Which template** (zheref/nen#239). With no `--requirements-from`, the
 verb looks for the template in GitHub's own locations under the `--repo`

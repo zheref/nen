@@ -12,6 +12,8 @@
 // "report the whole table, not the first failure" discipline this repository
 // applies everywhere a caller round-trips on a check (see ../release/preflight.ts).
 
+import { readLines, stripComments } from "./template.js";
+
 export interface BodyRequirement {
   /** A short name for this requirement, reported in the result. */
   readonly name: string;
@@ -28,6 +30,14 @@ export interface RequirementResult {
 export interface BodyCheckReport {
   readonly results: readonly RequirementResult[];
   readonly ok: boolean;
+  readonly findings?: readonly { line: number; message: string }[];
+  readonly warnings?: readonly { section: string; words: number; budget: number }[];
+}
+
+export interface BodyCheckOptions {
+  readonly exact?: boolean;
+  readonly max?: number;
+  readonly proseBudget?: number;
 }
 
 export class BodyCheckError extends Error {
@@ -83,11 +93,78 @@ export function validateRequirements(raw: unknown): asserts raw is readonly Body
   });
 }
 
-export function checkBody(body: string, requirements: readonly BodyRequirement[]): BodyCheckReport {
+export function checkBody(body: string, requirements: readonly BodyRequirement[], options: BodyCheckOptions = {}): BodyCheckReport {
   validateRequirements(requirements);
+  if (options.max !== undefined && (!options.exact || !Number.isSafeInteger(options.max) || options.max < 1)) {
+    throw new BodyCheckError("--max requires --exact and a positive safe integer.");
+  }
+  if (options.proseBudget !== undefined && (!Number.isSafeInteger(options.proseBudget) || options.proseBudget < 1)) {
+    throw new BodyCheckError("--prose-budget requires a positive safe integer.");
+  }
+  const lines = readLines(body);
+  const checked = options.exact ? lines.filter((line): boolean => line.kind === "heading").map((line): string => line.kind === "heading" ? line.text : "").join("\n") : body;
   const results = requirements.map((requirement): RequirementResult => {
     const regex = new RegExp(requirement.pattern, "im");
-    return { name: requirement.name, pattern: requirement.pattern, satisfied: regex.test(body) };
+    return { name: requirement.name, pattern: requirement.pattern, satisfied: regex.test(checked) };
   });
-  return { results, ok: results.every((result): boolean => result.satisfied) };
+  const findings: { line: number; message: string }[] = [];
+  let previous = -1;
+  let matched = 0;
+  if (options.exact) lines.forEach((line, index): void => {
+    if (line.kind !== "heading" || line.level !== 2) return;
+    const matches = requirements.flatMap((requirement, at): number[] => new RegExp(requirement.pattern, "im").test(line.text) ? [at] : []);
+    const at = matches[0];
+    if (matches.length !== 1 || at === undefined) {
+      findings.push({ line: index + 1, message: `${matches.length === 0 ? "undeclared" : "ambiguous"} level-2 heading: ${line.text}` });
+      return;
+    }
+    matched++;
+    if (at <= previous) findings.push({ line: index + 1, message: `out-of-order or repeated heading: ${line.text}` });
+    previous = Math.max(previous, at);
+    if (options.max !== undefined && matched === options.max + 1) findings.push({ line: index + 1, message: `matched heading count exceeds --max ${options.max}` });
+  });
+  const warnings = options.proseBudget === undefined ? [] : measureProse(body, options.proseBudget);
+  return {
+    results, ok: results.every((result): boolean => result.satisfied) && findings.length === 0,
+    ...(options.exact ? { findings } : {}),
+    ...(options.proseBudget === undefined ? {} : { warnings }),
+  };
+}
+
+/** Measurement only; code (including Mermaid), tables and comments contribute no prose. */
+export function measureProse(body: string, budget: number): { section: string; words: number; budget: number }[] {
+  const classified = readLines(body);
+  const sections: { section: string; words: number; budget: number }[] = [];
+  let current = { section: "preamble", words: 0, budget };
+  let fence: string | null = null;
+  let comment = false;
+  const rows = body.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+  const tableRows = new Set<number>();
+  rows.forEach((row, index): void => {
+    const cells = row.trim().replace(/^\||\|$/g, "").split("|");
+    if (!row.includes("|") || !cells.every((cell): boolean => /^\s*:?-{3,}:?\s*$/.test(cell)) || index === 0 || !rows[index - 1]?.includes("|")) return;
+    tableRows.add(index - 1);
+    tableRows.add(index);
+    for (let next = index + 1; next < rows.length && rows[next]?.includes("|"); next++) tableRows.add(next);
+  });
+  rows.forEach((raw, index): void => {
+    if (fence !== null) {
+      if (new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`).test(raw)) fence = null;
+      return;
+    }
+    const stripped = stripComments(raw, comment);
+    comment = stripped.open;
+    const line = stripped.text;
+    const open = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (open !== null) { fence = open[1] as string; return; }
+    const parsed = classified[index];
+    if (parsed?.kind === "heading" && parsed.level <= 2) {
+      sections.push(current);
+      current = { section: parsed.title, words: 0, budget };
+    } else if (parsed?.kind !== "heading" && !tableRows.has(index) && !/^ {4}|^\t/.test(line)) {
+      current.words += (line.replace(/<[^>]*>/g, " ").match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) ?? []).length;
+    }
+  });
+  sections.push(current);
+  return sections.filter((section): boolean => section.words > budget);
 }
