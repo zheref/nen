@@ -149,7 +149,7 @@ nen scaffold init --repo /path/to/repo --accept-detected --directories src,tests
 It ends by running `nen shu tools` in **check** mode and printing what this
 machine is missing, without installing anything. Run it yourself for the host
 verdict — exit 5 with the install command per tool when something is missing or
-is the wrong version, and `--install` (corepack only, in this release) to fix
+is the wrong version, and `--install` (corepack, or the closed Bashcov-only gem mode) to fix
 what nen is allowed to fix:
 
 ```bash
@@ -450,7 +450,7 @@ it stays pending and holds every pull request's checks with it.
 `nen --help` lists every command family (44); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-137 verbs outside the binary — each one's purpose, arguments, exit codes and
+139 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -507,8 +507,8 @@ environment *names* it would spawn and spawns nothing; `nen shu detect` proposes
 a `nen/contract.json` project block from the markers on disk and never writes
 one without `--write`; `nen shu tools` checks the **host** toolchain the
 declaration pins, exits 5 naming the install command per tool, and installs only
-through `corepack` with `--install` — every other declared installer is
-verify-only in this release. `nen shu coverage` and `nen shu test-report` each
+through the closed `corepack` and Bashcov-only `gem` modes with `--install`
+— other declared installers remain verify-only in this release. `nen shu coverage` and `nen shu test-report` each
 run a lane's declared command and then **parse what it wrote** — a coverage
 report, a results file or a whole directory of JUnit XML — into one shape, and
 refuse a damaged report by name rather than printing a plausible number for it.
