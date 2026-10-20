@@ -43,14 +43,13 @@ import { loadGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { SchemaError } from "../schema/errors.js";
 import {
   BASE_GATES_PATH,
-  decodeContentsPayload,
-  exclusionsAtBase,
+  exclusionsAtBoth,
   type BaseGatesRead,
 } from "../gates/base_exclusions.js";
 import { identitiesAtBase } from "../gates/base_identities.js";
 import { resolveDeclaredExclusions } from "../gates/predicates.js";
 import { declarationWarnings } from "../gates/ready.js";
-import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
+import { GH, must, redactRemoteCredentials, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
 import { classifyGatesPath, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
 import type { FlagSpec } from "../cli/args.js";
@@ -78,6 +77,7 @@ import {
   canonicalBotLogins,
   ceilingRefusal,
   readRequestEvents,
+  readGatesAt,
   resolveCeiling,
   RoundCeilingError,
   type BotRound,
@@ -286,7 +286,7 @@ ready:
                               resolved path is what --explain and --json
                               report.
   THE GATES FILE IS THE BASE'S (zheref/nen#372). Without --gates, every input
-  nen/gates.json supplies -- every reviewers[] key (name, login_pattern,
+  nen/gates.json supplies -- every reviewers[] key (name, kind, login_pattern,
   review/round/enrolment_check_pattern, bounded_policy_exempt,
   delivery_holistic_pass, approves_when_posted_at_head), default_approvers,
   approval_policy, base_reviewers, round_quorum, round_policy, delivery,
@@ -309,8 +309,15 @@ ready:
   (read: flags-unverified, refused like local-fallback); a refused base file
   is no verdict. checks.excluded is never taken from the checkout. With
   --gates naming a file outside the checkout, that file supplies the rest and
-  the base still supplies checks.excluded (read: gates-flag). 'watch until
-  --pr' and 'pr merge' run this same read.
+  base/default-tip intersection supplies checks.excluded (read: gates-flag).
+  'watch until --pr' and 'pr merge' run this same read.
+  checks.excluded requires the SAME complete declaration at BOTH the base
+  and default-branch tip, pinned by OID from the same GitHub snapshot. A
+  missing/unreadable/refused side authorises none; diagnostics name it.
+  JSON's rounds-owed row adds owedRounds: { reviewer, reason,
+  coveredByQuorum, kind? }[]. It includes excused quorum members; [] means
+  computed with none owed, absent means uncomputed (including CON-30).
+  kind is only the declared bot|human classification, never inferred.
   --require-base-gates        No verdict unless the gate inputs were the
                               base's: read base, gates-flag, or null (the
                               base read, declaring none). Any other route --
@@ -381,11 +388,15 @@ next-blocker:
                               can still be evaluated. A RELATIVE path is
                               resolved against --repo, NOT the current
                               directory, exactly as it is for 'ready'.
-  Without --gates (or with one naming the checkout's own file), every input
-  is read at the PR's BASE, as 'ready' reads it (zheref/nen#372). A base that
+  Reviewer identities and other inputs retain the PR's BASE route (#372).
+  checks.excluded is the intersection of complete declarations at the pinned
+  base and default-tip OIDs (#403), the same rule as 'ready'. A missing,
+  unreadable or refused side authorises none; warnings name the source.
+  Without --gates (or with one naming the checkout's own file), a base that
   could not be read falls back to the checkout's file, with a warning; a base
   that declares no file, or one this build refuses, is exit 2. --json adds
-  identities { path, read }.
+  identities { path, read } and declaredExclusionsSource naming both pinned
+  files and their intersection.
 
 cascade-main:
   Merges (never rebases) the trunk into the current branch and pushes on a
@@ -1318,11 +1329,15 @@ function blocker(context: CommandContext): number {
   // exactly as in `pr ready`; one naming the checkout's own nen/gates.json is
   // read at the base like the default, and any other file inside the
   // checkout is head content, applied with a warning. The exclusions are the
-  // base's on every path.
+  // intersection with the default tip on every path.
   const now = new Date().toISOString();
-  const baseSha = snapshot.baseRefOid ?? "";
+  // Both policy commits are selected together, then read only by immutable OID.
+  const refs = readGateRefs(context.seams, target, prNumber);
+  const baseSha = refs.baseSha;
   const where = `${target.slug}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
-  const baseRead = readBaseGatesWithGh(context.seams, target, baseSha);
+  const baseRead: BaseGatesRead = refs.failure === undefined
+    ? readGatesAt(context.seams, target, baseSha)
+    : { kind: "failed", message: refs.failure };
   const gatesClass = gatesFlag === undefined ? null : classifyGatesPath(root, local.path);
   let applied: { identities: GateIdentities; path: string; read: "base" | "local-fallback" | "gates-flag"; warnings: readonly string[] };
   if (gatesClass === null || gatesClass === "own") {
@@ -1350,12 +1365,17 @@ function blocker(context: CommandContext): number {
     applied = { identities: local, path: local.path, read: "gates-flag", warnings: [] };
   }
   const identities = applied.identities;
-  const base = exclusionsAtBase(baseRead, where, local.excludedChecks ?? []);
+  const defaultWhere = `${target.slug}@${refs.defaultSha === "" ? "(unknown default-branch tip)" : refs.defaultSha}:${BASE_GATES_PATH}`;
+  const defaultRead: BaseGatesRead = refs.failure !== undefined
+    ? { kind: "failed", message: refs.failure }
+    : refs.defaultSha !== "" && refs.defaultSha === baseSha ? baseRead : readGatesAt(context.seams, target, refs.defaultSha);
+  const base = exclusionsAtBoth({ read: baseRead, source: where }, { read: defaultRead, source: defaultWhere }, local.excludedChecks ?? []);
+  const exclusionSource = `${where} and ${defaultWhere} checks.excluded (intersection)`;
   // Every declared entry as `pr ready` reports it (hanten round 2, N1): the
   // notice for each honoured one that removed a check, and a warning for each
   // that did not apply -- expired, not yet ruled, an unevaluable condition.
   const declaredLines = resolveDeclaredExclusions(base.exclusions, snapshot.checks, now).outcomes.flatMap(
-    (outcome): string[] => declarationWarnings(outcome, `${where} checks.excluded`, now),
+    (outcome): string[] => declarationWarnings(outcome, exclusionSource, now),
   );
   const warnings = [...applied.warnings, ...base.warnings, ...declaredLines];
   const result = nextBlocker(identities, snapshot, {
@@ -1370,7 +1390,7 @@ function blocker(context: CommandContext): number {
     // `identities`, where the identities came from, mirroring `pr ready`'s
     // `meta.identities` (zheref/nen#372, Feitan 5).
     context.io.out(
-      JSON.stringify({ ...result, warnings, notes: base.notes, identities: { path: applied.path, read: applied.read } }, null, 2),
+      JSON.stringify({ ...result, warnings, notes: base.notes, declaredExclusionsSource: exclusionSource, identities: { path: applied.path, read: applied.read } }, null, 2),
     );
     return result.kind === "none" ? 0 : 1;
   }
@@ -1384,30 +1404,23 @@ function blocker(context: CommandContext): number {
   return result.kind === "none" ? 0 : 1;
 }
 
-/**
- * `nen/gates.json` at `baseSha` through `gh`, for `next-blocker` (zheref/nen#249):
- * the same REST contents route `pr ready` takes on its token, told apart the
- * same way -- a 404 is "the base declares nothing", every other failure is
- * "the base could not be read", and both are resolved by
- * ../gates/base_exclusions.ts's `exclusionsAtBase`.
- */
-function readBaseGatesWithGh(seams: Seams, target: Target, baseSha: string): BaseGatesRead {
-  if (baseSha === "") return { kind: "failed", message: "GitHub answered no base commit for the pull request" };
-  const encodedPath = BASE_GATES_PATH.split("/").map((segment): string => encodeURIComponent(segment)).join("/");
-  let stdout: string;
+/** Both trusted policy OIDs from one GitHub snapshot; no moving ref is used for file reads. */
+export function gateRefsArgv(target: Target, prNumber: number): readonly string[] {
+  return ["api", "--method", "POST", "graphql", "-f",
+    "query=query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){defaultBranchRef{target{oid}} pullRequest(number:$pr){baseRefOid}}}",
+    "-f", `owner=${target.owner}`, "-f", `name=${target.repo}`, "-F", `pr=${prNumber}`];
+}
+
+function readGateRefs(seams: Seams, target: Target, prNumber: number): { baseSha: string; defaultSha: string; failure?: string } {
   try {
-    stdout = must(seams, GH, ["api", `repos/${target.slug}/contents/${encodedPath}?ref=${baseSha}`]).stdout;
+    const result = must(seams, GH, [...gateRefsArgv(target, prNumber)]);
+    const raw = JSON.parse(result.stdout) as { data?: { repository?: { pullRequest?: { baseRefOid?: unknown }; defaultBranchRef?: { target?: { oid?: unknown } } } }; errors?: unknown };
+    if (raw.errors !== undefined) return { baseSha: "", defaultSha: "", failure: "GitHub reported errors while reading the pinned gate-ref snapshot" };
+    const base = raw.data?.repository?.pullRequest?.baseRefOid;
+    const tip = raw.data?.repository?.defaultBranchRef?.target?.oid;
+    return { baseSha: typeof base === "string" && /^[0-9a-f]{40}$/i.test(base) ? base : "", defaultSha: typeof tip === "string" && /^[0-9a-f]{40}$/i.test(tip) ? tip : "" };
   } catch (error) {
-    if (error instanceof ToolError) {
-      if (!error.result.spawnFailed && /HTTP 404|Not Found/i.test(error.result.stderr)) return { kind: "absent" };
-      return { kind: "failed", message: redactRemoteCredentials(error.message) };
-    }
-    throw error;
-  }
-  try {
-    return { kind: "read", text: decodeContentsPayload(JSON.parse(stdout) as unknown, BASE_GATES_PATH, baseSha) };
-  } catch (error) {
-    return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
+    return { baseSha: "", defaultSha: "", failure: `could not read pinned gate refs (${redactRemoteCredentials(error instanceof Error ? error.message : String(error))})` };
   }
 }
 

@@ -60,6 +60,7 @@ function snapshot(overrides: Partial<PullRequestSnapshot> = {}): PullRequestSnap
       reviewRequests: [],
     },
     defaultBranch: "main",
+    defaultBranchOid: "default123",
     checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
@@ -691,6 +692,7 @@ describe("fetchPrState -- the happy path's state shape", () => {
       head_ref: "feature/x",
       labels: [],
       default_branch: "main",
+      default_branch_sha: "default123",
     });
     expect(result.state["reviews"]).toEqual([
       { author: "sasuke", state: "APPROVED", commit_id: "deadbeef", submitted_at: "2025-01-01T00:00:00Z" },
