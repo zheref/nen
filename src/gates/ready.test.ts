@@ -25,7 +25,7 @@ import {
 import { loadGateIdentities, parseGateIdentities } from "../schema/gates.js";
 import { parseCheckRollup } from "../github/parse.js";
 import { defaultReviewers, reviewerRoundFacts } from "./predicates.js";
-import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { BANKAI_REPO, EVENT_REPO } from "../schema/fixtures/paths.js";
 
 // The same fixture identities ./predicates.test.ts runs the ported bats cases
 // against: sasuke/tenma (default approvers, review-check gated), copilot
@@ -2070,4 +2070,45 @@ describe("aiReviewers waivers preserve raw evidence and other obligations (#408)
     const ids = { ...identities(), approvalPolicy: "required" as const, defaultApprovers: ["rev0"] };
     expect(evaluateReady(ids, readyState({ reviews: [] }), opts).failing).toContain("approvals-at-head");
   });
+});
+
+
+describe("event lane ready rows (#440)", () => {
+  const identities = loadGateIdentities(EVENT_REPO);
+  const state = (startedAt: unknown, status = "IN_PROGRESS", conclusion: string | null = null): Record<string, unknown> => readyState({
+    reviews: [approvedAtHead("human"), approvedAtHead("lane-a[bot]"), approvedAtHead("lane-b[bot]")],
+    checks: [{ name: "lane-c / review", status, conclusion, startedAt }],
+    stall_requested_at: "2020-01-01T00:00:00Z", review_requests: ["lane-c[bot]"],
+  });
+  const row = (blob: Record<string, unknown>, id: ConjunctId): Conjunct => evaluateReady(identities, blob, OPTIONS).conjuncts.find((entry): boolean => entry.id === id)!;
+  it("reports owed, in flight structurally and in text without excusing the lane", () => {
+    const owed = row(state("2025-06-01T11:50:00Z"), "rounds-owed");
+    expect(owed.reason).toContain("lane-c (owed, in flight)");
+    expect(owed.owedRounds).toContainEqual({ reviewer: "lane-c", reason: "no-round-at-head", state: "in-flight", coveredByQuorum: false, kind: "bot" });
+    expect(row(state("2025-06-01T11:50:00Z"), "round-stalled").status).toBe("ready");
+  });
+  it("stalls at the run start boundary and never recommends a request", () => {
+    const stalled = row(state("2025-06-01T11:30:00Z"), "round-stalled");
+    expect(stalled.status).toBe("failed");
+    expect(stalled.reason).toContain("lane-c event-run stalled");
+    expect(stalled.reason).not.toContain("re-request");
+  });
+  it.each([null, undefined, "invalid", "2025-06-01T12:10:00Z"])("cannot manufacture elapsed run time from %s", (startedAt) => {
+    expect(row(state(startedAt), "round-stalled").status).toBe("ready");
+  });
+  it("retains terminal event state on a quorum-excused owed entry", () => {
+    const owed = row(state("2025-06-01T11:00:00Z", "COMPLETED", "SUCCESS"), "rounds-owed");
+    expect(owed.status).toBe("ready");
+    expect(owed.owedRounds).toContainEqual({ reviewer: "lane-c", reason: "no-round-at-head", state: "completed-without-review", coveredByQuorum: true, kind: "bot" });
+  });
+});
+
+
+it("#440: AI bot-round waivers do not waive an event-run stall", () => {
+  const identities = loadGateIdentities(EVENT_REPO);
+  const evaluation = evaluateReady(identities, readyState({
+    reviews: [approvedAtHead("human")],
+    checks: [{ name: "lane-c / review", status: "IN_PROGRESS", conclusion: null, startedAt: "2025-06-01T11:30:00Z" }],
+  }), { ...OPTIONS, aiReviewers: "optional", trustedBotReviewers: ["lane-a", "lane-b", "lane-c"] });
+  expect(evaluation.conjuncts.find((row): boolean => row.id === "round-stalled")?.status).toBe("failed");
 });

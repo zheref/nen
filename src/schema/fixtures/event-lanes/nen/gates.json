@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "reviewers": [
+    {
+      "name": "human",
+      "kind": "human",
+      "login_pattern": {
+        "pattern": "^human$",
+        "ignoreCase": true
+      }
+    },
+    {
+      "name": "lane-a",
+      "kind": "bot",
+      "wake": "event",
+      "login_pattern": {
+        "pattern": "^lane-a\\[bot\\]$",
+        "ignoreCase": true
+      },
+      "review_check_pattern": {
+        "pattern": "^lane-a / review$",
+        "ignoreCase": false
+      }
+    },
+    {
+      "name": "lane-b",
+      "kind": "bot",
+      "wake": "event",
+      "login_pattern": {
+        "pattern": "^lane-b\\[bot\\]$",
+        "ignoreCase": true
+      },
+      "review_check_pattern": {
+        "pattern": "^lane-b / review$",
+        "ignoreCase": false
+      }
+    },
+    {
+      "name": "lane-c",
+      "kind": "bot",
+      "wake": "event",
+      "login_pattern": {
+        "pattern": "^lane-c\\[bot\\]$",
+        "ignoreCase": true
+      },
+      "review_check_pattern": {
+        "pattern": "^lane-c / review$",
+        "ignoreCase": false
+      }
+    }
+  ],
+  "default_approvers": [
+    "human"
+  ],
+  "base_reviewers": [
+    "human"
+  ],
+  "delivery": {
+    "author_pattern": {
+      "pattern": "^delivery-bot$",
+      "ignoreCase": false
+    },
+    "head_ref_prefixes": [
+      "delivery/"
+    ]
+  },
+  "round_quorum": {
+    "any_of": [
+      "lane-a",
+      "lane-b",
+      "lane-c"
+    ],
+    "minimum": 2
+  }
+}

@@ -6,7 +6,7 @@ import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 import type { Seams } from "../seam/exec.js";
 import { warmupCommand } from "./command.js";
-import { noPortProbe } from "../seam/scripted.js";
+import { ScriptedSeams, noPortProbe } from "../seam/scripted.js";
 
 // NEVER `defaultSeams()` HERE (review finding) -- see board/command.test.ts's
 // own note on the same fix. A `run` that throws converts a future regression
@@ -30,7 +30,7 @@ const STUB_SEAMS: Seams = {
 
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping (review finding).
-async function capture(argv: readonly string[], repoFlag: string = BANKAI_REPO): Promise<{ code: number; out: string[]; err: string[] }> {
+async function capture(argv: readonly string[], repoFlag: string = BANKAI_REPO, seams: Seams = STUB_SEAMS): Promise<{ code: number; out: string[]; err: string[] }> {
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -41,7 +41,7 @@ async function capture(argv: readonly string[], repoFlag: string = BANKAI_REPO):
       err.push(line);
     },
   };
-  const code = await runFamily(warmupCommand, argv, repoFlag, false, io, STUB_SEAMS);
+  const code = await runFamily(warmupCommand, argv, repoFlag, false, io, seams);
   return { code, out, err };
 }
 
@@ -159,6 +159,9 @@ describe("nen warmup", () => {
           "  ],",
           '  "questionSweep": {',
           '    "checked": false',
+          "  },",
+          '  "ciSweep": {',
+          '    "checked": false',
           "  }",
           "}",
         ].join("\n"),
@@ -246,5 +249,57 @@ describe("nen warmup", () => {
       expect(help).toMatch(/NOT 'nen shu warmup'/);
       expect(help).toMatch(/WORKING COPY/);
     });
+  });
+});
+
+
+describe("warmup CI registry (#440)", () => {
+  const declare = (root: string, ci: unknown): void => writeFileSync(join(root, "nen/workflow.json"), JSON.stringify({ ci }));
+  const registry = (latest: string | undefined): string => JSON.stringify({ latest, consumers: [], product_codes: {} });
+  it("absent block remains NOT CHECKED, even with an explicit registry", async () => {
+    const result = await capture(["warmup", "--current", "v1", "--ci-registry", "missing.json", "--json"], cleanRegistryRepo("v1"));
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).ciSweep).toEqual({ checked: false });
+  });
+  it("resolves a relative local override against --repo and fails stale pins", async () => {
+    const root = cleanRegistryRepo("v1");
+    declare(root, { provider: "UNRESOLVED", pinned: "v1", tiers: ["reviewers"], rulings: {} });
+    writeFileSync(join(root, "ci.json"), registry("v2"));
+    const result = await capture(["warmup", "--current", "v1", "--ci-registry", "ci.json", "--json"], root);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n")).ciSweep).toMatchObject({ checked: true, ok: false, pinned: "v1", latest: "v2", reason: expect.stringContaining("stale") });
+  });
+  it.each(["missing", "malformed", "no latest", "missing pin", "unresolved provider"])("fails declared %s instead of reporting current", async (scenario) => {
+    const root = cleanRegistryRepo("v1");
+    declare(root, { provider: "CI", ...(scenario === "missing pin" ? {} : { pinned: "v1" }) });
+    if (scenario !== "missing") writeFileSync(join(root, "ci.json"), scenario === "malformed" ? "{" : registry(scenario === "no latest" ? undefined : "v1"));
+    const args = scenario === "unresolved provider" ? [] : ["--ci-registry", "ci.json"];
+    const result = await capture(["warmup", "--current", "v1", ...args, "--json"], root);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n")).ciSweep).toMatchObject({ checked: true, ok: false });
+  });
+  it.each([true, false])("reads remote registry via contents/decode with explicit override %s", async (explicit) => {
+    const root = cleanRegistryRepo("v1");
+    declare(root, { provider: "CI", pinned: "v2" });
+    writeFileSync(join(root, "nen/repos.json"), JSON.stringify({ latest: "v1", consumers: [], product_codes: { CI: "example/review-plane" } }));
+    const ref = explicit ? "release/next" : "HEAD";
+    const seams = new ScriptedSeams([{
+      match: `gh api --method GET repos/example/review-plane/contents/nen/repos.json?ref=${encodeURIComponent(ref)}`,
+      result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(registry("v2")).toString("base64") }) },
+    }]);
+    const result = await capture(["warmup", "--current", "v1", ...(explicit ? ["--ci-registry", "example/review-plane@release/next"] : []), "--json"], root, seams);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n")).ciSweep).toMatchObject({ checked: true, ok: true, latest: "v2" });
+    expect(seams.calls).toHaveLength(1);
+  });
+  it("combines nen pin, question and CI failures", async () => {
+    const root = registryRepo([{ repo: "o/r", pinned: "v0", consumes: [] }], "v1");
+    declare(root, { provider: "CI", pinned: "v1" });
+    writeFileSync(join(root, "ci.json"), registry("v2"));
+    writeFileSync(join(root, "questions.json"), JSON.stringify([{ id: "q", text: "why?" }]));
+    writeFileSync(join(root, "answers.json"), "{}");
+    const result = await capture(["warmup", "--current", "v1", "--ci-registry", "ci.json", "--questions-from", "questions.json", "--answers-from", "answers.json", "--json"], root);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ pinFindings: [{ kind: "stale" }], questionSweep: { checked: true, gaps: [{ questionId: "q" }] }, ciSweep: { checked: true, ok: false } });
   });
 });

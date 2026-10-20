@@ -10,6 +10,8 @@
 
 import { join } from "node:path";
 
+export const EVENT_REPO = join(process.cwd(), "src", "schema", "fixtures", "event-lanes");
+
 const FIXTURES = join(process.cwd(), "src", "schema", "fixtures");
 
 /** The vocabulary of the live system nen serves today. */

@@ -4,9 +4,9 @@ import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, runFamily, type Io } from "../index.js";
-import { ALT_REPO, BANKAI_REPO, SHU_REPO } from "../schema/fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO, SHU_REPO, EVENT_REPO } from "../schema/fixtures/paths.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
-import { defaultSeams, type Seams } from "../seam/exec.js";
+import { defaultSeams, type Seams, type CommandResult } from "../seam/exec.js";
 import type { Target } from "../github/target.js";
 import { reviewsArgv, reviewThreadsArgv, viewArgv } from "./fetch.js";
 import { botLoginArgv, collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsArgv } from "./bots.js";
@@ -71,7 +71,27 @@ async function capture(
   seams: Seams = STUB_SEAMS,
   guard: "private-target" | "scripted" = "private-target",
 ): Promise<{ code: number; out: string[]; err: string[] }> {
-  if (guard === "private-target") seams = withGuardDefault(argv, seams);
+  if (guard === "private-target") {
+    seams = withGuardDefault(argv, seams);
+    if (argv[0] === "pr" && argv[1] === "request-reviews") {
+      const underlying = seams;
+      const at = argv.indexOf("--target");
+      const target = argv[at + 1]?.split("/");
+      const prAt = argv.indexOf("--pr");
+      const sha = "a".repeat(40);
+      const policyCalls = new ScriptedSeams(target?.length === 2 ? [
+        { match: `gh ${gateRefsArgv({ owner: target[0]!, repo: target[1]!, slug: target.join("/") }, Number(argv[prAt + 1])).join(" ")}`, result: { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { target: { oid: sha } }, pullRequest: { baseRefOid: sha } } } }) } },
+        { match: `gh ${commitArgv({ owner: target[0]!, repo: target[1]!, slug: target.join("/") }, sha).join(" ")}`, result: { stdout: "{}" } },
+        { match: `gh ${gatesAtArgv({ owner: target[0]!, repo: target[1]!, slug: target.join("/") }, sha).join(" ")}`, result: { code: 1, stderr: "HTTP 404" } },
+      ] : []);
+      const keys = new Set(target?.length === 2 ? [
+        `gh ${gateRefsArgv({ owner: target[0]!, repo: target[1]!, slug: target.join("/") }, Number(argv[prAt + 1])).join(" ")}`,
+        `gh ${commitArgv({ owner: target[0]!, repo: target[1]!, slug: target.join("/") }, sha).join(" ")}`,
+        `gh ${gatesAtArgv({ owner: target[0]!, repo: target[1]!, slug: target.join("/") }, sha).join(" ")}`,
+      ] : []);
+      seams = { ...underlying, run: (command, args, options): CommandResult => keys.has(`${command} ${args.join(" ")}`) ? policyCalls.run(command, args, options) : underlying.run(command, args, options) };
+    }
+  }
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -3198,5 +3218,52 @@ describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
     const result = await capture(argvFor("x", "--private-names-ignore-file", "/no/such/ignore-file"), null, seams, "scripted");
     expect(result.code).toBe(2);
     expect(seams.calls).toEqual([]);
+  });
+});
+
+
+describe("request-reviews event wake (#440)", () => {
+  const target: Target = { owner: "example", repo: "consumer", slug: "example/consumer" };
+  const sha = "b".repeat(40);
+  const policy = readFileSync(join(EVENT_REPO, "nen/gates.json"), "utf8");
+  const policyScript = (text = policy): ScriptedCall[] => [
+    { match: `gh ${gateRefsArgv(target, 7).join(" ")}`, result: { stdout: JSON.stringify({ data: { repository: { defaultBranchRef: { target: { oid: sha } }, pullRequest: { baseRefOid: "c".repeat(40) } } } }) } },
+    { match: `gh ${commitArgv(target, sha).join(" ")}`, result: { stdout: "{}" } },
+    { match: `gh ${gatesAtArgv(target, sha).join(" ")}`, result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(text).toString("base64") }) } },
+  ];
+  const argv = ["pr", "request-reviews", "--target", target.slug, "--pr", "7"];
+  it.each([false, true])("skips login inputs before collaborator lookup, ceilings, mutations and pending verification (dry run %s)", async (dryRun) => {
+    const seams = new ScriptedSeams(policyScript());
+    const result = await capture([...argv, "--add-reviewers", "lane-a", "--add-bots", "lane-b[bot]", "--json", ...(dryRun ? ["--dry-run"] : [])], null, seams, "scripted");
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.out.join("\n"))).toMatchObject({ ok: true, routing: [], skipped: [{ name: "lane-a", reviewer: "lane-a", reason: "event-driven, not requested" }, { name: "lane-b[bot]", reviewer: "lane-b", reason: "event-driven, not requested" }] });
+    expect(seams.calls).toHaveLength(3);
+  });
+  it("canonicalizes an explicit Bot node id before deciding to skip it", async () => {
+    const seams = new ScriptedSeams([...policyScript(), {
+      match: `gh ${botNodesArgv(["BOT_lane"]).join(" ")}`,
+      result: { stdout: JSON.stringify({ data: { nodes: [{ __typename: "Bot", id: "BOT_lane", login: "lane-a[bot]" }] } }) },
+    }]);
+    const result = await capture([...argv, "--add-bots", "BOT_lane"], null, seams, "scripted");
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toContain("BOT_lane: event-driven, not requested");
+    expect(seams.calls).toHaveLength(4);
+  });
+  it.each([false, true])("mixed batches retain the actual request result (failure %s)", async (failure) => {
+    const seams = new ScriptedSeams([...policyScript(), {
+      match: `gh ${requestReviewsArgv(target, 7, ["example/team"]).join(" ")}`,
+      result: failure ? { code: 1, stderr: "denied" } : {},
+    }]);
+    const result = await capture([...argv, "--add-reviewers", "lane-a[bot],example/team", "--json"], null, seams, "scripted");
+    expect(result.code).toBe(failure ? 1 : 0);
+    expect(JSON.parse(result.out.join("\n")).skipped).toHaveLength(1);
+    expect(seams.calls).toHaveLength(4);
+  });
+  it("refuses an unread default policy before any request", async () => {
+    const seams = new ScriptedSeams([{ ...policyScript()[0]!, result: { code: 1, stderr: "unavailable" } }]);
+    const result = await capture([...argv, "--add-reviewers", "lane-a[bot]"], null, seams, "scripted");
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("Nothing was requested");
+    expect(seams.calls).toHaveLength(1);
   });
 });

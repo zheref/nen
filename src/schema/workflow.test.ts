@@ -863,8 +863,8 @@ describe("futon.advanceGo -- duplicate names after namespace normalization are r
 });
 
 describe("a workflow's SEVENTEEN blocks", () => {
-  it("says seventeen, now that severity is one of them", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's seventeen blocks are/);
+  it("says eighteen, including the CI declaration", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's eighteen blocks are/);
   });
 });
 
@@ -1333,5 +1333,17 @@ describe("severity metadata cannot become an ordered label", () => {
     const parsed = parseWorkflow("workflow.json", { severity }).severity!;
     expect(parsed.labels).toEqual({ p1: "flat" });
     expect(parsed.raw).toEqual(severity);
+  });
+});
+
+
+describe("workflow ci declaration (#440)", () => {
+  it("preserves provider, tiers, rulings and extension metadata", () => {
+    const ci = { provider: "CI", pinned: "v1.0.0", tiers: ["reviewers"], rulings: { enabled: true }, future: 42 };
+    expect(parseWorkflow("workflow.json", { ci }).ci).toEqual({ provider: "CI", pinned: "v1.0.0", raw: ci });
+    expect(parseWorkflow("workflow.json", {}).ci).toBeNull();
+  });
+  it.each([{ provider: 42 }, { provider: "CI", pinned: 1 }, { provider: "CI", tiers: "reviewers" }, { provider: "CI", rulings: [] }])("refuses malformed ci with a pointer", (ci) => {
+    expect(() => parseWorkflow("workflow.json", { ci })).toThrow(/ci\./);
   });
 });

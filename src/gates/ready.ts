@@ -332,6 +332,7 @@ import {
   normalizeReviewers,
   pendingCheckLabels,
   pendingRounds,
+  eventRoundFacts,
   roundsAtHead,
   quorumExcusedRounds,
   resolveDeclaredExclusions,
@@ -854,7 +855,7 @@ function describeOwedRound(identities: GateIdentities, owed: OwedRound): string 
       );
     }
     case "no-round-at-head":
-      return `${owed.reviewer} (no round at head)`;
+      return `${owed.reviewer} (${owed.state === undefined ? "no round at head" : `owed, ${owed.state === "in-flight" ? "in flight" : owed.state}`})`;
   }
 }
 
@@ -942,6 +943,7 @@ function describeQuorumMember(member: QuorumMember): string {
     );
   } else if (member.round === "delivery-holistic-pass") facts.push("round: CON-40 holistic pass");
   else facts.push(member.reading === "current-head" ? "no round at head" : "no round");
+  if (member.eventRun !== undefined) facts.push(`event lane: ${member.eventRun.state === "in-flight" ? "in flight" : member.eventRun.state}`);
   if (member.requested) facts.push("review requested, not yet posted");
   if (member.round === null && check !== null) {
     switch (check.state) {
@@ -1658,6 +1660,15 @@ export function evaluateReady(
           : { reason: `${owedRow.reason}; aiReviewers ${aiPolicy} waives bot rounds: ${[...waivedBots].join(", ") || "(none)"}` }),
       };
       stalledRow = passed();
+      for (const entry of owed) {
+        const event = eventRoundFacts(identities.reviewer(entry.reviewer), roundInputs.reviews, roundInputs.checks, head, policy);
+        if (event?.state !== "in-flight" || event.startedAt === null) continue;
+        const age = minutesSince(event.startedAt, options.now);
+        if (age !== undefined && age >= options.stallMinutes) {
+          stalledRow = failed(`not-ready: ${entry.reviewer} event-run stalled — in flight for ${age} min without a posted review (CON-32b; inspect the running lane)`);
+          break;
+        }
+      }
       const requestedAt = state["stall_requested_at"];
       const requestedAtText = typeof requestedAt === "string" ? requestedAt : "";
       // PORT CHANGE (§3): `entry.reviewer === "copilot"` -> the reviewer the FILE
@@ -1667,7 +1678,8 @@ export function evaluateReady(
       const stalled = owed.find(
         (entry): boolean =>
           entry.reason === "review-requested-not-yet-posted" &&
-          identities.reviewer(entry.reviewer)?.boundedPolicyExempt === true,
+          identities.reviewer(entry.reviewer)?.boundedPolicyExempt === true &&
+          identities.reviewer(entry.reviewer)?.wake !== "event",
       );
       if (stalled !== undefined && requestedAtText !== "") {
         // Under BOTH policies a pending request older than the stall bound is

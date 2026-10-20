@@ -39,7 +39,7 @@ import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE }
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
-import { loadGateIdentities, type GateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, parseGateIdentities, parseGatesText, type GateIdentities } from "../schema/gates.js";
 import { SchemaError } from "../schema/errors.js";
 import {
   BASE_GATES_PATH,
@@ -321,7 +321,9 @@ ready:
   and default-branch tip, pinned by OID from the same GitHub snapshot. A
   missing/unreadable/refused side authorises none; diagnostics name it.
   JSON's rounds-owed row adds owedRounds: { reviewer, reason,
-  coveredByQuorum, kind? }[]. It includes excused quorum members; [] means
+  coveredByQuorum, kind?, state? }[].
+  Event state is in-flight|no-run|completed-without-review|posted. Event
+  lanes are never requested; their review job proves activity only. It includes excused quorum members; [] means
   computed with none owed, absent means uncomputed (including CON-30).
   kind is only the declared bot|human classification, never inferred.
   --require-base-gates        No verdict unless the gate inputs were the
@@ -1593,8 +1595,8 @@ function resolveReviewerLogins(
 function doRequestReviews(context: CommandContext): number {
   const target = requireTarget(context);
   const prNumber = requirePr(context);
-  const reviewerLogins = commaList(context.args.values["add-reviewers"]);
-  const explicitBots = commaList(context.args.values["add-bots"]);
+  let reviewerLogins = commaList(context.args.values["add-reviewers"]);
+  let explicitBots = commaList(context.args.values["add-bots"]);
   const dryRun = context.args.booleans.has("dry-run");
 
   if (reviewerLogins.length === 0 && explicitBots.length === 0) {
@@ -1610,6 +1612,36 @@ function doRequestReviews(context: CommandContext): number {
     if (!isReviewerNodeId(name) && !isBotLoginInput(name)) {
       throw new VerbUsageError(`'${name}' is not a valid Bot node id or bot login for --add-bots.`);
     }
+  }
+
+  // Wake policy is trusted default-branch content, pinned by one snapshot.
+  // Partition before routing, ceilings, mutations or pending-request verification.
+  const refs = readGateRefs(context.seams, target, prNumber);
+  if (refs.failure !== undefined || refs.defaultSha === "") {
+    throw new VerbUsageError(`could not read reviewer wake policy: ${refs.failure ?? "no default-branch OID"}. Nothing was requested.`);
+  }
+  const policy = readGatesAt(context.seams, target, refs.defaultSha);
+  if (policy.kind === "failed") throw new VerbUsageError(`could not read reviewer wake policy: ${policy.message}. Nothing was requested.`);
+  const identities = policy.kind === "read"
+    ? parseGateIdentities(`${target.slug}@${refs.defaultSha}:${BASE_GATES_PATH}`, parseGatesText(BASE_GATES_PATH, policy.text))
+    : null;
+  const eventIdentities = identities?.reviewers.filter((identity): boolean => identity.wake === "event") ?? [];
+  const skipped: Array<{ name: string; reviewer: string; reason: string }> = [];
+  const canonicalIds = eventIdentities.length === 0 ? new Map<string, string>()
+    : canonicalBotLogins(context.seams, explicitBots.filter(isReviewerNodeId));
+  const requestable = (name: string): boolean => {
+    const login = canonicalIds.get(name) ?? name;
+    const identity = eventIdentities.find((candidate): boolean => candidate.loginPattern.test(login) || candidate.loginPattern.test(`${botLoginKey(login)}[bot]`));
+    if (identity === undefined) return true;
+    skipped.push({ name, reviewer: identity.name, reason: "event-driven, not requested" });
+    return false;
+  };
+  reviewerLogins = reviewerLogins.filter(requestable);
+  explicitBots = explicitBots.filter(requestable);
+  const skippedLines = skipped.map((entry): string => `${entry.name}: ${entry.reason}`);
+  if (reviewerLogins.length === 0 && explicitBots.length === 0) {
+    emit(context.io, context.json, { ok: true, ...(dryRun ? { dryRun: true } : {}), skipped, routing: [], message: skippedLines.join("\n"), unrecordedBots: [] }, skippedLines);
+    return 0;
   }
 
   // RESOLUTION RUNS EVEN UNDER --dry-run -- the same "not network-free"
@@ -1654,8 +1686,8 @@ function doRequestReviews(context: CommandContext): number {
     emit(
       context.io,
       context.json,
-      { ok: false, ...(dryRun ? { dryRun: true } : {}), routing: routes, message, ceiling: null, rounds: [], unrecordedBots: [] },
-      [message],
+      { ok: false, ...(dryRun ? { dryRun: true } : {}), skipped, routing: routes, message, ceiling: null, rounds: [], unrecordedBots: [] },
+      [...skippedLines, message],
     );
     return 1;
   };
@@ -1702,8 +1734,8 @@ function doRequestReviews(context: CommandContext): number {
         emit(
           context.io,
           context.json,
-          { ok: false, ...(dryRun ? { dryRun: true } : {}), routing: routes, message, ceiling: { maxRounds: read.maxRounds, source: read.source }, rounds, unrecordedBots: [] },
-          [message],
+          { ok: false, ...(dryRun ? { dryRun: true } : {}), skipped, routing: routes, message, ceiling: { maxRounds: read.maxRounds, source: read.source }, rounds, unrecordedBots: [] },
+          [...skippedLines, message],
         );
         return EXIT_ROUND_CEILING;
       }
@@ -1721,8 +1753,8 @@ function doRequestReviews(context: CommandContext): number {
   );
 
   if (dryRun) {
-    const lines = [`would request review on ${target.slug}#${prNumber}:`, ...routes.map(routeLine), ...ceilingLines];
-    emit(context.io, context.json, { ok: true, dryRun: true, routing: routes, message: lines.join("\n"), ...ceilingJson }, lines);
+    const lines = [...skippedLines, `would request review on ${target.slug}#${prNumber}:`, ...routes.map(routeLine), ...ceilingLines];
+    emit(context.io, context.json, { ok: true, dryRun: true, skipped, routing: routes, message: lines.join("\n"), ...ceilingJson }, lines);
     return 0;
   }
 
@@ -1752,13 +1784,13 @@ function doRequestReviews(context: CommandContext): number {
   // least one requested bot is not pending review.
   const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
   const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
-  const lines = [...results.map((result): string => result.message), ...ceilingLines];
+  const lines = [...skippedLines, ...results.map((result): string => result.message), ...ceilingLines];
   // JOINED WITH A NEWLINE, matching the human rendering line for line
   // (Copilot review, PR #174) -- both routes running in the same call
   // prints two lines to the terminal, and `--json`'s `message` field
   // silently collapsing them with a space would be a fact the human
   // rendering states plainly and the JSON rendering blurs.
-  emit(context.io, context.json, { ok, routing: routes, message: lines.join("\n"), unrecordedBots, ...ceilingJson }, lines);
+  emit(context.io, context.json, { ok, skipped, routing: routes, message: lines.join("\n"), unrecordedBots, ...ceilingJson }, lines);
   return code;
 }
 

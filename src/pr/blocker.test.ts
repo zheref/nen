@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { BANKAI_REPO, EVENT_REPO } from "../schema/fixtures/paths.js";
 import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
 import type { PrSnapshot } from "./fetch.js";
 import type { CheckRun, Review } from "../github/types.js";
@@ -376,4 +376,17 @@ describe("nextBlocker -- declared checks.excluded", () => {
     expect(result.kind).toBe("red-check");
     expect(result.detail).toMatch(/^no checks remain after the declared exclusion\(s\): check \(Windows/);
   });
+});
+
+
+it("#440: next-blocker keeps event quorum states consistent with readiness", () => {
+  const identities = loadGateIdentities(EVENT_REPO);
+  const posted = (name: string): Review => ({ author: name, state: "APPROVED", commitId: "head1", submittedAt: "2026-01-01T00:00:00Z" });
+  const run: CheckRun = { kind: "check_run", name: "lane-c / review", status: "COMPLETED", conclusion: "SUCCESS", startedAt: null, completedAt: null, detailsUrl: null };
+  const partial = snapshot({ checks: [run], reviews: [posted("human"), posted("lane-a[bot]")] });
+  const blocker = nextBlocker(identities, partial);
+  expect(blocker.kind).toBe("owed-round");
+  expect(blocker.detail).toContain("lane-c (owed, completed-without-review)");
+  expect(blocker.detail).toContain("lane-b");
+  expect(nextBlocker(identities, { ...partial, reviews: [...partial.reviews, posted("lane-b[bot]")] }).kind).toBe("none");
 });

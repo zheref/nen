@@ -1128,9 +1128,39 @@ export type OwedRoundReason =
   | "delivery-holistic-pass-never-posted"
   | "delivery-no-definitive-success-review-check";
 
+export type EventRoundState = "in-flight" | "no-run" | "completed-without-review" | "posted";
+
+export interface EventRoundFacts {
+  readonly state: EventRoundState;
+  readonly startedAt: string | null;
+}
+
+/** Event checks prove activity only. A formal submitted review is the round. */
+export function eventRoundFacts(
+  identity: ReviewerIdentity | undefined, reviews: readonly Review[],
+  checks: readonly RollupEntry[], headSha: string, policy: RoundPolicy,
+): EventRoundFacts | null {
+  if ((identity?.wake ?? "request") !== "event" || identity === undefined) return null;
+  const matching = latestChecks(checks).filter((entry): boolean => {
+    const name = rollupEntryCheckName(entry);
+    return name !== null && identity.reviewCheckPattern !== null && identity.reviewCheckPattern.test(name);
+  });
+  // Any live matching job binds, even if a sibling job has completed.
+  const active = matching.find((entry): boolean => lifecycleStatus(entry) !== "COMPLETED");
+  const posted = reviews.some((review): boolean => isPostedReviewBy(review, identity.loginPattern) && review.commitId === headSha);
+  if (active !== undefined) return { state: "in-flight", startedAt: active.startedAt ?? null };
+  if (posted) return { state: "posted", startedAt: null };
+  if (matching.length > 0) return { state: "completed-without-review", startedAt: null };
+  if (policy === "bounded" && reviews.some((review): boolean => isPostedReviewBy(review, identity.loginPattern))) {
+    return { state: "posted", startedAt: null };
+  }
+  return { state: "no-run", startedAt: null };
+}
+
 export interface OwedRound {
   readonly reviewer: string;
   readonly reason: OwedRoundReason;
+  readonly state?: EventRoundState;
 }
 
 // `tostring | test($p; "i")` over the request list. gh hands back `{login}` for
@@ -1164,7 +1194,7 @@ export function pendingRounds(
   policy: RoundPolicy,
   deliveryPr = false,
 ): OwedRound[] {
-  const names = normalizeReviewerNames(reviewers);
+  const names = normalizeReviewerNames([...reviewers, ...(identities.roundQuorum?.anyOf ?? []).filter((name): boolean => identities.reviewer(name)?.wake === "event")]);
   // Reduce the rollup to the LATEST run per name BEFORE asking whether a
   // check-satisfied reviewer (bisky, bugbot) has a round. Reading the RAW rollup
   // here let a SUPERSEDED non-SKIPPED run clear a reviewer whose LATEST run at
@@ -1185,6 +1215,12 @@ export function pendingRounds(
     // reading, so an unknown reviewer OWES a round rather than being excused.
     const identity: ReviewerIdentity | undefined = identities.reviewer(name);
     const loginPattern = identity?.loginPattern ?? exactLoginPattern(name);
+
+    const event = eventRoundFacts(identity, inputs.reviews, checks, headSha, policy);
+    if (event !== null) {
+      if (event.state !== "posted") owed.push({ reviewer: name, reason: "no-round-at-head", state: event.state });
+      continue;
+    }
 
     if (
       inputs.reviewRequests.some((request): boolean =>
@@ -1360,6 +1396,10 @@ function reviewerRound(
   policy: RoundPolicy,
   deliveryPr: boolean,
 ): RoundOutcome {
+  const event = eventRoundFacts(identity, reviews, checks, headSha, policy);
+  if (event !== null) return event.state === "posted"
+    ? { had: true, via: "review" }
+    : { had: false, reason: "no-round-at-head" };
   // BOUNDED ROUND POLICY, ANY-HEAD LIMB (zheref/nen#214). `strict` keeps the
   // ORIGINAL rule exactly: a round only counts at the CURRENT head, so a
   // remediation push re-opens the owed limb until the reviewer shows up
@@ -1581,6 +1621,7 @@ export type RoundCheckState = "absent" | "pending" | "skipped" | "unsuccessful" 
 
 export interface QuorumMember {
   readonly reviewer: string;
+  readonly eventRun?: EventRoundFacts;
   /** How the member's round was had, or `null` when it has none. */
   readonly round: RoundVia | null;
   /**
@@ -1651,7 +1692,7 @@ export function quorumExcusedRounds(
 export function quorumMembersInFlight(quorum: QuorumResult | null | undefined): ReadonlySet<string> {
   return new Set(
     (quorum?.members ?? [])
-      .filter((member): boolean => member.roundCheck?.state === "pending")
+      .filter((member): boolean => member.roundCheck?.state === "pending" || member.eventRun?.state === "in-flight")
       .map((member): string => member.reviewer),
   );
 }
@@ -1775,6 +1816,7 @@ export function roundQuorum(
         requestMatches(request, loginPattern),
       ),
       roundCheck,
+      ...(identity?.wake === "event" ? { eventRun: eventRoundFacts(identity, inputs.reviews, checks, headSha, policy)! } : {}),
     };
   });
   const count = members.filter((member): boolean => member.round !== null).length;

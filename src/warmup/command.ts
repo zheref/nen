@@ -1,6 +1,13 @@
 // src/warmup/command.ts -- `nen warmup`: stale-pin detection plus the
 // handbook-question sweep.
 
+import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { loadWorkflow } from "../schema/workflow.js";
+import { parseRepoRegistry, type RepoRegistry } from "../schema/repos.js";
+import { resolveToken } from "../repo/resolve.js";
+import { GH, redactRemoteCredentials } from "../seam/exec.js";
+import { decodeContentsPayload } from "../gates/base_exclusions.js";
 import {
   emit,
   requireValue,
@@ -10,9 +17,9 @@ import {
 import { readJsonFile } from "../cli/inputs.js";
 import { resolveRepoRoot } from "../repo/root.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
-import { detectStalePins, sweepHandbookQuestions, type PinFinding, type Question, type QuestionGap } from "./sweep.js";
+import { detectStalePins, sweepCiPin, type CiSweepResult, sweepHandbookQuestions, type PinFinding, type Question, type QuestionGap } from "./sweep.js";
 
-const USAGE = `nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
+const USAGE = `nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>] [--ci-registry <path|owner/name@ref>]
 
 Warms the target repository's POLICY inbox: stale-pin detection over its
 nen/repos.json (every consumer's default pin AND every per-caller pin
@@ -33,6 +40,11 @@ and an unperformed check must never render as a clean one.
                            registry.latest can itself be stale, so it is
                            stated explicitly rather than read from the file
                            being checked.
+  --ci-registry <locator>  Override the CI registry (local path relative to --repo,
+                           or owner/name@ref reading nen/repos.json). Otherwise
+                           ci.provider resolves through the target registry, at HEAD.
+                           ci.pinned is checked against its latest. No ci block:
+                           NOT CHECKED; a declared but unreadable pin fails.
   --questions-from <path>  A JSON array of { id, text }. Omitting it skips the
                            sweep -- reported as an explicit NOT CHECKED, both
                            in the human output and as { "checked": false } in
@@ -62,7 +74,7 @@ export const warmupCommand: Command = {
   name: "warmup",
   summary: "Detect stale pins (incl. per-caller) and sweep handbook questions.",
   usage: USAGE,
-  flags: { values: ["current", "questions-from", "answers-from"] },
+  flags: { values: ["current", "questions-from", "answers-from", "ci-registry"] },
   run(context: CommandContext): number {
     const current = requireValue(context.args, "current", "This repository's actual latest.");
     const registry = openTaxonomy({ repoFlag: context.repoFlag }).repos();
@@ -130,7 +142,40 @@ export const warmupCommand: Command = {
       lines.push("handbook-question sweep: NOT CHECKED (--questions-from was not supplied)");
     }
 
-    emit(context.io, context.json, { current, pinFindings, questionSweep }, lines);
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+    let ciSweep: CiSweepResult = { checked: false };
+    let pinned: string | null = null;
+    try {
+      const ci = loadWorkflow(root).workflow.ci;
+      if (ci !== null && ci !== undefined) {
+        pinned = ci.pinned;
+        let locator = context.args.values["ci-registry"];
+        if (locator === undefined) {
+          const provider = resolveToken(registry, ci.provider);
+          if (provider.length !== 1 || !provider[0]?.repo.includes("/")) throw new Error("ci.provider did not resolve to one repository; supply --ci-registry");
+          locator = `${provider[0].repo}@HEAD`;
+        }
+        const remote = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)@(.+)$/.exec(locator);
+        let ciRegistry: RepoRegistry;
+        if (remote !== null) {
+          const slug = remote[1]!;
+          const ref = remote[2]!;
+          const result = context.seams.run(GH, ["api", "--method", "GET", `repos/${slug}/contents/nen/repos.json?ref=${encodeURIComponent(ref)}`]);
+          if (result.code !== 0) throw new Error(`CI registry could not be read (exit ${result.code})`);
+          ciRegistry = parseRepoRegistry("CI registry", JSON.parse(decodeContentsPayload(JSON.parse(result.stdout) as unknown, "nen/repos.json", ref)) as unknown);
+        } else {
+          const path = resolve(root, locator);
+          ciRegistry = parseRepoRegistry(path, JSON.parse(readFileSync(path, "utf8")) as unknown);
+        }
+        ciSweep = sweepCiPin(pinned, ciRegistry.latest);
+      }
+    } catch (error) {
+      ciSweep = { checked: true, ok: false, pinned, latest: null, reason: redactRemoteCredentials(error instanceof Error ? error.message : String(error)) };
+    }
+    lines.push(!ciSweep.checked ? "CI pin sweep: NOT CHECKED (no ci block)"
+      : ciSweep.ok ? `CI pin sweep: current (${ciSweep.pinned})`
+      : `CI pin sweep: FAILED — ${ciSweep.reason}`);
+    emit(context.io, context.json, { current, pinFindings, questionSweep, ciSweep }, lines);
     const questionsFailed = questionSweep.checked && questionSweep.gaps.length > 0;
     // AN UNPINNED CONSUMER FAILS THE RUN, the same as a stale one, because
     // `pinFindings` carries both kinds. The fail-closed reading: the pin check
@@ -138,6 +183,6 @@ export const warmupCommand: Command = {
     // passed. Unlike the question sweep -- whose NOT CHECKED is the caller's
     // own choice not to supply the input, and so is not a failure -- this gap
     // is in the registry the caller pointed nen at.
-    return pinFindings.length === 0 && !questionsFailed ? 0 : 1;
+    return pinFindings.length === 0 && !questionsFailed && (!ciSweep.checked || ciSweep.ok) ? 0 : 1;
   },
 };

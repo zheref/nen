@@ -124,3 +124,9 @@ describe("countRounds", () => {
     );
   });
 });
+
+
+it("#440: an event run in flight remains owed despite historical rounds and a met quorum", () => {
+  const met = quorum([member("a", "review", null), { ...member("lane", null, null), eventRun: { state: "in-flight", startedAt: null } }]);
+  expect(countRounds([fact("lane", { posted: 1 })], [], 1, null, met).reviewers[0]?.min).toBe("owed-in-flight");
+});

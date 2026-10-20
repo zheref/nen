@@ -190,6 +190,8 @@ export interface ReviewerIdentity {
   readonly name: string;
   /** Explicit classification only; absence stays unknown. */
   readonly kind?: "bot" | "human";
+  /** How the reviewer wakes; omitted hand-built identities retain request semantics. */
+  readonly wake?: "request" | "event";
   readonly loginPattern: RegExp;
   readonly reviewCheckPattern: RegExp | null;
   readonly roundCheckPattern: RegExp | null;
@@ -577,6 +579,7 @@ export const GATES_KNOWN_KEYS: GatesKeyLevel = {
     items: {
       name: { introducedIn: "0.1.0" },
       kind: { introducedIn: NEXT_RELEASE },
+      wake: { introducedIn: NEXT_RELEASE },
       login_pattern: pattern("0.1.0"),
       review_check_pattern: pattern("0.1.0"),
       round_check_pattern: pattern("0.1.0"),
@@ -864,8 +867,13 @@ export function parseGateIdentities(path: string, value: unknown): GateIdentitie
     if (kind !== undefined && kind !== "bot" && kind !== "human") {
       throw new SchemaError(path, `${pointer}.kind`, `expected 'bot' or 'human', got ${describeValue(kind)}`);
     }
+    const wake = record["wake"] === undefined ? "request" : record["wake"];
+    if (wake !== "request" && wake !== "event") {
+      throw new SchemaError(path, `${pointer}.wake`, `expected 'request' or 'event', got ${describeValue(wake)}`);
+    }
     reviewers.push({
       name,
+      wake,
       ...(kind === undefined ? {} : { kind }),
       loginPattern: readPattern(path, `${pointer}.login_pattern`, record["login_pattern"], true),
       reviewCheckPattern: readPattern(
