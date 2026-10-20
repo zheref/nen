@@ -369,6 +369,7 @@ export function buildPlans(
   for (const entry of Object.values(declared)) {
     const pointer = `project.toolchain.${entry.tool}.version`;
     const pin = parsePin(entry.version, pointer);
+    const install = resolveInstall(entry, manifest, host);
     plans.push({
       name: entry.tool,
       required: true,
@@ -377,8 +378,8 @@ export function buildPlans(
       installer: entry.installer,
       pinned: renderPin(pin),
       satisfiedBy: (found): boolean => satisfiesPin(pin, found),
-      install: resolveInstall(entry, manifest, host),
-      why: entry.why,
+      install,
+      why: [entry.why, install.kind === "runnable" ? install.preconditions : null].filter(Boolean).join(" ") || null,
       // A toolchain entry pins a VERSION, never a ref: there is nothing to be
       // behind, and `null` says the comparison does not apply.
       pinnedRef: null,

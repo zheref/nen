@@ -2299,7 +2299,7 @@ describe("the no-elevation sweep", () => {
     for (const installer of INSTALLERS) {
       const plan = resolveInstall(
         {
-          tool: "placeholder-tool",
+          tool: installer === "gem" ? "bashcov" : "placeholder-tool",
           version: "1.2.3",
           probe: ["placeholder-tool", "--version"],
           versionFrom: "first-semver-on-stdout",
@@ -2324,8 +2324,8 @@ describe("the no-elevation sweep", () => {
     }
   });
 
-  it("enables exactly one installer, and it is the one that ships with its runtime", () => {
-    expect(ENABLED_INSTALLERS).toEqual(["corepack"]);
+  it("enables only the reviewed installer inventory", () => {
+    expect(ENABLED_INSTALLERS).toEqual(["corepack", "gem"]);
   });
 
   it("resolves NO runnable plan for any installer outside the enabled set", () => {
@@ -2337,7 +2337,7 @@ describe("the no-elevation sweep", () => {
     for (const installer of INSTALLERS) {
       const plan = resolveInstall(
         {
-          tool: "placeholder-tool",
+          tool: installer === "gem" ? "bashcov" : "placeholder-tool",
           version: "1.2.3",
           probe: ["placeholder-tool", "--version"],
           versionFrom: "first-semver-on-stdout",
@@ -2350,5 +2350,81 @@ describe("the no-elevation sweep", () => {
       );
       expect(plan.kind === "runnable", installer).toBe(ENABLED_INSTALLERS.includes(installer));
     }
+  });
+});
+
+
+describe("the pinned shell coverage installer", () => {
+  const entry = {
+    $name: "bashcov", version: "4.0.0", probe: ["ruby", "probe-bashcov"],
+    versionFrom: "first-semver-on-stdout", installer: "gem",
+  };
+  const steps = ["ruby --version", "gem --version",
+    "gem install bashcov --version 4.0.0 --install-dir .nen/tools/gems --bindir .nen/tools/bin --no-document --norc"];
+  const missing: ScriptedCall = { match: "ruby probe-bashcov", result: { spawnFailed: true } };
+  const installed = (version: string): ScriptedCall => ({ match: "ruby probe-bashcov", result: { stdout: version } });
+  const ok = steps.map((match): ScriptedCall => ({ match, result: { code: 0 } }));
+
+  it.each(["darwin", "linux"] as const)("installs the exact pin on %s and re-probes", async (platform) => {
+    const result = await withDeclaration(oneTool(entry), ["--install", "--json"], {
+      platform, staged: true, script: [missing, ...ok, installed("4.0.0")],
+    });
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual([missing.match, ...steps, missing.match]);
+    expect(row(result, "bashcov")).toMatchObject({ found: "4.0.0", satisfied: true });
+    expect(result.seams.calls.every((call): boolean => call.env === null)).toBe(true);
+  });
+  it("dry-runs the plan and runtime preconditions without spawning", async () => {
+    const result = await withDeclaration(oneTool(entry), ["--install", "--dry-run", "--json"]);
+    expect(result.code).toBe(0);
+    expect(spawned(result.seams)).toEqual([]);
+    expect(row(result, "bashcov").installCommand).toEqual(steps);
+    expect(row(result, "bashcov").why).toContain("Bash 4.1+");
+    expect(row(result, "bashcov").why).toContain("Ruby and RubyGems");
+  });
+  it("check mode only probes and does not install", async () => {
+    const result = await withDeclaration(oneTool(entry), ["--json"], { script: [missing] });
+    expect(result.code).toBe(5);
+    expect(spawned(result.seams)).toEqual([missing.match]);
+  });
+  it("does not trust successful installation when the re-probe reports a wrong version", async () => {
+    const result = await withDeclaration(oneTool(entry), ["--install", "--json"], {
+      staged: true, script: [missing, ...ok, installed("3.2.0")],
+    });
+    expect(result.code).toBe(5);
+    expect(row(result, "bashcov").satisfied).toBe(false);
+  });
+  it.each([0, 1, 2])("stops at missing runtime/installer or failed installation step %s", async (failed) => {
+    const script = [missing, ...ok.slice(0, failed), { match: steps[failed]!, result: { spawnFailed: true } }];
+    const result = await withDeclaration(oneTool(entry), ["--install", "--json"], { script });
+    expect(result.code).toBe(5);
+    expect(spawned(result.seams)).toEqual([missing.match, ...steps.slice(0, failed + 1)]);
+  });
+  it.each([">=4.0.0", "4.0", "4.0.0-rc.1"])("refuses non-exact RubyGems release %s", async (version) => {
+    const result = await withDeclaration(oneTool({ ...entry, version }), ["--install", "--json"], { script: [missing] });
+    expect(result.code).toBe(2);
+    expect(spawned(result.seams)).toEqual([missing.match]);
+  });
+  it.each(["win32", "freebsd"] as const)("refuses unsupported host %s before installation", async (platform) => {
+    const result = await withDeclaration(oneTool(entry), ["--install", "--json"], { platform, script: [missing] });
+    expect(result.code).toBe(2);
+    expect(spawned(result.seams)).toEqual([missing.match]);
+  });
+  it("refuses a presence-only probe that cannot verify the installed version", async () => {
+    const result = await withDeclaration(oneTool({ ...entry, versionFrom: "path-exists" }), ["--install", "--json"], { script: [missing] });
+    expect(result.code).toBe(2);
+    expect(spawned(result.seams)).toEqual([missing.match]);
+  });
+  it("stops on a nonzero installation exit without re-probing", async () => {
+    const result = await withDeclaration(oneTool(entry), ["--install", "--json"], {
+      script: [missing, ...ok.slice(0, 2), { match: steps[2]!, result: { code: 1 } }],
+    });
+    expect(result.code).toBe(5);
+    expect(spawned(result.seams)).toEqual([missing.match, ...steps]);
+  });
+  it("refuses arbitrary gems", async () => {
+    const result = await withDeclaration(oneTool({ ...entry, $name: "other-gem" }), ["--install", "--json"], { script: [missing] });
+    expect(result.code).toBe(2);
+    expect(spawned(result.seams)).toEqual([missing.match]);
   });
 });

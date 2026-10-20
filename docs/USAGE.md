@@ -12255,7 +12255,7 @@ exits `0`)
 ### `nen shu tools`
 
 Check the **host** toolchain this repository pins, and — only with `--install`,
-and only through one installer — install what nen is allowed to install. It is
+and only through the closed installer inventory — install what nen is allowed to install. It is
 the one verb in this family whose blast radius is the developer's machine rather
 than a repository, which is why every rule below is stated as a refusal.
 
@@ -12283,7 +12283,7 @@ nen shu tools --install [--only <tool[,tool]>] [--dry-run] [--json]
 | `version` | **yes** | The pin. Either an exact version (`"9.15.9"`) or a floor (`">=20.19.0"`) — the two forms nen can evaluate. There is no caret, no tilde, no two-sided range and no dist-tag; one of those is exit 2 naming the pointer and both forms. A pre-release or build-metadata suffix is held to **semver's own identifier charset** (alphanumerics and `-`, per dot-separated identifier): `1.2.3-rc.1+sha512.abc` is a pin, `1.2.3-; rm -rf /` is exit 2 by pointer — that suffix is the one part of a pin that reaches an installer's argv unreshaped. **No entry may omit it**: nen never certifies or installs `latest`, and the loader refuses an entry that tries. |
 | `probe` | **yes** | Argv, never a string. There is no shell. |
 | `versionFrom` | **yes** | One of `first-semver-on-stdout`, `first-semver-on-stderr`, `whole-line-stdout`, `path-exists`. **Deliberately not a regex** — a caller-supplied pattern is a caller-supplied program, and a ReDoS surface `src/schema/pattern.ts` exists to guard. The two `first-semver` members read the first version-shaped token (one dot or more) on that stream, **preferring a three-component one when the line offers several** — so a banner leading with a build date `2024.01` does not beat the `1.2.3` beside it, while `MAJOR.MINOR` is still read when that is all a probe prints. Nothing scores further: two three-component tokens on one line still yield the first, because choosing between them would be nen guessing which version the probe meant. A probe whose line leads with an unrelated dotted number and carries no three-component version reads *that* number — declare a probe that prints the version alone. |
-| `installer` | **yes** | One of `verify-only`, `corepack`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. Only **`corepack`** runs in this release. |
+| `installer` | **yes** | One of `verify-only`, `corepack`, `gem`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. **`corepack`** and **`gem`** run in this release. |
 | `why` | no | Where the pin comes from, in the repository's own words. Printed verbatim; never nen's. |
 
 The **`nen` row** comes from the `dependency` block instead, when there is one:
@@ -12401,10 +12401,39 @@ test computes that rule from the seam rather than from a list of names.
 
 | Installer | `--install` runs | Why |
 |---|---|---|
-| `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` — **on `darwin` and `linux` only** | The one install nen performs. The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. On **`win32` it is REFUSED**, with those two commands printed to run by hand: there `corepack` is a batch shim (`corepack.cmd`), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a `.bat`/`.cmd` without one (node, since the fix for CVE-2024-27980) fails; a runtime that starts it anyway starts it *through* the command interpreter, which re-parses the argument list nen assembled element by element — a shell by another name. Nen will not guess which of the two this host does, and an install that "works on POSIX and is untested on Windows" is a claim nobody checked. The **check** is unaffected on every host: it spawns only the probe the repository declared. |
+| `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` — **on `darwin` and `linux` only** | The package-manager install nen performs. The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. On **`win32` it is REFUSED**, with those two commands printed to run by hand: there `corepack` is a batch shim (`corepack.cmd`), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a `.bat`/`.cmd` without one (node, since the fix for CVE-2024-27980) fails; a runtime that starts it anyway starts it *through* the command interpreter, which re-parses the argument list nen assembled element by element — a shell by another name. Nen will not guess which of the two this host does, and an install that "works on POSIX and is untested on Windows" is a claim nobody checked. The **check** is unaffected on every host: it spawns only the probe the repository declared. |
+| `gem` | `ruby --version`, `gem --version`, then `gem install bashcov --version <pin> --install-dir .nen/tools/gems --bindir .nen/tools/bin --no-document --norc` | Only the declared `bashcov` tool, with an exact numeric `MAJOR.MINOR.PATCH` release, on **darwin/linux**. Other tools, ranges, abbreviated pins and hosts refuse. Ruby/RubyGems must already exist; the preflight steps stop on failure. RubyGems checks release/runtime compatibility. Tool runtime dependencies are installed in the same lane-local directory; project dependencies are never installed. `--norc` bypasses `.gemrc`. No elevation, PATH or shell profile edits; use the declared Ruby activation probe below. The report's `why` states the prerequisites, including **Bash 4.1+** for coverage (macOS system Bash 3.2 lacks `BASH_XTRACEFD`). |
 | `verify-only` | nothing | Reported with the pin and the sentence *"install by hand"*. A system-wide install with five common answers is exactly the choice nen does not make for you. |
 | `wrapper`, `npx` | nothing | There is nothing to install: the repository's own committed wrapper, or its own dependency graph, resolves the tool. |
 | `sdkmanager`, `dotnet-install`, `winget` | nothing | Declared, and **not enabled in this release**: every installer that fetches and executes vendor code, or writes into an SDK root, ships behind its own explicit decision. The row names the tool, the pin and the installer a human runs. |
+
+The `gem` report lists runtime preflights and the exact install argv in check and
+dry-run modes. `--dry-run` spawns neither preflights nor probes. `--install`
+re-runs the declaration's probe after successful installation and exits 5 if
+it still reports a missing or wrong version; an installer exit 0 is insufficient.
+A local install does not put a command on PATH: declare a probe that activates
+the local gem through Ruby, and select a compatible Ruby/RubyGems pair before
+running Nen. Do not use `path-exists` to certify this version.
+
+```json
+"toolchain": {
+  "bashcov": {
+    "version": "4.0.0",
+    "installer": "gem",
+    "probe": ["ruby", "-e", "Gem.use_paths(File.expand_path('.nen/tools/gems')); require 'bashcov/version'; puts Bashcov::VERSION"],
+    "versionFrom": "whole-line-stdout",
+    "why": "Focused shell line coverage; Ruby >=3.2 and compatible Bash already provisioned."
+  }
+}
+```
+
+All paths above are relative to the selected lane's `cwd`. In the test row, capture using
+`ruby -e "Gem.use_paths(File.expand_path('.nen/tools/gems')); load Gem.bin_path('bashcov', 'bashcov', '4.0.0')" -- --bash-path <existing-compatible-bash> -- <focused-script>`.
+[The shell coverage demonstration](ab/443-shell-coverage.md) records the tested
+LCOV formatter and consumer lane shape for Hatsu #148: its test row executes
+and instruments fixtures; its coverage row only checks and parses the existing
+capture. No coverage lane or floor
+is added to Hatsu by this provisioning change.
 
 **Eight fail-closed rules.** (1) Check is the default and `--install` is the
 only way to act — no field, env var or declaration key flips it. (2) `--dry-run`
