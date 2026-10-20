@@ -429,7 +429,7 @@ repository's `nen/` directory, at the path `--repo` names:
 | `nen/labels.json` | the label set — names, colours, descriptions | [`labels sync`](#nen-labels-sync), [`label apply`](#nen-label-apply), [`issue file`](#nen-issue-file), [`issue consolidate-close`](#nen-issue-consolidate-close), [`idea file`](#nen-idea-file), [`schema check`](#nen-schema-check) |
 | `nen/repos.json` | the registry — consumers, product codes, per-consumer pins, recorded scenarios, and the **canon pin**: the `pinned` tag on the canonical handbooks repository's `maintained_tools` entry (`CON-13`), plus where that repository's checkout is found on a machine (`checkout_env`, `checkout` -- [#294](https://github.com/zheref/nen/issues/294)) | [`repo resolve`](#nen-repo-resolve), [`repo scenario`](#nen-repo-scenario), [`ref format`](#nen-ref-format), [`fanout compute`](#nen-fanout-compute), [`fanout record`](#nen-fanout-record), [`warmup`](#nen-warmup), [`canon resolve`](#nen-canon-resolve), [`canon pin`](#nen-canon-pin), [`canon checkout`](#nen-canon-checkout) (the pin and the checkout declaration), [`canon mirror generate`](#nen-canon-mirror-generate) and [`canon mirror check`](#nen-canon-mirror-check) (the pin, when `--source`/`--ref` are omitted; the checkout declaration, when `--rules-dir` is), [`parse futon`](#nen-parse-futon), [`pr ready`](#nen-pr-ready) (ref resolution), [`schema check`](#nen-schema-check) (reports the pin) |
 | `nen/colors.yml` | the status-colour precedence for board rendering | [`color status`](#nen-color-status), [`schema check`](#nen-schema-check) |
-| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, read at the pull request's base) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
+| `nen/gates.json` | reviewer identities for the readiness check, and optional declared check exclusions (`checks.excluded`, the intersection at pinned base and default-tip commits) | [`pr ready`](#nen-pr-ready), [`pr next-blocker`](#nen-pr-next-blocker), [`schema check`](#nen-schema-check) |
 | `nen/contract.json` | optional — `dependency` (what this repository needs *from* nen: the version floor, the pinned ref, the bootstrap), `project` (its stack declaration: lanes, per-lane verbs, toolchain pins) and `mechanical` (the conflict set [`wc catch-up`](#nen-wc-catch-up) classifies: version manifests, changelog, generated mirrors and their regenerate argv — [#326](https://github.com/zheref/nen/issues/326)) | [`wc catch-up`](#nen-wc-catch-up) (the `mechanical` block, read only on a conflict), [`shu detect`](#nen-shu-detect) (proposes the `project` block), [`shu build`/`test`/`lint`/…](#family-shu) (every argv they run comes from it), [`shu tools`](#nen-shu-tools) (the `toolchain` pins), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence; `init` also reads `dependency.pinned_ref` for the CI file's ref), [`schema check`](#nen-schema-check) |
 | `nen/workflow.json` | optional — the delivery loop's **policy**: the branch template and trunk, the iteration checks, the coverage ladder, the attribution trailers a commit may carry, the declared subject-case rule and body width, the reports directory, the model matrix, the self-hosted runner pools. See [`nen/workflow.json`](#nenworkflowjson) | [`runner`](#family-runner) (the `runners` block), [`commit format`](#nen-commit-format) and [`commit write`](#nen-commit-write) (the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`), [`shu coverage`](#nen-shu-coverage) (the ladder, under `--touched` with no `--threshold`), [`scaffold init`](#nen-scaffold-init) and [`scaffold new`](#nen-scaffold-new) (write it into absence, and generate both git hooks out of it), [`schema check`](#nen-schema-check) |
 
@@ -1043,7 +1043,7 @@ guessing.
 Every input `nen/gates.json` supplies is read **at the pull request's base
 commit** (`baseRefOid`), through the same REST contents read
 [#249](https://github.com/zheref/nen/issues/249) built for `checks.excluded`:
-`reviewers[]` and each one's `login_pattern`, `review_check_pattern`,
+`reviewers[]` and each one's optional `kind`, `login_pattern`, `review_check_pattern`,
 `round_check_pattern`, `enrolment_check_pattern`, `bounded_policy_exempt`,
 `delivery_holistic_pass` and `approves_when_posted_at_head`;
 `default_approvers`, `approval_policy` and `base_reviewers`; `round_quorum`;
@@ -1085,8 +1085,8 @@ passes it through to every read. `nen pr merge` and `watch until --until
 ready` apply the same allow-list without it — the merge gate admits only
 `base`, since it passes neither `--gates` nor `--reviewers`.
 
-Three rules hold on every row. **`checks.excluded` is honoured from the base
-or not at all** — never from the fallback and never from `--gates`
+Three rules hold on every row. **`checks.excluded` requires the complete declaration at both pinned base and
+default-tip commits** — never from the fallback and never from `--gates`
 (see [declared check exclusions](#pr-ready-declared-exclusions) below), because
 an exclusion removes a check and only a merged ruling may do that. **A
 `--gates` that names the checkout's own `nen/gates.json`** — `--gates
@@ -1452,42 +1452,36 @@ that reports under a matching name — whichever app or workflow posted it — i
 dropped. That is why a glob needs a literal prefix, and why an exact name is
 the safer form.
 
-**Read at the pull request's BASE, never its head (Feitan F1).** `nen pr ready`
-reads `checks.excluded` from `nen/gates.json` **at the base commit GitHub
-reports for the pull request** (`baseRefOid`, through the REST contents API on
-the same token — it needs `contents:read`) — since [#372](#pr-ready-gates-at-base)
-the rest of the file too, unless `--gates` names another one. Under `--repo`, a worktree holds the
-pull request's own head; reading the exclusions there would let a pull request
-add an exclusion for its own red check. So:
+**Intersect two immutable sources ([#403](https://github.com/zheref/nen/issues/403)).**
+`checks.excluded` is read at the PR's base commit (`baseRefOid`) and at the
+repository's default-branch tip OID, both selected in the same GitHub snapshot.
+No moving branch name or local ref supplies either file. The default branch's
+name is read, never assumed to be `main`. Both reads use the same explicit
+token (`contents:read`); the base read is shared with [#372](#pr-ready-gates-at-base)'s
+identity read, and equal OIDs reuse that one read.
 
-- an entry the local file declares that the base does not is **not honoured**,
-  and named: `declared exclusion '<name>' is in the local nen/gates.json but not
-  at the pull request's base (<owner>/<repo>@<sha>:nen/gates.json) — NOT
-  honoured until it is merged there.`;
-- a base read that **fails** (no base commit, a 403, a transport that cannot
-  read files, a payload that is not a base64-encoded file — a directory, a
-  symlink, a file too large to be delivered inline, named by its type or size —
-  or a base file that is not JSON or whose block does not validate) honours
-  **no** exclusion. When the local file (or `--gates`) declares at least one
-  entry, that is a `meta.warnings` line (`declared check exclusions NOT
-  honoured: …`); when it declares **none**, nothing anybody can see was lost,
-  so it is a quiet `meta.notes` line instead (`could not confirm the base
-  declares no exclusion: <reason>`), rendered by `--explain` only — the verdict
-  is the stricter one either way;
-- a base with **no** `nen/gates.json` declares nothing; that is not a failure;
-- identities from `--reviewers` declare no exclusion, as they declare no
-  carve-out, and the base is not read.
+An exclusion is applied only when both files declare the same normalized
+`match`, `name`, `reason`, `ruled`, and `until`, preserving base order. Omitted
+`match` and explicit `exact` are equivalent. A different expiry, condition,
+ruling date, reason, or matching mode is a different declaration, even when the
+selector text matches. Neither a stacked base nor a newer default tip can
+widen the other side's ruling. For each removed entry the output names which
+side did not authorize it and that side's pinned `<repo>@<oid>:nen/gates.json`.
+The local file and an explicit external `--gates` supply diagnostics only for
+exclusions; neither can authorize one.
 
-**The base is only as trusted as its branch protection.** Reading the base
-stops a pull request from exempting its own checks, but anyone who can push to
-the base branch directly can write a ruling there; a ruling binds when it lives
-on a protected base.
+A missing OID, an unreadable commit/file, malformed JSON, a duplicate or unknown
+key, an unsupported version, or an invalid exclusion on either side applies
+**no** exclusions. A file absent at a readable commit declares none. A contents
+404 is treated as absence only after the commit itself is confirmed readable.
+When an entry is visible locally or on the other valid side, failures are loud
+`meta.warnings` (`declared check exclusions NOT honoured: …`); otherwise they
+remain quiet `meta.notes`, rendered by `--explain`. Both paths keep every check
+in CON-32(a). The flags-only path declares no exclusion and infers none.
 
-**Consumer note:** `nen pr ready` (and `pr next-blocker`, through `gh`) now
-reads `nen/gates.json` at the base through the REST contents API, so the token
-needs `contents:read` for declared exclusions to apply — and, since
-[#372](#pr-ready-gates-at-base), for the base's reviewer identities to apply
-rather than the checkout's, which is the warned fallback.
+Reviewer identities and the rest of the gate retain #372's base-only route;
+only exclusion authorization uses this intersection. Consumer AI-reviewer
+policy belongs to #408; reviewer wake/state behavior belongs to #440.
 
 What `nen pr ready` does with what it read:
 
@@ -1510,7 +1504,8 @@ What `nen pr ready` does with what it read:
   were never read — `in-force`: the LOCAL file's entry is in force by its dates,
   but nothing was applied, so it is not `honoured`, and `matched` is `null`.
 - `meta.declaredExclusionsSource` says where the entries came from:
-  `<owner>/<repo>@<sha>` (the base, on a decided report) or `local-unverified`
+  `<owner>/<repo>@<base-oid> and <owner>/<repo>@<default-oid> (intersection)`
+  on a decided report, or `local-unverified`
   (an unevaluated report's entries, the checkout's own file, never checked
   against the base; `--explain` says `local, not verified at base`). It is
   `null` for identities from `--reviewers`. `meta.notes` is always an array.
@@ -1600,13 +1595,13 @@ What `nen pr ready` does with what it read:
 - Like `--exclude-check`, it never changes which reviewers owe a round or
   whether CON-30's carve-out fires. `meta.excludedChecks` stays the **flag's**
   names only.
-- `nen pr next-blocker` applies the same base-read exclusions; see its section.
+- `nen pr next-blocker` applies the same two-source intersection; see its section.
 - An entry carrying a key it does not define (`$comment` aside) is refused.
 
 The block is validated at load wherever it is read — the local file by
 `nen pr ready` (exit `2`) and by `nen schema check` (whose `gates.json` row adds
-`, N declared check exclusion(s)` when there are any), the base's copy by the
-base read above. Refused by pointer (`checks.excluded[<i>].<field>`): a missing
+`, N declared check exclusion(s)` when there are any), both trusted copies by the
+reads above. Refused by pointer (`checks.excluded[<i>].<field>`): a missing
 or blank field; surrounding whitespace on any field (its own message); a
 `ruled` or `until` that is not a strict, real `YYYY-MM-DD` date; an `until`
 object carrying anything but `condition`; an `until` date before `ruled`; a glob
@@ -1784,9 +1779,26 @@ gate, and said nothing.
 | `dependabot_carve_out` (`author_pattern`, `satisfied_by_context`) | 0.7.0 |
 | `approval_policy` | 0.10.0 |
 | `round_policy.stallMinutes` | 0.11.0 |
+| `reviewers[].kind` (`bot` or `human`, optional) | 0.24.0 |
 | `round_policy.minRounds`, `round_policy.maxRounds` | 0.21.0 |
 | `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
 | `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
+
+**Optional reviewer `kind` ([#403](https://github.com/zheref/nen/issues/403)).**
+A reviewer may state `"kind": "bot"` or `"kind": "human"`; every other present
+value is refused at `reviewers[i].kind`. Omission stays unknown. It is an
+explicit consumer declaration, not a verified GitHub account type, and does not
+change pattern matching. For example, this isolated fixture remains valid and
+matches `copilot` **and any non-empty human login**:
+
+```json
+{"name":"declared-bot","kind":"bot","login_pattern":{"pattern":"^(copilot|.+)$","ignoreCase":true}}
+```
+
+Its `kind` tells a consumer only that the applied identity was declared a bot;
+it does not make that broad regex safe or restrict who may satisfy it. The
+base-applied kind is echoed on every `owedRounds` entry, including members
+covered by quorum. A flags-only identity has no declared kind.
 
 **Repeated keys are refused too** (Feitan F3): `{"round_policy":{"maxRounds":1,"maxRounds":999}}`
 is refused by pointer (`at round_policy, carries the key 'maxRounds' twice`) at exit `2`, wherever the
@@ -2022,10 +2034,28 @@ line for each failing row after the first, and one `warning:` line for each warn
 `verdict` (`ready`\|`not-ready`\|`unevaluated`), `gateLine`, `firstFailing`,
 `failing[]`, `judgedHead`, `localHead`, `conjuncts[]` (each row has `id`, `order`,
 `clause`, `title`, `status`, `reason`, `note` and `missing`, and the `rounds-owed` row also
-carries `roundQuorum` when the file declares a `round_quorum`), `caveats[]`, `remedy` and `meta`
+carries `roundQuorum` when the file declares a `round_quorum`, plus `owedRounds`
+when its ordinary calculation ran), `caveats[]`, `remedy` and `meta`
 (`meta.requiredHead` included). `failing`, `judgedHead`, `localHead`,
-`conjuncts[].missing`, `conjuncts[].roundQuorum` and `meta.requiredHead` are additive to
+`conjuncts[].missing`, `conjuncts[].roundQuorum`, `conjuncts[].owedRounds` and
+`meta.requiredHead` are additive to
 `nen.pr.ready/v0.1`.
+The `rounds-owed` conjunct's optional `owedRounds` is an ordered array of
+`{ reviewer, reason, coveredByQuorum, kind? }`. It carries every obligation
+computed by the existing round rules, including quorum-excused obligations.
+`reason` is the round obligation: `review-requested-not-yet-posted`,
+`no-round-at-head`, `delivery-holistic-pass-never-posted`, or
+`delivery-no-definitive-success-review-check`. It is not an invented round
+ordinal; contextual numeric counts remain in `meta.roundCounts`. The row's
+existing prose `reason`, verdict and exit meanings are unchanged.
+`coveredByQuorum` is true only when the actual met-quorum calculation excused
+that obligation. A pending/in-flight member stays owed, and an outsider is
+never covered. `kind` is included only when the applied identity declares it.
+`[]` means the ordinary calculation ran and found no obligation. The key is
+absent on all other conjuncts and when uncomputed: missing inputs, parse
+failures, or the CON-30 carve-out. Consumers must not interpret absence as
+nobody owed. This list adds no GitHub reads.
+
 Exit 0 only on `verdict: ready`.
 Exit 1 on `not-ready` **or** `unevaluated`, because a non-zero exit never means
 "cleared" (SKILL.md §4's "absence is never a pass").
@@ -2239,8 +2269,8 @@ case and path separators, and a directory junction is followed and checked
 the same way. **A pull request's own head can edit its
 working-tree template** — drop a section it did not fill, and the check it
 must pass goes with it — so a gate passes `--base <ref>` (the PR's base),
-the same reasoning as `nen pr ready` reading `checks.excluded` at the base
-(zheref/nen#249). With `--base`, the ref is resolved once to a single commit
+the same reasoning as `nen pr ready` pinning exclusion declarations at the base
+and default tip (zheref/nen#249, #403). With `--base`, the ref is resolved once to a single commit
 (`git rev-parse --verify --quiet --end-of-options <ref>^{commit}`, so a range
 is refused rather than read as its tip), the locations are listed with
 `git ls-tree` at that commit and the chosen file read with `git cat-file`;
@@ -2440,23 +2470,21 @@ runs. So it does not count a round-check run on an earlier commit, which
 `nen pr ready` does under `bounded`. Where the two differ, `next-blocker` calls
 the round owed. It is stricter than `pr ready` there, never looser.
 
-**Declared check exclusions (zheref/nen#249).** The red-check step applies
-`checks.excluded` exactly as `nen pr ready` does: read from `nen/gates.json`
-**at the pull request's base commit** (`baseRefOid`), never from the local
-file, dated against the current UTC day, and the honoured labels dropped
-before the step judges the rollup. A rollup holding only excluded checks is a
-`red-check` whose detail begins `no checks remain after the declared
-exclusion(s): …`. Any failure to read the base (no base commit, a 403, a
-malformed block) applies **no** exclusion; a base with no `nen/gates.json`
-declares none. Nothing is applied or refused silently: under the result line
-it prints `  excluded by declaration: …` for each honoured entry that removed a
-check, and `  warning: …` for every base-read failure (when the local file
-declares an entry), local-only entry, expired, not-yet-ruled or
-condition-`until` entry — the same wording `pr ready` uses. `--json` adds
-`warnings` (those lines) and `notes` (the quiet "could not confirm the base
-declares no exclusion" line, when nothing is declared locally). This verb does not
-take `--exclude-check` or `--exclude-run`, so where a `pr ready` call passed
-one of those it can name a check `pr ready` dropped — stricter, never looser.
+**Declared check exclusions ([#403](https://github.com/zheref/nen/issues/403)).**
+The red-check step uses `pr ready`'s complete-declaration intersection at the
+base and default-tip commits. Both OIDs are selected together over GraphQL;
+that policy snapshot must still match the fetched PR's head and base. Drift or
+unconfirmed refs authorize no exclusion, with a diagnostic; the original
+fetched base still owns reviewer identities even if the later ref read fails.
+File reads pin the OIDs, confirm commit readability, and reuse the read when
+they coincide. An absent, unreadable, or invalid side authorizes none. Output
+names the rejecting side and pinned source for every removed declaration;
+honored exclusions retain their notices, dates, and condition warnings.
+`--json` adds `declaredExclusionsSource` naming both pinned files and the
+intersection, plus `warnings` and quiet `notes` as in `pr ready`. Local and
+external `--gates` exclusions are diagnostic inputs only. This verb does not
+take `--exclude-check` or `--exclude-run`, so a `pr ready` invocation using
+those flags can drop a check that this verb still weighs.
 
 **Reviewer identities at the base, too ([#372](#pr-ready-gates-at-base)).** The
 same one read supplies the identities: without `--gates` (or with one naming

@@ -90,7 +90,7 @@ function isAbsent(value: unknown): boolean {
 // to a query without adding its unwrap is a one-file review finding rather than
 // a cross-file one.
 //
-// `defaultBranchRef { name }` is selected and NOT carried into the normalized
+// `defaultBranchRef { name target { oid } }` is selected and NOT carried into the normalized
 // node, on purpose: PullRequest has no `defaultBranch` field yet, and inventing
 // one here would be authoring model shape Phase 1 did not scope (BC-6). The
 // obligation to extend the model is recorded where the model lives -- see the
@@ -129,7 +129,7 @@ function isAbsent(value: unknown): boolean {
 export const PULL_REQUEST_QUERY = `
   query($owner:String!, $name:String!, $pr:Int!) {
     repository(owner:$owner, name:$name) {
-      defaultBranchRef { name }
+      defaultBranchRef { name target { oid } }
       pullRequest(number:$pr) {
         number
         mergeable
@@ -343,6 +343,8 @@ export interface PullRequestSnapshot {
   // a NON-EMPTY default branch, so an unread trunk leaves the ordinary at-head
   // rounds binding instead of WIDENING the gate on absent evidence.
   readonly defaultBranch: string | undefined;
+  /** Immutable default-tip commit from the same query as baseRefOid. */
+  readonly defaultBranchOid?: string | undefined;
   // Raw `statusCheckRollup.contexts.nodes` of the HEAD commit, for
   // parseCheckRollup(). This is PAGE ONE ONLY -- see checkRollupPageInfo.
   readonly checkRollup: unknown;
@@ -489,6 +491,7 @@ export function normalizePullRequestResponse(
     digPath(response, "repository", "pullRequest"),
   );
   const defaultBranch = digPath(response, "repository", "defaultBranchRef", "name");
+  const defaultBranchOid = digPath(response, "repository", "defaultBranchRef", "target", "oid");
   const rollupPage = headCommitCheckRollupPage(response);
   return {
     pullRequest: node,
@@ -497,6 +500,7 @@ export function normalizePullRequestResponse(
     // refused there anyway, but `undefined` says "not read" at the boundary
     // where that is still distinguishable.
     defaultBranch: typeof defaultBranch === "string" ? defaultBranch : undefined,
+    defaultBranchOid: typeof defaultBranchOid === "string" && /^[0-9a-f]{40}$/i.test(defaultBranchOid) ? defaultBranchOid : undefined,
     // PAGE ONE only -- unchanged in shape and value from before pagination
     // existed, so every pre-existing caller and test that reads
     // `snapshot.checkRollup` directly keeps its exact meaning. The caller MUST

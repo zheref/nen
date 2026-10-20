@@ -13,7 +13,7 @@ import { botLoginArgv, collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsAr
 import { requestReviewsArgv } from "./reviewers.js";
 import { botNodesArgv, commitArgv, gatesAtArgv, requestTimelineArgv } from "./round_ceiling.js";
 import { markReadyArgv, readDraftStateArgv } from "./markready.js";
-import { PR_FLAGS, PR_SUBCOMMAND_FLAGS, PR_SUBCOMMANDS, PR_TOKEN_ENV_ADVICE_KEYS, THREADS_ACTION_FLAGS, prCommand, prFlagOwners } from "./command.js";
+import { PR_FLAGS, PR_SUBCOMMAND_FLAGS, PR_SUBCOMMANDS, PR_TOKEN_ENV_ADVICE_KEYS, gateRefsArgv, THREADS_ACTION_FLAGS, prCommand, prFlagOwners } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
@@ -813,10 +813,11 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
     // kisame), so the verdict flips with the taxonomy: alt gates read "none",
     // bankai gates read "owed-round" for their own sasuke/tenma -- which is
     // the proof the --gates file, not some other source, decided.
-    function greenAltApprovedScript(): readonly ScriptedCall[] {
+    function greenAltApprovedScript(baseSha = "", defaultSha = baseSha): readonly ScriptedCall[] {
       const view = {
         number: 9,
         headRefOid: "abc123",
+        baseRefOid: baseSha,
         baseRefName: "main",
         headRefName: "feature/x",
         author: { login: "alice" },
@@ -848,6 +849,8 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         { match: `gh ${viewArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(view) } },
         { match: `gh ${reviewsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(reviews) } },
         { match: `gh ${reviewThreadsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify(threads) } },
+        { match: `gh ${gateRefsArgv(TARGET, 9).join(" ")}`, result: { stdout: JSON.stringify({ data: { repository: { pullRequest: { baseRefOid: baseSha, headRefOid: "abc123" }, defaultBranchRef: { target: { oid: defaultSha } } } } }) } },
+        ...[...new Set([baseSha, defaultSha])].filter((sha) => sha !== "").map((sha) => ({ match: `gh ${commitArgv(TARGET, sha).join(" ")}`, result: { stdout: "{}" } })),
       ];
     }
 
@@ -913,11 +916,11 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const altGates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
       const ruling = { name: "check (Windows*", match: "glob", reason: "no runner", ruled: "2020-01-01", until: { condition: "a runner exists" } };
       const script = (atBase: Record<string, unknown> | null): ScriptedCall[] => {
-        const [view, ...rest] = greenAltApprovedScript();
+        const [view, ...rest] = greenAltApprovedScript("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
         const withRed = {
           ...viewJson,
-          baseRefOid: "base123",
+          baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           statusCheckRollup: [
             ...(viewJson["statusCheckRollup"] as unknown[]),
             { __typename: "CheckRun", name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
@@ -925,9 +928,9 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         };
         const contents: ScriptedCall =
           atBase === null
-            ? { match: "gh api repos/o/n/contents/nen/gates.json?ref=base123", result: { code: 1, stderr: "HTTP 404" } }
+            ? { match: "gh api --method GET repos/o/n/contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result: { code: 1, stderr: "HTTP 404" } }
             : {
-                match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+                match: "gh api --method GET repos/o/n/contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(JSON.stringify(atBase)).toString("base64") }) },
               };
         return [{ match: view?.match ?? "", result: { stdout: JSON.stringify(withRed) } }, ...rest, contents];
@@ -955,8 +958,107 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       expect(refused.out[0]).toBe("#9: red-check");
       expect(refused.out.join("\n")).toContain(WINDOWS);
       expect(refused.out).toContain(
-        "  warning: declared exclusion 'check (Windows*' is in the local nen/gates.json but not at the pull request's base (o/n@base123:nen/gates.json) — NOT honoured until it is merged there.",
+        "  warning: declared exclusion 'check (Windows*' NOT honoured: the complete declaration is not authorised by the pull request's base (o/n@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen/gates.json) and the default-branch tip (o/n@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen/gates.json). Both pinned sources must declare the same match, name, reason, ruled and until.",
       );
+    });
+
+    it.each(["base-only", "default-only", "shared", "failed-default", "missing-default"])("next-blocker intersects immutable gate refs: %s", async (scenario) => {
+      const alt = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const ruling = { name: "ci / red", reason: "ruled out", ruled: "2020-01-01", until: "2099-12-31" };
+      const [view, ...rest] = greenAltApprovedScript("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", scenario === "missing-default" ? "" : "dddddddddddddddddddddddddddddddddddddddd");
+      const body = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
+      const content = (sha: string, entries: readonly unknown[]): ScriptedCall => ({
+        match: `gh ${gatesAtArgv(TARGET, sha).join(" ")}`,
+        result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(JSON.stringify({ ...alt, checks: { excluded: entries } })).toString("base64") }) },
+      });
+      const seams = new ScriptedSeams([
+        { match: view?.match ?? "", result: { stdout: JSON.stringify({ ...body, baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }, { name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] }) } },
+        ...rest,
+        content("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", scenario === "default-only" ? [] : [ruling]),
+        scenario === "failed-default" ? { match: `gh ${gatesAtArgv(TARGET, "dddddddddddddddddddddddddddddddddddddddd").join(" ")}`, result: { code: 1, stderr: "HTTP 403" } } : content("dddddddddddddddddddddddddddddddddddddddd", scenario === "base-only" ? [] : [ruling]),
+      ]);
+      const checkout = mkdtempSync(join(tmpdir(), "nen-403-"));
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", join(ALT_REPO, "nen", "gates.json"), "--json"], checkout, seams);
+      const parsed = JSON.parse(result.out.join("\n")) as { kind: string; warnings: string[]; declaredExclusionsSource: string };
+      expect(parsed.kind).toBe(scenario === "shared" ? "none" : "red-check");
+      expect(parsed.declaredExclusionsSource).toContain("o/n@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen/gates.json and o/n@");
+      if (scenario !== "shared") expect(parsed.warnings.join("\n")).toContain(scenario === "default-only" ? "pull request's base" : "default-branch tip");
+      expect(seams.calls.filter((call) => call.args.some((arg) => arg.includes("contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))).toHaveLength(1);
+    });
+
+    it.each(["base", "head", "missing-head", "unknown-original-base"])("a %s policy-snapshot drift cannot clear the original red check", async (drift) => {
+      const first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      const later = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      const tip = "dddddddddddddddddddddddddddddddddddddddd";
+      const alt = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+      const ruling = { name: "ci / red", reason: "ruled out", ruled: "2020-01-01", until: "2099-12-31" };
+      const calls = greenAltApprovedScript(first, tip).map((call): ScriptedCall => {
+        if (call.match === `gh ${viewArgv(TARGET, 9).join(" ")}`) {
+          const view = JSON.parse(String(call.result.stdout)) as Record<string, unknown>;
+          return { ...call, result: { stdout: JSON.stringify({ ...view, baseRefOid: drift === "unknown-original-base" ? "older-view" : first,
+            statusCheckRollup: [{ name: "ci", status: "COMPLETED", conclusion: "SUCCESS" }, { name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] }) } };
+        }
+        if (call.match === `gh ${gateRefsArgv(TARGET, 9).join(" ")}`) return { ...call, result: { stdout: JSON.stringify({ data: { repository: {
+          pullRequest: { baseRefOid: drift === "base" ? later : first, ...(drift === "missing-head" ? {} : { headRefOid: drift === "head" ? "new-head" : "abc123" }) },
+          defaultBranchRef: { target: { oid: tip } },
+        } } }) } };
+        return call;
+      });
+      const contents = [first, later, tip].map((sha): ScriptedCall => ({ match: `gh ${gatesAtArgv(TARGET, sha).join(" ")}`,
+        result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(JSON.stringify({ ...alt, checks: { excluded: [ruling] } })).toString("base64") }) } }));
+      const seams = new ScriptedSeams([...calls, { match: `gh ${commitArgv(TARGET, later).join(" ")}`, result: { stdout: "{}" } }, ...contents]);
+      const checkout = mkdtempSync(join(tmpdir(), "nen-403-drift-"));
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", join(ALT_REPO, "nen", "gates.json"), "--json"], checkout, seams);
+      const parsed = JSON.parse(result.out.join("\n")) as { kind: string; warnings: string[]; notes: string[] };
+      expect(result.code).toBe(1);
+      expect(parsed.kind).toBe("red-check");
+      expect([...parsed.warnings, ...parsed.notes].join("\n")).toMatch(/snapshot.*(changed|unconfirmed)/);
+      expect(seams.calls.some((call) => call.args.some((arg) => arg.includes(`contents/nen/gates.json?ref=${later}`)))).toBe(false);
+      expect(seams.calls.some((call) => call.args.some((arg) => arg.includes(`contents/nen/gates.json?ref=${tip}`)))).toBe(false);
+    });
+
+    it.each(["base drift", "unreadable refs"])("policy-snapshot %s cannot replace the original base's reviewer identities", async (change) => {
+      const first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      const later = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      const calls = greenAltApprovedScript(first, later).map((call): ScriptedCall => call.match !== `gh ${gateRefsArgv(TARGET, 9).join(" ")}` ? call : {
+        ...call, result: change === "unreadable refs" ? { code: 1, stderr: "HTTP 403 while reading policy refs" } : { stdout: JSON.stringify({ data: { repository: { pullRequest: { baseRefOid: later, headRefOid: "abc123" }, defaultBranchRef: { target: { oid: later } } } } }) },
+      });
+      const contents = [[first, BANKAI_REPO], [later, ALT_REPO]].map(([sha, fixture]): ScriptedCall => ({
+        match: `gh ${gatesAtArgv(TARGET, sha ?? "").join(" ")}`,
+        result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(readFileSync(join(fixture ?? "", "nen", "gates.json"), "utf8")).toString("base64") }) },
+      }));
+      const seams = new ScriptedSeams([...calls, ...contents]);
+      const checkout = mkdtempSync(join(tmpdir(), "nen-403-identities-"));
+      mkdirSync(join(checkout, "nen"));
+      copyFileSync(join(ALT_REPO, "nen", "gates.json"), join(checkout, "nen", "gates.json"));
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--json"], checkout, seams);
+      const parsed = JSON.parse(result.out.join("\n")) as { kind: string; identities: { path: string; read: string } };
+      expect(result.code).toBe(1);
+      expect(parsed.kind).toBe("owed-round");
+      expect(parsed.identities).toEqual({ path: `o/n@${first}:nen/gates.json`, read: "base" });
+      expect(seams.calls.some((call) => call.args.some((arg) => arg.includes(`contents/nen/gates.json?ref=${later}`)))).toBe(false);
+    });
+
+    it.each([
+      { code: 1, stderr: "HTTP 403 while reading refs" },
+      { stdout: "not JSON" },
+      { stdout: JSON.stringify({ errors: [{ message: "not readable" }] }) },
+    ])("a failed policy snapshot authorises no exclusion and names its failure", async (answer) => {
+      const script = greenAltApprovedScript();
+      const calls = script.map((call): ScriptedCall => {
+        if (call.match === `gh ${gateRefsArgv(TARGET, 9).join(" ")}`) return { ...call, result: answer };
+        if (call.match === `gh ${viewArgv(TARGET, 9).join(" ")}`) {
+          const view = JSON.parse(String(call.result.stdout)) as Record<string, unknown>;
+          return { ...call, result: { stdout: JSON.stringify({ ...view, statusCheckRollup: [{ name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] }) } };
+        }
+        return call;
+      });
+      const seams = new ScriptedSeams(calls);
+      const result = await capture(["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", join(ALT_REPO, "nen", "gates.json"), "--json"], mkdtempSync(join(tmpdir(), "nen-403-")), seams);
+      const parsed = JSON.parse(result.out.join("\n")) as { kind: string; notes: string[] };
+      expect(parsed.kind).toBe("red-check");
+      expect(parsed.notes.join("\n")).toMatch(/pinned gate.ref/);
+      expect(seams.calls.some((call) => call.args.some((arg) => arg.includes("contents/")))).toBe(false);
     });
 
     it("control characters in labels and declared text are stripped from rendered lines, kept in --json (Copilot on #359)", async () => {
@@ -964,11 +1066,11 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const altGates = JSON.parse(readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
       const ruling = { name: "check (Windows*", match: "glob", reason: "no\u001b[31m\r\nrunner", ruled: "2020-01-01", until: "2099-12-31" };
       const script = (): ScriptedCall[] => {
-        const [view, ...rest] = greenAltApprovedScript();
+        const [view, ...rest] = greenAltApprovedScript("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
         const withRed = {
           ...viewJson,
-          baseRefOid: "base123",
+          baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           statusCheckRollup: [
             ...(viewJson["statusCheckRollup"] as unknown[]),
             { __typename: "CheckRun", name: EVIL, status: "COMPLETED", conclusion: "FAILURE" },
@@ -979,7 +1081,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
           { match: view?.match ?? "", result: { stdout: JSON.stringify(withRed) } },
           ...rest,
           {
-            match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+            match: "gh api --method GET repos/o/n/contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content }) },
           },
         ];
@@ -1007,11 +1109,11 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const localGates = join(dir, "gates.json");
       writeFileSync(localGates, JSON.stringify({ ...altGates, checks: { excluded: [ruling] } }));
       const script = (): ScriptedCall[] => {
-        const [view, ...rest] = greenAltApprovedScript();
+        const [view, ...rest] = greenAltApprovedScript("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
         const withRed = {
           ...viewJson,
-          baseRefOid: "base123",
+          baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           statusCheckRollup: [
             ...(viewJson["statusCheckRollup"] as unknown[]),
             { __typename: "CheckRun", name: WINDOWS, status: "COMPLETED", conclusion: "FAILURE" },
@@ -1021,7 +1123,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
           { match: view?.match ?? "", result: { stdout: JSON.stringify(withRed) } },
           ...rest,
           {
-            match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+            match: "gh api --method GET repos/o/n/contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             result: { code: 1, stderr: "gh: Resource not accessible by integration (HTTP 403)" },
           },
         ];
@@ -1033,7 +1135,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
         new ScriptedSeams(script()),
       );
       expect(plain.out[0]).toBe("#9: red-check");
-      expect(plain.out.some((line): boolean => /^ {2}warning: declared check exclusions NOT honoured: the base could not be read \(.*HTTP 403/.test(line))).toBe(true);
+      expect(plain.out.some((line): boolean => /^ {2}warning: declared check exclusions NOT honoured: the pull request's base could not be read \(.*HTTP 403/.test(line))).toBe(true);
       const json = await capture(
         ["pr", "next-blocker", "--target", "o/n", "--pr", "9", "--gates", localGates, "--json"],
         checkout,
@@ -1041,7 +1143,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       );
       const parsed = JSON.parse(json.out.join("\n")) as { kind: string; warnings: string[]; notes: string[] };
       expect(parsed.kind).toBe("red-check");
-      expect(parsed.warnings.join("\n")).toMatch(/NOT honoured: the base could not be read[\s\S]*HTTP 403/);
+      expect(parsed.warnings.join("\n")).toMatch(/NOT honoured: the pull request's base could not be read[\s\S]*HTTP 403/);
       expect(parsed.notes).toEqual([]);
     });
 
@@ -1074,16 +1176,16 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       mkdirSync(join(checkout, "nen"));
       writeFileSync(join(checkout, "nen", "gates.json"), altGates);
       const script = (atBase: string | null): ScriptedCall[] => {
-        const [view, ...rest] = greenAltApprovedScript();
+        const [view, ...rest] = greenAltApprovedScript("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
         const contents: ScriptedCall =
           atBase === null
-            ? { match: "gh api repos/o/n/contents/nen/gates.json?ref=base123", result: { code: 1, stderr: "HTTP 404" } }
+            ? { match: "gh api --method GET repos/o/n/contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", result: { code: 1, stderr: "HTTP 404" } }
             : {
-                match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+                match: "gh api --method GET repos/o/n/contents/nen/gates.json?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(atBase).toString("base64") }) },
               };
-        return [{ match: view?.match ?? "", result: { stdout: JSON.stringify({ ...viewJson, baseRefOid: "base123" }) } }, ...rest, contents];
+        return [{ match: view?.match ?? "", result: { stdout: JSON.stringify({ ...viewJson, baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }) } }, ...rest, contents];
       };
       const argv = ["pr", "next-blocker", "--target", "o/n", "--pr", "9"];
       const atBase = await capture(argv, checkout, new ScriptedSeams(script(bankaiGates)));
@@ -1095,7 +1197,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       const json = await capture([...argv, "--json"], checkout, new ScriptedSeams(script(bankaiGates)));
       const parsed = JSON.parse(json.out.join("\n")) as { kind: string; identities: { path: string; read: string } };
       expect(parsed.kind).toBe("owed-round");
-      expect(parsed.identities).toEqual({ path: "o/n@base123:nen/gates.json", read: "base" });
+      expect(parsed.identities).toEqual({ path: "o/n@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen/gates.json", read: "base" });
       // --gates naming the checkout's OWN file is the head's: read at the base too (Nobunaga 10).
       const own = await capture([...argv, "--gates", "nen/gates.json"], checkout, new ScriptedSeams(script(bankaiGates)));
       expect(own.out[0]).toBe("#9: owed-round");
@@ -1105,7 +1207,7 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       expect(absent.code).toBe(2);
       expect(absent.out).toEqual([]);
       expect(absent.err.join("\n")).toMatch(
-        /no gate to apply: the pull request's base \(o\/n@base123:nen\/gates\.json\) declares no nen\/gates\.json/,
+        /no gate to apply: the pull request's base \(o\/n@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen\/gates\.json\) declares no nen\/gates\.json/,
       );
       // A base file this build refuses: a refusal too, never the checkout's file (Feitan 2).
       const refused = await capture(argv, checkout, new ScriptedSeams(script("{ not json")));

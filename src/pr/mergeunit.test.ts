@@ -45,12 +45,13 @@ function readySource(head: string = HEAD): PrStateSource {
       headRefOid: head,
       headRefName: "feature/x",
       baseRefName: "main",
-      baseRefOid: "basebase",
+      baseRefOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       author: { login: "someone" },
       labels: [],
       reviewRequests: [],
     },
     defaultBranch: "main",
+    defaultBranchOid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     checkRollup: [{ name: "ci / build", status: "COMPLETED", conclusion: "SUCCESS" }],
     checkRollupPageInfo: { hasNextPage: false, endCursor: null },
     reviewRequests: [],
@@ -70,8 +71,8 @@ function readySource(head: string = HEAD): PrStateSource {
     reviewRequestsPage: async (): Promise<never> => {
       throw new Error("should not paginate");
     },
-    // The base carries the same nen/gates.json the checkout does
-    // (zheref/nen#372): a base that declared none would give no verdict.
+    // Base and default tip coincide in this fixture; their one immutable read
+    // supplies both sides of #403's intersection and #372's base identities.
     fileAtRef: async (): Promise<string | null> => readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8"),
   };
 }
@@ -386,6 +387,33 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     );
   });
 
+  it.each(["base-only", "default-only"])("merge refuses a red check excluded by %s policy alone", async (side) => {
+    const plain = readySource();
+    const first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const tip = "dddddddddddddddddddddddddddddddddddddddd";
+    const gates = JSON.parse(readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8")) as Record<string, unknown>;
+    const ruling = { name: "ci / red", reason: "one-sided ruling", ruled: "2024-12-01", until: "2025-06-30" };
+    const reads: string[] = [];
+    const source: PrStateSource = {
+      ...plain,
+      pullRequestSnapshot: async (repo, n): Promise<PullRequestSnapshot> => {
+        const snapshot = await plain.pullRequestSnapshot(repo, n);
+        return { ...snapshot, defaultBranchOid: tip, checkRollup: [...(snapshot.checkRollup as unknown[]), { name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] };
+      },
+      fileAtRef: async (_repo, _path, ref): Promise<string | null> => {
+        reads.push(ref);
+        return JSON.stringify({ ...gates, checks: { excluded: (side === "base-only" ? ref === first : ref === tip) ? [ruling] : [] } });
+      },
+    };
+    const outcome = await run(tmpRoot(), passingScript(), { deps: readyDeps(source) });
+    expect(outcome.report.ok).toBe(false);
+    expect(outcome.report.ran).toBe(false);
+    expect(outcome.lines.join("\n")).toContain("pr ready: not-ready: required checks reported but are not all green");
+    expect(outcome.lines.join("\n")).toContain(side === "base-only" ? `default-branch tip (zheref/example@${tip}:nen/gates.json)` : `pull request's base (zheref/example@${first}:nen/gates.json)`);
+    expect(reads).toEqual([first, tip]);
+    expect(outcome.lines.join("\n")).not.toContain("excluded by declaration:");
+  });
+
   describe("checks.excluded the head declares but the base does not (zheref/nen#249, hanten round 2)", () => {
     const WINDOWS = 'check (Windows, ["self-hosted","Windows","X64"])';
     const RULING = { name: "check (Windows*", match: "glob", reason: "no Windows runner", ruled: "2024-12-01", until: "2025-06-30" };
@@ -420,7 +448,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       expect(outcome.report.ok).toBe(false);
       expect(outcome.lines.join("\n")).toMatch(/pr ready: not-ready: required checks reported but are not all green/);
       expect(outcome.lines).toContain(
-        "pr ready: warning: declared exclusion 'check (Windows*' is in the local nen/gates.json but not at the pull request's base (zheref/example@basebase:nen/gates.json) — NOT honoured until it is merged there.",
+        "pr ready: warning: declared exclusion 'check (Windows*' NOT honoured: the complete declaration is not authorised by the pull request's base (zheref/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen/gates.json) and the default-branch tip (zheref/example@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:nen/gates.json). Both pinned sources must declare the same match, name, reason, ruled and until.",
       );
       expect(outcome.lines.join("\n")).not.toContain("excluded by declaration");
     });
@@ -458,7 +486,7 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       expect(outcome.report.ok).toBe(false);
       expect(
         outcome.lines.some((line): boolean =>
-          line.startsWith("pr ready: warning: declared check exclusions NOT honoured: the base could not be read (HTTP 403"),
+          line.startsWith("pr ready: warning: declared check exclusions NOT honoured: the pull request's base could not be read (HTTP 403"),
         ),
       ).toBe(true);
     });

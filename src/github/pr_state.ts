@@ -1364,6 +1364,7 @@ export async function fetchPrState(
       // READ, never assumed to be the conventional trunk name, so a repository
       // that renames its default branch is not silently mis-gated.
       default_branch: snapshot.defaultBranch ?? "",
+      default_branch_sha: snapshot.defaultBranchOid ?? "",
     },
   };
 }

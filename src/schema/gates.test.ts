@@ -105,6 +105,24 @@ describe("parseGateIdentities -- validation", () => {
     },
   };
 
+  it.each(["bot", "human"] as const)("accepts optional declared kind %s", (kind) => {
+    const identities = parseGateIdentities(at, { ...minimal, reviewers: [{ ...minimal.reviewers[0], kind }] });
+    expect(identities.reviewer("a")?.kind).toBe(kind);
+    expect(parseGateIdentities(at, minimal).reviewer("a")).not.toHaveProperty("kind");
+    expect(GATES_KNOWN_KEYS["reviewers"]?.items?.["kind"]?.introducedIn).toBe(NEXT_RELEASE);
+  });
+  it.each(["ai", "BOT", "", 1, false, null, [], {}])("refuses kind %j by exact pointer", (kind) => {
+    expect(() => parseGateIdentities(at, { ...minimal, reviewers: [{ ...minimal.reviewers[0], kind }] }))
+      .toThrow(/reviewers\[0\]\.kind, expected 'bot' or 'human'/);
+  });
+  it("keeps a broad anchored login pattern valid: kind declares classification, it does not narrow matching", () => {
+    const root = fileURLToPath(new URL("./fixtures/reviewer-kind", import.meta.url));
+    const reviewer = loadGateIdentities(root).reviewer("declared-bot");
+    expect(reviewer?.kind).toBe("bot");
+    expect(reviewer?.loginPattern.test("copilot")).toBe(true);
+    expect(reviewer?.loginPattern.test("any-human-login")).toBe(true);
+  });
+
   it("accepts a minimal file", () => {
     const identities = parseGateIdentities(at, minimal);
     expect(identities.reviewers.length).toBe(1);

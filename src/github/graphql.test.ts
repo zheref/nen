@@ -23,6 +23,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  PULL_REQUEST_QUERY,
   digPath,
   normalizePullRequestResponse,
   normalizeReviewThreadsResponse,
@@ -518,5 +519,18 @@ describe("normalizeReviewThreadsResponse", () => {
     expect(page.nodes).toBeUndefined();
     expect(page.hasNextPage).toBeUndefined();
     expect(page.endCursor).toBeUndefined();
+  });
+});
+
+
+describe("default-tip exclusion input (#403)", () => {
+  it("selects and normalises the immutable default OID beside the base", () => {
+    expect(PULL_REQUEST_QUERY).toContain("defaultBranchRef { name target { oid } }");
+    expect(normalizePullRequestResponse({ repository: { defaultBranchRef: { name: "trunk", target: { oid: "dddddddddddddddddddddddddddddddddddddddd" } }, pullRequest: { baseRefOid: "base123" } } })).toMatchObject({
+      defaultBranch: "trunk", defaultBranchOid: "dddddddddddddddddddddddddddddddddddddddd", pullRequest: { baseRefOid: "base123" },
+    });
+  });
+  it.each([undefined, null, 1, {}, "", "main", "1234", "g".repeat(40)])("keeps unread OID %j unknown", (oid) => {
+    expect(normalizePullRequestResponse({ repository: { defaultBranchRef: { target: { oid } } } }).defaultBranchOid).toBeUndefined();
   });
 });
