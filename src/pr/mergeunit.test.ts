@@ -400,8 +400,9 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
         const snapshot = await plain.pullRequestSnapshot(repo, n);
         return { ...snapshot, defaultBranchOid: tip, checkRollup: [...(snapshot.checkRollup as unknown[]), { name: "ci / red", status: "COMPLETED", conclusion: "FAILURE" }] };
       },
-      fileAtRef: async (_repo, _path, ref): Promise<string | null> => {
-        reads.push(ref);
+      fileAtRef: async (_repo, path, ref): Promise<string | null> => {
+        reads.push(`${path}@${ref}`);
+        if (path === "nen/workflow.json") return JSON.stringify({ aiReviewers: "required" });
         return JSON.stringify({ ...gates, checks: { excluded: (side === "base-only" ? ref === first : ref === tip) ? [ruling] : [] } });
       },
     };
@@ -410,7 +411,10 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
     expect(outcome.report.ran).toBe(false);
     expect(outcome.lines.join("\n")).toContain("pr ready: not-ready: required checks reported but are not all green");
     expect(outcome.lines.join("\n")).toContain(side === "base-only" ? `default-branch tip (zheref/example@${tip}:nen/gates.json)` : `pull request's base (zheref/example@${first}:nen/gates.json)`);
-    expect(reads).toEqual([first, tip]);
+    expect(reads).toEqual([
+      `nen/gates.json@${first}`, `nen/gates.json@${tip}`,
+      `nen/workflow.json@${first}`, `nen/workflow.json@${tip}`,
+    ]);
     expect(outcome.lines.join("\n")).not.toContain("excluded by declaration:");
   });
 
@@ -910,5 +914,49 @@ describe("mergeUnit -- every gate evaluated, every verdict line quoted", () => {
       expect(outcome.lines.join("\n")).toMatch(/pr ready: ready/);
       expect(outcome.lines.join("\n")).toMatch(/pr body-check: 1\/1 requirement/);
     });
+  });
+});
+
+describe("merge unit shares trusted bot policy verdict (#408)", () => {
+  function policySource(policy: string, kind: string | null = "bot", redCheck = false): PrStateSource {
+    const plain = readySource();
+    const gates = {
+      version: 1, reviewers: [{ name: "robot", ...(kind === null ? {} : { kind }), login_pattern: { pattern: "^robot$", ignoreCase: false } }],
+      base_reviewers: ["robot"], default_approvers: [], approval_policy: "review-round-only",
+      round_quorum: { any_of: ["robot"], minimum: 1 },
+      delivery: { author_pattern: { pattern: "^delivery$", ignoreCase: false }, head_ref_prefixes: ["delivery/"] },
+    };
+    return {
+      ...plain, reviews: async () => [],
+      pullRequestSnapshot: async (ref, n): Promise<PullRequestSnapshot> => {
+        const snapshot = await plain.pullRequestSnapshot(ref, n);
+        return { ...snapshot, ...(redCheck ? { checkRollup: [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] } : {}) };
+      },
+      fileAtRef: async (_ref, path): Promise<string | null> => JSON.stringify(path === "nen/workflow.json" ? { aiReviewers: policy } : gates),
+    };
+  }
+  it.each(["optional", "off"])("%s permits only the shared waived-round verdict and prints its evidence", async (policy) => {
+    const script = [
+      ...passingScript(),
+      { match: "gh pr merge 9 --repo zheref/example --merge --match-head-commit cafebabe", result: { code: 0, stdout: "" } },
+      { match: "gh pr view 9 --repo zheref/example --json state,mergedAt", result: { code: 0, stdout: JSON.stringify({ state: "MERGED", mergedAt: "2025-01-02T00:00:00Z" }) } },
+    ];
+    const outcome = await run(tmpRoot(), script, { deps: readyDeps(policySource(policy)), run: true });
+    expect(outcome.report.ok).toBe(true); expect(outcome.report.ran).toBe(true); expect(outcome.report.state).toBe("MERGED");
+    expect(outcome.lines.join("\n")).toContain(`aiReviewers ${policy}; base ${"a".repeat(40)}: ${policy}; default tip ${"a".repeat(40)}: ${policy}`);
+    expect(outcome.lines.join("\n")).toContain("waived bot round: robot");
+    expect(outcome.lines.join("\n")).toContain("raw quorum unchanged");
+  });
+  it("a waived round cannot permit changes to the policy files", async () => {
+    const script = [ORIGIN_CALL, prOnceCall(), ...changedFilesCall([{ filename: "nen/workflow.json" }, { filename: "src/unit/a.ts" }]), workflowContentsCall(), treeCall([{ path: "nen/workflow.json", mode: "100644" }, { path: "src/unit/a.ts", mode: "100644" }]), VIEWER_CALL];
+    const outcome = await run(tmpRoot(), script, { deps: readyDeps(policySource("off")), run: true });
+    expect(outcome.report.ok).toBe(false); expect(outcome.report.ran).toBe(false);
+    expect(outcome.lines.join("\n")).toContain("this pull request changes 'nen/workflow.json' or 'nen/gates.json'");
+  });
+  it("required, unknown, human, and red-check cases refuse", async () => {
+    for (const source of [policySource("required"), policySource("nonsense"), policySource("off", null), policySource("off", "human"), policySource("off", "bot", true)]) {
+      const outcome = await run(tmpRoot(), passingScript(), { deps: readyDeps(source), run: true });
+      expect(outcome.report.ok).toBe(false); expect(outcome.report.ran).toBe(false);
+    }
   });
 });

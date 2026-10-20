@@ -267,6 +267,10 @@ codes (`KP#42`, or `KP42` — the `#` is optional) or, as here, a bare number
 with `--gh-repo owner/name`. `--json` carries the same verdict behind a stable
 contract line, `"contract": "nen.pr.ready/v0.1",`. A non-zero exit never means
 cleared: with no readable token the verdict is `unevaluated` at exit 1.
+The gate reads `aiReviewers` at the pinned PR base and default-branch tip;
+optional/off waive only consistently declared bots, with provenance and waivers
+in the same report. Human/unknown obligations and other gates remain binding.
+See [the policy contract](docs/USAGE.md#nen-pr-ready) for the additive JSON fields.
 
 **What does the backlog look like as a board, right now?**
 

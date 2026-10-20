@@ -2018,3 +2018,56 @@ describe("structured owedRounds (#403)", () => {
     expect(rowOf(result, "rounds-owed").owedRounds).toContainEqual({ reviewer: "sasuke", reason: "delivery-holistic-pass-never-posted", coveredByQuorum: false });
   });
 });
+
+describe("aiReviewers waivers preserve raw evidence and other obligations (#408)", () => {
+  function identities(kinds: readonly ("bot" | "human" | undefined)[] = ["bot"], quorum = true, base = true): ReturnType<typeof parseGateIdentities> {
+    const names = kinds.map((_kind, i) => `rev${i}`);
+    const parsed = parseGateIdentities("fixture", {
+      version: 1, reviewers: names.map((name, i) => ({ name, ...(kinds[i] === undefined ? {} : { kind: kinds[i] }), login_pattern: { pattern: `^${name}$`, ignoreCase: false }, bounded_policy_exempt: false })),
+      base_reviewers: names, default_approvers: [], approval_policy: "review-round-only",
+      delivery: { author_pattern: { pattern: "^delivery$", ignoreCase: false }, head_ref_prefixes: ["delivery/"] },
+      round_policy: { minRounds: 1, maxRounds: 3 },
+      ...(quorum ? { round_quorum: { any_of: names, minimum: names.length } } : {}),
+    });
+    return base ? parsed : { ...parsed, baseReviewers: [] };
+  }
+  const opts = { ...OPTIONS, aiReviewers: "optional" as const, trustedBotReviewers: ["rev0"] };
+  const owed = (evaluation: ReturnType<typeof evaluateReady>): Conjunct => evaluation.conjuncts.find((row) => row.id === "rounds-owed")!;
+  it.each(["optional", "off"] as const)("%s waives missing bot rounds and bot-only quorum, retaining actual zero counts", (aiReviewers) => {
+    const result = evaluateReady(identities(), readyState({ reviews: [] }), { ...opts, aiReviewers });
+    expect(result.ready).toBe(true);
+    expect(owed(result).owedRounds).toEqual([{ reviewer: "rev0", reason: "no-round-at-head", coveredByQuorum: false, kind: "bot", waivedByAiPolicy: aiReviewers }]);
+    expect(owed(result).roundQuorum).toMatchObject({ minimum: 1, count: 0, met: false });
+    expect(owed(result).aiPolicyQuorum).toEqual({ waivedReviewers: ["rev0"], bindingMinimum: 0, bindingCount: 0, met: true });
+    expect(result.context.roundCounts?.reviewers[0]).toMatchObject({ posted: 0, rounds: 0, min: "owed" });
+  });
+  it("also accounts for a missing quorum-only bot without fabricating an owed round", () => {
+    const result = evaluateReady(identities(["bot"], true, false), readyState({ reviews: [] }), opts);
+    expect(result.ready).toBe(true); expect(owed(result).owedRounds).toEqual([]);
+    expect(owed(result).aiPolicyQuorum?.waivedReviewers).toEqual(["rev0"]);
+  });
+  it("required, absent policy, or untrusted/absent classification preserve the failure", () => {
+    for (const options of [OPTIONS, { ...opts, aiReviewers: "required" as const }, { ...opts, trustedBotReviewers: [] }]) {
+      expect(evaluateReady(identities(), readyState({ reviews: [] }), options).ready).toBe(false);
+    }
+    // The production caller provides only positively trusted bots, not a pattern-derived name.
+    expect(evaluateReady(identities([undefined]), readyState({ reviews: [] }), { ...opts, trustedBotReviewers: [] }).ready).toBe(false);
+  });
+  it.each(["human", undefined] as const)("a mixed quorum keeps the %s member binding even when not base-enrolled", (kind) => {
+    const ids = identities(["bot", kind], true, false);
+    expect(evaluateReady(ids, readyState({ reviews: [] }), opts).ready).toBe(false);
+    const result = evaluateReady(ids, readyState({ reviews: [approvedAtHead("rev1")] }), opts);
+    expect(result.ready).toBe(true); expect(owed(result).roundQuorum).toMatchObject({ count: 1, minimum: 2, met: false });
+  });
+  it("waivers never clear other failed or unreadable conjuncts", () => {
+    for (const state of [{ mergeable: "CONFLICTING" }, { checks: [{ name: "ci", status: "COMPLETED", conclusion: "FAILURE" }] }, { unresolved_threads: 1 }, { reviews: "broken" }, { review_requests: "broken" }, { checks: "broken" }]) {
+      expect(evaluateReady(identities(), readyState({ reviews: [], ...state }), opts).ready).toBe(false);
+    }
+    const stallIds = identities();
+    const stalled = evaluateReady({ ...stallIds, reviewer: (name) => { const id = stallIds.reviewer(name); return id === undefined ? undefined : { ...id, boundedPolicyExempt: true }; } }, readyState({ reviews: [], review_requests: ["rev0"], stall_requested_at: "2025-06-01T11:00:00Z" }), opts);
+    expect(stalled.failing).toContain("round-stalled");
+    expect(owed(stalled).status).toBe("ready");
+    const ids = { ...identities(), approvalPolicy: "required" as const, defaultApprovers: ["rev0"] };
+    expect(evaluateReady(ids, readyState({ reviews: [] }), opts).failing).toContain("approvals-at-head");
+  });
+});

@@ -199,6 +199,12 @@ ready:
   conjunct row (ready / FAILED / unknown, with why). Every row is evaluated;
   the verdict is their conjunction and the first line quotes the FIRST failing
   row. Read-only -- it never labels, merges or comments.
+  aiReviewers is read from nen/workflow.json at the pinned PR base and
+  default-branch tip: required > optional > off; absent/unreadable is required.
+  Optional/off waive only bots consistently declared kind: bot by both trusted
+  gates files. Human/unknown rounds, stalls, approvals and other gates bind.
+  JSON keeps raw owedRounds/quorum and adds meta.aiReviewers provenance,
+  owedRounds[].waivedByAiPolicy and the separate aiPolicyQuorum judgment.
   THE VERDICT CONCERNS GITHUB'S CURRENT HEAD for the pull request at the moment
   it is read -- not your local commit. A push still in flight is judged as its
   parent. Every output states the judged head, and warns (naming both SHAs)
@@ -472,20 +478,19 @@ request-reviews:
   ([{ id, login, requested, next, maxRounds, refused }]) when a bot is
   named.
   A bot is reported as requested only when the mutation's OWN response
-  lists it, by node id, as pending review (zheref/nen#277): GitHub has
-  been seen to accept the call and record nothing, and no review then
-  arrives. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
+  lists it, by node id, as pending review (zheref/nen#277). A successful
+  response may omit a requested bot; it does not prove whether GitHub
+  recorded it. Exit codes: 0 every name requested (or a --dry-run); 1 nothing
   named, or a route's gh call failed or answered something unreadable,
   or the round ceiling could not be checked; 2 usage (a missing --pr, an
   unresolved --add-reviewers or --add-bots login, or an invalid explicit
   Bot node id) or a bot past
   round_policy.maxRounds; 9 every
-  call was ACCEPTED but at least one requested bot is not pending review
+  call was ACCEPTED but at least one requested bot is absent from the
+  response's pending-review page
   -- named in the message, and in --json's 'unrecordedBots' ([{ id, login
-  }], login null for a bot this pull request has never seen). No review
-  round should be expected from such a bot (the response is read off a
-  first:100 page, so a PR with more pending requests than that can report
-  a landed bot here). When a call also failed outright, 1 wins and
+  }], login null for a bot this pull request has never seen). The response cannot determine allowance exhaustion versus an otherwise
+  unrecorded request; its first:100 page may omit a pending bot. When a call also failed outright, 1 wins and
   'unrecordedBots' still names the bot. --json: '{ ok, routing, message,
   unrecordedBots }'.
 
@@ -1786,11 +1791,11 @@ function doRequestReviews(context: CommandContext): number {
   const unrecordedBots = results.flatMap((result): readonly UnrecordedBot[] => result.unrecordedBots ?? []);
   // A FAILED CALL OUTRANKS AN UNRECORDED BOT (zheref/nen#277). When one route's
   // `gh` call failed outright (exit 1's meaning) and, in the same invocation,
-  // the bot route was accepted but not recorded, the code says the louder
+  // the bot route was accepted but absent from the response, the code says the louder
   // fact -- something needs fixing before anything is retried -- and
   // `unrecordedBots` in --json still carries the bot half. EXIT 9 therefore
   // means exactly one thing: every call this verb made was accepted, and at
-  // least one requested bot is not pending review.
+  // least one requested bot is absent from the response's pending-review page.
   const failedOutright = results.some((result): boolean => !result.ok && (result.unrecordedBots ?? []).length === 0);
   const code = ok ? 0 : failedOutright ? 1 : EXIT_BOT_REQUEST_UNRECORDED;
   const lines = [...results.map((result): string => result.message), ...ceilingLines];

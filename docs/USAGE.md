@@ -359,7 +359,7 @@ verb it invoked. The complete list:
 | [`pr merge`](#nen-pr-merge) | `5` / `6` / `7` | `gh pr merge` refused / `gh` could not be started / `--delivery` only: **merged without authority** — GitHub reports the merge landed in a protected name or a base other than the one gated; tell the maintainer ([#286](https://github.com/zheref/nen/issues/286)). `--delivery`'s `2` is also **refused by ruling** (a protected base), told apart from usage by its stdout line and `refused: true` |
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
-| [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted and never recorded. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
+| [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted but did not list in the response's pending-review page; this does not prove recording failure or allowance exhaustion. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 
 One inconsistency is worth knowing before it surprises you: a missing
@@ -2042,14 +2042,51 @@ when its ordinary calculation ran), `caveats[]`, `remedy` and `meta`
 `conjuncts[].missing`, `conjuncts[].roundQuorum`, `conjuncts[].owedRounds` and
 `meta.requiredHead` are additive to
 `nen.pr.ready/v0.1`.
+**AI reviewer policy (#408).** Readiness and `pr merge --release-unit` read
+root `aiReviewers` from `nen/workflow.json` at the immutable PR-base SHA and
+default-branch-tip SHA in the same fetched snapshot. The stricter value wins:
+`required` > `optional` > `off`. Missing files, missing/invalid values, invalid
+JSON (including duplicate keys), missing commits or transport/read failures
+mean `required`; checkout/head content never relaxes this policy. Identical
+SHAs share one workflow read.
+
+Under `optional`/`off`, only reviewers explicitly classified `kind: "bot"`
+with matching complete reviewer identities in both trusted `nen/gates.json`
+files and the applied identity qualify for waivers. An anchored login pattern,
+quorum membership, missing kind, human kind, unreadable declaration or identity
+conflict does not establish a bot. Existing `required` behavior is unchanged.
+Every other readiness conjunct, including stalls, checks, approvals, unresolved
+threads and parse failures, still binds. Merge uses the same evaluator and
+continues to require base identities, matching head, author/body/path bounds
+and the policy-file-change guards.
+
+`meta.aiReviewers` carries `{ effective, base, defaultTip }`; each source is
+`{ sha, policy, fallback }`, with `fallback: null` on a valid declaration and a
+reason otherwise. Human/explain output and merge transcripts name both exact
+SHAs, decoded policies, fallback reasons and waived reviewer identities.
+Quorum/count evidence stays factual: `roundQuorum.minimum`, `.count`, `.met`
+and `meta.roundCounts` retain their ordinary meanings. For optional/off,
+`aiPolicyQuorum: { waivedReviewers, bindingMinimum, bindingCount, met }` on the
+rounds row separately judges the remaining non-bot members. Its binding minimum
+is the smaller of the declared minimum and the number of non-waived members;
+its binding count includes only actual rounds by those members. Thus a bot-only
+quorum may be waived with zero actual rounds, while a mixed quorum still binds
+its human/unknown members; a bot's posted round never fills their policy
+obligation. The original quorum can also satisfy its original rule as before.
+No review round is fabricated and the declared minimum is never rewritten.
+These fields are compatible additions to `nen.pr.ready/v0.1`.
+
 The `rounds-owed` conjunct's optional `owedRounds` is an ordered array of
-`{ reviewer, reason, coveredByQuorum, kind? }`. It carries every obligation
+`{ reviewer, reason, coveredByQuorum, kind?, waivedByAiPolicy? }`. It carries every obligation
 computed by the existing round rules, including quorum-excused obligations.
 `reason` is the round obligation: `review-requested-not-yet-posted`,
 `no-round-at-head`, `delivery-holistic-pass-never-posted`, or
 `delivery-no-definitive-success-review-check`. It is not an invented round
 ordinal; contextual numeric counts remain in `meta.roundCounts`. The row's
-existing prose `reason`, verdict and exit meanings are unchanged.
+existing prose `reason` and exit meanings are retained; a bot policy waiver
+can clear its round obligation. `waivedByAiPolicy` is `optional` or `off` only
+on a positively trusted bot obligation; an unwaived/uncovered entry remains
+binding.
 `coveredByQuorum` is true only when the actual met-quorum calculation excused
 that obligation. A pending/in-flight member stays owed, and an outsider is
 never covered. `kind` is included only when the applied identity declares it.
@@ -2712,7 +2749,7 @@ nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--a
 | `--add-reviewers <a,b>` | one of this or `--add-bots` | comma-separated reviewer logins, resolved one by one (see above) | a login that resolves to neither a bot (PR history or REST lookup) nor a collaborator is refused at exit 2 |
 | `--add-bots <login-or-id,...>` | one of this or `--add-reviewers` | comma-separated Bot logins or GraphQL node ids | accepts short and `[bot]` logins; `copilot` aliases `copilot-pull-request-reviewer`. Logins resolve through GitHub before any mutation; explicit ids remain unchanged |
 | `--dry-run` | no | resolves every `--add-reviewers` login (still reads GitHub) and prints which route each name or id would go to, then requests nothing | not network-free — see the `--dry-run` discipline table above |
-| `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) and an `unrecordedBots` array (`{ id, login }` per requested bot GitHub did not record — see exit `9`) alongside `ok`/`message` |
+| `--json` | no | machine-readable result | adds a `routing` array (`{ name, via, route, id }` per name/id) and an `unrecordedBots` array (`{ id, login }` per requested bot absent from the response's pending-review page, which may omit a recorded request — see exit `9`) alongside `ok`/`message` |
 
 Explicit Bot IDs accept a nonempty opaque `BOT_` payload of letters, digits,
 `_` and `-`, or canonical base64 decoding to exactly `<digits>:Bot<digits>`.
@@ -2795,9 +2832,9 @@ and `rounds` when a bot is named (a `--dry-run` carries `ok`, `dryRun`,
 failed or answered something unreadable, or the round ceiling could not be
 checked, exit 2 on a missing `--pr`, an unresolved `--add-reviewers` or
 `--add-bots` login, or a bot past `round_policy.maxRounds`, and **exit `9` when every call was
-accepted but GitHub did not record at least one requested bot**.
+accepted but the response did not list at least one requested bot**.
 
-**Exit `9` — a bot request GitHub accepted and never recorded
+**Exit `9` — a bot request GitHub accepted but did not list
 ([zheref/nen#277](https://github.com/zheref/nen/issues/277)).** On
 zheref/hatsu#123, #128 and #130 (2026-09-29) the `requestReviews` mutation
 for Copilot's node id exited 0 and answered, but its own `reviewRequests`
@@ -2808,16 +2845,18 @@ back)". Every requested bot is now looked for in the mutation's response **by
 node id**, and one that is absent fails the call:
 
 ```text
-zheref/hatsu#130: GitHub accepted the bot review request but did not record it for BOT_kgDOCnlnWA -- the mutation's own response lists no pending review request from that bot, so no review round should be expected from it. Pending bot review requests it does list: (none).
+zheref/hatsu#130: GitHub accepted the bot review request but its response did not list it for BOT_kgDOCnlnWA -- the mutation's own response lists no pending review request from that bot. This response cannot determine allowance exhaustion versus an otherwise unrecorded request; its first:100 page may omit a pending bot. Pending bot review requests it does list: (none).
 ```
 
 The bot is named `login (id)` where this pull request already knows it (its
 own `reviewRequests` or `timelineItems`) and by id alone otherwise; `--json`
 carries the same fact as `ok: false` and `unrecordedBots: [{ id, login }]`
 (`login` `null` for a bot the pull request has never seen), and
-`unrecordedBots` is `[]` on success. A caller should read `9` as **no review
-round to expect from that bot**, not as a failure to retry: nothing on the call
-itself failed. One limit, stated rather than hidden: the response's
+`unrecordedBots` is `[]` on success. A caller should read `9` as **accepted but absent from the response**. The
+response cannot determine allowance exhaustion versus an otherwise unrecorded
+request; it exposes pending requests, with no explicit allowance-exhaustion
+signal. Absence alone never establishes exhaustion or proves that no review
+will arrive. Nothing on the mutation call itself failed. One limit, stated rather than hidden: the response's
 `reviewRequests` is read as a single `first:100` page, so on a pull request with
 more than 100 pending review requests a bot that *did* land can fall past it and
 be reported here — a false refusal, never a false success, which is the
