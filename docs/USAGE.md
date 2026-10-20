@@ -9193,9 +9193,9 @@ Answers "did GitHub store this idea exactly as sent" -- a `gh issue create` exit
 **Usage**
 
 ```text
-nen idea file --target <owner/name> --repo <path> --title <t>
+nen idea file --target <owner/name> --repo <path> (--title <t> | --title-file <path>)
              --body-file <path> --label a,b --assignee <user>
-             [--forbid-family ns:family] [--skip-private-name-check]
+             [--dry-run] [--forbid-family ns:family] [--skip-private-name-check]
              [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
@@ -9205,7 +9205,9 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository to file into. | |
 | `--repo <path>` | yes | The checkout whose `nen/labels.json` validates every `--label`. | Listed unbracketed: omitted, exits 2 by name. |
-| `--title <t>` | yes | The idea's title. | |
+| `--title <t>` | one source | The idea's inline title. | Mutually exclusive with `--title-file`. |
+| `--title-file <path>` | one source | Exactly one UTF-8 line, resolved against `--repo`. | One final LF or CRLF is optional and removed; spaces, backticks and literal `$(...)` bytes are preserved. Missing/unreadable, invalid UTF-8, multiline or NUL-bearing files exit 2 before GitHub. An empty title fails filing validation at exit 1. |
+| `--dry-run` | no | Validate and check private names, then print the create plan without creating or reading back an issue. | Human output names the target, title, labels and checked stdin source. JSON matches `issue file`: `{ dryRun: true, argv, bodyFile, privateNameCheck }`. Privacy reads still run; outside-ignore hits still exit 4. |
 | `--body-file <path>` | yes | Path to the idea body. | Omitted entirely exits 2; the read text is compared byte-for-byte against the read-back. |
 | `--label a,b` | yes | Comma-separated labels. | Same taxonomy validation as `issue file`. |
 | `--assignee <user>` | yes | A single GitHub login. | |
@@ -9214,7 +9216,7 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 | `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file`; alone it exits **2**. |
 
-**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)). Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
+**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ dryRun, filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)). Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 on a valid dry run, or when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
 
 **Example**
 
@@ -16477,37 +16479,30 @@ exposed here so you can run it first.
 
 ```bash
 # 3. File it — labels and assignee IN the create call, never a follow-up edit.
-#    --body-file is relative to THIS shell, not to --repo: see below.
+#    --body-file is relative to --repo: see below.
 nen issue file --target zheref/nen --repo src/schema/fixtures/bankai-repo \
   --title "wake verify does not paginate PR comments past one page" \
   --body-file ./body.md --label bankai:stage/idea,bankai:severity/medium \
   --assignee zheref --dry-run
 
-# An idea instead: same choreography, plus a read-back that diffs
-# title/body/labels against what was submitted. NOTE: no --dry-run exists
-# here — this one files for real.
+# An idea instead: preview the same create plan. Drop --dry-run to file
+# and verify the stored title/body/labels through a read-back.
 nen idea file --target zheref/nen --repo src/schema/fixtures/bankai-repo \
   --title "Consider a --paginate flag on wake verify's gh api reads" \
-  --body-file ./idea-body.md --label bankai:stage/idea --assignee zheref
+  --body-file ./idea-body.md --label bankai:stage/idea --assignee zheref --dry-run
 ```
 
-`issue file --dry-run` prints the exact `gh issue create` argv and makes no
-network call at all. There is no `--body`: a body typed on the command line is
-a body nobody reviewed. Every label is checked against `--repo`'s
-`nen/labels.json` first, because GitHub would silently *create* an unknown
-label rather than refuse. `idea file` looks for `read-back OK`; any mismatch
-exits 1, and so does a read-back that lands on a pull request — and it has no
-`--dry-run`, so run it only when you mean to file.
+`issue file --dry-run` and `idea file --dry-run` print the `gh issue create`
+argv without creating an issue. Both still read visibility and run the
+[private-name guard](#the-private-name-guard). There is no `--body`: a body
+typed on the command line is a body nobody reviewed. Every label is checked
+against `--repo`'s `nen/labels.json` first. On a real filing, `idea file` looks
+for `read-back OK`; a mismatch or read-back landing on a pull request exits 1.
 
-Two different bases are in play in that block, which is why the body paths are
-spelled `./`. `--repo` points at the bundled fixture because that is where
-`nen/labels.json` lives; `--body-file` does **not** resolve against it.
-`issue file` never opens the body at all — the path goes into the `gh issue
-create` argv verbatim, so `gh`'s own working directory resolves it (the
-dry-run above prints `--body-file ./body.md` unchanged) — and `idea file`
-reads it with a bare `readFileSync`, against this process's directory. See
-[Relative paths resolve against two different
-bases](#relative-paths-resolve-against-two-different-bases).
+Both verbs resolve `--body-file` against `--repo`'s root, read and check it,
+and send those bytes on stdin (`--body-file -`). Absolute paths are used
+as supplied. `idea file --title-file` follows the same path rule and keeps
+maintainer text out of command source; supply exactly one title source.
 
 ```bash
 # 4. Fold the neighbours in: attach, then close with a comment.

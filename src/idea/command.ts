@@ -15,7 +15,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { validateFiling, type FileRequest } from "../issue/file.js";
+import { createArgv, validateFiling, type FileRequest } from "../issue/file.js";
 import { blockingExit, blocksWrite } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { fileIdea } from "./file.js";
@@ -23,10 +23,21 @@ import { fileIdea } from "./file.js";
 const USAGE = `nen idea file -- file an idea issue, then READ IT BACK to verify GitHub stored it as sent.
 
 usage:
-  nen idea file --target <owner/name> --repo <path> --title <t>
+  nen idea file --target <owner/name> --repo <path> (--title <t> | --title-file <path>)
                --body-file <path> --label a,b --assignee <user>
-               [--forbid-family ns:family] [--skip-private-name-check]
+               [--dry-run] [--forbid-family ns:family] [--skip-private-name-check]
                [--private-names-ignore-file <path> [--allow-all-ignored]]
+
+  --title-file <path>
+      Read exactly one UTF-8 line, resolved against --repo, instead of --title.
+      One final LF or CRLF is optional and removed; all other title bytes,
+      including spaces, backticks and shell-looking text, are preserved.
+      Missing, unreadable, invalid UTF-8 or multiline files exit 2 before gh.
+
+  --dry-run
+      Validate and check private names, then print the create plan without
+      creating or reading back an issue. --json: { dryRun, argv, bodyFile,
+      privateNameCheck }, exactly as nen issue file.
 
   --forbid-family ns:family
       Label families this invocation declares off-limits, comma-separated.
@@ -70,8 +81,8 @@ export const ideaCommand: Command = {
   summary: "File an idea issue and verify it read back exactly as submitted.",
   usage: USAGE,
   flags: {
-    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
-    booleans: [...PRIVATE_NAME_FLAGS.booleans],
+    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   run(context: CommandContext): number {
     requireSubcommand("idea", context.args, ["file"]);
@@ -112,21 +123,41 @@ export const ideaCommand: Command = {
     // unreadable (exit 2), before the first `gh` call (zheref/nen#363).
     const ignore = readIgnoreFlag(context);
     const root = assertRepoRoot({ repoFlag });
+    const titleFlag = context.args.values["title"];
+    const titleFile = context.args.values["title-file"];
+    if ((titleFlag === undefined) === (titleFile === undefined)) {
+      throw new VerbUsageError("provide exactly one of --title <t> or --title-file <path>.");
+    }
+    let title = titleFlag ?? "";
+    if (titleFile !== undefined) {
+      try {
+        title = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+          readFileSync(resolveAgainstRepo(root, titleFile)),
+        );
+      } catch {
+        throw new VerbUsageError("could not read --title-file as UTF-8; provide a readable file containing exactly one line.");
+      }
+      title = title.replace(/\r?\n$/, "");
+      if (/[\r\n\0]/.test(title)) {
+        throw new VerbUsageError("--title-file must contain exactly one line, with at most one final LF or CRLF and no NUL.");
+      }
+    }
+    const resolvedBodyFile = resolveAgainstRepo(root, bodyFile);
     let submittedBody: string;
     try {
       // Resolved against --repo's root, one base for every path flag
       // (zheref/nen#100). Read RAW: the read-back compares bytes, so
       // normalising here would
       // make nen disagree with itself about what it sent.
-      submittedBody = readFileSync(resolveAgainstRepo(root, bodyFile), "utf8");
+      submittedBody = readFileSync(resolvedBodyFile, "utf8");
     } catch (error) {
       context.io.err(`nen: could not read --body-file '${bodyFile}': ${String(error)}`);
       return 1;
     }
 
     const request: FileRequest = {
-      title: context.args.values["title"] ?? "",
-      bodyFile,
+      title,
+      bodyFile: resolvedBodyFile,
       labels: commaList(context.args.values["label"]),
       assignee: context.args.values["assignee"] ?? "",
       forbiddenFamilies: commaList(context.args.values["forbid-family"]),
@@ -154,8 +185,18 @@ export const ideaCommand: Command = {
       "nen idea file",
     );
     if (blocksWrite(privateNameCheck)) {
-      if (context.json) context.io.out(JSON.stringify({ filed: false, privateNameCheck }, null, 2));
+      if (context.json) context.io.out(JSON.stringify({ dryRun: context.args.booleans.has("dry-run"), filed: false, privateNameCheck }, null, 2));
       return blockingExit(privateNameCheck);
+    }
+    if (context.args.booleans.has("dry-run")) {
+      const argv = createArgv(target, request);
+      if (context.json) {
+        context.io.out(JSON.stringify({ dryRun: true, argv, bodyFile: request.bodyFile, privateNameCheck }, null, 2));
+      } else {
+        context.io.out(`would run: gh ${argv.join(" ")}`);
+        context.io.out(`stdin: the ${Buffer.byteLength(submittedBody, "utf8")} byte(s) read and checked from ${request.bodyFile} (gh reads these, not the file)`);
+      }
+      return 0;
     }
     const result = fileIdea(context.seams, target, request, submittedBody, taxonomy);
 

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { BANKAI_REPO } from "../schema/fixtures/paths.js";
-import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
+import { ScriptedSeams, type ScriptedCall, type RecordedRun } from "../seam/scripted.js";
 import type { Seams } from "../seam/exec.js";
 import { ideaCommand } from "./command.js";
 import { FULL_REACH_ROW, SCOPES_CALL } from "../issue/privacy.testkit.js";
@@ -28,7 +28,7 @@ async function capture(
   // `null` is a real case: the invocation that never typed --repo (zheref/nen#28).
   repoFlag: string | null = BANKAI_REPO,
   guard: "private-target" | "scripted" = "private-target",
-): Promise<{ code: number; out: string[]; err: string[]; calls: readonly string[] }> {
+): Promise<{ code: number; out: string[]; err: string[]; calls: readonly string[]; rawCalls: readonly RecordedRun[] }> {
   const guardRow = guard === "scripted" ? null : privateTargetRow(argv);
   if (guardRow !== null) script = [guardRow, ...script];
   const out: string[] = [];
@@ -48,6 +48,7 @@ async function capture(
     code,
     out,
     err,
+    rawCalls: scripted.calls,
     calls: scripted.calls
       .map((call): string => [call.command, ...call.args].join(" "))
       .filter((line): boolean => guardRow === null || line !== guardRow.match),
@@ -346,5 +347,137 @@ describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
     const result = await capture(filing("x", "--private-names-ignore-file", "no-such-ignore-file"), [], BANKAI_REPO, "scripted");
     expect(result.code).toBe(2);
     expect(result.calls).toEqual([]);
+  });
+});
+
+
+describe("nen idea file -- option parity (zheref/nen#444)", () => {
+  const make = (title: string | Uint8Array = "t"): { dir: string; titleFile: string; bodyFile: string; argv: string[] } => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-idea-parity-"));
+    const titleFile = join(dir, "title.txt");
+    const bodyFile = join(dir, "body.md");
+    writeFileSync(titleFile, title);
+    writeFileSync(bodyFile, "the body");
+    const argv = ["idea", "file", "--target", "zheref/nen", "--title-file", titleFile,
+      "--body-file", bodyFile, "--label", "bankai:severity/high", "--assignee", "me"];
+    return { dir, titleFile, bodyFile, argv };
+  };
+  const created = (title: string, body = "the body"): ScriptedCall[] => [
+    { match: `gh issue create --repo zheref/nen --title ${title} --body-file - --assignee me --label bankai:severity/high`,
+      result: { stdout: "https://github.com/zheref/nen/issues/5\n" } },
+    { match: "gh api repos/zheref/nen/issues/5", result: { stdout: JSON.stringify({ title, body,
+      labels: [{ name: "bankai:severity/high" }] }) } },
+  ];
+
+  it.each(["", "\n", "\r\n"])("passes literal title bytes through create argv and read-back with final %j", async (ending) => {
+    const title = "  Keep `backticks` and $(id) literally — café  ";
+    const fixture = make(title + ending);
+    fixture.argv[fixture.argv.indexOf("--title-file") + 1] = relative(BANKAI_REPO, fixture.titleFile);
+    const result = await capture(fixture.argv, created(title));
+    expect(result.code).toBe(0);
+    const call = result.rawCalls.find((call) => call.args[0] === "issue");
+    expect(call?.args).toEqual(["issue", "create", "--repo", "zheref/nen", "--title", title,
+      "--body-file", "-", "--assignee", "me", "--label", "bankai:severity/high"]);
+    expect(call?.stdin).toBe("the body");
+    expect(result.out.join("\n")).toContain("read-back OK");
+  });
+
+  it("dry-run JSON has issue-file's plan shape and does no create or read-back", async () => {
+    const fixture = make();
+    const result = await capture([...fixture.argv, "--dry-run", "--json"]);
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([]);
+    const report = JSON.parse(result.out.join("\n"));
+    expect(Object.keys(report).sort()).toEqual(["argv", "bodyFile", "dryRun", "privateNameCheck"]);
+    expect(report).toMatchObject({ dryRun: true, bodyFile: fixture.bodyFile,
+      argv: ["issue", "create", "--repo", "zheref/nen", "--title", "t", "--body-file", "-",
+        "--assignee", "me", "--label", "bankai:severity/high"] });
+  });
+
+  it("dry-run human output names target/title/labels and the checked stdin source", async () => {
+    const fixture = make();
+    const result = await capture([...fixture.argv, "--dry-run"]);
+    expect(result.code).toBe(0);
+    expect(result.calls).toEqual([]);
+    expect(result.out).toEqual([
+      "would run: gh issue create --repo zheref/nen --title t --body-file - --assignee me --label bankai:severity/high",
+      `stdin: the 8 byte(s) read and checked from ${fixture.bodyFile} (gh reads these, not the file)`,
+    ]);
+  });
+
+  it("dry-run still refuses invalid labels before GitHub", async () => {
+    const fixture = make();
+    fixture.argv[fixture.argv.indexOf("--label") + 1] = "unknown-label";
+    const result = await capture([...fixture.argv, "--dry-run"]);
+    expect(result.code).toBe(1);
+    expect(result.calls).toEqual([]);
+  });
+
+  it.each(["first\nsecond", "first\n\n", "first\rsecond", "first\0second", new Uint8Array([0xff])])(
+    "refuses malformed title file %j before GitHub", async (title) => {
+      const result = await capture(make(title).argv);
+      expect(result.code).toBe(2);
+      expect(result.calls).toEqual([]);
+      expect(result.err.join("\n")).toContain("--title-file");
+    },
+  );
+
+  it("refuses an unreadable title file before GitHub", async () => {
+    const fixture = make();
+    fixture.argv[fixture.argv.indexOf("--title-file") + 1] = join(fixture.dir, "absent");
+    const result = await capture(fixture.argv);
+    expect(result.code).toBe(2);
+    expect(result.calls).toEqual([]);
+  });
+
+  it("refuses empty file titles through existing filing validation", async () => {
+    const result = await capture(make("").argv);
+    expect(result.code).toBe(1);
+    expect(result.calls).toEqual([]);
+  });
+
+  it("requires exactly one title source before GitHub", async () => {
+    const fixture = make();
+    for (const argv of [[...fixture.argv, "--title", "other"],
+      fixture.argv.filter((_, index) => index !== 4 && index !== 5)]) {
+      const result = await capture(argv);
+      expect(result.code).toBe(2);
+      expect(result.calls).toEqual([]);
+      expect(result.err.join("\n")).toContain("exactly one");
+    }
+  });
+
+  it("help lists all parity flags; unrelated flags and subcommands still refuse", async () => {
+    const help = await capture(["idea", "file", "--help"]);
+    expect(help.code).toBe(0);
+    for (const flag of ["--dry-run", "--title-file", "--private-names-ignore-file"]) {
+      expect(help.out.join("\n")).toContain(flag);
+    }
+    expect((await capture([...make().argv, "--unknown-flag"])).code).toBe(2);
+    expect((await capture(["idea", "bogus", "--dry-run"])).code).toBe(2);
+  });
+
+  const PUBLIC: ScriptedCall = { match: "gh api repos/zheref/nen", result: { stdout: '{"visibility":"public"}' } };
+  const LIST: ScriptedCall = { match: "gh api user/repos?visibility=private&per_page=100&page=1",
+    result: { stdout: JSON.stringify([{ full_name: "acme/hidden-thing" }, { full_name: "acme/vault" }]) } };
+
+  it.each([false, true])("honours the ignore file while other private hits still exit 4 (dry-run %j)", async (dryRun) => {
+    const fixture = make("about vault");
+    const ignore = join(fixture.dir, "ignore.txt");
+    writeFileSync(ignore, "vault\n");
+    const flags = ["--private-names-ignore-file", ignore, "--json", ...(dryRun ? ["--dry-run"] : [])];
+    const script = [PUBLIC, FULL_REACH_ROW, LIST];
+    const allowed = await capture([...fixture.argv, ...flags],
+      [...script, ...(dryRun ? [] : created("about vault"))], BANKAI_REPO, "scripted");
+    expect(allowed.code).toBe(0);
+    expect(allowed.err.join("\n")).toContain("ignored:");
+    expect(allowed.err.join("\n")).not.toContain("vault");
+    writeFileSync(fixture.bodyFile, "hidden-thing");
+    const refused = await capture([...fixture.argv, ...flags], script, BANKAI_REPO, "scripted");
+    expect(refused.code).toBe(4);
+    expect(refused.calls).toEqual([PUBLIC.match, SCOPES_CALL, LIST.match]);
+    expect(JSON.parse(refused.out.join("\n"))).toMatchObject({ filed: false,
+      privateNameCheck: { result: "refused" } });
+    expect([...refused.out, ...refused.err].join("\n")).not.toMatch(/vault|hidden-thing/);
   });
 });
