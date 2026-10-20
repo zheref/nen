@@ -98,6 +98,8 @@ import {
   type UnrecordedBot,
 } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
+import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
+import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
 import { plainLine } from "../cli/plain.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
@@ -152,11 +154,31 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
-nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
+nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run] [PRIVATE-NAME FLAGS]
 nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
-nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
-nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json]
-nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--assignee <login>[,<login>...]] [--repo <path>] [--dry-run] [--json]
+nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json] [PRIVATE-NAME FLAGS: reply]
+nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json] [PRIVATE-NAME FLAGS]
+nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--assignee <login>[,<login>...]] [--repo <path>] [--dry-run] [--json] [PRIVATE-NAME FLAGS]
+
+PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
+  [--private-names-ignore-file <path> [--allow-all-ignored]]. 'edit-body',
+  'threads reply', 'threads settle' and 'open' write caller text to GitHub,
+  and run the private-name guard 'nen issue' runs (see 'nen issue --help',
+  PRIVATE REPOSITORY NAMES) before the write -- on --dry-run too: the text
+  is compared against the credential's live private repository list, a
+  private repository named in text bound for a PUBLIC target exits 4 and
+  writes nothing, a check that could not run exits 1 (a credential whose
+  X-OAuth-Scopes lacks 'repo' included: its list may be partial), a private
+  target is not checked and an internal one is. The guard's stderr lines begin 'nen pr <subcommand>:'
+  and never print the name; --json adds 'privateNameCheck'. Fields checked:
+  'open' title and body, before any other call; 'edit-body' body, after the
+  certifying read; 'threads reply' body, before the walk; 'threads settle'
+  every entry's body (entry[<n>], from 1), after the file's own refusals and
+  before the walk. On 'threads', 4 is also 'no such thread' / 'the pull
+  request is not visible': a guard refusal is told apart by its stderr lines
+  and, under --json, by privateNameCheck.result "refused", which those
+  refusals never print. 'open' and 'edit-body' hand gh the checked bytes on
+  stdin ('--body-file -'), never the path.
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
 
@@ -443,7 +465,7 @@ request-reviews:
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
   trimming, no template, the file becomes the body exactly, through
-  'gh pr edit --body-file'. --body-file is required; there is no inline
+  'gh pr edit --body-file -', the bytes on stdin. --body-file is required; there is no inline
   --body. Refused (exit 2): a missing or unreadable --body-file, an empty
   or whitespace-only one, a non-numeric/non-positive --pr. The number is
   CERTIFIED as a pull request before any write -- unlike 'nen issue
@@ -453,10 +475,11 @@ edit-body:
   anything changes, worded so it does not claim the number IS an issue --
   only that it is not a pull request -- and points at 'nen issue edit-body'
   next. --dry-run still performs that certifying read (this verb is not
-  network-free), then prints the target, the number, the byte count and
-  the first and last line of the body instead of writing. --json:
-  '{ contract: "nen.pr.edit-body/v0.1", target, number, bytes, written,
-  dryRun }'.
+  network-free) and the private-name guard (PRIVATE-NAME FLAGS above), then
+  prints the target, the number, the byte count and the first and last line
+  of the body instead of writing. --json: '{ contract: "nen.pr.edit-body/v0.1",
+  target, number, bytes, written, dryRun, privateNameCheck }'. Exit 4: the
+  guard refused, nothing written.
 
 mark-ready:
   Move ONE existing draft pull request out of draft, through GitHub's
@@ -558,7 +581,9 @@ open:
   --repo (default: the current directory).
   --base <ref>         the pull request's base branch on GitHub.
   --title-file <path>  the title: the file's first non-empty line.
-  --body-file <path>   the body, handed to 'gh pr create --body-file' as is.
+  --body-file <path>   the body, read once, checked by the private-name guard
+                       (PRIVATE-NAME FLAGS above) and handed to 'gh pr create'
+                       on stdin ('--body-file -'), never by path.
   --head <branch>      the head branch; default the checked-out branch.
   --draft              open it as a draft.
   --assignee <login>[,<login>...]  assign the pull request as it is opened
@@ -584,7 +609,10 @@ open:
   dry run; existing true on the exit-1 case, where they name the pull request
   already there; assignees the validated logins asked for ([] without
   --assignee); me the login '@me' resolved to, else null; assigned the
-  logins the read-back found, null when nothing was opened or read back.
+  logins the read-back found, null when nothing was opened or read back --
+  then privateNameCheck. EXIT 4, nothing asked and nothing opened: the
+  private-name guard found a private repository named in the title or body;
+  '{ contract, dryRun, opened: false, privateNameCheck }' under --json.
 
 merge:
   THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms: a release
@@ -963,10 +991,16 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
   retarget: { values: ["target", "pr", "base"] },
   "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
-  "edit-body": { values: ["target", "pr", "body-file"], booleans: ["dry-run"] },
+  // The private-name guard's three flags ride every row whose subcommand
+  // writes caller text (zheref/nen#363): edit-body, threads (reply, settle)
+  // and open.
+  "edit-body": { values: ["target", "pr", "body-file", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
   "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
-  threads: { values: ["target", "pr", "thread", "body-file", "from"], booleans: ["dry-run"] },
-  open: { values: ["target", "base", "title-file", "body-file", "head", "assignee"], booleans: ["draft", "dry-run"] },
+  threads: { values: ["target", "pr", "thread", "body-file", "from", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
+  open: {
+    values: ["target", "base", "title-file", "body-file", "head", "assignee", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["draft", "dry-run", ...PRIVATE_NAME_FLAGS.booleans],
+  },
   // --require-head is read by --delivery only; doMerge refuses it with
   // --release-unit, naming the form that reads it.
   merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
@@ -982,9 +1016,9 @@ export const PR_SUBCOMMANDS: readonly string[] = Object.keys(PR_SUBCOMMAND_FLAGS
  */
 export const THREADS_ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
   list: { values: [], booleans: [] },
-  reply: { values: ["thread", "body-file"], booleans: ["dry-run"] },
+  reply: { values: ["thread", "body-file", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
   resolve: { values: ["thread"], booleans: ["dry-run"] },
-  settle: { values: ["from"], booleans: ["dry-run"] },
+  settle: { values: ["from", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
 };
 
 const THREAD_ACTIONS: readonly string[] = Object.keys(THREADS_ACTION_FLAGS);
@@ -1791,6 +1825,8 @@ function requirePrStrict(context: CommandContext, verb: string): number {
 function editBody(context: CommandContext): number {
   const target = requireTarget(context);
   const pr = requirePrStrict(context, "edit-body");
+  // Read before any `gh` call; an unreadable one is exit 2 (zheref/nen#363).
+  const ignore = readIgnoreFlag(context);
 
   const bodyFile = context.args.values["body-file"];
   if (bodyFile === undefined) {
@@ -1802,7 +1838,9 @@ function editBody(context: CommandContext): number {
   // READ RAW AND CHECKED BEFORE ANYTHING IS SENT -- ../issue/command.ts's
   // comment() makes the same two decisions for the same reasons: a
   // --dry-run byte count that is not the byte count that would be sent is
-  // not a dry run, and `gh` is handed this SAME path untouched.
+  // not a dry run. Since zheref/nen#363 `gh` is handed these BYTES on stdin,
+  // never the path: the private-name guard checks them, and a path gh
+  // re-reads after the check could publish something it never saw.
   const body = readTextFile(
     bodyFile,
     process.cwd(),
@@ -1821,13 +1859,31 @@ function editBody(context: CommandContext): number {
   certifyPullRequest(context.seams, target, pr);
 
   const bytes = Buffer.byteLength(body, "utf8");
-  const argv = editBodyArgv(target, pr, bodyFile);
+  const argv = editBodyArgv(target, pr);
+  const dryRun = context.args.booleans.has("dry-run");
 
-  if (context.args.booleans.has("dry-run")) {
+  // THE PRIVATE-NAME GUARD (zheref/nen#363), after the certifying read (a
+  // number that is not a pull request is refused for THAT first) and before
+  // the write -- on a dry run too, so its verdict is the real run's.
+  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore, "nen pr edit-body");
+  if (blocksWrite(privateNameCheck)) {
     if (context.json) {
       context.io.out(
         JSON.stringify(
-          { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: false, dryRun: true },
+          { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: false, dryRun, privateNameCheck },
+          null,
+          2,
+        ),
+      );
+    }
+    return blockingExit(privateNameCheck);
+  }
+
+  if (dryRun) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify(
+          { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: false, dryRun: true, privateNameCheck },
           null,
           2,
         ),
@@ -1844,11 +1900,11 @@ function editBody(context: CommandContext): number {
     return 0;
   }
 
-  writePullRequestBody(context.seams, target, pr, bodyFile);
+  writePullRequestBody(context.seams, target, pr, body);
   if (context.json) {
     context.io.out(
       JSON.stringify(
-        { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: true, dryRun: false },
+        { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: true, dryRun: false, privateNameCheck },
         null,
         2,
       ),
@@ -1932,7 +1988,9 @@ function threads(context: CommandContext): number {
   }
 
   let body = "";
+  let ignore: IgnoreList | null = null;
   if (action === "reply") {
+    ignore = readIgnoreFlag(context);
     const bodyFile = context.args.values["body-file"];
     if (bodyFile === undefined || bodyFile.trim() === "") {
       throw new VerbUsageError(
@@ -1961,6 +2019,28 @@ function threads(context: CommandContext): number {
       throw new VerbUsageError(
         `--body-file '${bodyFile}' is empty (or holds only whitespace). An empty reply is never what a caller meant, and it is never assumed.`,
       );
+    }
+  }
+
+  // THE PRIVATE-NAME GUARD (zheref/nen#363), before the thread walk and the
+  // reply -- on a dry run too. A reply is posted under the caller's identity on
+  // the pull request's public timeline. Its exit 4 is the guard's 4, which this
+  // verb also answers for an unknown thread: a refusal by the guard is told
+  // apart by its stderr lines and, under --json, by `privateNameCheck`.
+  let privateNameCheck: PrivateNameCheck | null = null;
+  if (action === "reply") {
+    privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore, "nen pr threads reply");
+    if (blocksWrite(privateNameCheck)) {
+      if (context.json) {
+        context.io.out(
+          JSON.stringify(
+            { contract: THREADS_CONTRACT, target: target.slug, pr: prNumber, thread: threadId as string, replied: false, dryRun, privateNameCheck },
+            null,
+            2,
+          ),
+        );
+      }
+      return blockingExit(privateNameCheck);
     }
   }
 
@@ -2003,7 +2083,7 @@ function threads(context: CommandContext): number {
                   : "resolved"
             }`,
           ];
-    emit(context.io, context.json, report, lines);
+    emit(context.io, context.json, privateNameCheck === null ? report : { ...report, privateNameCheck }, lines);
     return 0;
   } catch (error) {
     if (error instanceof ThreadsError) {
@@ -2028,7 +2108,27 @@ function settle(context: CommandContext, target: Target, prNumber: number, dryRu
   }
   // RESOLVED AGAINST `--repo`, like every other path flag (Feitan F7).
   const fromPath = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), fromFlag);
+  const ignore = readIgnoreFlag(context);
   const { entries, baseDir } = readSettleFile(fromPath);
+  // THE PRIVATE-NAME GUARD (zheref/nen#363): every reply body in the file,
+  // after the file's own refusals and before the walk -- so a hit sends
+  // nothing to any thread. One field per entry, numbered from 1 in file order;
+  // the thread id is not text the guard reports.
+  const privateNameCheck = guardPrivateNames(
+    context,
+    target,
+    entries.map((entry, index): CheckedText => ({ field: `entry[${index + 1}]`, text: entry.body })),
+    ignore,
+    "nen pr threads settle",
+  );
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify({ contract: SETTLE_CONTRACT, target: target.slug, pr: prNumber, from: fromPath, dryRun, ok: false, privateNameCheck }, null, 2),
+      );
+    }
+    return blockingExit(privateNameCheck);
+  }
   let listing;
   try {
     listing = listThreads(context.seams, target, prNumber);
@@ -2052,7 +2152,7 @@ function settle(context: CommandContext, target: Target, prNumber: number, dryRu
     stoppedAt: result.stoppedAt,
     entries: result.outcomes,
   };
-  emit(context.io, context.json, report, renderSettle(report, baseDir));
+  emit(context.io, context.json, { ...report, privateNameCheck }, renderSettle(report, baseDir));
   if (result.failure !== null) context.io.err(`nen pr threads settle: ${stoppedLine(report)}`);
   return settleExit(result, EXIT_FOR);
 }
@@ -2067,30 +2167,52 @@ function open(context: CommandContext): number {
   const target = requireTarget(context);
   const base = requireValue(context.args, "base", "It is the pull request's base branch on GitHub.");
   const titlePath = requireValue(context.args, "title-file", "It is the file whose first non-empty line is the title.");
-  const bodyPath = requireValue(context.args, "body-file", "It is the pull request body, handed to gh as is.");
+  const bodyPath = requireValue(context.args, "body-file", "It is the pull request body, read once, checked and handed to gh on stdin.");
+  const ignore = readIgnoreFlag(context);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const title = readTextFile(titlePath, root, "It is the pull request's title -- 'pr open' reads no other source for it.")
     .split("\n")
     .map((line): string => line.trim())
     .find((line): boolean => line !== "");
   if (title === undefined) throw new VerbUsageError(`--title-file '${titlePath}' has no non-empty line, so there is no title to open with.`);
-  // READ TO PROVE IT IS THERE, then handed to gh by path: a body file gh
-  // cannot open would fail after the questions below were already asked.
+  // READ ONCE, RAW, AND THOSE BYTES ARE WHAT gh GETS, on stdin (zheref/nen#363):
+  // the private-name guard checks them, and a path gh re-read after the check
+  // could publish what the check never saw. An unreadable file still fails
+  // before any question below is asked.
   const bodyFile = resolveAgainstRepo(root, bodyPath);
-  readTextFile(bodyPath, root, "It is the pull request body -- 'pr open' hands it to gh by path.");
+  const body = readTextFile(bodyPath, root, "It is the pull request body -- 'pr open' reads it once, checks it and hands those bytes to gh.", true);
   const assignees = readAssignees(context.args.values["assignee"]);
+  // THE PRIVATE-NAME GUARD, before any other GitHub call and every write -- on
+  // a dry run too, so its verdict is the real run's.
+  const privateNameCheck = guardPrivateNames(
+    context,
+    target,
+    [
+      { field: "title", text: title },
+      { field: "body", text: body },
+    ],
+    ignore,
+    "nen pr open",
+  );
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) {
+      context.io.out(JSON.stringify({ contract: OPEN_CONTRACT, dryRun: context.args.booleans.has("dry-run"), opened: false, privateNameCheck }, null, 2));
+    }
+    return blockingExit(privateNameCheck);
+  }
   const outcome = openPullRequest(context.seams, root, target, {
     base,
     head: context.args.values["head"] ?? null,
     title,
     bodyFile,
+    body,
     draft: context.args.booleans.has("draft"),
     dryRun: context.args.booleans.has("dry-run"),
     assignees,
   });
   if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
   // Every line carries a branch name, a login or gh's own words.
-  emit(context.io, context.json, outcome.report, outcome.lines.map(plainLine));
+  emit(context.io, context.json, { ...outcome.report, privateNameCheck }, outcome.lines.map(plainLine));
   if (outcome.failure !== undefined) {
     context.io.err(`nen pr open: ${plainLine(outcome.failure)}`);
     return 1;

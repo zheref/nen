@@ -74,8 +74,15 @@ export interface OpenOptions {
   /** `--head`, or null for the checked-out branch. */
   readonly head: string | null;
   readonly title: string;
-  /** The body file, resolved -- handed to gh as-is. */
+  /** The body file, resolved -- named in the dry run's report, never handed to gh. */
   readonly bodyFile: string;
+  /**
+   * The body's bytes, read once and checked by the private-name guard
+   * (zheref/nen#363). THEY are what gh is handed, on stdin (`--body-file -`):
+   * the path would be re-read by gh after the check, so anything written to
+   * the file in between would be published unchecked.
+   */
+  readonly body: string;
   readonly draft: boolean;
   readonly dryRun: boolean;
   /** `--assignee`, split and syntax-checked by the caller; `@me` still literal here. */
@@ -110,8 +117,10 @@ export function createArgv(target: Target, options: OpenOptions, head: string, a
     head,
     "--title",
     options.title,
+    // `-`: the body travels on stdin -- the bytes read and checked, never the
+    // path (zheref/nen#363, the rule #329 set for 'issue file').
     "--body-file",
-    options.bodyFile,
+    "-",
     ...(options.draft ? ["--draft"] : []),
     ...(assignees.length > 0 ? ["--assignee", assignees.join(",")] : []),
   ];
@@ -314,7 +323,7 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
   if (options.dryRun) {
     return { kind: "done", report: report(null, null, false), lines: [...meLines, `would run: gh ${argv.map((token): string => (/[\s"']/.test(token) ? JSON.stringify(token) : token)).join(" ")}`] };
   }
-  const created = seams.run(GH, argv);
+  const created = seams.run(GH, argv, { stdin: options.body });
   const match = created.spawnFailed ? null : PR_URL.exec(created.stdout);
   if (created.spawnFailed || (created.code !== 0 && match === null)) throw new Error(`pull request creation failed ('gh pr create' ${created.spawnFailed ? "could not be started" : `exited ${created.code}`}: ${gitError(created.stderr, created.code)}).`);
   if (match === null || match[1] === undefined) {

@@ -10,6 +10,7 @@ import type { CommandResult, Seams } from "../seam/exec.js";
 import type { FlagSpec } from "../cli/args.js";
 import { issueCommand, ISSUE_FLAGS, ISSUE_SUBCOMMANDS, ISSUE_SUBCOMMAND_FLAGS } from "./command.js";
 import { mergedPullsArgv } from "./reconcile.js";
+import { FULL_REACH_ROW as REACH, SCOPES_CALL } from "./privacy.testkit.js";
 
 /** sha256 hex of a string's UTF-8 bytes -- the hash --expect-body-sha256 takes. */
 function sha(text: string): string {
@@ -24,8 +25,12 @@ function tempFile(name: string, contents: string): string {
   return path;
 }
 
-/** The three verbs that run the private-name guard (zheref/nen#329). */
-const GUARDED_SUBCOMMANDS: readonly string[] = ["file", "comment", "edit-body"];
+/**
+ * The verbs that run the private-name guard: three since zheref/nen#329, and
+ * `consolidate-close` since #363 -- only when the caller's own close text
+ * rides the close (see privateTargetRow).
+ */
+const GUARDED_SUBCOMMANDS: readonly string[] = ["file", "comment", "edit-body", "consolidate-close"];
 
 /**
  * THE DEFAULT PRIVATE-NAME GUARD ANSWER, for every test that is not about it.
@@ -39,6 +44,7 @@ const GUARDED_SUBCOMMANDS: readonly string[] = ["file", "comment", "edit-body"];
  */
 function privateTargetRow(argv: readonly string[]): ScriptedCall | null {
   if (argv[0] !== "issue" || !GUARDED_SUBCOMMANDS.includes(argv[1] ?? "")) return null;
+  if (argv[1] === "consolidate-close" && !argv.some((arg): boolean => /^--close-comment(-map)?(=|$)/.test(arg))) return null;
   const at = argv.indexOf("--target");
   const slug = at >= 0 ? argv[at + 1] : undefined;
   if (slug === undefined) return null;
@@ -96,7 +102,9 @@ async function capture(
 function writes(calls: readonly string[]): readonly string[] {
   return calls.filter(
     (line): boolean =>
-      !/^gh api [^ -][^ ]*$/.test(line) && !/^gh (pr|issue|search) (list|view) /.test(line),
+      !/^gh api [^ -][^ ]*$/.test(line) && !/^gh (pr|issue|search) (list|view) /.test(line) &&
+      // the private-name guard's credential-reach read (zheref/nen#363): a GET.
+      line !== SCOPES_CALL,
   );
 }
 
@@ -2923,10 +2931,10 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
   ];
 
   it("comment: a bare name on a PUBLIC target refuses with exit 4, posts nothing, and never prints the name", async () => {
-    const result = await capture(commentArgs("ported from vault last week"), [PUBLIC, LIST], guarded);
+    const result = await capture(commentArgs("ported from vault last week"), [PUBLIC, REACH, LIST], guarded);
     expect(result.code).toBe(4);
     expect(writes(result.calls)).toEqual([]);
-    expect(result.calls).toEqual(["gh api repos/o/n", "gh api user/repos?visibility=private&per_page=100&page=1"]);
+    expect(result.calls).toEqual(["gh api repos/o/n", SCOPES_CALL, "gh api user/repos?visibility=private&per_page=100&page=1"]);
     const all = [...result.out, ...result.err].join("\n");
     expect(all).toContain("body:1: private repository #2");
     expect(all).not.toMatch(/vault/i);
@@ -2934,20 +2942,20 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
 
   it("comment: an owner/name slug, a case variant and markdown emphasis are each refused", async () => {
     for (const body of ["see acme/hidden-thing", "VAULT", "_vault_", "**Hidden-Thing**"]) {
-      const result = await capture(commentArgs(body), [PUBLIC, LIST], guarded);
+      const result = await capture(commentArgs(body), [PUBLIC, REACH, LIST], guarded);
       expect(result.code, body).toBe(4);
       expect(writes(result.calls), body).toEqual([]);
     }
   });
 
   it("comment: --dry-run runs the same check and refuses the same way, before printing the body", async () => {
-    const result = await capture(commentArgs("the vault", "--dry-run"), [PUBLIC, LIST], guarded);
+    const result = await capture(commentArgs("the vault", "--dry-run"), [PUBLIC, REACH, LIST], guarded);
     expect(result.code).toBe(4);
     expect(result.out).toEqual([]);
   });
 
   it("comment --json: the refusal carries the verdict and NO body", async () => {
-    const result = await capture(commentArgs("the vault"), [PUBLIC, LIST], { ...guarded, json: true });
+    const result = await capture(commentArgs("the vault"), [PUBLIC, REACH, LIST], { ...guarded, json: true });
     expect(result.code).toBe(4);
     const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(report["body"]).toBeUndefined();
@@ -2966,7 +2974,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
   it("comment: a clean body on a PUBLIC target posts, and says nothing extra", async () => {
     const result = await capture(
       commentArgs("nothing private here"),
-      [PUBLIC, LIST, { match: "gh issue comment 12 --repo o/n --body nothing private here", result: { stdout: "" } }],
+      [PUBLIC, REACH, LIST, { match: "gh issue comment 12 --repo o/n --body nothing private here", result: { stdout: "" } }],
       guarded,
     );
     expect(result.code).toBe(0);
@@ -2974,7 +2982,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
   });
 
   it("comment: an EMPTY private list is a refusal (exit 1), never a pass", async () => {
-    const result = await capture(commentArgs("anything"), [PUBLIC, listOf([])], guarded);
+    const result = await capture(commentArgs("anything"), [PUBLIC, REACH, listOf([])], guarded);
     expect(result.code).toBe(1);
     expect(writes(result.calls)).toEqual([]);
     expect(result.err.join("\n")).toMatch(/read EMPTY/);
@@ -2986,7 +2994,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     expect(noVisibility.err.join("\n")).toMatch(/could not run/);
     const noList = await capture(
       commentArgs("anything"),
-      [PUBLIC, { match: "gh api user/repos?visibility=private&per_page=100&page=1", result: { code: 1, stderr: "HTTP 401" } }],
+      [PUBLIC, REACH, { match: "gh api user/repos?visibility=private&per_page=100&page=1", result: { code: 1, stderr: "HTTP 401" } }],
       guarded,
     );
     expect(noList.code).toBe(1);
@@ -3021,7 +3029,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         "issue", "file", "--target", "o/n", "--title", "Port the Vault adapter", "--body-file", path,
         "--label", "bankai:severity/low", "--assignee", "me",
       ],
-      [PUBLIC, LIST],
+      [PUBLIC, REACH, LIST],
       { ...guarded, repoFlag: BANKAI_REPO },
     );
     expect(result.code).toBe(4);
@@ -3036,7 +3044,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         "issue", "file", "--target", "o/n", "--title", "t", "--body-file", path,
         "--label", "bankai:severity/low", "--assignee", "me", "--dry-run",
       ],
-      [PUBLIC, LIST],
+      [PUBLIC, REACH, LIST],
       { ...guarded, repoFlag: BANKAI_REPO },
     );
     expect(result.code).toBe(4);
@@ -3050,7 +3058,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         "issue", "file", "--target", "o/n", "--title", "t", "--body-file", path,
         "--label", "bankai:severity/low", "--assignee", "me", "--dry-run",
       ],
-      [PUBLIC, LIST],
+      [PUBLIC, REACH, LIST],
       { ...guarded, repoFlag: BANKAI_REPO, json: true },
     );
     expect(result.code).toBe(0);
@@ -3068,7 +3076,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     const path = tempFile("body.md", "## plan\n\nmerge vault first\n");
     const result = await capture(
       ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
-      [CERTIFY, PUBLIC, LIST],
+      [CERTIFY, PUBLIC, REACH, LIST],
       { ...guarded, json: true },
     );
     expect(result.code).toBe(4);
@@ -3086,7 +3094,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     const path = tempFile("body.md", "anything\n");
     const result = await capture(
       ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", path],
-      [CERTIFY, PUBLIC, listOf([])],
+      [CERTIFY, PUBLIC, REACH, listOf([])],
       { ...guarded, json: true },
     );
     expect(result.code).toBe(1);
@@ -3100,7 +3108,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       const path = ignoreFile("# too generic to police\n\nVAULT\n");
       const result = await capture(
         commentArgs("the vault", "--private-names-ignore-file", path),
-        [PUBLIC, LIST, { match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
+        [PUBLIC, REACH, LIST, { match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
         guarded,
       );
       expect(result.code).toBe(0);
@@ -3111,7 +3119,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       const path = ignoreFile("vault\n");
       const result = await capture(
         commentArgs("the vault", "--dry-run", "--private-names-ignore-file", path),
-        [PUBLIC, LIST],
+        [PUBLIC, REACH, LIST],
         { ...guarded, json: true },
       );
       expect(result.code).toBe(0);
@@ -3129,12 +3137,12 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     it("an owner/name line exempts that slug only: the same name under another owner still refuses", async () => {
       const path = ignoreFile("acme/vault\n");
       const twin = listOf(["acme/vault", "other/vault"]);
-      const result = await capture(commentArgs("the vault", "--private-names-ignore-file", path), [PUBLIC, twin], guarded);
+      const result = await capture(commentArgs("the vault", "--private-names-ignore-file", path), [PUBLIC, REACH, twin], guarded);
       expect(result.code).toBe(4);
       expect(writes(result.calls)).toEqual([]);
       const exact = await capture(
         commentArgs("the vault", "--dry-run", "--private-names-ignore-file", path),
-        [PUBLIC, LIST],
+        [PUBLIC, REACH, LIST],
         guarded,
       );
       expect(exact.code).toBe(0);
@@ -3144,7 +3152,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       const path = ignoreFile("vault\n");
       const result = await capture(
         commentArgs("vault and hidden-thing", "--private-names-ignore-file", path),
-        [PUBLIC, LIST],
+        [PUBLIC, REACH, LIST],
         guarded,
       );
       expect(result.code).toBe(4);
@@ -3175,7 +3183,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
           "issue", "file", "--target", "o/n", "--title", "t", "--body-file", body,
           "--label", "bankai:severity/low", "--assignee", "me", "--dry-run", "--private-names-ignore-file", ignore,
         ],
-        [PUBLIC, LIST],
+        [PUBLIC, REACH, LIST],
         { ...guarded, repoFlag: BANKAI_REPO },
       );
       expect(filed.code).toBe(0);
@@ -3183,7 +3191,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
       const edited = await capture(
         ["issue", "edit-body", "--target", "o/n", "--issue", "12", "--body-file", body, "--dry-run",
           "--private-names-ignore-file", ignore],
-        [CERTIFY, PUBLIC, LIST],
+        [CERTIFY, PUBLIC, REACH, LIST],
         guarded,
       );
       expect(edited.code).toBe(0);
@@ -3218,7 +3226,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         },
         async (repo) => {
           const create = "gh issue create --repo o/n --title t --body-file - --assignee me --label bankai:severity/low";
-          const scripted = new ScriptedSeams([PUBLIC, LIST, { match: create, result: { stdout: "https://github.com/o/n/issues/7\n" } }]);
+          const scripted = new ScriptedSeams([PUBLIC, REACH, LIST, { match: create, result: { stdout: "https://github.com/o/n/issues/7\n" } }]);
           const out: string[] = [];
           const io: Io = { out: (line): void => void out.push(line), err: (): void => undefined };
           const code = await runFamily(issueCommand, fileArgs(), repo, true, io, scripted);
@@ -3238,7 +3246,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
           writeFileSync(join(cwd, "body.md"), "a clean decoy\n", "utf8");
         },
         async (repo) => {
-          const result = await capture(fileArgs(), [PUBLIC, LIST], { ...guarded, repoFlag: repo });
+          const result = await capture(fileArgs(), [PUBLIC, REACH, LIST], { ...guarded, repoFlag: repo });
           expect(result.code).toBe(4);
           expect(result.err.join("\n")).toContain("body:1: private repository #2");
         },
@@ -3254,7 +3262,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
         async (repo) => {
           const result = await capture(
             commentArgs("the vault", "--dry-run", "--private-names-ignore-file", "ignore.txt"),
-            [PUBLIC, LIST],
+            [PUBLIC, REACH, LIST],
             { ...guarded, repoFlag: repo },
           );
           expect(result.code).toBe(0);
@@ -3268,7 +3276,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     const ignoreAll = (): string => tempFile("redaction-ignore", "vault\nhidden-thing\n");
 
     it("refuses as unavailable (exit 1) and writes nothing", async () => {
-      const result = await capture(commentArgs("the vault", "--private-names-ignore-file", ignoreAll()), [PUBLIC, LIST], guarded);
+      const result = await capture(commentArgs("the vault", "--private-names-ignore-file", ignoreAll()), [PUBLIC, REACH, LIST], guarded);
       expect(result.code).toBe(1);
       expect(writes(result.calls)).toEqual([]);
       expect(result.err.join("\n")).toMatch(/every private name is ignored/);
@@ -3277,7 +3285,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     it("--allow-all-ignored permits it: the post goes ahead, each ignored hit still reported", async () => {
       const result = await capture(
         commentArgs("the vault", "--private-names-ignore-file", ignoreAll(), "--allow-all-ignored"),
-        [PUBLIC, LIST, { match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
+        [PUBLIC, REACH, LIST, { match: "gh issue comment 12 --repo o/n --body the vault", result: { stdout: "" } }],
         guarded,
       );
       expect(result.code).toBe(0);
@@ -3295,7 +3303,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     it("comment --body-file: a file rewritten after the check is NOT what is posted", async () => {
       const path = tempFile("body.md", "a clean body\n");
       const post = "gh issue comment 12 --repo o/n --body-file -";
-      const scripted = new ScriptedSeams([PUBLIC, LIST, { match: post, result: { stdout: "" } }]);
+      const scripted = new ScriptedSeams([PUBLIC, REACH, LIST, { match: post, result: { stdout: "" } }]);
       // A writer lands DURING the check -- after nen read the file, before gh runs.
       const racing: Seams = {
         ...scripted,
@@ -3329,7 +3337,7 @@ describe("nen issue file/comment/edit-body -- the private-name guard (zheref/nen
     it("edit-body: the write carries the replacement on stdin, byte for byte (CRLF kept)", async () => {
       const path = tempFile("body.md", "line one\r\nline two\r\n");
       const write = "gh issue edit 12 --repo o/n --body-file -";
-      const scripted = new ScriptedSeams([CERTIFY, PUBLIC, LIST, { match: write, result: {} }]);
+      const scripted = new ScriptedSeams([CERTIFY, PUBLIC, REACH, LIST, { match: write, result: {} }]);
       const silent: Io = { out: (): void => undefined, err: (): void => undefined };
       const code = await runFamily(
         issueCommand,
@@ -3457,5 +3465,76 @@ describe("nen issue reconcile -- read-only, proposes only (zheref/nen#332)", () 
     expect(out).toMatch(/READ-ONLY, PROPOSES ONLY/);
     // Copilot E on zheref/nen#387: the --json shape in --help matches USAGE.
     expect(out).toMatch(/landing, delivery: \{ pr,\s+url, mergedAt \} \| null, references:/);
+  });
+});
+
+describe("nen issue consolidate-close -- the private-name guard on the close comment (zheref/nen#363)", () => {
+  const CHILD_5: ScriptedCall = {
+    match: "gh api repos/o/n/issues/5",
+    result: { stdout: JSON.stringify({ number: 5, id: 55, title: "a", state: "open", labels: [] }) },
+  };
+  const NO_OPEN_PRS: ScriptedCall = {
+    match: "gh pr list --repo o/n --state open --limit 100 --json number,title,url,isDraft,body,closingIssuesReferences",
+    result: { stdout: "[]" },
+  };
+  const PUBLIC: ScriptedCall = { match: "gh api repos/o/n", result: { stdout: JSON.stringify({ visibility: "public" }) } };
+  const LIST: ScriptedCall = {
+    match: "gh api user/repos?visibility=private&per_page=100&page=1",
+    result: { stdout: JSON.stringify([{ full_name: "acme/hidden-thing" }, { full_name: "acme/vault" }]) },
+  };
+  const argv = (...extra: string[]): string[] => ["issue", "consolidate-close", "--target", "o/n", "--parent", "1", "--children", "5", ...extra];
+  const guarded = { privateGuard: "scripted" as const, repoFlag: BANKAI_REPO };
+
+  it("a private name in --close-comment on a PUBLIC target refuses with exit 4: nothing attached, nothing closed, the name never printed", async () => {
+    const result = await capture(argv("--close-comment", "Folded into #{parent}; see the vault."), [PARENT_1, CHILD_5, NO_OPEN_PRS, PUBLIC, REACH, LIST], guarded);
+    expect(result.code).toBe(4);
+    expect(writes(result.calls)).toEqual([]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen issue: close-comment[5]:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("checks each child's text from --close-comment-map, and --json carries the refusal without the text", async () => {
+    const path = tempFile("closes.json", JSON.stringify({ "5": "Absorbed by the Hidden-Thing section of #{parent}." }));
+    const result = await capture(argv("--close-comment-map", path, "--json"), [PARENT_1, CHILD_5, NO_OPEN_PRS, PUBLIC, REACH, LIST], guarded);
+    expect(result.code).toBe(4);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report["refused"]).toBe(true);
+    expect((report["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "close-comment[5]", line: 1, index: 1, normalised: false, ignored: false }]);
+    expect(result.out.join("\n")).not.toMatch(/hidden-thing/i);
+  });
+
+  it("a PRIVATE target is not checked: the list is never read and the close goes ahead", async () => {
+    const result = await capture(
+      argv("--close-comment", "see the vault"),
+      [
+        PARENT_1,
+        CHILD_5,
+        NO_OPEN_PRS,
+        { match: "gh api repos/o/n", result: { stdout: JSON.stringify({ visibility: "private" }) } },
+        { match: "gh api --method POST repos/o/n/issues/1/sub_issues -F sub_issue_id=55", result: {} },
+        { match: "gh issue close 5 --repo o/n --comment see the vault", result: {} },
+      ],
+      guarded,
+    );
+    expect(result.code).toBe(0);
+    expect(result.calls).not.toContain("gh api user/repos?visibility=private&per_page=100&page=1");
+  });
+
+  it("an unreadable private list fails closed (exit 1) before the attach", async () => {
+    const result = await capture(
+      argv("--close-comment", "Folded into #{parent}."),
+      [PARENT_1, CHILD_5, NO_OPEN_PRS, PUBLIC, REACH, { match: "gh api user/repos?visibility=private&per_page=100&page=1", result: { code: 1, stderr: "HTTP 401" } }],
+      guarded,
+    );
+    expect(result.code).toBe(1);
+    expect(writes(result.calls)).toEqual([]);
+  });
+
+  it("with no caller close text there is no check, and the guard's flags are refused (exit 2) before any call", async () => {
+    const result = await capture(argv("--skip-private-name-check"), [], guarded);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/only with --close-comment or --close-comment-map/);
+    expect(result.calls).toEqual([]);
   });
 });

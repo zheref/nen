@@ -33,8 +33,11 @@ import type { Target } from "../github/target.js";
  * The `gh` call, built once and used by BOTH the dry run and the real write --
  * see ../issue/comment.ts's `commentArgv` for why that matters.
  */
-export function editBodyArgv(target: Target, pr: number, bodyFile: string): readonly string[] {
-  return ["pr", "edit", String(pr), "--repo", target.slug, "--body-file", bodyFile];
+export function editBodyArgv(target: Target, pr: number): readonly string[] {
+  // `-`: the body travels on stdin -- the bytes read and checked by the
+  // private-name guard, never a path gh would re-read after the check
+  // (zheref/nen#363, the rule #329 set for 'issue edit-body').
+  return ["pr", "edit", String(pr), "--repo", target.slug, "--body-file", "-"];
 }
 
 // 404 and 410 are the two shapes GitHub answers "not found" with on this
@@ -70,10 +73,10 @@ export function certifyPullRequest(seams: Seams, target: Target, pr: number): vo
   );
 }
 
-/** Replace the pull request's body. Throws on anything `gh` did not exit 0 on. */
-export function writePullRequestBody(seams: Seams, target: Target, pr: number, bodyFile: string): void {
-  const argv = editBodyArgv(target, pr, bodyFile);
-  const result = seams.run(GH, argv);
+/** Replace the pull request's body with `body`, on stdin. Throws on anything `gh` did not exit 0 on. */
+export function writePullRequestBody(seams: Seams, target: Target, pr: number, body: string): void {
+  const argv = editBodyArgv(target, pr);
+  const result = seams.run(GH, argv, { stdin: body });
   if (result.spawnFailed || result.code !== 0) {
     throw new Error(
       `could not replace ${target.slug}#${pr}'s body: ${

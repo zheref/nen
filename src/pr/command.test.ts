@@ -15,6 +15,7 @@ import { botNodesArgv, commitArgv, gatesAtArgv, requestTimelineArgv } from "./ro
 import { markReadyArgv, readDraftStateArgv } from "./markready.js";
 import { PR_FLAGS, PR_SUBCOMMAND_FLAGS, PR_SUBCOMMANDS, PR_TOKEN_ENV_ADVICE_KEYS, THREADS_ACTION_FLAGS, prCommand, prFlagOwners } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
+import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
 /** A throwaway file, for edit-body's --body-file. */
 function tempFile(name: string, contents: string): string {
@@ -43,13 +44,34 @@ const STUB_SEAMS: Seams = {
   platform: "linux",
 };
 
+/** The `pr` subcommands that run the private-name guard (zheref/nen#363). */
+function runsPrivateNameGuard(argv: readonly string[]): boolean {
+  if (argv[0] !== "pr") return false;
+  if (argv[1] === "edit-body" || argv[1] === "open") return true;
+  return argv[1] === "threads" && (argv[2] === "reply" || argv[2] === "settle");
+}
+
+/**
+ * THE DEFAULT PRIVATE-NAME GUARD ANSWER (zheref/nen#363), for every test that
+ * is not about it: ../issue/privacy.testkit.ts's withPrivateTarget, applied to
+ * a guarded subcommand's --target. The guard's own describe block passes
+ * `"scripted"` and scripts the reads itself.
+ */
+function withGuardDefault(argv: readonly string[], seams: Seams): Seams {
+  const at = argv.indexOf("--target");
+  const slug = at >= 0 ? argv[at + 1] : undefined;
+  return slug === undefined || !runsPrivateNameGuard(argv) ? seams : withPrivateTarget(seams, slug);
+}
+
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping (review finding).
 async function capture(
   argv: readonly string[],
   repoFlag: string | null,
   seams: Seams = STUB_SEAMS,
+  guard: "private-target" | "scripted" = "private-target",
 ): Promise<{ code: number; out: string[]; err: string[] }> {
+  if (guard === "private-target") seams = withGuardDefault(argv, seams);
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -2087,18 +2109,18 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path],
       null,
-      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: {} }]),
+      new ScriptedSeams([CERTIFY_12, { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: {} }]),
     );
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toBe("replaced zheref/nen#12's body (29 byte(s))");
   });
 
-  it("--json carries the frozen six-field contract, written: true on a real run", async () => {
+  it("--json carries the six-field contract plus the guard's privateNameCheck (zheref/nen#363), written: true on a real run", async () => {
     const path = tempFile("body.md", "hello");
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--json"],
       null,
-      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: {} }]),
+      new ScriptedSeams([CERTIFY_12, { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: {} }]),
     );
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out.join("\n"))).toEqual({
@@ -2108,6 +2130,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
       bytes: 5,
       written: true,
       dryRun: false,
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
     });
   });
 
@@ -2122,7 +2145,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     );
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      `would run: gh pr edit 12 --repo zheref/nen --body-file ${path}`,
+      "would run: gh pr edit 12 --repo zheref/nen --body-file -",
       "target: zheref/nen",
       "number: 12",
       "bytes: 28",
@@ -2146,7 +2169,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     );
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      `would run: gh pr edit 12 --repo zheref/nen --body-file ${path}`,
+      "would run: gh pr edit 12 --repo zheref/nen --body-file -",
       "target: zheref/nen",
       "number: 12",
       "bytes: 31",
@@ -2155,7 +2178,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     ]);
   });
 
-  it("--dry-run --json carries dryRun: true, written: false, and no other fields", async () => {
+  it("--dry-run --json carries dryRun: true, written: false, the guard's verdict, and no other fields", async () => {
     const path = tempFile("body.md", "hi");
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--dry-run", "--json"],
@@ -2170,6 +2193,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
       bytes: 2,
       written: false,
       dryRun: true,
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
     });
   });
 
@@ -2263,7 +2287,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path],
       null,
-      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: { code: 1, stderr: "HTTP 500" } }]),
+      new ScriptedSeams([CERTIFY_12, { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: { code: 1, stderr: "HTTP 500" } }]),
     );
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/could not replace zheref\/nen#12's body/);
@@ -3038,10 +3062,10 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
       retarget: { values: ["target", "pr", "base"] },
       "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
-      "edit-body": { values: ["target", "pr", "body-file"], booleans: ["dry-run"] },
+      "edit-body": { values: ["target", "pr", "body-file", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
-      threads: { values: ["target", "pr", "thread", "body-file", "from"], booleans: ["dry-run"] },
-      open: { values: ["target", "base", "title-file", "body-file", "head", "assignee"], booleans: ["draft", "dry-run"] },
+      threads: { values: ["target", "pr", "thread", "body-file", "from", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
+      open: { values: ["target", "base", "title-file", "body-file", "head", "assignee", "private-names-ignore-file"], booleans: ["draft", "dry-run", "skip-private-name-check", "allow-all-ignored"] },
       merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
     });
     const threadsRow = PR_SUBCOMMAND_FLAGS["threads"] ?? {};
@@ -3060,5 +3084,69 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
     // and --gh-repo belong to 'pr ready' alone.
     expect(prFlagOwners("token-env")).toEqual(["'pr ready'"]);
     expect(prFlagOwners("gh-repo")).toEqual(["'pr ready'"]);
+  });
+});
+
+describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
+  const CERTIFY_12: ScriptedCall = { match: "gh api repos/zheref/nen/pulls/12", result: { stdout: JSON.stringify({ number: 12 }) } };
+  const LIST = privateListRow(["acme/hidden-thing", "acme/vault"]);
+  const WRITE: ScriptedCall = { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: {} };
+  const argvFor = (body: string, ...extra: string[]): string[] => [
+    "pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", tempFile("body.md", body), ...extra,
+  ];
+
+  it("a private name on a PUBLIC target refuses with exit 4 after certifying, before any write, and never prints the name", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST]);
+    const result = await capture(argvFor("moved out of the vault"), null, seams, "scripted");
+    expect(result.code).toBe(4);
+    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      "gh api repos/zheref/nen/pulls/12",
+      "gh api repos/zheref/nen",
+      SCOPES_CALL,
+      PRIVATE_LIST_PAGE,
+    ]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen pr edit-body: body:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("--dry-run refuses the same way, and --json carries the verdict with written: false", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST]);
+    const result = await capture(argvFor("the vault", "--dry-run", "--json"), null, seams, "scripted");
+    expect(result.code).toBe(4);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report["written"]).toBe(false);
+    expect(report["dryRun"]).toBe(true);
+    expect((report["privateNameCheck"] as { result: string }).result).toBe("refused");
+  });
+
+  it("a PRIVATE target is not checked -- the list is never read, and the body is written from stdin", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "private"), WRITE]);
+    const result = await capture(argvFor("the vault\n"), null, seams, "scripted");
+    expect(result.code).toBe(0);
+    expect(seams.calls.some((call): boolean => call.args.join(" ").startsWith("api user/repos"))).toBe(false);
+    expect(seams.calls[seams.calls.length - 1]?.stdin).toBe("the vault\n");
+  });
+
+  it("an unreadable private list fails closed (exit 1) and writes nothing", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, UNREADABLE_PRIVATE_LIST]);
+    const result = await capture(argvFor("anything"), null, seams, "scripted");
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/nen pr edit-body: private-name check could not run/);
+    expect(seams.calls.some((call): boolean => call.args[0] === "pr")).toBe(false);
+  });
+
+  it("--skip-private-name-check reads nothing for the guard, writes, and is named", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, WRITE]);
+    const result = await capture(argvFor("the vault", "--skip-private-name-check"), null, seams, "scripted");
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toMatch(/SKIPPED by --skip-private-name-check/);
+  });
+
+  it("a missing --private-names-ignore-file is exit 2 before any gh call", async () => {
+    const seams = new ScriptedSeams([]);
+    const result = await capture(argvFor("x", "--private-names-ignore-file", "/no/such/ignore-file"), null, seams, "scripted");
+    expect(result.code).toBe(2);
+    expect(seams.calls).toEqual([]);
   });
 });
