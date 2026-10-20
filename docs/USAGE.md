@@ -950,7 +950,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`shu`](#family-shu) | [`nen shu coverage`](#nen-shu-coverage) | run a lane's coverage command and PARSE the report it produced into one shape -- totals, per-target rows, and `--threshold`'s `met`, which never moves the exit code; `--touched --base <ref>` narrows the rows to the files a change touched (a git-diff read after the run) and, with `--threshold` absent, bands each row against `nen/workflow.json`'s coverage ladder -- or, where that file is absent, nen's published 80/85/90 defaults -- instead; never gating either way | nen/contract.json (project block); spawns the declared argv unless --dry-run, then READS the report the verb's `artifacts` name (and, under `--touched` with no `--threshold`, `nen/workflow.json` through the shared loader) | yes |
 | [`shu`](#family-shu) | [`nen shu test-report`](#nen-shu-test-report) | run a lane's declared TEST command and PARSE the results it produced into one shape -- a row per test and the four counts. It declares nothing of its own: it runs `project.verbs.<lane>.test` and reads THAT row's `artifacts`, one file or a whole directory of XML | nen/contract.json (project block); spawns the declared `test` argv unless --dry-run or --from-artifacts, then READS the results the `test` verb's `artifacts` name | yes |
 | [`shu`](#family-shu) | [`nen shu evidence`](#nen-shu-evidence) | match `git diff --name-status <base>...HEAD` against project.evidence.globs, deriving each survivor's suite/scene and grouping suite -> scenes; empty is exit 0, never an error | git diff (through the seam only -- no declared invocation, no lane); nen/contract.json (project.evidence) | yes |
-| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong, exit 7 when nen is behind the dependency block's pinned_ref inside its minimum), and with --install install what corepack can | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
+| [`shu`](#family-shu) | [`nen shu tools`](#nen-shu-tools) | check the host toolchain a declaration pins (exit 5 when anything is missing or wrong, exit 7 when nen is behind the dependency block's pinned_ref inside its minimum), and with --install run the supported corepack or user-local RubyGems installer | nen/contract.json (project.toolchain + dependency); spawns each declared version probe unless --dry-run; spawns an installer only with --install | yes |
 | [`shu`](#family-shu) | [`nen shu warmup`](#nen-shu-warmup) | warm a WORKING COPY: clean, fetch, fast-forward the trunk, cut the named branch, verify the declared build -- the one `shu` verb that mutates git state. Not [`nen warmup`](#nen-warmup), which sweeps a registry and reads only | git in --repo (unless --dry-run); nen/contract.json (project block) for the build/test half | yes |
 | [`dev`](#family-dev) | [`nen dev test`](#nen-dev-test) | run this checkout's own vitest suite via `bun run test` | package.json + vitest.config.ts under --repo | no *(stdio)* |
 | [`dev`](#family-dev) | [`nen dev lint`](#nen-dev-lint) | run this checkout's own eslint via `bun run lint` | package.json + eslint config under --repo | no *(stdio)* |
@@ -12347,7 +12347,7 @@ exits `0`)
 ### `nen shu tools`
 
 Check the **host** toolchain this repository pins, and — only with `--install`,
-and only through one installer — install what nen is allowed to install. It is
+and only through an enabled installer — install what nen is allowed to install. It is
 the one verb in this family whose blast radius is the developer's machine rather
 than a repository, which is why every rule below is stated as a refusal.
 
@@ -12375,7 +12375,7 @@ nen shu tools --install [--only <tool[,tool]>] [--dry-run] [--json]
 | `version` | **yes** | The pin. Either an exact version (`"9.15.9"`) or a floor (`">=20.19.0"`) — the two forms nen can evaluate. There is no caret, no tilde, no two-sided range and no dist-tag; one of those is exit 2 naming the pointer and both forms. A pre-release or build-metadata suffix is held to **semver's own identifier charset** (alphanumerics and `-`, per dot-separated identifier): `1.2.3-rc.1+sha512.abc` is a pin, `1.2.3-; rm -rf /` is exit 2 by pointer — that suffix is the one part of a pin that reaches an installer's argv unreshaped. **No entry may omit it**: nen never certifies or installs `latest`, and the loader refuses an entry that tries. |
 | `probe` | **yes** | Argv, never a string. There is no shell. |
 | `versionFrom` | **yes** | One of `first-semver-on-stdout`, `first-semver-on-stderr`, `whole-line-stdout`, `path-exists`. **Deliberately not a regex** — a caller-supplied pattern is a caller-supplied program, and a ReDoS surface `src/schema/pattern.ts` exists to guard. The two `first-semver` members read the first version-shaped token (one dot or more) on that stream, **preferring a three-component one when the line offers several** — so a banner leading with a build date `2024.01` does not beat the `1.2.3` beside it, while `MAJOR.MINOR` is still read when that is all a probe prints. Nothing scores further: two three-component tokens on one line still yield the first, because choosing between them would be nen guessing which version the probe meant. A probe whose line leads with an unrelated dotted number and carries no three-component version reads *that* number — declare a probe that prints the version alone. |
-| `installer` | **yes** | One of `verify-only`, `corepack`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. Only **`corepack`** runs in this release. |
+| `installer` | **yes** | One of `verify-only`, `corepack`, `gem-user`, `wrapper`, `npx`, `sdkmanager`, `dotnet-install`, `winget`. Only **`corepack`** and **`gem-user`** run in this release. |
 | `why` | no | Where the pin comes from, in the repository's own words. Printed verbatim; never nen's. |
 
 The **`nen` row** comes from the `dependency` block instead, when there is one:
@@ -12493,10 +12493,65 @@ test computes that rule from the seam rather than from a list of names.
 
 | Installer | `--install` runs | Why |
 |---|---|---|
-| `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` — **on `darwin` and `linux` only** | The one install nen performs. The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. On **`win32` it is REFUSED**, with those two commands printed to run by hand: there `corepack` is a batch shim (`corepack.cmd`), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a `.bat`/`.cmd` without one (node, since the fix for CVE-2024-27980) fails; a runtime that starts it anyway starts it *through* the command interpreter, which re-parses the argument list nen assembled element by element — a shell by another name. Nen will not guess which of the two this host does, and an install that "works on POSIX and is untested on Windows" is a claim nobody checked. The **check** is unaffected on every host: it spawns only the probe the repository declared. |
+| `corepack` | `corepack enable`, then `corepack prepare <tool>@<pin> --activate` — **on `darwin` and `linux` only** | The activator ships with the runtime it manages, and the version is the one the repository's own declaration pins. On **`win32` it is REFUSED**, with those two commands printed to run by hand: there `corepack` is a batch shim (`corepack.cmd`), and nen's one subprocess seam never uses a shell. A runtime that refuses to start a `.bat`/`.cmd` without one (node, since the fix for CVE-2024-27980) fails; a runtime that starts it anyway starts it *through* the command interpreter, which re-parses the argument list nen assembled element by element — a shell by another name. Nen will not guess which of the two this host does, and an install that "works on POSIX and is untested on Windows" is a claim nobody checked. The **check** is unaffected on every host: it spawns only the probe the repository declared. |
+| `gem-user` | Check `ruby` is at least 3.2, then `ruby -S gem install <tool> --version <pin> --user-install --no-document` — **on `darwin` and `linux` only** | The tool and exact version come from `project.toolchain`. A leading `v` is removed for RubyGems; prerelease and build-metadata pins are refused because this installer supports stable dotted-numeric gem versions. RubyGems installs into the current user's gem home; nen neither upgrades Ruby nor edits `PATH` or a shell profile. If Ruby is absent or too old, the prerequisite step fails before `gem` runs. The final declared tool probe must find the pinned version on this `PATH`; a successful gem exit alone is not success. On `win32`, the install is refused; the ordinary check still runs. |
 | `verify-only` | nothing | Reported with the pin and the sentence *"install by hand"*. A system-wide install with five common answers is exactly the choice nen does not make for you. |
 | `wrapper`, `npx` | nothing | There is nothing to install: the repository's own committed wrapper, or its own dependency graph, resolves the tool. |
 | `sdkmanager`, `dotnet-install`, `winget` | nothing | Declared, and **not enabled in this release**: every installer that fetches and executes vendor code, or writes into an SDK root, ships behind its own explicit decision. The row names the tool, the pin and the installer a human runs. |
+
+**Shell coverage consumer shape (Hatsu #148).** `project.toolchain` can pin
+`bashcov` at `3.3.0` with probe `["bashcov", "--version"]`, and
+`simplecov-lcov` at `0.8.0` with a RubyGems version probe. Both entries name
+`"installer": "gem-user"`; `--install` checks Ruby >=3.2, installs each exact
+gem into the user's gem home, then re-probes. The caller must already put the
+chosen Ruby and its user gem `bin` directory on `PATH`. Nen does not change it.
+The [Bashcov 3.3.0 gem](https://rubygems.org/gems/bashcov/versions/3.3.0)
+requires Ruby >=3.2. A `.simplecov` file can select the pinned LCOV formatter:
+
+```ruby
+require 'simplecov-lcov'
+SimpleCov::Formatter::LcovFormatter.config.report_with_single_file = true
+SimpleCov::Formatter::LcovFormatter.config.single_report_path = 'coverage/lcov.info'
+SimpleCov.formatter = SimpleCov::Formatter::LcovFormatter
+```
+
+The formatter emits file rows such as `SF:./scripts/check.sh`. A consumer's
+declared coverage steps normalize the leading `./` to `SF:scripts/check.sh`
+before Nen reads `coverage/lcov.info`; that makes `--touched` join the row to
+Git's repository-relative path. A temporary fixture exercised this sequence:
+Nen read an LCOV report, matched its changed `sample.sh`, and measured 2 of 3
+executable lines (66.67%). On macOS, **modern Bash is a prerequisite**: use
+Homebrew Bash 5.x (the proof used 5.3.20) and pass its path through Bashcov's
+`--bash-path` option. The stock `/bin/bash` 3.2 produced a zero-hit trace on
+this host. The consumer can declare Bash as a verify-only toolchain entry; Nen
+does not install or switch the shell. Hatsu #148 will exercise its own scripts
+and the required 80/85/90 touched-file floor.
+
+The tested macOS lane used this contract shape (with the consumer owning
+`normalize-lcov.mjs`, `.simplecov`, and its script path):
+
+```json
+{
+  "project": {
+    "toolchain": {
+      "bash": { "version": ">=5.0", "probe": ["/opt/homebrew/bin/bash", "--version"], "versionFrom": "first-semver-on-stdout", "installer": "verify-only", "why": "Bashcov needs modern Bash for trace coverage" },
+      "bashcov": { "version": "3.3.0", "probe": ["bashcov", "--version"], "versionFrom": "first-semver-on-stdout", "installer": "gem-user", "why": "Pinned shell coverage tool" },
+      "simplecov-lcov": { "version": "0.8.0", "probe": ["ruby", "-rrubygems", "-e", "puts Gem::Specification.find_by_name(\"simplecov-lcov\").version"], "versionFrom": "first-semver-on-stdout", "installer": "gem-user", "why": "Pinned LCOV formatter" }
+    },
+    "verbs": {
+      "shell": {
+        "coverage": {
+          "steps": [
+            { "exe": "bashcov", "argv": ["--bash-path", "/opt/homebrew/bin/bash", "--", "./sample.sh", "yes"] },
+            { "exe": "node", "argv": ["normalize-lcov.mjs"] }
+          ],
+          "artifacts": ["coverage/lcov.info"]
+        }
+      }
+    }
+  }
+}
+```
 
 **Eight fail-closed rules.** (1) Check is the default and `--install` is the
 only way to act — no field, env var or declaration key flips it. (2) `--dry-run`
@@ -12504,9 +12559,9 @@ prints every command and runs nothing, probes included. (3) **Never `sudo`**,
 never elevation; a test sweeps every rendered install plan for `sudo`, `runas`,
 `pkexec` and `Start-Process -Verb RunAs`. (4) Never an installer the declaration
 does not name. (5) **Never a version the declaration does not pin** — a range
-pin is refused rather than resolved to "the newest thing that satisfies it", and
-a pin the lane's own `package.json` `packageManager` field contradicts is
-refused rather than silently preferred. That cross-check compares **versions,
+pin is refused rather than resolved to "the newest thing that satisfies it".
+For `corepack`, a pin the lane's own `package.json` `packageManager` field
+contradicts is refused rather than silently preferred. That cross-check compares **versions,
 not strings** — `9.15` and `9.15.0` agree, `v9.15.9` and `9.15.9` agree, and an
 integrity suffix is split off — and it fires only when both sides state
 something nen can read, because that field belongs to the ecosystem rather than
@@ -16720,7 +16775,7 @@ rather than the reader. See [per-stack notes](#nen-shu-detect) under
 | run (production run) | **yes — any lane that declares one** | [`shu run`](#nen-shu-run) | Starts the lane's declared production process, locally and long-running. It is `compose-desktop`'s **only** row — `{gw} run`, the one invocation that lane has, which `detect` proposes end to end. On `expo` it is the verb that *builds and launches* a native lane, which is why `detect` proposes no `build` there and withholds `run` itself until the declaration names a platform — `expo run:{platform}` unedited is exit **2**. [`run rerun-failed`](#nen-run-rerun-failed) is unrelated — it is a CI re-run, and the `run` *family* name is about GitHub Actions runs. |
 | deploy | **the verb exists; `--target` and `--run` are both mandatory** | [`shu deploy`](#nen-shu-deploy) | Runs a lane's declared deploy invocation against a **named** target from `project.targets`, with the target's own `args` appended and the variables its `requiresEnv` names asserted (never read). Two flags and no single-flag path to acting: there is no default target, ever, and without `--run` the verb prints the fully resolved plan and spawns nothing at exit 0. The destination is resolved **after** the lane, the verb and the host, so a lane whose `deploy` is a seat answers exit 4 with its own reason whatever `--target` says, while a runnable row with no target is exit 2 naming what is declared. `gatsby` is the one stack with a reference deploy row (two steps: the archive, then the pages push, proposed only where the tree declares the publishing tool); `nextjs` has three observed shapes and no default, so `detect` proposes a seat. `detect` proposes `"targets": {}` on every stack and a destination on none. |
 | coverage | **yes on a single-package `nextjs` lane** | [`shu coverage`](#nen-shu-coverage) | Runs the lane's declared coverage command. The pack states this row as a shape run **once per package**, so `detect` proposes it only where that resolves to one command it can stand behind: a lane whose `package.json` names itself and declares the task. A **workspace root** is withheld with the members named — which of them, and in what order, is the repository's answer — and a lane that answers `{package}` but declares no such task is withheld naming the task. `xcode-ios`'s two-step row is withheld naming the **simulator**, not the result bundle: the bundle path is the one value `detect` contributes rather than reads (it is an *output*, and nen's own generated output lives under `.nen/`). The note says so, and says four more things a maintainer would otherwise meet as a failure — the path is **lane-relative** (an `ios/` lane writes `ios/.nen/`); `.nen/` is the line [`nen scaffold init`](#nen-scaffold-init) appends to your `.gitignore`, so a repository stood up another way must ignore it itself; `xcodebuild` **refuses an existing `-resultBundlePath`**, so a filled-in row succeeds once and then fails until the previous bundle is deleted or the value carries something per-run; and the value must move in every step of the row at once. **The bundle is not the report.** When you fill that row in, the path to declare under `project.verbs.<lane>.coverage.artifacts` is the file the *second* step's JSON lands in — `xcrun xccov view --report --json` writes to stdout, so give that step a `stdoutTo` naming the same path (nen writes the captured bytes itself; there is no shell and no redirection operator), and give the file a name with `xccov` in it — because an `.xcresult` is a **directory** and the coverage reader recognises a report by its name. What a run produced is then **parsed**: nen reads the first path under the verb's own `artifacts` whose format it recognises — the Istanbul/Vitest JSON summary, `xccov` JSON, Cobertura XML, JaCoCo XML, LCOV — into a total and a row per target, and refuses a report it cannot honestly read (truncated, or claiming more covered lines than lines) by name rather than printing a plausible number for it. `--threshold` reports `met` against the **counts** and never changes the exit code, in either direction. |
-| host toolchain | **yes to check; one installer to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, or **7** when everything passes but nen is `BEHIND` — inside the dependency block's `minimum` and below its `pinned_ref` ([behind the pinned ref](#behind-the-pinned-ref)) — naming the exact command per tool. `--install` acts only through `corepack`; every other declared installer is verify-only in this release, reported with its pin for a human to run. |
+| host toolchain | **yes to check; two installers to install** | [`shu tools`](#nen-shu-tools) | Probes every tool `project.toolchain` pins (and nen itself, from `dependency`) and exits 5 when anything is missing or is not the pinned version, or **7** when everything passes but nen is `BEHIND` — inside the dependency block's `minimum` and below its `pinned_ref` ([behind the pinned ref](#behind-the-pinned-ref)) — naming the exact command per tool. `--install` acts through `corepack` or `gem-user`; the other declared installer ids are reported with their pins for a human to handle. |
 | start a piece of work (clean, fetch, branch, prove it builds) | **yes — the git half everywhere, the build half where a lane declares one** | [`shu warmup`](#nen-shu-warmup) | One line for the five things a developer does by hand at the start of every task: refuse (or, with `--discard`, destroy) uncommitted work, fetch, fast-forward the trunk, cut the branch **you** name from its fresh tip, then run the lane's declared `build` — and its `test` with `--tests`. The **only** `shu` verb that mutates git state, so `--repo` is required and every step refuses rather than guessing; `--dry-run` prints every git and toolchain command and runs none of them. A repository with no `project` block still gets the git half and exits 0. Not [`warmup`](#nen-warmup), which sweeps a registry for stale pins and reads only. |
 | report on a piece of work | **yes — the facts and the fill** | [`report data`](#nen-report-data), [`report render`](#nen-report-render) | `report data` gathers what is on the branch against a base — commits, changed files (with a tier from your own `--tiers` table), the lane's coverage report **if one is already on disk**, the build proof under `.nen/proof/<lane>.json`, the last recorded stop — into one document, reading and never writing. `report render` fills a template with it: four constructs and nothing else, an unknown token refused **naming it** rather than published as a blank cell, and `--out` refused unless it resolves inside the repository with symlinks resolved. It never runs the coverage command — [`shu coverage`](#nen-shu-coverage) is the verb that produces the report this one reads, and both parse it with the same reader. `evidence` is an empty list until `nen shu evidence` lands; the field ships now so a template written today does not change shape when it does. |
 

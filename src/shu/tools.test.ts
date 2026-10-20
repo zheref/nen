@@ -2185,6 +2185,133 @@ describe("the install plan is decided against the HOST, and the host is injected
   });
 });
 
+describe("gem-user installs an exact Ruby tool without changing the host globally", () => {
+  const BASHCOV = {
+    tool: "bashcov",
+    version: "3.3.0",
+    probe: ["bashcov", "--version"],
+    versionFrom: "first-semver-on-stdout",
+    installer: "gem-user",
+    why: null,
+    raw: {},
+  } as const;
+  const declaration = oneTool({
+    $name: "bashcov",
+    version: BASHCOV.version,
+    probe: BASHCOV.probe,
+    versionFrom: BASHCOV.versionFrom,
+    installer: BASHCOV.installer,
+  });
+  const plan = resolveInstall(BASHCOV, null, "linux");
+  if (plan.kind !== "runnable") throw new Error("the Linux gem-user plan must be runnable");
+  const steps = plan.steps.map((step): string => [step.exe, ...step.argv].join(" "));
+
+  it("renders the Ruby prerequisite then the exact user-local gem install on POSIX hosts", () => {
+    expect(steps[0]).toContain("Ruby >=3.2.0 is required");
+    expect(steps[1]).toBe("ruby -S gem install bashcov --version 3.3.0 --user-install --no-document");
+    expect(resolveInstall(BASHCOV, null, "darwin")).toEqual(plan);
+    const unsupported = resolveInstall(BASHCOV, null, "win32");
+    expect(unsupported.kind).toBe("refused");
+    if (unsupported.kind === "refused") expect(unsupported.why).toMatch(/supported only on darwin and linux/);
+    const range = resolveInstall({ ...BASHCOV, version: ">=3.3.0" }, null, "linux");
+    expect(range.kind).toBe("refused");
+    const prefixed = resolveInstall({ ...BASHCOV, version: "v3.3.0" }, null, "linux");
+    expect(prefixed.kind).toBe("runnable");
+    if (prefixed.kind === "runnable") expect(prefixed.steps[1]?.argv).toContain("3.3.0");
+    for (const version of ["3.3.0+build.1", "3.3.0-rc.1"]) {
+      expect(resolveInstall({ ...BASHCOV, version }, null, "linux").kind).toBe("refused");
+    }
+    expect(resolveInstall({ ...BASHCOV, tool: "@scope/bashcov" }, null, "linux").kind).toBe("refused");
+  });
+
+  it("does not read a RubyGems prerelease as its pinned stable release", async () => {
+    expect(extractVersion("first-semver-on-stdout", "bashcov 3.3.0.pre.1; Ruby 3.4.4", ""))
+      .toBe("3.3.0.pre.1");
+    const result = await withDeclaration(declaration, ["--only", "bashcov", "--json"], {
+      script: [{ match: "bashcov --version", result: { stdout: "bashcov 3.3.0.pre.1\n" } }],
+    });
+    expect(result.code).toBe(5);
+    expect(row(result, "bashcov")).toMatchObject({
+      state: "present-but-wrong-version",
+      found: "3.3.0.pre.1",
+    });
+  });
+
+  it("shows the exact plan in a dry run without spawning, then installs and re-probes", async () => {
+    const dry = await withDeclaration(declaration, ["--dry-run", "--only", "bashcov", "--json"]);
+    expect(dry.code).toBe(0);
+    expect(dry.seams.calls).toEqual([]);
+    expect(row(dry, "bashcov").installCommand).toHaveLength(2);
+
+    const wet = await withDeclaration(declaration, ["--install", "--only", "bashcov", "--json"], {
+      staged: true,
+      script: [
+        { match: "bashcov --version", result: { spawnFailed: true, code: -1 } },
+        ...steps.map((match): ScriptedCall => ({ match, result: { code: 0 } })),
+        { match: "bashcov --version", result: { stdout: "bashcov 3.3.0\n" } },
+      ],
+    });
+    expect(wet.code).toBe(0);
+    expect(spawned(wet.seams)).toEqual(["bashcov --version", ...steps, "bashcov --version"]);
+    expect(row(wet, "bashcov")).toMatchObject({ state: "present-and-matching", found: "3.3.0" });
+  });
+
+  it("stops before gem when Ruby is absent or below 3.2", async () => {
+    for (const ruby of [{ spawnFailed: true, code: -1 }, { code: 1, stderr: "Ruby >=3.2.0 is required" }]) {
+      const result = await withDeclaration(declaration, ["--install", "--only", "bashcov", "--json"], {
+        script: [
+          { match: "bashcov --version", result: { spawnFailed: true, code: -1 } },
+          { match: steps[0] ?? "", result: ruby },
+        ],
+      });
+      expect(result.code).toBe(5);
+      expect(spawned(result.seams)).toEqual(["bashcov --version", steps[0]]);
+      expect(row(result, "bashcov").state).toBe("missing");
+    }
+  });
+
+  it("refuses Windows and a range pin before any command runs", async () => {
+    const unsupported = await withDeclaration(declaration, ["--install", "--only", "bashcov"], {
+      platform: "win32",
+    });
+    expect(unsupported.code).toBe(2);
+    expect(unsupported.seams.calls).toEqual([]);
+    const range = await withDeclaration(
+      oneTool({ $name: "bashcov", version: ">=3.3.0", probe: BASHCOV.probe,
+        versionFrom: BASHCOV.versionFrom, installer: "gem-user" }),
+      ["--install", "--only", "bashcov"],
+    );
+    expect(range.code).toBe(2);
+    expect(range.seams.calls).toEqual([]);
+  });
+
+  it("stops before the final probe when RubyGems is unavailable", async () => {
+    const result = await withDeclaration(declaration, ["--install", "--only", "bashcov", "--json"], {
+      script: [
+        { match: "bashcov --version", result: { spawnFailed: true, code: -1 } },
+        { match: steps[0] ?? "", result: { code: 0 } },
+        { match: steps[1] ?? "", result: { spawnFailed: true, code: -1 } },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(spawned(result.seams)).toEqual(["bashcov --version", ...steps]);
+    expect(row(result, "bashcov").state).toBe("missing");
+  });
+
+  it("reports a wrong installed version after successful gem steps", async () => {
+    const result = await withDeclaration(declaration, ["--install", "--only", "bashcov", "--json"], {
+      staged: true,
+      script: [
+        { match: "bashcov --version", result: { spawnFailed: true, code: -1 } },
+        ...steps.map((match): ScriptedCall => ({ match, result: { code: 0 } })),
+        { match: "bashcov --version", result: { stdout: "bashcov 3.2.0\n" } },
+      ],
+    });
+    expect(result.code).toBe(5);
+    expect(row(result, "bashcov").state).toBe("present-but-wrong-version");
+  });
+});
+
 // ── (j) the mutants this suite let live ────────────────────────────────────
 //
 // Four rules the code states and the suite did not pin: a mutation testing run
@@ -2324,8 +2451,8 @@ describe("the no-elevation sweep", () => {
     }
   });
 
-  it("enables exactly one installer, and it is the one that ships with its runtime", () => {
-    expect(ENABLED_INSTALLERS).toEqual(["corepack"]);
+  it("enables only the reviewed runtime-local installers", () => {
+    expect(ENABLED_INSTALLERS).toEqual(["corepack", "gem-user"]);
   });
 
   it("resolves NO runnable plan for any installer outside the enabled set", () => {

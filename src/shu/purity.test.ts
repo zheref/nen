@@ -27,7 +27,7 @@
 //   * `*.test.ts` and `fixtures/` are not shipped code. A test naming a tool is
 //     how the rule is PROVED (./fixtures/toolchain.ts names twenty-eight), and a
 //     fixture naming one is test data.
-//   * `install.ts` NAMES THE ONE INSTALLER NEN IMPLEMENTS, and it is the only
+//   * `install.ts` NAMES THE INSTALLERS NEN IMPLEMENTS, and it is the only
 //     exclusion added since this sweep was written. `nen shu tools --install`
 //     is the one verb in this family that spawns a program NEN chose rather
 //     than one a declaration named: a declaration names an installer ID out of
@@ -41,8 +41,8 @@
 //          `child_process` -- so the sweep's real subject, what reaches a
 //          spawn, is still covered by the modules the sweep still reads:
 //          ./probe.ts is what spawns, and it is swept.
-//       3. the enabled set is exactly one id, so "the one installer" is a fact
-//          this file checks and not a sentence a header makes.
+//       3. the enabled set is pinned to the reviewed ids by an executable
+//          assertion, not by a sentence in this header.
 //     An exclusion that only SUBTRACTS is one that widens silently the first
 //     time somebody adds a second name to the excluded file. This one adds
 //     three rules in exchange for the file it drops.
@@ -180,8 +180,8 @@ describe("§3 for the shu family: the executor decides with no toolchain name", 
     expect(code).not.toContain("child_process");
   });
 
-  it("enables exactly one installer, which is what 'the one installer' means", () => {
-    expect(ENABLED_INSTALLERS).toEqual(["corepack"]);
+  it("enables only the reviewed installers", () => {
+    expect(ENABLED_INSTALLERS).toEqual(["corepack", "gem-user"]);
     // Every enabled id is a member of the contract's closed set -- an installer
     // nen runs that the loader would refuse to read is not reachable at all.
     expect(ENABLED_INSTALLERS.every((id): boolean => INSTALLERS.includes(id))).toBe(true);

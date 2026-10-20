@@ -1,5 +1,5 @@
 // src/shu/install.ts -- the closed installer table for `nen shu tools`, and the
-// ONE module in this family that names the single installer nen implements.
+// ONE module in this family that names the installers nen implements.
 //
 // WHY THIS FILE IS EXCLUDED FROM ./purity.test.ts, AND WHY THE EXCLUSION IS
 // NARROW. The family's rule is that no file on the execution path names a
@@ -14,10 +14,8 @@
 //   * builds commands and never runs one (./probe.ts spawns; this file is
 //     pure), so the sweep's real subject -- what reaches a spawn -- is still
 //     covered by the modules the sweep still reads;
-//   * carries ONE such name, and ./purity.test.ts asserts that positively
-//     rather than merely skipping the file: an exclusion that only subtracts is
-//     an exclusion that silently widens the first time somebody adds a second
-//     name to it;
+//   * carries only names from the contract's closed installer set, which
+//     ./purity.test.ts asserts rather than merely skipping this file;
 //   * never reads the profiles pack, so the (d2) inertness rule is untouched --
 //     an install argv is built from the DECLARATION's own pin and from nothing
 //     else, which is the whole content of decision (d2).
@@ -34,20 +32,20 @@
 //   4. Never an installer the declaration does not name. The id comes from the
 //      entry; an id outside the closed set was already refused by the contract
 //      loader, at exit 2, listing the known ones.
-//   5. NEVER A VERSION THE DECLARATION DOES NOT PIN. The one enabled installer
-//      activates an EXACT version, so a range pin is refused rather than
-//      resolved to "the newest thing that satisfies it", and a pin the lane's
-//      own manifest contradicts is refused rather than silently preferred.
+//   5. NEVER A VERSION THE DECLARATION DOES NOT PIN. Enabled installers
+//      activate EXACT versions, so a range pin is refused rather than
+//      resolved to "the newest thing that satisfies it". Corepack also refuses
+//      a pin the lane's own manifest contradicts.
 //      There is no fallback to the catalogue's tested minimum.
-//   6. Never a URL nen invented. Nothing here fetches; the one enabled
-//      installer ships with the runtime it manages.
+//   6. Never a URL nen invented. Corepack ships with its runtime; gem-user
+//      invokes RubyGems by name, without assembling a source URL.
 //   7. Never edits PATH, a shell profile or an environment.
 //   8. Never installs a project's dependencies. That is a PRECONDITION nen
 //      asserts and never performs (./run.ts's header) -- a dependency install
 //      executes the project's own postinstall scripts, which is a different
 //      thing to consent to than activating a pinned package manager.
 //
-// WHAT IS ENABLED IN THIS RELEASE: one id. The declaration's other installer
+// WHAT IS ENABLED IN THIS RELEASE: two ids. The declaration's other installer
 // ids are real and are reported, with the version they pin, as work for a
 // human -- decision (d). A tool a repository believes nen manages, which nen
 // silently skips, is the failure this whole family is written against, so
@@ -74,11 +72,57 @@ export type InstallPlan =
   | { readonly kind: "not-enabled"; readonly why: string }
   | { readonly kind: "refused"; readonly why: string };
 
-/** The installer ids `--install` acts on in this release. Exactly one. */
-export const ENABLED_INSTALLERS: readonly Installer[] = ["corepack"];
+/** The installer ids `--install` acts on in this release. */
+export const ENABLED_INSTALLERS: readonly Installer[] = ["corepack", "gem-user"];
 
 /** The package-manager activator that ships with the runtime it manages. */
 const COREPACK = "corepack";
+const RUBY = "ruby";
+
+/** A pinned RubyGems tool installed only into the current user's gem home. */
+function gemUserPlan(entry: ToolchainEntry, host: NodeJS.Platform): InstallPlan {
+  const pin = parsePin(entry.version, `project.toolchain.${entry.tool}.version`);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(entry.tool)) {
+    return {
+      kind: "refused",
+      why: `project.toolchain.${entry.tool} is not an unscoped Ruby gem name; gem-user never passes a scoped or path-shaped tool name to RubyGems.`,
+    };
+  }
+  if (pin.kind !== "exact") {
+    return {
+      kind: "refused",
+      why: `project.toolchain.${entry.tool}.version pins the range '${entry.version}', but gem-user installs one exact version. Pin the Ruby gem version exactly or use verify-only.`,
+    };
+  }
+  const gemVersion = pin.version.replace(/^[vV]/, "");
+  if (!/^\d+(?:\.\d+)+$/.test(gemVersion)) {
+    return {
+      kind: "refused",
+      why: `project.toolchain.${entry.tool}.version pins '${entry.version}', but gem-user installs only stable dotted-numeric RubyGems versions. Remove prerelease or build metadata, or use verify-only.`,
+    };
+  }
+  if (host !== "darwin" && host !== "linux") {
+    return {
+      kind: "refused",
+      why: `gem-user is supported only on darwin and linux; ${host} needs a separate installer decision. The declared probe still works without --install.`,
+    };
+  }
+  return {
+    kind: "runnable",
+    steps: [
+      {
+        exe: RUBY,
+        argv: ["-rrubygems", "-e", 'abort "Ruby >=3.2.0 is required for gem-user" if Gem::Version.new(RUBY_VERSION) < Gem::Version.new("3.2.0")'],
+        stdoutTo: null,
+      },
+      {
+        exe: RUBY,
+        argv: ["-S", "gem", "install", entry.tool, "--version", gemVersion, "--user-install", "--no-document"],
+        stdoutTo: null,
+      },
+    ],
+  };
+}
 
 /**
  * The host this release will not run the enabled installer on, and the whole
@@ -113,7 +157,7 @@ const COREPACK = "corepack";
  */
 const REFUSED_INSTALL_HOST: NodeJS.Platform = "win32";
 
-/** The lane manifest whose pin the one enabled installer must agree with. */
+/** The lane manifest whose package-manager pin corepack must agree with. */
 const MANIFEST_FILE = "package.json";
 
 /** The manifest field that states that pin. */
@@ -279,6 +323,8 @@ export function resolveInstall(
   switch (entry.installer) {
     case "corepack":
       return corepackPlan(entry, manifest, host);
+    case "gem-user":
+      return gemUserPlan(entry, host);
     case "wrapper":
       return {
         kind: "nothing-to-install",
