@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FULL_REACH_ROW } from "./privacy.testkit.js";
 import { ScriptedSeams, type ScriptedCall } from "../seam/scripted.js";
 import type { Target } from "../github/target.js";
 import {
@@ -154,7 +155,7 @@ describe("the ignore list", () => {
 
   it("refuses as unavailable when EVERY private name is ignored, unless --allow-all-ignored (N4)", () => {
     const script = (): ScriptedSeams =>
-      new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault", "b/zeta"])]);
+      new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/vault", "b/zeta"])]);
     const ignoreAll = parseIgnoreList("vault\nzeta\n");
     const refused = checkPrivateNames(script(), TARGET, [{ field: "body", text: "vault" }], false, ignoreAll);
     expect(refused.result).toBe("unavailable");
@@ -166,7 +167,7 @@ describe("the ignore list", () => {
   });
 
   it("reports the list's size and owner count, and never a name (N13)", () => {
-    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault", "Acme/other", "b/zeta"])]);
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/vault", "Acme/other", "b/zeta"])]);
     const check = checkPrivateNames(seams, TARGET, [{ field: "body", text: "clean" }], false);
     expect(check.listSize).toBe(3);
     expect(check.owners).toBe(2);
@@ -177,7 +178,7 @@ describe("the ignore list", () => {
   });
 
   it("marks an ignored hit, and a check with only ignored hits is clean but reports them", () => {
-    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/other", "acme/vault"])]);
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/other", "acme/vault"])]);
     const check = checkPrivateNames(seams, TARGET, [{ field: "body", text: "vault" }], false, parseIgnoreList("vault"));
     expect(check.result).toBe("clean");
     expect(check.hits).toEqual([{ field: "body", line: 1, index: 2, normalised: false, ignored: true }]);
@@ -226,7 +227,7 @@ describe("the private-name reads, fail closed", () => {
     }
     // And through the verdict: unavailable, never a clean read of unrelated text.
     const check = checkPrivateNames(
-      new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault", "secretco/"])]),
+      new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/vault", "secretco/"])]),
       TARGET,
       [{ field: "body", text: "unrelated text" }],
       false,
@@ -269,18 +270,57 @@ describe("checkPrivateNames -- the verdict a verb acts on", () => {
     expect(seams.calls).toHaveLength(0);
   });
 
-  it("skips a private or internal target without reading the list", () => {
-    for (const value of ["private", "internal"]) {
-      const seams = new ScriptedSeams([visibility({ visibility: value })]);
+  it("skips a private target without reading the list", () => {
+    const seams = new ScriptedSeams([visibility({ visibility: "private" })]);
+    const check = checkPrivateNames(seams, TARGET, body, false);
+    expect(check.result).toBe("skipped-private-target");
+    expect(check.targetVisibility).toBe("private");
+    expect(seams.calls).toHaveLength(1);
+  });
+
+  // zheref/nen#363, Feitan F9: an internal repository is readable by the
+  // whole enterprise, so it is checked like a public one.
+  it("checks an INTERNAL target like a public one", () => {
+    const seams = new ScriptedSeams([visibility({ visibility: "internal" }), FULL_REACH_ROW, page(1, ["acme/vault"])]);
+    const check = checkPrivateNames(seams, TARGET, body, false);
+    expect(check.result).toBe("refused");
+    expect(check.targetVisibility).toBe("internal");
+  });
+
+  // zheref/nen#363, Feitan F7: a list the credential cannot be shown to have
+  // in full is a refusal, never a pass against the names it happened to get.
+  describe("the credential's reach -- X-OAuth-Scopes", () => {
+    const scopes = (headers: string): ScriptedCall => ({ match: "gh api -i user", result: { stdout: `HTTP/2.0 200 OK\n${headers}\n{"login":"me"}` } });
+    it("a classic token with 'repo' reads the list", () => {
+      const seams = new ScriptedSeams([visibility({ visibility: "public" }), scopes("X-OAuth-Scopes: read:org, repo, workflow\n"), page(1, ["acme/other"])]);
+      expect(checkPrivateNames(seams, TARGET, body, false).result).toBe("clean");
+    });
+    it("a scopes header WITHOUT 'repo' is unavailable, and the list is never read", () => {
+      const seams = new ScriptedSeams([visibility({ visibility: "public" }), scopes("X-OAuth-Scopes: public_repo, read:org\n")]);
       const check = checkPrivateNames(seams, TARGET, body, false);
-      expect(check.result).toBe("skipped-private-target");
-      expect(check.targetVisibility).toBe(value);
-      expect(seams.calls).toHaveLength(1);
-    }
+      expect(check.result).toBe("unavailable");
+      expect(check.error).toMatch(/may be partial/);
+      expect(seams.calls).toHaveLength(2);
+    });
+    it("NO scopes header (a fine-grained, app or CI token) is unavailable", () => {
+      const seams = new ScriptedSeams([visibility({ visibility: "public" }), scopes("Content-Type: application/json\n")]);
+      const check = checkPrivateNames(seams, TARGET, body, false);
+      expect(check.result).toBe("unavailable");
+      expect(check.error).toMatch(/no X-OAuth-Scopes header/);
+      expect(blockingExit(check)).toBe(1);
+    });
+    it("a header-looking line in the BODY is not read as the header", () => {
+      const seams = new ScriptedSeams([visibility({ visibility: "public" }), scopes("Content-Type: application/json\n\nX-OAuth-Scopes: repo")]);
+      expect(checkPrivateNames(seams, TARGET, body, false).result).toBe("unavailable");
+    });
+    it("a scopes read that fails is unavailable", () => {
+      const seams = new ScriptedSeams([visibility({ visibility: "public" }), { match: "gh api -i user", result: { code: 1, stderr: "HTTP 401" } }]);
+      expect(checkPrivateNames(seams, TARGET, body, false).result).toBe("unavailable");
+    });
   });
 
   it("refuses a hit on a public target with exit 4, and its lines never carry the name", () => {
-    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/vault"])]);
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/vault"])]);
     const check = checkPrivateNames(seams, TARGET, body, false);
     expect(check.result).toBe("refused");
     expect(blockingExit(check)).toBe(PRIVATE_NAME_EXIT);
@@ -290,7 +330,7 @@ describe("checkPrivateNames -- the verdict a verb acts on", () => {
   });
 
   it("is clean on a public target with no hit, and prints nothing", () => {
-    const seams = new ScriptedSeams([visibility({ visibility: "public" }), page(1, ["acme/other"])]);
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/other"])]);
     const check = checkPrivateNames(seams, TARGET, body, false);
     expect(check.result).toBe("clean");
     expect(privateNameLines(check, TARGET)).toEqual([]);
@@ -301,7 +341,7 @@ describe("checkPrivateNames -- the verdict a verb acts on", () => {
       match: "gh api user/repos?visibility=private&per_page=100&page=1",
       result: { code: 1, stderr: "HTTP 401\u001b[2K\u001b[1Aforged\r" },
     };
-    const check = checkPrivateNames(new ScriptedSeams([visibility({ visibility: "public" }), failing]), TARGET, [], false);
+    const check = checkPrivateNames(new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, failing]), TARGET, [], false);
     expect(check.error).toContain("\u001b[2K");
     const human = privateNameLines(check, TARGET).join("\n");
     expect(human).not.toMatch(/[\u0000-\u0009\u000B-\u001F\u007F-\u009F]/);
@@ -317,7 +357,7 @@ describe("checkPrivateNames -- the verdict a verb acts on", () => {
     );
     expect(noVisibility.result).toBe("unavailable");
     expect(blockingExit(noVisibility)).toBe(1);
-    const emptyList = checkPrivateNames(new ScriptedSeams([visibility({ visibility: "public" }), page(1, [])]), TARGET, body, false);
+    const emptyList = checkPrivateNames(new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, [])]), TARGET, body, false);
     expect(emptyList.result).toBe("unavailable");
     expect(emptyList.error).toMatch(/EMPTY/);
     expect(privateNameLines(emptyList, TARGET).join("\n")).toMatch(/never a pass/);

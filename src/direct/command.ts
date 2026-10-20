@@ -1,4 +1,4 @@
-// src/direct/command.ts -- `nen direct registry|resolve`.
+// src/direct/command.ts -- `nen direct registry|resolve|matrix|answer`.
 //
 // The deterministic half of model direction. Hatsu's ruling of 2026-10-04: STABLE
 // ALIASES, REPLACEABLE VERSIONS. Given an issue's classification (languages and
@@ -13,13 +13,16 @@
 // and every vocabulary word it uses is read from the files --registry and
 // --taxonomy name, never written into this binary.
 //
-// Three verbs, one family, so a skill's whole mechanical loop is one noun:
+// Four verbs, one family, so a skill's whole mechanical loop is one noun:
 //   registry  validate the registry file, print what it says;
 //   resolve   resolve a classification to a recommendation, report any mismatch
 //             with the session, optionally record it;
+//   matrix    every (job, domain, language) answer at once, from that same
+//             resolver, for a consumer that renders the whole table (#426);
 //   answer    write the maintainer's picker answer into that record afterwards.
-// Each lives in its own module beside this one (./registry-verb.ts and
-// ./resolve-verb.ts, over ./registry.ts and ./resolve.ts); this file is the
+// Each lives in its own module beside this one (./registry-verb.ts,
+// ./resolve-verb.ts, ./matrix-verb.ts and ./answer-verb.ts, over ./registry.ts,
+// ./resolve.ts, ./matrix.ts and ./record.ts); this file is the
 // family's registration, its usage text and its dispatch.
 //
 // EXIT CODES (docs/USAGE.md, "Exit codes"): 0 an answer (a mismatch is an
@@ -27,6 +30,7 @@
 
 import { requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
 import { runAnswer } from "./answer-verb.js";
+import { runMatrix } from "./matrix-verb.js";
 import { runRegistry } from "./registry-verb.js";
 import { runResolve } from "./resolve-verb.js";
 
@@ -38,6 +42,8 @@ usage:
                       --kind <kind> [--role <role>] [--labels <a,b>] [--lang <a,b>] [--job <c,d>]
                       [--surface <s|unread>] [--model <alias|unread>] [--effort <level|unread>]
                       [--record <effort-id>] [--json]
+  nen direct matrix   --registry <path> --taxonomy <path> --repo <path>
+                      [--job <c,d>] [--domain <e,f>] [--json]
   nen direct answer   --record <effort-id> --answer <continue|stop> --repo <path> [--json]
 
 The registry file (--registry) names ALIASES (roles such as the frontier author or
@@ -105,6 +111,32 @@ resolves against --repo's root.
       unknown language or job key, a surface or level the registry lacks (each names the
       valid set), or a refused --record.
 
+  nen direct matrix
+      Every (job, domain, language) answer at once, for a consumer that renders the
+      whole table: each job of the taxonomy, in each of its domains, in the shared
+      column ('*', an issue with no language) and each language column. It OWNS NO
+      RULE: each cell is that one job and that one language in that domain, answered
+      by resolve's own functions -- the pair (route, fallback, phase, cell key,
+      stand-in), the aggregate, the winner and runner-up resolved (surface, spelled
+      alias, restart line, interactive tools, snapshot quote, live lookup) and the
+      effort.
+      Whether a job can be in a domain at all is step 1's answer over a bounded set
+      of WITNESS issues: the job alone, then with up to two other jobs; a kind no
+      rule names, then each kind a rule names; no role, then each named role; no
+      label, then one per pattern ('*:name' as 'ns:name', 'ns' suffixed when named). The first candidate that
+      derives a domain is printed as its witness (kind, role, labels, jobs, the rule
+      row), passable to 'resolve' as typed. Where it is the job alone
+      (witnessIsCell: true), one 'resolve' call on it reproduces every cell; a
+      witness that needed companions shares the domain and the job's own pair with
+      the cell, while the cell's winner, aggregate and effort stay that one job's.
+      A domain no candidate derives is 'unreachable', printed with no cells. A cell whose winner is a reviewer with no
+      stand-in is 'skipped' (no recommendation; 'resolve' refuses such an issue
+      alone). --job and --domain narrow the table to those keys (taxonomy order).
+      Exit 0 the matrix, 1 the failures 'resolve' gives (an invalid registry or
+      taxonomy, an unreadable workflow, a job the registry does not route, a job
+      with no weight -- each by name), 2 a missing flag or an unknown or empty
+      --job or --domain key (naming the valid set).
+
   nen direct answer
       Writes the maintainer's picker answer into the record 'resolve --record' filed, which
       exists before the picker runs: reads .nen/direct/<encoded id>.json under --repo (the
@@ -114,18 +146,20 @@ resolves against --repo's root.
       is not continue or stop, a missing flag or a refused --record is exit 2.
 
   --registry <path>    The model-direction registry file. Required.
-  --taxonomy <path>    The classification taxonomy file. Required by resolve.
+  --taxonomy <path>    The classification taxonomy file. Required by resolve and matrix.
   A flag that belongs to another verb of the family (--record on registry, --taxonomy
   on answer...) is a usage error, exit 2, naming the flag.
 
   --repo <path>        The checkout whose nen/workflow.json spells the aliases.
-                       Required by resolve; optional on registry, where it only
+                       Required by resolve and matrix; optional on registry, where it only
                        anchors a relative --registry (default: the current directory).
   --kind <kind>        The repository kind, verbatim from 'nen repo classify --json'.
   --role <role>        The repository role, verbatim from 'nen repo classify --json'.
   --labels <a,b>       The issue's labels, as GitHub reports them.
   --lang <a,b>         The language keys the issue carries (comma list; may be empty).
-  --job <c,d>          The job keys the issue carries (comma list; empty is undirectable).
+  --job <c,d>          The job keys the issue carries (comma list; empty is undirectable);
+                       on matrix, the jobs to enumerate (default: every job).
+  --domain <e,f>       matrix only: the domains to enumerate (default: every domain).
   --surface <s>        The surface the running session is on, or unread.
   --model <alias>      The model alias the running session is on, or unread.
   --effort <level>     The effort level the running session is at, or unread.
@@ -145,6 +179,7 @@ resolves against --repo's root.
 const VERB_FLAGS: Readonly<Record<string, readonly string[]>> = {
   registry: ["registry"],
   resolve: ["registry", "taxonomy", "lang", "job", "kind", "role", "labels", "surface", "model", "effort", "record"],
+  matrix: ["registry", "taxonomy", "job", "domain"],
   answer: ["record", "answer"],
 };
 
@@ -165,17 +200,18 @@ function refuseForeignFlags(subcommand: string, context: CommandContext): void {
 
 export const directCommand: Command = {
   name: "direct",
-  subcommands: ["registry", "resolve", "answer"],
-  summary: "Choose the model, surface and effort for an issue's classification: validate the registry, resolve a recommendation.",
+  subcommands: ["registry", "resolve", "matrix", "answer"],
+  summary: "Choose the model, surface and effort for an issue's classification: validate the registry, resolve a recommendation, enumerate the matrix.",
   usage: USAGE,
   flags: {
-    values: ["registry", "taxonomy", "lang", "job", "kind", "role", "labels", "surface", "model", "effort", "record", "answer"],
+    values: ["registry", "taxonomy", "lang", "job", "kind", "role", "labels", "surface", "model", "effort", "record", "answer", "domain"],
     booleans: [],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("direct", context.args, ["registry", "resolve", "answer"]);
+    const subcommand = requireSubcommand("direct", context.args, ["registry", "resolve", "matrix", "answer"]);
     refuseForeignFlags(subcommand, context);
     if (subcommand === "registry") return runRegistry(context);
+    if (subcommand === "matrix") return runMatrix(context);
     return subcommand === "resolve" ? runResolve(context) : runAnswer(context);
   },
 };

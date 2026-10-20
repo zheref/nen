@@ -6,15 +6,17 @@ import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbo
 const TARGET: Target = { owner: "zheref", repo: "nen", slug: "zheref/nen" };
 
 describe("editBodyArgv -- the argv a dry run prints IS the argv that runs", () => {
-  it("spells the write as 'pr edit <n> --repo <slug> --body-file <path>'", () => {
-    expect(editBodyArgv(TARGET, 12, "notes/body.md")).toEqual([
+  // zheref/nen#363: the body travels on STDIN, never as a path gh would re-read
+  // after the private-name guard checked the bytes.
+  it("spells the write as 'pr edit <n> --repo <slug> --body-file -'", () => {
+    expect(editBodyArgv(TARGET, 12)).toEqual([
       "pr",
       "edit",
       "12",
       "--repo",
       "zheref/nen",
       "--body-file",
-      "notes/body.md",
+      "-",
     ]);
   });
 });
@@ -76,28 +78,29 @@ describe("certifyPullRequest -- refuses (as a usage error) before any write when
 });
 
 describe("writePullRequestBody -- posts through the Runner seam", () => {
-  it("runs exactly one gh call with the caller's own path", () => {
+  it("runs exactly one gh call, handing it the body's bytes on stdin", () => {
     const seams = new ScriptedSeams([
-      { match: "gh pr edit 12 --repo zheref/nen --body-file notes/body.md", result: {} },
+      { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: {} },
     ]);
-    expect(() => writePullRequestBody(seams, TARGET, 12, "notes/body.md")).not.toThrow();
+    expect(() => writePullRequestBody(seams, TARGET, 12, "the new body\n")).not.toThrow();
     expect(seams.calls.length).toBe(1);
+    expect(seams.calls[0]?.stdin).toBe("the new body\n");
   });
 
   it("throws naming the object when gh refuses", () => {
     const seams = new ScriptedSeams([
-      { match: "gh pr edit 12 --repo zheref/nen --body-file notes/body.md", result: { code: 1, stderr: "HTTP 404: Not Found" } },
+      { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: { code: 1, stderr: "HTTP 404: Not Found" } },
     ]);
-    expect(() => writePullRequestBody(seams, TARGET, 12, "notes/body.md")).toThrow(/zheref\/nen#12/);
+    expect(() => writePullRequestBody(seams, TARGET, 12, "the new body\n")).toThrow(/zheref\/nen#12/);
   });
 
   it("throws when gh could not be started at all, rather than reading code -1 as a refusal", () => {
     const seams = new ScriptedSeams([
       {
-        match: "gh pr edit 12 --repo zheref/nen --body-file notes/body.md",
+        match: "gh pr edit 12 --repo zheref/nen --body-file -",
         result: { code: -1, stderr: "spawn gh ENOENT", spawnFailed: true },
       },
     ]);
-    expect(() => writePullRequestBody(seams, TARGET, 12, "notes/body.md")).toThrow(/ENOENT/);
+    expect(() => writePullRequestBody(seams, TARGET, 12, "the new body\n")).toThrow(/ENOENT/);
   });
 });

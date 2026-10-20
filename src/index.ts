@@ -60,6 +60,7 @@ import { checkTaxonomy } from "./schema/taxonomy.js";
 import { WORKFLOW_FILE } from "./schema/workflow.js";
 import { GATES_FILE } from "./schema/source.js";
 import { runSchemaSet, SCHEMA_SET_FLAGS } from "./schema/set.js";
+import { CANON_VALUES_FILE, isMirrorReadError, mirrorRowFile } from "./schema/canonmirror.js";
 import { defaultSeams, type Seams } from "./seam/exec.js";
 import { BootstrapExit, runBootstrap } from "./supply/bootstrap.js";
 import { PROGRAM, VERSION } from "./version.js";
@@ -182,6 +183,22 @@ there is reported exactly as one carrying it nowhere, and the row names the
 migration -- run 'nen scaffold init --accept-detected', or copy it by hand. A
 schemas/ copy left beside a working nen/ one is a separate, harmless 'warn'
 row: delete it with git rm.
+
+The '.claude/rules/' row (zheref/nen#262) compares a consumer's canon mirror,
+as written by 'nen canon mirror generate', with the bindings in
+.claude/canon-values.yml. Absent bindings, or an empty or missing
+.claude/rules/, read ok. The values each token held in earlier committed
+revisions come from git, offline (GIT_NO_LAZY_FETCH=1; the one row that runs
+it, and only when the file and a generated mirror file are both present).
+Every comparison that could not be made is a 'warn' row reading NOT CHECKED:
+.md files none of which carries nen's marker (an older sync-canon mirror is
+not read), a shallow clone, a history or a revision git cannot read, no
+committed revision. It FAILs, naming the token, both values and the files,
+when a token's bound value is nowhere in the mirror while an earlier value of
+it is (a mirror generated before the rebind), or when an earlier value is a
+table cell or code span on a line beside the bound value or the token's name
+(a hardcoded column). An earlier value anywhere else is not a finding, nor is
+one that is any token's current value. Regenerate; never hand-edit (CON-13).
 
 A nen/gates.json key this build does not read is refused, never ignored
 (zheref/nen#310): the gates row fails naming every such key, the keys that
@@ -426,7 +443,7 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
           io.err(`${PROGRAM}: unknown 'schema' subcommand '${subcommand ?? "(none)"}'. Try 'schema check' or 'schema set'.`);
           return 2;
         }
-        return schemaCheck(repoFlag, json, io, parsed.booleans.has("ledger"));
+        return schemaCheck(repoFlag, json, io, parsed.booleans.has("ledger"), seams);
 
       default:
         io.err(`${PROGRAM}: unknown command '${command}'.`);
@@ -599,8 +616,8 @@ function schemaSet(argv: readonly string[], headRepo: string | null, headJson: b
   }
 }
 
-function schemaCheck(repoFlag: string | null, json: boolean, io: Io, ledger: boolean): number {
-  const report = checkTaxonomy({ repoFlag, ledger });
+function schemaCheck(repoFlag: string | null, json: boolean, io: Io, ledger: boolean, seams: Seams): number {
+  const report = checkTaxonomy({ repoFlag, ledger, run: seams.run });
   // An unknown gates.json key is exit 2 (zheref/nen#310), as it is in
   // `nen pr ready`: the file asks for a gate this binary cannot apply.
   // A repeated key (Feitan F3) is refused the same way.
@@ -638,11 +655,14 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io, ledger: boo
     if (check.note !== null) io.out(`        ^ ${check.note}`);
   }
   if (!report.ok) {
-    // THREE FAILURES, THREE SENTENCES -- exhaustive, because `report.ok` is
+    // FOUR FAILURES, FOUR SENTENCES -- exhaustive, because `report.ok` is
     // false exactly when some REQUIRED check failed: a file that could not be
     // read, `nen/workflow.json` itself (never required unless present and
-    // malformed), or a policy POINTER row that loaded and failed on what it
-    // names (below).
+    // malformed), a policy POINTER row that loaded and failed on what it
+    // names (below), or the `.claude/rules/` canon mirror row (zheref/nen#262),
+    // which FAILs on a finding or on a bindings file or mirror directory it
+    // could not read. The first three are one if/else chain; the mirror's
+    // sentence is independent of them and printed after.
     //
     // The second exists because `nen/workflow.json` is the one file that DOES
     // have a built-in default. Every sentence below rests on "nen has no
@@ -665,9 +685,13 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io, ledger: boo
     // contract -- zheref/nen#300, Nobunaga N1). It gets its own sentence.
     const failedChecks = report.checks.filter((check): boolean => !check.ok && check.required);
     const isPolicyPointer = (file: string): boolean => file.startsWith(`${WORKFLOW_FILE}#`);
+    // The canon mirror row (zheref/nen#262) is not a taxonomy file either: it
+    // gets its own sentence, below and independent of these three.
+    const mirrorRow = mirrorRowFile();
     const unreadable = failedChecks.some(
       (check): boolean =>
         check.file !== WORKFLOW_FILE &&
+        check.file !== mirrorRow &&
         !isPolicyPointer(check.file) &&
         !(check.file === GATES_FILE && refusedGates),
     );
@@ -684,6 +708,14 @@ function schemaCheck(repoFlag: string | null, json: boolean, io: Io, ledger: boo
     } else if (pointerFailed) {
       io.err(
         `${PROGRAM}: '${WORKFLOW_FILE}' loaded, and it names a deploy destination nen/contract.json does not declare or mark nonProduction -- the row above says which.`,
+      );
+    }
+    const mirrorFailed = failedChecks.find((check): boolean => check.file === mirrorRow);
+    if (mirrorFailed !== undefined) {
+      io.err(
+        isMirrorReadError(mirrorFailed.detail)
+          ? `${PROGRAM}: the '${mirrorRow}' row could not read its inputs -- the row above says which. Nothing was compared.`
+          : `${PROGRAM}: the generated '${mirrorRow}' mirror does not agree with '${CANON_VALUES_FILE}' -- the row above names each token, both values and the files. Regenerate it with 'nen canon mirror generate'; never hand-edit a mirror file (CON-13).`,
       );
     }
     if (report.duplicateKeys.length > 0) {

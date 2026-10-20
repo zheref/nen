@@ -13,8 +13,9 @@ import { botLoginArgv, collaboratorArgv, prAndKnownBotsArgv, requestBotReviewsAr
 import { requestReviewsArgv } from "./reviewers.js";
 import { botNodesArgv, commitArgv, gatesAtArgv, requestTimelineArgv } from "./round_ceiling.js";
 import { markReadyArgv, readDraftStateArgv } from "./markready.js";
-import { prCommand } from "./command.js";
+import { PR_FLAGS, PR_SUBCOMMAND_FLAGS, PR_SUBCOMMANDS, PR_TOKEN_ENV_ADVICE_KEYS, THREADS_ACTION_FLAGS, prCommand, prFlagOwners } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
+import { FULL_REACH_ROW, privateListRow, PRIVATE_LIST_PAGE, SCOPES_CALL, UNREADABLE_PRIVATE_LIST, visibilityRow, withPrivateTarget } from "../issue/privacy.testkit.js";
 
 /** A throwaway file, for edit-body's --body-file. */
 function tempFile(name: string, contents: string): string {
@@ -43,13 +44,34 @@ const STUB_SEAMS: Seams = {
   platform: "linux",
 };
 
+/** The `pr` subcommands that run the private-name guard (zheref/nen#363). */
+function runsPrivateNameGuard(argv: readonly string[]): boolean {
+  if (argv[0] !== "pr") return false;
+  if (argv[1] === "edit-body" || argv[1] === "open") return true;
+  return argv[1] === "threads" && (argv[2] === "reply" || argv[2] === "settle");
+}
+
+/**
+ * THE DEFAULT PRIVATE-NAME GUARD ANSWER (zheref/nen#363), for every test that
+ * is not about it: ../issue/privacy.testkit.ts's withPrivateTarget, applied to
+ * a guarded subcommand's --target. The guard's own describe block passes
+ * `"scripted"` and scripts the reads itself.
+ */
+function withGuardDefault(argv: readonly string[], seams: Seams): Seams {
+  const at = argv.indexOf("--target");
+  const slug = at >= 0 ? argv[at + 1] : undefined;
+  return slug === undefined || !runsPrivateNameGuard(argv) ? seams : withPrivateTarget(seams, slug);
+}
+
 // DRIVES THE REAL `runFamily` (../index.ts), not a hand-copy of its
 // error-to-exit-code mapping (review finding).
 async function capture(
   argv: readonly string[],
   repoFlag: string | null,
   seams: Seams = STUB_SEAMS,
+  guard: "private-target" | "scripted" = "private-target",
 ): Promise<{ code: number; out: string[]; err: string[] }> {
+  if (guard === "private-target") seams = withGuardDefault(argv, seams);
   const out: string[] = [];
   const err: string[] = [];
   const io: Io = {
@@ -1039,6 +1061,56 @@ describe("nen pr fetch/next-blocker/cascade-main/retarget/request-reviews -- CLI
       // own sasuke is still owed a round, which is only reachable if the
       // gates FILE was what parameterised the verdict.
       expect(result.out.join("\n")).toMatch(/sasuke/);
+    });
+
+    // zheref/nen#372: without --gates, the reviewer identities come from the
+    // BASE as well -- the checkout's own file, in a worktree the PR's head,
+    // cannot name its own reviewers. The same snapshot as above: alt's
+    // reviewers approved, bankai's are owed.
+    it("without --gates, reads the reviewer identities at the BASE: a head carrying its own reviewer set does not clear its round, and a base with none is refused", async () => {
+      const altGates = readFileSync(join(ALT_REPO, "nen", "gates.json"), "utf8");
+      const bankaiGates = readFileSync(join(BANKAI_REPO, "nen", "gates.json"), "utf8");
+      const checkout = mkdtempSync(join(tmpdir(), "nen-372-"));
+      mkdirSync(join(checkout, "nen"));
+      writeFileSync(join(checkout, "nen", "gates.json"), altGates);
+      const script = (atBase: string | null): ScriptedCall[] => {
+        const [view, ...rest] = greenAltApprovedScript();
+        const viewJson = JSON.parse(String(view?.result.stdout)) as Record<string, unknown>;
+        const contents: ScriptedCall =
+          atBase === null
+            ? { match: "gh api repos/o/n/contents/nen/gates.json?ref=base123", result: { code: 1, stderr: "HTTP 404" } }
+            : {
+                match: "gh api repos/o/n/contents/nen/gates.json?ref=base123",
+                result: { stdout: JSON.stringify({ type: "file", encoding: "base64", content: Buffer.from(atBase).toString("base64") }) },
+              };
+        return [{ match: view?.match ?? "", result: { stdout: JSON.stringify({ ...viewJson, baseRefOid: "base123" }) } }, ...rest, contents];
+      };
+      const argv = ["pr", "next-blocker", "--target", "o/n", "--pr", "9"];
+      const atBase = await capture(argv, checkout, new ScriptedSeams(script(bankaiGates)));
+      expect(atBase.code).toBe(1);
+      expect(atBase.out[0]).toBe("#9: owed-round");
+      expect(atBase.out.join("\n")).toMatch(/sasuke/);
+      expect(atBase.out.join("\n")).not.toMatch(/warning: gate inputs read from the LOCAL/);
+      // --json says where the identities came from (Feitan 5).
+      const json = await capture([...argv, "--json"], checkout, new ScriptedSeams(script(bankaiGates)));
+      const parsed = JSON.parse(json.out.join("\n")) as { kind: string; identities: { path: string; read: string } };
+      expect(parsed.kind).toBe("owed-round");
+      expect(parsed.identities).toEqual({ path: "o/n@base123:nen/gates.json", read: "base" });
+      // --gates naming the checkout's OWN file is the head's: read at the base too (Nobunaga 10).
+      const own = await capture([...argv, "--gates", "nen/gates.json"], checkout, new ScriptedSeams(script(bankaiGates)));
+      expect(own.out[0]).toBe("#9: owed-round");
+      expect(own.out.join("\n")).not.toMatch(/warning: gate inputs read from the LOCAL/);
+      // The base declaring NONE never applies the checkout's file: a refusal, exit 2 (Feitan 1).
+      const absent = await capture(argv, checkout, new ScriptedSeams(script(null)));
+      expect(absent.code).toBe(2);
+      expect(absent.out).toEqual([]);
+      expect(absent.err.join("\n")).toMatch(
+        /no gate to apply: the pull request's base \(o\/n@base123:nen\/gates\.json\) declares no nen\/gates\.json/,
+      );
+      // A base file this build refuses: a refusal too, never the checkout's file (Feitan 2).
+      const refused = await capture(argv, checkout, new ScriptedSeams(script("{ not json")));
+      expect(refused.code).toBe(2);
+      expect(refused.err.join("\n")).toMatch(/no gate to apply: this nen cannot read the gate the pull request's base declares/);
     });
 
     // zheref/nen#8 item 4, on THIS verb: next-blocker shares `ready`'s
@@ -2037,18 +2109,18 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path],
       null,
-      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: {} }]),
+      new ScriptedSeams([CERTIFY_12, { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: {} }]),
     );
     expect(result.code).toBe(0);
     expect(result.out.join("\n")).toBe("replaced zheref/nen#12's body (29 byte(s))");
   });
 
-  it("--json carries the frozen six-field contract, written: true on a real run", async () => {
+  it("--json carries the six-field contract plus the guard's privateNameCheck (zheref/nen#363), written: true on a real run", async () => {
     const path = tempFile("body.md", "hello");
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--json"],
       null,
-      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: {} }]),
+      new ScriptedSeams([CERTIFY_12, { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: {} }]),
     );
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out.join("\n"))).toEqual({
@@ -2058,6 +2130,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
       bytes: 5,
       written: true,
       dryRun: false,
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
     });
   });
 
@@ -2072,7 +2145,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     );
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      `would run: gh pr edit 12 --repo zheref/nen --body-file ${path}`,
+      "would run: gh pr edit 12 --repo zheref/nen --body-file -",
       "target: zheref/nen",
       "number: 12",
       "bytes: 28",
@@ -2096,7 +2169,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     );
     expect(result.code).toBe(0);
     expect(result.out).toEqual([
-      `would run: gh pr edit 12 --repo zheref/nen --body-file ${path}`,
+      "would run: gh pr edit 12 --repo zheref/nen --body-file -",
       "target: zheref/nen",
       "number: 12",
       "bytes: 31",
@@ -2105,7 +2178,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     ]);
   });
 
-  it("--dry-run --json carries dryRun: true, written: false, and no other fields", async () => {
+  it("--dry-run --json carries dryRun: true, written: false, the guard's verdict, and no other fields", async () => {
     const path = tempFile("body.md", "hi");
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path, "--dry-run", "--json"],
@@ -2120,6 +2193,7 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
       bytes: 2,
       written: false,
       dryRun: true,
+      privateNameCheck: { result: "skipped-private-target", targetVisibility: "private", listSize: null, owners: null, hits: [], error: null },
     });
   });
 
@@ -2213,16 +2287,18 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     const result = await capture(
       ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", path],
       null,
-      new ScriptedSeams([CERTIFY_12, { match: `gh pr edit 12 --repo zheref/nen --body-file ${path}`, result: { code: 1, stderr: "HTTP 500" } }]),
+      new ScriptedSeams([CERTIFY_12, { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: { code: 1, stderr: "HTTP 500" } }]),
     );
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/could not replace zheref\/nen#12's body/);
   });
 
-  it("refuses --dry-run on any subcommand other than edit-body", async () => {
+  it("refuses --dry-run on any subcommand that does not read it, naming all five that do", async () => {
     const result = await capture(["pr", "ready", "--dry-run"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/--dry-run is only read by 'pr edit-body'/);
+    expect(result.err.join("\n")).toContain(
+      "--dry-run is only read by 'pr request-reviews', 'pr edit-body', 'pr mark-ready', 'pr threads' and 'pr open'.",
+    );
   });
 
   it("refuses --body-file on any subcommand other than edit-body", async () => {
@@ -2683,7 +2759,7 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     const seams = new ScriptedSeams([]);
     const result = await capture([...base, "--token-env", "MY_TOKEN"], null, seams);
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("--token-env is only read by 'pr ready'; mark-ready runs on gh's own credential");
+    expect(result.err.join("\n")).toContain("--token-env is only read by 'pr ready'; mark-ready runs on whatever credential gh resolves");
     expect(seams.calls.length).toBe(0);
   });
 
@@ -2796,5 +2872,281 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     const result = await capture(["pr", "retarget", "--target", "acme/widgets", "--pr", "1", "--base", "main", "--dry-run"], null);
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toMatch(/'pr mark-ready'/);
+  });
+});
+
+// zheref/nen#351: every `pr` subcommand refuses, at exit 2 and before any gh
+// call, each family flag it does not read -- naming the subcommands that do.
+// An empty ScriptedSeams throws on its first call, so `calls.length === 0`
+// proves the refusal came first.
+describe("the family's one flag guard (zheref/nen#351)", () => {
+  const BODY = tempFile("body.md", "## How to verify\n\nRun it.\n");
+  const TITLE = tempFile("title.txt", "A title\n");
+  const SETTLE = tempFile("settle.json", JSON.stringify([{ thread: "T1", body: "done" }]));
+  const REQUIREMENTS = tempFile("requirements.json", JSON.stringify([{ name: "how to verify", pattern: "## How to verify" }]));
+
+  // Each MUTATING subcommand at an invocation that is otherwise complete, so
+  // without the guard it would go on to a gh (or git) call.
+  const MUTATING: readonly (readonly [string, readonly string[]])[] = [
+    ["cascade-main", ["pr", "cascade-main", "--no-push"]],
+    ["retarget", ["pr", "retarget", "--target", "zheref/nen", "--pr", "12", "--base", "main"]],
+    ["request-reviews", ["pr", "request-reviews", "--target", "zheref/nen", "--pr", "12", "--add-reviewers", "octocat"]],
+    ["edit-body", ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY]],
+    ["mark-ready", ["pr", "mark-ready", "--target", "zheref/nen", "--pr", "12"]],
+    ["threads", ["pr", "threads", "reply", "--target", "zheref/nen", "--pr", "12", "--thread", "T1", "--body-file", BODY]],
+    ["threads", ["pr", "threads", "resolve", "--target", "zheref/nen", "--pr", "12", "--thread", "T1"]],
+    ["threads", ["pr", "threads", "settle", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE]],
+    ["open", ["pr", "open", "--target", "zheref/nen", "--base", "main", "--title-file", TITLE, "--body-file", BODY]],
+    ["merge", ["pr", "merge", "zheref/example#9", "--release-unit", "--requirements-from", REQUIREMENTS]],
+    ["merge", ["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS]],
+  ];
+
+  for (const [subcommand, argv] of MUTATING) {
+    const label = argv.slice(1, subcommand === "threads" ? 3 : 2).join(" ");
+
+    it(`refuses --token-env on 'pr ${label}' at exit 2 with zero calls, naming 'pr ready'`, async () => {
+      const seams = new ScriptedSeams([]);
+      const result = await capture([...argv, "--token-env", "NARROW_TOKEN"], tmpdir(), seams);
+      expect(result.code).toBe(2);
+      const err = result.err.join("\n");
+      expect(err).toContain(`--token-env is not read by 'pr ${label}'.`);
+      expect(err).toContain("--token-env is only read by 'pr ready';");
+      expect(seams.calls.length).toBe(0);
+    });
+
+    it(`refuses --gh-repo on 'pr ${label}' at exit 2 with zero calls, naming 'pr ready'`, async () => {
+      const seams = new ScriptedSeams([]);
+      const result = await capture([...argv, "--gh-repo", "acme/widgets"], tmpdir(), seams);
+      expect(result.code).toBe(2);
+      const err = result.err.join("\n");
+      expect(err).toContain(`--gh-repo is not read by 'pr ${label}'.`);
+      expect(err).toContain("--gh-repo is only read by 'pr ready'");
+      expect(seams.calls.length).toBe(0);
+    });
+  }
+
+  it("says truthfully what credential each subcommand runs on instead", async () => {
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY], "edit-body runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login), never on the variable --token-env names."],
+      [["pr", "merge", "zheref/example#9", "--delivery", "--requirements-from", REQUIREMENTS], "merge judges readiness on GH_TOKEN and merges on whatever credential gh resolves"],
+      [["pr", "cascade-main"], "cascade-main fetches and pushes on git's own credential and calls no GitHub API"],
+      [["pr", "staleness", "--wakes-from", "w.json", "--last-activity", "2026-01-01T00:00:00Z", "--now", "2026-01-01T00:00:00Z"], "staleness reads local files only and calls no GitHub API"],
+    ];
+    for (const [argv, advice] of cases) {
+      const result = await capture([...argv, "--token-env", "T"], tmpdir(), new ScriptedSeams([]));
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n"), argv.join(" ")).toContain(advice);
+    }
+  });
+
+  it("points --gh-repo at --target on a subcommand that reads --target", async () => {
+    const result = await capture(["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--gh-repo", "acme/widgets"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("--gh-repo is only read by 'pr ready'; 'pr fetch' names its repository with --target <owner/name>.");
+  });
+
+  it("names EVERY subcommand that reads a flag, not only 'pr ready'", async () => {
+    const mark = ["pr", "mark-ready", "--target", "zheref/nen", "--pr", "12"];
+    const cases: readonly (readonly [readonly string[], string])[] = [
+      [[...mark, "--reviewers", "a"], "--reviewers is only read by 'pr ready' and 'pr next-blocker'."],
+      [[...mark, "--gates", "g.json"], "--gates is only read by 'pr ready' and 'pr next-blocker'."],
+      [[...mark, "--base", "main"], "--base is only read by 'pr body-check', 'pr retarget' and 'pr open'."],
+      [[...mark, "--body-file", BODY], "--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--from", SETTLE], "--from is only read by 'pr threads settle'."],
+      [["pr", "fetch", "--target", "zheref/nen", "--pr", "12", "--require-head", "abcdef1"], "--require-head is only read by 'pr ready', 'pr mark-ready' and 'pr merge --delivery'."],
+    ];
+    for (const [argv, message] of cases) {
+      const result = await capture(argv, null, new ScriptedSeams([]));
+      expect(result.code, argv.join(" ")).toBe(2);
+      expect(result.err.join("\n"), argv.join(" ")).toContain(message);
+    }
+  });
+
+  it("names every foreign flag at once, sorted, and never one the subcommand reads", async () => {
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY, "--dry-run", "--token-env", "T", "--gh-repo", "a/b"],
+      null,
+      new ScriptedSeams([]),
+    );
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err.indexOf("--gh-repo is not read")).toBeGreaterThanOrEqual(0);
+    expect(err.indexOf("--gh-repo is not read")).toBeLessThan(err.indexOf("--token-env is not read"));
+    for (const own of ["--target", "--pr", "--body-file", "--dry-run"]) expect(err).not.toContain(`${own} is not read`);
+  });
+
+  // Exhaustive, and derived from the parser's own spec: every family flag a
+  // subcommand's row does not declare is refused there, before any call.
+  for (const subcommand of PR_SUBCOMMANDS) {
+    it(`'pr ${subcommand}' refuses every family flag outside its own row (exit 2, zero calls)`, async () => {
+      const row = PR_SUBCOMMAND_FLAGS[subcommand] ?? {};
+      const own = new Set([...(row.values ?? []), ...(row.booleans ?? []), ...(row.lists ?? [])]);
+      const head = subcommand === "threads" ? ["pr", "threads", "list"] : subcommand === "merge" ? ["pr", "merge", "zheref/example#9"] : ["pr", subcommand];
+      const foreign: (readonly string[])[] = [
+        ...(PR_FLAGS.values ?? []).filter((flag): boolean => !own.has(flag)).map((flag): readonly string[] => [`--${flag}`, "x"]),
+        ...(PR_FLAGS.lists ?? []).filter((flag): boolean => !own.has(flag)).map((flag): readonly string[] => [`--${flag}`, "x"]),
+        ...(PR_FLAGS.booleans ?? []).filter((flag): boolean => !own.has(flag)).map((flag): readonly string[] => [`--${flag}`]),
+      ];
+      expect(foreign.length).toBeGreaterThan(0);
+      for (const extra of foreign) {
+        const seams = new ScriptedSeams([]);
+        const result = await capture([...head, ...extra], tmpdir(), seams);
+        const flag = (extra[0] ?? "").slice(2);
+        expect(result.code, `${subcommand} ${extra.join(" ")}`).toBe(2);
+        const subject = subcommand === "threads" ? "threads list" : subcommand;
+        expect(result.err.join("\n"), `${subcommand} ${extra.join(" ")}`).toContain(`--${flag} is not read by 'pr ${subject}'. --${flag} is only read by `);
+        expect(seams.calls.length, `${subcommand} ${extra.join(" ")}`).toBe(0);
+      }
+    });
+  }
+
+  // Feitan, SEC-7 (hanten round 1): args.ts hands every token after a bare
+  // `--` over as passthrough, which no 'pr' subcommand reads.
+  it("refuses tokens after a bare '--' at exit 2 with zero calls, naming the flag but never its value", async () => {
+    const seams = new ScriptedSeams([]);
+    const result = await capture(
+      ["pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", BODY, "--", "--token-env", "SECRET_VAR_NAME", "--gh-repo=acme/widgets"],
+      null,
+      seams,
+    );
+    expect(result.code).toBe(2);
+    const err = result.err.join("\n");
+    expect(err).toContain("'pr edit-body' reads nothing after a bare '--'");
+    expect(err).toContain("among them --token-env and --gh-repo");
+    expect(err).not.toContain("SECRET_VAR_NAME");
+    expect(err).not.toContain("acme/widgets");
+    expect(seams.calls.length).toBe(0);
+  });
+
+  // Nobunaga 4 (hanten round 1): the threads action level names who reads the
+  // flag, and reports in the same message as the family level.
+  it("names the threads action that reads a flag, and every foreign flag of a threads call at once", async () => {
+    const resolve = await capture(["pr", "threads", "resolve", "--target", "zheref/nen", "--pr", "217", "--thread", "T1", "--body-file", BODY], null, new ScriptedSeams([]));
+    expect(resolve.code).toBe(2);
+    expect(resolve.err.join("\n")).toContain("--body-file is not read by 'pr threads resolve'. --body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'.");
+    const seams = new ScriptedSeams([]);
+    const list = await capture(["pr", "threads", "list", "--target", "zheref/nen", "--pr", "217", "--from", SETTLE, "--token-env", "T", "--thread", "T1"], null, seams);
+    expect(list.code).toBe(2);
+    const err = list.err.join("\n");
+    expect(err).toContain("--from is not read by 'pr threads list'. --from is only read by 'pr threads settle'.");
+    expect(err).toContain("--thread is not read by 'pr threads list'. --thread is only read by 'pr threads reply' and 'pr threads resolve'.");
+    expect(err).toContain("--token-env is not read by 'pr threads list'. --token-env is only read by 'pr ready';");
+    expect(seams.calls.length).toBe(0);
+  });
+
+  // Nobunaga 9 (hanten round 1): the form that reads it, not the one that refuses it.
+  it("names 'pr merge --delivery' for --require-head", () => {
+    expect(prFlagOwners("require-head")).toEqual(["'pr ready'", "'pr mark-ready'", "'pr merge --delivery'"]);
+  });
+
+  // Nobunaga 6 (hanten round 1): no default credential claim.
+  it("states --token-env advice for every subcommand but ready, and has no default", () => {
+    expect([...PR_TOKEN_ENV_ADVICE_KEYS].sort()).toEqual(PR_SUBCOMMANDS.filter((name): boolean => name !== "ready").sort());
+  });
+
+  // Nobunaga 5, BC-9 (hanten round 1): the derived tests above take both sides
+  // from PR_SUBCOMMAND_FLAGS, so an over-declared row would pass them all and
+  // bring back the silent ignore. This literal is the other side. A change to it
+  // must be matched by the subcommand's handler actually reading the flag.
+  it("declares exactly the flags each handler reads (literal snapshot)", () => {
+    expect(PR_SUBCOMMAND_FLAGS).toEqual({
+      ready: {
+        values: ["target", "pr", "gh-repo", "reviewers", "approvers", "round-policy", "exclude-run", "gates", "token-env", "require-head"],
+        booleans: ["explain", "require-base-gates"],
+        lists: ["exclude-check", "reviewer-login"],
+      },
+      staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
+      "body-check": { values: ["body-from", "requirements-from", "base"] },
+      fetch: { values: ["target", "pr"] },
+      "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
+      "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
+      retarget: { values: ["target", "pr", "base"] },
+      "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
+      "edit-body": { values: ["target", "pr", "body-file", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
+      "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
+      threads: { values: ["target", "pr", "thread", "body-file", "from", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
+      open: { values: ["target", "base", "title-file", "body-file", "head", "assignee", "private-names-ignore-file"], booleans: ["draft", "dry-run", "skip-private-name-check", "allow-all-ignored"] },
+      merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
+    });
+    const threadsRow = PR_SUBCOMMAND_FLAGS["threads"] ?? {};
+    const own = new Set([...(threadsRow.values ?? []), ...(threadsRow.booleans ?? [])].filter((flag): boolean => flag !== "target" && flag !== "pr"));
+    const actions = new Set(Object.values(THREADS_ACTION_FLAGS).flatMap((row): string[] => [...row.values, ...row.booleans]));
+    expect(own).toEqual(actions);
+  });
+
+  it("derives the parser spec as the union of the rows, and every flag in it has an owner", () => {
+    expect(prCommand.subcommands).toEqual(PR_SUBCOMMANDS);
+    expect(prCommand.flags).toBe(PR_FLAGS);
+    for (const flag of [...(PR_FLAGS.values ?? []), ...(PR_FLAGS.booleans ?? []), ...(PR_FLAGS.lists ?? [])]) {
+      expect(prFlagOwners(flag).length, flag).toBeGreaterThan(0);
+    }
+    // The spread zheref/nen#351 named is no longer the family's: --token-env
+    // and --gh-repo belong to 'pr ready' alone.
+    expect(prFlagOwners("token-env")).toEqual(["'pr ready'"]);
+    expect(prFlagOwners("gh-repo")).toEqual(["'pr ready'"]);
+  });
+});
+
+describe("nen pr edit-body -- the private-name guard (zheref/nen#363)", () => {
+  const CERTIFY_12: ScriptedCall = { match: "gh api repos/zheref/nen/pulls/12", result: { stdout: JSON.stringify({ number: 12 }) } };
+  const LIST = privateListRow(["acme/hidden-thing", "acme/vault"]);
+  const WRITE: ScriptedCall = { match: "gh pr edit 12 --repo zheref/nen --body-file -", result: {} };
+  const argvFor = (body: string, ...extra: string[]): string[] => [
+    "pr", "edit-body", "--target", "zheref/nen", "--pr", "12", "--body-file", tempFile("body.md", body), ...extra,
+  ];
+
+  it("a private name on a PUBLIC target refuses with exit 4 after certifying, before any write, and never prints the name", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST]);
+    const result = await capture(argvFor("moved out of the vault"), null, seams, "scripted");
+    expect(result.code).toBe(4);
+    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      "gh api repos/zheref/nen/pulls/12",
+      "gh api repos/zheref/nen",
+      SCOPES_CALL,
+      PRIVATE_LIST_PAGE,
+    ]);
+    const all = [...result.out, ...result.err].join("\n");
+    expect(all).toContain("nen pr edit-body: body:1: private repository #2");
+    expect(all).not.toMatch(/vault/i);
+  });
+
+  it("--dry-run refuses the same way, and --json carries the verdict with written: false", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, LIST]);
+    const result = await capture(argvFor("the vault", "--dry-run", "--json"), null, seams, "scripted");
+    expect(result.code).toBe(4);
+    const report = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(report["written"]).toBe(false);
+    expect(report["dryRun"]).toBe(true);
+    expect((report["privateNameCheck"] as { result: string }).result).toBe("refused");
+  });
+
+  it("a PRIVATE target is not checked -- the list is never read, and the body is written from stdin", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "private"), WRITE]);
+    const result = await capture(argvFor("the vault\n"), null, seams, "scripted");
+    expect(result.code).toBe(0);
+    expect(seams.calls.some((call): boolean => call.args.join(" ").startsWith("api user/repos"))).toBe(false);
+    expect(seams.calls[seams.calls.length - 1]?.stdin).toBe("the vault\n");
+  });
+
+  it("an unreadable private list fails closed (exit 1) and writes nothing", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, visibilityRow("zheref/nen", "public"), FULL_REACH_ROW, UNREADABLE_PRIVATE_LIST]);
+    const result = await capture(argvFor("anything"), null, seams, "scripted");
+    expect(result.code).toBe(1);
+    expect(result.err.join("\n")).toMatch(/nen pr edit-body: private-name check could not run/);
+    expect(seams.calls.some((call): boolean => call.args[0] === "pr")).toBe(false);
+  });
+
+  it("--skip-private-name-check reads nothing for the guard, writes, and is named", async () => {
+    const seams = new ScriptedSeams([CERTIFY_12, WRITE]);
+    const result = await capture(argvFor("the vault", "--skip-private-name-check"), null, seams, "scripted");
+    expect(result.code).toBe(0);
+    expect(result.err.join("\n")).toMatch(/SKIPPED by --skip-private-name-check/);
+  });
+
+  it("a missing --private-names-ignore-file is exit 2 before any gh call", async () => {
+    const seams = new ScriptedSeams([]);
+    const result = await capture(argvFor("x", "--private-names-ignore-file", "/no/such/ignore-file"), null, seams, "scripted");
+    expect(result.code).toBe(2);
+    expect(seams.calls).toEqual([]);
   });
 });

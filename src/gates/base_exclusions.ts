@@ -7,8 +7,8 @@
 // read `ready` on the strength of a ruling nobody merged. So the exclusions are
 // read from `nen/gates.json` AT THE BASE COMMIT GitHub reports for the pull
 // request (`baseRefOid`), the same move `nen pr merge --release-unit` makes for
-// `nen/workflow.json` (Feitan FEI-3). Reviewer identities keep their own
-// source; only the exclusions move.
+// `nen/workflow.json` (Feitan FEI-3). zheref/nen#372 moved the REST of the
+// file to the base too, through the same read: ./base_identities.ts.
 //
 // EVERY FAILURE HONOURS NOTHING, AND SAYS SO. A base that could not be read, a
 // base file that is not JSON, a base `checks.excluded` that does not validate:

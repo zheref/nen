@@ -24,6 +24,7 @@
 
 import {
   emit,
+  GLOBAL_FLAGS,
   requireRepoFlag,
   requireSubcommand,
   requireValue,
@@ -38,7 +39,7 @@ import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE }
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
-import { loadGateIdentities } from "../schema/gates.js";
+import { loadGateIdentities, type GateIdentities } from "../schema/gates.js";
 import { SchemaError } from "../schema/errors.js";
 import {
   BASE_GATES_PATH,
@@ -46,11 +47,14 @@ import {
   exclusionsAtBase,
   type BaseGatesRead,
 } from "../gates/base_exclusions.js";
+import { identitiesAtBase } from "../gates/base_identities.js";
 import { resolveDeclaredExclusions } from "../gates/predicates.js";
 import { declarationWarnings } from "../gates/ready.js";
 import { GH, must, redactRemoteCredentials, ToolError, type Seams } from "../seam/exec.js";
 import { parseTarget, type Target , TargetError} from "../github/target.js";
-import { PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
+import { classifyGatesPath, PR_READY_FLAGS, prReady, resolveIdentities } from "../verbs/pr_ready.js";
+import type { FlagSpec } from "../cli/args.js";
+import { conjoin } from "../cli/prose.js";
 import { checkBody, validateRequirements, BodyCheckError, type BodyRequirement } from "./bodycheck.js";
 import {
   checkDerivedBody,
@@ -94,6 +98,8 @@ import {
   type UnrecordedBot,
 } from "./bots.js";
 import { certifyPullRequest, editBodyArgv, writePullRequestBody } from "./editbody.js";
+import { blockingExit, blocksWrite, type CheckedText, type IgnoreList, type PrivateNameCheck } from "../issue/privacy.js";
+import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { LOGIN as OPEN_LOGIN, ME as OPEN_ME, OPEN_CONTRACT, openPullRequest } from "./open.js";
 import { plainLine } from "../cli/plain.js";
 import { exitCodeFor, markReady, SHA_PREFIX as MARK_READY_SHA_PREFIX, type MarkReadyReport } from "./markready.js";
@@ -140,7 +146,7 @@ function requirePr(context: CommandContext): number {
 }
 
 const USAGE = `nen pr ready --target <owner/name> --pr <n> [the same ready options below]
-nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>]
+nen pr ready <ref> [--explain] [--gh-repo <owner/name>] [--reviewers <a,b,c>] [--reviewer-login <name>=<login>]... [--approvers <a,b>] [--round-policy strict|bounded] [--exclude-run <id>] [--exclude-check <name>]... [--gates <path>] [--token-env <VAR>] [--require-head <sha>] [--require-base-gates]
 nen pr staleness --wakes-from <path> --last-activity <ISO> --now <ISO> [--ready] [--min-verified-wakes <n>] [--idle-minutes <n>]
 nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr fetch --target <owner/name> --pr <n>
@@ -148,13 +154,41 @@ nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,
 nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 nen pr retarget --target <owner/name> --pr <n> --base <branch>
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
-nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run]
+nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run] [PRIVATE-NAME FLAGS]
 nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
-nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json]
-nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json]
-nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--assignee <login>[,<login>...]] [--repo <path>] [--dry-run] [--json]
+nen pr threads list|reply|resolve --target <owner/name> --pr <n> [--thread <id>] [--body-file <path>] [--dry-run] [--json] [PRIVATE-NAME FLAGS: reply]
+nen pr threads settle --target <owner/name> --pr <n> --from <file.json> [--dry-run] [--json] [PRIVATE-NAME FLAGS]
+nen pr open --target <owner/name> --base <ref> --title-file <path> --body-file <path> [--head <branch>] [--draft] [--assignee <login>[,<login>...]] [--repo <path>] [--dry-run] [--json] [PRIVATE-NAME FLAGS]
+
+PRIVATE-NAME FLAGS (zheref/nen#363): [--skip-private-name-check]
+  [--private-names-ignore-file <path> [--allow-all-ignored]]. 'edit-body',
+  'threads reply', 'threads settle' and 'open' write caller text to GitHub,
+  and run the private-name guard 'nen issue' runs (see 'nen issue --help',
+  PRIVATE REPOSITORY NAMES) before the write -- on --dry-run too: the text
+  is compared against the credential's live private repository list, a
+  private repository named in text bound for a PUBLIC target exits 4 and
+  writes nothing, a check that could not run exits 1 (a credential whose
+  X-OAuth-Scopes lacks 'repo' included: its list may be partial), a private
+  target is not checked and an internal one is. The guard's stderr lines begin 'nen pr <subcommand>:'
+  and never print the name; --json adds 'privateNameCheck'. Fields checked:
+  'open' title and body, before any other call; 'edit-body' body, after the
+  certifying read; 'threads reply' body, before the walk; 'threads settle'
+  every entry's body (entry[<n>], from 1), after the file's own refusals and
+  before the walk. On 'threads', 4 is also 'no such thread' / 'the pull
+  request is not visible': a guard refusal is told apart by its stderr lines
+  and, under --json, by privateNameCheck.result "refused", which those
+  refusals never print. 'open' and 'edit-body' hand gh the checked bytes on
+  stdin ('--body-file -'), never the path.
 nen pr merge <n|owner/name#n|CODE#n> --release-unit --requirements-from <path> --repo <path> [--run] [--json]
 nen pr merge <n|owner/name#n|CODE#n> --delivery --requirements-from <path> --repo <path> [--require-head <sha>] [--run] [--json]
+
+Flags are PER SUBCOMMAND (zheref/nen#351). Every subcommand refuses, at exit
+2 and before any gh call, each flag it does not read -- another
+subcommand's flag exactly as a misspelt one, 'pr ready''s --token-env and
+--gh-repo included -- and the refusal names the subcommands that do read
+it. A threads action reads only its own action's flags, and tokens after a
+bare '--' are refused too: no subcommand forwards arguments. The global
+--repo, --json and --help are never refused.
 
 ready:
   Report a pull request's CON-32 readiness: the gate's verdict and every
@@ -237,13 +271,55 @@ ready:
                               file) and needs contents:read: a standing ruling
                               belongs there, with its reason, ruling date and
                               until, not in a flag.
-  --gates <path>              Read reviewer identities from this gates file
-                              instead of the target repo's nen/gates.json.
+  --gates <path>              Read every gate input but checks.excluded from
+                              this file -- the caller's word, used as given --
+                              instead of nen/gates.json at the PR's base.
                               A RELATIVE path is resolved against the --repo
                               root, NOT the current directory; pass an
                               absolute path for a file outside the target
-                              repository. The resolved path is what --explain
-                              and --json report.
+                              repository. A --gates naming the checkout's OWN
+                              nen/gates.json (any spelling, a hard link) is
+                              the head's file and is read at the base like
+                              the default; any other file inside the checkout
+                              may be head content, applied with a warning
+                              (meta.identities.read: local-fallback). The
+                              resolved path is what --explain and --json
+                              report.
+  THE GATES FILE IS THE BASE'S (zheref/nen#372). Without --gates, every input
+  nen/gates.json supplies -- every reviewers[] key (name, login_pattern,
+  review/round/enrolment_check_pattern, bounded_policy_exempt,
+  delivery_holistic_pass, approves_when_posted_at_head), default_approvers,
+  approval_policy, base_reviewers, round_quorum, round_policy, delivery,
+  dependabot_carve_out, checks.excluded -- is read at the PR's BASE commit
+  (contents:read), not from the --repo checkout (in a worktree the PR's own
+  head) unless the base cannot be READ: a PR cannot loosen its own gate.
+    base could not be read (403, network)  the checkout's file, warned
+                                           (read: local-fallback); 'pr merge'
+                                           and 'watch until --until ready'
+                                           refuse such a ready
+    base declares no nen/gates.json        --reviewers' own identities if
+                                           given (read: null), else NO
+                                           verdict: unevaluated, exit 1
+    base file this build refuses           NO verdict: unevaluated, exit 1
+                                           (upgrade nen)
+  The checkout carrying NO nen/gates.json (a head that deleted it) with
+  --reviewers reads the base all the same: a base file applies, --reviewers
+  narrowing it (read: base, warned); none at the base, the flags are the gate
+  (read: null); a base that could not be read leaves the flags unverified
+  (read: flags-unverified, refused like local-fallback); a refused base file
+  is no verdict. checks.excluded is never taken from the checkout. With
+  --gates naming a file outside the checkout, that file supplies the rest and
+  the base still supplies checks.excluded (read: gates-flag). 'watch until
+  --pr' and 'pr merge' run this same read.
+  --require-base-gates        No verdict unless the gate inputs were the
+                              base's: read base, gates-flag, or null (the
+                              base read, declaring none). Any other route --
+                              local-fallback, flags-unverified -- is
+                              unevaluated, exit 1, naming it. A ready on the
+                              checkout's file otherwise exits 0 like a
+                              base-judged one; pass this wherever the exit
+                              code is acted on (a script, a required check,
+                              an agent). 'watch until --pr' takes it too.
   --token-env <VAR>           Environment variable holding the token. Default
                               GH_TOKEN; never picked up ambiently.
   --require-head <sha>        Judge ONLY this commit (7-40 hex digits, a prefix
@@ -299,12 +375,17 @@ next-blocker:
   stays human. NOTE: the changelog.d/ fragment half of CON-33(a) is
   diff-shaped and not checked here; see ../pr/blocker.ts's header.
   --gates <path>              Read reviewer identities from this gates file
-                              instead of the target repo's nen/gates.json
+                              instead of nen/gates.json at the PR's base
                               -- the same flag 'ready' takes, through the same
                               resolver, so a checkout that ships no gates file
                               can still be evaluated. A RELATIVE path is
                               resolved against --repo, NOT the current
                               directory, exactly as it is for 'ready'.
+  Without --gates (or with one naming the checkout's own file), every input
+  is read at the PR's BASE, as 'ready' reads it (zheref/nen#372). A base that
+  could not be read falls back to the checkout's file, with a warning; a base
+  that declares no file, or one this build refuses, is exit 2. --json adds
+  identities { path, read }.
 
 cascade-main:
   Merges (never rebases) the trunk into the current branch and pushes on a
@@ -384,7 +465,7 @@ request-reviews:
 edit-body:
   Replaces the pull request's body OUTRIGHT with the file's bytes -- no
   trimming, no template, the file becomes the body exactly, through
-  'gh pr edit --body-file'. --body-file is required; there is no inline
+  'gh pr edit --body-file -', the bytes on stdin. --body-file is required; there is no inline
   --body. Refused (exit 2): a missing or unreadable --body-file, an empty
   or whitespace-only one, a non-numeric/non-positive --pr. The number is
   CERTIFIED as a pull request before any write -- unlike 'nen issue
@@ -394,10 +475,11 @@ edit-body:
   anything changes, worded so it does not claim the number IS an issue --
   only that it is not a pull request -- and points at 'nen issue edit-body'
   next. --dry-run still performs that certifying read (this verb is not
-  network-free), then prints the target, the number, the byte count and
-  the first and last line of the body instead of writing. --json:
-  '{ contract: "nen.pr.edit-body/v0.1", target, number, bytes, written,
-  dryRun }'.
+  network-free) and the private-name guard (PRIVATE-NAME FLAGS above), then
+  prints the target, the number, the byte count and the first and last line
+  of the body instead of writing. --json: '{ contract: "nen.pr.edit-body/v0.1",
+  target, number, bytes, written, dryRun, privateNameCheck }'. Exit 4: the
+  guard refused, nothing written.
 
 mark-ready:
   Move ONE existing draft pull request out of draft, through GitHub's
@@ -499,7 +581,9 @@ open:
   --repo (default: the current directory).
   --base <ref>         the pull request's base branch on GitHub.
   --title-file <path>  the title: the file's first non-empty line.
-  --body-file <path>   the body, handed to 'gh pr create --body-file' as is.
+  --body-file <path>   the body, read once, checked by the private-name guard
+                       (PRIVATE-NAME FLAGS above) and handed to 'gh pr create'
+                       on stdin ('--body-file -'), never by path.
   --head <branch>      the head branch; default the checked-out branch.
   --draft              open it as a draft.
   --assignee <login>[,<login>...]  assign the pull request as it is opened
@@ -525,7 +609,10 @@ open:
   dry run; existing true on the exit-1 case, where they name the pull request
   already there; assignees the validated logins asked for ([] without
   --assignee); me the login '@me' resolved to, else null; assigned the
-  logins the read-back found, null when nothing was opened or read back.
+  logins the read-back found, null when nothing was opened or read back --
+  then privateNameCheck. EXIT 4, nothing asked and nothing opened: the
+  private-name guard found a private repository named in the title or body;
+  '{ contract, dryRun, opened: false, privateNameCheck }' under --json.
 
 merge:
   THE BOUNDED MERGE THIS BINARY PERFORMS, in exactly two forms: a release
@@ -580,7 +667,9 @@ merge:
   and --delivery, a flag merge does not read, --require-head, a bad ref,
   an unknown or unreadable product code, missing --requirements-from,
   --repo's origin naming a different repository than the ref or the code
-  resolves to, or an unknown flag such as --admin/--auto);
+  resolves to, or an unknown flag such as --admin/--auto -- unknown to
+  'pr merge' itself: a flag another 'pr' subcommand reads is refused
+  here too, as it is on every subcommand, zheref/nen#351);
   5 gh REFUSED the merge (branch protection, a required review, ...) --
   its stderr and the exact command are printed for a human; 6 gh could
   not be RUN at all (not on PATH, no permission) -- distinct from 5,
@@ -858,124 +947,250 @@ function ready(context: CommandContext): Promise<number> {
   );
 }
 
+// ── which flags each subcommand reads (zheref/nen#351) ──────────────────────
+
+/**
+ * WHAT EACH `pr` SUBCOMMAND ACTUALLY READS -- the ONE declaration the family's
+ * parser spec and its foreign-flag refusal are both derived from, in the shape
+ * ../issue/command.ts's ISSUE_SUBCOMMAND_FLAGS set for the issue family.
+ *
+ * WHY. A family shares one parser spec, so every flag any `pr` subcommand
+ * declares parsed cleanly for ALL thirteen of them. `pr ready`'s whole set was
+ * spread onto the family (`...PR_READY_FLAGS.values`), and only some foreign
+ * flags were refused, one hand-written guard at a time -- so `pr edit-body`,
+ * `pr request-reviews`, `pr threads` and `pr open` accepted `--token-env` and
+ * `--gh-repo` and ignored them (zheref/nen#351; Feitan F1 and Nobunaga N1 on
+ * #345, which closed it for `pr mark-ready` alone). The sharpest case is
+ * `--token-env`: a caller naming a narrower credential still wrote with gh's
+ * own, and nothing said so.
+ *
+ * So ownership is no longer written as a list of refusals. Each subcommand
+ * declares the flags it reads, once, here; the parser gets their UNION (so a
+ * flag cannot exist without an owner), and a flag parsed but absent from the
+ * executing subcommand's own row is refused BY CONSTRUCTION, at exit 2 and
+ * before any gh call, naming the subcommands that do read it. Adding a flag to
+ * one row adds it to the parser and to every sibling's refusal in one edit.
+ *
+ * THE GLOBAL FLAGS ARE NOT LISTED and are never foreign: `--repo`, `--json`
+ * and `--help` are ../cli/command.ts's, merged into every family by
+ * mergeFlags. `threads` lists every flag ANY of its actions reads; the
+ * per-action refusal (THREADS_ACTION_FLAGS below) narrows it further.
+ */
+export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
+  // `pr ready`'s flags pass through to ../verbs/pr_ready.ts's prReady(), which
+  // reads PR_READY_FLAGS and the --target/--pr aliases (zheref/nen#383).
+  ready: {
+    values: ["target", "pr", ...PR_READY_FLAGS.values],
+    booleans: [...PR_READY_FLAGS.booleans],
+    lists: [...PR_READY_FLAGS.lists],
+  },
+  staleness: { values: ["wakes-from", "last-activity", "now", "min-verified-wakes", "idle-minutes"], booleans: ["ready"] },
+  "body-check": { values: ["body-from", "requirements-from", "base"] },
+  fetch: { values: ["target", "pr"] },
+  "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
+  "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
+  retarget: { values: ["target", "pr", "base"] },
+  "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
+  // The private-name guard's three flags ride every row whose subcommand
+  // writes caller text (zheref/nen#363): edit-body, threads (reply, settle)
+  // and open.
+  "edit-body": { values: ["target", "pr", "body-file", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
+  "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },
+  threads: { values: ["target", "pr", "thread", "body-file", "from", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
+  open: {
+    values: ["target", "base", "title-file", "body-file", "head", "assignee", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["draft", "dry-run", ...PRIVATE_NAME_FLAGS.booleans],
+  },
+  // --require-head is read by --delivery only; doMerge refuses it with
+  // --release-unit, naming the form that reads it.
+  merge: { values: ["requirements-from", "require-head"], booleans: ["release-unit", "delivery", "run"] },
+};
+
+/** The subcommand names, read off the table so the two can never differ. */
+export const PR_SUBCOMMANDS: readonly string[] = Object.keys(PR_SUBCOMMAND_FLAGS);
+
+/**
+ * Which flags each `threads` action reads beyond --target/--pr (zheref/nen#215,
+ * Copilot on #221). Module-level so the family refusal can name the one action
+ * that reads a flag (`--from` is 'pr threads settle''s) rather than the verb.
+ */
+export const THREADS_ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
+  list: { values: [], booleans: [] },
+  reply: { values: ["thread", "body-file", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
+  resolve: { values: ["thread"], booleans: ["dry-run"] },
+  settle: { values: ["from", ...PRIVATE_NAME_FLAGS.values], booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans] },
+};
+
+const THREAD_ACTIONS: readonly string[] = Object.keys(THREADS_ACTION_FLAGS);
+
+/** Whether one row declares this flag, in any of its three halves. */
+function declaresFlag(spec: FlagSpec, flag: string): boolean {
+  return (spec.values ?? []).includes(flag) || (spec.booleans ?? []).includes(flag) || (spec.lists ?? []).includes(flag);
+}
+
+/** The family's parser spec: the UNION of every row, sorted for a stable 'unknown option' listing. */
+function unionPrFlags(specs: readonly FlagSpec[]): FlagSpec {
+  const values = new Set<string>();
+  const booleans = new Set<string>();
+  const lists = new Set<string>();
+  for (const spec of specs) {
+    for (const flag of spec.values ?? []) values.add(flag);
+    for (const flag of spec.booleans ?? []) booleans.add(flag);
+    for (const flag of spec.lists ?? []) lists.add(flag);
+  }
+  return { values: [...values].sort(), booleans: [...booleans].sort(), lists: [...lists].sort() };
+}
+
+export const PR_FLAGS: FlagSpec = unionPrFlags(Object.values(PR_SUBCOMMAND_FLAGS));
+
+const PR_GLOBAL_FLAG_NAMES: ReadonlySet<string> = new Set([
+  ...(GLOBAL_FLAGS.values ?? []),
+  ...(GLOBAL_FLAGS.booleans ?? []),
+  ...(GLOBAL_FLAGS.lists ?? []),
+]);
+
+/**
+ * A flag one FORM of a subcommand reads and the other refuses: `--require-head`
+ * is 'pr merge --delivery''s, and doMerge refuses it with --release-unit, so
+ * naming bare 'pr merge' would send a caller to a refusal (hanten round 1).
+ */
+const PR_FLAG_FORM: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  merge: { "require-head": "merge --delivery" },
+};
+
+/**
+ * Who reads this flag, in the table's order, each as `'pr <subcommand>'` --
+ * or `'pr threads <action>'` where exactly one threads action reads it, which
+ * is the more useful answer for `--from` (settle) and `--body-file` (reply).
+ * `withinThreads` (the refused invocation is itself a threads action) names
+ * EVERY threads action that reads it, since 'pr threads' alone would name the
+ * verb the caller is already running.
+ */
+export function prFlagOwners(flag: string, withinThreads = false): readonly string[] {
+  return PR_SUBCOMMANDS.filter((name): boolean => declaresFlag(PR_SUBCOMMAND_FLAGS[name] ?? {}, flag)).flatMap((name): string[] => {
+    if (name === "threads") {
+      const actions = THREAD_ACTIONS.filter((action): boolean => {
+        const row = THREADS_ACTION_FLAGS[action];
+        return row !== undefined && (row.values.includes(flag) || row.booleans.includes(flag));
+      });
+      if (actions.length === 1 || (withinThreads && actions.length > 0)) return actions.map((action): string => `'pr threads ${action}'`);
+    }
+    return [`'pr ${PR_FLAG_FORM[name]?.[flag] ?? name}'`];
+  });
+}
+
+const GH_RESOLVES = "runs on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login), never on the variable --token-env names.";
+
+/**
+ * What `--token-env` would have meant here, said truthfully per subcommand --
+ * a refusal that asserts something false about the verb is one a caller stops
+ * believing (../issue/command.ts's refuseForeignFlags, the same rule). Keyed
+ * by EVERY subcommand but `ready` (the one that reads the flag) with no default
+ * branch, so a new subcommand gets no credential claim until one is written
+ * for it (command.test.ts asserts the coverage; hanten round 1).
+ */
+const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
+  staleness: "staleness reads local files only and calls no GitHub API, so there is no credential to name.",
+  "body-check": "body-check reads local files and git only and calls no GitHub API, so there is no credential to name.",
+  fetch: `fetch ${GH_RESOLVES}`,
+  "next-blocker": `next-blocker ${GH_RESOLVES}`,
+  "cascade-main": "cascade-main fetches and pushes on git's own credential and calls no GitHub API.",
+  retarget: `retarget ${GH_RESOLVES}`,
+  "request-reviews": `request-reviews ${GH_RESOLVES}`,
+  "edit-body": `edit-body ${GH_RESOLVES}`,
+  "mark-ready": `mark-ready ${GH_RESOLVES}`,
+  threads: `threads ${GH_RESOLVES}`,
+  open: `open ${GH_RESOLVES}`,
+  merge: "merge judges readiness on GH_TOKEN and merges on whatever credential gh resolves (GH_TOKEN/GITHUB_TOKEN if exported, else its stored login); the variable --token-env names would have changed neither.",
+};
+
+/** Exported for the coverage test: every key of PR_SUBCOMMAND_FLAGS but `ready` has advice. */
+export const PR_TOKEN_ENV_ADVICE_KEYS: readonly string[] = Object.keys(TOKEN_ENV_ADVICE);
+
+/** What to type instead, where the owners alone are not the useful answer. */
+function foreignFlagAdvice(subcommand: string, flag: string): string | undefined {
+  if (flag === "token-env") return TOKEN_ENV_ADVICE[subcommand];
+  if (flag === "gh-repo" && declaresFlag(PR_SUBCOMMAND_FLAGS[subcommand] ?? {}, "target")) {
+    return `'pr ${subcommand}' names its repository with --target <owner/name>.`;
+  }
+  return undefined;
+}
+
+/**
+ * Refuse every flag of this invocation the executing subcommand does not read
+ * -- ALL of them named at once, sorted -- at exit 2, before any subcommand
+ * runs and so before any gh call (zheref/nen#351). Each sentence says the
+ * subcommand does not read the flag, then which subcommands DO.
+ *
+ * A `threads` action is judged against its OWN row (--target, --pr and
+ * THREADS_ACTION_FLAGS[action]), here rather than inside threads(), so one
+ * message names every foreign flag at both levels (hanten round 1). An action
+ * that is missing or unknown is judged against the verb's row; threads() then
+ * refuses the action itself.
+ *
+ * TOKENS AFTER A BARE `--` ARE REFUSED TOO (Feitan, SEC-7, hanten round 1).
+ * ../cli/args.ts stops reading at `--` and hands the rest over as
+ * `passthrough`, which no `pr` subcommand forwards anywhere -- so
+ * `-- --token-env NARROW` was accepted and ignored on every subcommand, write
+ * paths included. Only a flag-shaped token's NAME is ever echoed, never a value.
+ */
+function refuseFlagsSubcommandDoesNotRead(context: CommandContext, subcommand: string): void {
+  const action = context.args.positionals[2];
+  const actionRow = subcommand === "threads" && action !== undefined ? THREADS_ACTION_FLAGS[action] : undefined;
+  const spec: FlagSpec | undefined =
+    actionRow === undefined ? PR_SUBCOMMAND_FLAGS[subcommand] : { values: ["target", "pr", ...actionRow.values], booleans: [...actionRow.booleans] };
+  const subject = actionRow === undefined ? subcommand : `threads ${action ?? ""}`;
+  // Unreachable: requireSubcommand has already refused anything not keyed
+  // here. Stated so a caller that skips that step fails closed, never reading
+  // `undefined` as "reads everything".
+  if (spec === undefined) throw new VerbUsageError(`'pr ${subcommand}' declares no flags of its own.`);
+  const given = [
+    ...Object.keys(context.args.values).filter((flag): boolean => context.args.values[flag] !== undefined),
+    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
+    ...context.args.booleans,
+  ];
+  const foreign = [...new Set(given)].filter((flag): boolean => !PR_GLOBAL_FLAG_NAMES.has(flag) && !declaresFlag(spec, flag)).sort();
+  const passthrough = context.args.passthrough;
+  if (foreign.length === 0 && passthrough.length === 0) return;
+  const sentences = foreign.map((flag): string => {
+    const owners = prFlagOwners(flag, actionRow !== undefined);
+    // Never empty while PR_FLAGS is the union of these rows: a flag no row
+    // declares is an 'unknown option' at the parser and never reaches here.
+    const read = owners.length === 0 ? `No 'pr' subcommand reads --${flag}.` : `--${flag} is only read by ${conjoin(owners)}`;
+    const advice = foreignFlagAdvice(subcommand, flag);
+    return `--${flag} is not read by 'pr ${subject}'. ${read}${owners.length === 0 ? "" : advice === undefined ? "." : `; ${advice}`}`;
+  });
+  if (passthrough.length > 0) {
+    const named = [
+      ...new Set(
+        passthrough
+          .filter((token): boolean => token.startsWith("--"))
+          .map((token): string => token.slice(2).split("=")[0] ?? "")
+          .filter((name): boolean => /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(name)),
+      ),
+    ].map((name): string => `--${name}`);
+    sentences.push(
+      `'pr ${subject}' reads nothing after a bare '--': no 'pr' subcommand forwards arguments, so ${passthrough.length} token(s) there would have been accepted and ignored${named.length === 0 ? "" : `, among them ${conjoin(named)}`}. Drop the '--'.`,
+    );
+  }
+  throw new VerbUsageError(sentences.join(" "));
+}
+
 export const prCommand: Command = {
   name: "pr",
-  subcommands: ["ready", "staleness", "body-check", "fetch", "next-blocker", "cascade-main", "retarget", "request-reviews", "edit-body", "mark-ready", "threads", "open", "merge"],
+  subcommands: PR_SUBCOMMANDS,
   summary:
     "CON-32 readiness, staleness, body-check, fetch, next-blocker, cascade-main, retarget, request-reviews, edit-body, mark-ready, threads, open, merge.",
   usage: USAGE,
-  flags: {
-    values: [
-      "wakes-from",
-      "last-activity",
-      "now",
-      "min-verified-wakes",
-      "idle-minutes",
-      "body-from",
-      "requirements-from",
-      ...PR_READY_FLAGS.values,
-      "target",
-      "pr",
-      "policy",
-      "trunk",
-      "base",
-      "add-reviewers",
-      "add-bots",
-      "body-file",
-      "thread",
-      "title-file",
-      "head",
-      "from",
-      "assignee",
-    ],
-    booleans: ["ready", ...PR_READY_FLAGS.booleans, "delivery-pr", "no-push", "dry-run", "draft", "release-unit", "delivery", "run"],
-    // `ready`'s repeatable `--exclude-check` (zheref/nen#243) -- declared as a
-    // LIST so a second occurrence is kept, not refused as a repeated value.
-    lists: [...PR_READY_FLAGS.lists],
-  },
+  flags: PR_FLAGS,
   run(context: CommandContext): number | Promise<number> {
-    const subcommand = requireSubcommand("pr", context.args, [
-      "ready",
-      "staleness",
-      "body-check",
-      "fetch",
-      "next-blocker",
-      "cascade-main",
-      "retarget",
-      "request-reviews",
-      "edit-body",
-      "mark-ready",
-      "threads",
-      "open",
-      "merge",
-    ]);
-    // 'merge''s own two: a general-purpose merge is exactly what this
-    // subcommand refuses to be, so a caller who carried '--release-unit' or
-    // '--run' over from a 'merge' invocation onto any other subcommand is
-    // told rather than silently ignored.
-    if (subcommand !== "merge" && context.args.booleans.has("release-unit")) {
-      throw new VerbUsageError("--release-unit is only read by 'pr merge'.");
-    }
-    if (subcommand !== "merge" && context.args.booleans.has("delivery")) {
-      throw new VerbUsageError("--delivery is only read by 'pr merge'.");
-    }
-    if (subcommand !== "merge" && context.args.booleans.has("run")) {
-      throw new VerbUsageError("--run is only read by 'pr merge'.");
-    }
-    // --no-push sits in this family's shared boolean set (above) only because
-    // that set has no per-subcommand table (review finding, PR #141) -- so
-    // without this, it would parse cleanly and be silently ignored on every
-    // OTHER `pr` subcommand, misleading a caller who carried it over from a
-    // `cascade-main` invocation. A minimal, local refusal here, rather than
-    // the full foreign-flag table `shu`/`issue` have (../shu/command.ts,
-    // ../issue/command.ts), because this family has no such table for any of
-    // its other subcommand-specific flags yet (`--delivery-pr` has the same
-    // gap) and growing one is a bigger change than this flag's own PR.
-    if (subcommand !== "cascade-main" && context.args.booleans.has("no-push")) {
-      throw new VerbUsageError("--no-push is only read by 'pr cascade-main'.");
-    }
-    // Same shape, same reason, for edit-body's own two flags -- and, since
-    // zheref/nen#160, request-reviews' own --dry-run too (its resolution
-    // reads GitHub the same way edit-body's certifying read does, so it
-    // earns the identical dry-run-gated shape rather than a bespoke one):
-    // a flag left unguarded here would parse cleanly and be silently
-    // ignored on every OTHER `pr` subcommand.
-    if (
-      subcommand !== "edit-body" &&
-      subcommand !== "request-reviews" &&
-      subcommand !== "mark-ready" &&
-      subcommand !== "threads" &&
-      subcommand !== "open" &&
-      context.args.booleans.has("dry-run")
-    ) {
-      throw new VerbUsageError(
-        "--dry-run is only read by 'pr edit-body', 'pr request-reviews', 'pr mark-ready', 'pr threads' and 'pr open'.",
-      );
-    }
-    if (subcommand !== "edit-body" && subcommand !== "threads" && subcommand !== "open" && context.args.values["body-file"] !== undefined) {
-      throw new VerbUsageError("--body-file is only read by 'pr edit-body', 'pr threads reply' and 'pr open'.");
-    }
-    // Same shape for open's own four: a title file, a head, an assignee list
-    // and a draft flag mean nothing to any other subcommand here.
-    if (subcommand !== "open") {
-      for (const flag of ["title-file", "head", "assignee"]) {
-        if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is only read by 'pr open'.`);
-      }
-      if (context.args.booleans.has("draft")) throw new VerbUsageError("--draft is only read by 'pr open'.");
-    }
-    // Same shape, same reason: --thread names a review thread and nothing
-    // else in this family has one, so a caller who carried it over from a
-    // 'threads' invocation is told rather than silently ignored.
-    if (subcommand !== "threads" && context.args.values["thread"] !== undefined) {
-      throw new VerbUsageError("--thread is only read by 'pr threads'.");
-    }
-    if (subcommand !== "threads" && context.args.values["from"] !== undefined) {
-      throw new VerbUsageError("--from is only read by 'pr threads settle'.");
-    }
-    if (subcommand !== "request-reviews" && context.args.values["add-bots"] !== undefined) {
-      throw new VerbUsageError("--add-bots is only read by 'pr request-reviews'.");
-    }
-    if (subcommand === "mark-ready") refuseFlagsMarkReadyDoesNotRead(context);
+    const subcommand = requireSubcommand("pr", context.args, PR_SUBCOMMANDS);
+    // ONE GUARD FOR THE WHOLE FAMILY (zheref/nen#351), derived from
+    // PR_SUBCOMMAND_FLAGS above. It replaces the one-flag-at-a-time refusals
+    // this function used to carry (--release-unit, --no-push, --dry-run,
+    // --body-file, --thread, --add-bots, ...) and mark-ready's and merge's own
+    // tables, each of which covered the flags somebody had thought of.
+    refuseFlagsSubcommandDoesNotRead(context, subcommand);
     switch (subcommand) {
       case "ready":
         return ready(context);
@@ -1053,7 +1268,10 @@ function blocker(context: CommandContext): number {
   // --reviewers guard above, which is checked first precisely so a bad flag
   // is refused without any filesystem or network work.
   const root = assertRepoRoot({
-    repoFlag: requireRepoFlag(context, "It is the checkout whose nen/gates.json supplies the reviewer identities."),
+    repoFlag: requireRepoFlag(
+      context,
+      "It is the checkout whose nen/gates.json is read first; the reviewer identities come from nen/gates.json at the pull request's base, and from this file only when the base cannot be read.",
+    ),
   });
   // `--gates <path>` goes through ../verbs/pr_ready.ts's resolveIdentities --
   // THE SAME resolver `pr ready` uses, never a re-spelled copy -- because
@@ -1075,9 +1293,9 @@ function blocker(context: CommandContext): number {
   // build does not read (zheref/nen#310) -- is a usage error, exit 2, as it is
   // in `pr ready`: nobody asked a question GitHub could answer, so no blocker
   // is reported. Re-raised whole, so the path and pointer survive.
-  let identities;
+  let local;
   try {
-    identities =
+    local =
       gatesFlag === undefined
         ? loadGateIdentities(root)
         : resolveIdentities(root, gatesFlag, [], []).identities;
@@ -1086,21 +1304,60 @@ function blocker(context: CommandContext): number {
     throw error;
   }
   const snapshot = fetchPullRequest(context.seams, target, prNumber);
-  // `checks.excluded` AT THE BASE (zheref/nen#249, Feitan F1), the same source
-  // `pr ready` reads -- never the local file, which in a worktree is the pull
-  // request's own head. Any failure (no base commit, an unreadable or absent
-  // file, a malformed block) applies none: the stricter answer.
+  // `nen/gates.json` AT THE BASE, the same source `pr ready` reads -- never the
+  // local file, which in a worktree is the pull request's own head. ONE read
+  // for both halves: `checks.excluded` (zheref/nen#249, Feitan F1), where any
+  // failure (no base commit, an unreadable or absent file, a malformed block)
+  // applies none, the stricter answer; and every OTHER input -- reviewers,
+  // rounds, quorum, approvals, carve-outs (zheref/nen#372) -- where a base
+  // that could not be READ falls back to the local file with a warning, and a
+  // base that declares NO file or one this build REFUSES is a refusal (exit
+  // 2): this verb's --reviewers narrows a declared set and names no logins,
+  // so it is no identity source to fall back to. An explicit `--gates` naming
+  // a file outside the checkout is the caller's word for the second half,
+  // exactly as in `pr ready`; one naming the checkout's own nen/gates.json is
+  // read at the base like the default, and any other file inside the
+  // checkout is head content, applied with a warning. The exclusions are the
+  // base's on every path.
   const now = new Date().toISOString();
   const baseSha = snapshot.baseRefOid ?? "";
   const where = `${target.slug}@${baseSha === "" ? "(unknown base)" : baseSha}:${BASE_GATES_PATH}`;
-  const base = exclusionsAtBase(readBaseGatesWithGh(context.seams, target, baseSha), where, identities.excludedChecks ?? []);
+  const baseRead = readBaseGatesWithGh(context.seams, target, baseSha);
+  const gatesClass = gatesFlag === undefined ? null : classifyGatesPath(root, local.path);
+  let applied: { identities: GateIdentities; path: string; read: "base" | "local-fallback" | "gates-flag"; warnings: readonly string[] };
+  if (gatesClass === null || gatesClass === "own") {
+    const atBase = identitiesAtBase(baseRead, where, local);
+    if (atBase.kind !== "applied") {
+      throw new VerbUsageError(
+        `no gate to apply: ${atBase.reason}. ${
+          atBase.kind === "absent"
+            ? "Merge a nen/gates.json into the base first, or pass --gates <path> naming a file you vouch for outside this checkout."
+            : "Upgrade nen to a build that reads the base's gates file, or fix the base's file."
+        }`,
+      );
+    }
+    applied = { identities: atBase.identities, path: atBase.path, read: atBase.origin, warnings: atBase.warnings };
+  } else if (gatesClass === "inside") {
+    applied = {
+      identities: local,
+      path: local.path,
+      read: "local-fallback",
+      warnings: [
+        `--gates '${local.path}' names a file inside the --repo checkout (${root}), which in a worktree may be the pull request's own head: it is applied as given, but as possible head content rather than the caller's word.`,
+      ],
+    };
+  } else {
+    applied = { identities: local, path: local.path, read: "gates-flag", warnings: [] };
+  }
+  const identities = applied.identities;
+  const base = exclusionsAtBase(baseRead, where, local.excludedChecks ?? []);
   // Every declared entry as `pr ready` reports it (hanten round 2, N1): the
   // notice for each honoured one that removed a check, and a warning for each
   // that did not apply -- expired, not yet ruled, an unevaluable condition.
   const declaredLines = resolveDeclaredExclusions(base.exclusions, snapshot.checks, now).outcomes.flatMap(
     (outcome): string[] => declarationWarnings(outcome, `${where} checks.excluded`, now),
   );
-  const warnings = [...base.warnings, ...declaredLines];
+  const warnings = [...applied.warnings, ...base.warnings, ...declaredLines];
   const result = nextBlocker(identities, snapshot, {
     declaredExclusions: base.exclusions,
     now,
@@ -1109,8 +1366,12 @@ function blocker(context: CommandContext): number {
     deliveryPr: context.args.booleans.has("delivery-pr"),
   });
   if (context.json) {
-    // `warnings` and `notes` are additive (hanten round 2, N1/N3).
-    context.io.out(JSON.stringify({ ...result, warnings, notes: base.notes }, null, 2));
+    // `warnings` and `notes` are additive (hanten round 2, N1/N3); so is
+    // `identities`, where the identities came from, mirroring `pr ready`'s
+    // `meta.identities` (zheref/nen#372, Feitan 5).
+    context.io.out(
+      JSON.stringify({ ...result, warnings, notes: base.notes, identities: { path: applied.path, read: applied.read } }, null, 2),
+    );
     return result.kind === "none" ? 0 : 1;
   }
   context.io.out(`#${prNumber}: ${result.kind}`);
@@ -1564,6 +1825,8 @@ function requirePrStrict(context: CommandContext, verb: string): number {
 function editBody(context: CommandContext): number {
   const target = requireTarget(context);
   const pr = requirePrStrict(context, "edit-body");
+  // Read before any `gh` call; an unreadable one is exit 2 (zheref/nen#363).
+  const ignore = readIgnoreFlag(context);
 
   const bodyFile = context.args.values["body-file"];
   if (bodyFile === undefined) {
@@ -1575,7 +1838,9 @@ function editBody(context: CommandContext): number {
   // READ RAW AND CHECKED BEFORE ANYTHING IS SENT -- ../issue/command.ts's
   // comment() makes the same two decisions for the same reasons: a
   // --dry-run byte count that is not the byte count that would be sent is
-  // not a dry run, and `gh` is handed this SAME path untouched.
+  // not a dry run. Since zheref/nen#363 `gh` is handed these BYTES on stdin,
+  // never the path: the private-name guard checks them, and a path gh
+  // re-reads after the check could publish something it never saw.
   const body = readTextFile(
     bodyFile,
     process.cwd(),
@@ -1594,13 +1859,31 @@ function editBody(context: CommandContext): number {
   certifyPullRequest(context.seams, target, pr);
 
   const bytes = Buffer.byteLength(body, "utf8");
-  const argv = editBodyArgv(target, pr, bodyFile);
+  const argv = editBodyArgv(target, pr);
+  const dryRun = context.args.booleans.has("dry-run");
 
-  if (context.args.booleans.has("dry-run")) {
+  // THE PRIVATE-NAME GUARD (zheref/nen#363), after the certifying read (a
+  // number that is not a pull request is refused for THAT first) and before
+  // the write -- on a dry run too, so its verdict is the real run's.
+  const privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore, "nen pr edit-body");
+  if (blocksWrite(privateNameCheck)) {
     if (context.json) {
       context.io.out(
         JSON.stringify(
-          { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: false, dryRun: true },
+          { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: false, dryRun, privateNameCheck },
+          null,
+          2,
+        ),
+      );
+    }
+    return blockingExit(privateNameCheck);
+  }
+
+  if (dryRun) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify(
+          { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: false, dryRun: true, privateNameCheck },
           null,
           2,
         ),
@@ -1617,11 +1900,11 @@ function editBody(context: CommandContext): number {
     return 0;
   }
 
-  writePullRequestBody(context.seams, target, pr, bodyFile);
+  writePullRequestBody(context.seams, target, pr, body);
   if (context.json) {
     context.io.out(
       JSON.stringify(
-        { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: true, dryRun: false },
+        { contract: "nen.pr.edit-body/v0.1", target: target.slug, number: pr, bytes, written: true, dryRun: false, privateNameCheck },
         null,
         2,
       ),
@@ -1633,41 +1916,10 @@ function editBody(context: CommandContext): number {
 }
 
 // ── mark-ready (zheref/nen#345) ─────────────────────────────────────────────
-
-/** The only flags `pr mark-ready` reads (the global --json/--help/--repo aside). */
-const MARK_READY_VALUES: ReadonlySet<string> = new Set(["target", "pr", "require-head", "repo"]);
-const MARK_READY_BOOLEANS: ReadonlySet<string> = new Set(["dry-run", "json", "help"]);
-const PR_READY_ONLY: ReadonlySet<string> = new Set<string>([
-  ...PR_READY_FLAGS.values,
-  ...PR_READY_FLAGS.lists,
-  ...PR_READY_FLAGS.booleans,
-]);
-
-/**
- * Refuse, at exit 2 and before any `gh` call, every family flag mark-ready
- * does not read (Feitan F1, Nobunaga N1) -- the same local-refusal shape
- * `--thread` and `--add-bots` have above, generalised because this verb sits
- * in a family whose flag set is mostly OTHER verbs'. The sharpest case is
- * `--token-env`: silently accepted, it reads as "this ran on that token"
- * when the write in fact ran on whatever gh is authenticated as.
- */
-function refuseFlagsMarkReadyDoesNotRead(context: CommandContext): void {
-  const given = [
-    ...Object.keys(context.args.values).filter((flag): boolean => !MARK_READY_VALUES.has(flag)),
-    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
-    ...[...context.args.booleans].filter((flag): boolean => !MARK_READY_BOOLEANS.has(flag)),
-  ];
-  const first = given[0];
-  if (first === undefined) return;
-  if (first === "token-env") {
-    throw new VerbUsageError("--token-env is only read by 'pr ready'; mark-ready runs on gh's own credential.");
-  }
-  if (PR_READY_ONLY.has(first)) {
-    throw new VerbUsageError(`--${first} is only read by 'pr ready'; 'pr mark-ready' reads --target, --pr, --require-head and --dry-run.`);
-  }
-  throw new VerbUsageError(`--${first} is not read by 'pr mark-ready'; it reads --target, --pr, --require-head and --dry-run.`);
-}
-
+//
+// The flags it reads are its PR_SUBCOMMAND_FLAGS row; every other family flag
+// -- --token-env above all (Feitan F1, Nobunaga N1) -- is refused by the
+// family guard before this runs (zheref/nen#351 generalised #345's table).
 //
 // The verb's logic lives in ./markready.ts behind the seam; this adapts flags
 // and renders. `--pr` takes the STRICT reader, because this verb WRITES: a
@@ -1701,15 +1953,15 @@ function doMarkReady(context: CommandContext): number {
 //
 // THE ACTION IS A SECOND POSITIONAL, not a third flag. `nen pr threads list`
 // reads as one verb with a mode, which is what it is; a `--resolve` boolean
-// beside a `--reply` boolean would be two flags that can both be given, and
-// this family already has one refusal per silently-ignored flag because that
-// mistake is expensive here.
+// beside a `--reply` boolean would be two flags that can both be given, and a
+// flag that is accepted and ignored is what PR_SUBCOMMAND_FLAGS and
+// refuseFlagsSubcommandDoesNotRead exist to refuse, because that mistake is
+// expensive here.
 //
 // EVERY PATH LISTS FIRST, INCLUDING `--dry-run`. The listing is what turns a
 // bad `--thread` into exit 4 naming it and an already-resolved one into exit 3
 // naming it, instead of a GraphQL error a caller has to read. See
 // ./threads.ts's header for why those two are separate codes at all.
-const THREAD_ACTIONS: readonly string[] = ["list", "reply", "resolve", "settle"];
 
 function threads(context: CommandContext): number {
   const action = context.args.positionals[2];
@@ -1718,33 +1970,11 @@ function threads(context: CommandContext): number {
       `'pr threads' needs an action: ${THREAD_ACTIONS.join(", ")}. Try 'nen pr threads list --target <owner/name> --pr <n>'.`,
     );
   }
-  // THE FAMILY GUARD STOPS AT THE FAMILY, AND THE ACTION NEEDS ITS OWN
-  // (Copilot, #221). `--thread`, `--body-file` and `--dry-run` all belong to
-  // 'threads', so the family-level refusals above let them through -- and then
-  // `list` ignored `--thread`, and `resolve` ignored `--body-file`. A caller
-  // got a successful listing or a real resolution while an instruction they
-  // typed had no effect, which is the exact thing this family already refuses
-  // one level up: the ignored thing is the instruction you gave.
-  const ACTION_FLAGS: Readonly<Record<string, { values: readonly string[]; booleans: readonly string[] }>> = {
-    list: { values: [], booleans: [] },
-    reply: { values: ["thread", "body-file"], booleans: ["dry-run"] },
-    resolve: { values: ["thread"], booleans: ["dry-run"] },
-    settle: { values: ["from"], booleans: ["dry-run"] },
-  };
-  const mine = ACTION_FLAGS[action] as { values: readonly string[]; booleans: readonly string[] };
-  const foreign = [
-    ...["thread", "body-file", "from"].filter(
-      (flag): boolean => context.args.values[flag] !== undefined && !mine.values.includes(flag),
-    ),
-    ...["dry-run"].filter(
-      (flag): boolean => context.args.booleans.has(flag) && !mine.booleans.includes(flag),
-    ),
-  ];
-  if (foreign.length > 0) {
-    throw new VerbUsageError(
-      `--${foreign.join(", --")} ${foreign.length === 1 ? "is" : "are"} not read by 'pr threads ${action}'. A flag accepted and ignored is worse than one refused: the ignored thing is the instruction you gave, and this verb would otherwise have answered 0 while doing something other than what you asked.`,
-    );
-  }
+  // EACH ACTION READS ONLY ITS OWN FLAGS (Copilot, #221): `list` used to
+  // ignore `--thread` and `resolve` `--body-file`. refuseFlagsSubcommandDoesNotRead
+  // judges a threads action against THREADS_ACTION_FLAGS[action] before this
+  // runs, so every flag the action does not read was already refused there,
+  // naming the actions that do read it (hanten round 1).
 
   const target = requireTarget(context);
   const prNumber = requirePrStrict(context, `threads ${action}`);
@@ -1758,7 +1988,9 @@ function threads(context: CommandContext): number {
   }
 
   let body = "";
+  let ignore: IgnoreList | null = null;
   if (action === "reply") {
+    ignore = readIgnoreFlag(context);
     const bodyFile = context.args.values["body-file"];
     if (bodyFile === undefined || bodyFile.trim() === "") {
       throw new VerbUsageError(
@@ -1787,6 +2019,28 @@ function threads(context: CommandContext): number {
       throw new VerbUsageError(
         `--body-file '${bodyFile}' is empty (or holds only whitespace). An empty reply is never what a caller meant, and it is never assumed.`,
       );
+    }
+  }
+
+  // THE PRIVATE-NAME GUARD (zheref/nen#363), before the thread walk and the
+  // reply -- on a dry run too. A reply is posted under the caller's identity on
+  // the pull request's public timeline. Its exit 4 is the guard's 4, which this
+  // verb also answers for an unknown thread: a refusal by the guard is told
+  // apart by its stderr lines and, under --json, by `privateNameCheck`.
+  let privateNameCheck: PrivateNameCheck | null = null;
+  if (action === "reply") {
+    privateNameCheck = guardPrivateNames(context, target, [{ field: "body", text: body }], ignore, "nen pr threads reply");
+    if (blocksWrite(privateNameCheck)) {
+      if (context.json) {
+        context.io.out(
+          JSON.stringify(
+            { contract: THREADS_CONTRACT, target: target.slug, pr: prNumber, thread: threadId as string, replied: false, dryRun, privateNameCheck },
+            null,
+            2,
+          ),
+        );
+      }
+      return blockingExit(privateNameCheck);
     }
   }
 
@@ -1829,7 +2083,7 @@ function threads(context: CommandContext): number {
                   : "resolved"
             }`,
           ];
-    emit(context.io, context.json, report, lines);
+    emit(context.io, context.json, privateNameCheck === null ? report : { ...report, privateNameCheck }, lines);
     return 0;
   } catch (error) {
     if (error instanceof ThreadsError) {
@@ -1854,7 +2108,27 @@ function settle(context: CommandContext, target: Target, prNumber: number, dryRu
   }
   // RESOLVED AGAINST `--repo`, like every other path flag (Feitan F7).
   const fromPath = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), fromFlag);
+  const ignore = readIgnoreFlag(context);
   const { entries, baseDir } = readSettleFile(fromPath);
+  // THE PRIVATE-NAME GUARD (zheref/nen#363): every reply body in the file,
+  // after the file's own refusals and before the walk -- so a hit sends
+  // nothing to any thread. One field per entry, numbered from 1 in file order;
+  // the thread id is not text the guard reports.
+  const privateNameCheck = guardPrivateNames(
+    context,
+    target,
+    entries.map((entry, index): CheckedText => ({ field: `entry[${index + 1}]`, text: entry.body })),
+    ignore,
+    "nen pr threads settle",
+  );
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) {
+      context.io.out(
+        JSON.stringify({ contract: SETTLE_CONTRACT, target: target.slug, pr: prNumber, from: fromPath, dryRun, ok: false, privateNameCheck }, null, 2),
+      );
+    }
+    return blockingExit(privateNameCheck);
+  }
   let listing;
   try {
     listing = listThreads(context.seams, target, prNumber);
@@ -1878,7 +2152,7 @@ function settle(context: CommandContext, target: Target, prNumber: number, dryRu
     stoppedAt: result.stoppedAt,
     entries: result.outcomes,
   };
-  emit(context.io, context.json, report, renderSettle(report, baseDir));
+  emit(context.io, context.json, { ...report, privateNameCheck }, renderSettle(report, baseDir));
   if (result.failure !== null) context.io.err(`nen pr threads settle: ${stoppedLine(report)}`);
   return settleExit(result, EXIT_FOR);
 }
@@ -1893,30 +2167,52 @@ function open(context: CommandContext): number {
   const target = requireTarget(context);
   const base = requireValue(context.args, "base", "It is the pull request's base branch on GitHub.");
   const titlePath = requireValue(context.args, "title-file", "It is the file whose first non-empty line is the title.");
-  const bodyPath = requireValue(context.args, "body-file", "It is the pull request body, handed to gh as is.");
+  const bodyPath = requireValue(context.args, "body-file", "It is the pull request body, read once, checked and handed to gh on stdin.");
+  const ignore = readIgnoreFlag(context);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
   const title = readTextFile(titlePath, root, "It is the pull request's title -- 'pr open' reads no other source for it.")
     .split("\n")
     .map((line): string => line.trim())
     .find((line): boolean => line !== "");
   if (title === undefined) throw new VerbUsageError(`--title-file '${titlePath}' has no non-empty line, so there is no title to open with.`);
-  // READ TO PROVE IT IS THERE, then handed to gh by path: a body file gh
-  // cannot open would fail after the questions below were already asked.
+  // READ ONCE, RAW, AND THOSE BYTES ARE WHAT gh GETS, on stdin (zheref/nen#363):
+  // the private-name guard checks them, and a path gh re-read after the check
+  // could publish what the check never saw. An unreadable file still fails
+  // before any question below is asked.
   const bodyFile = resolveAgainstRepo(root, bodyPath);
-  readTextFile(bodyPath, root, "It is the pull request body -- 'pr open' hands it to gh by path.");
+  const body = readTextFile(bodyPath, root, "It is the pull request body -- 'pr open' reads it once, checks it and hands those bytes to gh.", true);
   const assignees = readAssignees(context.args.values["assignee"]);
+  // THE PRIVATE-NAME GUARD, before any other GitHub call and every write -- on
+  // a dry run too, so its verdict is the real run's.
+  const privateNameCheck = guardPrivateNames(
+    context,
+    target,
+    [
+      { field: "title", text: title },
+      { field: "body", text: body },
+    ],
+    ignore,
+    "nen pr open",
+  );
+  if (blocksWrite(privateNameCheck)) {
+    if (context.json) {
+      context.io.out(JSON.stringify({ contract: OPEN_CONTRACT, dryRun: context.args.booleans.has("dry-run"), opened: false, privateNameCheck }, null, 2));
+    }
+    return blockingExit(privateNameCheck);
+  }
   const outcome = openPullRequest(context.seams, root, target, {
     base,
     head: context.args.values["head"] ?? null,
     title,
     bodyFile,
+    body,
     draft: context.args.booleans.has("draft"),
     dryRun: context.args.booleans.has("dry-run"),
     assignees,
   });
   if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
   // Every line carries a branch name, a login or gh's own words.
-  emit(context.io, context.json, outcome.report, outcome.lines.map(plainLine));
+  emit(context.io, context.json, { ...outcome.report, privateNameCheck }, outcome.lines.map(plainLine));
   if (outcome.failure !== undefined) {
     context.io.err(`nen pr open: ${plainLine(outcome.failure)}`);
     return 1;
@@ -1956,7 +2252,8 @@ function readAssignees(raw: string | undefined): readonly string[] {
  * whole composition; this adapter only reads the CLI's own flags and renders.
  */
 async function doMerge(context: CommandContext): Promise<number> {
-  refuseFlagsMergeDoesNotRead(context);
+  // Every flag 'pr merge' does not read was refused by the family guard
+  // (round 2, N7; zheref/nen#351) before this ran.
   const releaseUnit = context.args.booleans.has("release-unit");
   const delivery = context.args.booleans.has("delivery");
   if (releaseUnit && delivery) {
@@ -2066,28 +2363,4 @@ function readRequirements(requirementsPath: string, root: string): readonly Body
     throw error;
   }
   return rawRequirements;
-}
-
-/** Every flag 'pr merge' reads, globals included (round 2, N7). */
-const MERGE_VALUES: ReadonlySet<string> = new Set(["requirements-from", "require-head", "repo"]);
-const MERGE_BOOLEANS: ReadonlySet<string> = new Set(["release-unit", "delivery", "run", "json", "help"]);
-
-/**
- * The 'pr' family has ONE flag table, so every family flag parses on 'merge'.
- * 'merge' reads only the sets above; any other flag -- 'pr ready''s own
- * (round 1, N11) or another subcommand's, such as --base or --target (round
- * 2, N7) -- is refused here, before any gh call, rather than silently
- * ignored, as mark-ready does.
- */
-function refuseFlagsMergeDoesNotRead(context: CommandContext): void {
-  const given = [
-    ...Object.keys(context.args.values).filter((flag): boolean => context.args.values[flag] !== undefined && !MERGE_VALUES.has(flag)),
-    ...Object.keys(context.args.lists).filter((flag): boolean => (context.args.lists[flag] ?? []).length > 0),
-    ...[...context.args.booleans].filter((flag): boolean => !MERGE_BOOLEANS.has(flag)),
-  ];
-  const first = given[0];
-  if (first === undefined) return;
-  const reads = "'pr merge' reads its ref, --release-unit or --delivery, --requirements-from, --repo, --require-head (--delivery only), --run and --json.";
-  if (PR_READY_ONLY.has(first)) throw new VerbUsageError(`--${first} is only read by 'pr ready'; ${reads}`);
-  throw new VerbUsageError(`--${first} is not read by 'pr merge'; ${reads}`);
 }

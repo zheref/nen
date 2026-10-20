@@ -745,7 +745,8 @@ export interface CloseComments {
   readonly perChild: ReadonlyMap<number, string>;
 }
 
-function templateFor(comments: CloseComments | null, child: number): string {
+/** The template a child is closed with: its own, else the shared one, else nen's fixed default. */
+export function templateFor(comments: CloseComments | null, child: number): string {
   if (comments === null) return DEFAULT_CLOSE_COMMENT;
   return comments.perChild.get(child) ?? comments.template ?? DEFAULT_CLOSE_COMMENT;
 }

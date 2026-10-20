@@ -196,6 +196,18 @@ export interface PrStateSource {
 
 export interface FetchStateOptions {
   readonly identities: GateIdentities;
+  /**
+   * The identities AS THE PULL REQUEST'S BASE DECLARES THEM (zheref/nen#372).
+   * OPTIONAL: when present it is called ONCE, with the snapshot's
+   * `baseRefOid` ("" when GitHub answered none), after the snapshot is read and
+   * BEFORE any identity is consulted, and its answer replaces `identities` for
+   * the whole of this read -- so the reviewer set, the stall bound, the round
+   * caps and the earlier-head reads all follow the base's file, never the
+   * head's. The base commit is only known once the snapshot is read, which is
+   * why this is a hook rather than a value. It must not throw for a base that
+   * cannot be read: it answers the caller's fallback instead.
+   */
+  readonly identitiesAtBase?: (baseSha: string) => Promise<GateIdentities>;
   /** `--reviewers a,b,c`. EMPTY means "derive the set from the rollup". */
   readonly reviewersCsv: string;
   readonly policy: RoundPolicy;
@@ -1098,6 +1110,14 @@ export async function fetchPrState(
     };
   }
 
+  // The identities this read applies: the BASE's when the caller asked for
+  // them (zheref/nen#372), resolved here because `baseRefOid` is only known
+  // now, and before anything below consults a reviewer.
+  const identities =
+    options.identitiesAtBase === undefined
+      ? options.identities
+      : await options.identitiesAtBase(typeof node.baseRefOid === "string" ? node.baseRefOid : "");
+
   // FALSE-GREEN DEFECT, FIXED (zheref/nen#14's fact-check on
   // zheref/bankai-core#927). `snapshot.checkRollup` is PAGE ONE ONLY --
   // `contexts(first:100)` with no cursor, capped at exactly the 100 entries
@@ -1215,7 +1235,7 @@ export async function fetchPrState(
       ? options.reviewersCsv
       : // `|| checks='[]'` -- the shell degrades an unreducible rollup to the
         // base set rather than failing the fetch.
-        defaultReviewers(options.identities, parsedChecks.ok ? parsedChecks.value : []).join(",");
+        defaultReviewers(identities, parsedChecks.ok ? parsedChecks.value : []).join(",");
 
   // The stall timestamp, ONLY when a request for the reviewer the stall bound
   // applies to is actually pending. No pending request means no bound to
@@ -1231,7 +1251,7 @@ export async function fetchPrState(
   let timelineRead: Promise<unknown[]> | undefined;
   const readTimeline = (): Promise<unknown[]> => (timelineRead ??= source.timeline(repo, prNumber));
   let stallRequestedAt = "";
-  const exempt: ReviewerIdentity | undefined = options.identities.reviewers.find(
+  const exempt: ReviewerIdentity | undefined = identities.reviewers.find(
     (reviewer): boolean =>
       reviewer.boundedPolicyExempt &&
       requests.some((login): boolean => reviewer.loginPattern.test(login)),
@@ -1244,7 +1264,7 @@ export async function fetchPrState(
   // `round_policy.minRounds` or `.maxRounds` -- a repository that states
   // neither makes no extra call and gets the state it got before.
   const roundCapsDeclared =
-    (options.identities.minRounds ?? null) !== null || (options.identities.maxRounds ?? null) !== null;
+    (identities.minRounds ?? null) !== null || (identities.maxRounds ?? null) !== null;
   // The same events carry who made each request, which the own-request
   // reading needs only while a request is PENDING -- so a PR with none makes
   // neither read for it (zheref/nen#240, criterion 4).
@@ -1279,7 +1299,7 @@ export async function fetchPrState(
   // review request PENDING that the bounded rule would want read -- no call
   // otherwise -- and only the detail text uses them.
   const boundedWanted = earlierRoundCheckWanted(
-    options.identities,
+    identities,
     "bounded",
     normalizeReviewers(reviewers),
     checkRollupNodes,
@@ -1289,7 +1309,7 @@ export async function fetchPrState(
     options.policy === "bounded"
       ? boundedWanted
       : boundedWanted.filter((wanted): boolean => {
-          const pattern = options.identities.reviewer(wanted.reviewer)?.loginPattern;
+          const pattern = identities.reviewer(wanted.reviewer)?.loginPattern;
           return pattern !== undefined && requests.some((login): boolean => pattern.test(login));
         });
   const earlier = await readEarlierRoundChecks(

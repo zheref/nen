@@ -189,6 +189,8 @@ describe("nen schema check", () => {
       "nen/workflow.json#deploy.defaultTarget",
       "nen/workflow.json#release",
       "nen/decisions.json",
+      // The canon mirror row (zheref/nen#262): absent bindings read absent (optional).
+      ".claude/rules/",
     ]);
     expect(checks.find((c): boolean => c["file"] === "nen/workflow.json#release")).toEqual({
       file: "nen/workflow.json#release",
