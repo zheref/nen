@@ -3972,6 +3972,7 @@ git is refused at exit 2 naming its version, never fetched around)
 
 ```text
 nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
+                [--trailer "Key: alias"]...
                 [--abort] [--dry-run] [--json]
 ```
 
@@ -3984,6 +3985,7 @@ nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
 | `--strategy` | no | `rebase`, `merge` or `auto` (default) | **auto rebases when no commit of the branch is on its `@{upstream}`** and merges otherwise — the same published-commit detection [`wc squash`](#nen-wc-squash) refuses on, shared rather than copied. A rebase rewrites what somebody else may already hold |
 | `--abort` | no | back out an in-progress rebase or merge | runs the matching `git rebase --abort` / `git merge --abort`; refused at exit 2 when nothing is in progress |
 | `--dry-run` | no | print the strategy and the git line | fetches (a read), runs neither |
+| `--trailer "Key: alias"` | for merge commits | repeatable explicit caller identity | same trailer shape and attribution policy as `commit write`; no identity inferred from branch, model or environment |
 | `--json` | no | machine-readable result | `nen.wc.catch-up/v0.2` — see below |
 
 **Mechanism.** `--base` is validated first (above), then a dirty tree is
@@ -3991,7 +3993,16 @@ refused at exit 2 before the fetch. Then `git fetch --end-of-options origin
 refs/heads/<base>:refs/remotes/origin/<base>`, `before`/`behindBefore`/`aheadBefore` are read,
 the strategy is resolved, and — unless the branch is already up to date
 (`noOp: true`, exit 0, nothing run) — `git rebase origin/<base>` or
-`git merge --no-edit origin/<base>` runs. **On a conflict** the report's
+`git merge --no-edit -m <message-with-trailers> origin/<base>` runs.
+A divergent merge requires explicit `--trailer "Key: alias"` input before
+Git starts it. With a workflow file, at least one key must be declared under
+`commits.allowedAttributionTrailers`; all supplied keys pass the shared
+attribution validator. Without a workflow file, explicit trailers follow
+`commit write`'s permissive policy. Malformed workflow files refuse before
+merge creation. An up-to-date branch, rebase, abort, or fast-forward requires
+no identity; the fast-forward path uses `--ff-only` even when local Git
+configuration requests merge commits. Human dry runs show the actual quoted
+message or commit trailer arguments. **On a conflict** the report's
 `conflicted[]` carries each path with `ours` — **always this branch's
 side** — and `theirs` — **always the base's** — whichever index stage holds
 it: on a merge stage 2 is this branch and stage 3 is `origin/<base>`; on a
@@ -4013,7 +4024,9 @@ resolutions are staged — Hatsu's `ao` already says so. The verb asks git
 whether a rebase or merge is in progress (`git rebase --show-current-patch` / `MERGE_HEAD`,
 through the seam, so a worktree's relocated git directory changes nothing)
 and continues it: `git rebase --continue` under `GIT_EDITOR=true`, or
-`git commit --no-edit` for a merge, reporting `resumed: true`. No status
+`git commit --no-edit --trailer "Key: alias"` for a merge, reporting `resumed: true`. Supply the explicit identity again when resuming
+a resolved merge; absence refuses before the commit, leaving the resolution
+staged. `--abort` remains usable without identity. No status
 refusal and no fetch on that path — the tree is dirty by definition. Unmerged
 paths, or a staged file `git diff --cached --check` says still carries a
 conflict marker, are reported as `conflicted[]` again at exit 1 with the

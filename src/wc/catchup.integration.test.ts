@@ -144,7 +144,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     advanceMain({ "README.md": "main side\n" }, "docs: main side");
     const before = mustGit(work, ["rev-parse", "HEAD"]);
 
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(stopped.code).toBe(1);
     expect(stopped.doc["strategy"]).toBe("rebase");
     expect(stopped.doc["after"]).toBeNull();
@@ -155,7 +155,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     expect(git(work, ["rebase", "--show-current-patch"]).code).toBe(0);
 
     // The same command, unresolved: conflicted again, nothing continued.
-    const again = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const again = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(again.code).toBe(1);
     expect(again.doc["resumed"]).toBe(false);
     expect(conflicts(again).map((c): string => c.path)).toEqual(["README.md"]);
@@ -163,7 +163,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     // Resolve, stage, re-run: the rebase finishes on top of main.
     writeFileSync(join(work, "README.md"), "both sides\n");
     mustGit(work, ["add", "README.md"]);
-    const resumed = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const resumed = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(resumed.code).toBe(0);
     expect(resumed.doc["resumed"]).toBe(true);
     expect(resumed.doc["strategy"]).toBe("rebase");
@@ -176,7 +176,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     expect(mustGit(work, ["merge-base", "--is-ancestor", "origin/main", "HEAD"])).toBe("");
     expect(mustGit(work, ["show", "HEAD:README.md"])).toBe("both sides");
     // And the NEXT run is an ordinary one, not a second continue.
-    const next = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const next = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(next.code).toBe(0);
     expect(next.doc).toMatchObject({ noOp: true, resumed: false });
   });
@@ -187,7 +187,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     mustGit(work, [...PINNED, "push", "--quiet", "-u", "origin", "merge-conflict"]);
     const before = mustGit(work, ["rev-parse", "HEAD"]);
 
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(stopped.code).toBe(1);
     expect(stopped.doc["strategy"]).toBe("merge");
     expect(mustGit(work, ["show", ":2:README.md"])).toBe("published side");
@@ -207,7 +207,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     const work = branchWith("awkward-paths", { "docs/ünï.md": "branch ü\n", "sp ace.txt": "branch space\n" });
     // Cut before main adds the same two paths, so both are add/add conflicts.
     advanceMain({ "docs/ünï.md": "main ü\n", "sp ace.txt": "main space\n" }, "docs: two awkward paths");
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main", "--strategy", "merge"]);
     expect(stopped.code).toBe(1);
     // git's own default would C-quote the first one; the verb asks for the bytes.
     expect(mustGit(work, ["diff", "--name-only", "--diff-filter=U"])).toContain('"docs/\\303\\274n\\303\\257.md"');
@@ -215,7 +215,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
     expect([...byPath.keys()].sort()).toEqual(["docs/ünï.md", "sp ace.txt"]);
     expect(byPath.get("docs/ünï.md")).toEqual({ path: "docs/ünï.md", class: "other", ours: "branch ü\n", theirs: "main ü\n" });
     expect(byPath.get("sp ace.txt")).toEqual({ path: "sp ace.txt", class: "other", ours: "branch space\n", theirs: "main space\n" });
-    const text = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"], false);
+    const text = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main", "--strategy", "merge"], false);
     expect(text.out.join("\n")).toContain("  docs/ünï.md\n    ours  :\n      branch ü\n    theirs:\n      main ü");
     mustGit(work, ["merge", "--abort"]);
   });
@@ -223,12 +223,12 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up, against the real git", () => {
   it("a clean catch-up rebases the unpublished branch onto the fresh origin/main", async () => {
     const work = branchWith("clean-rebase", { "mine.txt": "mine\n" });
     advanceMain({ "other.txt": "unrelated\n" }, "chore: unrelated");
-    const result = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const result = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(result.code).toBe(0);
     expect(result.doc).toMatchObject({ strategy: "rebase", noOp: false, conflicted: [], behindBefore: 1, aheadBefore: 1 });
     expect(mustGit(work, ["merge-base", "--is-ancestor", "origin/main", "HEAD"])).toBe("");
     expect(mustGit(work, ["rev-list", "--count", "origin/main..HEAD"])).toBe("1");
-    const noOp = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const noOp = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(noOp.code).toBe(0);
     expect(noOp.doc["noOp"]).toBe(true);
   });
@@ -310,7 +310,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     const work = branchWith("mixed-classes", releaseEdits("mixed", "0.2.0", { "mixed/src.ts": "export const x = 2;\n" }));
     advanceMain(releaseEdits("mixed", "0.3.0", { "mixed/src.ts": "export const x = 3;\n" }), "chore: release 0.3.0");
 
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main", "--strategy", "merge"]);
     expect(stopped.code).toBe(1);
     expect(stopped.doc).toMatchObject({
       contract: "nen.wc.catch-up/v0.2",
@@ -331,7 +331,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(conflicts(stopped).find((c): boolean => c.path === "mixed/src.ts")).toMatchObject({ ours: "export const x = 2;\n", theirs: "export const x = 3;\n" });
     expect(groups(stopped).map((g): string => g.class)).toEqual(["manifest", "changelog", "mirror"]);
 
-    const text = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"], false);
+    const text = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main", "--strategy", "merge"], false);
     expect(text.code).toBe(1);
     const out = text.out.join("\n");
     expect(out).toContain("classes: 2 manifest, 1 changelog, 1 mirror, 1 other (by nen/contract.json's 'mechanical' block)");
@@ -355,7 +355,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     const published = mustGit(work, ["rev-parse", "HEAD"]);
     advanceMain(releaseEdits("allmech", "0.3.0"), "chore: release 0.3.0");
 
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(stopped.code).toBe(3);
     expect(stopped.doc).toMatchObject({ strategy: "merge", declaration: "declared", classes: { manifest: 2, changelog: 1, mirror: 1, other: 0 }, mechanical: true, after: null });
     const mirror = groups(stopped).find((g): boolean => g.class === "mirror");
@@ -369,7 +369,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     expect(groups(stopped).find((g): boolean => g.class === "manifest")?.steps).toEqual([
       ["git", "-C", work, "add", "--", lit("allmech/.claude-plugin/plugin.json"), lit("allmech/package.json")],
     ]);
-    const text = await wc(["catch-up", "--repo", work, "--base", "main"], false);
+    const text = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"], false);
     expect(text.code).toBe(3);
     expect(text.out.join("\n")).toContain("all 4 conflicted path(s) are mechanical -- exit 3; nen resolved none.");
     expect(text.out.join("\n")).toContain("    $ nen surface mirror generate --surface codex --out allmech/surfaces/codex");
@@ -382,7 +382,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     writeFileSync(join(work, "allmech/CHANGELOG.md"), "# Changelog\n\n## 0.4.0\n\n## 0.3.0\n\n## 0.1.0\n");
     // Run from somewhere else entirely: the printed -C is what makes the steps land (N3).
     followSteps(work, stopped, (): void => writeFileSync(join(work, "allmech/surfaces/codex/a.md"), "generated a 0.4.0\n"));
-    const resumed = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const resumed = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(resumed.code).toBe(0);
     expect(resumed.doc).toMatchObject({ resumed: true, conflicted: [], declaration: "not-read", mechanical: false });
     expect(mustGit(work, ["show", "HEAD:allmech/surfaces/codex/a.md"])).toBe("generated a 0.4.0");
@@ -400,7 +400,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     mustGit(seed, [...WHO, "commit", "--quiet", "-m", "chore: drop b"]);
     mustGit(seed, [...PINNED, "push", "--quiet", "origin", "main"]);
 
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main"]);
     expect(stopped.code).toBe(3);
     expect(stopped.doc).toMatchObject({ strategy: "rebase", classes: { manifest: 2, changelog: 1, mirror: 2, other: 0 }, mechanical: true });
     expect(groups(stopped).find((g): boolean => g.class === "mirror")?.steps).toEqual([
@@ -416,7 +416,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     seedCase("broken");
     const work = branchWith("broken-contract", { "broken/src.ts": "export const x = 'branch';\n", "nen/contract.json": "{ not json\n" });
     advanceMain({ "broken/src.ts": "export const x = 'main';\n" }, "chore: main side");
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main", "--strategy", "merge"]);
     expect(stopped.code).toBe(1);
     expect(stopped.doc).toMatchObject({ declaration: "unreadable", classes: { manifest: 0, changelog: 0, mirror: 0, other: 1 }, mechanical: false, resolve: [] });
     expect(typeof stopped.doc["declarationError"]).toBe("string");
@@ -433,7 +433,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
       mustGit(work, ["rm", "--quiet", `${dir}/package.json`, `${dir}/CHANGELOG.md`]);
       mustGit(work, [...WHO, "commit", "--quiet", "-m", "chore: drop the manifest and changelog"]);
       advanceMain({ [`${dir}/package.json`]: '{ "version": "0.3.0" }\n', [`${dir}/CHANGELOG.md`]: "# Changelog\n\n## 0.3.0\n" }, "chore: release 0.3.0");
-      const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", strategy]);
+      const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main", "--strategy", strategy]);
       expect(stopped.code).toBe(1);
       expect(stopped.doc).toMatchObject({ strategy, declaration: "declared", mechanical: false, classes: { manifest: 0, changelog: 0, mirror: 0, other: 2 } });
       expect(conflicts(stopped).map((c) => [c.path, (c as unknown as { class: string }).class]).sort()).toEqual([
@@ -458,7 +458,7 @@ describe.skipIf(!HAVE_GIT)("nen wc catch-up classifies a conflict, against the r
     );
     const work = branchWith("star-branch", { "star/x*.md": "branch\n" });
     advanceMain({ "star/x*.md": "main\n" }, "chore: main star");
-    const stopped = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    const stopped = await wc(["catch-up", "--trailer", "Hatsu-Agent: kurapika", "--repo", work, "--base", "main", "--strategy", "merge"]);
     expect(stopped.code).toBe(3);
     expect(groups(stopped)[0]?.steps).toEqual([["git", "-C", work, "add", "--", lit("star/x*.md")]]);
     // An unrelated edit to the file a glob would also have matched.
@@ -720,5 +720,83 @@ describe.skipIf(!HAVE_GIT)("nen wc publish, against the real git", () => {
     expect(result.code).toBe(1);
     expect(result.doc).toMatchObject({ needsForce: true, pushed: false, upstreamBefore: "origin/diverged" });
     expect(mustGit(work, ["ls-remote", "origin", "refs/heads/diverged"]).split(/\s+/)[0]).toBe(remote);
+  });
+});
+
+
+describe.skipIf(!HAVE_GIT)("attributed catch-up merge", () => {
+  it("refuses missing identity without moving HEAD, then writes a clean attributed merge without amend", async () => {
+    const work = branchWith("identity-clean", { "identity-branch.txt": "branch\n" });
+    advanceMain({ "identity-main.txt": "main\n" }, "docs: identity main");
+    const before = mustGit(work, ["rev-parse", "HEAD"]);
+    const args = ["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"];
+    const missing = await wc(args);
+    expect(missing.code).toBe(2);
+    expect(missing.err.join("\n")).toContain("--trailer");
+    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(before);
+    expect(git(work, ["rev-parse", "--verify", "MERGE_HEAD"]).code).not.toBe(0);
+    const dry = await wc([...args, "--trailer", "Hatsu-Agent: kurapika", "--dry-run"], false);
+    expect(dry.code).toBe(0);
+    expect(dry.out.join("\n")).toContain("Hatsu-Agent: kurapika");
+    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(before);
+    const merged = await wc([...args, "--trailer", "Hatsu-Agent: kurapika"]);
+    expect(merged.code, merged.err.join("\n")).toBe(0);
+    expect(mustGit(work, ["show", "-s", "--format=%P", "HEAD"]).split(" ")).toHaveLength(2);
+    expect(mustGit(work, ["show", "-s", "--format=%(trailers:key=Hatsu-Agent,valueonly)", "HEAD"])).toBe("kurapika");
+    expect(mustGit(work, ["rev-parse", "HEAD^1"])).toBe(before);
+  });
+
+  it("requires identity again before completing a resolved merge", async () => {
+    const work = branchWith("identity-resume", { "README.md": "identity branch\n" });
+    advanceMain({ "README.md": "identity main\n" }, "docs: identity conflict");
+    const args = ["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"];
+    const stopped = await wc([...args, "--trailer", "Hatsu-Agent: kurapika"]);
+    expect(stopped.code).toBe(1);
+    writeFileSync(join(work, "README.md"), "resolved\n");
+    mustGit(work, ["add", "README.md"]);
+    const before = mustGit(work, ["rev-parse", "HEAD"]);
+    const missing = await wc(args);
+    expect(missing.code).toBe(2);
+    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(before);
+    const dry = await wc([...args, "--trailer", "Hatsu-Agent: kurapika", "--dry-run"], false);
+    expect(dry.out.join("\n")).toContain("--trailer 'Hatsu-Agent: kurapika'");
+    const resumed = await wc([...args, "--trailer", "Hatsu-Agent: kurapika"]);
+    expect(resumed.code, resumed.err.join("\n")).toBe(0);
+    expect(resumed.doc["resumed"]).toBe(true);
+    expect(mustGit(work, ["show", "-s", "--format=%(trailers:key=Hatsu-Agent,valueonly)", "HEAD"])).toBe("kurapika");
+  });
+});
+
+
+describe.skipIf(!HAVE_GIT)("catch-up identity boundaries", () => {
+  it("refuses malformed, forbidden and non-identity input under the declared policy before merge mutation", async () => {
+    const work = branchWith("identity-policy", { "identity-policy.txt": "branch\n" });
+    mkdirSync(join(work, "nen"), { recursive: true });
+    writeFileSync(join(work, "nen/workflow.json"), JSON.stringify({ commits: { allowedAttributionTrailers: ["Hatsu-Agent"], forbiddenTrailers: ["Signed-off-by"] } }));
+    mustGit(work, ["add", "nen/workflow.json"]);
+    mustGit(work, ["commit", "-m", "chore: declare attribution"]);
+    advanceMain({ "identity-policy-main.txt": "main\n" }, "docs: policy main");
+    const before = mustGit(work, ["rev-parse", "HEAD"]);
+    const args = ["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"];
+    for (const trailer of ["bad", "Signed-off-by: somebody", "Closes: #445"]) {
+      const result = await wc([...args, "--trailer", trailer]);
+      expect(result.code, result.err.join("\n")).toBe(2);
+      expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(before);
+      expect(git(work, ["rev-parse", "--verify", "MERGE_HEAD"]).code).not.toBe(0);
+    }
+    const merged = await wc([...args, "--trailer", "Hatsu-Agent: kurapika", "--trailer", "Refs: #445"]);
+    expect(merged.code, merged.err.join("\n")).toBe(0);
+    expect(mustGit(work, ["show", "-s", "--format=%(trailers:key=Hatsu-Agent,valueonly)", "HEAD"])).toBe("kurapika");
+  });
+
+  it("fast-forwards without identity even when Git configuration requests a merge commit", async () => {
+    const work = branchWith("identity-ff", { "identity-ff.txt": "branch\n" });
+    mustGit(work, ["reset", "--hard", "origin/main"]);
+    mustGit(work, ["config", "merge.ff", "false"]);
+    advanceMain({ "identity-ff-main.txt": "main\n" }, "docs: ff main");
+    const result = await wc(["catch-up", "--repo", work, "--base", "main", "--strategy", "merge"]);
+    expect(result.code, result.err.join("\n")).toBe(0);
+    expect(mustGit(work, ["rev-parse", "HEAD"])).toBe(mustGit(work, ["rev-parse", "origin/main"]));
+    expect(mustGit(work, ["show", "-s", "--format=%P", "HEAD"]).split(" ")).toHaveLength(1);
   });
 });

@@ -190,7 +190,7 @@ that would have been committed.
 
 catch-up:
   nen wc catch-up --repo <path> --base <ref> [--strategy rebase|merge|auto]
-                  [--abort] [--dry-run] [--json]
+                  [--trailer "Key: alias"]... [--abort] [--dry-run] [--json]
 
   --base <ref>      the base branch: validated by 'git check-ref-format
                     --branch' and refused at exit 2 when git rejects it or it
@@ -201,6 +201,10 @@ catch-up:
                     commit of this branch is on its @{upstream} -- the same
                     detection 'wc squash' uses -- and MERGES otherwise,
                     because a rebase rewrites what somebody else may hold.
+  --trailer         explicit caller identity for each merge commit, including
+                    resumes. Repeatable; same shape and policy as commit write.
+                    Required before a divergent merge; no identity inferred.
+                    Fast-forwards, rebases and aborts require none.
   --abort           back out an in-progress rebase or merge ('git rebase
                     --abort' / 'git merge --abort') and stop; refused when
                     none is in progress.
@@ -732,6 +736,7 @@ function doCatchUp(context: CommandContext): number {
     strategy: strategyRaw as RequestedStrategy,
     dryRun: context.args.booleans.has("dry-run"),
     abort: context.args.booleans.has("abort"),
+    trailerFlags: context.args.lists["trailer"] ?? [],
     declaration: () => loadMechanical(root),
   });
   if (outcome.kind === "refused") throw new VerbUsageError(outcome.reason);
@@ -908,10 +913,13 @@ export const wcCommand: Command = {
   flags: {
     values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan"],
     booleans: ["dry-run", "abort", "set-upstream", "take", "return", "status", "run"],
-    lists: ["copy-from-core"],
+    lists: ["copy-from-core", "trailer"],
   },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("wc", context.args, ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune"]);
+    if (subcommand !== "catch-up" && (context.args.lists["trailer"] ?? []).length > 0) {
+      throw new VerbUsageError(`--trailer is only read by 'wc catch-up', not 'wc ${subcommand}'.`);
+    }
     if (subcommand === "prune") return runPrune(context);
     if (context.args.values["plan"] !== undefined || context.args.booleans.has("run")) throw new VerbUsageError("--plan and --run are only read by wc prune.");
     // `--remote` IS PUBLISH'S ALONE; accepted and ignored elsewhere it would be

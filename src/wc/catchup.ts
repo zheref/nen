@@ -61,6 +61,9 @@
 // remote-tracking ref this repository already keeps and never a branch, and
 // this module never pushes.
 
+import { composeMessage, parseTrailerFlags } from "../commit/write.js";
+import { attributionRefusalMessages, loadWorkflow, trailerAdmitted } from "../schema/workflow.js";
+import { renderCommand } from "./mechanical.js";
 import { plainBlock, plainLine } from "../cli/plain.js";
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 import { rawLines } from "../seam/lines.js";
@@ -312,6 +315,8 @@ export interface CatchUpOptions {
   readonly strategy: RequestedStrategy;
   readonly dryRun: boolean;
   readonly abort: boolean;
+  /** Explicit caller identity; validated only when a merge commit can be created. */
+  readonly trailerFlags?: readonly string[];
   /**
    * Reads the mechanical declaration. Called only once something conflicted,
    * so a clean catch-up never opens the file. Absent means "nothing declared".
@@ -378,6 +383,20 @@ const UNCLASSIFIED = {
   mechanical: false,
   resolve: [] as readonly ResolveGroup[],
 };
+
+/** Caller input and repository policy are the same validators commit write uses. */
+function mergeTrailers(cwd: string, flags: readonly string[]): readonly string[] {
+  const parsed = parseTrailerFlags(flags);
+  const loaded = loadWorkflow(cwd);
+  const reasons = [...parsed.reasons, ...attributionRefusalMessages(loaded, parsed.trailers.map((trailer) => trailer.key))];
+  if (parsed.trailers.length === 0 || (loaded.present && !parsed.trailers.some((trailer) => trailerAdmitted(loaded.workflow.commits, trailer.key)))) {
+    reasons.push("a catch-up merge commit requires explicit caller identity: pass --trailer 'Key: alias' using a key in nen/workflow.json commits.allowedAttributionTrailers (for example your declared agent trailer). No identity is inferred from a branch, model or environment");
+  }
+  if (reasons.length > 0) throw new MergeIdentityError(reasons.join(". "));
+  return parsed.trailers.map((trailer) => `${trailer.key}: ${trailer.value}`);
+}
+
+class MergeIdentityError extends Error {}
 
 /**
  * The verb, from the first read to the report. `refused` is a usage error
@@ -472,13 +491,22 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
       lines.push(abortLine(pending));
       return done(null, stillConflicted);
     }
+    let trailers: readonly string[] = [];
+    if (pending === "merge") {
+      try { trailers = mergeTrailers(cwd, options.trailerFlags ?? []); }
+      catch (error) {
+        if (!(error instanceof MergeIdentityError)) throw error;
+        return { kind: "refused", reason: error.message };
+      }
+    }
+    const commitArgs = ["commit", "--no-edit", ...trailers.flatMap((trailer) => ["--trailer", trailer])];
     if (dryRun) {
-      lines.push(pending === "rebase" ? "would run: git rebase --continue  (GIT_EDITOR=true)" : "would run: git commit --no-edit");
+      lines.push(pending === "rebase" ? "would run: git rebase --continue  (GIT_EDITOR=true)" : `would run: ${renderCommand(["git", ...commitArgs])}`);
       return done(null, []);
     }
     const resumed = pending === "rebase"
       ? runGit(seams, cwd, ["rebase", "--continue"], { GIT_EDITOR: "true" })
-      : runGit(seams, cwd, ["commit", "--no-edit"]);
+      : runGit(seams, cwd, commitArgs);
     if (resumed.code !== 0) {
       const conflicted = collectConflicts(seams, cwd, pending);
       if (conflicted.length === 0) {
@@ -561,9 +589,22 @@ export function catchUp(seams: Seams, cwd: string, options: CatchUpOptions): Cat
     lines.push(`already up to date with ${remoteBase} (${aheadBefore} ahead, 0 behind) -- nothing to do`);
     return done(before, true, []);
   }
-  const argv = strategy === "rebase" ? ["rebase", remoteBase] : ["merge", "--no-edit", remoteBase];
+  let trailers: readonly string[] = [];
+  if (strategy === "merge" && aheadBefore > 0) {
+    try { trailers = mergeTrailers(cwd, options.trailerFlags ?? []); }
+    catch (error) {
+      if (!(error instanceof MergeIdentityError)) throw error;
+      return { kind: "refused", reason: error.message };
+    }
+  }
+  // --ff-only makes the zero-ahead route incapable of creating an unattributed
+  // commit, including under merge.ff=false or a branch mergeoptions override.
+  const message = composeMessage(`Merge remote-tracking branch '${remoteBase}'`, parseTrailerFlags(trailers).trailers);
+  const argv = strategy === "rebase" ? ["rebase", remoteBase]
+    : aheadBefore === 0 ? ["merge", "--ff-only", remoteBase]
+      : ["merge", "--no-edit", "-m", message, remoteBase];
   if (dryRun) {
-    lines.push(`would run: git ${argv.join(" ")}  (${aheadBefore} ahead, ${behindBefore} behind)`);
+    lines.push(`would run: ${renderCommand(["git", ...argv])}  (${aheadBefore} ahead, ${behindBefore} behind)`);
     return done(null, false, []);
   }
   const ran = runGit(seams, cwd, argv);
