@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectStalePins, sweepHandbookQuestions } from "./sweep.js";
+import { detectStalePins, sweepCiPin, sweepHandbookQuestions } from "./sweep.js";
 import type { ConsumerEntry } from "../schema/repos.js";
 
 function consumer(overrides: Partial<ConsumerEntry>): ConsumerEntry {
@@ -90,5 +90,15 @@ describe("sweepHandbookQuestions", () => {
       { repo: "o/b", questionId: "q1", text: "?" },
       { repo: "o/b", questionId: "q2", text: "??" },
     ]);
+  });
+});
+
+
+describe("CI pin sweep (#440)", () => {
+  it("requires both latest and a matching pin", () => {
+    expect(sweepCiPin("v2", "v2")).toMatchObject({ checked: true, ok: true });
+    for (const [pinned, latest] of [[null, "v2"], ["v1", null], ["v1", "v2"]]) {
+      expect(sweepCiPin(pinned ?? null, latest ?? null)).toMatchObject({ checked: true, ok: false });
+    }
   });
 });

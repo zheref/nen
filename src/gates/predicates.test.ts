@@ -37,6 +37,7 @@ import {
   reviewerReviewCheckPattern,
   reviewsAllApprovedAtHead,
   roundQuorum,
+  reviewerRoundFacts,
   unapprovedApprovers,
   uncheckedChecks,
   waitingCheckEntries,
@@ -51,7 +52,7 @@ import {
   type QuorumResult,
 } from "./predicates.js";
 import { loadGateIdentities, parseGateIdentities, type GateIdentities } from "../schema/gates.js";
-import { ALT_REPO, BANKAI_REPO } from "../schema/fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO, EVENT_REPO } from "../schema/fixtures/paths.js";
 
 // --- the identities every case below is run against --------------------------
 //
@@ -3009,4 +3010,99 @@ describe("waitingCheckEntries -- the latest checks still waiting for a runner", 
     ];
     expect(waitingCheckEntries(entries)).toHaveLength(1);
   });
+});
+
+
+describe("event lanes (#440)", () => {
+  const identities = loadGateIdentities(EVENT_REPO);
+  const laneReview = (lane: string, commitId = "headsha"): Review => review({ author: `${lane}[bot]`, commitId });
+  const laneRun = (status: CheckRun["status"], conclusion: CheckRun["conclusion"] = null): CheckRun =>
+    checkRun({ name: "lane-c / review", status, conclusion, startedAt: "2026-01-01T00:00:00Z" });
+  const input = (checks: readonly RollupEntry[], reviews: readonly Review[] = []): RoundInputs => ({ checks, reviews, reviewRequests: [] });
+  it.each(["QUEUED", "IN_PROGRESS", "PENDING", "WAITING"] as const)("%s supersedes historical review and remains owed even with a met quorum", (status) => {
+    const inputs = input([laneRun(status)], [laneReview("lane-a"), laneReview("lane-b"), laneReview("lane-c", "old")]);
+    const quorum = roundQuorum(identities, inputs, "headsha", "bounded")!;
+    expect(quorum).toMatchObject({ met: true, count: 2 });
+    expect(quorum.members[2]).toMatchObject({ round: null, eventRun: { state: "in-flight" }, roundCheck: null });
+    // Event quorum lanes bind without an entry in base_reviewers or --reviewers.
+    const owed = pendingRounds(identities, inputs, "headsha", [], "bounded");
+    expect(quorumExcusedRounds(owed, quorum)).toEqual({ owed: [{ reviewer: "lane-c", reason: "no-round-at-head", state: "in-flight" }], excused: [] });
+  });
+  it("SUCCESS alone is completed-without-review and only a met quorum excuses it", () => {
+    const inputs = input([laneRun("COMPLETED", "SUCCESS")], [laneReview("lane-a")]);
+    const owed = pendingRounds(identities, inputs, "headsha", [], "bounded");
+    const quorum = roundQuorum(identities, inputs, "headsha", "bounded")!;
+    expect(quorum).toMatchObject({ met: false, count: 1, minimum: 2 });
+    expect(quorumExcusedRounds(owed, quorum).excused).toEqual([]);
+    expect(owed).toContainEqual({ reviewer: "lane-c", reason: "no-round-at-head", state: "completed-without-review" });
+    const metInputs = input(inputs.checks, [...inputs.reviews, laneReview("lane-b")]);
+    const met = roundQuorum(identities, metInputs, "headsha", "bounded")!;
+    expect(quorumExcusedRounds(pendingRounds(identities, metInputs, "headsha", [], "bounded"), met).excused).toHaveLength(1);
+  });
+  it("a submitted formal review is the round; PENDING and previous-head strict reviews are not", () => {
+    for (const reviews of [[{ ...laneReview("lane-c"), state: "PENDING" as const }], [laneReview("lane-c", "old")]]) {
+      expect(roundQuorum(identities, input([laneRun("COMPLETED", "SUCCESS")], reviews), "headsha", "strict")?.members[2]?.eventRun?.state).toBe("completed-without-review");
+    }
+    expect(roundQuorum(identities, input([laneRun("COMPLETED", "SUCCESS")], [laneReview("lane-c")]), "headsha", "strict")?.members[2]?.round).toBe("review");
+  });
+  it("uses the latest run and refuses a StatusContext as event-run evidence", () => {
+    const checks = [laneRun("COMPLETED", "SUCCESS"), checkRun({ name: "lane-c / review", status: "QUEUED" }), statusContext({ context: "lane-b / review", state: "SUCCESS" })];
+    const quorum = roundQuorum(identities, input(checks), "headsha", "bounded")!;
+    expect(quorum.members[2]?.eventRun?.state).toBe("in-flight");
+    expect(quorum.members[1]?.eventRun?.state).toBe("no-run");
+  });
+});
+
+describe("event delivery holistic rounds (F440-1)", () => {
+  const raw = JSON.parse(readFileSync(join(EVENT_REPO, "nen/gates.json"), "utf8")) as { reviewers: Record<string, unknown>[] };
+  const identities = parseGateIdentities("event-delivery/nen/gates.json", {
+    ...raw,
+    reviewers: raw.reviewers.map((identity) => identity.name === "lane-c" ? { ...identity, delivery_holistic_pass: true } : identity),
+  });
+  const historical = rounds({ reviews: [review({ author: "lane-a[bot]" }), review({ author: "lane-c[bot]", commitId: "opensha" })] });
+
+  it("F440-1: an old holistic review without a current check remains owed and cannot meet the quorum", () => {
+    expect.soft(pendingRounds(identities, historical, "headsha", [], "bounded", true)).toContainEqual({
+      reviewer: "lane-c", reason: "delivery-no-definitive-success-review-check", state: "no-run",
+    });
+    expect.soft(reviewerRoundFacts(identities, historical, "headsha", ["lane-c"], "bounded", true)[0]).toMatchObject({ posted: 1, round: null });
+    const quorum = roundQuorum(identities, historical, "headsha", "bounded", true)!;
+    expect.soft(quorum).toMatchObject({ count: 1, minimum: 2, met: false });
+    expect.soft(quorum.members[2]).toMatchObject({ round: null, reading: "current-head", eventRun: { state: "no-run" } });
+  });
+  it.each(["NEUTRAL", "SKIPPED", "FAILURE"] as const)("a terminal %s cannot substitute for the delivery SUCCESS", (conclusion) => {
+    const inputs = { ...historical, checks: [checkRun({ name: "lane-c / review", status: "COMPLETED", conclusion })] };
+    expect(pendingRounds(identities, inputs, "headsha", [], "bounded", true)).toContainEqual({ reviewer: "lane-c", reason: "delivery-no-definitive-success-review-check", state: "completed-without-review" });
+    expect(roundQuorum(identities, inputs, "headsha", "bounded", true)).toMatchObject({ count: 1, met: false });
+  });
+  it.each(["bounded", "strict"] as const)("%s accepts a current formal review or the historical holistic pass plus current SUCCESS, with truthful via", (policy) => {
+    const atHead = { ...historical, reviews: [...historical.reviews, review({ author: "lane-c[bot]" })] };
+    expect(roundQuorum(identities, atHead, "headsha", policy, true)?.members[2]).toMatchObject({ round: "review", eventRun: { state: "posted" } });
+    const abstain = { ...historical, checks: [checkRun({ name: "lane-c / review", status: "COMPLETED", conclusion: "SUCCESS" })] };
+    expect(pendingRounds(identities, abstain, "headsha", [], policy, true).some((entry) => entry.reviewer === "lane-c")).toBe(false);
+    expect(reviewerRoundFacts(identities, abstain, "headsha", ["lane-c"], policy, true)[0]).toMatchObject({ posted: 1, round: "delivery-holistic-pass" });
+    expect(roundQuorum(identities, abstain, "headsha", policy, true)?.members[2]).toMatchObject({ round: "delivery-holistic-pass", reading: "current-head", eventRun: { state: "posted" } });
+  });
+  it.each([{ reviews: [] }, { reviews: [review({ author: "lane-c[bot]", state: "PENDING", commitId: "opensha" })] }, { reviews: [review({ author: "lane-c[bot]", state: "PENDING" })] }])("SUCCESS without a submitted holistic review never creates a round (%j)", ({ reviews }) => {
+    const inputs = rounds({ reviews, checks: [checkRun({ name: "lane-c / review", status: "COMPLETED", conclusion: "SUCCESS" })] });
+    expect(pendingRounds(identities, inputs, "headsha", [], "bounded", true)).toContainEqual({ reviewer: "lane-c", reason: "delivery-holistic-pass-never-posted", state: "completed-without-review" });
+    expect(reviewerRoundFacts(identities, inputs, "headsha", ["lane-c"], "bounded", true)[0]).toMatchObject({ posted: 0, round: null });
+    expect(roundQuorum(identities, inputs, "headsha", "bounded", true)?.members[2]).toMatchObject({ round: null, eventRun: { state: "completed-without-review" } });
+  });
+  it("keeps ordinary bounded any-head leniency off a delivery PR, and strict still requires the current head", () => {
+    expect(pendingRounds(identities, historical, "headsha", [], "bounded", false).some((entry) => entry.reviewer === "lane-c")).toBe(false);
+    expect(roundQuorum(identities, historical, "headsha", "bounded", false)?.members[2]).toMatchObject({ round: "review", reading: "any-head", eventRun: { state: "posted" } });
+    expect(pendingRounds(identities, historical, "headsha", [], "strict", false)).toContainEqual({ reviewer: "lane-c", reason: "no-round-at-head", state: "no-run" });
+    expect(roundQuorum(identities, historical, "headsha", "strict", false)?.members[2]).toMatchObject({ round: null, reading: "current-head", eventRun: { state: "no-run" } });
+  });
+});
+
+
+it("#440: a fresh event run at the same head supersedes that head's earlier posted review", () => {
+  const identities = loadGateIdentities(EVENT_REPO);
+  const inputs: RoundInputs = {
+    checks: [checkRun({ name: "lane-a / review", status: "IN_PROGRESS" })],
+    reviews: [review({ author: "lane-a[bot]", commitId: "headsha" })], reviewRequests: [],
+  };
+  expect(roundQuorum(identities, inputs, "headsha", "bounded")?.members[0]).toMatchObject({ round: null, eventRun: { state: "in-flight" } });
 });

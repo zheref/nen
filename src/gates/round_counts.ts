@@ -103,6 +103,7 @@ export function countRounds(
     const rounds = Math.max(fact.posted, fact.round === null ? 0 : 1);
     let min: MinRoundsStatus;
     if (minRounds === null) min = "no-minimum";
+    else if (quorum?.members.some((member): boolean => member.reviewer === fact.reviewer && member.eventRun?.state === "in-flight")) min = "owed-in-flight";
     else if (rounds >= minRounds) min = "met";
     else if (members.has(fact.reviewer) && inFlight.has(fact.reviewer)) min = "owed-in-flight";
     else if (members.has(fact.reviewer) && quorum?.met === true) min = "fulfilled-by-quorum";

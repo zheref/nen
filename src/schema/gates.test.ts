@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ALT_REPO, BANKAI_REPO } from "./fixtures/paths.js";
+import { ALT_REPO, BANKAI_REPO, EVENT_REPO } from "./fixtures/paths.js";
 import { fileURLToPath } from "node:url";
 import {
   GATES_KNOWN_KEYS,
@@ -1122,5 +1122,19 @@ describe("unknown keys are refused, never ignored (zheref/nen#310)", () => {
     expect(Object.keys(GATES_KNOWN_KEYS)).toEqual(
       expect.arrayContaining(["round_quorum", "round_policy", "checks", "reviewers", "approval_policy", "default_approvers", "dependabot_carve_out"]),
     );
+  });
+});
+
+
+describe("reviewer wake (#440)", () => {
+  it("defaults old files to request and accepts generic event lanes", () => {
+    expect(loadGateIdentities(BANKAI_REPO).reviewers.every((entry): boolean => entry.wake === "request")).toBe(true);
+    expect(loadGateIdentities(EVENT_REPO).reviewer("lane-a")?.wake).toBe("event");
+    expect(GATES_KNOWN_KEYS.reviewers?.items?.wake?.introducedIn).toBe(NEXT_RELEASE);
+  });
+  it.each(["timer", null, true, 1])("refuses unknown wake %s by pointer", (wake) => {
+    expect(() => parseGateIdentities("gates.json", {
+      version: 1, reviewers: [{ name: "lane", wake }],
+    })).toThrow(/reviewers\[0\]\.wake/);
   });
 });

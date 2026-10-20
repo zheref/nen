@@ -25,6 +25,17 @@
 
 import type { ConsumerEntry } from "../schema/repos.js";
 
+export type CiSweepResult =
+  | { readonly checked: false }
+  | { readonly checked: true; readonly ok: boolean; readonly pinned: string | null; readonly latest: string | null; readonly reason: string | null };
+
+export function sweepCiPin(pinned: string | null, latest: string | null): CiSweepResult {
+  const reason = latest === null || latest === "" ? "CI registry has no latest tag"
+    : pinned === null || pinned === "" ? "ci.pinned is missing"
+    : pinned !== latest ? `ci.pinned ${pinned} is stale; latest ${latest}` : null;
+  return { checked: true, ok: reason === null, pinned, latest, reason };
+}
+
 /**
  * A finding carries its KIND (zheref/nen#10 item 4). Two different facts were
  * previously reported as one absence: a consumer whose pin is behind `current`

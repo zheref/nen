@@ -522,7 +522,15 @@ export interface SeverityPolicy {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+export interface CiPolicy {
+  /** Product code resolved through the target registry; provider names are data. */
+  readonly provider: string;
+  readonly pinned: string | null;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
 export interface Workflow {
+  readonly ci?: CiPolicy | null;
   readonly severity: SeverityPolicy | null;
   readonly schema: string | null;
   readonly branch: BranchPolicy;
@@ -642,6 +650,7 @@ export function defaultWorkflow(): Workflow {
     futon: { advanceGo: emptyRecord<readonly AdvanceGoKind[]>(), raw: empty },
     // NO DEFAULT POOL, EVER -- see RunnersPolicy.
     runners: null,
+    ci: null,
     raw: empty,
   };
 }
@@ -667,7 +676,7 @@ const ROOT_KEYS: readonly string[] = [
   "profile",
   "release",
   "futon",
-  "runners",
+  "runners", "ci",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -2202,9 +2211,19 @@ function parseSeverity(path: string, value: unknown): SeverityPolicy | null {
   return { family, order, labels, raw };
 }
 
+function parseCi(path: string, value: unknown): CiPolicy | null {
+  if (value === undefined) return null;
+  const raw = requireRecord(path, "ci", value);
+  const provider = requireString(path, "ci.provider", raw["provider"]);
+  const pinned = raw["pinned"] === undefined || raw["pinned"] === null ? null : requireString(path, "ci.pinned", raw["pinned"]);
+  if (raw["tiers"] !== undefined) requireArray(path, "ci.tiers", raw["tiers"]).forEach((tier, i): void => { requireString(path, `ci.tiers[${i}]`, tier); });
+  if (raw["rulings"] !== undefined) requireRecord(path, "ci.rulings", raw["rulings"]);
+  return { provider, pinned, raw };
+}
+
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's eighteen blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's nineteen blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -2228,6 +2247,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     release: parseReleasePolicy(path, raw["release"]),
     futon: parseFutonPolicy(path, raw["futon"]),
     runners: parseRunners(path, raw["runners"]),
+    ci: parseCi(path, raw["ci"]),
     raw,
   };
 }

@@ -1651,6 +1651,43 @@ An empty `satisfied_by_context` is refused at load: a carve-out satisfied by no
 context is satisfied by nothing, and would clear the review rounds for that
 author on no evidence at all.
 
+**Event lanes (`wake: "event"`, nen >= 0.26.0).** An omitted `wake` means
+`request`; any other value is refused at `reviewers[i].wake`. An event lane
+runs on repository events and posts a formal review under its `login_pattern`.
+Its `review_check_pattern` proves activity; a successful job alone never
+counts as a round. Its latest matching CheckRuns at the judged head produce
+`in-flight`, `no-run`, `completed-without-review`, or `posted`. A draft
+`PENDING` review is not posted. A live run supersedes earlier review evidence,
+including under `bounded`, and stays owed even when other members meet the
+quorum. Event members of `round_quorum.any_of` bind without a `base_reviewers`
+entry. A terminal run without a formal review, or no run, may be excused only
+by a met quorum. `rounds-owed.owedRounds[]` retains `reviewer`, `reason`,
+`coveredByQuorum`, and optional `kind`, adding `state` for event lanes; excused
+entries retain that state. Quorum members also expose `eventRun` with `state`
+and `startedAt`; `roundCheck` retains its check-is-the-round meaning.
+
+An event reviewer that also declares `delivery_holistic_pass` keeps CON-40's
+delivery rule on a delivery PR under both round policies. A submitted review
+at the current head counts; otherwise a prior submitted holistic review needs
+a definitive current-head review-check `SUCCESS`. That exception reports
+`round: "delivery-holistic-pass"` and `eventRun.state: "posted"`, identifying
+the satisfied holistic round rather than claiming a new review at head.
+Without that success the lane remains owed, with its delivery-specific reason
+and `no-run` or `completed-without-review` state. Any live matching run still
+supersedes the prior round, remains owed across a met quorum, and can stall.
+
+For an event lane, `round-stalled` measures `stallMinutes` from the selected
+live run's start, firing at the boundary. Before then the lane is owed, in
+flight. Missing or invalid start times cannot establish elapsed stall time.
+A stalled event run asks the caller to inspect the lane; it does not recommend
+requesting a reviewer that wakes on events.
+
+For example, `any_of: ["lane-a", "lane-b", "lane-c"], minimum: 2` with only
+`lane-a` reviewed is **unmet**: the row names `lane-b` and `lane-c` as short,
+and excuses nobody, even if their jobs are available but have not posted.
+Once `lane-b` reviews, a completed-without-review `lane-c` may be excused;
+a still-running `lane-c` remains owed.
+
 **`round_quorum`: at least N of a group must have a round (maintainer ruling
 2026-09-29).** The maintainer's words: *"Copilot credits are exhausted. Expect
 Cursor instead. Let's make it canon on the repo so that we solve at least one
@@ -1782,6 +1819,7 @@ gate, and said nothing.
 | `approval_policy` | 0.10.0 |
 | `round_policy.stallMinutes` | 0.11.0 |
 | `reviewers[].kind` (`bot` or `human`, optional) | 0.24.0 |
+| `reviewers[].wake` (`request` or `event`, defaults to `request`) | 0.26.0 |
 | `round_policy.minRounds`, `round_policy.maxRounds` | 0.21.0 |
 | `round_quorum` (`any_of`, `minimum`) | 0.17.0 |
 | `checks.excluded[]` (`name`, `match`, `reason`, `ruled`, `until`, `until.condition`) | 0.20.0 |
@@ -2716,6 +2754,16 @@ zheref/nen#12 now targets 'release/1.0'
 (from `src/pr/command.test.ts`, which scripts `gh pr edit 12 --repo zheref/nen --base release/1.0` — this verb reaches GitHub, so it was not run live here)
 
 ### `nen pr request-reviews`
+
+Before routing, this verb reads `nen/gates.json` at the pinned default-branch
+OID from one GitHub snapshot. A matching `wake: "event"` reviewer is skipped
+before collaborator lookup, request-ceiling counting, mutations, and pending
+request verification. Explicit Bot IDs are resolved to canonical logins for
+this decision. Each skipped input says `event-driven, not requested`; JSON
+includes `skipped: [{ name, reviewer, reason }]`, including dry runs and mixed
+batches. An all-skipped batch exits 0; mixed batches retain request failures.
+An unreadable or refused wake policy prevents any requests. A default branch
+with no gates file retains the request behavior for undeclared reviewers.
 
 Two routes, chosen per name. A Bot login resolved from this pull request’s
 history or GitHub’s `GET /users/<login>[bot]` endpoint, or a raw node id named
@@ -5724,6 +5772,21 @@ totals:
 
 ### `nen warmup`
 
+The CI sweep reads the consumer's `nen/workflow.json` → `ci` block, preserving
+its `{ provider, pinned, tiers, rulings }` declaration. `ci.provider` resolves
+through the target's existing repository registry; no provider name is built
+into Nen. By default its `nen/repos.json` is read at `HEAD`. An unresolved
+provider fails closed; supply `--ci-registry <path|owner/name@ref>` to override
+the registry source. Local paths resolve against `--repo`; remote locators
+read `nen/repos.json` through GitHub's contents API at the named ref.
+
+The sweep compares `ci.pinned` with the registry's `latest`. A mismatch, missing
+pin, missing latest, unreadable source or malformed registry fails the run.
+No `ci` block reports `CI pin sweep: NOT CHECKED` and `ciSweep: { checked: false }`,
+even if an override was supplied. A checked result reports
+`{ checked: true, ok, pinned, latest, reason }`. Nen-pin and handbook-question
+findings remain present and combine with CI failures in the exit code.
+
 This family has a single command with no subcommand of its own — `nen warmup <anything-else>` ignores
 the extra word rather than refusing it, unlike every other family in this section. It answers "is any
 consumer's pin behind `--current`, and does any consumer have an unanswered handbook question": a
@@ -5740,7 +5803,7 @@ and that one **mutating in every form**. They compose in that order when you wan
 **Usage**
 
 ```text
-nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
+nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>] [--ci-registry <path|owner/name@ref>]
 ```
 
 **Arguments**
@@ -5748,6 +5811,7 @@ nen warmup --current <vX.Y.Z> [--questions-from <path>] [--answers-from <path>]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--current <vX.Y.Z>` | yes | This repository's actual latest version. | Stated explicitly — a plugin-shipped `registry.latest` can itself be stale. |
+| `--ci-registry <path or owner/name@ref>` | no | Override the declared CI provider registry. | Local paths are relative to `--repo`; requires a consumer `ci` block. |
 | `--questions-from <path>` | no | A JSON array of `{ id, text }` handbook questions. | Omitting it skips the sweep, reported as an explicit `NOT CHECKED` (`{"checked": false}` in `--json`), never a silent "no gaps". |
 | `--answers-from <path>` | required together with `--questions-from` | A JSON object `{ "<repo>": ["<question-id>", ...] }`. | Required once `--questions-from` is given (exit 2 otherwise). |
 | `--repo <path>` | no | The checkout whose `nen/repos.json` is checked. | Defaults to cwd. |
