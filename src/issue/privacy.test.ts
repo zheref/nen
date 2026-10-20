@@ -7,13 +7,20 @@ import {
   checkPrivateNames,
   compileMatcher,
   findPrivateNames,
+  NamedListError,
   normalise,
   parseIgnoreList,
+  objectKindAtRef,
+  parseNamedList,
   privateNameLines,
+  readCommittedNamedList,
   readPrivateList,
+  resolveRemoteDefaultRef,
+  showAtRef,
   readTargetVisibility,
   PrivateListUnavailableError,
   PRIVATE_NAME_EXIT,
+  type NamedList,
 } from "./privacy.js";
 
 const TARGET: Target = { owner: "o", repo: "pub", slug: "o/pub" };
@@ -110,14 +117,14 @@ describe("private-name matching (zheref/nen#329)", () => {
     // Prefix: `vault` is policed, `vault.tools` ignored; `.` bounds a word, so `vault` occurs.
     const prefix = compileMatcher(["a/vault", "b/vault.tools"], parseIgnoreList("vault.tools\n"));
     expect(findPrivateNames(prefix, [{ field: "body", text: "see vault.tools" }])).toEqual([
-      { field: "body", line: 1, index: 1, normalised: false, ignored: false },
-      { field: "body", line: 1, index: 2, normalised: false, ignored: true },
+      { field: "body", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" },
     ]);
     // Suffix: `vault` is policed, `my_vault` ignored; `_` bounds a word.
     const suffix = compileMatcher(["a/my_vault", "b/vault"], parseIgnoreList("my_vault\n"));
     expect(findPrivateNames(suffix, [{ field: "body", text: "in my_vault today" }])).toEqual([
-      { field: "body", line: 1, index: 1, normalised: false, ignored: true },
-      { field: "body", line: 1, index: 2, normalised: false, ignored: false },
+      { field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file" },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null },
     ]);
   });
 
@@ -149,7 +156,7 @@ describe("the ignore list", () => {
   it("a blocking hit reports the first STILL-POLICED entry's index, never an exempt twin's (N7)", () => {
     const matcher = compileMatcher(["a/thing", "b/thing"], parseIgnoreList("a/thing\n"));
     expect(findPrivateNames(matcher, [{ field: "body", text: "thing" }])).toEqual([
-      { field: "body", line: 1, index: 2, normalised: false, ignored: false },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null },
     ]);
   });
 
@@ -163,7 +170,7 @@ describe("the ignore list", () => {
     expect(blockingExit(refused)).toBe(1);
     const allowed = checkPrivateNames(script(), TARGET, [{ field: "body", text: "vault" }], false, ignoreAll, true);
     expect(allowed.result).toBe("clean");
-    expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true }]);
+    expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "ignore-file" }]);
   });
 
   it("reports the list's size and owner count, and never a name (N13)", () => {
@@ -181,7 +188,7 @@ describe("the ignore list", () => {
     const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/other", "acme/vault"])]);
     const check = checkPrivateNames(seams, TARGET, [{ field: "body", text: "vault" }], false, parseIgnoreList("vault"));
     expect(check.result).toBe("clean");
-    expect(check.hits).toEqual([{ field: "body", line: 1, index: 2, normalised: false, ignored: true }]);
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" }]);
     expect(privateNameLines(check, TARGET)).toEqual(["nen issue: ignored: body:1: private repository #2 (ignore file)"]);
   });
 });
@@ -361,5 +368,165 @@ describe("checkPrivateNames -- the verdict a verb acts on", () => {
     expect(emptyList.result).toBe("unavailable");
     expect(emptyList.error).toMatch(/EMPTY/);
     expect(privateNameLines(emptyList, TARGET).join("\n")).toMatch(/never a pass/);
+  });
+});
+
+describe("the named list (zheref/nen#441)", () => {
+  it("parses exact owner/name slugs, lowercase, skipping comments, blanks and whitespace", () => {
+    const list = parseNamedList("# ruled public\n\n  Acme/Thing  # the ruling\r\nb/other\n");
+    expect([...list.slugs]).toEqual(["acme/thing", "b/other"]);
+  });
+
+  it("refuses a bare name, naming the line and never the entry", () => {
+    let thrown: unknown;
+    try {
+      parseNamedList("# header\nacme/thing\nvault\n");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(NamedListError);
+    expect((thrown as NamedListError).line).toBe(3);
+    expect((thrown as NamedListError).message).toMatch(/line 3 is not an exact owner\/name/);
+    expect((thrown as NamedListError).message).not.toContain("vault");
+    expect(() => parseNamedList("a/b/c\n")).toThrow(NamedListError);
+    expect(() => parseNamedList("acme/\n")).toThrow(NamedListError);
+  });
+
+  it("exempts exactly that repository: a same-named private repository under another owner is still a hit", () => {
+    const named = parseNamedList("a/thing\n");
+    const matcher = compileMatcher(["a/thing", "b/thing"], null, named);
+    expect(matcher.ignored.has("thing")).toBe(false);
+    expect(findPrivateNames(matcher, [{ field: "body", text: "thing" }])).toEqual([
+      { field: "body", line: 1, index: 2, normalised: false, ignored: false, ignoredBy: null },
+    ]);
+  });
+
+  it("honours both lists in one call, and each ignored hit says which list exempted it", () => {
+    const seams = new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/thing", "acme/vault", "b/zeta"])]);
+    const check = checkPrivateNames(
+      seams,
+      TARGET,
+      [{ field: "body", text: "thing, vault and zeta" }],
+      false,
+      parseIgnoreList("vault\n"),
+      false,
+      parseNamedList("acme/thing\n"),
+    );
+    expect(check.result).toBe("refused");
+    expect(check.hits).toEqual([
+      { field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" },
+      { field: "body", line: 1, index: 2, normalised: false, ignored: true, ignoredBy: "ignore-file" },
+      { field: "body", line: 1, index: 3, normalised: false, ignored: false, ignoredBy: null },
+    ]);
+    expect(privateNameLines(check, TARGET).slice(0, 3)).toEqual([
+      "nen issue: ignored: body:1: private repository #1 (named list)",
+      "nen issue: ignored: body:1: private repository #2 (ignore file)",
+      "nen issue: body:1: private repository #3",
+    ]);
+  });
+
+  it("names the named list when both lists exempt one entry", () => {
+    const matcher = compileMatcher(["acme/thing"], parseIgnoreList("thing\n"), parseNamedList("acme/thing\n"));
+    expect(matcher.exemptedBy.get("thing")).toBe("named-list");
+  });
+
+  it("counts both lists in the every-name-exempted refusal", () => {
+    const script = (): ScriptedSeams =>
+      new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/thing", "acme/vault"])]);
+    const both = checkPrivateNames(script(), TARGET, [{ field: "body", text: "x" }], false, parseIgnoreList("vault\n"), false, parseNamedList("acme/thing\n"));
+    expect(both.result).toBe("unavailable");
+    expect(both.error).toMatch(/every private name is ignored \(the ignore file and the named list exempt all 2\)/);
+    const namedOnly = checkPrivateNames(script(), TARGET, [{ field: "body", text: "x" }], false, null, false, parseNamedList("acme/thing\nacme/vault\n"));
+    expect(namedOnly.error).toMatch(/\(the named list exempts all 2\)/);
+    const allowed = checkPrivateNames(script(), TARGET, [{ field: "body", text: "thing" }], false, null, true, parseNamedList("acme/thing\nacme/vault\n"));
+    expect(allowed.result).toBe("clean");
+    expect(allowed.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
+  });
+
+  const HEAD_REF = "git -C /r symbolic-ref -q refs/remotes/origin/HEAD";
+  const main = (path: string): string => `git -C /r show refs/remotes/origin/main:${path}`;
+  const tree = (path: string): string => `git -C /r ls-tree refs/remotes/origin/main -- ${path}`;
+  const file = (path: string, text: string): ScriptedCall => ({ match: main(path), result: { stdout: text } });
+  const blob = (path: string): ScriptedCall => ({ match: tree(path), result: { stdout: `100644 blob 0123456789abcdef0123456789abcdef01234567\t${path}\n` } });
+  const headRef: ScriptedCall = { match: HEAD_REF, result: { stdout: "refs/remotes/origin/main\n" } };
+
+  it("resolves the remote's default branch from refs/remotes/origin/HEAD, and null when it is unset or not origin's", () => {
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([headRef]), "/r")).toBe("refs/remotes/origin/main");
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([{ match: HEAD_REF, result: { code: 1 } }]), "/r")).toBeNull();
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([{ match: HEAD_REF, result: { stdout: "refs/remotes/upstream/main\n" } }]), "/r")).toBeNull();
+    expect(resolveRemoteDefaultRef(new ScriptedSeams([{ match: HEAD_REF, result: { code: 1, spawnFailed: true } }]), "/r")).toBeNull();
+  });
+
+  it("shows a committed file at a ref, tells a file from a tree or symlink, and answers null or absent when git cannot", () => {
+    expect(showAtRef(new ScriptedSeams([file("scripts/named.txt", "acme/thing\n")]), "/r", "refs/remotes/origin/main", "scripts/named.txt")).toBe("acme/thing\n");
+    expect(showAtRef(new ScriptedSeams([{ match: main("scripts/named.txt"), result: { code: 128, stderr: "fatal: path does not exist" } }]), "/r", "refs/remotes/origin/main", "scripts/named.txt")).toBeNull();
+    expect(objectKindAtRef(new ScriptedSeams([blob("scripts/named.txt")]), "/r", "refs/remotes/origin/main", "scripts/named.txt")).toBe("file");
+    expect(objectKindAtRef(new ScriptedSeams([{ match: tree("changelog.d"), result: { stdout: "040000 tree 0123456789abcdef0123456789abcdef01234567\tchangelog.d\n" } }]), "/r", "refs/remotes/origin/main", "changelog.d")).toBe("tree");
+    expect(objectKindAtRef(new ScriptedSeams([{ match: tree("link"), result: { stdout: "120000 blob 0123456789abcdef0123456789abcdef01234567\tlink\n" } }]), "/r", "refs/remotes/origin/main", "link")).toBe("symlink");
+    expect(objectKindAtRef(new ScriptedSeams([{ match: tree("gone"), result: { stdout: "" } }]), "/r", "refs/remotes/origin/main", "gone")).toBe("absent");
+  });
+
+  it("reads the policy, the path and the list at the remote's default branch, and never the checkout's values", () => {
+    const seams = new ScriptedSeams([
+      headRef,
+      file("nen/workflow.json", '{"privateNames":{"namedFile":"scripts/ruled.txt"}}'),
+      blob("scripts/ruled.txt"),
+      file("scripts/ruled.txt", "# ruled\nAcme/Thing\n"),
+    ]);
+    // The checkout declares another path: compared, never read.
+    const read = readCommittedNamedList(seams, "/r", "scripts/mine.txt");
+    expect(read.ref).toBe("refs/remotes/origin/main");
+    expect(read.path).toBe("scripts/ruled.txt");
+    expect([...(read.named?.slugs ?? [])]).toEqual(["acme/thing"]);
+    expect(seams.calls.map((call): string => [call.command, ...call.args].join(" "))).toEqual([
+      HEAD_REF,
+      main("nen/workflow.json"),
+      tree("scripts/ruled.txt"),
+      main("scripts/ruled.txt"),
+    ]);
+  });
+
+  it("a branch that declares its own list, or retargets branch.base at itself, exempts nothing: the default branch's policy decides (Feitan, Nobunaga)", () => {
+    // main's policy declares no named list; the checkout's does, and names a
+    // base of its own. Neither checkout value is read.
+    const seams = new ScriptedSeams([headRef, file("nen/workflow.json", '{"branch":{"base":"feature"}}')]);
+    const read = readCommittedNamedList(seams, "/r", "scripts/mine.txt");
+    expect(read.named).toBeNull();
+    expect(read.reason).toMatch(/declares no privateNames\.namedFile; the checkout's own declaration \('scripts\/mine.txt'\) is head content and decides nothing/);
+    expect(seams.calls.map((call): string => call.args.join(" ")).join("\n")).not.toContain("feature");
+    expect(seams.calls.map((call): string => call.args.join(" ")).join("\n")).not.toContain("mine.txt");
+  });
+
+  it.each([
+    ["the ref unset", [{ match: HEAD_REF, result: { code: 1 } }], /refs\/remotes\/origin\/HEAD is not set/],
+    ["no policy at the ref", [headRef, { match: main("nen/workflow.json"), result: { code: 128 } }], /nen\/workflow.json is not at refs\/remotes\/origin\/main/],
+    ["a policy this build cannot parse", [headRef, file("nen/workflow.json", '{"coverage":{"minimun":1}}')], /could not be read -- .*coverage\.minimun/],
+    ["a policy that is not JSON", [headRef, file("nen/workflow.json", "not json")], /is not valid JSON/],
+    ["a directory at the path", [headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"changelog.d"}}'), { match: tree("changelog.d"), result: { stdout: "040000 tree 0123456789abcdef0123456789abcdef01234567\tchangelog.d\n" } }], /'changelog.d' at refs\/remotes\/origin\/main is a tree, not a regular file/],
+    ["a symlink at the path", [headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"link"}}'), { match: tree("link"), result: { stdout: "120000 blob 0123456789abcdef0123456789abcdef01234567\tlink\n" } }], /is a symlink, not a regular file/],
+    ["no such file at the ref", [headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"scripts/x.txt"}}'), { match: tree("scripts/x.txt"), result: { stdout: "" } }], /'scripts\/x.txt' is not at refs\/remotes\/origin\/main/],
+  ])("names nothing, with the reason, on %s", (_case, script, reason) => {
+    const read = readCommittedNamedList(new ScriptedSeams(script as ScriptedCall[]), "/r", "scripts/x.txt");
+    expect(read.named).toBeNull();
+    expect(read.reason).toMatch(reason);
+  });
+
+  it("a bare name on the committed list throws NamedListError naming the line", () => {
+    const seams = new ScriptedSeams([headRef, file("nen/workflow.json", '{"privateNames":{"namedFile":"scripts/x.txt"}}'), blob("scripts/x.txt"), file("scripts/x.txt", "acme/thing\nvault\n")]);
+    expect(() => readCommittedNamedList(seams, "/r", "scripts/x.txt")).toThrow(NamedListError);
+  });
+
+  it("reads a lazily given named list only after the visibility row: never under the opt-out, never for a private target", () => {
+    let calls = 0;
+    const named = (): NamedList => {
+      calls += 1;
+      return parseNamedList("acme/thing\n");
+    };
+    expect(checkPrivateNames(new ScriptedSeams([]), TARGET, [{ field: "body", text: "thing" }], true, null, false, named).result).toBe("skipped-by-flag");
+    expect(checkPrivateNames(new ScriptedSeams([visibility({ visibility: "private" })]), TARGET, [{ field: "body", text: "thing" }], false, null, false, named).result).toBe("skipped-private-target");
+    expect(calls).toBe(0);
+    const check = checkPrivateNames(new ScriptedSeams([visibility({ visibility: "public" }), FULL_REACH_ROW, page(1, ["acme/thing", "b/zeta"])]), TARGET, [{ field: "body", text: "thing" }], false, null, false, named);
+    expect(calls).toBe(1);
+    expect(check.hits).toEqual([{ field: "body", line: 1, index: 1, normalised: false, ignored: true, ignoredBy: "named-list" }]);
   });
 });

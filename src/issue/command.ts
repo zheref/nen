@@ -501,10 +501,31 @@ usage:
       EVERY private name refuses (exit 1, "every private name is ignored")
       unless --allow-all-ignored is given. An ignored hit never blocks
       and is never silent: 'ignored: <field>:<line>: private repository #k
-      (ignore file)' on stderr, without the name. --json carries
+      (ignore file)' on stderr, without the name.
+      The --repo checkout's COMMITTED NAMED LIST is honoured beside it
+      (zheref/nen#441): nen/workflow.json -> privateNames.namedFile names
+      a file of private repositories whose NAME a recorded ruling made
+      public, one exact 'owner/name' per line ('#' comments, blanks
+      ignored, case-insensitive). A bare 'name' there is a usage error
+      (exit 2) naming the line: it would exempt every owner's repository of
+      that name, and a same-named private repository under another owner
+      stays a hit. The checkout's declaration is only the switch: the path
+      and the list are read at the remote's default branch
+      ('refs/remotes/origin/HEAD', then '<that ref>:nen/workflow.json' and
+      '<that ref>:<its namedFile>'), never from the checkout, so a branch
+      cannot write, retarget or point the guard at its own exemption; a line
+      counts once merged there and fetched. Whatever cannot be read on that
+      route (the ref unset, no policy or no file there, a directory or
+      symlink, a policy this build cannot parse) names nothing and the run
+      says so. Every-name-exempted counts both lists, and
+      --allow-all-ignored is accepted with a declared named list and no
+      ignore file. An ignored hit says which list: '(named list)' or
+      '(ignore file)' on stderr, 'ignoredBy: named-list | ignore-file'
+      under --json. --json carries
       'privateNameCheck: { result: clean | skipped-private-target |
       skipped-by-flag | refused | unavailable, targetVisibility, listSize,
-      owners, hits: [{ field, line, index, normalised, ignored }], error }'
+      owners, hits: [{ field, line, index, normalised, ignored, ignoredBy }],
+      error }'
       (listSize/owners are counts, null when the list was not read); a
       refused 'comment' report carries no 'body'.
 

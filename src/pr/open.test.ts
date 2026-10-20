@@ -363,7 +363,7 @@ describe("nen pr open -- the private-name guard (zheref/nen#363)", () => {
     expect(result.code).toBe(4);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(doc).toMatchObject({ contract: OPEN_CONTRACT, dryRun: true, opened: false });
-    expect((doc["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "title", line: 1, index: 1, normalised: false, ignored: false }]);
+    expect((doc["privateNameCheck"] as { hits: unknown[] }).hits).toEqual([{ field: "title", line: 1, index: 1, normalised: false, ignored: false, ignoredBy: null }]);
   });
 
   it("a PRIVATE target is not checked -- the list is never read -- and the body bytes go to gh on stdin", async () => {
