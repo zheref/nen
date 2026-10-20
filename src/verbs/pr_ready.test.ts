@@ -4,7 +4,7 @@
 // network -- `deps.openSource` is the one seam this file drives).
 
 import { afterEach, describe, expect, it } from "vitest";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -598,7 +598,7 @@ function sampleReport(overrides: Partial<ReadyReport> = {}): ReadyReport {
       declaredExclusionsSource: "zheref/example@basebase",
       notes: [],
       deliveryPr: false,
-      identities: { source: "schema", path: "/repo/nen/gates.json" },
+      identities: { source: "schema", path: "/repo/nen/gates.json", read: "gates-flag" },
       dependabotCarveOut: false,
       warnings: [],
       evaluatedAt: "2025-01-01T00:00:00Z",
@@ -701,12 +701,18 @@ function stubDeps(source: PrStateSource | null, local: LocalCheckout | null = nu
   };
 }
 
+// An empty root OUTSIDE this checkout (zheref/nen#372, Feitan 4): with no
+// --repo the root is the current directory -- this repository -- and the
+// fixture --gates names would sit inside it, which reads as head content.
+// The default here is the ordinary case: a --gates file the caller vouches for.
+const OUTSIDE_ROOT = mkdtempSync(join(tmpdir(), "nen-372-outside-"));
+
 function input(overrides: Partial<PrReadyInput> = {}): PrReadyInput {
   return {
     positionals: ["pr", "ready", "9"],
     values: { "gh-repo": "zheref/example", gates: schemaPath(BANKAI_REPO, GATES_FILE) },
     booleans: new Set(["json"]),
-    repoFlag: null,
+    repoFlag: OUTSIDE_ROOT,
     ...overrides,
   };
 }
@@ -1557,18 +1563,22 @@ describe("prReady -- a relative --gates is the target repository's file, and the
       // Standing anywhere at all: the answer must not depend on it.
       process.chdir(tmpdir());
       const { io, out } = capture();
+      // A relative path to a file OUTSIDE the --repo root, so it is the
+      // caller's word (zheref/nen#372); the checkout's own nen/gates.json
+      // under any spelling is read at the base instead -- tested below.
       const code = await prReady(
         input({
-          values: { "gh-repo": "zheref/example", gates: join("nen", "gates.json") },
+          values: { "gh-repo": "zheref/example", gates: join("..", "alt-repo", "nen", "gates.json") },
           repoFlag: BANKAI_REPO,
         }),
         io,
         stubDeps(stubSource()),
       );
-      expect(code).toBe(0);
+      expect(code).not.toBe(2);
       const report = JSON.parse(out.join("\n")) as ReadyReport;
-      expect(report.meta.identities.path).toBe(schemaPath(BANKAI_REPO, GATES_FILE));
+      expect(report.meta.identities.path).toBe(schemaPath(ALT_REPO, GATES_FILE));
       expect(report.meta.identities.source).toBe("schema");
+      expect(report.meta.identities.read).toBe("gates-flag");
     } finally {
       process.chdir(previous);
     }
@@ -1578,14 +1588,14 @@ describe("prReady -- a relative --gates is the target repository's file, and the
     const { io, out } = capture();
     await prReady(
       input({
-        values: { "gh-repo": "zheref/example", gates: join("nen", "gates.json") },
+        values: { "gh-repo": "zheref/example", gates: join("..", "alt-repo", "nen", "gates.json") },
         booleans: new Set(["explain"]),
         repoFlag: BANKAI_REPO,
       }),
       io,
       stubDeps(stubSource()),
     );
-    expect(out.join("\n")).toContain(`identities ${schemaPath(BANKAI_REPO, GATES_FILE)}`);
+    expect(out.join("\n")).toContain(`identities ${schemaPath(ALT_REPO, GATES_FILE)} (--gates, the caller's file)`);
   });
 
   it("a --gates that does not exist is exit 2 with an actionable refusal, not a raw ENOENT", async () => {
@@ -2022,7 +2032,7 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     expect(report?.meta.notes).toEqual([]);
   });
 
-  it("without --gates, reads the CHECKOUT's own nen/gates.json for identities -- and still takes exclusions from the base (N8)", async () => {
+  it("without --gates, reads identities AND exclusions from the base; a base with no file gives no verdict (N8, zheref/nen#372)", async () => {
     const root = mkdtempSync(join(tmpdir(), "nen-249-checkout-"));
     dirs.push(root);
     mkdirSync(join(root, "nen"), { recursive: true });
@@ -2037,12 +2047,23 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
       return JSON.parse(out.join("\n")) as ReadyReport;
     };
     const atBase = await own(withRedWindows(baseDeclares([RULING])));
-    expect(atBase.meta.identities.path).toBe(join(root, "nen", "gates.json"));
+    expect(atBase.meta.identities).toEqual({
+      source: "schema",
+      path: "zheref/example@basebase:nen/gates.json",
+      read: "base",
+    });
     expect(atBase.verdict).toBe("ready");
     expect(atBase.meta.declaredExclusions[0]?.status).toBe("honoured");
+    // A base declaring NO file never applies the checkout's (hanten round 1,
+    // Feitan 1): no verdict, and the checkout's file is named as not applied.
     const headOnly = await own(withRedWindows(baseDeclares(null)));
-    expect(headOnly.verdict).toBe("not-ready");
-    expect(headOnly.meta.warnings.join("\n")).toMatch(/in the local nen\/gates\.json but not at the pull request's base/);
+    expect(headOnly.verdict).toBe("unevaluated");
+    expect(headOnly.meta.identities).toEqual({
+      source: "schema",
+      path: join(root, "nen", "gates.json"),
+      read: "local-unverified",
+    });
+    expect(headOnly.gateLine).toMatch(/^unevaluated: no gate to apply: the pull request's base \(zheref\/example@basebase:nen\/gates\.json\) declares no nen\/gates\.json/);
   });
 
   it("a PR whose HEAD adds an exclusion for its own red check reads not-ready, and says why (Feitan F1)", async () => {
@@ -2211,6 +2232,454 @@ describe("prReady -- declared checks.excluded (zheref/nen#249)", () => {
     );
     expect(code).toBe(2);
     expect(err.join("\n")).toMatch(/checks\.excluded\[0\]\.reason/);
+  });
+});
+
+// ── every nen/gates.json input at the base (zheref/nen#372) ─────────────────
+
+describe("prReady -- every nen/gates.json input is read at the PR's base (zheref/nen#372)", () => {
+  const dirs: string[] = [];
+  afterEach((): void => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  // The BASE's rules: one reviewer, owed a round at head, posting as exactly
+  // `rev-bot[bot]`. Nothing else satisfies it.
+  // A delivery author nobody here is, so the CON-40 carve-out never fires.
+  const DELIVERY = { author_pattern: { pattern: "^delivery-bot\\[bot\\]$", ignoreCase: false }, head_ref_prefixes: ["integration/"], labels: [] };
+  const STRICT = {
+    version: 1,
+    delivery: DELIVERY,
+    reviewers: [{ name: "rev", login_pattern: { pattern: "^rev-bot\\[bot\\]$", ignoreCase: false } }],
+    approval_policy: "review-round-only",
+    default_approvers: [],
+    base_reviewers: ["rev"],
+  };
+  // The HEAD's edit: the same reviewer, its pattern widened to admit the PR's
+  // own author -- the shape Feitan named on #264.
+  const LOOSE_LOGIN = {
+    ...STRICT,
+    reviewers: [{ name: "rev", login_pattern: { pattern: "^(rev-bot\\[bot\\]|intruder)$", ignoreCase: false } }],
+  };
+  // A quorum of two over two bots, where only one has a round.
+  const QUORUM_OF_TWO = {
+    version: 1,
+    delivery: DELIVERY,
+    reviewers: [
+      { name: "alpha", login_pattern: { pattern: "^alpha\\[bot\\]$", ignoreCase: false } },
+      { name: "beta", login_pattern: { pattern: "^beta\\[bot\\]$", ignoreCase: false } },
+    ],
+    approval_policy: "review-round-only",
+    default_approvers: [],
+    base_reviewers: ["alpha"],
+    round_quorum: { any_of: ["alpha", "beta"], minimum: 2 },
+  };
+  const QUORUM_OF_ONE = { ...QUORUM_OF_TWO, round_quorum: { any_of: ["alpha", "beta"], minimum: 1 } };
+
+  /** A checkout -- the PR's own head, as a worktree holds it -- carrying `local`. */
+  function checkout(local: Record<string, unknown>): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-372-"));
+    dirs.push(root);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    writeFileSync(join(root, "nen", "gates.json"), JSON.stringify(local));
+    return root;
+  }
+  /** A green PR reviewed at head by `logins`, whose BASE answers `atBase`. */
+  function source(logins: readonly string[], atBase: () => Promise<string | null>): PrStateSource {
+    return stubSource({
+      reviews: async (): Promise<unknown[]> =>
+        logins.map((login) => ({ user: { login }, state: "COMMENTED", commit_id: "cafebabe", submitted_at: "2025-01-01T00:00:00Z" })),
+      fileAtRef: async (_repo: PrRef, path: string, ref: string): Promise<string | null> => {
+        expect(path).toBe("nen/gates.json");
+        expect(ref).toBe("basebase");
+        return atBase();
+      },
+    });
+  }
+  const declares = (value: Record<string, unknown>) => async (): Promise<string | null> => JSON.stringify(value);
+  const run = async (
+    root: string,
+    src: PrStateSource | null,
+    mode: "json" | "explain" | "plain" = "json",
+    values: Record<string, string> = {},
+    extra: readonly string[] = [],
+  ): Promise<{ code: number; out: string[]; report: ReadyReport | null }> => {
+    const { io, out, err } = capture();
+    const code = await prReady(
+      input({
+        values: { "gh-repo": "zheref/example", ...values },
+        repoFlag: root,
+        booleans: new Set([...(mode === "plain" ? [] : [mode]), ...extra]),
+      }),
+      io,
+      stubDeps(src),
+    );
+    // A refusal prints nothing on stdout; name it rather than failing on the parse.
+    expect(code === 2 ? err.join("\n") : "", "refused").toBe("");
+    return { code, out, report: mode === "json" ? (JSON.parse(out.join("\n")) as ReadyReport) : null };
+  };
+
+  it("a head that loosens login_pattern does not change the verdict: the base's pattern decides", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    const strictBase = await run(root, source(["intruder"], declares(STRICT)));
+    expect(strictBase.code).toBe(1);
+    expect(strictBase.report?.verdict).toBe("not-ready");
+    expect(strictBase.report?.meta.identities).toEqual({
+      source: "schema",
+      path: "zheref/example@basebase:nen/gates.json",
+      read: "base",
+    });
+    expect(strictBase.report?.meta.warnings).toEqual([]);
+    // The control: the SAME head, judged by its own file because the base
+    // carries the loose one too, reads ready -- so it was the base's pattern,
+    // and nothing else, that held the PR above.
+    const looseBase = await run(root, source(["intruder"], declares(LOOSE_LOGIN)));
+    expect(looseBase.report?.verdict).toBe("ready");
+  });
+
+  it("a head that loosens round_quorum does not change the verdict: the base's minimum decides", async () => {
+    const root = checkout(QUORUM_OF_ONE);
+    const strictBase = await run(root, source(["alpha[bot]"], declares(QUORUM_OF_TWO)));
+    expect(strictBase.code).toBe(1);
+    expect(strictBase.report?.verdict).toBe("not-ready");
+    expect(strictBase.report?.gateLine).toMatch(/quorum/);
+    const looseBase = await run(root, source(["alpha[bot]"], declares(QUORUM_OF_ONE)));
+    expect(looseBase.report?.verdict).toBe("ready");
+  });
+
+  it("the base's file decides even when the checkout's is STRICTER: the base is the source, not the stricter of the two", async () => {
+    const root = checkout(QUORUM_OF_TWO);
+    const { report } = await run(root, source(["alpha[bot]"], declares(QUORUM_OF_ONE)));
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.identities.read).toBe("base");
+  });
+
+  it("a base read that FAILS falls back to the local file, and every output says so", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    const failing = (): PrStateSource =>
+      source(["intruder"], async (): Promise<string | null> => {
+        throw new Error("HTTP 403: Resource not accessible by integration");
+      });
+    const json = await run(root, failing());
+    expect(json.report?.verdict).toBe("ready");
+    expect(json.report?.meta.identities).toEqual({
+      source: "schema",
+      path: join(root, "nen", "gates.json"),
+      read: "local-fallback",
+    });
+    const warning = `gate inputs read from the LOCAL ${join(root, "nen", "gates.json")}, NOT the pull request's base (zheref/example@basebase:nen/gates.json): the base could not be read (HTTP 403: Resource not accessible by integration). In a worktree the local file is the pull request's own head, so the reviewers, rounds, quorum, approvals and carve-outs this verdict applied may be ones the base has not merged; 'pr merge' and 'watch until --until ready' refuse a verdict that rests on them.`;
+    expect(json.report?.meta.warnings).toEqual([warning]);
+    const plain = await run(root, failing(), "plain");
+    expect(plain.out).toContain(`  warning: ${warning}`);
+    const explain = await run(root, failing(), "explain");
+    expect(explain.out.join("\n")).toContain("(LOCAL fallback -- the base could not supply it; see the warning)");
+  });
+
+  it("a base file this build REFUSES never falls back: no verdict, whatever the checkout carries (hanten round 1, Feitan 2)", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    for (const [label, text] of [
+      ["unread key", JSON.stringify({ ...STRICT, future_stricter_rule: {} })],
+      ["not JSON", "{ not json"],
+      ["unsupported version", JSON.stringify({ ...STRICT, version: 2 })],
+    ] as const) {
+      const { code, report } = await run(root, source(["intruder"], async (): Promise<string | null> => text));
+      expect(code, label).toBe(1);
+      expect(report?.verdict, label).toBe("unevaluated");
+      expect(report?.meta.identities.read, label).toBe("local-unverified");
+      expect(report?.gateLine, label).toMatch(
+        /^unevaluated: no gate to apply: this nen cannot read the gate the pull request's base declares \(zheref\/example@basebase:nen\/gates\.json: /,
+      );
+      expect(report?.remedy, label).toMatch(/^Upgrade nen to a build that reads the base's gates file/);
+      expect(report?.conjuncts.every((c): boolean => c.status === "unevaluated"), label).toBe(true);
+      expect(report?.conjuncts[0]?.missing, label).toMatch(/^the gate could not be established \(this nen cannot read/);
+    }
+  });
+
+  it("a base that declares NO file never applies a head-added one: --reviewers decides, or there is no verdict (Feitan 1)", async () => {
+    // Feitan's probe at 31a0818: the head ADDS a gates file widening rev's
+    // login to the PR's own author, the base has none, the caller names its
+    // own reviewer set.
+    const root = checkout(LOOSE_LOGIN);
+    const absent = (): PrStateSource => source(["intruder"], async (): Promise<string | null> => null);
+    const flagged = await run(root, absent(), "json", { reviewers: "rev", approvers: "" });
+    expect(flagged.code).toBe(1);
+    expect(flagged.report?.verdict).toBe("not-ready");
+    expect(flagged.report?.meta.identities).toEqual({ source: "flags", path: null, read: null });
+    expect(flagged.report?.meta.warnings.join("\n")).toContain(
+      `declares no nen/gates.json, so no merged ruling states a gate -- and the checkout's own file, in a worktree the pull request's head, is never applied in its place. The identities are --reviewers' own (each name the whole login); the checkout's ${join(root, "nen", "gates.json")} was ignored.`,
+    );
+    // The control: --reviewers' own login does satisfy the round.
+    const own = await run(root, source(["rev"], async (): Promise<string | null> => null), "json", { reviewers: "rev", approvers: "" });
+    expect(own.report?.verdict).toBe("ready");
+    // No --reviewers: no gate anybody merged, no verdict -- never ready.
+    const bare = await run(root, absent());
+    expect(bare.code).toBe(1);
+    expect(bare.report?.verdict).toBe("unevaluated");
+    expect(bare.report?.remedy).toMatch(/^Merge a nen\/gates\.json into the base first, or pass --reviewers a,b,c/);
+  });
+
+  it("a PR with no base commit, or a transport that cannot read files, falls back with the reason", async () => {
+    const root = checkout(STRICT);
+    const noReader = source(["rev-bot[bot]"], declares(STRICT));
+    delete (noReader as { fileAtRef?: unknown }).fileAtRef;
+    const a = await run(root, noReader);
+    expect(a.report?.meta.identities.read).toBe("local-fallback");
+    expect(a.report?.meta.warnings.join("\n")).toMatch(/cannot read files at a commit/);
+    const withBase = source(["rev-bot[bot]"], declares(STRICT));
+    const noBase: PrStateSource = {
+      ...withBase,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+        const snapshot = await withBase.pullRequestSnapshot(repo, n);
+        return { ...snapshot, pullRequest: { ...snapshot.pullRequest, baseRefOid: undefined } } as PullRequestSnapshot;
+      },
+    };
+    const b = await run(root, noBase);
+    expect(b.report?.meta.identities.read).toBe("local-fallback");
+    expect(b.report?.meta.warnings.join("\n")).toMatch(/\(zheref\/example@\(unknown base\):nen\/gates\.json\): the base could not be read \(GitHub answered no base commit/);
+  });
+
+  it("the base is read ONCE, and its checks.excluded and identities come from that one read", async () => {
+    const root = checkout(STRICT);
+    let reads = 0;
+    const src = source(["rev-bot[bot]"], async (): Promise<string | null> => {
+      reads += 1;
+      return JSON.stringify(STRICT);
+    });
+    const { report } = await run(root, src);
+    expect(report?.verdict).toBe("ready");
+    expect(reads).toBe(1);
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+  });
+
+  it("the base's round_policy.stallMinutes is the one applied, not the head's", async () => {
+    // Copilot-shaped: bounded-exempt, a request pending since 2024-12-31T23:00Z,
+    // judged at 2025-01-01T00:00Z -- 60 minutes. The head declares a 120-minute
+    // bound (not stalled); the base 30 (stalled).
+    const exempt = (stallMinutes: number): Record<string, unknown> => ({
+      version: 1,
+      delivery: DELIVERY,
+      reviewers: [{ name: "bot", login_pattern: { pattern: "^bot\\[bot\\]$", ignoreCase: false }, bounded_policy_exempt: true }],
+      approval_policy: "review-round-only",
+      default_approvers: [],
+      base_reviewers: ["bot"],
+      round_policy: { stallMinutes },
+    });
+    const root = checkout(exempt(120));
+    const pending = (atBase: number): PrStateSource => {
+      const base = stubSource();
+      return {
+        ...base,
+        reviews: async (): Promise<unknown[]> => [],
+        pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+          const snapshot = await base.pullRequestSnapshot(repo, n);
+          return { ...snapshot, reviewRequests: [{ login: "bot[bot]" }] };
+        },
+        timeline: async (): Promise<unknown[]> => [
+          { event: "review_requested", created_at: "2024-12-31T23:00:00Z", requested_reviewer: { login: "bot[bot]" } },
+        ],
+        fileAtRef: async (): Promise<string | null> => JSON.stringify(exempt(atBase)),
+      };
+    };
+    const stalled = await run(root, pending(30));
+    const notStalled = await run(root, pending(120));
+    const row = (report: ReadyReport | null): string | undefined =>
+      report?.conjuncts.find((c): boolean => c.id === "round-stalled")?.status;
+    expect(stalled.report?.meta.identities.read).toBe("base");
+    expect(row(stalled.report)).toBe("failed");
+    expect(row(notStalled.report)).toBe("ready");
+  });
+
+  it("an explicit --gates is the caller's word: its identities win, and checks.excluded is still the base's", async () => {
+    const root = checkout(STRICT);
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-372-caller-"));
+    dirs.push(elsewhere);
+    const callerFile = join(elsewhere, "caller-gates.json");
+    writeFileSync(callerFile, JSON.stringify(LOOSE_LOGIN));
+    let reads = 0;
+    const src = source(["intruder"], async (): Promise<string | null> => {
+      reads += 1;
+      return JSON.stringify(STRICT);
+    });
+    const { report } = await run(root, src, "json", { gates: callerFile });
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.identities).toEqual({ source: "schema", path: callerFile, read: "gates-flag" });
+    expect(report?.meta.warnings).toEqual([]);
+    // Read once, for the exclusions alone (zheref/nen#249).
+    expect(reads).toBe(1);
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+  });
+
+  it("a --gates naming the checkout's OWN nen/gates.json is the head's file by another spelling: read at the base", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    for (const spelling of ["nen/gates.json", "./nen/gates.json", join(root, "nen", "gates.json")]) {
+      const { report } = await run(root, source(["intruder"], declares(STRICT)), "json", { gates: spelling });
+      expect(report?.verdict, spelling).toBe("not-ready");
+      expect(report?.meta.identities.read, spelling).toBe("base");
+    }
+  });
+
+  it("the same FILE under another name -- a hard link, a case-folded spelling -- is still the checkout's own (Feitan 4)", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-372-link-"));
+    dirs.push(elsewhere);
+    const link = join(elsewhere, "linked-gates.json");
+    linkSync(join(root, "nen", "gates.json"), link);
+    const spellings = [link];
+    // Only on a case-insensitive volume (APFS, NTFS) does the folded spelling name the file at all.
+    const folded = join(root, "NEN", "GATES.JSON");
+    if (existsSync(folded)) spellings.push(folded);
+    for (const spelling of spellings) {
+      const { report } = await run(root, source(["intruder"], declares(STRICT)), "json", { gates: spelling });
+      expect(report?.verdict, spelling).toBe("not-ready");
+      expect(report?.meta.identities.read, spelling).toBe("base");
+    }
+  });
+
+  it("any OTHER --gates file inside the checkout is head content: applied as given, marked local-fallback, warned (Feitan 4)", async () => {
+    const root = checkout(STRICT);
+    mkdirSync(join(root, "contracts"));
+    const inside = join(root, "contracts", "gates.json");
+    writeFileSync(inside, JSON.stringify(LOOSE_LOGIN));
+    let reads = 0;
+    const src = source(["intruder"], async (): Promise<string | null> => {
+      reads += 1;
+      return JSON.stringify(STRICT);
+    });
+    const { report } = await run(root, src, "json", { gates: join("contracts", "gates.json") });
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.identities).toEqual({ source: "schema", path: inside, read: "local-fallback" });
+    expect(report?.meta.warnings.join("\n")).toContain(
+      `--gates '${inside}' names a file inside the --repo checkout (${root}), which in a worktree may be the pull request's own head: it is applied as given, but as possible head content rather than the caller's word`,
+    );
+    expect(reads).toBe(1);
+  });
+
+  it("an unevaluated report AFTER the base was read keeps the base's route and source (Nobunaga 11)", async () => {
+    const root = checkout(STRICT);
+    const base = source(["rev-bot[bot]"], declares(STRICT));
+    const paging: PrStateSource = {
+      ...base,
+      pullRequestSnapshot: async (repo: PrRef, n: number): Promise<PullRequestSnapshot> => {
+        const snapshot = await base.pullRequestSnapshot(repo, n);
+        return { ...snapshot, checkRollupPageInfo: { hasNextPage: true, endCursor: "c1" } };
+      },
+      checkRollupPage: async (): Promise<CheckRollupPage> => {
+        throw new Error("HTTP 502 on page two");
+      },
+    };
+    const { report } = await run(root, paging);
+    expect(report?.verdict).toBe("unevaluated");
+    expect(report?.meta.identities).toEqual({
+      source: "schema",
+      path: "zheref/example@basebase:nen/gates.json",
+      read: "base",
+    });
+    expect(report?.meta.declaredExclusionsSource).toBe("zheref/example@basebase");
+  });
+
+  it("an unevaluated report names the local file as local-unverified: the base was never read", async () => {
+    const root = checkout(STRICT);
+    const { report } = await run(root, null);
+    expect(report?.verdict).toBe("unevaluated");
+    expect(report?.meta.identities).toEqual({
+      source: "schema",
+      path: join(root, "nen", "gates.json"),
+      read: "local-unverified",
+    });
+  });
+
+  // ── a head that DELETES its gates file (round 2, Feitan 1) ───────────────
+  /** A checkout carrying NO nen/gates.json -- the head removed it. */
+  function bare(): string {
+    const root = mkdtempSync(join(tmpdir(), "nen-372-bare-"));
+    dirs.push(root);
+    return root;
+  }
+
+  it("a head that removed its gates file does not turn --reviewers into a replacement: the base's quorum still decides", async () => {
+    let reads = 0;
+    const src = source(["alpha[bot]"], async (): Promise<string | null> => {
+      reads += 1;
+      return JSON.stringify(QUORUM_OF_TWO);
+    });
+    const { code, report } = await run(bare(), src, "json", { reviewers: "alpha[bot]" });
+    expect(reads).toBe(1);
+    expect(code).toBe(1);
+    expect(report?.verdict).toBe("not-ready");
+    expect(report?.gateLine).toMatch(/quorum/);
+    expect(report?.meta.identities).toEqual({ source: "schema", path: "zheref/example@basebase:nen/gates.json", read: "base" });
+    expect(report?.meta.warnings).toContain(
+      "the checkout carries no nen/gates.json, but the pull request's base does (zheref/example@basebase:nen/gates.json): the base's gate applies, and --reviewers only narrows its configured reviewer set, as it does beside a file. A pull request that removes its gates file does not remove the base's gate.",
+    );
+    // The control: the same flags against a base declaring a quorum of one read ready.
+    const one = await run(bare(), source(["alpha[bot]"], declares(QUORUM_OF_ONE)), "json", { reviewers: "alpha[bot]" });
+    expect(one.report?.verdict).toBe("ready");
+  });
+
+  it("--reviewers with no gates file anywhere: the base is read, declares none, and the flags are the gate (read null, no warning)", async () => {
+    let reads = 0;
+    const src = source(["rev"], async (): Promise<string | null> => {
+      reads += 1;
+      return null;
+    });
+    const { code, report } = await run(bare(), src, "json", { reviewers: "rev", approvers: "" });
+    expect(reads).toBe(1);
+    expect(code).toBe(0);
+    expect(report?.meta.identities).toEqual({ source: "flags", path: null, read: null });
+    expect(report?.meta.warnings).toEqual([]);
+  });
+
+  it("--reviewers with no gates file and a base that could not be READ: flags-unverified, warned, and --require-base-gates refuses it", async () => {
+    const failing = (): PrStateSource =>
+      source(["rev"], async (): Promise<string | null> => {
+        throw new Error("HTTP 403");
+      });
+    const { code, report } = await run(bare(), failing(), "json", { reviewers: "rev", approvers: "" });
+    expect(code).toBe(0);
+    expect(report?.verdict).toBe("ready");
+    expect(report?.meta.identities).toEqual({ source: "flags", path: null, read: "flags-unverified" });
+    expect(report?.meta.warnings).toEqual([
+      "the pull request's base (zheref/example@basebase:nen/gates.json) could not be read (HTTP 403), so it is unknown whether it declares a gate --reviewers would only narrow: the identities are --reviewers' own, unverified; 'pr merge', 'watch until --until ready' and --require-base-gates refuse a verdict that rests on them.",
+    ]);
+    const strict = await run(bare(), failing(), "json", { reviewers: "rev", approvers: "" }, ["require-base-gates"]);
+    expect(strict.code).toBe(1);
+    expect(strict.report?.verdict).toBe("unevaluated");
+    expect(strict.report?.gateLine).toBe(
+      "unevaluated: --require-base-gates: the gate inputs were not the pull request's base's (meta.identities.read: flags-unverified)",
+    );
+  });
+
+  it("--reviewers with no gates file and a base file this build refuses: no verdict", async () => {
+    const { code, report } = await run(bare(), source(["rev"], async (): Promise<string | null> => "{ not json"), "json", { reviewers: "rev", approvers: "" });
+    expect(code).toBe(1);
+    expect(report?.verdict).toBe("unevaluated");
+    expect(report?.gateLine).toMatch(/^unevaluated: no gate to apply: this nen cannot read the gate the pull request's base declares/);
+  });
+
+  it("--require-base-gates: a base-judged or --gates-judged ready stands; a local-fallback ready is unevaluated, exit 1, naming the route (Feitan 2)", async () => {
+    const root = checkout(LOOSE_LOGIN);
+    const base = await run(root, source(["rev-bot[bot]"], declares(STRICT)), "json", {}, ["require-base-gates"]);
+    expect(base.code).toBe(0);
+    expect(base.report?.verdict).toBe("ready");
+    const elsewhere = mkdtempSync(join(tmpdir(), "nen-372-req-"));
+    dirs.push(elsewhere);
+    writeFileSync(join(elsewhere, "g.json"), JSON.stringify(LOOSE_LOGIN));
+    const flag = await run(root, source(["intruder"], declares(STRICT)), "json", { gates: join(elsewhere, "g.json") }, ["require-base-gates"]);
+    expect(flag.code).toBe(0);
+    const failing = (): PrStateSource =>
+      source(["intruder"], async (): Promise<string | null> => {
+        throw new Error("HTTP 403");
+      });
+    // Without the flag the fallback ready still exits 0 -- the reason the flag exists.
+    expect((await run(root, failing())).code).toBe(0);
+    const strict = await run(root, failing(), "json", {}, ["require-base-gates"]);
+    expect(strict.code).toBe(1);
+    expect(strict.report?.verdict).toBe("unevaluated");
+    expect(strict.report?.gateLine).toBe(
+      "unevaluated: --require-base-gates: the gate inputs were not the pull request's base's (meta.identities.read: local-fallback)",
+    );
+    expect(strict.report?.meta.identities.read).toBe("local-fallback");
+    expect(strict.report?.conjuncts.every((c): boolean => c.status === "unevaluated")).toBe(true);
+    expect(strict.report?.meta.warnings.join("\n")).toMatch(/^gate inputs read from the LOCAL /);
   });
 });
 
