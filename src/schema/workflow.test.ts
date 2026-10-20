@@ -1284,3 +1284,23 @@ describe("deploy -- a repeated key is refused, never collapsed (Feitan N1 on #30
     expect(loaded.workflow.deploy.defaultTarget).toBe("staging");
   });
 });
+
+
+describe("release.unitPaths -- deletion-only entries (#425)", () => {
+  it("accepts a literal file or directory prefix alongside every older entry form", () => {
+    const entries = ["=CHANGELOG.md", { path: "changelog.d/", deleteOnly: true }, { path: "old.md", deleteOnly: true }, { path: "package.json", keys: ["version"] }, { path: "src/version.ts", lines: ["version"] }];
+    expect(parseWorkflow("<doc>", { release: { unitPaths: entries } }).release.unitPaths).toEqual(entries);
+  });
+
+  it.each([false, null, "true", 1, undefined])("refuses deleteOnly=%j by pointer", (deleteOnly) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: "changelog.d/", deleteOnly }] } })).toThrow(/release\.unitPaths\[0\]\.deleteOnly/);
+  });
+
+  it.each(["", "/", "/changelog.d/", "../fragments", "dir/../file", "dir/./file", "dir//file", "dir//", "**", "dir/*", "dir/?", "=file", "dir\\file", "file\nname", "file#name", "file%20name"])("refuses unsafe deletion prefix %j", (path) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path, deleteOnly: true }] } })).toThrow(/release\.unitPaths\[0\]\.path/);
+  });
+
+  it.each([{ keys: ["version"] }, { lines: ["ok"] }, { extra: true }])("refuses mixed or unknown deletion entry keys %j", (extra) => {
+    expect(() => parseWorkflow("<doc>", { release: { unitPaths: [{ path: "changelog.d/", deleteOnly: true, ...extra }] } })).toThrow(SchemaError);
+  });
+});

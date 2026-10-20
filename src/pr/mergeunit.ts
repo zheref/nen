@@ -530,7 +530,7 @@ export function runUnitCheckGate(options: RunUnitCheckGate): GateOutcome {
   // Fetched only when a content entry exists at all, and only a ToolError
   // aborts THIS gate (F8(a) -- every other gate in the composition still
   // reports).
-  const hasContentEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
+  const hasContentEntry = unitPaths.some((entry): boolean => typeof entry !== "string" && !("deleteOnly" in entry));
   let keyScoped: KeyScopedContext | undefined;
   if (hasContentEntry) {
     let mergeBaseSha: string;

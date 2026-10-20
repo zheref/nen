@@ -294,8 +294,14 @@ export interface ReleaseUnitLinedPath {
   readonly lines: readonly string[];
 }
 
-/** A whole-path pattern (`=path` for exact), a keyed JSON file, or a line-bound text file. */
-export type ReleaseUnitEntry = string | ReleaseUnitKeyedPath | ReleaseUnitLinedPath;
+/** A literal repo-relative path prefix whose changed files may only be removed. */
+export interface ReleaseUnitDeletedPath {
+  readonly path: string;
+  readonly deleteOnly: true;
+}
+
+/** A whole-path pattern, a keyed JSON file, a line-bound text file, or a deletion-only prefix. */
+export type ReleaseUnitEntry = string | ReleaseUnitKeyedPath | ReleaseUnitLinedPath | ReleaseUnitDeletedPath;
 
 /**
  * `release.unitPaths` -- the repo-relative path set (an `=exact` path, a prefix or a narrow glob,
@@ -1165,31 +1171,43 @@ function isUniversalPattern(pattern: string): boolean {
   return UNIVERSAL_PROBE_PATHS.every((probe): boolean => matchesPattern(probe, pattern));
 }
 
-/** A content bound chooses exactly one of `keys` and `lines`. */
-const UNIT_PATH_ENTRY_KEYS: readonly string[] = ["path", "keys", "lines"];
+/** An object chooses one content or deletion bound. */
+const UNIT_PATH_ENTRY_KEYS: readonly string[] = ["path", "keys", "lines", "deleteOnly"];
 
 /**
  * One `release.unitPaths[i]` that arrived as an OBJECT rather than a string
- * -- a content-scoped bound, validated for SHAPE only (the same discipline
+ * -- a content or deletion bound, validated for SHAPE only (the same discipline
  * `review.scopes` and the plain-string branch below both already hold to):
  * `path` is a repo-relative path to the ONE exact file this entry bounds
  * (never a pattern -- see `ReleaseUnitKeyedPath`'s own doc comment), `keys`
  * is a non-empty list of leaf-key strings, or `lines` a non-empty list of
- * safe full-line regexes. Whether the file is readable as JSON/text and its
+ * safe full-line regexes. `deleteOnly: true` instead bounds a literal path
+ * prefix to removals. Whether the file is readable as JSON/text and its
  * changes stayed inside these bounds,
  * is ../release/unitcheck.ts's own question, asked against real base/head
  * content this loader has never seen.
  */
-function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Record<string, unknown>>): ReleaseUnitKeyedPath | ReleaseUnitLinedPath {
+function parseUnitPathEntry(path: string, pointer: string, value: Readonly<Record<string, unknown>>): ReleaseUnitKeyedPath | ReleaseUnitLinedPath | ReleaseUnitDeletedPath {
   for (const key of Object.keys(value)) {
     if (key.startsWith("$") || UNIT_PATH_ENTRY_KEYS.includes(key)) continue;
     throw new SchemaError(
       path,
       `${pointer}.${key}`,
-      "is not a key a content-scoped release-unit entry can carry. Use 'path' and exactly one of 'keys' (JSON leaf paths) or 'lines' (whole-line regular expressions)",
+      `is not a key a ${Object.hasOwn(value, "deleteOnly") ? "deletion-only" : "content-scoped"} release-unit entry can carry. Use 'path' and exactly one of 'keys', 'lines' or 'deleteOnly'`,
     );
   }
   const filePath = requireString(path, `${pointer}.path`, value["path"]);
+  if (Object.hasOwn(value, "deleteOnly")) {
+    if (value["deleteOnly"] !== true) throw new SchemaError(path, `${pointer}.deleteOnly`, "must be true; omit the entry to leave deletions unclaimed");
+    if (Object.hasOwn(value, "keys") || Object.hasOwn(value, "lines")) throw new SchemaError(path, pointer, "must carry exactly one of 'keys', 'lines' or 'deleteOnly', never a mixed bound");
+    // One optional trailing slash spells a directory prefix. Keep the shared
+    // segment-boundary matcher, with no glob or '=path' interpretation here.
+    const prefix = filePath.endsWith("/") ? filePath.slice(0, -1) : filePath;
+    if (filePath.startsWith("=") || /[#?%]/.test(prefix) || exactPathProblem(`=${prefix}`) !== null) {
+      throw new SchemaError(path, `${pointer}.path`, "must name a literal repo-relative path prefix, with no glob, URL metacharacter, backslash, control character, empty, '.' or '..' segment; one trailing '/' is allowed");
+    }
+    return { path: filePath, deleteOnly: true };
+  }
   if (filePath.trim() === "" || filePath.startsWith("/") || filePath.split("/").some((segment): boolean => segment === "" || segment === "." || segment === "..") || /[\\*\u0000-\u001f\u007f]/.test(filePath)) {
     throw new SchemaError(
       path,
@@ -2240,7 +2258,8 @@ export function describeRelease(workflow: Workflow): string {
   const strings = entries.filter((entry): entry is string => typeof entry === "string");
   const keyed = entries.filter((entry): boolean => typeof entry !== "string" && "keys" in entry).length;
   const lined = entries.filter((entry): boolean => typeof entry !== "string" && "lines" in entry).length;
-  return `${entries.length} entry(s): ${strings.filter((entry): boolean => entry.startsWith("=")).length} exact path(s), ${strings.filter((entry): boolean => !entry.startsWith("=")).length} prefix/glob(s), ${keyed} key-bound, ${lined} line-bound`;
+  const deleted = entries.filter((entry): boolean => typeof entry !== "string" && "deleteOnly" in entry).length;
+  return `${entries.length} entry(s): ${strings.filter((entry): boolean => entry.startsWith("=")).length} exact path(s), ${strings.filter((entry): boolean => !entry.startsWith("=")).length} prefix/glob(s), ${keyed} key-bound, ${lined} line-bound${deleted === 0 ? "" : `, ${deleted} deletion-only`}`;
 }
 
 /**

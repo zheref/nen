@@ -194,7 +194,8 @@ unit-check:
   Reads the pull request's changed files (gh) and compares them to
   --repo's declared release-unit path set (nen/workflow.json's
   'release.unitPaths' -- '=path' for one exact file, a prefix/glob string,
-  {path, keys} for JSON leaves, or {path, lines} for text line patterns,
+  {path, keys} for JSON leaves, {path, lines} for text line patterns,
+  or {path, deleteOnly:true} for removals under a literal path prefix,
   ../report/patterns.ts's grammar, the same one 'nen review scopes' reads).
   A DETERMINISTIC replacement for a human re-reading the diff: this was one
   of the three things "judged by reading rather than by a nen command"
@@ -226,7 +227,7 @@ unit-check:
   refuses to make about a boundary the repository never drew.
   --json: '{ contract: "nen.release.unit-check/v0.1", target, pr,
   unitPaths, keyedPaths, changedFiles, outsideUnit, keyScopedViolations, ok,
-  linedPaths, lineScopedViolations }'.`;
+  linedPaths, lineScopedViolations, deletionOnlyPaths }'.`;
 
 const DEFAULT_HOLD_VAR = "RELEASE_HOLD";
 // DEFAULT_FRAGMENT_DIR now lives in ../changelog/completeness.ts, shared with
@@ -540,7 +541,7 @@ function unitCheck(context: CommandContext): number {
   // repository with no content entries pays no extra API call at all. N6: the
   // content is compared against the MERGE BASE of base/head, not
   // `baseRefOid` directly -- see ../release/unitcheck.ts's `fetchMergeBaseSha`.
-  const hasContentEntry = unitPaths.some((entry): boolean => typeof entry !== "string");
+  const hasContentEntry = unitPaths.some((entry): boolean => typeof entry !== "string" && !("deleteOnly" in entry));
   let keyScoped: KeyScopedContext | undefined;
   if (hasContentEntry) {
     const refs = fetchPrRefs(context.seams, target, ref.number);

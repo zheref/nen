@@ -582,6 +582,20 @@ describe("nen release self-check -- CLI wiring", () => {
 });
 
 describe("nen release unit-check -- CLI wiring", () => {
+  it.each(["removed", "added", "modified", "renamed", undefined])("checks deletion-only REST status %s without reading fragment content", async (status) => {
+    const root = workflowRepo([{ path: "changelog.d/", deleteOnly: true }]);
+    const changed = { filename: "changelog.d/425.md", status, ...(status === "renamed" ? { previous_filename: "changelog.d/old.md" } : {}) };
+    const seams = new ScriptedSeams([
+      { match: "gh api --paginate --slurp repos/acme/widgets/pulls/9/files", result: { code: 0, stdout: JSON.stringify([[changed]]) } },
+      { match: "gh api repos/acme/widgets/pulls/9", result: { code: 0, stdout: '{"changed_files":1}' } },
+    ]);
+    const result = await capture(["release", "unit-check", "--pr", "acme/widgets#9"], root, seams.run);
+    expect(result.code).toBe(status === "removed" ? 0 : 1);
+    expect(result.out.join("\n")).toContain("changelog.d/ {deleteOnly: true}");
+    if (status !== "removed") expect(result.out.join("\n")).toContain('outside: "changelog.d/425.md"');
+    expect(seams.calls).toHaveLength(2);
+  });
+
   function workflowRepo(unitPaths: readonly unknown[] | undefined): string {
     const dir = mkdtempSync(join(tmpdir(), "nen-unit-check-"));
     mkdirSync(join(dir, "nen"), { recursive: true });

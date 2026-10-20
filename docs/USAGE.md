@@ -592,7 +592,7 @@ they assumed instead); they come back empty or `null`.
 | `monitor.maxCycles` / `pollSeconds` | how long a monitoring loop may run | callers |
 | `models.<surface>.<tier>` / `models.roles` / `models.rule` | which model alias a role gets on a surface. An **open** map at both levels — nen checks that every leaf is a string and reads nothing else | callers |
 | `profile.default` / `profile.allowed` | which RUN PROFILE a bare turn runs under, and which a caller may ask for (v0.13.0, [#227](https://github.com/zheref/nen/issues/227)). The names are **closed** — `fast`, `standard`, `thorough` — and their meaning is the turn loop's, not nen's: nen refuses a fourth name by pointer, an empty or repeating `allowed`, and a `default` outside `allowed`. Default `{ "default": "standard", "allowed": ["fast", "standard", "thorough"] }`; an `allowed` with no `default` falls back to `standard` when listed, else its first entry | callers ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#profile` row) |
-| `release.unitPaths` | the release-unit bounds: a string `"=README.md"` for one exact path, an existing segment prefix or narrow glob, an object `{"path":"package.json","keys":["version"]}` for JSON leaves, or `{"path":"src/version.ts","lines":["<whole-line regex>"]}` for text. Both removed and added lines must match. Object paths are exact, and `keys` / `lines` are mutually exclusive non-empty lists. See [release unit-check](#nen-release-unit-check) for validation, full-content reads and fail-closed limits. `null` or absent means undeclared and both unit gates refuse; empty lists and universal string globs (`**`, `**/*`) are refused by pointer. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (policy read from the PR's BASE commit); [`schema check`](#nen-schema-check) reports `nen/workflow.json#release` |
+| `release.unitPaths` | the release-unit bounds: a string `"=README.md"` for one exact path, an existing segment prefix or narrow glob, an object `{"path":"package.json","keys":["version"]}` for JSON leaves, or `{"path":"src/version.ts","lines":["<whole-line regex>"]}` for text; `{"path":"changelog.d/","deleteOnly":true}` permits only removals under that literal path prefix. Both removed and added lines must match. Content-bound object paths are exact; `keys`, `lines` and `deleteOnly` are mutually exclusive, and the first two are non-empty lists. See [release unit-check](#nen-release-unit-check) for validation, full-content reads and fail-closed limits. `null` or absent means undeclared and both unit gates refuse; empty lists and universal string globs (`**`, `**/*`) are refused by pointer. No default | [`release unit-check`](#nen-release-unit-check), [`nen pr merge`](#nen-pr-merge) (policy read from the PR's BASE commit); [`schema check`](#nen-schema-check) reports `nen/workflow.json#release` |
 | `futon.advanceGo` | which repo KINDS (`product` \| `process` \| `library`, `../repo/classify.ts`'s own closed three) a named skill's advance-go step is gated to, keyed by skill name with any `plugin:` prefix stripped and lower-cased. A skill this DECLARED map does not name is UNGATED. When the map itself is EMPTY -- the key absent, the whole file absent, an explicit `{}`, or a body carrying only `$`-prefixed metadata keys (none of which count as a declared skill) -- the gate does not read as "no gate" at all: the built-in `DEFAULT_ADVANCE_GO` policy applies instead, and every step it annotates carries `source: "default"`. A map naming even ONE skill is a genuine declaration and replaces the default wholesale (`source: "declared"`) -- see [`parse futon`](#nen-parse-futon)'s "declared vs. default" section | [`parse futon`](#nen-parse-futon) |
 | `runners.naming` / `runners.pools[]` | the self-hosted runner pools [`runner`](#family-runner) acts on (from v0.18.0). `naming` is exactly `{machine}-{consumer}R{slot}` -- the one template this release parses, any other refused naming it -- and may be omitted. Each pool: `id` (a slug, unique), `os` (`Linux`\|`macOS`\|`Windows`) and `arch` (`X64`\|`ARM64`) in GitHub's label case (`windows`, `x64`, `darwin`, `amd64` are refused naming the spelling), `mode` (optional, #333: `service` or `interactive` -- how the runners run on their host; absent is `service` for `Windows` and `Linux` and `interactive` for `macOS`, whose runner is always a LaunchAgent in the user's session. `macOS` + `service` and `Linux` + `interactive` are refused, naming why. An interactive `Windows` pool runs inside a signed-in desktop session, for jobs that drive a real UI, which a service in session 0 cannot), `labels` exactly `["self-hosted", os, arch]`, or `["self-hosted", "Windows", arch, "desktop"]` for an interactive Windows pool, optionally followed by the pool's own label written out (any other extra label is refused: nen's own runner-policy guard (`src/ci/runner-policy.test.ts`; a consumer's guard follows in zheref/hatsu#204) admits only the canonical sets plus the pool's own label, and a bare `self-hosted` would match every runner; `desktop` on a service pool is refused naming the missing `"mode": "interactive"`; the refusal names each fault -- a bare `self-hosted`, a missing os or arch, a second extra label, another pool's `pool-*` label, the pool's own label in the wrong case). **From #340 every pool also carries one label of its own, `pool-<id>`, derived from its `id` and appended LAST** -- `["self-hosted", "Windows", "X64", "pool-windows-x64"]`, `["self-hosted", "Windows", "X64", "desktop", "pool-kwi-desktop"]`. It is never declared (a declaration written before it parses unchanged), and it is the set every `runner` verb uses: what the host script registers with, a rendered workflow's `runs-on`, what `runner verify --pool` and `runner enable` require. GitHub gives `self-hosted`, the OS and the arch to every runner of that OS and arch, so without it any later registration would join the pool by accident. The label prevents that accidental join; it is not an authorization boundary -- anyone who can register a runner on the repository can register it with the label. Pool ids are unique, so two pools never share a pool label and need no refusal of their own, `enableVariable` (optional, `^[A-Z][A-Z0-9_]*$` -- the repository variable a gated job reads; absent means the pool's jobs are not variable-gated), `tools` (non-empty, one word each -- they are written into a bash step), `preflightWorkflow` (a `.yml` basename, **one per pool**: the file is rendered for one pool's `runs-on`, and a green run of it is what `runner enable` accepts), and `root` (optional `windows`/`linux`/`darwin` defaults, a `~` expanded at run time, never stored expanded; no quote, `$`, backtick, `;`, `&`, `|` or `%`, because it is written into PowerShell and bash). Two pools of one os and arch are two pools from #340, told apart by their own labels (a repeated `id` is still refused). **No default, ever**: absent, every `runner` verb that needs it refuses at exit 2 naming the key | [`runner`](#family-runner) ([`schema check`](#nen-schema-check) prints it as the `nen/workflow.json#runners` row) |
 
@@ -7608,6 +7608,26 @@ Each `outside:` path is printed via `JSON.stringify`, so a path carrying a
 quote, a control character, or a leading/trailing space is unambiguous in
 the rendering rather than blending into the line around it.
 
+**Deletion-only entries** (#425): `{"path":"changelog.d/","deleteOnly":true}`
+claims a literal repo-relative path prefix on segment boundaries, using the same
+prefix matcher as string entries. One trailing `/` is allowed; globs, `=`,
+backslashes, control characters, URL metacharacters, empty segments and `.` / `..`
+segments are refused by pointer. `deleteOnly` must be exactly `true`, and cannot
+be combined with `keys` or `lines`. Unknown entry keys are refused.
+
+Only GitHub's explicit `removed` file status passes. Added, modified, renamed,
+copied, missing and unknown statuses fail by filename. Renames touching either
+the old or new path fail, even within the prefix. A broad overlapping string
+never waives this bound; any overlapping JSON or text bound is still mandatory.
+Deletion-only entries need no content read. They do not require fragment text to
+appear in `CHANGELOG.md`. `schema check` counts them in the release pointer row.
+
+For `pr merge --release-unit`, the declaration must already be in the PR's
+**base** policy before a release proposal folds the fragments; adding it in that
+proposal cannot authorize its own deletion. Nen declares `changelog.d/` this way.
+Consumers may add the same entry after upgrading to the next minor containing
+this new entry kind; older Nen versions refuse it. No provisioning is needed.
+
 **Content-scoped entries** (item 4, maintainer's ruling): a `release.unitPaths`
 entry may also be an OBJECT, `{"path": "<exact file>", "keys": ["<json
 pointer or dotted key>", ...]}`, bounding one exact JSON file to a set of its
@@ -7685,12 +7705,14 @@ outside the unit" and "every path is inside it" are both a guess this verb
 refuses to make about a boundary the repository never drew. `--json`:
 `{ contract: "nen.release.unit-check/v0.1", target, pr, unitPaths,
 keyedPaths, changedFiles, outsideUnit, keyScopedViolations, ok,
-linedPaths, lineScopedViolations }` — N15:
+linedPaths, lineScopedViolations, deletionOnlyPaths }` — N15:
 `unitPaths` stays the STRING (whole-path pattern) entries only, exactly the
 shape it had before content-scoped entries existed; the OBJECT
 (key-bound) entries keep their own `keyedPaths` field. The additive
 `linedPaths` field carries `{path, lines}` entries; `lineScopedViolations`
 contains `{path, ok, offendingLines: [{side, line, text}], reason}` outcomes.
+`deletionOnlyPaths` carries `{path, deleteOnly:true}` entries; refused statuses
+join `outsideUnit` as filename strings, preserving the existing report fields.
 
 **Example**
 
