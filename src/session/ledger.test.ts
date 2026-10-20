@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { appendSessionEntry, isSessionEntry, readSessionLedger, sessionLedgerPath, SESSION_CONTRACT, type SessionEntry } from "./ledger.js";
 
 const ENTRY: SessionEntry = { recordedAt: "2026-10-19T12:00:00.000Z", surface: "codex", model: null, dial: null, title: "Session", id: null, source: null };
@@ -39,5 +39,28 @@ describe("session ledger", () => {
     }));
     await Promise.all(jobs);
     expect(readSessionLedger(path, "race").entries.map((entry): string | null => entry.id).sort()).toEqual(["0", "1", "2", "3"]);
+  });
+});
+
+
+describe.skipIf(process.platform === "win32")("non-regular session ledger entries", () => {
+  it.each(["show", "record", "report"])("%s completes without opening a FIFO as JSON", (action) => {
+    const repo = root(), path = sessionLedgerPath(repo, "e");
+    mkdirSync(dirname(path), { recursive: true });
+    expect(spawnSync("mkfifo", [path]).status).toBe(0);
+    try {
+      const argv = action === "report"
+        ? ["--eval", `import {readSessionLedgers} from ${JSON.stringify(join(process.cwd(), "src/report/data.ts"))}; console.log(JSON.stringify(readSessionLedgers(${JSON.stringify(repo)}, console.error)));`]
+        : [join(process.cwd(), "src/index.ts"), "session", action, "--repo", repo, "--effort", "e", ...(action === "record" ? ["--surface", "codex", "--title", "blocked"] : []), "--json"];
+      const result = spawnSync("bun", argv, { encoding: "utf8", timeout: 2000 });
+      expect(result.error).toBeUndefined();
+      expect(result.signal).toBeNull();
+      expect(result.status).toBe(action === "report" ? 0 : 1);
+      expect(result.stderr).toContain("not a regular file");
+      if (action === "report") expect(JSON.parse(result.stdout)).toEqual([]);
+      expect(lstatSync(path).isFIFO()).toBe(true);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

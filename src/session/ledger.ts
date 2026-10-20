@@ -1,5 +1,5 @@
 // Caller-reported session identity only: no environment, harness or process reads.
-import { lstatSync, readFileSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { withLedgerLock, writeLedgerAtomically, type LedgerLockOptions } from "../ledger/lock.js";
 import { encodeEffortId } from "../usage/ledger.js";
@@ -37,6 +37,17 @@ export function sessionLedgerPath(root: string, effort: string): string {
   return join(root, ...SESSION_LEDGER_DIR.split("/"), `${encodeEffortId(effort)}.json`);
 }
 
+/** Open without waiting for a FIFO writer, then inspect the actual read descriptor. */
+export function readSessionLedgerText(path: string): string {
+  const fd = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error("session ledger is not a regular file");
+    return readFileSync(fd, "utf8");
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function readSessionLedger(path: string, effort: string): SessionLedger {
   // A dangling symlink is an existing entry whose target cannot be read.
   // existsSync follows it and would incorrectly permit replacing that ledger.
@@ -48,7 +59,7 @@ export function readSessionLedger(path: string, effort: string): SessionLedger {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(readSessionLedgerText(path));
   } catch (error) {
     throw new Error(`'${path}' is not readable JSON (${error instanceof Error ? error.message : String(error)}). A session ledger nen cannot read is not rewritten over; move it aside.`);
   }

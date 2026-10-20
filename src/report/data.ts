@@ -46,7 +46,7 @@ import { VerbUsageError } from "../cli/command.js";
 import { containedPath } from "../repo/contain.js";
 import { proofRelativePath } from "../shu/proof.js";
 import { PHASE_CONTRACT, PHASE_LEDGER_DIR } from "../phase/ledger.js";
-import { SESSION_CONTRACT, SESSION_LEDGER_DIR, isSessionEntry, type SessionEntry } from "../session/ledger.js";
+import { SESSION_CONTRACT, SESSION_LEDGER_DIR, isSessionEntry, readSessionLedgerText, type SessionEntry } from "../session/ledger.js";
 import { USAGE_CONTRACT, USAGE_LEDGER_DIR } from "../usage/ledger.js";
 import { openDeclaration } from "../shu/declaration.js";
 import { formatNamedBy, readReport } from "../shu/coverage/parse.js";
@@ -433,10 +433,10 @@ export { matchesPattern } from "./patterns.js";
  * A file that is not JSON at all is `null` with the reason on stderr: a report
  * is not the place to fail a run over a marker file.
  */
-export function readJsonArtifact(absolute: string, display: string, warn: (line: string) => void): unknown {
+export function readJsonArtifact(absolute: string, display: string, warn: (line: string) => void, readText: (path: string) => string = (path): string => readFileSync(path, "utf8")): unknown {
   if (!existsSync(absolute)) return null;
   try {
-    return JSON.parse(normalizeEol(readFileSync(absolute, "utf8"))) as unknown;
+    return JSON.parse(normalizeEol(readText(absolute))) as unknown;
   } catch (error) {
     warn(`${display} is present and is not valid JSON (${error instanceof Error ? error.message : String(error)}); reported as null.`);
     return null;
@@ -705,7 +705,7 @@ export function readSessionLedgers(root: string, warn: (line: string) => void): 
   const rows: ReportSession[] = [];
   for (const name of names) {
     const display = `${SESSION_LEDGER_DIR}/${name}`;
-    const doc = readJsonArtifact(join(dir, name), display, warn) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
+    const doc = readJsonArtifact(join(dir, name), display, warn, readSessionLedgerText) as { contract?: unknown; effort?: unknown; entries?: unknown } | null;
     if (doc === null) continue;
     if (doc.contract !== SESSION_CONTRACT || typeof doc.effort !== "string" || !Array.isArray(doc.entries)) {
       warn(`${display}: not a '${SESSION_CONTRACT}' ledger -- skipped`);

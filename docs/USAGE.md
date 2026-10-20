@@ -5486,9 +5486,9 @@ for record. `--repo` defaults to the current directory.
 
 **`--json`** — record emits `{ path, entry }`; show emits `{ contract, effort, entries }`.
 Each entry is `{ recordedAt, surface, model, dial, title, id, source }`.
-Show on an absent ledger succeeds with `entries: []`; an existing dangling ledger link, malformed or foreign ledgers fail
+Show on an absent ledger succeeds with `entries: []`; non-regular entries (including FIFOs), an existing dangling ledger link, malformed or foreign ledgers fail
 at exit 1 and are never overwritten. Unexpected positional or passthrough tokens refuse at exit 2
-before any read or append. Appends share the atomic ledger lock.
+before any read or append. Appends share the atomic ledger lock. Session reads inspect a nonblocking descriptor before reading JSON; report ingestion warns and skips a non-regular session entry.
 [`report data`](#nen-report-data) flattens every entry into `sessions[]` with its effort;
 `{{#each sessions}}{{title}}{{/each}}` renders recorded titles.
 
