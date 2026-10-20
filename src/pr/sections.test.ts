@@ -70,6 +70,31 @@ describe("caller-owned PR section catalogue", () => {
     expect(() => sectionFamily(parse(), taxonomy, [])).toThrow(/at least one/);
     expect(() => sectionFamily(parse({ ...catalogue, families: { maintain: [], canon: [] } }), taxonomy, ["build"])).toThrow(/no family/);
   });
+  it("resolves the full consumer envelope identically with and without provenance", () => {
+    const sections = { max: 3, variants: { "process.canon": ["changes", "verify"] } };
+    const unstamped = resolveSections(parse(), "process", "canon", [], { pr: { sections } });
+    const stamped = resolveSections(parse(), "process", "canon", [], { pr: { sections: { ...sections, $canon: { contract: "hatsu.pr-sections/v1", sha256: "f".repeat(64) }, $comment: "metadata" }, $sections: "options" } });
+    expect(stamped).toEqual(unstamped);
+    expect(stamped.max).toBe(3);
+    expect(stamped.overridden).toBe(true);
+    expect(stamped.sections.map((row): string => row.id)).toEqual(["changes", "verify"]);
+    expect(resolveSections(parse(), "process", "canon", ["economics"], { pr: { sections } }).sections).toHaveLength(3);
+    expect(() => resolveSections(parse(), "process", "canon", ["economics"], { pr: { sections: { ...sections, max: 2 } } })).toThrow(/process.canon.*3.*max 2/);
+    expect(resolveSections(parse(), "library", "canon", [], { pr: { sections: { max: 2 } } }).overridden).toBe(false);
+    expect(resolveSections(parse(), "process", "canon", [], { pr: { sections: { variants: sections.variants } } }).max).toBe(7);
+  });
+  it("validates nested caps and all nested cells at their actual pointers", () => {
+    for (const max of [0, -1, 1.5, "3", null, 8, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() => resolveSections(parse(), "process", "canon", [], { pr: { sections: { max } } })).toThrow(/pr.sections.max/);
+    }
+    for (const variants of [null, [], "bad"]) {
+      expect(() => resolveSections(parse(), "process", "canon", [], { pr: { sections: { variants } } })).toThrow(/pr.sections.variants/);
+    }
+    expect(() => resolveSections(parse(), "process", "canon", [], { pr: { sections: { variants: { "library.canon": ["absent"] } } } })).toThrow(/pr.sections.variants.library.canon.*unknown reader/);
+    expect(() => resolveSections(parse(), "process", "canon", [], { pr: { sections: { variants: { "missing.canon": [] } } } })).toThrow(/pr.sections.variants.missing.canon.*unknown catalogue cell/);
+    expect(() => resolveSections(parse(), "process", "canon", [], { pr: { sections: { max: 7, "process.canon": ["changes"] } } })).toThrow(/pr.sections.process.canon.*put cells under variants/);
+    expect(resolveSections(parse(), "library", "canon", [], { pr: { sections: { $canon: {}, "library.canon": ["verify"] } } }).sections).toHaveLength(1);
+  });
   it("wires both actions through the real dispatcher without network calls", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-sections-")); dirs.push(dir);
     const file = join(dir, "catalogue.json"); writeFileSync(file, JSON.stringify(catalogue));
@@ -81,6 +106,11 @@ describe("caller-owned PR section catalogue", () => {
     const result = await capture(["pr", "sections", "resolve", "--catalogue", file, "--kind", "process", "--family", "canon", "--json"]);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.out.join("\n"))).toMatchObject({ contract: "nen.pr.sections/v0.1", cell: "process.canon" });
+    const workflow = join(dir, "workflow.json");
+    writeFileSync(workflow, JSON.stringify({ pr: { sections: { max: 2, variants: { "process.canon": ["changes", "verify"] }, $canon: { sha256: "stamp" } } } }));
+    const overridden = await capture(["pr", "sections", "resolve", "--catalogue", file, "--kind", "process", "--family", "canon", "--overrides", workflow, "--json"]);
+    expect(overridden.code).toBe(0);
+    expect(JSON.parse(overridden.out.join("\n"))).toMatchObject({ max: 2, overridden: true, sections: [{ id: "changes" }, { id: "verify" }] });
     const family = await capture(["pr", "sections", "family", "--catalogue", file, "--taxonomy", "src/classify/fixtures/mini.taxonomy.json", "--jobs", "build,test"]);
     expect(family.code).toBe(0); expect(family.out.join("\n")).toContain("tie broken");
     expect((await capture(["pr", "sections", "nope", "--catalogue", file])).code).toBe(2);

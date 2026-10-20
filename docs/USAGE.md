@@ -2182,8 +2182,15 @@ An empty list, unknown taxonomy job, or unmapped job refuses.
 `variants` maps `<kind>.<family>` to ordered reader ids. Every cell is validated
 when the catalogue loads, including unselected cells; an unknown id refuses.
 No missing cell is guessed. A consumer may replace cells through
-`workflow.json`'s `pr.sections`, using the same flat cell map; `$` metadata
-siblings are ignored. Overrides are validated even when unselected.
+`workflow.json`'s `pr.sections.variants`, using the same cell map. Optional
+`pr.sections.max` narrows the cap: a positive safe integer no greater than the
+catalogue's `max`. Omitted `variants` uses catalogue cells; omitted `max` uses
+the catalogue cap. `$` metadata siblings, including `$canon`, are ignored.
+Overrides are validated even when unselected.
+
+The original flat `pr.sections` cell map remains supported with the catalogue
+cap. A configuration carrying `max` or `variants` selects the nested envelope;
+mixing flat cells into that envelope refuses and names the offending key.
 
 Resolve JSON is `{ contract, kind, family, cell, overridden, sections, footer,
 requirements, max }`; each resolved section is `{ id, title, level }`, and

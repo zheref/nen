@@ -68,17 +68,30 @@ export function resolveSections(catalogue: SectionCatalogue, kind: string, famil
   const cell = `${kind}.${family}`;
   let selected = catalogue.variants[cell];
   let overridden = false;
+  let max = catalogue.max;
   if (overrides !== undefined) {
     const workflow = requireRecord("overrides", "$", overrides);
     const pr = workflow.pr === undefined ? {} : requireRecord("overrides", "pr", workflow.pr);
     if (pr.sections !== undefined) {
-      const cells = requireRecord("overrides", "pr.sections", pr.sections);
+      const config = requireRecord("overrides", "pr.sections", pr.sections);
+      const nested = Object.hasOwn(config, "variants") || Object.hasOwn(config, "max");
+      if (nested) {
+        for (const key of Object.keys(config)) {
+          if (!key.startsWith("$") && key !== "max" && key !== "variants") throw new SchemaError("overrides", `pr.sections.${key}`, "unknown override envelope key; put cells under variants");
+        }
+        if (Object.hasOwn(config, "max")) {
+          if (!Number.isSafeInteger(config.max) || (config.max as number) < 1 || (config.max as number) > catalogue.max) throw new SchemaError("overrides", "pr.sections.max", `expected a positive safe integer no greater than catalogue max ${catalogue.max}`);
+          max = config.max as number;
+        }
+      }
+      const pointer = nested ? "pr.sections.variants" : "pr.sections";
+      const cells = nested ? (Object.hasOwn(config, "variants") ? requireRecord("overrides", pointer, config.variants) : {}) : config;
       // Validate every overridden cell, including cells not selected this run.
       for (const [key, value] of Object.entries(cells)) {
         if (key.startsWith("$")) continue;
-        if (!Object.hasOwn(catalogue.variants, key)) throw new SchemaError("overrides", `pr.sections.${key}`, "unknown catalogue cell");
-        const ids = strings("overrides", `pr.sections.${key}`, value);
-        for (const id of ids) if (!catalogue.sections.some((row): boolean => row.id === id)) throw new SchemaError("overrides", `pr.sections.${key}`, `unknown reader section '${id}'`);
+        if (!Object.hasOwn(catalogue.variants, key)) throw new SchemaError("overrides", `${pointer}.${key}`, "unknown catalogue cell");
+        const ids = strings("overrides", `${pointer}.${key}`, value);
+        for (const id of ids) if (!catalogue.sections.some((row): boolean => row.id === id)) throw new SchemaError("overrides", `${pointer}.${key}`, `unknown reader section '${id}'`);
         if (key === cell) { selected = ids; overridden = true; }
       }
     }
@@ -89,7 +102,7 @@ export function resolveSections(catalogue: SectionCatalogue, kind: string, famil
   const readers = selected.map((id): Section => catalogue.sections.find((row): boolean => row.id === id) as Section).filter(admitted);
   // Conditional sections absent from the cell append in catalogue order.
   for (const row of catalogue.sections) if (row.when !== undefined && withFacts.includes(row.when) && !readers.includes(row)) readers.push(row);
-  if (readers.length > catalogue.max) throw new SchemaError("catalogue", `variants.${cell}`, `cell '${cell}' has ${readers.length} reader sections, over max ${catalogue.max}`);
+  if (readers.length > max) throw new SchemaError("catalogue", `variants.${cell}`, `cell '${cell}' has ${readers.length} reader sections, over max ${max}`);
   const footer = catalogue.footer.filter(admitted);
   const resolved = (row: Section): { id: string; title: string; level: number } => {
     const title = typeof row.title === "string" ? row.title : row.title[kind];
@@ -97,7 +110,7 @@ export function resolveSections(catalogue: SectionCatalogue, kind: string, famil
     return { id: row.id, title, level: row.level };
   };
   const requirements = [...readers, ...footer].map((row): BodyRequirement => ({ name: row.id, pattern: row.pattern ?? `^ {0,3}${"#".repeat(row.level)}[ \\t]+${escapeRegex(resolved(row).title)}[ \\t]*$` }));
-  return { contract: SECTIONS_CONTRACT, kind, family, cell, overridden, sections: readers.map(resolved), footer: footer.map(resolved), requirements, max: catalogue.max };
+  return { contract: SECTIONS_CONTRACT, kind, family, cell, overridden, sections: readers.map(resolved), footer: footer.map(resolved), requirements, max };
 }
 
 export function sectionFamily(catalogue: SectionCatalogue, taxonomy: ClassifyTaxonomy, jobs: readonly string[]): { contract: typeof SECTIONS_CONTRACT; family: string; counts: Readonly<Record<string, number>>; tied: readonly string[]; rule: string } {
