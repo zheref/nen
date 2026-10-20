@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 43 command
-families, 136 verbs, every flag checked against the binary this repository
+families, 138 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -794,7 +794,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 136 verbs, grouped as the README groups them. **Reads** is what a
+All 138 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -805,6 +805,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr ready`](#nen-pr-ready) | CON-32 readiness verdict for one pull request | nen/gates.json + nen/repos.json (or --gates/--reviewers/--gh-repo), github (gh api graphql/rest) | yes |
 | [`pr`](#family-pr) | [`nen pr staleness`](#nen-pr-staleness) | stale + Ready merge-permission arithmetic over a verified-wake history | caller-supplied --wakes-from JSON file, no schema/git/gh | yes |
 | [`pr`](#family-pr) | [`nen pr body-check`](#nen-pr-body-check) | checks a PR body against caller-supplied requirement patterns, or, with no `--requirements-from`, against the headings of the repository's own PR template, each required present and filled (named as derived, with where it was read) | caller-supplied --body-from/--requirements-from files; else the PR template (`pull_request_template.md`/`.txt` at the root, `.github/` or `docs/`, or `PULL_REQUEST_TEMPLATE/*.md`/`.txt`) in the working tree, or at `--base <ref>` through git (`rev-parse`, `ls-tree`, `cat-file`) | yes |
+| [`pr`](#family-pr) | [`nen pr sections resolve`](#nen-pr-sections-resolve) | resolves a caller-owned section catalogue by kind, family and conditional facts | --catalogue JSON; optional workflow.json pr.sections overrides | yes |
+| [`pr`](#family-pr) | [`nen pr sections family`](#nen-pr-sections-family) | folds taxonomy jobs into the catalogue family with the most jobs, ties by declared precedence | --taxonomy and --catalogue JSON | yes |
 | [`pr`](#family-pr) | [`nen pr fetch`](#nen-pr-fetch) | one typed snapshot of a PR: head sha, mergeability, check rollup, per-commit reviews, review threads, pending review requests | github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr next-blocker`](#nen-pr-next-blocker) | the first blocking condition, in fixed order (conflict, red check, owed round, unresolved thread, missing body requirement) | nen/gates.json (or --gates), github (gh) | yes |
 | [`pr`](#family-pr) | [`nen pr cascade-main`](#nen-pr-cascade-main) | merges (never rebases) the trunk into the current branch and pushes on a clean merge, or stops there under `--no-push` | git (fetch/merge/push, reaches origin) | yes |
@@ -2076,7 +2078,7 @@ merge PERMITTED (stale + Ready)
 ```
 (from a real run, `wakes.json` = `[{"at":"2026-09-07T18:00:00Z","noCommit":true},{"at":"2026-09-07T19:00:00Z","noCommit":true}]`)
 
-### `nen pr sections resolve` and `nen pr sections family`
+### `nen pr sections resolve`
 
 ```text
 nen pr sections resolve --catalogue <path> --kind <kind> --family <family>
@@ -2135,6 +2137,19 @@ Family JSON is `{ contract, family, counts, tied, rule }`. Human resolve output
 includes ids, titles and the requirements array. A cell exceeding `max` after
 conditional admission exits 1 naming the cell and count; invalid catalogues or
 unknown ids also exit 1. Bad CLI arguments exit 2. No action calls GitHub.
+
+### `nen pr sections family`
+
+```text
+nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
+```
+
+Counts distinct known job keys by the catalogue's family membership. Most jobs
+wins; ties follow the catalogue's `precedence` order and name that rule in human
+output. `--json` emits `{ contract, family, counts, tied, rule }`, contract
+`nen.pr.sections/v0.1`. Unknown or unmapped jobs refuse; an empty job list refuses.
+See [section resolution](#nen-pr-sections-resolve) for the catalogue format,
+file resolution, validation and exit codes.
 
 ### `nen pr body-check`
 
