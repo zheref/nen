@@ -985,6 +985,14 @@ describe("a read-only persona keeps its intent on every surface (zheref/nen#473)
     expect(isReadOnlyPersona(entries("tools: Read, Edit"))).toBe(false);
     expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - MultiEdit"))).toBe(false);
     expect(isReadOnlyPersona(entries("tools: Read, NotebookEdit"))).toBe(false);
+    // A YAML comment never hides a write tool, and never invents one.
+    expect(isReadOnlyPersona(entries("tools: Read, Edit # the one writer"))).toBe(false);
+    expect(isReadOnlyPersona(entries('tools:\n  - Read\n  - "Edit" # c'))).toBe(false);
+    expect(isReadOnlyPersona(entries("tools: Read # Edit"))).toBe(true);
+    expect(isReadOnlyPersona(entries("tools:\n  # Write once\n  - Read"))).toBe(true);
+    expect(isReadOnlyPersona(entries('tools: ["Read", "a#b"]'))).toBe(true);
+    // An MCP tool may write, and nothing here can tell.
+    expect(isReadOnlyPersona(entries("tools: Read, mcp__fs__write_file"))).toBe(false);
     // No tools key inherits every tool; an empty one names nothing.
     expect(isReadOnlyPersona(entries("name: x"))).toBe(false);
     expect(isReadOnlyPersona(entries("tools:"))).toBe(false);

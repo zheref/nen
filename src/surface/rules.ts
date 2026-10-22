@@ -154,6 +154,8 @@ export type CanonMirrorRule =
  *   list itself is the control and travels as written.
  * - `key`: the surface documents a frontmatter key of its own, emitted as
  *   `<key>: <value>` on a read-only persona that does not already set it.
+ *   Where that key is known not to hold is a capabilities fact
+ *   (./capabilities.ts `readOnly`), not something the generator acts on.
  * - `none`: the surface documents no per-persona control; the generate report
  *   names every read-only persona instead, so the run can disclose it.
  */
@@ -164,8 +166,6 @@ export type ReadOnlyControl =
       readonly key: string;
       readonly value: string;
       readonly source: string;
-      /** Where the documented key is known NOT to hold; null when nothing says so. */
-      readonly unverified: string | null;
     }
   | { readonly kind: "none"; readonly reason: string; readonly source: string };
 
@@ -528,8 +528,7 @@ export const SURFACES: readonly SurfaceRow[] = [
       kind: "key",
       key: "readonly",
       value: "true",
-      source: "https://cursor.com/docs/context/subagents",
-      unverified: "a plugin-shipped subagent (forum.cursor.com/t/173787: the plugin loader does not read readonly yet)",
+      source: "https://cursor.com/docs/subagents",
     },
     hooks: {
       file: "hooks.json",
@@ -598,7 +597,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     pluginManifest: null,
     verbatim: false,
     source: "https://cursor.com/docs/context/skills",
-    agentSource: "https://cursor.com/docs/agent/subagents",
+    agentSource: "https://cursor.com/docs/subagents",
     caveat:
       "this surface documents that a skill's `name` must be lowercase letters, numbers and hyphens and must match its folder name; nen mirrors the folder name and the `name` line it was given, and refuses neither",
   },

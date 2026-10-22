@@ -594,10 +594,12 @@ interface AgentOutput {
 }
 
 /**
- * The tools that let a persona write. A `tools:` list naming none of them is a
- * read-only persona (zheref/nen#473). `NotebookEdit` is here beside the three
- * the issue names because it writes a file too; counting it can only make
- * FEWER personas read-only, never mark a writer as one.
+ * The built-in tools that let a persona write. A `tools:` list naming none of
+ * them, and no MCP tool, is a read-only persona (zheref/nen#473). `NotebookEdit`
+ * is here beside the three the issue names because it writes a file too. An
+ * `mcp__*` entry may write and nothing here can tell, so a list carrying one is
+ * never read-only: every rule in this function can only make FEWER personas
+ * read-only, never mark a writer as one.
  */
 const WRITE_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
@@ -606,18 +608,36 @@ const WRITE_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", 
  * of WRITE_TOOLS. A persona with no `tools` key inherits every tool, so it is
  * NOT read-only. Both spellings are read: one comma-joined line
  * (`tools: Read, Grep`) and a block or flow list. A scoped grant such as
- * `Bash(git:*)` counts by its tool name.
+ * `Bash(git:*)` counts by its tool name. A YAML comment (` #` outside quotes,
+ * or a line starting `#`) is dropped first, so `tools: Read, Edit # note`
+ * still names Edit.
  */
 export function isReadOnlyPersona(entries: readonly FrontmatterEntry[]): boolean {
   const entry = entries.find((candidate): boolean => candidate.key === "tools");
   if (entry === undefined) return false;
-  const raw = [inlineValue(entry), ...entry.lines.slice(1)].join(",");
+  const raw = [inlineValue(entry), ...entry.lines.slice(1)].map(withoutYamlComment).join(",");
   const names = raw
     .replace(/[[\]]/g, ",")
     .split(",")
     .map((part): string => part.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").replace(/\(.*$/, "").trim())
     .filter((name): boolean => name !== "");
-  return names.length > 0 && !names.some((name): boolean => WRITE_TOOLS.has(name));
+  return names.length > 0 && !names.some((name): boolean => WRITE_TOOLS.has(name) || name.startsWith("mcp__"));
+}
+
+/** The line up to a YAML comment: a `#` at the start or after whitespace, outside quotes. */
+function withoutYamlComment(line: string): string {
+  let quote: string | null = null;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "#" && (index === 0 || /\s/.test(line[index - 1] ?? ""))) {
+      return line.slice(0, index);
+    }
+  }
+  return line;
 }
 
 /**

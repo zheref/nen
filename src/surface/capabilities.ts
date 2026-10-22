@@ -161,7 +161,7 @@ export const CAPABILITIES: readonly SurfaceCapabilities[] = [
     descriptionBudget: 30,
     descriptionBudgetSource: "measured 2026-09-19, not documented (hardening audit)",
     permissionsShape: "cursor-cli-json",
-    readOnly: { control: "honoured at project placement (.cursor/agents/, readonly: true); plugin placement unverified (forum.cursor.com/t/173787)", source: "https://cursor.com/docs/context/subagents" },
+    readOnly: { control: "honoured at project placement (.cursor/agents/, readonly: true); plugin placement unverified (forum.cursor.com/t/173787)", source: "https://cursor.com/docs/subagents" },
     source: "https://cursor.com/docs/agent/hooks",
     caveat: "a persona whose model is another provider's alias falls back, and a tier alias is not a documented id, so the mirror writes 'inherit' for every persona and reports the tier (modelMapped). A rules file must be .mdc (a plain .md is ignored); the page advises under 500 lines",
   },
