@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import type { CommandResult, Seams } from "../seam/exec.js";
 import { noPortProbe } from "../seam/scripted.js";
@@ -248,7 +248,7 @@ describe("stop answer helpers", () => {
     for (const id of ["", "/abs", "a/../b", ".", "..", "a\\b", "C:x"]) {
       expect((): unknown => effortDirectory("/c", id), id).toThrow();
     }
-    expect(effortDirectory("/c", "a/b")).toBe(join("/c", ".nen", "stops", "a%2Fb"));
+    expect(effortDirectory("/c", "a/b")).toBe(resolve("/c", ".nen", "stops", "a%2Fb"));
   });
 
   it("names a record's first defect", () => {
