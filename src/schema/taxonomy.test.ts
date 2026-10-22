@@ -92,6 +92,8 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
       "nen/workflow.json#release",
+      // The idle profile row (HR-5), cross-checked against nen/decisions.json.
+      "nen/workflow.json#idle",
       "nen/decisions.json",
       // The canon mirror row (zheref/nen#262): absent bindings read absent (optional).
       ".claude/rules/",
@@ -119,6 +121,7 @@ describe("checkTaxonomy", () => {
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
       "nen/workflow.json#release",
+      "nen/workflow.json#idle",
       "nen/colors.yml",
       "nen/decisions.json",
       // Absent bindings: the canon mirror row (zheref/nen#262) is ok.

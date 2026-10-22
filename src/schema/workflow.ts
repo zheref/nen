@@ -478,9 +478,47 @@ export interface DeclaredSubjectCase extends SubjectCaseSpec {
 /** The one string `commits.subjectCase` accepts; any other preset is a JavaScript package nen cannot read. */
 export const SUBJECT_CASE_PRESET = "config-conventional";
 
+/**
+ * When a LOCAL concurrency slot frees (`monitor.localSlotFrees`, HR-5). A
+ * CLOSED set, read by `nen loop slots`:
+ *
+ *   - `ready+prompted` (the default, and the rule before the key existed): the
+ *     PR is ready AND the human has been prompted.
+ *   - `merged`: only when the PR has merged -- the strictest reading.
+ *   - `stacked-open`: an effort whose PR is OPEN and STACKED onto another
+ *     effort's branch frees (the stack's owner drives it from there); every
+ *     other effort keeps the `ready+prompted` rule.
+ */
+export const LOCAL_SLOT_RULES = ["ready+prompted", "merged", "stacked-open"] as const;
+export type LocalSlotRule = (typeof LOCAL_SLOT_RULES)[number];
+export const DEFAULT_LOCAL_SLOT_RULE: LocalSlotRule = "ready+prompted";
+
 export interface MonitorPolicy {
   readonly maxCycles: number;
   readonly pollSeconds: number;
+  /** `monitor.localSlotFrees`, or the default when the key is absent. */
+  readonly localSlotFrees: LocalSlotRule;
+  /** Whether `localSlotFrees` was stated, so a reader can say where the rule came from. */
+  readonly localSlotFreesDeclared: boolean;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/** What an idle batch does with one ask-once row it was not asked about (HR-5). */
+export const IDLE_RESOLUTIONS = ["default", "hold", "refuse"] as const;
+export type IdleResolution = (typeof IDLE_RESOLUTIONS)[number];
+
+/**
+ * The `idle` block (HR-5): a typed idle profile's batch resolution per
+ * ask-once row, the terminal state it runs to, and its budget. nen validates
+ * and reports it; it never runs a batch and never picks a resolution.
+ */
+export interface IdlePolicy {
+  /** ask-once row id -> resolution. Row ids are `[a-z0-9-]+`, as nen/decisions.json spells them. */
+  readonly decisions: Readonly<Record<string, IdleResolution>>;
+  /** The terminal state the batch runs to, in the repository's own words. `null` when unstated. */
+  readonly terminal: string | null;
+  /** The batch's budget; each half `null` when unstated. */
+  readonly budget: { readonly minutes: number | null; readonly tokens: number | null };
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -553,6 +591,8 @@ export interface Workflow {
   readonly futon: FutonPolicy;
   /** `runners` -- the self-hosted runner policy, or null when none is declared. No default. */
   readonly runners: RunnersPolicy | null;
+  /** `idle` -- the typed idle profile (HR-5), or null when none is declared. No default. */
+  readonly idle?: IdlePolicy | null;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -642,7 +682,7 @@ export function defaultWorkflow(): Workflow {
     },
     notifications: { rungs: DEFAULT_RUNGS, sound: DEFAULT_SOUND, turn: DEFAULT_TURN, raw: empty },
     commits: { allowedAttributionTrailers: [], forbiddenTrailers: [], runTrailer: null, subjectCase: null, bodyMaxLineLength: null, raw: empty },
-    monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, raw: empty },
+    monitor: { maxCycles: DEFAULT_MAX_CYCLES, pollSeconds: DEFAULT_POLL_SECONDS, localSlotFrees: DEFAULT_LOCAL_SLOT_RULE, localSlotFreesDeclared: false, raw: empty },
     models: { rule: null, surfaces: emptyRecord(), roles: emptyRecord(), raw: empty },
     review: { scopes: emptyRecord<ReviewScope>(), raw: empty },
     profile: { default: DEFAULT_PROFILE, allowed: PROFILE_NAMES, raw: empty },
@@ -651,6 +691,7 @@ export function defaultWorkflow(): Workflow {
     // NO DEFAULT POOL, EVER -- see RunnersPolicy.
     runners: null,
     ci: null,
+    idle: null,
     raw: empty,
   };
 }
@@ -677,6 +718,7 @@ const ROOT_KEYS: readonly string[] = [
   "release",
   "futon",
   "runners", "ci",
+  "idle",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -698,7 +740,11 @@ const COMMITS_KEYS: readonly string[] = [
   "subjectCase",
   "bodyMaxLineLength",
 ];
-const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds"];
+const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds", "localSlotFrees"];
+const IDLE_KEYS: readonly string[] = ["decisions", "terminal", "budget"];
+const IDLE_BUDGET_KEYS: readonly string[] = ["minutes", "tokens"];
+/** A decisions.json row id, as ../schema/decisions.ts spells one. */
+const DECISION_ROW_ID = /^[a-z0-9][a-z0-9-]*$/;
 const PROFILE_KEYS: readonly string[] = ["default", "allowed"];
 
 /**
@@ -2084,7 +2130,9 @@ function parseBodyMaxLineLength(path: string, value: unknown): number | null {
 }
 
 function parseMonitor(path: string, value: unknown): MonitorPolicy {
-  const raw = block(path, "monitor", value, MONITOR_KEYS, "A monitor policy's two keys are");
+  const raw = block(path, "monitor", value, MONITOR_KEYS, "A monitor policy's three keys are");
+  const slotRaw = raw["localSlotFrees"];
+  const localSlotFreesDeclared = slotRaw !== undefined && slotRaw !== null;
   return {
     // A CAP OF ZERO IS A LOOP THAT NEVER RUNS, which is a thing a repository is
     // allowed to say; there is no upper bound, because "how long may a monitor
@@ -2099,8 +2147,73 @@ function parseMonitor(path: string, value: unknown): MonitorPolicy {
       1,
       Number.MAX_SAFE_INTEGER,
     ),
+    localSlotFrees: localSlotFreesDeclared
+      ? requireEnum(path, "monitor.localSlotFrees", slotRaw, LOCAL_SLOT_RULES)
+      : DEFAULT_LOCAL_SLOT_RULE,
+    localSlotFreesDeclared,
     raw,
   };
+}
+
+/**
+ * The `idle` block (HR-5). Every key is optional, but a key that IS stated is
+ * validated: a resolution outside the closed set, a row id that is not a
+ * decisions.json slug, an empty terminal or a budget that is not a positive
+ * whole number is refused by pointer. Whether each row id is an ask-once row
+ * is a SECOND file's question, answered by `nen schema check`'s
+ * `nen/workflow.json#idle` row, never here.
+ */
+function parseIdle(path: string, value: unknown): IdlePolicy | null {
+  if (value === undefined || value === null) return null;
+  const raw = block(path, "idle", value, IDLE_KEYS, "An idle profile's three keys are");
+  const decisions: Record<string, IdleResolution> = {};
+  if (raw["decisions"] !== undefined && raw["decisions"] !== null) {
+    const map = requireRecord(path, "idle.decisions", raw["decisions"]);
+    for (const [id, resolution] of Object.entries(map)) {
+      if (id.startsWith("$")) continue;
+      if (!DECISION_ROW_ID.test(id)) {
+        throw new SchemaError(
+          path,
+          `idle.decisions.${id}`,
+          "is not a decision row id: nen/decisions.json spells a row id [a-z0-9-]+, so this key could never name an ask-once row",
+        );
+      }
+      decisions[id] = requireEnum(path, `idle.decisions.${id}`, resolution, IDLE_RESOLUTIONS);
+    }
+  }
+  let terminal: string | null = null;
+  if (raw["terminal"] !== undefined && raw["terminal"] !== null) {
+    terminal = requireString(path, "idle.terminal", raw["terminal"]);
+    if (terminal.trim() === "") {
+      throw new SchemaError(path, "idle.terminal", "is an empty string. State the terminal state the batch runs to, or omit the key");
+    }
+  }
+  let minutes: number | null = null;
+  let tokens: number | null = null;
+  if (raw["budget"] !== undefined && raw["budget"] !== null) {
+    const budget = block(path, "idle.budget", raw["budget"], IDLE_BUDGET_KEYS, "An idle budget's two keys are");
+    const whole = (key: string): number | null => {
+      const at = budget[key];
+      if (at === undefined || at === null) return null;
+      if (typeof at !== "number" || !Number.isSafeInteger(at) || at < 1) {
+        throw new SchemaError(path, `idle.budget.${key}`, `expected a positive whole number, got ${describeValue(at)}. A budget of zero or less is a batch that may never start`);
+      }
+      return at;
+    };
+    minutes = whole("minutes");
+    tokens = whole("tokens");
+  }
+  return { decisions, terminal, budget: { minutes, tokens }, raw };
+}
+
+/** The `nen/workflow.json#idle` row's text when a profile is declared. */
+export function describeIdle(idle: IdlePolicy): string {
+  const ids = Object.keys(idle.decisions);
+  const budget = [
+    idle.budget.minutes === null ? null : `${idle.budget.minutes} min`,
+    idle.budget.tokens === null ? null : `${idle.budget.tokens} tokens`,
+  ].filter((part): part is string => part !== null);
+  return `${ids.length} ask-once row resolution${ids.length === 1 ? "" : "s"}${ids.length === 0 ? "" : ` (${ids.map((id): string => `${id}=${idle.decisions[id] ?? ""}`).join(", ")})`}; terminal ${idle.terminal === null ? "unstated" : JSON.stringify(idle.terminal)}; budget ${budget.length === 0 ? "unstated" : budget.join(", ")}`;
 }
 
 /**
@@ -2223,7 +2336,7 @@ function parseCi(path: string, value: unknown): CiPolicy | null {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's nineteen blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twenty blocks are");
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -2248,6 +2361,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     futon: parseFutonPolicy(path, raw["futon"]),
     runners: parseRunners(path, raw["runners"]),
     ci: parseCi(path, raw["ci"]),
+    idle: parseIdle(path, raw["idle"]),
     raw,
   };
 }
