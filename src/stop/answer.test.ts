@@ -14,8 +14,11 @@ import { stopCommand } from "./command.js";
 // the relative-to-root resolution is exercised. Anything else throws.
 function seams(gitAnswer: CommandResult | null = null, now = "2026-10-22T10:00:00Z"): Seams {
   return {
-    run: (command, args): CommandResult => {
+    run: (command, args, options): CommandResult => {
       if (command === "git" && args.includes("--git-common-dir")) {
+        // An inherited GIT_DIR must never steer the lookup to another repository.
+        expect(options?.env).toMatchObject({ GIT_DIR: undefined, GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined, LC_ALL: "C" });
+        expect(Object.hasOwn(options?.env ?? {}, "GIT_DIR")).toBe(true);
         return gitAnswer ?? { code: 0, stdout: ".git\n", stderr: "", spawnFailed: false };
       }
       throw new Error(`unexpected subprocess: ${command} ${args.join(" ")}`);
@@ -147,6 +150,7 @@ describe("nen stop answer --record", () => {
       [...BASE.slice(0, 10), "--pick", "A"],
       [...BASE, "--option", "A=dup::again", "--pick", "A"],
       [...BASE, "--option", "C=no consequence", "--pick", "A"],
+      [...BASE, "--option", "C=Discard the tree::same label as B", "--pick", "A"],
       [...BASE, "--pick", "A", "--mark"],
       [...BASE, "--pick", "A", "--title", "t"],
       [...BASE.map((token): string => (token === "HA-IS-#401" ? "../escape" : token)), "--pick", "A"],
@@ -180,6 +184,8 @@ describe("nen stop answer --record", () => {
     const result = await run([...BASE, "--pick", "A"], root);
     expect(result.code).toBe(2);
     expect(readdirSync(outside)).toEqual([]);
+    // The dry run refuses exactly what the real run would, and no id is burned.
+    expect((await run([...BASE, "--pick", "A", "--dry-run"], root)).code).toBe(2);
   });
 });
 
@@ -250,6 +256,14 @@ describe("stop answer helpers", () => {
     expect(recordDefect({ contract: "x" }, "e", 1)).toMatch(/is not a nen.stop.answer/);
     expect(recordDefect({ contract: STOP_ANSWER_CONTRACT, effortId: "f" }, "e", 1)).toMatch(/records the effort/);
     expect(recordDefect({ contract: STOP_ANSWER_CONTRACT, effortId: "e", n: 2 }, "e", 1)).toMatch(/named 1.json/);
+    const good = {
+      contract: STOP_ANSWER_CONTRACT, id: "R-2026-10-22-01", effortId: "e", n: 1, gate: "G5", who: "w", question: "q",
+      options: [{ key: "A", label: "a", consequence: "c" }], kind: "picked", pick: "A", typed: null, answeredAt: "t",
+    };
+    expect(recordDefect(good, "e", 1)).toBeNull();
+    expect(recordDefect({ ...good, pick: "Z" }, "e", 1)).toMatch(/none of its options' keys/);
+    expect(recordDefect({ ...good, options: [1] }, "e", 1)).toMatch(/not an object/);
+    expect(recordDefect({ ...good, options: [{ key: "A" }] }, "e", 1)).toMatch(/string key, label and consequence/);
   });
 });
 

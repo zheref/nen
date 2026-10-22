@@ -127,7 +127,12 @@ export function effortDirectory(common: string, id: string): string {
 
 /** `git rev-parse --git-common-dir` under `root`, absolute. Unreadable is exit 1, never an empty ledger. */
 export function gitCommonDir(context: CommandContext, root: string): string {
-  const result = context.seams.run("git", ["-C", root, "rev-parse", "--git-common-dir"]);
+  // An inherited GIT_DIR / GIT_COMMON_DIR / GIT_WORK_TREE (a git hook, a
+  // wrapper) would point the lookup at another repository's ledger, so they are
+  // dropped; LC_ALL=C keeps git's message the one quoted on a refusal.
+  const result = context.seams.run("git", ["-C", root, "rev-parse", "--git-common-dir"], {
+    env: { LC_ALL: "C", LANGUAGE: undefined, GIT_DIR: undefined, GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined },
+  });
   const lines = result.stdout.trim().split(/\r?\n/);
   const line = lines[0];
   if (result.code !== 0 || lines.length !== 1 || line === undefined || line === "") {
@@ -275,9 +280,14 @@ function recordAnswer(context: CommandContext): number {
   }
   const options = rawOptions.map(parseOptionSpec);
   const keys = new Set<string>();
+  const labels = new Set<string>();
   for (const option of options) {
     if (keys.has(option.key)) throw new VerbUsageError(`--option key '${option.key}' is given twice; each option needs its own key.`);
+    // Two options with one label would make a typed reply of that label name
+    // either of them, and the verb would have to choose: refused instead.
+    if (labels.has(option.label)) throw new VerbUsageError(`--option label '${option.label}' is given twice; each option needs its own label.`);
     keys.add(option.key);
+    labels.add(option.label);
   }
   const pickFlag = context.args.values["pick"];
   const typedFile = context.args.values["typed-file"];
@@ -310,6 +320,11 @@ function recordAnswer(context: CommandContext): number {
   const common = gitCommonDir(context, root);
   const directory = effortDirectory(common, effort);
   const idsDir = resolve(common, ...STOP_IDS_DIR);
+  // Both directories are proven to stay in the common directory BEFORE an id is
+  // reserved or a listing is read: a refusal then burns no id, and a dry run
+  // refuses exactly what the real run would.
+  assertContained(common, directory);
+  assertContained(common, idsDir);
   const answeredAt = context.seams.now().toISOString();
   const date = answeredAt.slice(0, 10);
   const dryRun = context.args.booleans.has("dry-run");
@@ -356,6 +371,16 @@ export function recordDefect(document: unknown, effort: string, n: number): stri
   if (typeof r["gate"] !== "string" || !Object.hasOwn(GATE_NAMES, r["gate"])) return "has no known gate";
   for (const key of ["who", "question", "answeredAt"]) if (typeof r[key] !== "string") return `has no '${key}' string`;
   if (!Array.isArray(r["options"])) return "has no options array";
+  const optionKeys: string[] = [];
+  for (const option of r["options"] as unknown[]) {
+    if (typeof option !== "object" || option === null) return "has an option that is not an object";
+    const o = option as Record<string, unknown>;
+    if (typeof o["key"] !== "string" || typeof o["label"] !== "string" || typeof o["consequence"] !== "string") {
+      return "has an option without a string key, label and consequence";
+    }
+    optionKeys.push(o["key"]);
+  }
+  if (typeof r["pick"] === "string" && !optionKeys.includes(r["pick"])) return `picks '${r["pick"]}', which is none of its options' keys`;
   if (r["kind"] !== "picked" && r["kind"] !== "typed") return "has a kind that is neither 'picked' nor 'typed'";
   if (r["pick"] !== null && typeof r["pick"] !== "string") return "has a pick that is neither a key nor null";
   if (r["typed"] !== null && typeof r["typed"] !== "string") return "has typed text that is neither a string nor null";

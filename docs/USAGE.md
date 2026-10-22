@@ -13959,7 +13959,7 @@ chooses**: the caller states the question, the options and the answer; nen valid
 the instant and the id, and writes.
 
 **Where.** `<git common dir>/.nen/stops/<percent-encoded effort>/<n>.json`: the common directory (`git
-rev-parse --git-common-dir` under `--repo`), not the worktree, so every worktree of one repository
+rev-parse --git-common-dir` under `--repo`, with an inherited `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` dropped so a hook's environment cannot point it at another repository), not the worktree, so every worktree of one repository
 writes into one ledger and an effort's stops outlive the worktree that asked them. `<n>` counts up from
 the records already present. A record is **created, never replaced**: it is written to a temp file and
 hard-linked into place, so a racing writer takes the next `<n>` and a reader never sees a torn record.
@@ -13994,7 +13994,7 @@ nen stop answer show <effort-id> [--repo <path>] [--json]
 | `--gate <g>` | yes | The gate the stop asked at. | One of `nen stop`'s gates; any other -> exit 2. |
 | `--who <name>` | yes | The persona that asked. | Nen ships no built-in name. |
 | `--question-file <path>` | yes | The question as it was asked. | Kept as read (EOL-normalized); unreadable or empty -> exit 2. |
-| `--option <key>=<label>::<consequence>` | yes, **repeatable** | One option the stop offered. | Split at the first `=` and the first `::` after it, so `=` and `:` may appear in the label and the consequence. The key is letters, digits, `_`, `-`; every part non-empty; a key twice -> exit 2. |
+| `--option <key>=<label>::<consequence>` | yes, **repeatable** | One option the stop offered. | Split at the first `=` and the first `::` after it, so `=` and `:` may appear in the label and the consequence. The key is letters, digits, `_`, `-`; every part non-empty; a key or a label twice -> exit 2 (two options with one label would leave a typed reply naming either, and the verb would have to choose). |
 | `--pick <key>` | one of the two | The option the maintainer picked. | Must be one of the `--option` keys -> otherwise exit 2. |
 | `--typed-file <path>` | one of the two | The maintainer's reply in their own words. | Kept byte for byte; unreadable or blank -> exit 2. Both, or neither, of `--pick` and `--typed-file` -> exit 2. |
 | `--dry-run` | no | Validate and print the record and the next free id; write nothing. | The id shown is not reserved. Refused on `show`. |
@@ -14008,7 +14008,7 @@ caller believes was written.
 
 **`nen stop answer show <effort-id>`** lists the effort's records in `<n>` order. An effort with no
 directory is an empty ledger (exit 0, `no stop answers recorded for '<id>'`). A record that is not JSON,
-not `nen.stop.answer/v0.1`, names another effort, or whose `n` disagrees with its file name is exit 1
+not `nen.stop.answer/v0.1`, names another effort, whose `n` disagrees with its file name, whose options are not `{ key, label, consequence }` strings, or whose `pick` is none of its option keys is exit 1
 naming the file -- "could not read" is never "nothing found", and the ledger is never reported shorter
 than it is. A record that is a symbolic link, or a directory that resolves outside the common directory,
 is exit 2.
