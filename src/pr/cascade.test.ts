@@ -198,3 +198,20 @@ describe("cascadeMain -- merge, never rebase, and never resolve a conflict itsel
     });
   });
 });
+
+describe("cascadeMain --dry-run (Hatsu SDD plan N6)", () => {
+  it("prints fetch, merge and push as 'would run:' and spawns nothing", () => {
+    const seams = new ScriptedSeams([]);
+    const result = cascadeMain(seams, "/repo", "develop", { dryRun: true });
+    expect(seams.calls).toEqual([]);
+    expect(result).toMatchObject({ conflicted: false, pushed: false, noPush: false, error: null, conflicts: [], dryRun: true });
+    expect(result.log.slice(0, 3)).toEqual(["would run: git fetch origin develop", "would run: git merge --no-edit origin/develop", "would run: git push"]);
+  });
+
+  it("with --no-push prints no push line, and keys dryRun last", () => {
+    const seams = new ScriptedSeams([]);
+    const result = cascadeMain(seams, "/repo", "main", { dryRun: true, noPush: true });
+    expect(result.log.some((line): boolean => line === "would run: git push")).toBe(false);
+    expect(Object.keys(result)).toEqual(["conflicted", "pushed", "noPush", "log", "error", "conflicts", "dryRun"]);
+  });
+});

@@ -136,3 +136,50 @@ describe("phase effort dial (#437)", () => {
     expect(JSON.parse(readFileSync(path, "utf8")).phases[0].dial).toBeNull();
   });
 });
+
+describe("nen phase begin --resume (Hatsu SDD plan N6)", () => {
+  const LEDGER = (root: string): { phases: { phase: string; startedAt: string; endedAt: string | null; resumedAt?: string[] }[] } =>
+    JSON.parse(readFileSync(join(root, PHASE_LEDGER_DIR, "e1.json"), "utf8")) as { phases: { phase: string; startedAt: string; endedAt: string | null; resumedAt?: string[] }[] };
+
+  it("continues an entry already open with the same name: resumedAt appended, the start kept, no second entry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-phase-"));
+    expect((await capture(["phase", "begin", "--effort", "e1", "--phase", "rasengan"], root, "2026-01-01T00:00:00Z")).code).toBe(0);
+    const first = await capture(["phase", "begin", "--effort", "e1", "--phase", "rasengan", "--resume"], root, "2026-01-01T00:05:00Z");
+    expect(first.code).toBe(0);
+    expect(first.out.join("\n")).toMatch(/resumed rasengan on 'e1' at 2026-01-01T00:05:00.000Z \(open since 2026-01-01T00:00:00.000Z\)/);
+    expect((await capture(["phase", "begin", "--effort", "e1", "--phase", "rasengan", "--resume"], root, "2026-01-01T00:09:00Z")).code).toBe(0);
+    const ledger = LEDGER(root);
+    expect(ledger.phases).toHaveLength(1);
+    expect(ledger.phases[0]).toMatchObject({ phase: "rasengan", startedAt: "2026-01-01T00:00:00.000Z", endedAt: null, resumedAt: ["2026-01-01T00:05:00.000Z", "2026-01-01T00:09:00.000Z"] });
+    const shown = await capture(["phase", "show", "--effort", "e1"], root, "2026-01-01T00:10:00Z");
+    expect(shown.out.join("\n")).toMatch(/resumed at 2026-01-01T00:05:00.000Z, 2026-01-01T00:09:00.000Z/);
+  });
+
+  it("still refuses the same open name without --resume, naming --resume", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-phase-"));
+    await capture(["phase", "begin", "--effort", "e1", "--phase", "rasengan"], root, "2026-01-01T00:00:00Z");
+    const again = await capture(["phase", "begin", "--effort", "e1", "--phase", "rasengan"], root, "2026-01-01T00:01:00Z");
+    expect(again.code).toBe(2);
+    expect(again.err.join("\n")).toMatch(/already open on effort 'e1'.*--resume/);
+    expect(LEDGER(root).phases).toHaveLength(1);
+  });
+
+  it("refuses --resume while a differently named phase is open, writing nothing", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-phase-"));
+    await capture(["phase", "begin", "--effort", "e1", "--phase", "breath"], root, "2026-01-01T00:00:00Z");
+    const refused = await capture(["phase", "begin", "--effort", "e1", "--phase", "rasengan", "--resume"], root, "2026-01-01T00:01:00Z");
+    expect(refused.code).toBe(2);
+    expect(refused.err.join("\n")).toMatch(/'breath' is open instead/);
+    expect(LEDGER(root).phases.map((entry) => entry.phase)).toEqual(["breath"]);
+  });
+
+  it("begins a fresh entry when nothing is open at all, and is refused on 'end' and 'show'", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-phase-"));
+    const began = await capture(["phase", "begin", "--effort", "e1", "--phase", "rasengan", "--resume"], root, "2026-01-01T00:00:00Z");
+    expect(began.code).toBe(0);
+    expect(began.out.join("\n")).toMatch(/began rasengan .*nothing was open to continue/);
+    expect(LEDGER(root).phases[0]?.resumedAt).toBeUndefined();
+    expect((await capture(["phase", "end", "--effort", "e1", "--resume"], root, "2026-01-01T00:01:00Z")).code).toBe(2);
+    expect((await capture(["phase", "show", "--effort", "e1", "--resume"], root, "2026-01-01T00:01:00Z")).code).toBe(2);
+  });
+});

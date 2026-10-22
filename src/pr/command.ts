@@ -158,8 +158,8 @@ nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json
 nen pr fetch --target <owner/name> --pr <n>
 nen pr converge --target <owner/name> --pr <n> [--json]
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
-nen pr cascade-main --repo <path> [--trunk main] [--no-push]
-nen pr retarget --target <owner/name> --pr <n> --base <branch>
+nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run]
+nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run]
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run] [PRIVATE-NAME FLAGS]
 nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
@@ -454,9 +454,17 @@ cascade-main:
                               index (the merge happens); --json gains
                               'noPush: true'. Exit codes are unchanged: 0 on a
                               clean merge, 1 on a conflict.
+  --dry-run                   Print every git call (fetch, merge, push unless
+                              --no-push) as 'would run:' and run none of them,
+                              the fetch included; exit 0. Whether the merge
+                              would conflict is only known by merging. --json
+                              gains 'dryRun: true'.
 
 retarget:
   gh pr edit --base, for a stacked PR after its predecessor merges.
+  --dry-run  print 'would run: gh pr edit <n> --repo <o/n> --base <b>' and
+             call nothing, not even a read; exit 0. --json: { ok, message,
+             dryRun, command }.
 
 request-reviews:
   Two routes, chosen per name -- 'gh pr edit --add-reviewer' (once per
@@ -660,12 +668,16 @@ open:
   a head whose local sha is not what 'git ls-remote <remote> refs/heads/<b>'
   answers, where <remote>/<b> is what '<head>@{upstream}' names (origin only
   when that is the upstream's remote; a head tracking fork/<b> is asked of
-  fork) -- push first. EXIT 1, nothing opened: a pull request is already
-  open for that head ('gh pr list --head'), reported with its number and url.
+  fork) -- push first. ALREADY OPEN for that head ('gh pr list --head'):
+  against the same --base, at the head commit pushed here, it is the pull
+  request a previous call opened (a retry after a timeout), reported
+  'opened: existing' with its number and url at EXIT 0, nothing created;
+  another base or head commit (a same-named branch on a fork), EXIT 1,
+  nothing opened or retargeted.
   --json: '{ contract: "${OPEN_CONTRACT}", number, url, head, base, draft,
   dryRun, existing, assignees, me, assigned }' -- number and url null on a
-  dry run; existing true on the exit-1 case, where they name the pull request
-  already there; assignees the validated logins asked for ([] without
+  dry run; existing true when a pull request was already open for the head,
+  where they name the pull request already there; assignees the validated logins asked for ([] without
   --assignee); me the login '@me' resolved to, else null; assigned the
   logins the read-back found, null when nothing was opened or read back --
   then privateNameCheck. EXIT 4, nothing asked and nothing opened: the
@@ -1067,8 +1079,8 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   fetch: { values: ["target", "pr"] },
   converge: { values: ["target", "pr"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
-  "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
-  retarget: { values: ["target", "pr", "base"] },
+  "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
+  retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
   "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
   // The private-name guard's three flags ride every row whose subcommand
   // writes caller text (zheref/nen#363): edit-body, threads (reply, settle)
@@ -1577,6 +1589,7 @@ function cascade(context: CommandContext): number {
   });
   const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main", {
     noPush: context.args.booleans.has("no-push"),
+    dryRun: context.args.booleans.has("dry-run"),
   });
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
@@ -1609,7 +1622,7 @@ function doRetarget(context: CommandContext): number {
   if (base === undefined || base.trim() === "") {
     throw new VerbUsageError("--base <branch> is required.");
   }
-  const result = retarget(context.seams, target, prNumber, base);
+  const result = retarget(context.seams, target, prNumber, base, context.args.booleans.has("dry-run"));
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
@@ -2403,7 +2416,7 @@ function open(context: CommandContext): number {
     context.io.err(`nen pr open: ${plainLine(outcome.failure)}`);
     return 1;
   }
-  return outcome.report.existing ? 1 : 0;
+  return 0;
 }
 
 /**
