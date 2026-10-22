@@ -34,7 +34,7 @@ import {
   requireTargetFlag,
   parseCallerToken,
 } from "../cli/command.js";
-import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { readJsonFile, readTextFile, readVerbatimTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE } from "./mergeunit.js";
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
@@ -69,6 +69,9 @@ import { computeStaleness, type VerifiedWake } from "./staleness.js";
 import { nextBlocker } from "./blocker.js";
 import { cascadeMain } from "./cascade.js";
 import { fetchPullRequest, type PrSnapshot } from "./fetch.js";
+import { ConvergeReadError, readConvergeInput } from "./converge.js";
+import { converge, DEFAULT_COVERAGE_POLICY, PR_CONVERGE_CONTRACT, readCoveragePolicy, type CoveragePolicy } from "../issue/criteria.js";
+import { parseCatalogue, type IssueSectionsCatalogue } from "../issue/shape.js";
 import { retarget } from "./retarget.js";
 import { requestReviews } from "./reviewers.js";
 import {
@@ -154,9 +157,10 @@ nen pr body-check --body-from <path> [--requirements-from <path> | --base <ref>]
 nen pr sections resolve --catalogue <path> --kind <kind> --family <family> [--with a,b] [--overrides <workflow.json>] [--json]
 nen pr sections family --taxonomy <path> --catalogue <path> --jobs <a,b> [--json]
 nen pr fetch --target <owner/name> --pr <n>
+nen pr converge --target <owner/name> --pr <n> [--requirements-from <catalogue.json>] [--json]
 nen pr next-blocker --target <owner/name> --pr <n> --repo <path> [--reviewers a,b] [--policy bounded|strict] [--delivery-pr] [--gates <path>]
-nen pr cascade-main --repo <path> [--trunk main] [--no-push]
-nen pr retarget --target <owner/name> --pr <n> --base <branch>
+nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run]
+nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run]
 nen pr request-reviews --target <owner/name> --pr <n> [--add-reviewers a,b] [--add-bots login-or-id,...] [--dry-run]
 nen pr edit-body --target <owner/name> --pr <n> --body-file <path> [--dry-run] [PRIVATE-NAME FLAGS]
 nen pr mark-ready --target <owner/name> --pr <n> [--require-head <sha>] [--dry-run] [--json]
@@ -397,6 +401,37 @@ fetch:
   PER COMMIT, review threads with resolution state, pending review
   requests.
 
+converge:
+  Read-only. Compares the acceptance criteria of every issue the PR closes
+  (GitHub's closingIssuesReferences; on a base that is not the default
+  branch, where GitHub computes none, the body's Closes/Fixes/Resolves
+  keywords) with the PR body's verify rows '| <criterion> | <word> |
+  <evidence> |', where <criterion> is AC-{n}, <CODE>#<N>/AC-{n},
+  <owner/name>#<N>/AC-{n}, #<N>/AC-{n} or none, and <word> is satisfied,
+  partial, missing, contradicts or unrequested. Criteria are read as 'nen
+  issue criteria' reads them; --requirements-from <catalogue.json> gives the
+  issue-sections catalogue (its acceptance prefix and section) and an
+  optional 'coverage' block (blocking words, the none word, evidence
+  required or optional) -- with none, the defaults are AC rows anywhere in
+  the body, missing and contradicts blocking, unrequested on none rows, and
+  evidence required. Reports per criterion: covered-with-evidence,
+  covered-without-evidence, missing-row, malformed-row, duplicate-rows,
+  not-verifiable, and the row's word. Exits: 0 nothing blocks (a PR into
+  the default branch closing no issue is 0); 1 any blocking row -- a
+  missing-row, malformed-row or duplicate-rows criterion, a blocking word, a
+  criterion row saying unrequested, a criterion without evidence, a closing
+  issue stating no criterion (not-verifiable) or carrying an unrecognised AC
+  row, a none row with a problem, an unmatched or malformed verify row, a
+  non-default base whose body names no closing issue -- or a read that did
+  not finish (the PR, the default branch, a closing issue, a full page of
+  100 closing references); 2 usage or a malformed catalogue. --json: '{
+  contract: "nen.pr.converge/v0.1", target, pr, url, headSha, base,
+  closingSource, verifiable, closingIssues: [{ issue, criteria, verifiable,
+  unrecognised }], criteria: [{ issue, id, text, coverage, word, evidence,
+  rows }], unrequested: [{ line, word, evidence, problem }], unmatched: [{
+  line, cell, reason }], malformed: [{ line, cell, reason }], counts,
+  blocking }'.
+
 next-blocker:
   The FIRST blocking condition, fixed order: conflict -> red required
   check -> owed reviewer round -> unresolved thread -> missing body
@@ -430,9 +465,17 @@ cascade-main:
                               index (the merge happens); --json gains
                               'noPush: true'. Exit codes are unchanged: 0 on a
                               clean merge, 1 on a conflict.
+  --dry-run                   Print every git call (fetch, merge, push unless
+                              --no-push) as 'would run:' and run none of them,
+                              the fetch included; exit 0. Whether the merge
+                              would conflict is only known by merging. --json
+                              gains 'dryRun: true'.
 
 retarget:
   gh pr edit --base, for a stacked PR after its predecessor merges.
+  --dry-run  print 'would run: gh pr edit <n> --repo <o/n> --base <b>' and
+             call nothing, not even a read; exit 0. --json: { ok, message,
+             dryRun, command }.
 
 request-reviews:
   Two routes, chosen per name -- 'gh pr edit --add-reviewer' (once per
@@ -636,12 +679,17 @@ open:
   a head whose local sha is not what 'git ls-remote <remote> refs/heads/<b>'
   answers, where <remote>/<b> is what '<head>@{upstream}' names (origin only
   when that is the upstream's remote; a head tracking fork/<b> is asked of
-  fork) -- push first. EXIT 1, nothing opened: a pull request is already
-  open for that head ('gh pr list --head'), reported with its number and url.
+  fork) -- push first. ALREADY OPEN for that head ('gh pr list --head'):
+  against the same --base, at the head commit pushed here, it is the pull
+  request a previous call opened (a retry after a timeout), reported
+  'opened: existing' with its number and url at EXIT 0, nothing created;
+  another base or head commit (a same-named branch on a fork), or a fork's
+  pull request even at the same commit (isCrossRepository), EXIT 1,
+  nothing opened or retargeted.
   --json: '{ contract: "${OPEN_CONTRACT}", number, url, head, base, draft,
   dryRun, existing, assignees, me, assigned }' -- number and url null on a
-  dry run; existing true on the exit-1 case, where they name the pull request
-  already there; assignees the validated logins asked for ([] without
+  dry run; existing true when a pull request was already open for the head,
+  where they name the pull request already there; assignees the validated logins asked for ([] without
   --assignee); me the login '@me' resolved to, else null; assigned the
   logins the read-back found, null when nothing was opened or read back --
   then privateNameCheck. EXIT 4, nothing asked and nothing opened: the
@@ -1041,9 +1089,10 @@ export const PR_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
   sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
   fetch: { values: ["target", "pr"] },
+  converge: { values: ["target", "pr", "requirements-from"] },
   "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
-  "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
-  retarget: { values: ["target", "pr", "base"] },
+  "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
+  retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
   "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
   // The private-name guard's three flags ride every row whose subcommand
   // writes caller text (zheref/nen#363): edit-body, threads (reply, settle)
@@ -1148,6 +1197,7 @@ const TOKEN_ENV_ADVICE: Readonly<Record<string, string>> = {
   sections: "sections reads local JSON files only and calls no GitHub API.",
   "body-check": "body-check reads local files and git only and calls no GitHub API, so there is no credential to name.",
   fetch: `fetch ${GH_RESOLVES}`,
+  converge: `converge ${GH_RESOLVES}`,
   "next-blocker": `next-blocker ${GH_RESOLVES}`,
   "cascade-main": "cascade-main fetches and pushes on git's own credential and calls no GitHub API.",
   retarget: `retarget ${GH_RESOLVES}`,
@@ -1232,6 +1282,20 @@ function refuseFlagsSubcommandDoesNotRead(context: CommandContext, subcommand: s
 }
 
 export const prCommand: Command = {
+  exits: [
+    { verb: "pr open", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "pr edit-body", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "pr threads", code: 3, meaning: "the thread is already resolved (settle: every other entry settled)" },
+    { verb: "pr threads", code: 4, meaning: "no thread with that id, the pull request is not visible, or (reply/settle) the private-name guard" },
+    { verb: "pr threads", code: 5, meaning: "the credential could not authenticate" },
+    { verb: "pr merge", code: 5, meaning: "gh pr merge refused" },
+    { verb: "pr merge", code: 6, meaning: "gh could not be started" },
+    { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
+    { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
+    { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },
+    { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
+    { verb: "pr request-reviews", code: 9, meaning: "a bot request GitHub accepted but did not list as pending" },
+  ],
   name: "pr",
   subcommands: PR_SUBCOMMANDS,
   summary:
@@ -1257,6 +1321,8 @@ export const prCommand: Command = {
         return sectionsCommand(context);
       case "fetch":
         return fetch(context);
+      case "converge":
+        return convergeVerb(context);
       case "next-blocker":
         return blocker(context);
       case "cascade-main":
@@ -1301,6 +1367,78 @@ function fetch(context: CommandContext): number {
   }
   printSnapshot(context, snapshot);
   return 0;
+}
+
+/**
+ * `nen pr converge`: the closing issues' criteria against the PR body's
+ * verify rows (../issue/criteria.ts). A read that did not finish is exit 1,
+ * reported on stderr: "could not read" is never "nothing to cover", and it is
+ * not a usage error either (the shared exit scheme's 2).
+ */
+function convergeVerb(context: CommandContext): number {
+  const target = requireTarget(context);
+  const prNumber = requirePr(context);
+  const catalogueFrom = context.args.values["requirements-from"];
+  let catalogue: IssueSectionsCatalogue | null = null;
+  let policy: CoveragePolicy = DEFAULT_COVERAGE_POLICY;
+  if (catalogueFrom !== undefined) {
+    if (catalogueFrom === "") throw new VerbUsageError("--requirements-from names the issue-sections catalogue; it cannot be empty.");
+    const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+    const raw = readJsonFile<unknown>(resolveAgainstRepo(root, catalogueFrom), process.cwd(), "--requirements-from is the catalogue the criteria and coverage rules are read from.");
+    try {
+      catalogue = parseCatalogue(raw);
+      policy = readCoveragePolicy(raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>)["coverage"] : undefined);
+    } catch (error) {
+      throw new VerbUsageError(plainLine(`'${catalogueFrom}': ${error instanceof Error ? error.message : String(error)}`));
+    }
+  }
+  let input;
+  try {
+    input = readConvergeInput(context.seams, target, prNumber, catalogue);
+  } catch (error) {
+    if (!(error instanceof ConvergeReadError)) throw error;
+    context.io.err(plainLine(`nen pr converge: ${error.message}`));
+    return 1;
+  }
+  const report = converge(input.issues, input.body, policy);
+  const closingIssues = input.issues.map((issue) => ({
+    issue: `${issue.target}#${issue.number}`,
+    criteria: issue.report.criteria.length,
+    verifiable: issue.report.verifiable,
+    unrecognised: issue.report.unrecognised,
+  }));
+  const counts = report.counts;
+  const noKeyword = input.closingSource === "none-on-non-default-base";
+  const blocking = noKeyword
+    ? [`${target.slug}#${prNumber}: base '${input.base}' is not the default branch, where GitHub computes no closing references, and the body names no closing issue (Closes/Fixes/Resolves #N)`, ...report.blocking]
+    : report.blocking;
+  const head =
+    input.issues.length === 0
+      ? noKeyword
+        ? `${target.slug}#${prNumber} into '${input.base}' (not the default branch): GitHub lists no closing issue and the body names none -- cannot tell what it closes`
+        : `${target.slug}#${prNumber} closes no issue: no criterion to compare (not verifiable)`
+      : `${report.criteria.length} criterion row(s) across ${input.issues.length} closing issue(s)${input.closingSource === "body-keywords" ? " (from the body's closing keywords: the base is not the default branch)" : ""}, ${blocking.length} blocking -- ` +
+        `${counts["covered-with-evidence"]} covered with evidence, ${counts["covered-without-evidence"]} without, ${counts["missing-row"]} missing-row, ` +
+        `${counts["malformed-row"]} malformed-row, ${counts["duplicate-rows"]} duplicate-rows, ${counts["not-verifiable"]} not-verifiable`;
+  const lines = [
+    head,
+    ...report.criteria.map(
+      (entry): string =>
+        `${entry.coverage.toUpperCase()}  ${entry.issue}/${entry.id ?? "(no AC row)"}` +
+        `${entry.word === null ? "" : ` ${entry.word}`}${entry.rows.length === 0 ? "" : ` (line ${entry.rows.join(", ")})`}`,
+    ),
+    ...input.issues.flatMap((issue): string[] => issue.report.unrecognised.map((row): string => `UNRECOGNISED ${issue.target}#${issue.number} line ${row.line}: ${row.text}`)),
+    ...report.unrequested.map((row): string => `UNREQUESTED line ${row.line}: ${row.word ?? "?"}${row.problem === null ? "" : ` -- ${row.problem}`}`),
+    ...report.unmatched.map((row): string => `UNMATCHED line ${row.line} '${row.cell}': ${row.reason}`),
+    ...report.malformed.map((row): string => `MALFORMED line ${row.line}: ${row.reason}`),
+  ].map(plainLine);
+  emit(
+    context.io,
+    context.json,
+    { contract: PR_CONVERGE_CONTRACT, target: target.slug, pr: prNumber, url: input.url, headSha: input.headSha, base: input.base, closingSource: input.closingSource, closingIssues, ...report, blocking },
+    lines,
+  );
+  return blocking.length > 0 ? 1 : 0;
 }
 
 function blocker(context: CommandContext): number {
@@ -1500,6 +1638,7 @@ function cascade(context: CommandContext): number {
   });
   const result = cascadeMain(context.seams, root, context.args.values["trunk"] ?? "main", {
     noPush: context.args.booleans.has("no-push"),
+    dryRun: context.args.booleans.has("dry-run"),
   });
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
@@ -1532,7 +1671,7 @@ function doRetarget(context: CommandContext): number {
   if (base === undefined || base.trim() === "") {
     throw new VerbUsageError("--base <branch> is required.");
   }
-  const result = retarget(context.seams, target, prNumber, base);
+  const result = retarget(context.seams, target, prNumber, base, context.args.booleans.has("dry-run"));
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;
@@ -2279,7 +2418,9 @@ function open(context: CommandContext): number {
   const bodyPath = requireValue(context.args, "body-file", "It is the pull request body, read once, checked and handed to gh on stdin.");
   const ignore = readIgnoreFlag(context);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const title = readTextFile(titlePath, root, "It is the pull request's title -- 'pr open' reads no other source for it.")
+  // VERBATIM: a title whose bytes are not UTF-8 is refused (exit 2), never
+  // opened with replacement characters (delivery round on zheref/nen#498).
+  const title = readVerbatimTextFile(titlePath, root, "It is the pull request's title -- 'pr open' reads no other source for it.")
     .split("\n")
     .map((line): string => line.trim())
     .find((line): boolean => line !== "");
@@ -2326,7 +2467,7 @@ function open(context: CommandContext): number {
     context.io.err(`nen pr open: ${plainLine(outcome.failure)}`);
     return 1;
   }
-  return outcome.report.existing ? 1 : 0;
+  return 0;
 }
 
 /**

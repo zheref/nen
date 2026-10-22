@@ -21,11 +21,17 @@ import { REPOS_FILE, resolveSchemaFile } from "../schema/source.js";
 import { githubRefCode, parseGithubRef } from "./github.js";
 import { openTaxonomy } from "../schema/taxonomy.js";
 import { formatRef, KNOWN_STATES, parseRef, RefError, type ObjectKind } from "./notation.js";
+import { resolve as resolvePath } from "node:path";
+import { assertRepoRoot } from "../repo/root.js";
+import { CitationSyntaxError, resolveCitation, renderResolve, ResolveWiringError } from "./resolve.js";
 
 const USAGE = `nen ref format --code <CODE> --kind <IS|PR> --number <N> [--state <s>] [--url <u>] [--no-glyphs]
 nen ref parse <token>
+nen ref resolve --citation '<path> § N | <path> § *Title* | <path>#anchor | <path> | HR-n | CON-n'
+                --root <checkout> [--from <file>] [--in <file>] [--json]
 
-The object notation <CODE>-<IS|PR>-#<N>, formatted and parsed.
+The object notation <CODE>-<IS|PR>-#<N>, formatted and parsed; and where one
+canon citation lands.
 
 format:
   --code <CODE>    Two or three uppercase letters. Checked against the target
@@ -43,23 +49,95 @@ parse:
                    have IS/PR. code is included only for an exact registered slug
                    (case-insensitive), including consumer-only codes.
 
+resolve:
+  --citation <c>   '<path> § N' (a heading or bold paragraph lead whose text
+                   opens with N: 'N.', 'N ·', '§ N'), '<path> § *Title*' (a
+                   heading or lead whose normalised text equals the title or
+                   starts with it), '<path>#anchor' (GitHub's heading slugs,
+                   duplicates suffixed, and explicit <a id> anchors), '<path>'
+                   (the file exists), or a clause id 'P-N' (a definition as
+                   'nen canon clause check' counts one; P-2 never matches
+                   P-20). The path may be written as a Markdown link,
+                   '[x](path) § N', or '[x](<path with spaces>) § N'. Fenced blocks and frontmatter carry no
+                   heading; CRLF reads as LF.
+  --root <checkout> The canon checkout (or --repo; one directory, named once).
+  --from <file>    The citing file, relative to the root: a relative target
+                   resolves from its directory (default: the root). A target
+                   that leaves the root is unresolved by name.
+  --in <file>      Where a clause id is defined. Else --root's
+                   nen/contract.json clauseHomes ({ "<PREFIX>": "<file>" }),
+                   else the documented defaults HR -> docs/ROSTER.md,
+                   CON -> CONSTITUTION.md; any other prefix needs one.
+  Exit 0 resolved (every match listed: a number two headings share is two
+  matches, never a pick); 1 unresolved, with candidates (the target's headings
+  and leads, or the five clause ids defined nearest) and the reason -- the
+  verb never re-aims a citation; 2 a usage error or a target that could not be
+  read (unreadable, not UTF-8).
+  --json: { contract: "nen.ref.resolve/v0.1", citation, kind, root, target,
+            resolved, matches, reason, candidates }; each match and candidate
+            { line, text, anchor, via: heading|lead|anchor|definition|file }.
+
   --repo <path>    The checkout whose nen/repos.json --code is checked
                    against. Defaults to the current directory, so a call
                    made from anywhere else needs it: the taxonomy-missing
                    refusal you would otherwise meet is this flag's
                    absence, not a missing file.`;
 
+const RESOLVE_FLAGS = ["citation", "root", "from", "in"] as const;
+const FORMAT_FLAGS = ["code", "kind", "number", "state", "url"] as const;
+
+function refuseFlags(context: CommandContext, verb: string, flags: readonly string[], booleans: readonly string[] = []): void {
+  for (const flag of flags) {
+    if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'ref ${verb}'. A flag accepted and ignored is worse than one refused.`);
+  }
+  for (const flag of booleans) {
+    if (context.args.booleans.has(flag)) throw new VerbUsageError(`--${flag} is not read by 'ref ${verb}'. A flag accepted and ignored is worse than one refused.`);
+  }
+}
+
+function resolveVerb(context: CommandContext): number {
+  refuseExtraPositionals(context.args, 2);
+  refuseFlags(context, "resolve", FORMAT_FLAGS, ["no-glyphs"]);
+  const citation = requireValue(context.args, "citation", "It is the citation to resolve, e.g. 'claude/skills/breath/SKILL.md § 2a' or 'HR-2'.");
+  const rootFlag = context.args.values["root"];
+  if (rootFlag !== undefined && rootFlag.trim() === "") throw new VerbUsageError("--root was given an empty value.");
+  if (rootFlag !== undefined && context.repoFlag !== null && resolvePath(rootFlag) !== resolvePath(context.repoFlag)) {
+    throw new VerbUsageError(`--root '${rootFlag}' and --repo '${context.repoFlag}' name different directories; give one.`);
+  }
+  const root = assertRepoRoot({ repoFlag: rootFlag ?? context.repoFlag });
+  const from = context.args.values["from"] ?? null;
+  const within = context.args.values["in"] ?? null;
+  for (const [flag, value] of [["from", from], ["in", within]] as const) {
+    if (value !== null && value.trim() === "") throw new VerbUsageError(`--${flag} was given an empty value.`);
+  }
+  let report;
+  try {
+    report = resolveCitation({ root, citation, from, in: within });
+  } catch (error) {
+    if (error instanceof CitationSyntaxError) throw new VerbUsageError(error.message);
+    if (error instanceof ResolveWiringError) {
+      context.io.err(`nen ref resolve: ${error.message} -- not resolved, and not unresolved either: the target could not be read.`);
+      return 2;
+    }
+    throw error;
+  }
+  emit(context.io, context.json, report, renderResolve(report));
+  return report.resolved ? 0 : 1;
+}
+
 export const refCommand: Command = {
   name: "ref",
-  subcommands: ["format", "parse"],
-  summary: "Format or parse the <CODE>-<IS|PR>-#<N> object notation.",
+  subcommands: ["format", "parse", "resolve"],
+  summary: "Format or parse the <CODE>-<IS|PR>-#<N> object notation, or resolve a canon citation.",
   usage: USAGE,
   flags: {
-    values: ["code", "kind", "number", "state", "url"],
+    values: [...FORMAT_FLAGS, ...RESOLVE_FLAGS],
     booleans: ["no-glyphs"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("ref", context.args, ["format", "parse"]);
+    const subcommand = requireSubcommand("ref", context.args, ["format", "parse", "resolve"]);
+    if (subcommand === "resolve") return resolveVerb(context);
+    refuseFlags(context, subcommand, RESOLVE_FLAGS);
     if (subcommand === "parse") {
       const token = context.args.positionals[2];
       if (token === undefined) {

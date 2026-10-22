@@ -26,3 +26,11 @@ describe("rerunFailed", () => {
     expect(result.message).toMatch(/no such run/);
   });
 });
+
+describe("rerunFailed --dry-run (Hatsu SDD plan N6)", () => {
+  it("prints the exact gh call and spawns nothing", () => {
+    const seams = new ScriptedSeams([]);
+    expect(rerunFailed(seams, TARGET, 42, true)).toEqual({ ok: true, message: "would run: gh run rerun 42 --repo zheref/KroApple --failed", dryRun: true, command: "gh run rerun 42 --repo zheref/KroApple --failed" });
+    expect(seams.calls).toEqual([]);
+  });
+});

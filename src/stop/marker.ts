@@ -8,6 +8,8 @@
  * rule rather than a preference: `nen/` is committed configuration and `.nen/`
  * is generated output, so a `git add nen/` after a stop cannot stage this file.
  */
+import type { GateId } from "../schema/decisions.js";
+
 export const MARKER_FILE = ".nen/last-stop.json";
 
 /** `nen.stop.mark/v0.1` -- the marker's own versioned contract string. */
@@ -25,7 +27,8 @@ const MARKER_KEYS_V1: readonly string[] = ["contract", "who", "gate", "notified"
 /** What v0.2 adds, in written order; every one present, null when empty. */
 const MARKER_KEYS_V2_EXTRA: readonly string[] = ["title", "body", "reportUrl", "options", "proposedIssue"];
 
-export const GATE_NAMES: Readonly<Record<string, string>> = {
+/** Each gate of ../schema/decisions.ts's one GATES list, named; the type holds the two in step. */
+export const GATE_NAMES: Readonly<Record<GateId, string>> = {
   G1: "epic approval",
   "G1-M": "release into build",
   G2: "merge",

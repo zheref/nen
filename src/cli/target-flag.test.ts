@@ -7,7 +7,8 @@
 // places to keep agreeing -- so this drives the verbs through the real CLI and
 // asserts one answer.
 //
-// FIFTEEN OF THE SEVENTEEN are in the table below, and the two that are not are
+// THE FOUR FAMILIES' VERBS ARE IN THE TABLE BELOW, then every other family's that
+// requires the flag (Hatsu SDD plan N5); the two of the four that are not are
 // named with their reasons rather than quietly dropped (Copilot, PR #195):
 // `pr cascade-main` just under this comment, and `pr edit-body`, whose
 // `--body-file` is read before `--target` so a row for it would assert a file
@@ -22,6 +23,11 @@ import { issueCommand } from "../issue/command.js";
 import { labelsCommand } from "../labels/command.js";
 import { prCommand } from "../pr/command.js";
 import { repoCommand } from "../repo/command.js";
+import { canonCommand } from "../canon/command.js";
+import { classifyCommand } from "../classify/command.js";
+import { ideaCommand } from "../idea/command.js";
+import { runCommand } from "../run/command.js";
+import { runnerCommand } from "../runner/command.js";
 import type { Command } from "./command.js";
 
 /** Every verb of the four families whose first act is to resolve `--target`. */
@@ -42,6 +48,24 @@ const VERBS: readonly (readonly [Command, readonly string[]])[] = [
   [issueCommand, ["issue", "chain-position", "--issue", "1"]],
   [issueCommand, ["issue", "terminus", "--issue", "1"]],
   [issueCommand, ["issue", "reconcile"]],
+  // THE REST OF THE SURFACE THAT REQUIRES --target (Hatsu SDD plan N5): USAGE
+  // documented the rule two ways -- fixed here, "exits 1 on eighteen verbs"
+  // further down -- and only a sweep over every family that takes the flag
+  // can say which was true. Each of these answers through the same refusal.
+  [issueCommand, ["issue", "file", "--repo", ".", "--title", "x", "--body-file", "x"]],
+  [issueCommand, ["issue", "edit-body", "--issue", "1", "--body-file", "x"]],
+  [issueCommand, ["issue", "consolidate-close", "--parent", "1", "--children", "2"]],
+  [ideaCommand, ["idea", "file", "--repo", ".", "--title", "x", "--body-file", "x"]],
+  [prCommand, ["pr", "open", "--title-file", "x", "--body-file", "x"]],
+  [prCommand, ["pr", "converge", "--pr", "1"]],
+  [prCommand, ["pr", "threads", "list", "--pr", "1"]],
+  [classifyCommand, ["classify", "install", "--sync"]],
+  [classifyCommand, ["classify", "apply", "--plan", "x"]],
+  [canonCommand, ["canon", "resolve", "--repo", "."]],
+  [runCommand, ["run", "rerun-failed", "--run-id", "1"]],
+  [runnerCommand, ["runner", "preflight"]],
+  [runnerCommand, ["runner", "enable"]],
+  [runnerCommand, ["runner", "relabel"]],
 ];
 
 // `pr cascade-main` is DELIBERATELY ABSENT. It reaches the same helper and

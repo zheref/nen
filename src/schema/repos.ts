@@ -25,6 +25,7 @@
 // several tags behind.
 
 import { requireArray, requireRecord, requireString, SchemaError } from "./errors.js";
+import { GATES, type GateId } from "./decisions.js";
 import { optionalString } from "./errors.js";
 import { readSchemaJson, REPOS_FILE } from "./source.js";
 
@@ -168,10 +169,127 @@ export interface RepoRegistry {
    * reason.
    */
   readonly toolPinIndexes?: Readonly<Record<string, number>>;
+  /**
+   * `families[]` (zheref/nen#453, Hatsu ruling HR-16): a product family -- one
+   * specification repository and the sibling platform repositories that
+   * deliver it -- in file order.
+   *
+   * OPTIONAL IN THE TYPE, ALWAYS SET BY THE LOADER, for `toolCheckouts`'
+   * reason: a hand-built registry predates the key, and its absence reads as
+   * "no family declared".
+   */
+  readonly families?: readonly ProductFamily[];
   byRepo(repo: string): ConsumerEntry | undefined;
   byCode(code: string): ConsumerEntry | undefined;
   /** Consumers whose `consumes` intersects `changed`. Order is the file's. */
   affectedBy(changed: readonly string[]): readonly ConsumerEntry[];
+}
+
+/**
+ * The gate a family's specification repository stands at when the registry
+ * does not say: G2, today's value (HR-16). The registry's own `spec.gate` is
+ * read when stated -- any gate of the one vocabulary -- so a G4 ruling that
+ * moves it needs no nen release (delivery round on zheref/nen#498, reading 10).
+ */
+export const FAMILY_SPEC_GATE: GateId = "G2";
+/** The one role a family's `spec` block may state. */
+export const FAMILY_SPEC_ROLE = "spec";
+
+/** One `families[].members[]` row: a product code, and the platform it delivers, when stated. */
+export interface FamilyMember {
+  /** A key of `product_codes`, exactly as the file spells it. */
+  readonly code: string;
+  readonly platform: string | null;
+}
+
+/** One `families[]` entry. See `RepoRegistry.families`. */
+export interface ProductFamily {
+  readonly name: string;
+  /** The entry's position in `families`, so a report can name it by pointer. */
+  readonly index: number;
+  readonly spec: { readonly repo: string; readonly role: typeof FAMILY_SPEC_ROLE; readonly gate: GateId };
+  readonly members: readonly FamilyMember[];
+}
+
+/**
+ * `families[]`, validated (zheref/nen#453). Every FAIL names its pointer:
+ * `name` a non-empty string unique across families; `spec.repo` an
+ * `owner/name`; `spec.role`, when stated, exactly `spec`; `spec.gate`, when
+ * stated, one of the gates of ../schema/decisions.ts's GATES (default G2,
+ * HR-16's value: product specification is the maintainer's to merge); `members[]` non-empty, each
+ * `code` an EXACT key of `product_codes` (a typo'd code names no repository
+ * and must not pass silently), no code twice in one family, and no code in two
+ * families. Unknown keys on an entry are preserved, as everywhere in this file.
+ */
+function parseFamilies(path: string, raw: unknown, productCodes: Readonly<Record<string, string>>): readonly ProductFamily[] {
+  if (raw === undefined || raw === null) return [];
+  const names = new Map<string, number>();
+  const codeOwner = new Map<string, string>();
+  return requireArray(path, "families", raw).map((entry, index): ProductFamily => {
+    const at = `families[${index}]`;
+    const record = requireRecord(path, at, entry);
+    const name = requireString(path, `${at}.name`, record["name"]);
+    if (name.trim() === "") throw new SchemaError(path, `${at}.name`, "is an empty string; a family is resolved by its name");
+    const previous = names.get(name.toLowerCase());
+    if (previous !== undefined) {
+      throw new SchemaError(path, `${at}.name`, `duplicates families[${previous}].name ('${name}'); a family resolved by name would answer with whichever one was read first`);
+    }
+    names.set(name.toLowerCase(), index);
+
+    const spec = requireRecord(path, `${at}.spec`, record["spec"]);
+    const specRepo = requireString(path, `${at}.spec.repo`, spec["repo"]);
+    if (!/^[^/\s]+\/[^/\s]+$/.test(specRepo)) {
+      throw new SchemaError(path, `${at}.spec.repo`, `expected an 'owner/name' slug, got '${specRepo}'`);
+    }
+    if (spec["role"] !== undefined && spec["role"] !== null) {
+      const role = requireString(path, `${at}.spec.role`, spec["role"]);
+      if (role !== FAMILY_SPEC_ROLE) {
+        throw new SchemaError(path, `${at}.spec.role`, `must be exactly '${FAMILY_SPEC_ROLE}', got '${role}'. A family's specification repository has one role; omit the key or state it`);
+      }
+    }
+    let gate: GateId = FAMILY_SPEC_GATE;
+    if (spec["gate"] !== undefined && spec["gate"] !== null) {
+      const stated = requireString(path, `${at}.spec.gate`, spec["gate"]);
+      if (!(GATES as readonly string[]).includes(stated)) {
+        throw new SchemaError(path, `${at}.spec.gate`, `must be one of ${GATES.join(", ")}, got '${stated}'. Omit it for ${FAMILY_SPEC_GATE}, the gate HR-16 names today`);
+      }
+      gate = stated as GateId;
+    }
+
+    const rawMembers = requireArray(path, `${at}.members`, record["members"]);
+    if (rawMembers.length === 0) {
+      throw new SchemaError(path, `${at}.members`, "is an empty array. A family with no members delivers nothing; list its platform repositories by product code");
+    }
+    const declared = Object.keys(productCodes).filter((code): boolean => !code.startsWith("$")).sort();
+    const own = new Set<string>();
+    const members = rawMembers.map((item, memberIndex): FamilyMember => {
+      const memberAt = `${at}.members[${memberIndex}]`;
+      const member = requireRecord(path, memberAt, item);
+      const code = requireString(path, `${memberAt}.code`, member["code"]);
+      if (!Object.prototype.hasOwnProperty.call(productCodes, code)) {
+        throw new SchemaError(
+          path,
+          `${memberAt}.code`,
+          `'${code}' is not a key of product_codes. A member is resolved through product_codes, and an unknown code names no repository. Declared codes: ${declared.join(", ") || "(none)"}`,
+        );
+      }
+      if (own.has(code)) {
+        throw new SchemaError(path, `${memberAt}.code`, `'${code}' is listed twice in family '${name}'`);
+      }
+      own.add(code);
+      const other = codeOwner.get(code);
+      if (other !== undefined) {
+        throw new SchemaError(path, `${memberAt}.code`, `'${code}' is already a member of family '${other}'. A repository delivers one family's product; a code in two families would be built against two specifications`);
+      }
+      codeOwner.set(code, name);
+      const platform = optionalString(path, `${memberAt}.platform`, member["platform"]);
+      if (platform !== null && platform.trim() === "") {
+        throw new SchemaError(path, `${memberAt}.platform`, "is an empty string; omit the key to state no platform");
+      }
+      return { code, platform };
+    });
+    return { name, index, spec: { repo: specRepo, role: FAMILY_SPEC_ROLE, gate }, members };
+  });
 }
 
 /** How a `maintained_tools` entry says its checkout is found. See `RepoRegistry.toolCheckouts`. */
@@ -407,6 +525,7 @@ export function parseRepoRegistry(path: string, value: unknown): RepoRegistry {
     toolPins,
     toolPinIndexes,
     toolCheckouts,
+    families: parseFamilies(path, root["families"], productCodes),
     byRepo: (repo): ConsumerEntry | undefined => byRepoIndex.get(repo),
     byCode: (code): ConsumerEntry | undefined => byCodeIndex.get(code),
     affectedBy: (changed): readonly ConsumerEntry[] => {

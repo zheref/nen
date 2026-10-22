@@ -191,7 +191,8 @@ function declarationGate(root: string, repo: string | null): { readonly gate: "G
   try {
     const { role } = roleOf(loadRepoRegistry(root), repo);
     if (role === "canon") return { gate: "G4" };
-    if (role === "consumer") return { gate: "G2" };
+    // A family's spec repository stands at G2 (zheref/nen#453, HR-16).
+    if (role === "consumer" || role === "spec") return { gate: "G2" };
     return { why: `'${repo}' is not in this checkout's nen/repos.json, so whether its gate is G2 or G4 is not derived -- register it rather than inferring` };
   } catch (error) {
     return { why: `no readable nen/repos.json to read '${repo}''s role from (${error instanceof Error ? error.message : String(error)})` };

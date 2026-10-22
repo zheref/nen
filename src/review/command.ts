@@ -165,6 +165,10 @@ function runScopes(context: CommandContext): number {
 }
 
 export const reviewCommand: Command = {
+  exits: [
+    { verb: "review ledger", code: 3, meaning: "refused: the branch is the trunk or not a branch; no ledger is opened" },
+    { verb: "review ledger", code: 4, meaning: "lost: no ledger here, but one was opened under this key before; recover it, never a fresh init" },
+  ],
   name: "review",
   subcommands: SUBCOMMANDS,
   summary: "Classify review scopes and own per-effort reviewer budget ledgers.",

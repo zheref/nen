@@ -5,7 +5,7 @@
 // BEFORE it comes back to a human (iterate). Both are caps a caller agreed to
 // and neither is one nen may widen on its own.
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   emit,
@@ -19,29 +19,57 @@ import { resolveRepoRoot } from "../repo/root.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./slots.js";
+import { loadWorkflow, type LocalSlotRule } from "../schema/workflow.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
+import { effortsFromRun, markerForBranch, readinessInProcess, type FromRunReport } from "./fromrun.js";
+import { gitCommonDir, locateRunManifest, readRunManifest, runIdSegment } from "../run/manifest.js";
+import { readLivePr } from "../run/verify.js";
+import { parseTarget, type Target } from "../github/target.js";
+import type { Effort } from "./slots.js";
+import { LOOP_COMMON_DIR, LOOP_LEDGER_DIR, legacyDirs, present, resolveLoopHome } from "./home.js";
+import { withLedgerLock, writeLedgerAtomically } from "../ledger/lock.js";
 
-/**
- * Where a loop's ledger lives, repo-relative and forward-slashed.
- *
- * `.nen/`, NOT `nen/`, the same one-character rule `../stop/command.ts`'s marker
- * follows: `nen/` is committed configuration and `.nen/` is generated output, so
- * a `git add nen/` mid-loop cannot stage a running loop's bookkeeping.
- */
-export const LOOP_LEDGER_DIR = ".nen/loop";
+// Where a loop's ledger lives is ./home.ts's: `<git-common-dir>/.nen/loop/`,
+// with `<--repo>/.nen/loop/` (`.nen/`, never the committed `nen/`) only outside
+// a git repository. Re-exported for the callers that named it here.
+export { LOOP_COMMON_DIR, LOOP_LEDGER_DIR };
 
 const USAGE = `nen loop slots -- how many concurrency slots each plane has free.
 
 usage:
-  nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>]
+  nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>] [--repo <path>] [--json]
+  nen loop slots --from-run <run-id> --target <owner/name> --local-cap <n>
+                 [--ci-cap <n>] [--repo <path>] [--json]
 
 The efforts file is a JSON array of
-  {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool}
+  {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool,
+   "merged": bool, "stacked": bool}
+('merged' and 'stacked' are optional, absent reads false).
 
-A CI slot frees when the PR OPENS -- something else drives it from there. A
-LOCAL slot frees only when the PR is READY and the human has been PROMPTED,
-because nothing else is behind a locally-authored PR. The two budgets are
-counted separately and never traded against each other.
+A CI slot frees when the PR OPENS -- something else drives it from there. When
+a LOCAL slot frees is --repo's nen/workflow.json 'idle.localSlotFrees' under a
+declared idle profile, else 'monitor.localSlotFrees', else the default (HR-5);
+the two keys stating different values is refused. One of a closed set:
+  ready+prompted  (the default) the PR is READY and the human has been
+                  PROMPTED, because nothing else is behind a locally-authored PR
+  merged          only once the PR has merged
+  stacked-open    a PR open and stacked onto another effort's branch frees (the
+                  stack's owner drives it); every other effort as ready+prompted
+The rule in force and where it came from are printed ('local slot frees: ...')
+and carried by --json as 'localSlotFrees': { rule, source }. A
+nen/workflow.json that is present and will not load is exit 1, never the
+default. The two budgets are counted separately and never traded against each
+other.
+
+--from-run BUILDS the efforts document instead of reading one (HR-5): the run's
+manifest ('nen run start') names the efforts -- its delivery PRs; integration
+and release PRs hold no slot -- and every field is read, none typed: prOpen and
+merged from the PR's live state, ready from 'nen pr ready' in process, prompted
+from a valid stop marker (.nen/last-stop.json) in the worktree checked out on
+the PR's head branch, stacked when the PR's base is another recorded delivery PR's head
+branch. A PR closed without a merge frees its slot. Anything that could not be
+read keeps its effort HELD and is listed under 'unread'. --from-run and
+--efforts are refused together: during a run no field is caller-typed.
 
 --local-cap is REQUIRED. It used to default to 7, and that default was removed
 (issue #52): a concurrency guard must be chosen, not inherited -- every real
@@ -80,11 +108,26 @@ the claim being refused rather than by anyone remembering.
                   true, or a gate ended it. Releasing twice is not an error;
                   claiming after a release is.
 
-The ledger is '${LOOP_LEDGER_DIR}/<id>.json' under --repo. Exit 0 on a claim or a
-release; exit 1 when the cap is REACHED -- an answer, not a failure: izanagi's
-cap is grammar rather than a default precisely so that reaching it is a
-decision to bring to a human, never a bound to raise and re-run. Exit 2 for a
-malformed id, a malformed line, a changed line, or a claim after a release.`;
+The ledger is '<git-common-dir>/${LOOP_COMMON_DIR}/<id>.json' -- git rev-parse
+--git-common-dir of --repo, one home shared by the main checkout and every
+linked worktree, so removing an effort worktree never resets a cap. Only when
+--repo is not inside a git repository is it '${LOOP_LEDGER_DIR}/<id>.json' under
+--repo; a --repo that does not exist is refused (exit 2). Claims run under the
+shared ledger lock and write atomically, so parallel claims never lose a count.
+Every claim also writes '<id>.opened' beside the ledger; a missing
+ledger beside that marker is a LOST ledger, refused, never iteration 1. A
+ledger an older build left at '<git-common-dir>/nen/loop/<id>.json', at
+'${LOOP_LEDGER_DIR}/<id>.json' under --repo, or under any other checkout
+'git worktree list' names, is moved to the common-dir home once, on the first
+read, and reported.
+
+Exit 0 on a claim or a release; exit 1 when the cap is REACHED -- an answer,
+not a failure: izanagi's cap is grammar rather than a default precisely so that
+reaching it is a decision to bring to a human, never a bound to raise and
+re-run. Exit 2 for a malformed id, a malformed line, a changed line, a claim
+after a release, an unreadable ledger, a lost ledger ('ledger lost'), a ledger
+in more than one home, a --repo that does not exist, or a git that cannot name the common directory or list
+the worktrees.`;
 
 function print(context: CommandContext, report: PlaneReport): void {
   context.io.out(
@@ -94,16 +137,31 @@ function print(context: CommandContext, report: PlaneReport): void {
 }
 
 export const loopCommand: Command = {
+  exits: [
+    { verb: "loop iterate", code: 2, meaning: "also: the loop's count cannot be established -- a lost ledger, a ledger in two homes, an unreadable ledger, or a git that cannot name the common dir; never retried as a typo" },
+  ],
   name: "loop",
   subcommands: ["slots", "iterate"],
   summary: "Count the concurrency budgets, and enforce izanagi's iteration cap.",
   usage: USAGE,
-  flags: { values: ["efforts", "ci-cap", "local-cap", "id", "line", "release"], booleans: [] },
-  run(context: CommandContext): number {
+  flags: { values: ["efforts", "ci-cap", "local-cap", "id", "line", "release", "from-run", "target"], booleans: [] },
+  run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("loop", context.args, ["slots", "iterate"]);
-    if (subcommand === "iterate") return iterate(context);
+    if (subcommand === "iterate") {
+      for (const flag of ["from-run", "target"]) {
+        if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'loop iterate'; only 'loop slots' takes it. A flag accepted and ignored is worse than one refused.`);
+      }
+      return iterate(context);
+    }
+    const fromRun = context.args.values["from-run"];
     const path = context.args.values["efforts"];
-    if (path === undefined) throw new VerbUsageError("--efforts <path.json> is required.");
+    if (fromRun !== undefined && path !== undefined) {
+      throw new VerbUsageError("--from-run and --efforts are refused together: under a run the efforts document is built from the manifest and live reads, and no field of it is caller-typed (HR-5).");
+    }
+    if (fromRun === undefined && context.args.values["target"] !== undefined) {
+      throw new VerbUsageError("--target is read only with --from-run, where it names the repository the run's PRs live in.");
+    }
+    if (fromRun === undefined && path === undefined) throw new VerbUsageError("--efforts <path.json> or --from-run <run-id> is required.");
 
     // Required, no default (issue #52). The old default of 7 sat more than
     // three times looser than every real caller's own stated policy of 2, so a
@@ -131,29 +189,114 @@ export const loopCommand: Command = {
   // under a "could not read --efforts" message about a file nobody had a path to
   // yet, which is the wrong code and the wrong sentence at once.
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+    if (fromRun !== undefined) return slotsFromRun(context, root, fromRun, caps);
     let parsed;
     try {
-      const full = resolveAgainstRepo(root, path);
+      const full = resolveAgainstRepo(root, path as string);
       parsed = parseEfforts(readFileSync(full, "utf8").replace(/\r\n/g, "\n"));
     } catch (error) {
-      context.io.err(`nen: could not read --efforts '${path}': ${String(error)}`);
+      context.io.err(`nen: could not read --efforts '${path as string}': ${String(error)}`);
       return 1;
     }
     if (parsed.errors.length > 0) {
       for (const error of parsed.errors) context.io.err(`nen: ${error}`);
       return 1;
     }
-    const report = computeSlots(parsed.efforts, caps);
-    if (context.json) {
-      context.io.out(JSON.stringify(report, null, 2));
-    } else {
-      print(context, report.ci);
-      print(context, report.local);
-      if (report.done.length > 0) context.io.out(`freed: ${report.done.join(", ")}`);
-    }
-    return report.ci.binding || report.local.binding ? 1 : 0;
+    return countAndReport(context, root, parsed.efforts, caps, null);
   },
 };
+
+/**
+ * When a local slot frees, with where the rule came from, or null with the
+ * reason printed (exit 1). Under a declared idle profile its own
+ * `idle.localSlotFrees` is read first (delivery round on zheref/nen#498,
+ * reading 5: Hatsu's catalogue row owns the key there), then
+ * `monitor.localSlotFrees`, then the default.
+ */
+function readLocalRule(context: CommandContext, root: string): { rule: LocalSlotRule; source: string; key: string } | null {
+  try {
+    const loaded = loadWorkflow(root);
+    const idle = loaded.workflow.idle ?? null;
+    if (loaded.present && idle !== null && idle.localSlotFrees !== null) {
+      return { rule: idle.localSlotFrees, source: `${loaded.path}: idle.localSlotFrees`, key: "idle.localSlotFrees" };
+    }
+    return {
+      rule: loaded.workflow.monitor.localSlotFrees,
+      source: loaded.present && loaded.workflow.monitor.localSlotFreesDeclared
+        ? `${loaded.path}: monitor.localSlotFrees`
+        : "default (neither idle.localSlotFrees nor monitor.localSlotFrees declared)",
+      key: "monitor.localSlotFrees",
+    };
+  } catch (error) {
+    // A POLICY THAT WILL NOT LOAD IS NOT "NO POLICY": counting under the
+    // default would free slots the repository's own rule holds.
+    context.io.err(`nen: could not read nen/workflow.json for the local slot rule: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+function countAndReport(
+  context: CommandContext,
+  root: string,
+  efforts: readonly Effort[],
+  caps: { ci: number; local: number },
+  fromRun: FromRunReport | null,
+): number {
+  const localRule = readLocalRule(context, root);
+  if (localRule === null) return 1;
+  const counted = computeSlots(efforts, caps, localRule.rule, localRule.key);
+  const localSlotFrees = { rule: localRule.rule, source: localRule.source };
+  const report = fromRun === null ? { ...counted, localSlotFrees } : { ...counted, localSlotFrees, fromRun };
+  if (context.json) {
+    context.io.out(JSON.stringify(report, null, 2));
+  } else {
+    context.io.out(`local slot frees: ${localRule.rule} (${localRule.source})`);
+    if (fromRun !== null) {
+      context.io.out(`from run ${fromRun.run}: ${fromRun.efforts.length} effort(s)`);
+      for (const effort of fromRun.efforts) context.io.out(`    ${effort.id}: ${effort.facts}`);
+      if (fromRun.notEfforts.length > 0) context.io.out(`not efforts (integration/release): ${fromRun.notEfforts.map((n): string => `#${n}`).join(", ")}`);
+      if (fromRun.closedUnmerged.length > 0) context.io.out(`closed unmerged: ${fromRun.closedUnmerged.map((n): string => `#${n}`).join(", ")}`);
+      for (const row of fromRun.unread) context.io.out(`unread #${row.pr}: ${row.reason} -- held`);
+    }
+    print(context, report.ci);
+    print(context, report.local);
+    if (report.done.length > 0) context.io.out(`freed: ${report.done.join(", ")}`);
+  }
+  return report.ci.binding || report.local.binding ? 1 : 0;
+}
+
+/** `loop slots --from-run`: the efforts document built from the manifest and live reads (./fromrun.ts). */
+async function slotsFromRun(context: CommandContext, root: string, id: string, caps: { ci: number; local: number }): Promise<number> {
+  if (runIdSegment(id) === null) throw new VerbUsageError(`--from-run '${id}' is not a run id ([A-Za-z0-9._-], no '..').`);
+  const targetRaw = requireValue(context.args, "target", "It names the repository the run's PRs live in.");
+  let target: Target;
+  try {
+    target = parseTarget(targetRaw);
+  } catch (error) {
+    throw new VerbUsageError(error instanceof Error ? error.message : String(error));
+  }
+  let manifest;
+  try {
+    const path = locateRunManifest(gitCommonDir(context.seams, root), id).path;
+    manifest = readRunManifest(path);
+    if (manifest === null) {
+      context.io.err(`nen: no run '${id}' at ${path} -- nothing to count from. A run nobody started is not a run with every slot free.`);
+      return 1;
+    }
+  } catch (error) {
+    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  if (manifest.repo.toLowerCase() !== target.slug.toLowerCase()) {
+    throw new VerbUsageError(`--target ${target.slug} is not run '${id}''s repository ${manifest.repo}; its PR numbers name PRs there.`);
+  }
+  const built = await effortsFromRun(manifest, {
+    readPr: (pr) => readLivePr(context.seams, target, pr),
+    readiness: (pr) => readinessInProcess(target.slug, pr, root),
+    marker: (branch) => markerForBranch(context.seams, root, branch),
+  });
+  return countAndReport(context, root, built.efforts, caps, built);
+}
 
 /**
  * `nen loop iterate` -- claim one iteration against the invocation's own cap.
@@ -197,18 +340,42 @@ function iterate(context: CommandContext): number {
   }
 
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const path = join(root, ...LOOP_LEDGER_DIR.split("/"), `${segment}.json`);
-  const existing = readLedger(path);
-
-  const result = claimIteration(existing, {
-    id,
-    line: line.trim(),
-    task: parsed.value.task,
-    condition: parsed.value.condition,
-    cap: parsed.value.cap,
-    now: context.seams.now().toISOString(),
-    release: release === null ? null : release.trim(),
-  });
+  const home = resolveLoopHome(root, context.seams);
+  const path = join(home.dir, `${segment}.json`);
+  const marker = join(home.dir, `${segment}.opened`);
+  const legacyPaths = legacyDirs(root, home, context.seams).map((dir): string => join(dir, `${segment}.json`));
+  // ONE CLAIM AT A TIME (Feitan, delivery round on zheref/nen#498). The
+  // ledger lives in the git common dir every worktree shares, so two claims
+  // from two checkouts race on one file: locate -> claim -> write runs under
+  // the shared ledger lock, and the ledger is written through a temp file and
+  // a rename, so N parallel claims leave `iterations === N` (or are refused
+  // past the cap) and a reader never sees a torn ledger.
+  const { located, result } = withLedgerLock(
+    path,
+    () => {
+      const found = locateLedger(context, legacyPaths, path, marker, id);
+      const claimed = claimIteration(found.ledger, {
+        id,
+        line: line.trim(),
+        task: parsed.value.task,
+        condition: parsed.value.condition,
+        cap: parsed.value.cap,
+        now: context.seams.now().toISOString(),
+        release: release === null ? null : release.trim(),
+      });
+      if (claimed.ok) {
+        // THE MARKER FIRST, THEN THE LEDGER. A marker without a ledger is the
+        // lost-ledger refusal, the safe direction; a ledger without a marker
+        // would be a loop whose loss later reads as a fresh start.
+        writeMarker(marker, claimed.ledger);
+        writeLedgerAtomically(path, claimed.ledger);
+      }
+      return { located: found, result: claimed };
+    },
+    { waitMs: LOOP_LOCK_WAIT_MS, warn: (text: string): void => context.io.err(text) },
+  );
+  const existing = located.ledger;
+  const migratedFrom = located.migratedFrom;
 
   if (!result.ok) {
     if (result.error.kind === "usage") throw new VerbUsageError(result.error.message);
@@ -227,6 +394,8 @@ function iterate(context: CommandContext): number {
             cap: existing?.cap ?? parsed.value.cap,
             iterations: existing?.iterations ?? 0,
             released: existing?.released ?? false,
+            durable: home.durable,
+            migratedFrom,
           },
           null,
           2,
@@ -236,7 +405,6 @@ function iterate(context: CommandContext): number {
     return 1;
   }
 
-  writeLedger(path, result.ledger);
   const ledger = result.ledger;
   const lines = result.released
     ? [`released ${ledger.id} after ${ledger.iterations}/${ledger.cap} iteration(s): ${ledger.releaseReason ?? ""}`]
@@ -262,6 +430,9 @@ function iterate(context: CommandContext): number {
       startedAt: ledger.startedAt,
       lastAt: ledger.lastAt,
       path,
+      durable: home.durable,
+      marker,
+      migratedFrom,
     },
     lines,
   );
@@ -311,7 +482,95 @@ function readLedger(path: string): LoopLedger | null {
   return ledger;
 }
 
-function writeLedger(path: string, ledger: LoopLedger): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(ledger, null, 2)}\n`, "utf8");
+interface Located {
+  readonly ledger: LoopLedger | null;
+  /** The worktree-local path the ledger was moved from on this read, or null. */
+  readonly migratedFrom: string | null;
 }
+
+/**
+ * Find the ledger for one id, applying the migration and the lost-ledger rule.
+ *
+ * In order: a ledger in the durable home AND at any old worktree-local path,
+ * or at more than one old path, is refused (nen never picks which count is
+ * true); a ledger at exactly one old path -- under --repo or under any other
+ * checkout of the repository -- is moved to the durable home once and
+ * reported; a ledger at neither, beside an existing `.opened` marker, is LOST
+ * and refused; a ledger at neither with no marker is a loop that never began.
+ */
+function locateLedger(
+  context: CommandContext,
+  legacyPaths: readonly string[],
+  path: string,
+  marker: string,
+  id: string,
+): Located {
+  const here = present(path, "ledger");
+  const legacy = legacyPaths.filter((candidate): boolean => candidate !== path && present(candidate, "ledger"));
+  if ((here && legacy.length > 0) || legacy.length > 1) {
+    const homes = [...(here ? [path] : []), ...legacy];
+    throw new VerbUsageError(
+      `loop '${id}' has a ledger in ${homes.length} homes at once:\n${homes.map((home): string => `  ${home}`).join("\n")}\nRefusing rather than choosing which count is true. Keep the one that carries the loop's real count, delete the others, and claim again.`,
+    );
+  }
+  const legacyPath = legacy[0];
+  if (legacyPath !== undefined) {
+    // Read (and so validate) BEFORE moving: an unrecognised file at the old
+    // path is refused where it stands, never carried into the durable home.
+    const moved = readLedger(legacyPath);
+    if (moved === null) {
+      throw new VerbUsageError(`the loop ledger at ${legacyPath} vanished while it was being read for migration. Refusing rather than counting from nothing; claim again.`);
+    }
+    // The marker goes down WITH the move, not on the next successful claim: a
+    // migrated loop already at its cap is refused before any claim writes one,
+    // and its later loss must still read as lost rather than as a fresh loop.
+    writeMarker(marker, moved);
+    moveLedger(legacyPath, path);
+    context.io.err(`nen: migrated loop ledger '${id}' from ${legacyPath} to ${path} (the durable git-common-dir home; this happens once).`);
+    return { ledger: moved, migratedFrom: legacyPath };
+  }
+  // A ledger that vanished between the lstat above and the read is absent,
+  // and goes through the lost-ledger rule like any other absence.
+  const ledger = here ? readLedger(path) : null;
+  if (ledger === null) {
+    if (present(marker, "loop marker")) {
+      throw new VerbUsageError(
+        `ledger lost: loop '${id}' was opened under this repository (${marker}) but its ledger at ${path} is gone. Refusing rather than starting at iteration 1: the iterations it spent are unknown, and a fresh count would hand out a whole cap's worth more. Restore the ledger, or end the loop by hand and begin a new one under its own --id.`,
+      );
+    }
+    return { ledger: null, migratedFrom: null };
+  }
+  return { ledger, migratedFrom: null };
+}
+
+function moveLedger(from: string, to: string): void {
+  try {
+    mkdirSync(dirname(to), { recursive: true });
+    try {
+      renameSync(from, to);
+    } catch (error) {
+      // A worktree on another filesystem from its git directory cannot rename
+      // across; copy then remove, in that order, so a failure leaves a copy.
+      if ((error as NodeJS.ErrnoException | null)?.code !== "EXDEV") throw error;
+      copyFileSync(from, to);
+      unlinkSync(from);
+    }
+  } catch (error) {
+    throw new VerbUsageError(
+      `the loop ledger at ${from} could not be moved to its durable home ${to} (${(error as NodeJS.ErrnoException | null)?.code ?? String(error)}). Refusing rather than counting from either copy: check both paths, keep the one with the loop's real count, and claim again.`,
+    );
+  }
+}
+
+function writeMarker(path: string, ledger: LoopLedger): void {
+  mkdirSync(dirname(path), { recursive: true });
+  // Written once: an existing marker already says what it needs to.
+  try {
+    writeFileSync(path, `${ledger.id} opened ${ledger.startedAt}\n`, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== "EEXIST") throw error;
+  }
+}
+
+/** How long a claim waits for another claim on the same loop before refusing. */
+const LOOP_LOCK_WAIT_MS = 10_000;

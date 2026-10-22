@@ -315,6 +315,29 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-reviewers a").classification).toBe("mutating");
     expect(classifyCommand("nen tag cut --name v1.0.0 --at abc123").classification).toBe("mutating");
     expect(classifyCommand("nen run rerun-failed --target o/r --run-id 9").classification).toBe("mutating");
+    // The run manifest (SDD piece N7): start/append write unless --dry-run;
+    // verify, budget, wc overlap, stage check and loop slots --from-run read.
+    expect(classifyCommand("nen run start --id r1 --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen run start --id r1 --repo . --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1").classification).toBe("mutating");
+    expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1 --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen run verify --id r1 --target o/r").classification).toBe("read-only");
+    expect(classifyCommand("nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9").classification).toBe("read-only");
+    expect(classifyCommand("nen wc overlap --efforts a,b --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen stage check --exclusive --target o/r --issue 7").classification).toBe("read-only");
+    expect(classifyCommand("nen loop slots --from-run r1 --target o/r --local-cap 2").classification).toBe("read-only");
+    // The spec family (SDD piece N10): three reads; index writes only under --write, and not under --dry-run.
+    expect(classifyCommand("nen spec number --repo . --layout specs/{nnn}-{slug}").classification).toBe("read-only");
+    expect(classifyCommand("nen spec check --repo . --folder specs/001-a --markers --rank").classification).toBe("read-only");
+    expect(classifyCommand("nen spec cite-check --repo . --folder specs/001-a --checkouts c --at HEAD").classification).toBe("read-only");
+    expect(classifyCommand("nen spec index --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen spec index --repo . --write").classification).toBe("mutating");
+    expect(classifyCommand("nen spec index --repo . --write --dry-run").classification).toBe("read-only");
+    // The canon prose verbs (SDD piece N9): four reads.
+    expect(classifyCommand("nen canon lint --root . --rules contracts/prose.lint.json --baseline b.json --base origin/main --json").classification).toBe("read-only");
+    expect(classifyCommand("nen canon clause check --file docs/ROSTER.md --prefix HR --base origin/main:docs/ROSTER.md --leaves 'claude/**/*.md'").classification).toBe("read-only");
+    expect(classifyCommand("nen ref resolve --citation HR-2 --root .").classification).toBe("read-only");
+    expect(classifyCommand("nen decisions summary --repo . --json").classification).toBe("read-only");
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md").classification).toBe("mutating");
     expect(classifyCommand("nen scaffold init").classification).toBe("mutating");
     expect(classifyCommand("nen fanout record --range v1..v2").classification).toBe("mutating");
@@ -331,7 +354,21 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
   // and reason improve.
   it("an always-mutating verb answers 'mutating', not 'unknown', even with a passthrough '--' on the line", () => {
     expect(classifyCommand("nen tag cut --name x --at y -- z").classification).toBe("mutating");
-    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md -- z").classification).toBe("mutating");
+  });
+
+  // zheref/nen#444: `idea file` gained --dry-run, so its row is dry-run-gated
+  // like `issue file`'s; and the two issue-shape reads are read-only.
+  it("classifies idea file by its --dry-run, and the issue-shape reads as read-only", () => {
+    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md").classification).toBe("mutating");
+    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen issue body-check --body-file b.md --requirements-from c.json").classification).toBe("read-only");
+    expect(classifyCommand("nen issue questions --ref NN#1 --target o/r").classification).toBe("read-only");
+    expect(classifyCommand("nen issue criteria --ref NN#1 --target o/r").classification).toBe("read-only");
+    expect(classifyCommand("nen pr converge --target o/r --pr 3").classification).toBe("read-only");
+    // No longer always-mutating: past a passthrough '--' it reads as 'issue file' does.
+    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md -- z").classification).toBe(
+      classifyCommand("nen issue file --target o/r --title x --body-file b.md -- z").classification,
+    );
   });
 
   // BOTH `scaffold` VERBS, PINNED IN BOTH DIRECTIONS. The rows moved from
@@ -876,6 +913,7 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     // #340: `--target` is mandatory (a write verb never falls back to a remote).
     "runner relabel": "nen runner relabel --target o/r --pool p",
     "shu detect": "nen shu detect",
+    "spec index": "nen spec index --repo .",
     // `--target` is mandatory on this verb, so the base line carries it: a
     // base that could never run would prove the coupling against a command
     // nobody types.

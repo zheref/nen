@@ -56,8 +56,8 @@ ones are safe to retry).
 
 Pinning `--ref` to a tag keeps that tag's behaviour until you choose to move;
 see [CHANGELOG.md](CHANGELOG.md) for what changed release to release,
-including every deliberate behaviour change (under each version's "Behaviour
-changes") a caller needs to account for before repinning to a newer tag.
+including every deliberate behaviour change (under each version's "Breaking /
+consumer notes") a caller needs to account for before repinning to a newer tag.
 
 ## Try it
 
@@ -451,10 +451,10 @@ it stays pending and holds every pull request's checks with it.
 
 ## The verb surface
 
-`nen --help` lists every command family (44); each
+`nen --help` lists every command family (47); each
 family's own `--help` (`nen pr --help`, `nen board --help`, ...) documents
 its verbs and flags in full. [`docs/USAGE.md`](docs/USAGE.md) documents all
-139 verbs outside the binary — each one's purpose, arguments, exit codes and
+161 verbs outside the binary — each one's purpose, arguments, exit codes and
 `--json` shape — plus the conventions they share and the developer workflows
 they compose into. The families group roughly as:
 
@@ -474,7 +474,12 @@ they compose into. The families group roughly as:
   into one by JSON pointer), `color`, `repo`, `ref`
 - **Release mechanics** — `release`, `changelog`, `tag`, `fanout`, `run`
 - **Issue & idea filing** — `issue`, `idea`
-- **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`
+- **Repository scaffolding & canon** — `scaffold`, `canon`, `quality`, `commit`,
+  `spec` (`number`, `check`, `cite-check`, `index`: a Spec Kit spec repository, read),
+  `decisions` (`summary`: the decision matrix counted, so prose never carries
+  the numbers); `canon lint` and `canon clause check` hold a canon's prose to a
+  caller-owned rules contract and its clause ids unique, and `ref resolve`
+  says where one citation lands
 - **Stack-aware developer verbs** — `shu` (`detect`, `build`, `test`,
   `ui-test`, `lint`, `archive`, `release`, `dev`, `run`, `deploy`, `coverage`,
   `test-report`, `evidence`, `tools`, `warmup`). Most of them run what a
@@ -485,6 +490,8 @@ they compose into. The families group roughly as:
 - **This repository's own dev loop** — `dev` (`test`, `lint`, `replay`)
 - **Skill-grammar parsing** — `parse`
 - **Supply** — `bootstrap`, `wake`, `stop`
+- **Exit vocabulary** — `exits`: every exit code above `0`/`1`/`2`, verb ->
+  code -> meaning, as data the docs are held to
 - **Reports** — `report` (`data`, `render`): the facts an effort's report is
   made of, and the fill that turns them into one
 - **Surfaces** — `surface` (`mirror generate`, `mirror check`, `install`,

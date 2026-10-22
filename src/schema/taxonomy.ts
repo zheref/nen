@@ -36,6 +36,8 @@ import {
   describeProfile,
   describeRunners,
   describeWorkflow,
+  describeAlwaysOverlaps,
+  describeIdle,
   DEFAULT_TARGET_NONE,
   loadWorkflow,
   WORKFLOW_FILE,
@@ -301,6 +303,76 @@ function decisionsCheck(root: string): SchemaCheck {
   return run(DECISIONS_FILE, root, false, (): string => describeDecisions(loadDecisions(root)));
 }
 
+// The `idle` row (HR-5). Like `deploy.defaultTarget`, it reads TWO files: the
+// profile lives in `nen/workflow.json`, and the rows it resolves are
+// `nen/decisions.json`'s. A row the local matrix declares with a class other
+// than ask-once-per-run is a required FAIL by pointer -- an idle batch may only
+// pre-answer a question a run would ask once. A row the local matrix does not
+// declare at all is a WARN, never a pass and never a fail: a consumer's own
+// file overrides the canon matrix it runs under, so the row may be the canon's,
+// and this checkout cannot see that. An absent matrix is the same warn, said.
+function idleCheck(root: string): SchemaCheck {
+  const resolved = resolveSchemaFile(root, WORKFLOW_FILE);
+  const row = (ok: boolean, required: boolean, detail: string): SchemaCheck => ({
+    file: `${resolved.relative}#idle`,
+    path: resolved.path,
+    ok,
+    detail,
+    required,
+    legacy: false,
+    note: null,
+  });
+  let workflow: Workflow;
+  let policyPath: string;
+  try {
+    const loaded = loadWorkflow(root);
+    if (!loaded.present) return row(true, false, "none declared (no policy file)");
+    workflow = loaded.workflow;
+    policyPath = loaded.path;
+  } catch {
+    return row(true, false, `not read -- ${WORKFLOW_FILE} did not load; see that row`);
+  }
+  const idle = workflow.idle ?? null;
+  if (idle === null) return row(true, false, "none declared");
+  const summary = describeIdle(idle);
+  // A KEY NEN DOES NOT READ IS SAID, never accepted silently: a consumer that
+  // states a rule nen ignores believes it is in force (delivery round on
+  // zheref/nen#498, reading 5).
+  if (idle.unreadKeys.length > 0) {
+    return row(false, false, `${summary} -- idle.${idle.unreadKeys.join(", idle.")} ${idle.unreadKeys.length === 1 ? "is a key" : "are keys"} nen does not read; nothing it says is enforced here`);
+  }
+  const ids = Object.keys(idle.decisions);
+  if (ids.length === 0) return row(true, false, summary);
+  let matrix;
+  try {
+    matrix = loadDecisions(root);
+  } catch {
+    return row(false, false, `${summary} -- not cross-checked: ${DECISIONS_FILE} did not load; see that row`);
+  }
+  if (!matrix.present) {
+    return row(false, false, `${summary} -- not cross-checked: no ${DECISIONS_FILE} here, so whether each id is an ask-once-per-run row is unknown (the rows may be the canon matrix's)`);
+  }
+  for (const id of ids) {
+    const declared = matrix.row(id);
+    if (declared !== undefined && declared.class !== "ask-once-per-run") {
+      return row(
+        false,
+        true,
+        new SchemaError(
+          policyPath,
+          `idle.decisions.${id}`,
+          `resolves '${id}', which ${DECISIONS_FILE} declares as a '${declared.class}' row. An idle batch may pre-answer only an ask-once-per-run row: an autonomous row asks nothing, and a human gate is never pre-answered`,
+        ).message,
+      );
+    }
+  }
+  const unknown = ids.filter((id): boolean => matrix.row(id) === undefined);
+  if (unknown.length > 0) {
+    return row(false, false, `${summary} -- ${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} not declared in ${DECISIONS_FILE}; the row may be the canon matrix's, which this checkout cannot see`);
+  }
+  return row(true, false, summary);
+}
+
 function workflowCheck(root: string): SchemaCheck {
   return run(WORKFLOW_FILE, root, false, (): string => {
     const loaded = loadWorkflow(root);
@@ -537,7 +609,8 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
       // is a pin nobody knows has moved -- it was prose in a `$comment` until
       // the loader modelled it.
       const pins = Object.entries(repos.toolPins).map(([repo, tag]): string => `${repo}@${tag}`);
-      return `${repos.consumers.length} consumers, ${Object.keys(repos.productCodes).length} product codes, latest ${repos.latest ?? "(unrecorded)"}${pins.length === 0 ? "" : `, pinned tools: ${pins.join(", ")}`}`;
+      const families = repos.families ?? [];
+      return `${repos.consumers.length} consumers, ${Object.keys(repos.productCodes).length} product codes, latest ${repos.latest ?? "(unrecorded)"}${pins.length === 0 ? "" : `, pinned tools: ${pins.join(", ")}`}${families.length === 0 ? "" : `, families: ${families.map((family): string => `${family.name} (${family.members.length} member${family.members.length === 1 ? "" : "s"})`).join(", ")}`}`;
     }),
     colorsCheck(root),
     run(GATES_FILE, root, false, (): string => {
@@ -589,6 +662,10 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     defaultTargetCheck(root),
     // The release unit's path/content bounds (zheref/nen#348).
     pointerCheck(root, "release", describeRelease),
+    // The idle profile (HR-5), cross-checked against nen/decisions.json.
+    idleCheck(root),
+    // The paths `nen wc overlap` counts as touched by every effort (NN#488 AC-2).
+    pointerCheck(root, "alwaysOverlaps", describeAlwaysOverlaps),
     // `nen/decisions.json` LAST OF THE nen/ FILES: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

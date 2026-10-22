@@ -753,6 +753,13 @@ export interface RepositoryContract {
   readonly project: ProjectBlock | null;
   /** `wc catch-up`'s mechanical conflict set, or null when the file declares none. */
   readonly mechanical: MechanicalBlock | null;
+  /**
+   * The repository's canon precedence (HR-1): which source wins when two
+   * disagree, first wins. `null` when the file declares none. nen validates
+   * the list and never applies it -- deciding which text wins is the
+   * repository's, the list is only its declaration.
+   */
+  readonly precedence: readonly PrecedenceSource[] | null;
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -2748,6 +2755,109 @@ export function parseMechanical(path: string, value: unknown): MechanicalBlock {
   return { manifests, changelog, mirrors, raw };
 }
 
+// ── precedence (HR-1) ───────────────────────────────────────────────────────
+//
+// ONE ORDERED LIST OF CANON SOURCES, FIRST WINS. Hatsu's ruling HR-1 replaced a
+// three-item prose order with this machine-readable list, and asked that
+// `nen schema check` validate it. The list is checked by SHAPE ONLY (delivery
+// round on zheref/nen#498, reading 10): each entry is a `<plane>.CON`, a dotted
+// source name (`roster.ruling`) or a repository-relative path, non-empty and
+// unique. A closed list in this binary would gate a G4 canon ruling -- a new
+// source, a renamed one -- on a nen release. The six sources the consumer
+// names today stay as DOCUMENTED KNOWN NAMES: an entry one edit from one of
+// them is refused as the typo it almost certainly is, because a typo'd entry
+// would sit in the list, outrank everything after it, and point at nothing.
+// The ORDER is the repository's own and is never checked against any
+// preferred order -- nen detects and validates; it does not decide which text
+// wins.
+
+/**
+ * The sources a consumer names today: documented known names, used to refuse
+ * a near-miss (one edit away) as a typo. Not a closed vocabulary -- any entry
+ * of the right shape is read.
+ */
+export const PRECEDENCE_SOURCES = [
+  "skill.hardLimit",
+  "roster.ruling",
+  "nen/decisions.json",
+  "docs/WORKFLOW.md",
+  "docs/PROCESS.md",
+  "handbooks",
+] as const;
+
+/**
+ * A governance plane's constitution clauses, `<plane>.CON`. THE PLANE'S NAME IS
+ * DATA (§3, names are data): this binary ships no system's name, so the plane
+ * is the repository's to spell and only the SHAPE is checked -- a lower-case
+ * slug, a dot, `CON`. One such entry per plane; the uniqueness rule below
+ * refuses the same plane twice.
+ */
+export const CON_SOURCE = /^[a-z][a-z0-9-]*\.CON$/;
+
+/** A `precedence` entry: one of the fixed sources, or a `<plane>.CON`. */
+export type PrecedenceSource = string;
+
+/** A dotted source name (`roster.ruling`, `skill.hardLimit`). */
+const DOTTED_SOURCE = /^[a-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$/;
+/** A repository-relative path or bare name (`docs/WORKFLOW.md`, `handbooks`): no leading '/', no '..', no empty segment. */
+const PATH_SOURCE = /^(?![/\\])(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
+/** Whether `name` has a precedence source's shape: `<plane>.CON`, a dotted name, or a repository-relative path. */
+export function precedenceShape(name: string): boolean {
+  if (CON_SOURCE.test(name)) return true;
+  // A last segment that spells CON in any other way is a malformed plane entry, never a dotted name.
+  if (/\.con$/i.test(name)) return false;
+  return DOTTED_SOURCE.test(name) || PATH_SOURCE.test(name);
+}
+
+export function parsePrecedence(path: string, value: unknown): readonly PrecedenceSource[] | null {
+  if (value === undefined || value === null) return null;
+  const list = requireArray(path, "precedence", value);
+  if (list.length === 0) {
+    throw new SchemaError(
+      path,
+      "precedence",
+      "is an empty array. A precedence that ranks nothing decides no disagreement; list the sources first-wins, or delete the key",
+    );
+  }
+  const seen = new Map<string, number>();
+  return list.map((item, index): PrecedenceSource => {
+    const pointer = `precedence[${index}]`;
+    const name = requireString(path, pointer, item);
+    const known = (PRECEDENCE_SOURCES as readonly string[]).includes(name);
+    const meant = known ? undefined : PRECEDENCE_SOURCES.find((source): boolean => withinOneEdit(name, source) || source.toLowerCase() === name.toLowerCase());
+    if (!known && (meant !== undefined || !precedenceShape(name))) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `${JSON.stringify(name)} is not a precedence source.${meant === undefined ? "" : ` It is one edit from '${meant}'.`} A source is '<plane>.CON' for a governance plane's constitution clauses (a lower-case slug, a dot, CON), a dotted source name (as ${PRECEDENCE_SOURCES[1]}), or a repository-relative path (as ${PRECEDENCE_SOURCES[3]}); the names in use are ${PRECEDENCE_SOURCES.join(", ")}. An entry no reader can locate would outrank every source after it and point at nothing`,
+      );
+    }
+    const previous = seen.get(name);
+    if (previous !== undefined) {
+      throw new SchemaError(
+        path,
+        pointer,
+        `repeats precedence[${previous}] ('${name}'). A source ranked twice has two ranks, and a reader comparing two sources would get whichever one it found first`,
+      );
+    }
+    seen.set(name, index);
+    return name;
+  });
+}
+
+/** A root key one edit from `precedence`, refused by the name it meant. */
+function refuseNearMissPrecedence(path: string, raw: Readonly<Record<string, unknown>>): void {
+  for (const key of Object.keys(raw)) {
+    if (key.startsWith("$") || key === "precedence" || !withinOneEdit(key, "precedence")) continue;
+    throw new SchemaError(
+      path,
+      key,
+      `is one edit from 'precedence', which IS a key nen reads, and is not itself one. Every other root key is preserved verbatim, which is exactly why this one cannot be: '${key}' would be kept, read by nobody, and the repository's precedence would go unvalidated. Fix the spelling`,
+    );
+  }
+}
+
 export function parseContract(
   path: string,
   location: SchemaLocation,
@@ -2757,12 +2867,14 @@ export function parseContract(
   const hasDependency = raw["dependency"] !== undefined && raw["dependency"] !== null;
   const hasProject = raw["project"] !== undefined && raw["project"] !== null;
   const hasMechanical = raw["mechanical"] !== undefined && raw["mechanical"] !== null;
-  if (!hasDependency && !hasProject && !hasMechanical) {
+  refuseNearMissPrecedence(path, raw);
+  const precedence = parsePrecedence(path, raw["precedence"]);
+  if (!hasDependency && !hasProject && !hasMechanical && precedence === null) {
     const stray = Object.keys(raw).filter((key): boolean => !key.startsWith("$"));
     throw new SchemaError(
       path,
       "(root)",
-      `declares neither a "dependency" block (what this repository needs FROM nen) nor a "project" block (what nen needs to know ABOUT it) -- nor a "mechanical" block (the conflict set 'nen wc catch-up' classifies) -- so nothing can ever read it. ${
+      `declares neither a "dependency" block (what this repository needs FROM nen) nor a "project" block (what nen needs to know ABOUT it) -- nor a "mechanical" block (the conflict set 'nen wc catch-up' classifies), nor a "precedence" list (HR-1) -- so nothing can ever read it. ${
         stray.length === 0
           ? "The file is empty of both; delete it, or add the block you meant."
           : `Its top-level keys are [${stray.join(", ")}] -- if this file was moved here from a root 'nen.contract.json', wrap that object in a "dependency" key.`
@@ -2783,6 +2895,7 @@ export function parseContract(
     dependency: hasDependency ? parseDependencyBlock(path, raw["dependency"]) : null,
     project: hasProject ? parseProjectBlock(path, raw["project"]) : null,
     mechanical: hasMechanical ? parseMechanical(path, raw["mechanical"]) : null,
+    precedence,
     raw,
   };
 }
@@ -2836,6 +2949,9 @@ export function describeContract(contract: RepositoryContract): string {
     blocks.push(
       `mechanical (${manifests.length} manifest ${manifests.length === 1 ? "glob" : "globs"}, ${changelog.length} changelog ${changelog.length === 1 ? "glob" : "globs"}, ${mirrors.length} ${mirrors.length === 1 ? "mirror" : "mirrors"})`,
     );
+  }
+  if (contract.precedence !== null) {
+    blocks.push(`precedence (${contract.precedence.length} ${contract.precedence.length === 1 ? "source" : "sources"}: ${contract.precedence.join(" > ")})`);
   }
   return blocks.join(", ");
 }

@@ -16,12 +16,14 @@ import { readAiReviewers, trustedBotReviewers, aiReviewersNotices, type AiReview
 // more: it resolves what was asked about, it decides where the reviewer
 // IDENTITIES come from, and it renders. No predicate lives here.
 //
-// AUTHORITY, TODAY. None. Throughout zheref/nen#2 the shell gate remains
-// CON-32's authority and this verb holds no readiness authority until the shadow
-// window (docs/evidence/shadow-window-p1.md) closes clean. That is §7's P1
-// rollback position and it is why nothing here writes to GitHub: this verb
-// cannot label, merge, comment, re-request or re-run, and adding any of those is
-// a different issue with a different review.
+// AUTHORITY. This verb is the one producer of the CON-32 readiness verdict
+// (Hatsu SDD plan N5, finding D16): a caller that claims a pull request is ready
+// quotes this verb's line, and no other gate decides it. The shell gate it was
+// ported from is retired; the shadow window (docs/evidence/shadow-window-p1.md)
+// is the dated record of the port's comparison against it, not a second
+// authority. Producing the verdict is all it does: nothing here writes to
+// GitHub -- this verb cannot label, merge, comment, re-request or re-run, and
+// adding any of those is a different issue with a different review.
 //
 // ── WHERE THE IDENTITIES COME FROM, AND WHY THERE IS NO DEFAULT SET ─────────
 //
@@ -165,7 +167,7 @@ export const PR_READY_FLAGS = {
 
 // A token is never read ambiently the way `gh` reads one; the caller names the
 // variable, and this is only the DEFAULT NAME, not a fallback chain.
-const DEFAULT_TOKEN_ENV = "GH_TOKEN";
+export const DEFAULT_TOKEN_ENV = "GH_TOKEN";
 
 // `${COPILOT_STALL_MINUTES:-30}` and `${MAX_THREAD_PAGES:-50}` -- the shell's
 // two numeric knobs, at the shell's values. Operator settings, not PR data.

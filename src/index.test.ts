@@ -188,6 +188,8 @@ describe("nen schema check", () => {
       "nen/workflow.json#runners",
       "nen/workflow.json#deploy.defaultTarget",
       "nen/workflow.json#release",
+      "nen/workflow.json#idle",
+      "nen/workflow.json#alwaysOverlaps",
       "nen/decisions.json",
       // The canon mirror row (zheref/nen#262): absent bindings read absent (optional).
       ".claude/rules/",

@@ -163,7 +163,7 @@ describe("nen idea file -- CLI wiring", () => {
   // surfaced as an error line and exit 1, with no result object because there
   // is no verdict to report. The test exists so that contract is a decision on
   // the record rather than an accident of where the throw lands.
-  it("--json emits no verdict object for that failure -- exit 1 and the message on stderr", async () => {
+  it("--json emits no verdict object for that failure -- exit 1 and the refusal envelope on stdout", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-idea-"));
     const bodyFile = join(dir, "body.md");
     writeFileSync(bodyFile, "the body");
@@ -202,9 +202,16 @@ describe("nen idea file -- CLI wiring", () => {
         },
       ],
     );
+    // Since Hatsu SDD plan N5 the failure is the nen.refusal/v0.1 envelope on
+    // stdout under --json -- still no verdict object: no readBack, no
+    // mismatches, nothing a caller could read as a match.
     expect(result.code).toBe(1);
-    expect(result.out).toEqual([]);
-    expect(result.err.join("\n")).toMatch(/PULL REQUEST, not an issue/);
+    expect(result.err).toEqual([]);
+    const envelope = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(envelope).toMatchObject({ contract: "nen.refusal/v0.1", ok: false, verb: "idea file", code: 1 });
+    expect(envelope).not.toHaveProperty("readBack");
+    expect(envelope).not.toHaveProperty("mismatches");
+    expect(String((envelope["refused"] as string[])[0])).toMatch(/PULL REQUEST, not an issue/);
   });
 
   it("idea --help documents the read-back's object-class check", async () => {
@@ -340,6 +347,25 @@ describe("nen idea file -- the private-name guard (zheref/nen#363)", () => {
     expect(result.code).toBe(0);
     expect(result.calls).not.toContain("gh api repos/zheref/nen");
     expect(result.err.join("\n")).toMatch(/SKIPPED by --skip-private-name-check/);
+  });
+
+  it("--private-names-ignore-file: a hit listed in the file is reported as ignored and the idea is filed; a hit outside it exits 4 and files nothing (zheref/nen#444 AC-2)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "nen-idea-ignore-"));
+    const ignore = join(dir, "ignore.txt");
+    writeFileSync(ignore, "acme/vault\n");
+    const vaultCreated: ScriptedCall[] = [
+      { match: CREATE, result: { stdout: "https://github.com/zheref/nen/issues/5\n" } },
+      { match: "gh api repos/zheref/nen/issues/5", result: { stdout: JSON.stringify({ title: "t", body: "ported from the vault", labels: [{ name: "bankai:severity/high" }] }) } },
+    ];
+    const inside = await capture(filing("ported from the vault", "--private-names-ignore-file", ignore, "--json"), [PUBLIC, FULL_REACH_ROW, LIST, ...vaultCreated], BANKAI_REPO, "scripted");
+    expect(inside.code).toBe(0);
+    expect(inside.calls).toContain(CREATE);
+    const check = (JSON.parse(inside.out.join("\n")) as { privateNameCheck: { result: string; hits: { ignored: boolean }[] } }).privateNameCheck;
+    expect(check.hits.length).toBeGreaterThan(0);
+    expect(check.hits.every((hit) => hit.ignored)).toBe(true);
+    const outside = await capture(filing("about hidden-thing", "--private-names-ignore-file", ignore), [PUBLIC, FULL_REACH_ROW, LIST], BANKAI_REPO, "scripted");
+    expect(outside.code).toBe(4);
+    expect(outside.calls.some((line): boolean => line.startsWith("gh issue create"))).toBe(false);
   });
 
   it("a missing --private-names-ignore-file is exit 2 before any gh call", async () => {

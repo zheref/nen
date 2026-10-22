@@ -1,0 +1,140 @@
+{
+  "$schema": "nen.prose-lint/v0.1",
+  "contract": "example.prose-lint/v1",
+  "$comment": "TEST FIXTURE for src/canon/lint.test.ts -- a copy of the rules a consumer's prose-lint contract carries, under a neutral contract id so it never claims to be any consumer's single home of its rules. The consumer's own contract is its data; `nen canon lint` presupposes the consumer has landed one (Hatsu's lands with its SDD piece P5). Not shipped.",
+  "authority": "HR-13 (ratchet, PL-03 and PL-04 empty from day one; code fences and quoted maintainer words exempt) and HR-4 (the one marker shape) in docs/ROSTER.md. Where this file and a page describing it disagree, this file is right.",
+  "paths": {
+    "include": [
+      "claude/skills/*/SKILL.md",
+      "claude/agents/*.md",
+      "claude/rules/*.md",
+      "docs/**/*.md"
+    ],
+    "$include": "Globs over the root: `*` matches one path segment, `**` any number. surfaces/** is generated and never linted, whatever this list says."
+  },
+  "exemptions": {
+    "codeFences": true,
+    "quotedWords": true,
+    "$exemptions": "HR-13: fenced code and quoted words (\"…\", “…”, *\"…\"*) are exempt from every rule. Blockquotes and frontmatter are linted."
+  },
+  "records": {
+    "paths": [
+      "docs/ab/**",
+      "docs/history/**",
+      "docs/Loop/**",
+      "docs/surfaces/evidence/**",
+      "docs/ROSTER.md",
+      "CHANGELOG*"
+    ],
+    "rules": ["PL-03"],
+    "$records": "Dated evidence and history records: a version literal there is what was true when it was written. docs/ROSTER.md is one because a ruling's words are never changed after it lands (HR-2). RETIRED blocks are exempt from the same rules wherever they sit."
+  },
+  "versionSource": {
+    "file": "nen/contract.json",
+    "minimum": "/dependency/minimum",
+    "pinned": "/dependency/pinned_ref"
+  },
+  "decisionsFile": "nen/decisions.json",
+  "markerRows": ["missing-maintainer-choice", "missing-argument", "missing-configuration", "ambiguous-intent"],
+  "markerLimit": 3,
+  "emptyBaseline": ["PL-03", "PL-04"],
+  "rulingsFile": "docs/ROSTER.md",
+  "declaredValues": ["contracts/config-catalogue.json", "nen/*.json"],
+  "rules": [
+    {
+      "id": "PL-01",
+      "class": "by-hand",
+      "severity": "fail",
+      "summary": "An affirmative by-hand admission: a step the plane performs by hand. A clause that refuses or retires the hand step is not one.",
+      "pattern": "\\bby hand\\b",
+      "negations": "\\b(never|not|no|nothing|without|instead|rather|refuse[sd]?|forbid\\w*|stop\\w*|retired?|retiring|no longer|used to|n't|maintainer|human|you|your)\\b"
+    },
+    {
+      "id": "PL-02",
+      "class": "stale-residue",
+      "severity": "fail",
+      "summary": "'until nen' or 'pending port' with no zheref/nen#N in the same paragraph ('until nen 0.7' is history, not a residue).",
+      "pattern": "\\buntil (?:a |the )?nen\\b(?![\\s`]*v?\\d)|\\bpending (?:a |the )?(?:nen )?port\\b",
+      "requires": "zheref/nen#\\d+"
+    },
+    {
+      "id": "PL-03",
+      "class": "stale-version",
+      "severity": "fail",
+      "summary": "A claim of the current nen pin (`pin vX.Y`, `pinned nen vX.Y`, `at the pinned vX.Y`) or a nen floor (`nen vX.Y+`, `needs nen vX.Y`), outside RETIRED blocks and records, that is not the contract's minimum or pinned_ref read at run time. A provenance literal (`nen 0.19, zheref/nen#357`: the release a behaviour arrived in) is adoption history, and so is a pin claim after a past word.",
+      "patterns": [
+        "\\bpin(?:ned)?(?:_ref| ref)?\\b[\\s:`(]*(?:nen\\s+)?`?v?(\\d+)\\.(\\d+)(?:\\.(\\d+))?",
+        "\\bnen\\s+`?v?(\\d+)\\.(\\d+)(?:\\.(\\d+))?`?\\+",
+        "\\b(?:needs?|requires?|minimum|floor)(?: of)?\\s+`?nen`?\\s+`?v?(\\d+)\\.(\\d+)(?:\\.(\\d+))?"
+      ],
+      "otherPins": "spec-?kit|specKit|handbooks|maintained_tools|canon-values|limbo",
+      "pastWords": ["through", "before", "until", "pre", "was", "were", "then", "older", "earlier"]
+    },
+    {
+      "id": "PL-04",
+      "class": "citation",
+      "severity": "fail",
+      "summary": "A linked `§ N`, a linked `§ *Title*` or a relative link that resolves to no heading, explicit anchor or bold paragraph lead in its target, or to no file inside the root."
+    },
+    {
+      "id": "PL-05",
+      "class": "bare-ref",
+      "severity": "fail",
+      "summary": "A bare #N with no repository code (zheref/<repo>#N, HA#N, HA-PR-#N).",
+      "pattern": "(?<![\\w/&#`\\]-])#(\\d+)\\b"
+    },
+    {
+      "id": "PL-06",
+      "class": "unverified-claim",
+      "severity": "fail",
+      "summary": "'verified live', 'checked live' or 'verified against' without both a date and an evidence path in the same paragraph.",
+      "pattern": "\\b(?:verified|checked) live\\b|\\bverified against\\b",
+      "date": "\\b20\\d\\d-\\d\\d-\\d\\d\\b",
+      "evidence": "[\\w./-]+\\.(?:md|json|log|txt)\\b|docs/ab/"
+    },
+    {
+      "id": "PL-07",
+      "class": "hedge",
+      "severity": "advisory",
+      "summary": "A hedge where a rule should state what happens.",
+      "pattern": "\\b(?:might|could|should|perhaps|probably|possibly|likely|maybe|for now|eventually|soon)\\b"
+    },
+    {
+      "id": "PL-08",
+      "class": "adjective",
+      "severity": "advisory",
+      "summary": "An unquantified adjective.",
+      "pattern": "\\b(?:fast|faster|slow|quick|quickly|large|small|huge|tiny|significant|significantly|reasonable|appropriate|adequate|sufficient|robust|simple|easy|several|many|few|enough)\\b"
+    },
+    {
+      "id": "PL-09",
+      "class": "number-not-declared",
+      "severity": "advisory",
+      "summary": "A numeric flag value on a `nen …` line that matches no value declared in the declaredValues files.",
+      "pattern": "--[a-z][a-z-]*[ =]`?(\\d+)\\b"
+    },
+    {
+      "id": "PL-10",
+      "class": "residue-unfiled",
+      "severity": "advisory",
+      "summary": "A Residue item that cites neither zheref/<repo>#N nor the literal 'unfiled' (PROCESS § Residue and owned dependencies).",
+      "requires": "zheref/[\\w.-]+#\\d+|\\bunfiled\\b"
+    },
+    {
+      "id": "PL-11",
+      "class": "open-question-shape",
+      "severity": "fail",
+      "summary": "An open question not in the shape [NEEDS <row-id>: question], a marker naming a row outside markerRows (a human-gate row is a stop, not a question), a marker with no ledger reference (OPEN-n or zheref/<repo>#N) in its paragraph, or more than markerLimit markers in one skill.",
+      "pattern": "\\bTODO\\b|\\bTBD\\b|\\bFIXME\\b|\\[NEEDS\\b",
+      "marker": "\\[NEEDS ([a-z][a-z0-9-]*): [^\\]\\n]+\\]",
+      "ledger": "\\bOPEN-\\d+\\b|zheref/[\\w.-]+#\\d+"
+    },
+    {
+      "id": "PL-12",
+      "class": "reading-cited-as-ruled",
+      "severity": "fail",
+      "summary": "A skill, persona or rules file citing an HR row whose status is `reading` without the word 'reading' in the same paragraph (HR-3).",
+      "pattern": "\\bHR-(\\d+)\\b"
+    }
+  ]
+}

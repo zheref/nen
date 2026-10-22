@@ -118,6 +118,35 @@ export function readTextFile(
 }
 
 /**
+ * A file read VERBATIM, where a byte nen did not mean to change is a defect:
+ * `--typed-file` and `--question-file` (`nen stop answer`, kept byte for byte)
+ * and `--title-file` (`issue file` / `idea file`, filed and then read back).
+ * `readFileSync(path, "utf8")` swaps an invalid byte for U+FFFD and carries on,
+ * so a file that is not UTF-8 would be recorded -- or filed and then verified
+ * against itself -- as text it never held. Here the bytes are decoded with a
+ * FATAL decoder and invalid UTF-8 is refused at exit 2, naming the file
+ * (delivery round on zheref/nen#498, reading 23). A leading BOM is left for
+ * the caller to judge.
+ */
+export function readVerbatimTextFile(path: string, cwd: string, why: string, raw: boolean = false): string {
+  const full = isAbsolute(path) ? path : resolvePath(cwd, path);
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(full);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    throw new VerbUsageError(`could not read '${full}'${code === undefined ? "" : ` (${code})`}. ${why}`);
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new VerbUsageError(`'${full}' is not valid UTF-8; it is read verbatim, so nen refuses it rather than replace the bytes it cannot decode. ${why}`);
+  }
+  return raw ? text : normalizeEol(text);
+}
+
+/**
  * A `--flag <dir>` read as a DIRECTORY that may legitimately not exist yet,
  * defaulted when the flag is omitted. Returns the resolved absolute path, or
  * `null` when nothing is there.

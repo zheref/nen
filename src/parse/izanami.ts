@@ -1045,6 +1045,10 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
         "writes and deletes mirror files in the consumer's declared surfaces unless --dry-run is given",
       ),
       "mirror check": GATED(["--markdown-out"], "writes the drift report to --markdown-out"),
+      // The canon prose verbs (SDD piece N9): pure reads of the checkout, plus
+      // git merge-base/diff/show/ls-files under --base and --leaves.
+      lint: RO("reads the rules contract, the baseline and the canon's Markdown, and under --base git merge-base, diff and show; writes nothing"),
+      "clause check": RO("reads one Markdown file, a base file or git object, and under --leaves git ls-files and diff; writes nothing"),
     },
   },
   changelog: {
@@ -1087,6 +1091,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       write: MUT("commits the index -- git commit -F on a validated message file; a local write, but a write"),
     },
   },
+  decisions: { subcommands: { summary: RO("reads and counts nen/decisions.json; writes nothing") } },
   dev: { subcommands: { test: DEV_FORWARDING_CHECKER, lint: DEV_FORWARDING_CHECKER, replay: DEV_CHECKER } },
   direct: {
     subcommands: {
@@ -1100,6 +1105,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   effort: { subcommands: { classify: RO("classifies an effort -- pure computation") } },
   epic: { subcommands: { "next-wave": GATED(["--out"], "writes the rewritten body to --out") } },
+  exits: { subcommands: { "*": RO("prints the exit vocabulary the binary carries -- reads nothing") } },
   fanout: {
     subcommands: {
       compute: RO("computes the fan-out set from git/workflow reads"),
@@ -1107,7 +1113,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   gate: { subcommands: { derive: RO("derives a gate from a changed-file set -- pure computation") } },
-  idea: { subcommands: { file: MUT("creates a GitHub issue; it has no dry-run form") } },
+  idea: { subcommands: { file: DRY("creates a GitHub issue unless --dry-run is given") } },
   issue: {
     subcommands: {
       search: RO("the four duplicate searches -- gh reads only"),
@@ -1133,6 +1139,9 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // delivery): it proposes closures and never
       // performs one, so there is no write for a --dry-run to gate.
       reconcile: RO("proposes closures for issues a landed PR already closes -- gh reads only"),
+      "body-check": RO("checks an issue body against a caller catalogue -- file or gh reads only"),
+      questions: RO("counts open and resolved questions in an issue body -- file or gh reads only"),
+      criteria: RO("lists the AC rows of an issue body -- file or gh reads only"),
     },
   },
   label: {
@@ -1149,7 +1158,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       rename: DRY("renames GitHub labels in place unless --dry-run is given"),
     },
   },
-  loop: { subcommands: { slots: RO("counts concurrency budgets from a report file") } },
+  loop: { subcommands: { slots: RO("counts concurrency budgets from a report file, or from a run's manifest and live reads (--from-run: gh pr view, pr ready, git worktree list)") } },
   phase: {
     subcommands: {
       begin: MUT("writes an entry to the .nen/phases/<effort>.json ledger -- a local write, but a write"),
@@ -1176,6 +1185,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // from this side, so the rows cannot silently go false again no
       // matter which module a refactor touches first.
       fetch: RO("one typed PR snapshot -- gh reads only (its REST reviews call pins --method GET)"),
+      converge: RO("compares closing issues' AC rows with the PR body's verify rows -- gh pr view and gh api issue reads only"),
       "next-blocker": RO("reports the first blocking condition -- reads only (same pinned-GET fetch)"),
       "cascade-main": MUT("merges the trunk into the branch and pushes; --no-push still merges locally (a working-tree/index mutation), so it stays mutating in every spelling"),
       retarget: MUT("gh pr edit --base"),
@@ -1215,6 +1225,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     subcommands: {
       format: RO("formats the object notation -- pure computation"),
       parse: RO("parses the object notation -- pure computation"),
+      resolve: RO("reads the cited Markdown file under the root; writes nothing"),
     },
   },
   release: {
@@ -1257,7 +1268,20 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       scopes: RO("classifies '<base>...HEAD' against review.scopes and reports the raised scopes -- one git read, one file read, nothing written"),
     },
   },
-  run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
+  run: {
+    subcommands: {
+      "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs"),
+      // The batch run's manifest (SDD piece N7): start, append and park write it
+      // under the git common dir unless --dry-run, whose form reads it and
+      // writes nothing; verify and budget only read (gh pr view, the usage
+      // ledgers), and a refused budget claim writes nothing either.
+      start: DRY("writes the run manifest under the git common dir unless --dry-run is given"),
+      append: DRY("reads the PR over gh pr view and records it in the run manifest unless --dry-run is given"),
+      park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
+      verify: RO("reads the run manifest and every recorded PR over gh pr view"),
+      budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
+    },
+  },
   // THE RUNNER FAMILY'S HOST ACT IS NEVER A ROW HERE, because nen never
   // performs it: `script` writes a file and prints a launch line, and running
   // that line (elevated) is the maintainer's. `verify` polls reads only.
@@ -1447,8 +1471,23 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       warmup: MUT("brings a working copy to a known state: it discards, fetches, force-moves a trunk ref and checks out a branch. No form of it is a pure read -- the dry run spawns nothing, but a warm-up is not a thing anyone WATCHES, so certifying one form read-only buys a caller nothing and costs the fail-closed answer"),
     },
   },
+  // The spec family's first slice (SDD piece N10, HR-12): three pure reads
+  // and one generator whose write is behind --write, itself dry-run-gated.
+  spec: {
+    subcommands: {
+      number: RO("reads origin/<base> with git rev-parse/ls-tree and the open PRs' files over gh pr list; writes nothing"),
+      check: RO("reads a spec folder's or constitution's Markdown and a caller's vocabulary file; writes nothing"),
+      "cite-check": RO("reads member checkouts with git remote get-url, rev-parse and cat-file; writes nothing"),
+      index: GATED_DRY(["--write"], "reads each folder's spec.md header; --write writes <root>/INDEX.md unless --dry-run is given"),
+    },
+  },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },
-  stage: { subcommands: { triage: RO("reads 'git status --porcelain'; stages nothing") } },
+  stage: {
+    subcommands: {
+      triage: RO("reads 'git status --porcelain'; stages nothing"),
+      check: RO("reads nen/labels.json and an issue's labels over gh issue view; labels nothing"),
+    },
+  },
   // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
   // table are still a pure render -- this verb fires no notification and never
   // could (../stop/command.ts's header states why) -- but `--mark` writes
@@ -1460,6 +1499,14 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   stop: {
     subcommands: {
       clear: MUT("removes the .nen/last-stop.json marker -- a local delete, but a write"),
+      // `answer` IS A SUBCOMMAND WITH ITS OWN WRITE, so it must never fall to
+      // the "*" row below: that row is gated on --mark alone and would certify
+      // `nen stop answer --record ...` read-only while it reserves an id and
+      // creates a record under the git common directory. The two-token key is
+      // tried first, so `answer show` (a pure read of those records) keeps its
+      // own read-only row.
+      "answer show": RO("lists the stop-answer records under the git common directory's .nen/stops/<effort>/; writes nothing"),
+      answer: DRY("reserves an id under .nen/stop-ids/ and creates one record under .nen/stops/<effort>/ in the git common directory unless --dry-run is given"),
       "*": GATED(
         ["--mark"],
         "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads",
@@ -1519,6 +1566,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // moves or drops-and-recreates one worktree and copies files into it.
       // --dry-run fetches nothing and writes nothing, so it alone is a read.
       worktree: DRY("fetches origin/<base>, adds, moves or recreates one worktree at <core>/.nen/worktrees/<name> and copies files from core into it, unless --dry-run is given"),
+      overlap: RO("compares the efforts' git diff --name-only against a base; writes nothing"),
     },
   },
 };
@@ -1796,6 +1844,25 @@ function classifyNenInvocation(raw: string): ClassifyResult {
   if (familyWide !== undefined) {
     // A "*" row is selected by the FAMILY alone (stop, warmup, parse), so the
     // subcommand token is an argument here, not part of the path.
+    //
+    // A SIBLING SUBCOMMAND BEHIND A FLAG IS NOT THE FAMILY-WIDE FORM. The
+    // reader (../cli/args.ts) collects positionals around flags, so `nen stop
+    // --gate G5 answer --record x` runs `stop answer` -- a write -- while the
+    // token right after the family is a flag and no keyed row matched. When a
+    // word this family keys as a subcommand appears anywhere on the line, the
+    // "*" row cannot be shown to apply: unknown, never the "*" verdict. Over-
+    // refusal at worst (a flag VALUE that happens to spell a subcommand).
+    const siblings = new Set(
+      Object.keys(entry.subcommands)
+        .filter((key): boolean => key !== "*")
+        .map((key): string => key.split(" ")[0] ?? key),
+    );
+    const sibling = tokens.slice(index + 1).find((token): boolean => siblings.has(token));
+    if (sibling !== undefined) {
+      return nenUnknown(
+        `'${sibling}' is a subcommand of 'nen ${family}' but does not follow the family directly -- the reader would still run 'nen ${family} ${sibling}', so the family-wide row cannot vouch for this line`,
+      );
+    }
     return unprovableVerbPath(tokens, index) ?? evaluateNenPolicy(familyWide, `nen ${family}`, tokens, lineFaithful);
   }
   return nenUnknown(

@@ -41,7 +41,7 @@ import {
 export { PHASE_CONTRACT, PHASE_LEDGER_DIR, readLedger };
 export type { PhaseEntry, PhaseLedger, PhaseStep };
 
-const USAGE = `nen phase begin --effort <id> --phase <name> [--surface <s>] [--model <alias>] [--dial <level>] [--note <text>]
+const USAGE = `nen phase begin --effort <id> --phase <name> [--resume] [--surface <s>] [--model <alias>] [--dial <level>] [--note <text>]
 nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
 nen phase show  --effort <id> [--repo <path>] [--json]
 
@@ -66,11 +66,22 @@ milliseconds and the exit code the caller reports. 'show' prints the ledger.
   --model <alias>  Which model tier or alias ran it. Recorded verbatim.
   --dial <level>   The effort level, in the surface's vocabulary. Recorded
                    verbatim; null when absent, including on older ledgers.
+  --resume         For 'begin': an entry already OPEN with this --phase name
+                   is continued, not refused -- this invocation's instant is
+                   appended to its 'resumedAt' and nothing else changes, so a
+                   phase re-entered after an interrupted run keeps one entry
+                   and its original start. With nothing open at all it begins
+                   a fresh entry. With ANOTHER phase open and this one not,
+                   it is refused (exit 2), naming the open one: that is not a
+                   resume, and which phase the run is in is the caller's.
+                   'end' still measures from the original start, so a
+                   resumed entry's durationMs spans the interruption; 'show'
+                   prints its 'resumed at' instants under it.
   --exit <code>    The phase's exit code, for 'end'. Omitted = null.
   --note <text>    One free-text line kept on the entry.
 
 Two open entries with the same phase name are refused: 'end' would not know
-which one to close. 'end' with nothing open is a usage error naming the
+which one to close ('begin --resume' continues the open one instead). 'end' with nothing open is a usage error naming the
 effort. 'nen report data' merges every ledger it finds as 'phases[]'.
 
 An entry carries 'steps: []' from 'begin'. A 'nen shu <verb> --effort <id>'
@@ -91,7 +102,7 @@ export const phaseCommand: Command = {
   summary: "Record when a workflow phase began and ended, per effort.",
   usage: USAGE,
   subcommands: ["begin", "end", "show"],
-  flags: { values: ["effort", "phase", "surface", "model", "dial", "exit", "note"], booleans: [] },
+  flags: { values: ["effort", "phase", "surface", "model", "dial", "exit", "note"], booleans: ["resume"] },
   run(context: CommandContext): number {
     const sub = requireSubcommand("phase", context.args, ["begin", "end", "show"]);
     const effort = requireEffort(context);
@@ -99,6 +110,9 @@ export const phaseCommand: Command = {
     const path = phaseLedgerPath(root, effort);
     const now = context.seams.now();
     const note = context.args.values["note"] ?? null;
+
+    const resume = context.args.booleans.has("resume");
+    if (resume && sub !== "begin") throw new VerbUsageError(`--resume is read by 'phase begin' only; 'phase ${sub}' does not read it.`);
 
     if (sub === "show") {
       const ledger = readLedger(path, effort);
@@ -115,8 +129,29 @@ export const phaseCommand: Command = {
       if (sub === "begin") {
         const phase = context.args.values["phase"];
         if (phase === undefined || phase.trim() === "") throw new VerbUsageError("--phase <name> is required for 'begin'.");
-        if (ledger.phases.some((entry): boolean => entry.phase === phase && entry.endedAt === null)) {
-          throw new VerbUsageError(`phase '${phase}' is already open on effort '${effort}'. End it first; two open entries with one name cannot be told apart.`);
+        let sameIndex = -1;
+        ledger.phases.forEach((entry, index): void => {
+          if (entry.phase === phase && entry.endedAt === null) sameIndex = index;
+        });
+        if (sameIndex !== -1 && resume) {
+          // THE RESUME (Hatsu SDD plan N6): the same entry, continued. Its
+          // start, steps and every other field stay as they were -- only the
+          // instant of this re-entry is appended -- so a run interrupted
+          // mid-phase and picked up again reads as ONE phase, re-entered.
+          const open = ledger.phases[sameIndex] as PhaseEntry;
+          const resumed: PhaseEntry = { ...open, resumedAt: [...(open.resumedAt ?? []), now.toISOString()] };
+          writeLedger(path, { ...ledger, phases: ledger.phases.map((entry, i): PhaseEntry => (i === sameIndex ? resumed : entry)) });
+          emit(context.io, context.json, { path, entry: resumed, resumed: true }, [`resumed ${phase} on '${effort}' at ${now.toISOString()} (open since ${open.startedAt}) -- ${path}`]);
+          return 0;
+        }
+        if (sameIndex !== -1) {
+          throw new VerbUsageError(`phase '${phase}' is already open on effort '${effort}'. End it first, or continue it with --resume; two open entries with one name cannot be told apart.`);
+        }
+        if (resume) {
+          const others = ledger.phases.filter((entry): boolean => entry.endedAt === null).map((entry): string => `'${entry.phase}'`);
+          if (others.length > 0) {
+            throw new VerbUsageError(`--resume continues an open '${phase}' entry, and none is open on effort '${effort}'; ${others.join(", ")} ${others.length === 1 ? "is" : "are"} open instead. Resume that phase, end it first, or begin '${phase}' without --resume.`);
+          }
         }
         const entry: PhaseEntry = {
           phase,
@@ -136,7 +171,7 @@ export const phaseCommand: Command = {
         };
         const next: PhaseLedger = { ...ledger, phases: [...ledger.phases, entry] };
         writeLedger(path, next);
-        emit(context.io, context.json, { path, entry }, [`began ${phase} on '${effort}' at ${entry.startedAt} -- ${path}`]);
+        emit(context.io, context.json, resume ? { path, entry, resumed: false } : { path, entry }, [`began ${phase} on '${effort}' at ${entry.startedAt}${resume ? " (--resume: nothing was open to continue)" : ""} -- ${path}`]);
         return 0;
       }
 
@@ -183,6 +218,8 @@ export function renderLedger(ledger: PhaseLedger): string[] {
     const duration = entry.durationMs === null ? "open" : `${entry.durationMs}ms`;
     const tail = [entry.exitCode === null ? null : `exit ${entry.exitCode}`, entry.surface, entry.model, entry.dial === null ? null : plainLine(entry.dial)].filter((v): v is string => v !== null).join(" · ");
     lines.push(`  ${entry.phase.padEnd(14)} ${duration.padStart(9)}  ${entry.startedAt}${tail === "" ? "" : `  ${tail}`}`);
+    // A RESUMED ENTRY SAYS SO (N6): its duration spans every interruption.
+    if ((entry.resumedAt ?? []).length > 0) lines.push(`    resumed at ${(entry.resumedAt ?? []).join(", ")}`);
     // THE STEPS, INDENTED UNDER THE PHASE THEY RAN IN. A step is never a row
     // of its own at the phase's level: it is detail about that phase, and
     // rendering it flush left would read as a phase nobody began.

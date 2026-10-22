@@ -863,8 +863,8 @@ describe("futon.advanceGo -- duplicate names after namespace normalization are r
 });
 
 describe("a workflow's NINETEEN blocks", () => {
-  it("says nineteen, including privateNames and the CI declaration", () => {
-    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's nineteen blocks are/);
+  it("says twenty-one, including privateNames, the CI declaration, the idle profile and alwaysOverlaps", () => {
+    expect(() => parseWorkflow("<doc>", { reviews: {} })).toThrow(/A workflow's twenty-one blocks are/);
   });
 });
 

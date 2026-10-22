@@ -36,3 +36,17 @@ describe("retarget -- gh pr edit --base, the one documented command", () => {
     expect(result.message).toMatch(/no such branch/);
   });
 });
+
+describe("retarget --dry-run (Hatsu SDD plan N6)", () => {
+  it("prints the exact gh call, shell-quoted, and spawns nothing", () => {
+    const seams = new ScriptedSeams([]);
+    const result = retarget(seams, TARGET, 12, "release 1.0", true);
+    expect(result).toEqual({ ok: true, message: "would run: gh pr edit 12 --repo zheref/nen --base 'release 1.0'", dryRun: true, command: "gh pr edit 12 --repo zheref/nen --base 'release 1.0'" });
+    expect(seams.calls).toEqual([]);
+  });
+
+  it("names the call it made on a real run, with dryRun false", () => {
+    const seams = new ScriptedSeams([{ match: `gh ${retargetArgv(TARGET, 12, "main").join(" ")}`, result: {} }]);
+    expect(retarget(seams, TARGET, 12, "main")).toMatchObject({ ok: true, dryRun: false, command: "gh pr edit 12 --repo zheref/nen --base main" });
+  });
+});

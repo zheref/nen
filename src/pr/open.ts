@@ -10,10 +10,17 @@
 // reviewed. No upstream at all is refused first, because a branch nobody
 // published is a branch nobody can open a pull request from.
 //
-// ONE PULL REQUEST PER HEAD. `gh pr list --head <branch> --state open` is
-// asked before anything is created; a hit is reported -- number and url --
-// at exit 1, and nothing is opened. The second pull request from one branch
-// is the mistake every retry wrapper makes once.
+// ONE PULL REQUEST PER HEAD, AND A RETRY IS NOT AN ERROR. `gh pr list --head
+// <branch> --state open` is asked before anything is created. A hit against
+// the SAME base, at the SAME head commit this checkout pushed, is the pull
+// request a previous call already opened -- a retry
+// after a timeout, a resumed run -- so it is returned as `opened: existing`
+// at exit 0 with its number and url, and nothing is created (Hatsu SDD plan
+// N6, finding D6). A hit against ANOTHER base, or at another head commit
+// (`--head` matches a branch NAME, from any fork), is not that pull request: it is
+// reported at exit 1, still `existing`, and nothing is opened or retargeted --
+// which base is right is the caller's call. The second pull request from one
+// branch is the mistake every retry wrapper makes once.
 //
 // THROUGH `gh`, LIKE EVERY OTHER WRITE IN THIS FAMILY. ../pr/fetch.ts reads
 // through `gh` and ../issue/file.ts creates through `gh`; this follows the
@@ -231,8 +238,14 @@ function readAssigned(seams: Seams, target: Target, number: number): { readonly 
   }
 }
 
+/** A `headRepositoryOwner` object's login, or null. */
+function ownerLogin(value: unknown): string | null {
+  const login = value !== null && typeof value === "object" ? (value as { login?: unknown }).login : undefined;
+  return typeof login === "string" ? login : null;
+}
+
 export function listArgv(target: Target, head: string): readonly string[] {
-  return ["pr", "list", "--repo", target.slug, "--head", head, "--state", "open", "--json", "number,url"];
+  return ["pr", "list", "--repo", target.slug, "--head", head, "--state", "open", "--json", "number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner"];
 }
 
 export function openPullRequest(seams: Seams, cwd: string, target: Target, options: OpenOptions): OpenOutcome {
@@ -286,11 +299,11 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
   // 3. ONE PULL REQUEST PER HEAD.
   const listed = seams.run(GH, listArgv(target, head));
   if (listed.spawnFailed || listed.code !== 0) throw new Error(`could not list open pull requests for '${head}' on ${target.slug} ('gh pr list' failed: ${gitError(listed.stderr, listed.code)}).`);
-  let open: { number?: unknown; url?: unknown }[];
+  let open: { number?: unknown; url?: unknown; baseRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown; headRepositoryOwner?: unknown }[];
   try {
     const parsed = JSON.parse(listed.stdout.trim() === "" ? "[]" : listed.stdout) as unknown;
     if (!Array.isArray(parsed)) throw new Error("not an array");
-    open = parsed as { number?: unknown; url?: unknown }[];
+    open = parsed as { number?: unknown; url?: unknown; baseRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown; headRepositoryOwner?: unknown }[];
   } catch (error) {
     throw new Error(`'gh pr list' for '${head}' did not answer a JSON array (${error instanceof Error ? error.message : String(error)}).`);
   }
@@ -307,15 +320,68 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
     me,
     assigned,
   });
-  const first = open[0];
+  // THE ONE THIS BRANCH OPENED, if any of the listed is: same base, same head
+  // commit, and NOT FROM A FORK. Every row is looked at -- a fork's same-named
+  // pull request listed first must not hide ours. A fork row at the same commit
+  // is still somebody else's: the sha is public once pushed, and the fork's
+  // author can move that head (Feitan, delivery round on zheref/nen#498,
+  // SEC-7). Failing that, the first row is reported.
+  const sameRepository = (row: { isCrossRepository?: unknown }): boolean => row.isCrossRepository === false;
+  const ours = open.find((row): boolean => typeof row.number === "number" && typeof row.url === "string" && row.baseRefName === options.base && row.headRefOid === localSha && sameRepository(row));
+  const first = ours ?? open[0];
   if (first !== undefined) {
     const number = typeof first.number === "number" ? first.number : null;
     const url = typeof first.url === "string" ? first.url : null;
-    return {
+    const openBase = typeof first.baseRefName === "string" ? first.baseRefName : null;
+    const openHead = typeof first.headRefOid === "string" ? first.headRefOid : null;
+    const fork = first.isCrossRepository !== false;
+    if (number === null || url === null || openBase !== options.base || openHead !== localSha || fork) {
+      // NOT PROVABLY THE PULL REQUEST THIS CALL WOULD HAVE OPENED: another
+      // base, or an answer nen could not read whole. Reported, never adopted
+      // and never retargeted -- exit 1, nothing opened.
+      // `gh pr list --head` matches the branch NAME, from any fork: a pull
+      // request whose head commit is not the one this checkout pushed is
+      // somebody else's, whatever its branch is called.
+      const why = number === null || url === null
+        ? `'gh pr list' answered an open pull request for '${head}' with no readable number or url`
+        : openBase === null || openHead === null
+          ? `${target.slug}#${number} is already open for '${head}', and its ${openBase === null ? "base" : "head commit"} could not be read`
+          : openBase !== options.base
+            ? `${target.slug}#${number} is already open for '${head}' against '${openBase}', not '${options.base}'`
+            : openHead !== localSha
+              ? `${target.slug}#${number} is already open for a branch named '${head}', but its head commit is ${openHead}, not the ${localSha} this checkout pushed -- it is not provably this branch's pull request`
+              : `${target.slug}#${number} is open for a branch named '${head}' at the same commit, but ${first.isCrossRepository === true ? `from a fork${ownerLogin(first.headRepositoryOwner) === null ? "" : ` (${ownerLogin(first.headRepositoryOwner) as string})`}` : "gh did not say whether it is from a fork"} -- a fork's head is its author's to move, so it is not provably this branch's pull request`;
+      return {
+        kind: "done",
+        report: report(number, url, true),
+        lines: [...meLines, `a pull request is already open for '${head}': #${number ?? "?"} ${url ?? ""} -- nothing was opened. One head, one pull request.`],
+        failure: `${why}. Nothing was opened or retargeted; retarget it ('nen pr retarget') or close it -- that choice is the caller's.`,
+      };
+    }
+    const existingLine = `opened: existing ${target.slug}#${number}: ${url} -- already open for '${head}' against '${openBase}'; nothing was created. One head, one pull request.`;
+    if (assignees.length === 0) {
+      return { kind: "done", report: report(number, url, true), lines: [...meLines, existingLine] };
+    }
+    // AN ADOPTED PULL REQUEST IS HELD TO --assignee TOO: its assignees are
+    // READ BACK, never re-applied. A retry after a create whose assignment was
+    // not confirmed must not turn into an exit 0 on an unassigned pull request.
+    const readBack = readAssigned(seams, target, number);
+    const assignedLine = readBack.logins === null ? [] : [`assigned (read back): ${readBack.logins.length === 0 ? "nobody" : readBack.logins.join(", ")}`];
+    const adopted = (failure: string | null): OpenOutcome => ({
       kind: "done",
-      report: report(number, url, true),
-      lines: [...meLines, `a pull request is already open for '${head}': #${number ?? "?"} ${url ?? ""} -- nothing was opened. One head, one pull request.`],
-    };
+      report: report(number, url, true, readBack.logins),
+      lines: [...meLines, existingLine, ...assignedLine],
+      ...(failure === null ? {} : { failure }),
+    });
+    if (readBack.logins === null) {
+      return adopted(`${target.slug}#${number} was already open, and its assignees could not be read back (${readBack.error ?? "unknown"}); the assignment is NOT confirmed. Nothing was assigned.`);
+    }
+    const have = new Set(readBack.logins.map((login): string => login.toLowerCase()));
+    const missing = assignees.filter((login): boolean => !have.has(login.toLowerCase()));
+    if (missing.length > 0) {
+      return adopted(`${target.slug}#${number} was already open, and the read-back does not show ${missing.map((login): string => `'${login}'`).join(", ")} assigned. Nothing was assigned; assign it ('gh pr edit --add-assignee') or close it -- the caller's call.`);
+    }
+    return adopted(null);
   }
 
   // 4. THE CREATE, or the line that would.

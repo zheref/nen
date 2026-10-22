@@ -15,7 +15,9 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { validateFiling, type FileRequest } from "../issue/file.js";
+import { refuse } from "../cli/refusal.js";
+import { createArgv, stdinLine, validateFiling, type FileRequest } from "../issue/file.js";
+import { readTitleFile } from "../issue/title.js";
 import { blockingExit, blocksWrite } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
 import { fileIdea } from "./file.js";
@@ -23,10 +25,25 @@ import { fileIdea } from "./file.js";
 const USAGE = `nen idea file -- file an idea issue, then READ IT BACK to verify GitHub stored it as sent.
 
 usage:
-  nen idea file --target <owner/name> --repo <path> --title <t>
+  nen idea file --target <owner/name> --repo <path>
+               (--title <t> | --title-file <path>)
                --body-file <path> --label a,b --assignee <user>
-               [--forbid-family ns:family] [--skip-private-name-check]
+               [--forbid-family ns:family] [--dry-run]
+               [--skip-private-name-check]
                [--private-names-ignore-file <path> [--allow-all-ignored]]
+
+  --title-file <path>
+      The title, read from a file verbatim with ONE trailing newline stripped
+      (zheref/nen#444), so the maintainer's words never pass through shell
+      source. Resolves against --repo's root. Refused (exit 2) together with
+      --title, when unreadable, and when the title still holds a line break.
+
+  --dry-run
+      Runs every check a real filing runs -- the filing's own refusals and the
+      private-name guard, which still READS GitHub -- then prints the exact
+      'gh issue create' argv and the stdin line, in 'nen issue file
+      --dry-run's shape, and creates nothing. --json: '{ dryRun: true, argv,
+      bodyFile, privateNameCheck }'.
 
   --forbid-family ns:family
       Label families this invocation declares off-limits, comma-separated.
@@ -65,13 +82,17 @@ loudly (exit 1, the issue named), like any other read-back that could not
 confirm what it read.`;
 
 export const ideaCommand: Command = {
+  jsonRefusals: ["file"],
+  exits: [
+    { verb: "idea file", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+  ],
   name: "idea",
   subcommands: ["file"],
   summary: "File an idea issue and verify it read back exactly as submitted.",
   usage: USAGE,
   flags: {
-    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
-    booleans: [...PRIVATE_NAME_FLAGS.booleans],
+    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
+    booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   run(context: CommandContext): number {
     requireSubcommand("idea", context.args, ["file"]);
@@ -112,6 +133,9 @@ export const ideaCommand: Command = {
     // unreadable (exit 2), before the first `gh` call (zheref/nen#363).
     const ignore = readIgnoreFlag(context);
     const root = assertRepoRoot({ repoFlag });
+    // Read before the body, so a --title/--title-file refusal is a usage error
+    // ahead of any other read (zheref/nen#444).
+    const titleFromFile = readTitleFile(context, root);
     let submittedBody: string;
     try {
       // Resolved against --repo's root, one base for every path flag
@@ -120,12 +144,11 @@ export const ideaCommand: Command = {
       // make nen disagree with itself about what it sent.
       submittedBody = readFileSync(resolveAgainstRepo(root, bodyFile), "utf8");
     } catch (error) {
-      context.io.err(`nen: could not read --body-file '${bodyFile}': ${String(error)}`);
-      return 1;
+      return refuse(context.io, context.json, "idea file", 1, [`could not read --body-file '${bodyFile}': ${String(error)}`]);
     }
 
     const request: FileRequest = {
-      title: context.args.values["title"] ?? "",
+      title: titleFromFile ?? context.args.values["title"] ?? "",
       bodyFile,
       labels: commaList(context.args.values["label"]),
       assignee: context.args.values["assignee"] ?? "",
@@ -138,8 +161,7 @@ export const ideaCommand: Command = {
     // from GitHub. fileIdea validates again; the two cannot disagree.
     const refusals = validateFiling(request, taxonomy);
     if (refusals.length > 0) {
-      for (const refusal of refusals) context.io.err(`nen: ${refusal.reason}`);
-      return 1;
+      return refuse(context.io, context.json, "idea file", 1, refusals.map((refusal): string => refusal.reason));
     }
     // THE PRIVATE-NAME GUARD (zheref/nen#363), before the create: the title and
     // the very bytes that travel to gh on stdin.
@@ -157,11 +179,23 @@ export const ideaCommand: Command = {
       if (context.json) context.io.out(JSON.stringify({ filed: false, privateNameCheck }, null, 2));
       return blockingExit(privateNameCheck);
     }
+    // THE PLAN, NOT THE WRITE (zheref/nen#444): every check above has run, so
+    // the verdict a dry run prints is the real run's; nothing is created and
+    // nothing is read back. The shape is 'nen issue file --dry-run's.
+    if (context.args.booleans.has("dry-run")) {
+      const argv = createArgv(target, request);
+      if (context.json) {
+        context.io.out(JSON.stringify({ dryRun: true, argv, bodyFile: resolveAgainstRepo(root, bodyFile), privateNameCheck }, null, 2));
+        return 0;
+      }
+      context.io.out(`would run: gh ${argv.join(" ")}`);
+      context.io.out(stdinLine(resolveAgainstRepo(root, bodyFile), submittedBody));
+      return 0;
+    }
     const result = fileIdea(context.seams, target, request, submittedBody, taxonomy);
 
     if ("refusals" in result) {
-      for (const refusal of result.refusals) context.io.err(`nen: ${refusal.reason}`);
-      return 1;
+      return refuse(context.io, context.json, "idea file", 1, result.refusals.map((refusal): string => refusal.reason));
     }
 
     if (context.json) {

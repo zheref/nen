@@ -2417,11 +2417,11 @@ describe("nen pr edit-body -- replaces a pull request's body outright, byte for 
     expect(result.err.join("\n")).toMatch(/could not replace zheref\/nen#12's body/);
   });
 
-  it("refuses --dry-run on any subcommand that does not read it, naming all five that do", async () => {
+  it("refuses --dry-run on any subcommand that does not read it, naming all seven that do", async () => {
     const result = await capture(["pr", "ready", "--dry-run"], null, new ScriptedSeams([]));
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain(
-      "--dry-run is only read by 'pr request-reviews', 'pr edit-body', 'pr mark-ready', 'pr threads' and 'pr open'.",
+      "--dry-run is only read by 'pr cascade-main', 'pr retarget', 'pr request-reviews', 'pr edit-body', 'pr mark-ready', 'pr threads' and 'pr open'.",
     );
   });
 
@@ -2992,10 +2992,10 @@ describe("nen pr mark-ready (registry wiring onto ./markready.ts)", () => {
     });
   });
 
-  it("is the only new reader of --dry-run: 'pr retarget --dry-run' is still refused", async () => {
-    const result = await capture(["pr", "retarget", "--target", "acme/widgets", "--pr", "1", "--base", "main", "--dry-run"], null);
-    expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toMatch(/'pr mark-ready'/);
+  it("'pr retarget --dry-run' reads it since N6: prints the gh call and makes none", async () => {
+    const result = await capture(["pr", "retarget", "--target", "acme/widgets", "--pr", "1", "--base", "main", "--dry-run"], null, new ScriptedSeams([]));
+    expect(result.code).toBe(0);
+    expect(result.out.join("\n")).toBe("would run: gh pr edit 1 --repo acme/widgets --base main");
   });
 });
 
@@ -3183,9 +3183,10 @@ describe("the family's one flag guard (zheref/nen#351)", () => {
       "body-check": { values: ["body-from", "requirements-from", "base", "max", "prose-budget"], booleans: ["exact"] },
       sections: { values: ["catalogue", "kind", "family", "with", "overrides", "taxonomy", "jobs"] },
       fetch: { values: ["target", "pr"] },
+      converge: { values: ["target", "pr", "requirements-from"] },
       "next-blocker": { values: ["target", "pr", "reviewers", "gates", "policy"], booleans: ["delivery-pr"] },
-      "cascade-main": { values: ["trunk"], booleans: ["no-push"] },
-      retarget: { values: ["target", "pr", "base"] },
+      "cascade-main": { values: ["trunk"], booleans: ["no-push", "dry-run"] },
+      retarget: { values: ["target", "pr", "base"], booleans: ["dry-run"] },
       "request-reviews": { values: ["target", "pr", "add-reviewers", "add-bots"], booleans: ["dry-run"] },
       "edit-body": { values: ["target", "pr", "body-file", "private-names-ignore-file"], booleans: ["dry-run", "skip-private-name-check", "allow-all-ignored"] },
       "mark-ready": { values: ["target", "pr", "require-head"], booleans: ["dry-run"] },

@@ -523,6 +523,9 @@ function relabel(context: CommandContext): number {
 export function makeRunnerCommand(deps: RunnerDeps): Command {
   return {
     name: "runner",
+    exits: [
+      { verb: "runner *", code: 5, meaning: "gh could not be started, on a verb that calls gh" },
+    ],
     subcommands: RUNNER_SUBCOMMANDS,
     summary: "Self-hosted runners: inventory, plan, host script, verify, preflight workflow, enable, relabel.",
     usage: USAGE,

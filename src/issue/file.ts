@@ -203,6 +203,11 @@ export function validateFiling(
   return refusals;
 }
 
+/** The dry-run line naming the bytes `gh` reads on stdin, shared by `issue file` and `idea file` so their shapes cannot drift. */
+export function stdinLine(path: string, body: string): string {
+  return `stdin: the ${Buffer.byteLength(body, "utf8")} byte(s) read and checked from ${path} (gh reads these, not the file)`;
+}
+
 export function createArgv(target: Target, request: FileRequest): readonly string[] {
   const argv = [
     "issue",

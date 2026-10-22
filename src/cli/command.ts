@@ -67,6 +67,35 @@ export interface Command {
    * the same way.
    */
   run(context: CommandContext): number | Promise<number>;
+  /**
+   * Every exit code ABOVE the shared 0/1/2 scheme a verb of this family can
+   * return, with what it means there (Hatsu SDD plan N5, finding B3). The same
+   * number means different things in different verbs, so the vocabulary is
+   * data the family owns rather than a prose table only a reader can use:
+   * `nen exits` (../exits/command.ts) renders it, and
+   * ../exits/exits.test.ts holds docs/USAGE.md's exit table to it, row for row.
+   * Absent means the family's verbs return only 0, 1 and 2.
+   */
+  readonly exits?: readonly ExitCode[];
+  /**
+   * The subcommands whose refusals are a `nen.refusal/v0.1` envelope on
+   * stdout under `--json` instead of `nen: <reason>` prose on stderr (Hatsu
+   * SDD plan N5, finding B3). Read by ../index.ts's `runFamily` for a refusal
+   * that is THROWN; a verb that refuses by returning a code calls ./refusal.ts's
+   * `refuse` itself. The prose path without `--json` is unchanged.
+   */
+  readonly jsonRefusals?: readonly string[];
+}
+
+/**
+ * One exit code a verb returns above 0/1/2. `verb` is spelled as typed after
+ * `nen ` -- `pr merge`, `surface mirror check` -- or `<family> *` for a code
+ * every verb of the family shares.
+ */
+export interface ExitCode {
+  readonly verb: string;
+  readonly code: number;
+  readonly meaning: string;
 }
 
 /** The global flags every family also accepts. */

@@ -40,7 +40,8 @@ export type DecisionClass = "autonomous" | "ask-once-per-run" | "human-gate";
 
 const CLASSES: readonly DecisionClass[] = ["autonomous", "ask-once-per-run", "human-gate"];
 
-const GATES = ["G1", "G1-M", "G2", "G3", "G4", "G5"] as const;
+/** The ONE gate vocabulary: src/decisions/command.ts, src/stop/marker.ts and src/stop/answer.ts import it. */
+export const GATES = ["G1", "G1-M", "G2", "G3", "G4", "G5"] as const;
 export type GateId = (typeof GATES)[number];
 
 /** One option a stop may present -- executable, or it is not an option. */

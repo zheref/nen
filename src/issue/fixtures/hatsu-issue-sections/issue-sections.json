@@ -1,0 +1,75 @@
+{
+  "contract": "hatsu.issue-sections/v1",
+  "$comment": "The issue section catalogue (HR-4; SDD plan piece P6). One catalogue owns the headings an issue Hatsu files carries per kind, which of them must be present and non-empty, the row shapes inside them, and the two word lists the acceptance rows are read against. Every heading is a level-2 heading matched case-insensitively. scripts/issue_body_check.mts reads this file and nothing else for the shape; templates/issue-body/<kind>.md is the body each kind starts from. A body checked with no --kind is read against `common` only. Acceptance criteria state intent, never technology: a flag, a verb or a path belongs in Plan notes alone. Owed to nen as `nen issue body-check` (zheref/nen#476) and `nen issue questions` (zheref/nen#477).",
+  "sections": {
+    "problem": { "heading": "Problem" },
+    "audience": { "heading": "Audience and why" },
+    "platforms": { "heading": "Platforms" },
+    "constraints": { "heading": "Constraints" },
+    "priority": { "heading": "Priority" },
+    "reproduction": { "heading": "Reproduction", "$comment": "A defect's repro steps, expected against actual, platform and build, frequency (hatsu:file section 2)." },
+    "failing-run": { "heading": "Failing run", "$comment": "A machinery defect's failing run link and what the guard should have done instead (hatsu:file section 2)." },
+    "missing-rule": { "heading": "Missing rule", "$comment": "A canon gap's missing or wrong rule and what a reader did instead because of it (hatsu:file section 2)." },
+    "children": { "heading": "Children", "$comment": "An epic's child issues or planned slices, one per line." },
+    "acceptance": { "heading": "Acceptance criteria", "rows": "acceptance" },
+    "success": { "heading": "Success criteria", "rows": "success" },
+    "entities": { "heading": "Key entities", "$comment": "Required only when the issue captures data; never required by a kind." },
+    "assumptions": { "heading": "Assumptions", "rows": "assumption", "none": true },
+    "open-questions": { "heading": "Open questions", "rows": "question", "none": true },
+    "design-direction": { "heading": "Design Direction", "$comment": "Bisky's section for a brief naming a rendered surface (hatsu:emperor-time section 3)." },
+    "scope": { "heading": "Scope boundaries" },
+    "cross-references": { "heading": "Cross-references" },
+    "plan-notes": { "heading": "Plan notes", "$comment": "The only section where a flag, a verb or a path may appear." }
+  },
+  "common": ["problem", "audience", "acceptance", "success", "assumptions", "open-questions", "scope", "cross-references"],
+  "kinds": {
+    "product": {
+      "template": "templates/issue-body/product.md",
+      "required": ["problem", "audience", "platforms", "constraints", "priority", "acceptance", "success", "assumptions", "open-questions", "scope", "cross-references"],
+      "optional": ["entities", "design-direction", "plan-notes"]
+    },
+    "defect": {
+      "template": "templates/issue-body/defect.md",
+      "required": ["problem", "audience", "reproduction", "acceptance", "success", "assumptions", "open-questions", "scope", "cross-references"],
+      "optional": ["entities", "plan-notes"]
+    },
+    "machinery": {
+      "template": "templates/issue-body/machinery.md",
+      "required": ["problem", "audience", "failing-run", "acceptance", "success", "assumptions", "open-questions", "scope", "cross-references"],
+      "optional": ["entities", "plan-notes"]
+    },
+    "canon-gap": {
+      "template": "templates/issue-body/canon-gap.md",
+      "required": ["problem", "audience", "missing-rule", "acceptance", "success", "assumptions", "open-questions", "scope", "cross-references"],
+      "optional": ["entities", "plan-notes"]
+    },
+    "epic": {
+      "template": "templates/issue-body/epic.md",
+      "required": ["problem", "audience", "children", "acceptance", "success", "assumptions", "open-questions", "scope", "cross-references"],
+      "optional": ["entities", "plan-notes"]
+    }
+  },
+  "rows": {
+    "acceptance": { "shape": "- AC-{n}: Given … When … Then …", "pattern": "^- AC-([0-9]+): Given .+ When .+ Then .+$", "prefix": "^- AC-" },
+    "success": { "shape": "- SC-{n}: <a measurable outcome carrying a number or a percentage>", "pattern": "^- SC-([0-9]+): (.+)$", "prefix": "^- SC-", "measure": "[0-9]|%" },
+    "assumption": { "shape": "- AS-{n}: <value> — derived from <source>", "pattern": "^- AS-([0-9]+): .+ — derived from .+$", "prefix": "^- AS-" },
+    "question": {
+      "shape": "- OQ-{n} (<owning gate>): <question>",
+      "pattern": "^- OQ-([0-9]+) \\(([^()]+)\\): .+$",
+      "resolvedShape": "- ~~OQ-{n}~~ → A: <answer> (<YYYY-MM-DD>, <ruling ref>)",
+      "resolvedPattern": "^- ~~OQ-([0-9]+)~~ → A: .+ \\(([0-9]{4}-[0-9]{2}-[0-9]{2}), [^()]+\\)$",
+      "prefix": "^- (~~)?OQ-"
+    }
+  },
+  "noneText": "^-? ?None\\.?$",
+  "vagueAdjectives": ["fast", "quick", "quickly", "easy", "easily", "simple", "simply", "intuitive", "robust", "scalable", "seamless", "seamlessly", "user-friendly", "efficient", "efficiently", "appropriate", "appropriately", "reasonable", "reasonably", "nice", "clean", "better", "good", "proper", "properly", "flexible", "smooth", "smoothly", "sufficient", "adequate", "minimal", "optimal", "modern", "various", "several", "some", "many", "few", "etc"],
+  "technologyTerms": {
+    "words": ["API", "APIs", "JSON", "YAML", "SQL", "database", "endpoint", "HTTP", "HTTPS", "REST", "GraphQL", "webhook", "regex", "CLI", "script", "React", "SwiftUI", "Swift", "Kotlin", "TypeScript", "JavaScript", "npm", "bun", "bash", "git", "gh", "nen", "Docker", "Kubernetes", "SDK", "framework", "schema"],
+    "patterns": [
+      { "id": "code-span", "pattern": "`[^`]+`" },
+      { "id": "flag", "pattern": "(^|\\s)--?[A-Za-z][A-Za-z0-9-]*" },
+      { "id": "path", "pattern": "[a-z0-9_.-]+/[a-z0-9_.-]+/[a-z0-9_./-]*" },
+      { "id": "file", "pattern": "\\b[A-Za-z0-9_-]+\\.(json|ya?ml|md|ts|mts|js|sh|py|swift|kt|cs|toml)\\b" }
+    ]
+  }
+}

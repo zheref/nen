@@ -370,7 +370,14 @@ describe.skipIf(!HAVE_GIT)("Nobunaga round 2 -- objects and hooks that lie about
     writeFileSync(join(canon, "handbooks", "stacks", "scenario-x", "rules", "01-a.md"), "# A\n\nHello {{EVIL}}.\n");
     // Git itself, trusting the hook, calls this tree clean.
     expect(git(canon, ["status", "--porcelain"])).toBe("");
-    expect(await verdict(canon)).toMatchObject({ ok: false, failure: { code: "dirty", message: expect.stringMatching(/M handbooks\/stacks\/scenario-x\/rules\/01-a\.md/) as unknown } });
+    // EITHER DIRTY-TREE CHECK MAY FIRE FIRST (Phinks, delivery round on
+    // zheref/nen#498, QA-4): under suite load the status read and the raw-byte
+    // hash race, and both are the same verdict -- code 'dirty' -- in two words.
+    // The test holds the verdict, not which of the two checks said it.
+    expect(await verdict(canon)).toMatchObject({
+      ok: false,
+      failure: { code: "dirty", message: expect.stringMatching(/M handbooks\/stacks\/scenario-x\/rules\/01-a\.md|on-disk bytes differ from the tag/) as unknown },
+    });
   });
 });
 

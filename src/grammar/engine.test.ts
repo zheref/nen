@@ -346,3 +346,20 @@ describe("parseInvocation -- single-slot templates with a bracketed clause (zher
     ]);
   });
 });
+
+describe("parseTemplate -- a later slot with no separator (zheref/nen#419)", () => {
+  it("refuses '<a> <b>', '<a> <b:x|y>', '<a> {x} <b>' and '<a> [<b>]', naming the rewrite", () => {
+    for (const template of ["<a> <b>", "<a> <b:x|y>", "<a> {x} <b>", "<a> [<b>]"]) {
+      expect(() => parseTemplate(template)).toThrow(/<b> follows <a> with no separator/);
+      expect(() => parseTemplate(template)).toThrow(/'<a> then <b>' or '<a>@<b>'/);
+    }
+  });
+
+  it("leaves '<a>', '<a>@<b>', '<a> then <b>', '<a>{+}' and '<a:x|y>|<b>' unchanged", () => {
+    expect(parseTemplate("<a>").slots.map((s): string => s.name)).toEqual(["a"]);
+    expect(parseInvocation("s", parseTemplate("<a>@<b>"), "p@q").slots.map((s) => [s.name, s.value])).toEqual([["a", "p"], ["b", "q"]]);
+    expect(parseInvocation("s", parseTemplate("<a> then <b>"), "p then q").slots.map((s) => [s.name, s.value])).toEqual([["a", "p"], ["b", "q"]]);
+    expect(parseTemplate("<a>{+}").slots[0]?.joiner).toBe("+");
+    expect(parseTemplate("<a:x|y>|<b>").slots).toHaveLength(1);
+  });
+});

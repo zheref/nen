@@ -32,10 +32,12 @@ import { changelogCommand } from "../changelog/command.js";
 import { classifyCommand } from "../classify/command.js";
 import { colorCommand } from "../color/command.js";
 import { commitCommand } from "../commit/command.js";
+import { decisionsCommand } from "../decisions/command.js";
 import { devCommand } from "../dev/command.js";
 import { directCommand } from "../direct/command.js";
 import { effortCommand } from "../effort/command.js";
 import { epicCommand } from "../epic/command.js";
+import { exitsCommand } from "../exits/command.js";
 import { fanoutCommand } from "../fanout/command.js";
 import { gateCommand } from "../gate/command.js";
 import { ideaCommand } from "../idea/command.js";
@@ -57,6 +59,7 @@ import { runnerCommand } from "../runner/command.js";
 import { scaffoldCommand } from "../scaffold/command.js";
 import { sessionCommand } from "../session/command.js";
 import { shuCommand } from "../shu/command.js";
+import { specCommand } from "../spec/command.js";
 import { splitCommand } from "../split/command.js";
 import { stageCommand } from "../stage/command.js";
 import { stopCommand } from "../stop/command.js";
@@ -76,10 +79,12 @@ export const COMMANDS: readonly Command[] = [
   classifyCommand,
   colorCommand,
   commitCommand,
+  decisionsCommand,
   devCommand,
   directCommand,
   effortCommand,
   epicCommand,
+  exitsCommand,
   fanoutCommand,
   gateCommand,
   ideaCommand,
@@ -101,6 +106,7 @@ export const COMMANDS: readonly Command[] = [
   scaffoldCommand,
   sessionCommand,
   shuCommand,
+  specCommand,
   splitCommand,
   stageCommand,
   stopCommand,

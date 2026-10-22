@@ -1,0 +1,594 @@
+{
+  "$schema": "nen.workflow/v0.1",
+  "$comment": "Hatsu's OWN workflow policy. This file is the policy half of the two-file configuration model documented in docs/WORKFLOW.md: nen/contract.json says what nen EXECUTES (lanes, argv, preconditions, hosts, targets), this file says what the workflow DECIDES with (branch shape, which declared verbs run per iteration, the coverage ladder, where reports go, which trailers a commit may carry, which model tier a persona gets). At nen/contract.json's pinned build `nen schema check` VALIDATES this file -- an `ok nen/workflow.json` row, and a FAIL by pointer on a malformed key -- and two verbs read parts of it: `nen commit format --repo` takes `commits.allowedAttributionTrailers`, and `nen shu coverage --touched` takes the `coverage` ladder when no `--threshold` is given. Everything else here is read by the skills themselves, which is a read rather than a residue: nen validates this file, it does not hand the values out. Every value here is a policy default, not a fact about the machine. aiReviewers (top level, Hatsu's own key; the maintainer's rulings of 2026-10-11, zheref/hatsu#245, docs/ROSTER.md section Rulings of 2026-10-11 -- AI reviewers per consumer): required | optional | off for every automated reviewer in nen/gates.json reviewers[], gating their use and their expectation; absent reads required; the rule is docs/PROCESS.md section Reviewer rounds and review threads, AI reviewers per consumer. Hatsu's own value is optional, on the maintainer's ruling, written by config_values.sh set. nen tolerates the key and reads none of it.",
+  "branch": {
+    "template": "{model}/{persona}/{descriptor}",
+    "base": "main",
+    "$comment": "{model} is the MODEL ALIAS the actor runs on (opus, sonnet, haiku, fable), {persona} the roster persona it acts as, {descriptor} a short kebab noun phrase for the effort. Example: opus/kurapika/machinery-wave-1. `base` is the trunk breath fast-forwards, ao pulls from, and the PreToolUse hook refuses a commit or a push on."
+  },
+  "iteration": {
+    "checks": [
+      "lint"
+    ],
+    "lane": "plugin",
+    "$comment": "The declared verbs the loop runs, three times over, for three different questions -- breath proves them on the branch's fresh tip (was the base sound), rasengan runs them as the author's own inner-loop feedback while it writes the change (does what I just wrote work), and kokusen runs them over the finished tree before every commit and refuses a red one (is the tree I am about to record green). THE COMPILE-BEFORE-COMMIT IS KOKUSEN'S AND RASENGAN IS THE AUTHORING PHASE -- the maintainer's ruling of 2026-09-10, docs/ROSTER.md. When the entry is `lint`, that check is hatsu:gyo — the linting process, on every Ren turn. Hatsu is bash-and-markdown: its general mechanical check is `claude plugin validate . --strict`, declared as the `plugin` lane's `lint`. There is no general test suite; focused fixtures live on their own lanes — one per executable guard, enumerated in nen/contract.json's `plugin` lane `test` seat (`plugin-bump-guard` when scripts/plugin_bump_check.sh changes, `plugin-update` for scripts/hatsu_plugin_update.sh, `root-guard`, `surface-link-guard`, `prose-guard`, `tenkai-guard`, and the rest). They are not iteration checks, full regression, or evidence for unrelated behavior. Project-wide tests are kotoamatsukami's at mukai and coverage is byakugan's, not aka's."
+  },
+  "tests": {
+    "required": [],
+    "extra": [],
+    "$comment": "Hatsu ships no general automated test suite, so kotoamatsukami has nothing to run here and says so rather than inventing a runner. tsukuyomi does not read this block: it runs the explicit scoped lane that covers the changed executable (plugin-bump-guard and/or plugin-update) on every ren turn. An empty `required` is a statement, not an omission."
+  },
+  "coverage": {
+    "minimum": 80,
+    "recommended": 85,
+    "ideal": 90,
+    "scope": "touched",
+    "$comment": "The ladder byakugan reports against at mukai, in percent line coverage of TOUCHED files. Under `minimum` is a G5 stop, never a lowered bar. Hatsu declares no coverage verb, so byakugan reports `not measurable here` against this ladder rather than a number — the ladder still ships because it is the policy every repository Hatsu drives inherits when it declares none of its own. Gyo is linting, not this ladder. Kotoamatsukami runs tests, not this ladder."
+  },
+  "launch": {
+    "default": null,
+    "fallback": null,
+    "$comment": "Hatsu has no runnable application: it is a plugin read by Claude Code. amaterasu names that fact and launches nothing. A repository with launch targets names them in nen/contract.json under project.launch and selects one here."
+  },
+  "deploy": {
+    "defaultTarget": null,
+    "$comment": "Read by hatsu:kagutsuchi section 1; from nen v0.21.0 nen knows the key too and nen schema check FAILs a defaultTarget naming an undeclared target or one not marked project.targets.<name>.nonProduction: true (zheref/nen#300), so a default target carries that flag as well as a non-production `why` (zheref/hatsu#146; the maintainer's ruling of 2026-09-29: \"rely on a default value from one of our configuration files ... so that it doesn't always require destination and it can be easily chained with other skills like futon\"). `defaultTarget` names a key of nen/contract.json -> project.targets that a hatsu:kagutsuchi invocation typed with NO target sends to; a typed target always overrides it, and the report says which source the target came from (\"typed\" or \"workflow.json -> deploy.defaultTarget\"). It is honoured only for a target whose `why` reads non-production -- a default naming a store or the live environment is refused, and G3 (mugetsu) is unchanged. `nen shu deploy` itself is unchanged: --target is always passed explicitly by the skill, so \"nen never chooses where a build goes\" stays true of nen; the choice is recorded here, in configuration the maintainer wrote. null (Hatsu's own value: a plugin declares no deploy target) means an omitted target is asked as free text, exactly as before. A per-stack default in nen shu detect's reference pack is nen's to add."
+  },
+  "reports": {
+    "dir": "Reports",
+    "retain": "final-only",
+    "template": "spiritual-message",
+    "captures": "Reports/captures",
+    "$comment": "`dir` is git-ignored (.gitignore). `retain: final-only` governs what is KEPT, not whether a working file exists (maintainer's ruling, 2026-09-09): only the final current-head readiness report at the G2/G4 human gate gets a dated file of its own under `dir`, before any human merge, and the per-turn and landing reports are published to the conversation as an Artifact -- or, on a surface that cannot publish one, opened from the TRANSIENT `<dir>/current.html`, which every render overwrites and git ignores. One always-latest working file is not a retained report. `template` names templates/<name>.html in this repository, and templates/<name>.md is its Markdown twin, filled from the same document (docs/PROCESS.md, The Markdown report).",
+    "sections": {
+      "$comment": "Maintainer's ruling of 2026-09-19 (zheref/hatsu#89): which blocks each report variant renders is configuration, read by nen report render --variant (v0.12.0), which injects sections.<block> presence flags for the template; every value inside a block is model-written. turn and landing are Spiritual Message (templates/spiritual-message.html); turn-fast is the per-turn publish under the fast profile (desk and last turn only); final and register are Rikugan (templates/rikugan.html; each has a .md twin filled from the same document) -- the dated final report is a one-effort Rikugan with a cleared desk, and register is what backlog-board, futon and backlog-loop render.",
+      "turn": {
+        "template": "spiritual-message",
+        "blocks": [
+          "masthead",
+          "tally",
+          "desk",
+          "lastTurn",
+          "landed",
+          "delta",
+          "evidence",
+          "launch",
+          "decisions"
+        ]
+      },
+      "turn-fast": {
+        "template": "spiritual-message",
+        "blocks": [
+          "masthead",
+          "tally",
+          "desk",
+          "lastTurn"
+        ]
+      },
+      "landing": {
+        "template": "spiritual-message",
+        "blocks": [
+          "masthead",
+          "tally",
+          "desk",
+          "lastTurn",
+          "landed",
+          "delta",
+          "evidence",
+          "spend",
+          "launch",
+          "decisions",
+          "prBody"
+        ]
+      },
+      "final": {
+        "template": "rikugan",
+        "blocks": [
+          "masthead",
+          "tally",
+          "desk",
+          "register",
+          "spend",
+          "legend"
+        ]
+      },
+      "register": {
+        "template": "rikugan",
+        "blocks": [
+          "masthead",
+          "tally",
+          "desk",
+          "register",
+          "spend",
+          "legend"
+        ]
+      }
+    }
+  },
+  "notifications": {
+    "rungs": [
+      "push",
+      "os",
+      "sound"
+    ],
+    "sound": "Glass",
+    "turn": "rung1",
+    "$comment": "jutaisho's ladder, innermost first: `push` is the surface's own turn-complete signal, `os` an osascript notification, `sound` /System/Library/Sounds/<sound>.aiff through afplay. hooks/stop-bell.sh rings rungs 2 and 3 off .nen/last-stop.json; a rung absent from this list is not rung. `turn` decides how loud an ORDINARY turn is -- one with no gate: `rung1` (the default, and what an absent key reads as) rings only the first rung `rungs` lists, `all` rings every rung it lists. A GATE always rings everything `rungs` lists regardless of `turn`, and `turn` can only WITHHOLD an escalation `rungs` already grants -- it can never conjure a rung `rungs` does not list. nen reads and validates this key from v0.5.0 -- a closed set of `rung1` and `all`, refused by pointer on anything else -- and fires none of the three rungs itself; hooks/stop-bell.sh is what rings them."
+  },
+  "commits": {
+    "allowedAttributionTrailers": [
+      "Hatsu-Agent",
+      "Akatsuki-Agent"
+    ],
+    "forbiddenTrailers": [
+      "Co-Authored-By",
+      "Claude-Session",
+      "Signed-off-by",
+      "Generated-by",
+      "Generated-with",
+      "Reviewed-by"
+    ],
+    "$comment": "Prospective commits carry exactly the canonical persona/plane key that truthfully identifies the responsible actor: Hatsu-Agent for Hatsu work, Akatsuki-Agent for autonomous Akatsuki work. Do not infer a persona from a runtime alias or default one blindly. Model, surface, runtime, session, and generated-credit attribution remain forbidden in commit messages and bodies. The final PR ledger records actual participants and contributions. Existing commits and dated evidence are historical and are not rewritten."
+  },
+  "monitor": {
+    "maxCycles": 20,
+    "pollSeconds": 300,
+    "$comment": "en's izanagi cap and its poll interval. The cap is grammar, not a default: a watch loop with no cap does not run."
+  },
+  "profile": {
+    "default": "standard",
+    "allowed": [
+      "fast",
+      "standard",
+      "thorough"
+    ],
+    "$comment": "The run profile hatsu:ren reads (zheref/hatsu#93). `default` applies to every turn that names none; a turn may name one with --profile or the words \"fast turn\" / \"thorough turn\", and only a value in `allowed` is accepted. fast: steps 1 to 3 per turn, a turn-fast page, the launch skipped for the turn (not moved: mukai has no launch step), the full page and coverage deferred to mukai; standard: today's turn; thorough: the impacted suites (kotoamatsukami) on every turn. A landing (mukai) always runs thorough. Validated by nen schema check from v0.13.0; an older pin preserves the key as raw data."
+  },
+  "models": {
+    "rule": "latest alias only, never a version; subagents never on the frontier tier",
+    "claude": {
+      "frontier": "fable",
+      "deep": "opus",
+      "fast": "sonnet",
+      "economy": "haiku"
+    },
+    "codex": {
+      "frontier": "astra",
+      "deep": "sol",
+      "fast": "terra",
+      "economy": "luna"
+    },
+    "cursor": {
+      "frontier": "grok",
+      "deep": "grok",
+      "fast": "composer",
+      "economy": "composer",
+      "note": "Cursor-native only; provider models there are reserved for Bugbot"
+    },
+    "antigravity": {
+      "frontier": "gemini-4-argon",
+      "deep": "pro",
+      "fast": "flash",
+      "economy": "flash",
+      "note": "Google AI / Gemini tiers. A persona's model accepts only inherit, flash or pro (https://antigravity.google/docs/subagents, fetched 2026-09-20), so economy maps to flash here; flash_lite is not a documented persona value"
+    },
+    "roles": {
+      "reviewer": "deep",
+      "worker": "fast",
+      "measurer": "fast",
+      "orchestrator": "frontier",
+      "watcher": "economy",
+      "formatter": "economy",
+      "$comment": "watcher and formatter run on economy (zheref/hatsu#93): Illumi and hatsu:izanami polls run as watcher, formatting passes (gyo's auto-fix, prose reflow) as formatter. A role maps to a tier, never to a model. A subagent's tier is its scope's or role's, never its caller's (zheref/hatsu#222, ruling of 2026-10-13): a reviewer keeps its scope's declared tier (review.scopes.<scope>.tier, this reviewer tier by default) when hatsu:direct sends the maintainer's own session to fast or economy; docs/WORKFLOW.md section models states it."
+    },
+    "$comment": "A tier is named, never a model version — a pinned version is a pin that rots. The orchestrator tier is the main session's; a SUBAGENT never runs on it, because the frontier tier is where the human's own conversation lives. Below it a subagent's tier is its role's, never its caller's (roles.$comment, zheref/hatsu#222)."
+  },
+  "review": {
+    "$comment": "Maintainer's rulings of 2026-09-09 (Feitan, Chrollo), 2026-09-19 (Nobunaga, Shalnark), 2026-09-30 (Leorio) -- zheref/hatsu#89. nen review scopes --base <ref> (v0.12.0) classifies the branch diff by these rows: a path may raise several scopes, and each raised scope is reviewed by its persona under hanten, within budget (reviews per EFFORT -- one branch, one PR -- never per session or repository; a new PR starts every scope full, maintainer's ruling of 2026-09-28). code is Nobunaga's and claims every path, so he is the default reviewer everywhere; tier is read against models.<surface>.<tier>, and Nobunaga's tier depends on nen repo classify's kind (deep on a process repository, fast on a product one). Paths are prefixes or globs in nen report data's tier-table grammar.",
+    "scopes": {
+      "code": {
+        "persona": "nobunaga",
+        "tier": "deep",
+        "budget": 2,
+        "paths": [
+          "**"
+        ],
+        "$comment": "code practices, scope completeness, adversarial reading; tier deep on a process repository, fast on a product repository"
+      },
+      "security": {
+        "persona": "feitan",
+        "tier": "deep",
+        "budget": 1,
+        "paths": [
+          "hooks/**",
+          "contracts/**",
+          ".github/workflows/**",
+          "scripts/**",
+          "nen/contract.json",
+          "bootstrap/**",
+          "**/*auth*",
+          "**/*secret*",
+          "**/*credential*",
+          "**/*token*",
+          "templates/*.html"
+        ]
+      },
+      "architecture": {
+        "persona": "chrollo",
+        "tier": "deep",
+        "budget": 1,
+        "paths": [
+          "docs/ROSTER.md",
+          "docs/WORKFLOW.md",
+          "docs/STANDALONE-ENTRY.md",
+          "docs/DISCOVERY.md",
+          "claude/agents/**",
+          "claude/skills/*/SKILL.md",
+          "nen/*.json",
+          "contracts/**"
+        ],
+        "$comment": "layering, state ownership, the resolved stack rules, the repository's own architecture notes. claude/skills/*/SKILL.md is on this list because in a process repository the skills ARE the machinery: a step moved between phases, an authority widened or a protocol duplicated into a second file is an architecture change, and Nobunaga's code scope reads them for practice rather than for structure."
+      },
+      "ui": {
+        "persona": "hisoka",
+        "tier": "fast",
+        "budget": 2,
+        "paths": [
+          "templates/*.html",
+          "**/*.css",
+          "**/*.svg",
+          "**/Views/**",
+          "**/Components/**",
+          "**/*.storyboard",
+          "**/*.xib",
+          "**/__snapshots__/**"
+        ]
+      },
+      "performance": {
+        "persona": "uvogin",
+        "tier": "fast",
+        "budget": 3,
+        "paths": [
+          "**/perf/**",
+          "**/*benchmark*",
+          "**/budgets.json"
+        ]
+      },
+      "surfaces": {
+        "persona": "phinks",
+        "tier": "deep",
+        "budget": 1,
+        "paths": [
+          "surfaces/**"
+        ],
+        "$comment": "generated-surface integrity (zheref/hatsu#73): the two guards run first -- scripts/surface_link_check.sh and scripts/surface_mirror_check.sh -- and Phinks reads what they cannot (a link at the wrong depth, a stamp, a hook root, an invocation prefix). One persona, one budget: a diff raising release and surfaces together is one Phinks raise carrying both scopes. Totality is content, not path: hanten § 2 raises it on the architecture scope."
+      },
+      "economics": {
+        "persona": "leorio",
+        "tier": "deep",
+        "budget": 1,
+        "paths": [
+          ".github/workflows/**",
+          "templates/pr-readiness.yml",
+          "**/*billing*",
+          "**/*Billing*",
+          "**/*pricing*",
+          "**/*Pricing*",
+          "**/*price*",
+          "**/*Price*",
+          "**/*subscription*",
+          "**/*Subscription*",
+          "**/*paywall*",
+          "**/*Paywall*",
+          "**/*entitlement*",
+          "**/*Entitlement*",
+          "**/*purchase*",
+          "**/*Purchase*",
+          "**/*payment*",
+          "**/*Payment*",
+          "**/*invoice*",
+          "**/*Invoice*",
+          "**/*quota*",
+          "**/*Quota*",
+          "**/billing/**",
+          "**/Billing/**",
+          "**/payments/**",
+          "**/Payments/**",
+          "**/paywall/**",
+          "**/Paywall/**",
+          "**/*stripe*",
+          "**/*Stripe*",
+          "**/*.storekit",
+          "**/*.tf"
+        ],
+        "$comment": "Maintainer's ruling of 2026-09-30 (Leorio): advisory economics -- billing, consumption and run-cost differences charted for the maintainer's informed decision; he never rejects. These paths are the ONE home of the path rows: Hatsu's own run-cost surfaces (CI workflows, the consumer readiness workflow template) plus the generic product globs, in lower-case and PascalCase and as directories, because matching is case-sensitive and a bare *name* matches the last path segment only (a consumer declares its own). The content rows that raise this scope with no path are docs/ECONOMICS.md section 1's, read by hanten section 2 and stated nowhere else. Rules are ECON-1..ECON-8 in docs/ECONOMICS.md."
+      },
+      "release": {
+        "persona": "phinks",
+        "tier": "deep",
+        "budget": 1,
+        "paths": [
+          ".claude-plugin/plugin.json",
+          "CHANGELOG.md",
+          "changelog.d/**",
+          "templates/release-publish.sh",
+          "scripts/release-publish.sh",
+          "templates/pr-readiness.yml",
+          "**/*.podspec",
+          "**/Package.swift",
+          "**/build.gradle*",
+          "**/package.json"
+        ]
+      }
+    }
+  },
+  "mukai": {
+    "autoEn": true,
+    "$autoEn": "one of: true | false",
+    "$comment": "Maintainer's ruling of 2026-09-28 (docs/ROSTER.md section Rulings of 2026-09-26/27/28, ruling 8): once shibari has opened the PR and the landing report is rendered, mukai OFFERS to start en on it in one line naming the PR and never starts it silently -- unless this key is true, in which case en starts immediately in the same user turn as it did before. Absent means false. Hatsu's own value is true, on the maintainer's request of 2026-10-01 (\"Let's configure this repository for autoEn (let's make it enabled)\"). Read by the mukai skill only; nen validates the file and hands no value out."
+  },
+  "release": {
+    "$comment": "The RELEASE UNIT -- the maintainer's rulings of 2026-09-26 and 2026-09-28 (docs/ROSTER.md § Rulings of 2026-09-26/27/28: getsuga merges its own release-proposal PR, bounded; in hatsu the plugin manifest is bumped in the DELIVERY PR, so the release PR touches the changelog only). Exactly the paths getsuga § 3 writes when it folds a release here: the collated CHANGELOG section and the fragments it deletes. Not .claude-plugin/plugin.json (the delivery PR carries the bump; getsuga § 3 step 5 is a no-op in this repository), and not nen/repos.json (this registry carries no `latest` key). `nen release unit-check --pr <n>` compares a pull request's changed files to this list (the same prefix/glob grammar review.scopes uses), and `nen pr merge --release-unit` refuses to merge a release-proposal PR that touches anything outside it. From nen v0.15.1 an entry may also be {\"path\": \"<exact json file>\", \"keys\": [...]} to bound a JSON file to named leaf keys -- unused here. Hatsu declares no tags.identity, so no archive-written identity file belongs here.",
+    "unitPaths": [
+      "CHANGELOG.md",
+      "changelog.d/**"
+    ]
+  },
+  "futon": {
+    "$comment": "The ADVANCE-GO GATE -- the maintainer's rulings of 2026-09-26 and 2026-09-28 (docs/ROSTER.md § Rulings of 2026-09-26/27/28: getsuga and kagutsuchi take an advance go on any repository kind; mugetsu only on a process or library repository, never a product that deploys or uploads to a store; the three kinds are docs/WORKFLOW.md § Repository kinds). `nen parse futon` annotates every skill-chain step whose skill is listed here with gate: {allowed, kind, reason}, the kind being `nen repo classify`'s own verdict for the resolved repo (unknown fails closed); a skill not listed here gets no gate, and futon § 8 refuses a listed skill's step that carries none. From nen v0.15.1 an ABSENT key falls back to nen's built-in default policy (gate.source \"default\"), and a declared one replaces it wholesale (gate.source \"declared\") -- hatsu declares its own so the policy is read from here. The policy lives here and nowhere in prose: mugetsu § 3 and futon § 8 read the gate line verbatim.",
+    "advanceGo": {
+      "mugetsu": [
+        "process",
+        "library"
+      ],
+      "getsuga": [
+        "product",
+        "process",
+        "library"
+      ],
+      "kagutsuchi": [
+        "product",
+        "process",
+        "library"
+      ]
+    }
+  },
+  "classify": {
+    "publish": "label+comment",
+    "$publish": "one of: label | label+comment",
+    "$comment": "The maintainer's request of 2026-10-20 (docs/ROSTER.md section Rulings of 2026-10-20 -- classify and direct always write back): whether hatsu:classify, beyond the lang/ and job/ labels it applies through nen classify apply, also writes its resolved criteria to the issue. label (the default, and the 2026-10-04 behaviour): the labels and the local ledger only. label+comment: those labels plus one marker-keyed criteria comment per classified issue -- every decided key with confidence, status and signal category, unapplied keys marked not applied with their reason, never issue text; the whole contract is contracts/classify.taxonomy.json -> publish. Read at the default branch's tip, never the checkout, by the classify skill standalone, under build and under file once the issue exists; never under ren or for an inline effort, which have no issue to write to. Hatsu's own value is label+comment. nen validates the file and hands no value out."
+  },
+  "direct": {
+    "publish": "label+comment",
+    "$publish": "one of: none | label | label+comment",
+    "$comment": "Maintainer's ruling of 2026-10-05 (docs/ROSTER.md section Rulings of 2026-10-05 -- the registry rebalance): whether hatsu:direct writes its verdict to the issue on GitHub. none (the default, and the 2026-10-04 behaviour): report and the local ledger .nen/direct/<effort>.json only. label: the model LINE of the primary pick as one model/<line> label through nen label apply. label+comment: that label plus one marker-keyed comment carrying the primary, fallback and recommended picks with tier, surface, effort dial and the live-read version (contracts/direct.registry.json -> publish). Read by the direct skill under build or standalone (never under ren, which cannot leave the machine); any other value reads none, said. Hatsu's own value is label+comment, on the maintainer's request of 2026-10-11 (\"Open a PR setting direct.publish to label and comment\"), written by config_values.sh set; the first sweep's seven model/ labels were applied the same day as if it were already set. nen validates the file and hands no value out."
+  },
+  "aiReviewers": "optional",
+  "$aiReviewers": "one of: required | optional | off",
+  "pr": {
+    "$sections": "available sections: delivery — Always-first ledger-rendered delivery metadata; outside the seven-reader cap. | changes — Before/After for a named consumer; Case for/Case against; what would flip the decision. | why — Source/What it showed/Why it matters now, followed by the authoring nature. | how — Mermaid structure diagram and Item/Kind/Change legend; flow diagram only when behavior flow changed; one rejected alternative. | improves — All eleven aspects, marked ⬆ improves / ➖ unchanged / ⬇ regresses; justify only movement. | verify — Product: numbered steps. Library: Consumer scenario/Call or import/Expected, plus published artifact command. Process: Behavior changed/Lane or verb run/Refuses on/Passes on. | evidence — UZF-26 state/variant evidence table; only where project.evidence.globs is declared. | compat — Symbol/Before/After/Consumer action; semver verdict. | across — What another repository does differently after this merge; recorded rulings. | release-unit — Artifact/Size/Provenance; CON-22 fan-out. | rollout — Target/Flag/Rollback step. | economics — Leorio summary, then the full report in details; no new level-2 headings inside it. | checklist — Compact evidence-backed completion conditions. | issues — Canonical issue URL/scope/merging verdict table and closing lines; Development guard applies. | attribution — Final heading; exact participant ledger from docs/AGENT-ATTRIBUTION.md.",
+    "sections": {
+      "max": 7,
+      "variants": {
+        "product.build": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify",
+          "evidence"
+        ],
+        "library.build": [
+          "changes",
+          "why",
+          "how",
+          "compat",
+          "improves",
+          "verify"
+        ],
+        "process.build": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "across",
+          "verify"
+        ],
+        "unknown.build": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "product.fix": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify",
+          "evidence"
+        ],
+        "library.fix": [
+          "changes",
+          "why",
+          "how",
+          "compat",
+          "improves",
+          "verify"
+        ],
+        "process.fix": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "across",
+          "verify"
+        ],
+        "unknown.fix": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "product.maintain": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify",
+          "rollout"
+        ],
+        "library.maintain": [
+          "changes",
+          "why",
+          "how",
+          "compat",
+          "improves",
+          "verify"
+        ],
+        "process.maintain": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "across",
+          "verify"
+        ],
+        "unknown.maintain": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "product.verify": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify",
+          "evidence"
+        ],
+        "library.verify": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "process.verify": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "unknown.verify": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "product.canon": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "library.canon": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "process.canon": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "across",
+          "verify"
+        ],
+        "unknown.canon": [
+          "changes",
+          "why",
+          "how",
+          "improves",
+          "verify"
+        ],
+        "product.release": [
+          "changes",
+          "why",
+          "release-unit",
+          "rollout",
+          "verify",
+          "evidence"
+        ],
+        "library.release": [
+          "changes",
+          "why",
+          "release-unit",
+          "compat",
+          "verify"
+        ],
+        "process.release": [
+          "changes",
+          "why",
+          "release-unit",
+          "across",
+          "verify"
+        ],
+        "unknown.release": [
+          "changes",
+          "why",
+          "release-unit",
+          "verify"
+        ]
+      }
+    }
+  },
+  "intake": {
+    "$comment": "Hatsu's own key (docs/ROSTER.md HR-21, HR-24, HR-38): intake.challenger maps a brief's artifact to the intake examiner hatsu:emperor-time section 4 raises on it, read from Hatsu's own checkout and never a consumer's (who challenges a brief is Hatsu policy). Every matching examiner challenges (HR-25); an artifact the map names no examiner for goes to satotz (HR-26). Values written by scripts/config_values.sh set; docs/INTAKE-CHALLENGE.md section 1. nen tolerates the key and reads none of it.",
+    "challenger": {
+      "brief": "satotz",
+      "$brief": "one of: satotz | lippo | buhara | bisky",
+      "spec": "lippo",
+      "$spec": "one of: satotz | lippo | buhara | bisky",
+      "platform": "buhara",
+      "$platform": "one of: satotz | lippo | buhara | bisky",
+      "rendered": "bisky",
+      "$rendered": "one of: satotz | lippo | buhara | bisky"
+    }
+  },
+  "idle": {
+    "decisions": {
+      "harness-attribution-switch": "hold",
+      "host-nen-link": "hold",
+      "missing-consumer-declaration": "default",
+      "missing-argument": "default",
+      "missing-configuration": "default",
+      "missing-maintainer-choice": "hold",
+      "mode-unknown": "default",
+      "direct-mismatch": "default",
+      "port-drift": "hold",
+      "intake-challenger": "hold",
+      "port-siblings": "hold",
+      "wrap-up": "default",
+      "cleanup-plan": "hold",
+      "publish-offer": "refuse"
+    },
+    "localSlotFrees": "merged",
+    "$localSlotFrees": "fixed: merged (ROSTER § Rulings of 2026-09-30, Slots and stops)",
+    "terminal": "ready-at-prompt-or-integration",
+    "$terminal": "one of: ready-at-prompt-or-integration | ready-at-prompt",
+    "budget": {
+      "minutes": 480,
+      "tokens": 4000000
+    }
+  }
+}

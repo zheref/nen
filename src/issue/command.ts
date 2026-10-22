@@ -27,7 +27,9 @@ import {
   type CommandContext,
   requireTargetFlag,
   parseCallerToken,
+  emit,
 } from "../cli/command.js";
+import { refuse } from "../cli/refusal.js";
 import {
   closedSince,
   findCanonical,
@@ -37,6 +39,7 @@ import {
 import {
   createArgv,
   fileIssue,
+  stdinLine,
   openPrCheck,
   validateFiling,
   type FileRequest,
@@ -74,6 +77,19 @@ import {
 import { chainPosition, parseRoleMap, terminus, type ChainPositionResult, type TerminusResult } from "./chain.js";
 import { conjoin } from "../cli/prose.js";
 import { reconcile, renderReconcile, RECONCILE_LIMIT, RECONCILE_MAX_LIMIT } from "./reconcile.js";
+import {
+  checkIssueBody,
+  countQuestions,
+  IssueShapeError,
+  ISSUE_BODY_CHECK_CONTRACT,
+  ISSUE_QUESTIONS_CONTRACT,
+  parseCatalogue,
+  type IssueSectionsCatalogue,
+  selectKind,
+} from "./shape.js";
+import { readTitleFile } from "./title.js";
+import { extractCriteria, ISSUE_CRITERIA_CONTRACT } from "./criteria.js";
+import { plainLine } from "../cli/plain.js";
 
 export function numberList(value: string | undefined): readonly number[] {
   return commaList(value)
@@ -125,7 +141,7 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   search: { values: ["target", "subject", "files", "rule-ids", "lane-labels"] },
   "open-pr-check": { values: ["target", "issues"] },
   file: {
-    values: ["target", "title", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
+    values: ["target", "title", "title-file", "body-file", "label", "assignee", "forbid-family", ...PRIVATE_NAME_FLAGS.values],
     booleans: ["dry-run", ...PRIVATE_NAME_FLAGS.booleans],
   },
   comment: {
@@ -146,6 +162,12 @@ export const ISSUE_SUBCOMMAND_FLAGS: Readonly<Record<string, FlagSpec>> = {
   "chain-position": { values: ["target", "issue", "chain-labels"] },
   terminus: { values: ["target", "issue", "chain-labels", "integration-prefix", "trunk"] },
   reconcile: { values: ["target", "since", "limit", "issues", "hold-labels"] },
+  // The two issue-shape reads (./shape.ts): one body, from a file or from the
+  // issue itself, and nothing written either way.
+  "body-check": { values: ["body-file", "ref", "target", "requirements-from", "kind"] },
+  questions: { values: ["body-file", "ref", "target", "requirements-from"] },
+  // The AC rows of one issue body (./criteria.ts), read-only like the two above.
+  criteria: { values: ["body-file", "ref", "target", "requirements-from"] },
 };
 
 /**
@@ -351,7 +373,8 @@ usage:
       Which candidates carry an OPEN pull request. Closing one of those orphans
       work in flight, so this is the guard that runs before any close.
 
-  nen issue file --target <owner/name> --repo <path> --title <t>
+  nen issue file --target <owner/name> --repo <path>
+                 (--title <t> | --title-file <path>)
                  --body-file <path> --label a,b --assignee <user>
                  [--forbid-family ns:family] [--dry-run]
                  [--skip-private-name-check]
@@ -359,7 +382,11 @@ usage:
       Creates the issue with its labels and assignee IN THE CREATE CALL. Every
       label must exist in the target repository's taxonomy. --body-file
       resolves against --repo's root, and that resolved path is what 'gh'
-      is handed. Private-name guard: see PRIVATE REPOSITORY NAMES below.
+      is handed. --title-file reads the title from a file verbatim, ONE
+      trailing newline stripped, so no shell expands the words (zheref/nen#444);
+      it resolves against --repo's root and is refused (exit 2) with --title,
+      when unreadable, or when the title still holds a line break.
+      Private-name guard: see PRIVATE REPOSITORY NAMES below.
 
   nen issue comment --target <owner/name> --issue <n>
                     (--body-file <path> | --body <text>) [--dry-run]
@@ -686,12 +713,80 @@ usage:
       url, title, base, mergedAt, mergeCommit, landing, delivery: { pr,
       url, mergedAt } | null, references: [{ source: linked | body |
       commit, text, commit }] }] }], notOpen,
-      findings: [{ source, detail }], complete }'.`;
+      findings: [{ source, detail }], complete }'.
+
+  nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
+                       --requirements-from <catalogue.json> [--kind <kind>]
+      Read-only. Checks one issue body against the CALLER's section catalogue,
+      in the v1 object shape (sections an object of { heading,
+      rows, none }; kinds.<kind> { required, optional }; common, the sections
+      checked with no --kind; top-level rows with pattern, prefix, measure,
+      resolvedPattern; noneText; vagueAdjectives; technologyTerms) or nen's
+      older array shape -- docs/USAGE.md, "The issue-sections catalogue".
+      Reports every miss at once: a required section missing, a section
+      present and empty, a content pattern not matched, a row section with no
+      <PREFIX>-{n} row, a row not in its pattern's shape or naming its id in no
+      admitted shape (row-shape), rows not numbered 1..n in order, a row whose
+      text fails its measure. A none section may say only noneText. Vague
+      adjectives, and technology terms on acceptance rows, are advisories,
+      never a miss. With several kinds, no --kind and no common list it
+      refuses (exit 2): nen will not pick a kind. --ref reads the issue from
+      --target; its CODE is echoed, never resolved, and a number naming a pull
+      request is refused (exit 2). Exits: 0 no miss, 1 a miss or an unreadable
+      issue, 2 usage or a malformed catalogue. --json: '{ contract:
+      "nen.issue.body-check/v0.1", source, catalogue: { path, contract },
+      kind, ok, sections: [{ id, title, status, line }], rows: [{ section,
+      id, number, line }], misses: [{ section, kind, line, detail }],
+      advisories: [{ kind, word, line }] }'.
+
+  nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
+                      [--requirements-from <catalogue.json>]
+      Read-only. Counts open questions ('- OQ-{n} (<gate>): <question>'),
+      resolved ones ('- ~~OQ-{n}~~ → A: <answer> (<YYYY-MM-DD>, <ruling
+      ref>)') and [NEEDS ...] markers ('[NEEDS CLARIFICATION: ...]', '[NEEDS
+      <row-id>: ...]'), outside fenced code, inline code and comments; a
+      task-list checkbox before the id is read. --requirements-from reads the
+      two row patterns from the catalogue's rows.question instead. Any list
+      row naming OQ-{n} -- a blockquoted one included -- in neither shape is
+      listed as unrecognised, never counted as either: a resolved row lacking
+      its answer, date or ruling reference is unrecognised. It counts and
+      never decides: exit 0 whenever the body was read, 1 when the issue could
+      not be read, 2 usage or a malformed catalogue. --json: '{ contract:
+      "nen.issue.questions/v0.1", source, counts: { open, resolved,
+      needsMarkers, unrecognised }, open: [{ id, number, gate, line }],
+      resolved: [{ id, number, line }], needsMarkers: [{ label, line }],
+      unrecognised: [{ line, text }] }'.
+
+  nen issue criteria (--ref <CODE>#<N> --target <owner/name> | --body-file <path>)
+                     [--requirements-from <catalogue.json>]
+      Read-only. Lists the acceptance criteria an issue body states: every
+      list row '- AC-{n}: <text>' ('*', '+', '1.' and '1)' bullets, a
+      task-list checkbox and a bold id read) outside fenced code and comments,
+      with its number, text and line, and any AC number stated twice. A list
+      row naming AC-{n} in no admitted shape, or inside a blockquote, is
+      unrecognised. --requirements-from takes the prefix from the catalogue's
+      acceptance rows and reads them inside its acceptance section only, as
+      'issue body-check' does; with none, AC rows anywhere in the body. A
+      body with no AC row is reported not verifiable -- nothing to verify,
+      never "all verified". 'nen pr converge' compares these rows with a PR's
+      verify rows. Exits: 0 whenever the body was read, 1 when the issue could
+      not be read or carried no body, 2 usage or a malformed catalogue.
+      --json: '{ contract: "nen.issue.criteria/v0.1", source, verifiable,
+      criteria: [{ id, number, text, line }], duplicates: [{ id, lines }],
+      unrecognised: [{ line, text }] }'.`;
 
 export const issueCommand: Command = {
+  jsonRefusals: ["file"],
+  exits: [
+    { verb: "issue edit-body", code: 3, meaning: "conflict, nothing written: the current body is not the --expect-body-sha256 version" },
+    { verb: "issue file", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "issue comment", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "issue edit-body", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "issue consolidate-close", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+  ],
   name: "issue",
   subcommands: ISSUE_SUBCOMMANDS,
-  summary: "Search, guard, file, attach and classify issues.",
+  summary: "Search, guard, file, attach and classify issues; check their shape, questions and criteria.",
   usage: USAGE,
   // The UNION of every subcommand's own spec (ISSUE_SUBCOMMAND_FLAGS above), never a
   // second hand-kept list: a flag the parser accepts but no subcommand
@@ -723,6 +818,12 @@ export const issueCommand: Command = {
         return position(context);
       case "reconcile":
         return reconcileVerb(context);
+      case "body-check":
+        return issueBodyCheck(context);
+      case "questions":
+        return issueQuestions(context);
+      case "criteria":
+        return issueCriteria(context);
       default:
         return chainTerminus(context);
     }
@@ -909,7 +1010,7 @@ function file(context: CommandContext): number {
   // about which file it is, or the check vouches for bytes nobody sends.
   const rawBodyFile = context.args.values["body-file"] ?? "";
   const request: FileRequest = {
-    title: context.args.values["title"] ?? "",
+    title: readTitleFile(context, root) ?? context.args.values["title"] ?? "",
     bodyFile: rawBodyFile === "" ? "" : resolveAgainstRepo(root, rawBodyFile),
     labels: commaList(context.args.values["label"]),
     assignee: context.args.values["assignee"] ?? "",
@@ -920,8 +1021,7 @@ function file(context: CommandContext): number {
   }
   const refusals = validateFiling(request, taxonomy);
   if (refusals.length > 0) {
-    for (const refusal of refusals) context.io.err(`nen: ${refusal.reason}`);
-    return 1;
+    return refuse(context.io, context.json, "issue file", 1, refusals.map((refusal): string => refusal.reason));
   }
   // Read here, not by `gh`, so the guard sees the bytes `gh` is about to send.
   const body = readTextFile(
@@ -1154,9 +1254,6 @@ function comment(context: CommandContext): number {
  * The dry-run line saying where `--body-file -`'s stdin comes from: the bytes
  * already read (and checked) from that path, not the path itself.
  */
-function stdinLine(path: string, body: string): string {
-  return `stdin: the ${Buffer.byteLength(body, "utf8")} byte(s) read and checked from ${path} (gh reads these, not the file)`;
-}
 
 /** `bodyFile` for a --json report: the path a file body was read from, absent for an inline one. */
 function bodyFileField(request: CommentRequest): { readonly bodyFile?: string } {
@@ -2098,5 +2195,143 @@ function reconcileVerb(context: CommandContext): number {
     );
     return 1;
   }
+  return 0;
+}
+
+// --- the issue-shape reads: body-check and questions (./shape.ts) -------------
+
+/** Where an issue-shape read took its body from, as `--json` reports it. */
+type ShapeSource =
+  | { readonly kind: "file"; readonly path: string }
+  | { readonly kind: "issue"; readonly ref: string; readonly target: string; readonly number: number };
+
+const ISSUE_REF = /^(?:([^\s#]+)#|#)?([0-9]{1,9})$/;
+
+/**
+ * The body an issue-shape read checks: `--body-file <path>` (resolved against
+ * --repo's root), or `--ref <CODE>#<N> --target <owner/name>` read from GitHub.
+ * Exactly one. `--target` addresses the API; a ref's `CODE` is echoed and never
+ * resolved, and an `owner/name#N` ref must name `--target` itself. A number
+ * that names a pull request is refused (exit 2) -- 'nen pr body-check' reads
+ * those -- and an issue whose payload carried no body is a read that failed
+ * (exit 1), never an empty body.
+ */
+function readShapeBody(context: CommandContext, verb: string): { body: string; source: ShapeSource } {
+  const bodyFile = context.args.values["body-file"];
+  const ref = context.args.values["ref"];
+  if ((bodyFile === undefined) === (ref === undefined)) {
+    throw new VerbUsageError(`'issue ${verb}' reads ONE body: give exactly one of --body-file <path> or --ref <CODE>#<N> with --target <owner/name>.`);
+  }
+  if (bodyFile !== undefined) {
+    if (context.args.values["target"] !== undefined) {
+      throw new VerbUsageError("--target is read only with --ref: a --body-file is read from disk and addresses no repository.");
+    }
+    const path = resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), bodyFile);
+    return { body: readTextFile(path, process.cwd(), `--body-file names the issue body 'issue ${verb}' reads; an unreadable one is refused, never read as empty.`), source: { kind: "file", path } };
+  }
+  const target = requireTarget(context);
+  const match = ISSUE_REF.exec((ref as string).trim());
+  const number = match === null ? NaN : Number.parseInt(match[2] as string, 10);
+  if (match === null || !Number.isSafeInteger(number) || number <= 0) {
+    throw new VerbUsageError(`--ref '${ref}' is not an issue reference. Write <CODE>#<N>, <owner/name>#<N>, #<N> or <N>; --target names the repository it is read from.`);
+  }
+  const prefix = match[1];
+  if (prefix !== undefined && prefix.includes("/") && prefix.toLowerCase() !== target.slug.toLowerCase()) {
+    throw new VerbUsageError(`--ref '${ref}' names ${prefix}, and --target names ${target.slug}; nen will not pick one.`);
+  }
+  if (prefix !== undefined && !prefix.includes("/") && !/^[A-Za-z][A-Za-z0-9]*$/.test(prefix)) {
+    throw new VerbUsageError(`--ref '${ref}': '${prefix}' is neither a product code (a letter, then letters and digits) nor an owner/name slug.`);
+  }
+  const summary = readIssue(context.seams, target, number);
+  if (summary.isPullRequest) {
+    throw new VerbUsageError(`#${number} names a pull request in ${target.slug}, not an issue; 'nen pr body-check' reads a pull request's body.`);
+  }
+  if (summary.body === undefined) {
+    throw new Error(`could not read ${target.slug}#${number}'s body: the API payload carried no 'body' field, and an unread body is never an empty one.`);
+  }
+  return { body: summary.body.replace(/\r\n?/g, "\n"), source: { kind: "issue", ref: ref as string, target: target.slug, number } };
+}
+
+function describeSource(source: ShapeSource): string {
+  return source.kind === "file" ? `'${source.path}'` : `${source.target}#${source.number}`;
+}
+
+function issueBodyCheck(context: CommandContext): number {
+  const catalogueFrom = context.args.values["requirements-from"];
+  if (catalogueFrom === undefined || catalogueFrom === "") {
+    throw new VerbUsageError("--requirements-from <catalogue.json> is required: which sections an issue must carry is the caller's catalogue, never nen's.");
+  }
+  const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+  let catalogue;
+  let kind: string;
+  try {
+    catalogue = parseCatalogue(readJsonFile<unknown>(resolveAgainstRepo(root, catalogueFrom), process.cwd(), "--requirements-from is the catalogue every section is checked against."));
+    kind = selectKind(catalogue, context.args.values["kind"]);
+  } catch (error) {
+    if (error instanceof IssueShapeError) throw new VerbUsageError(plainLine(`'${catalogueFrom}': ${error.message}`));
+    throw error;
+  }
+  const { body, source } = readShapeBody(context, "body-check");
+  const report = checkIssueBody(body, catalogue, kind);
+  const okCount = report.sections.filter((section): boolean => section.status === "ok").length;
+  const label = { ok: "ok", missing: "MISSING", empty: "EMPTY" } as const;
+  const lines = [
+    `${okCount}/${report.sections.length} section(s) present for kind '${kind}', ${report.misses.length} miss(es) -- ${describeSource(source)}`,
+    ...report.sections.map((section): string => `${label[section.status]}  ${section.id}${section.line === null ? "" : ` (line ${section.line})`}`),
+    ...report.misses
+      .filter((miss): boolean => miss.kind !== "missing" && miss.kind !== "empty")
+      .map((miss): string => `MISS ${miss.kind}${miss.line === null ? "" : ` line ${miss.line}`}: ${miss.detail}`),
+    ...report.advisories.map((advisory): string => `ADVISORY line ${advisory.line}: vague '${advisory.word}'`),
+  ].map(plainLine);
+  emit(
+    context.io,
+    context.json,
+    { contract: ISSUE_BODY_CHECK_CONTRACT, source, catalogue: { path: catalogueFrom, contract: catalogue.contract }, ...report },
+    lines,
+  );
+  return report.ok ? 0 : 1;
+}
+
+/** The caller's catalogue when `--requirements-from` is given (questions and criteria read its row grammar), else null. */
+function optionalCatalogue(context: CommandContext): IssueSectionsCatalogue | null {
+  const from = context.args.values["requirements-from"];
+  if (from === undefined) return null;
+  if (from === "") throw new VerbUsageError("--requirements-from names the issue-sections catalogue; it cannot be empty.");
+  try {
+    return parseCatalogue(readJsonFile<unknown>(resolveAgainstRepo(resolveRepoRoot({ repoFlag: context.repoFlag }), from), process.cwd(), "--requirements-from is the catalogue the row grammar is read from."));
+  } catch (error) {
+    if (error instanceof IssueShapeError) throw new VerbUsageError(plainLine(`'${from}': ${error.message}`));
+    throw error;
+  }
+}
+
+function issueQuestions(context: CommandContext): number {
+  const catalogue = optionalCatalogue(context);
+  const { body, source } = readShapeBody(context, "questions");
+  const report = countQuestions(body, catalogue?.questions ?? undefined);
+  const lines = [
+    `${report.counts.open} open, ${report.counts.resolved} resolved, ${report.counts.needsMarkers} [NEEDS] marker(s), ${report.counts.unrecognised} unrecognised -- ${describeSource(source)}`,
+    ...report.open.map((row): string => `OPEN      ${row.id} (${row.gate}) line ${row.line}`),
+    ...report.resolved.map((row): string => `RESOLVED  ${row.id} line ${row.line}`),
+    ...report.needsMarkers.map((marker): string => `NEEDS     ${marker.label === "" ? "(no label)" : marker.label} line ${marker.line}`),
+    ...report.unrecognised.map((row): string => `UNRECOGNISED line ${row.line}: ${row.text}`),
+  ].map(plainLine);
+  emit(context.io, context.json, { contract: ISSUE_QUESTIONS_CONTRACT, source, ...report }, lines);
+  return 0;
+}
+
+function issueCriteria(context: CommandContext): number {
+  const catalogue = optionalCatalogue(context);
+  const { body, source } = readShapeBody(context, "criteria");
+  const report = extractCriteria(body, catalogue);
+  const lines = [
+    report.verifiable
+      ? `${report.criteria.length} AC row(s), ${report.duplicates.length} duplicate number(s) -- ${describeSource(source)}`
+      : `0 AC row(s): not verifiable -- ${describeSource(source)}`,
+    ...report.criteria.map((criterion): string => `${criterion.id} line ${criterion.line}: ${criterion.text}`),
+    ...report.duplicates.map((duplicate): string => `DUPLICATE ${duplicate.id} lines ${duplicate.lines.join(", ")}`),
+    ...report.unrecognised.map((row): string => `UNRECOGNISED line ${row.line}: ${row.text}`),
+  ].map(plainLine);
+  emit(context.io, context.json, { contract: ISSUE_CRITERIA_CONTRACT, source, ...report }, lines);
   return 0;
 }

@@ -17,7 +17,7 @@ const ON_WORK = { match: "git symbolic-ref --short HEAD", result: { stdout: "fea
 const TRACKED = { match: "git rev-parse --abbrev-ref feature/work@{upstream}", result: { stdout: "origin/feature/work\n" } };
 const LOCAL = { match: "git rev-parse feature/work", result: { stdout: `${SHA}\n` } };
 const REMOTE = { match: "git ls-remote origin refs/heads/feature/work", result: { stdout: `${SHA}\trefs/heads/feature/work\n` } };
-const NONE_OPEN = { match: "gh pr list --repo zheref/nen --head feature/work --state open --json number,url", result: { stdout: "[]\n" } };
+const NONE_OPEN = { match: "gh pr list --repo zheref/nen --head feature/work --state open --json number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner", result: { stdout: "[]\n" } };
 const PUSHED: readonly ScriptedCall[] = [ON_WORK, TRACKED, LOCAL, REMOTE, NONE_OPEN];
 
 interface Captured {
@@ -98,6 +98,15 @@ describe("nen pr open -- refusals before anything is created", () => {
     expect(missing.seams.calls).toEqual([]);
   });
 
+  it("refuses a title file that is not valid UTF-8 at exit 2, before any call", async () => {
+    const { root } = repo();
+    writeFileSync(join(root, "title.txt"), Buffer.from([0xff, 0xfe, 0x41, 0x0a]));
+    const result = await capture(root, ["--dry-run"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is not valid UTF-8/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
   it("refuses a detached HEAD with no --head, at exit 2", async () => {
     const { root } = repo();
     const result = await capture(root, [], [{ match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } }]);
@@ -134,16 +143,67 @@ describe("nen pr open -- refusals before anything is created", () => {
     for (const result of [nothing, stale]) expect(calls(result.seams).some((call): boolean => call.startsWith("gh"))).toBe(false);
   });
 
-  it("exits 1 naming the pull request already open for the head, creating nothing", async () => {
+  it("returns the pull request already open for the head against the same base as 'opened: existing' at exit 0, creating nothing", async () => {
     const { root } = repo();
-    const result = await capture(root, [], [
-      ON_WORK, TRACKED, LOCAL, REMOTE,
-      { match: "gh pr list --repo zheref/nen --head feature/work --state open --json number,url", result: { stdout: JSON.stringify([{ number: 231, url: "https://github.com/zheref/nen/pull/231" }]) } },
-    ], true);
-    expect(result.code).toBe(1);
+    const listed = (rows: unknown): { match: string; result: { stdout: string } } => ({ match: "gh pr list --repo zheref/nen --head feature/work --state open --json number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner", result: { stdout: JSON.stringify(rows) } });
+    const result = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed([{ number: 231, url: "https://github.com/zheref/nen/pull/231", baseRefName: "main", headRefOid: SHA, isCrossRepository: false }])], true);
+    expect(result.code).toBe(0);
     const doc = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
     expect(doc).toMatchObject({ contract: OPEN_CONTRACT, number: 231, url: "https://github.com/zheref/nen/pull/231", head: "feature/work", existing: true, dryRun: false });
     expect(calls(result.seams).some((call): boolean => call.startsWith("gh pr create"))).toBe(false);
+    const human = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed([{ number: 231, url: "https://github.com/zheref/nen/pull/231", baseRefName: "main", headRefOid: SHA, isCrossRepository: false }])]);
+    expect(human.code).toBe(0);
+    expect(human.out.join("\n")).toMatch(/^opened: existing zheref\/nen#231: https:\/\/github.com\/zheref\/nen\/pull\/231/m);
+  });
+
+  it("finds this branch's pull request among several listed, and holds an adopted one to --assignee by read-back", async () => {
+    const { root } = repo();
+    const listed = (rows: unknown): { match: string; result: { stdout: string } } => ({ match: "gh pr list --repo zheref/nen --head feature/work --state open --json number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner", result: { stdout: JSON.stringify(rows) } });
+    const rows = [
+      { number: 230, url: "https://github.com/zheref/nen/pull/230", baseRefName: "main", headRefOid: "f".repeat(40), isCrossRepository: false },
+      { number: 231, url: "https://github.com/zheref/nen/pull/231", baseRefName: "main", headRefOid: SHA, isCrossRepository: false },
+    ];
+    const found = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed(rows)], true);
+    expect(found.code).toBe(0);
+    expect(JSON.parse(found.out.join("\n"))).toMatchObject({ number: 231, existing: true });
+    const assignee = [
+      { match: "gh api --method GET users/octo", result: { stdout: JSON.stringify({ login: "octo" }) } },
+      { match: "gh api --method GET repos/zheref/nen/assignees/octo", result: { stdout: "" } },
+    ];
+    const unassigned = await capture(root, ["--assignee", "octo"], [ON_WORK, TRACKED, LOCAL, REMOTE, ...assignee, listed(rows), { match: "gh pr view 231 --repo zheref/nen --json assignees", result: { stdout: JSON.stringify({ assignees: [] }) } }]);
+    expect(unassigned.code).toBe(1);
+    expect(unassigned.err.join("\n")).toMatch(/already open, and the read-back does not show 'octo' assigned/);
+    const assigned = await capture(root, ["--assignee", "octo"], [ON_WORK, TRACKED, LOCAL, REMOTE, ...assignee, listed(rows), { match: "gh pr view 231 --repo zheref/nen --json assignees", result: { stdout: JSON.stringify({ assignees: [{ login: "octo" }] }) } }]);
+    expect(assigned.code).toBe(0);
+    for (const result of [found, unassigned, assigned]) expect(calls(result.seams).some((call): boolean => call.startsWith("gh pr create") || call.startsWith("gh pr edit"))).toBe(false);
+  });
+
+  it("exits 1 when the pull request open for the head targets another base, sits at another head commit, or its base cannot be read -- nothing opened or retargeted", async () => {
+    const { root } = repo();
+    const listed = (rows: unknown): { match: string; result: { stdout: string } } => ({ match: "gh pr list --repo zheref/nen --head feature/work --state open --json number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner", result: { stdout: JSON.stringify(rows) } });
+    const other = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed([{ number: 231, url: "https://github.com/zheref/nen/pull/231", baseRefName: "release/1", headRefOid: SHA, isCrossRepository: false }])], true);
+    expect(other.code).toBe(1);
+    expect(JSON.parse(other.out.join("\n"))).toMatchObject({ number: 231, existing: true });
+    expect(other.err.join("\n")).toMatch(/against 'release\/1', not 'main'/);
+    const unread = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed([{ number: 231, url: "https://github.com/zheref/nen/pull/231", headRefOid: SHA, isCrossRepository: false }])]);
+    expect(unread.code).toBe(1);
+    expect(unread.err.join("\n")).toMatch(/its base could not be read/);
+    // `--head` matches a branch NAME from any fork: another head commit is not this branch's pull request.
+    const foreign = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed([{ number: 231, url: "https://github.com/zheref/nen/pull/231", baseRefName: "main", headRefOid: "f".repeat(40), isCrossRepository: false }])]);
+    expect(foreign.code).toBe(1);
+    expect(foreign.err.join("\n")).toMatch(/head commit is f{40}, not the .* this checkout pushed/);
+    // A FORK's pull request at the SAME commit and base is still not ours: the sha is public once
+    // pushed, and the fork's author can move that head (SEC-7). Never adopted as 'opened: existing'.
+    const fork = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed([{ number: 232, url: "https://github.com/zheref/nen/pull/232", baseRefName: "main", headRefOid: SHA, isCrossRepository: true, headRepositoryOwner: { login: "mallory" } }])], true);
+    expect(fork.code).toBe(1);
+    expect(JSON.parse(fork.out.join("\n"))).toMatchObject({ number: 232, existing: true });
+    expect(fork.err.join("\n")).toMatch(/from a fork \(mallory\) -- a fork's head is its author's to move/);
+    const silent = await capture(root, [], [ON_WORK, TRACKED, LOCAL, REMOTE, listed([{ number: 233, url: "https://github.com/zheref/nen/pull/233", baseRefName: "main", headRefOid: SHA }])]);
+    expect(silent.code).toBe(1);
+    expect(silent.err.join("\n")).toMatch(/gh did not say whether it is from a fork/);
+    for (const result of [other, unread, foreign, fork, silent]) {
+      expect(calls(result.seams).some((call): boolean => call.startsWith("gh pr create") || call.startsWith("gh pr edit"))).toBe(false);
+    }
   });
 });
 
@@ -160,7 +220,7 @@ describe("nen pr open -- the create", () => {
       "git rev-parse --abbrev-ref feature/work@{upstream}",
       "git rev-parse feature/work",
       "git ls-remote origin refs/heads/feature/work",
-      "gh pr list --repo zheref/nen --head feature/work --state open --json number,url",
+      "gh pr list --repo zheref/nen --head feature/work --state open --json number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner",
     ]);
     const text = await capture(root, ["--dry-run"], PUSHED);
     expect(text.out).toEqual(["would run: gh pr create --repo zheref/nen --base main --head feature/work --title \"feat: the thing\" --body-file -"]);

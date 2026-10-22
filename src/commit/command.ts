@@ -42,6 +42,7 @@
 
 import { assertRepoRoot } from "../repo/root.js";
 import { emit, requireRepoFlag, requireSubcommand, requireValue, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { refuse } from "../cli/refusal.js";
 import { SchemaError } from "../schema/errors.js";
 import { attributionRefusalMessages, loadWorkflow, WORKFLOW_FILE, type LoadedWorkflow } from "../schema/workflow.js";
 import { PROGRAM } from "../version.js";
@@ -352,6 +353,10 @@ function runWrite(context: CommandContext): number {
 }
 
 export const commitCommand: Command = {
+  jsonRefusals: ["format"],
+  exits: [
+    { verb: "commit write", code: 3, meaning: "committed, and the read-back found a trailer the policy refuses; the commit is left in place" },
+  ],
   name: "commit",
   subcommands: ["format", "check", "write"],
   summary: "Format a Conventional Commits message; check a lane's build proof; write a validated commit.",
@@ -445,13 +450,15 @@ export const commitCommand: Command = {
     // establish are printed after them rather than dropped -- one pass, every
     // problem -- exactly as `write` reports the same failures.
     if (failures.length > 0) {
+      // Under --json both kinds travel in the one envelope, failures first
+      // (Hatsu SDD plan N5); without it the prose is unchanged.
+      if (context.json) return refuse(context.io, true, "commit format", 1, [...failures, ...refusals]);
       for (const failure of failures) context.io.err(failure);
       for (const refusal of refusals) context.io.err(`nen: ${refusal}`);
       return 1;
     }
     if (refusals.length > 0) {
-      for (const refusal of refusals) context.io.err(`nen: ${refusal}`);
-      return 2;
+      return refuse(context.io, context.json, "commit format", 2, refusals);
     }
     if (context.json) {
       context.io.out(JSON.stringify({ message }, null, 2));
