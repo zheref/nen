@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { runFamily, type Io } from "../index.js";
-import type { CommandResult, Seams } from "../seam/exec.js";
+import { spawnRunner, type CommandResult, type Seams } from "../seam/exec.js";
 import { loopCommand } from "./command.js";
 import { noPortProbe } from "../seam/scripted.js";
 
@@ -22,8 +23,10 @@ async function capture(
     },
   };
   const seams: Seams = {
-    run: (): CommandResult => {
-      throw new Error("loop slots makes no subprocess call");
+    // `loop iterate` asks git for the common directory; nothing else runs.
+    run: (command, args, runOptions): CommandResult => {
+      if (command !== "git") throw new Error(`loop makes no ${command} call`);
+      return spawnRunner(command, args, runOptions);
     },
     now: (): Date => new Date("2026-01-01T00:00:00Z"),
     env: {},
@@ -286,5 +289,170 @@ describe("nen loop iterate -- izanagi's cap, enforced across a loop", () => {
     });
     expect(result.code).toBe(2);
     expect(result.err.join("\n")).toContain("is not a 'nen.loop.iterate/v0.1' ledger");
+  });
+});
+
+// Finding D2 / autonomy-loop#1 of Hatsu's SDD plan: the ledger lived in the
+// effort worktree's own `.nen/`, which a worktree cleanup removes, and ENOENT
+// then read as "no loop began" -- a whole fresh cap. These drive the durable
+// home, the lost-ledger rule and the one-time migration through real git.
+describe("nen loop iterate -- the ledger lives in the git common directory", () => {
+  const LINE = "address the backlog until it is empty up to 3";
+
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+  }
+
+  /** A repository with one commit and one linked worktree. */
+  function repoWithWorktree(): { core: string; worktree: string; common: string } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "nen-loop-git-")));
+    const core = join(base, "core");
+    mkdirSync(core);
+    git(core, "init", "-q", "-b", "main");
+    git(core, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init");
+    const worktree = join(base, "wt");
+    git(core, "worktree", "add", "-q", "-b", "effort", worktree);
+    return { core, worktree, common: join(core, ".git") };
+  }
+
+  it("resolves the ledger against the common dir from a linked worktree", async () => {
+    const { core, worktree, common } = repoWithWorktree();
+    const result = await capture(["loop", "iterate", "--id", "en-NN-1", "--line", LINE], {
+      repoFlag: worktree,
+      json: true,
+    });
+    expect(result.code).toBe(0);
+    const document = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    // Compared as real paths: git may spell the directory differently from
+    // tmpdir() (macOS /private, Windows short names) while naming the same file.
+    expect(realpathSync.native(String(document["path"]))).toBe(
+      realpathSync.native(join(common, "nen", "loop", "en-NN-1.json")),
+    );
+    expect(document["durable"]).toBe(true);
+    expect(document["migratedFrom"]).toBeNull();
+    expect(existsSync(join(common, "nen", "loop", "en-NN-1.opened"))).toBe(true);
+    expect(existsSync(join(worktree, ".nen", "loop", "en-NN-1.json"))).toBe(false);
+    // The SAME loop, claimed from the main checkout, continues the count.
+    const second = await capture(["loop", "iterate", "--id", "en-NN-1", "--line", LINE], { repoFlag: core });
+    expect(second.code).toBe(0);
+    expect(second.out[0]).toBe("iteration 2/3 -- address the backlog until it is empty");
+  });
+
+  it("keeps the count when the effort worktree is removed", async () => {
+    const { core, worktree } = repoWithWorktree();
+    await capture(["loop", "iterate", "--id", "en-NN-2", "--line", LINE], { repoFlag: worktree });
+    git(core, "worktree", "remove", "--force", worktree);
+    const after = await capture(["loop", "iterate", "--id", "en-NN-2", "--line", LINE], { repoFlag: core });
+    expect(after.code).toBe(0);
+    expect(after.out[0]).toBe("iteration 2/3 -- address the backlog until it is empty");
+  });
+
+  it("reads a missing ledger with no marker as a fresh loop", async () => {
+    const { worktree } = repoWithWorktree();
+    const result = await capture(["loop", "iterate", "--id", "fresh", "--line", LINE], { repoFlag: worktree });
+    expect(result.code).toBe(0);
+    expect(result.out[0]).toBe("iteration 1/3 -- address the backlog until it is empty");
+  });
+
+  it("refuses a missing ledger beside its .opened marker with exit 2, 'ledger lost'", async () => {
+    const { worktree, common } = repoWithWorktree();
+    await capture(["loop", "iterate", "--id", "lost", "--line", LINE], { repoFlag: worktree });
+    unlinkSync(join(common, "nen", "loop", "lost.json"));
+    const result = await capture(["loop", "iterate", "--id", "lost", "--line", LINE], { repoFlag: worktree });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("ledger lost");
+    expect(result.out).toEqual([]);
+    // And a release of a lost loop is refused the same way, not as "never begun".
+    const release = await capture(
+      ["loop", "iterate", "--id", "lost", "--line", LINE, "--release", "done"],
+      { repoFlag: worktree },
+    );
+    expect(release.code).toBe(2);
+    expect(release.err.join("\n")).toContain("ledger lost");
+  });
+
+  it("applies the lost-ledger rule in the worktree-local fallback too", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-loop-"));
+    await capture(["loop", "iterate", "--id", "lost", "--line", LINE], { repoFlag: root });
+    expect(existsSync(join(root, ".nen", "loop", "lost.opened"))).toBe(true);
+    unlinkSync(join(root, ".nen", "loop", "lost.json"));
+    const result = await capture(["loop", "iterate", "--id", "lost", "--line", LINE], { repoFlag: root });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("ledger lost");
+  });
+
+  it("migrates a ledger from the old worktree-local path once, and reports it", async () => {
+    const { worktree, common } = repoWithWorktree();
+    // Begin the loop the way an older build did: worktree-local, no marker.
+    const legacy = mkdtempSync(join(tmpdir(), "nen-loop-"));
+    await capture(["loop", "iterate", "--id", "old", "--line", LINE], { repoFlag: legacy });
+    const legacyLedger = readFileSync(join(legacy, ".nen", "loop", "old.json"), "utf8");
+    mkdirSync(join(worktree, ".nen", "loop"), { recursive: true });
+    const oldPath = join(worktree, ".nen", "loop", "old.json");
+    writeFileSync(oldPath, legacyLedger, "utf8");
+
+    const result = await capture(["loop", "iterate", "--id", "old", "--line", LINE], {
+      repoFlag: worktree,
+      json: true,
+    });
+    expect(result.code).toBe(0);
+    const document = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(document["iterations"]).toBe(2);
+    expect(realpathSync.native(dirname(String(document["migratedFrom"])))).toBe(realpathSync.native(dirname(oldPath)));
+    expect(result.err.join("\n")).toContain("migrated loop ledger 'old'");
+    expect(existsSync(oldPath)).toBe(false);
+    expect(existsSync(join(common, "nen", "loop", "old.json"))).toBe(true);
+
+    // Once: the next claim reads the durable home and reports nothing moved.
+    const next = await capture(["loop", "iterate", "--id", "old", "--line", LINE], {
+      repoFlag: worktree,
+      json: true,
+    });
+    expect(next.code).toBe(0);
+    expect((JSON.parse(next.out.join("\n")) as Record<string, unknown>)["migratedFrom"]).toBeNull();
+    expect(next.err).toEqual([]);
+  });
+
+  it("marks a migrated loop opened even when the claim after the move is refused at the cap", async () => {
+    const { worktree, common } = repoWithWorktree();
+    const one = "act until done up to 1";
+    const legacy = mkdtempSync(join(tmpdir(), "nen-loop-"));
+    await capture(["loop", "iterate", "--id", "full", "--line", one], { repoFlag: legacy });
+    mkdirSync(join(worktree, ".nen", "loop"), { recursive: true });
+    writeFileSync(
+      join(worktree, ".nen", "loop", "full.json"),
+      readFileSync(join(legacy, ".nen", "loop", "full.json"), "utf8"),
+      "utf8",
+    );
+    const capped = await capture(["loop", "iterate", "--id", "full", "--line", one], { repoFlag: worktree });
+    expect(capped.code).toBe(1);
+    unlinkSync(join(common, "nen", "loop", "full.json"));
+    const lost = await capture(["loop", "iterate", "--id", "full", "--line", one], { repoFlag: worktree });
+    expect(lost.code).toBe(2);
+    expect(lost.err.join("\n")).toContain("ledger lost");
+  });
+
+  it("refuses a ledger found in both homes rather than choosing a count", async () => {
+    const { worktree, common } = repoWithWorktree();
+    await capture(["loop", "iterate", "--id", "twice", "--line", LINE], { repoFlag: worktree });
+    mkdirSync(join(worktree, ".nen", "loop"), { recursive: true });
+    writeFileSync(
+      join(worktree, ".nen", "loop", "twice.json"),
+      readFileSync(join(common, "nen", "loop", "twice.json"), "utf8"),
+      "utf8",
+    );
+    const result = await capture(["loop", "iterate", "--id", "twice", "--line", LINE], { repoFlag: worktree });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("two homes at once");
+  });
+
+  it("refuses an unrecognised file at the old path rather than migrating it", async () => {
+    const { worktree, common } = repoWithWorktree();
+    mkdirSync(join(worktree, ".nen", "loop"), { recursive: true });
+    writeFileSync(join(worktree, ".nen", "loop", "junk.json"), "{ not json", "utf8");
+    const result = await capture(["loop", "iterate", "--id", "junk", "--line", LINE], { repoFlag: worktree });
+    expect(result.code).toBe(2);
+    expect(existsSync(join(common, "nen", "loop", "junk.json"))).toBe(false);
+    expect(existsSync(join(worktree, ".nen", "loop", "junk.json"))).toBe(true);
   });
 });

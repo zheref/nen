@@ -861,7 +861,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`epic`](#family-epic) | [`nen epic next-wave`](#nen-epic-next-wave) | flips a completed child, redraws the progress bar, computes the next releasable wave | local file (--body-file), optional write (--out) | yes |
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file and explicit caps | local file (--efforts) | yes |
-| [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `.nen/loop/<id>.json` under --repo (reads and writes) | yes |
+| [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `<git-common-dir>/nen/loop/<id>.json` and `<id>.opened` (reads and writes; `.nen/loop/` under --repo only outside a git repository) | yes |
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `.nen/phases/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`session`](#family-session) | [`nen session`](#nen-session) | records caller-reported session identity and effort dial per effort, and shows the ledger | `.nen/sessions/<effort>.json` under --repo; no git/gh or harness reads | yes |
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
@@ -5604,10 +5604,14 @@ nen loop iterate --id <id> --line "<task> until <condition> up to <N>"
 | `--id <id>` | yes | This loop's own label, and the name of its ledger. | One path segment: 1–100 characters of `[A-Za-z0-9._-]`, starting with a letter or digit, no `..`. **Refused, never sanitised** — two ids mangled to one segment would silently share a cap between two loops, which is the failure this verb exists to prevent. |
 | `--line "<...>"` | yes | The invocation, restated on **every** claim and parsed by the izanagi grammar. | A claim whose line differs from the running one is refused (exit 2), naming both: a cap a caller can raise by re-typing the line with a bigger N is not a cap. It also catches the honest version — a second loop reusing an id that already belongs to a different task. |
 | `--release <why>` | no | End the loop instead of claiming: the condition became true, or a gate ended it. | The reason is required text; an empty one records that a loop stopped and not why. Releasing twice is not an error; claiming after a release is. A loop at its cap can always still be released — the way out is never blocked. |
-| `--repo <path>` | no | The repository the ledger lives under. | Ledger path is `.nen/loop/<id>.json` — the dot-prefixed generated tree, never the committed `nen/`, the same rule [`stop --mark`](#nen-stop) follows. |
-| `--json` | no | One machine document per claim. | `{ contract: "nen.loop.iterate/v0.1", id, claimed, capReached, task, condition, cap, iterations, remaining, released, releaseReason, startedAt, lastAt, path }`. |
+| `--repo <path>` | no | The repository the ledger belongs to. | Ledger path is `<git-common-dir>/nen/loop/<id>.json`, where the common directory is `git rev-parse --git-common-dir` of `--repo`: one home shared by the main checkout and every linked worktree, which no worktree removal and no `git clean` touches, so cleaning up an effort worktree never resets its cap (the same durable home Hatsu's futon effort record uses). Only when `--repo` is not inside a git repository (or does not exist yet) is it `.nen/loop/<id>.json` under `--repo` — the dot-prefixed generated tree, never the committed `nen/`. A git that cannot be run, or that refuses for any reason other than "not a git repository", is exit 2, never the fallback. |
+| `--json` | no | One machine document per claim. | `{ contract: "nen.loop.iterate/v0.1", id, claimed, capReached, task, condition, cap, iterations, remaining, released, releaseReason, startedAt, lastAt, path, durable, marker, migratedFrom }`. `durable` is `true` when the ledger is in the common directory; `marker` is the `<id>.opened` path; `migratedFrom` is the old worktree-local path when this read moved the ledger, else `null`. The cap-refusal document carries `durable` and `migratedFrom` after `released`. The three keys are appended, so the contract stays `v0.1`. |
 
 **Output and exit codes** — `iteration <n>/<cap> -- <task> until <condition>` on a claim, `released <id> after <n>/<cap> iteration(s): <why>` on a release. Exit **0** on either. Exit **1** when the cap is REACHED — an answer, not a failure: izanagi's cap is grammar rather than a default precisely so that reaching it is a decision to bring to a human, never a bound to raise and re-run. Exit **2** for a malformed `--id`, a `--line` the grammar refuses, a changed line, a claim after a release, or a ledger that cannot be read (refused rather than started again: a loop whose count nen cannot read has an unknown number of writes behind it, and beginning at 1 would hand out a whole cap's worth more).
+
+**The lost-ledger rule.** Every claim and release writes `<id>.opened` beside the ledger, before the ledger itself. A missing ledger with that marker present is a loop that began and whose count is gone: exit **2** with `ledger lost`, never iteration 1 — for a claim and for a `--release` alike. A missing ledger with no marker is a loop that never began. A marker that cannot be read is exit 2, not "no marker".
+
+**Migration on read.** A ledger an older build left at `.nen/loop/<id>.json` under `--repo` is validated, moved to the common-dir home once (copy-then-remove across filesystems), and reported on stderr as `nen: migrated loop ledger '<id>' from <old> to <new> ...` and in `migratedFrom`. An unrecognised file at the old path is refused where it stands and not moved. A ledger present in **both** homes is exit 2 (`two homes at once`): nen does not choose which count is true.
 
 **Example**
 
@@ -5616,7 +5620,7 @@ nen loop iterate --id sweep --line "address the backlog until it is empty up to 
 ```
 ```text
 iteration 1/3 -- address the backlog until it is empty
-  2 remaining after this one; ledger /repo/.nen/loop/sweep.json
+  2 remaining after this one; ledger /repo/.git/nen/loop/sweep.json
 ```
 The fourth claim, after three:
 ```text
