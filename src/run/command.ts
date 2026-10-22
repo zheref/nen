@@ -72,7 +72,7 @@ and that line, and calls nothing; --json: { ok, message, dryRun, command }.
 
 The manifest lives at '<git-common-dir>/${RUN_MANIFEST_DIR}/<run-id>.json' -- the git
 common dir, so every worktree of the project shares it and no effort cleanup
-removes it; one an earlier build wrote at '<git-common-dir>/hatsu/runs/' is
+removes it; one an earlier build wrote under the legacy spelling is
 moved there once. git is asked with an inherited GIT_DIR, GIT_COMMON_DIR and
 GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
 
