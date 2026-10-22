@@ -46,16 +46,25 @@ function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
+/**
+ * An `owner/name` GitHub could have issued. The slug comes from the payload
+ * and becomes a `gh api repos/<slug>/...` path, so a value with a `..`, a
+ * slash too many or a query character is refused (exit 2), never sent.
+ */
+const SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
+
 /** `owner/name` of one closing reference: its `repository`, else its issue URL. */
 function referenceSlug(entry: Record<string, unknown>): string | null {
   const repository = record(entry["repository"]);
   const owner = record(repository?.["owner"]);
   const login = owner?.["login"];
   const name = repository?.["name"];
-  if (typeof login === "string" && login !== "" && typeof name === "string" && name !== "") return `${login}/${name}`;
+  const slug = typeof login === "string" && typeof name === "string" ? `${login}/${name}` : null;
+  if (slug !== null && SLUG.test(slug)) return slug;
+  if (slug !== null && slug !== "/") return null;
   const url = entry["url"];
   const match = typeof url === "string" ? /^https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/\d+$/.exec(url) : null;
-  return match === null ? null : (match[1] as string);
+  return match !== null && SLUG.test(match[1] as string) ? (match[1] as string) : null;
 }
 
 /** Read the pull request and every issue it closes, or throw `ConvergeReadError`. */

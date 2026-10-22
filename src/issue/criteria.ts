@@ -267,7 +267,8 @@ export function converge(issues: readonly ClosingIssue[], prBody: string): Conve
       continue;
     }
     if (row.criterion.kind === "none") {
-      unrequested.push({ line: row.line, word: row.word, evidence: row.evidence, problem: row.problem });
+      const problem = row.problem ?? (row.word === "unrequested" ? null : `a none row says unrequested, not '${row.word}': it names no criterion to be ${row.word}`);
+      unrequested.push({ line: row.line, word: row.word, evidence: row.evidence, problem });
       continue;
     }
     const found = candidates(row.criterion, issues);

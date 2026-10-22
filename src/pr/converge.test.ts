@@ -100,6 +100,9 @@ describe("nen pr converge", () => {
     const noBody = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5"], [view(PR_BODY, [ref(12)]), issueRead(12, null)]);
     expect(noBody.code).toBe(2);
     expect(noBody.err).toMatch(/no 'body' field/);
+    const traversal = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5"], [view(PR_BODY, [{ number: 1, repository: { name: "..", owner: { login: "o" } } }])]);
+    expect(traversal.code).toBe(2);
+    expect(traversal.calls).toEqual([VIEW]);
     const full = await run(prCommand, ["pr", "converge", "--target", "o/n", "--pr", "5"], [view(PR_BODY, Array.from({ length: CLOSING_PAGE }, (_, index) => ref(index + 1)))]);
     expect(full.code).toBe(2);
     expect(full.err).toMatch(/full page/);

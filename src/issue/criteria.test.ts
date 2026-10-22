@@ -121,8 +121,11 @@ describe("converge", () => {
   });
 
   it("lists unrequested rows, rows naming no stated criterion, and malformed first cells", () => {
-    const report = converge([issue("- AC-1: a\n")], "| AC-1 | satisfied | x |\n| none | unrequested | tidy |\n| AC-9 | satisfied | x |\n| AC-x | satisfied | x |\n");
-    expect(report.unrequested).toEqual([{ line: 2, word: "unrequested", evidence: "tidy", problem: null }]);
+    const report = converge([issue("- AC-1: a\n")], "| AC-1 | satisfied | x |\n| none | unrequested | tidy |\n| AC-9 | satisfied | x |\n| AC-x | satisfied | x |\n| none | satisfied | y |\n");
+    expect(report.unrequested).toEqual([
+      { line: 2, word: "unrequested", evidence: "tidy", problem: null },
+      { line: 5, word: "satisfied", evidence: "y", problem: "a none row says unrequested, not 'satisfied': it names no criterion to be satisfied" },
+    ]);
     expect(report.unmatched.map((row) => row.cell)).toEqual(["AC-9"]);
     expect(report.malformed.map((row) => row.line)).toEqual([4]);
     expect(report.blocking).toEqual([]);
