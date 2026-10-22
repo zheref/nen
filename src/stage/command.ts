@@ -6,7 +6,7 @@
 import { assertRepoRoot } from "../repo/root.js";
 import { parseTarget, TargetError } from "../github/target.js";
 import { loadLabelTaxonomy } from "../schema/labels.js";
-import { checkExclusive, readIssueLabels, renderStageCheck, stageFamily } from "./check.js";
+import { checkExclusive, readIssueLabels, renderStageCheck, stageFamily, type StageCheckReport } from "./check.js";
 import { GIT, outputLines } from "../seam/exec.js";
 import { commaList } from "../cli/comma.js";
 import { plainLine } from "../cli/plain.js";
@@ -16,7 +16,6 @@ import {
   requireRepoFlag,
   requireSubcommand,
   requireTargetFlag,
-  requireValue,
   VerbUsageError,
   type Command,
   type CommandContext,
@@ -46,13 +45,16 @@ nen stage list   -- the exact add list: what a checkpoint stages, nothing else.
 nen stage check  -- --exclusive: an issue carries at most one stage-family label.
 
 usage:
-  nen stage check --exclusive --target <owner/name> --issue <N> [--repo <path>] [--json]
+  nen stage check --exclusive --target <owner/name> (--issue <N> | --issues <n,...>)
+                   [--repo <path>] [--json]
                    The stage family is every label --repo's nen/labels.json
                    declares as '<namespace>:stage/<leaf>'; an undeclared
-                   stage-shaped label on the issue counts too. Exit 0 with one
-                   stage label or none; 1 when two coexist (both named, neither
-                   picked), when the taxonomy declares no stage family, or when
-                   the issue could not be read; 2 on a malformed flag.
+                   stage-shaped label on the issue counts too. Exit 0 when
+                   every issue carries one stage label or none; 1 when two
+                   coexist on any (both named, neither picked) or an issue
+                   could not be read; 2 on a malformed flag, or when
+                   nen/labels.json declares no stage family (the file named,
+                   before any issue is read).
 
   nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
                    [--large-bytes <n>] [--range <base>..<head>]
@@ -547,13 +549,13 @@ export const stageCommand: Command = {
   ],
   name: "stage",
   subcommands: ["triage", "list", "check"],
-  summary: "Flag secrets, local config, oversized files, binaries and unmentioned deletions before staging; emit the exact add list.",
+  summary: "Flag secrets, local config, oversized files, binaries and unmentioned deletions before staging; emit the exact add list; check an issue holds at most one stage label.",
   usage: USAGE,
-  flags: { values: ["scope", "mentions", "large-bytes", "range", "target", "issue"], booleans: ["nul", "exclusive"] },
+  flags: { values: ["scope", "mentions", "large-bytes", "range", "target", "issue", "issues"], booleans: ["nul", "exclusive"] },
   run(context: CommandContext): number {
     const subcommand = requireSubcommand("stage", context.args, ["triage", "list", "check"]);
     if (subcommand === "check") return doCheck(context);
-    for (const flag of ["target", "issue"]) {
+    for (const flag of ["target", "issue", "issues"]) {
       if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'stage ${subcommand}'; only 'stage check' takes it. A flag accepted and ignored is worse than one refused.`);
     }
     if (context.args.booleans.has("exclusive")) throw new VerbUsageError(`--exclusive is not read by 'stage ${subcommand}'; only 'stage check' takes it.`);
@@ -604,9 +606,17 @@ function doCheck(context: CommandContext): number {
   }
   const targetRaw = requireTargetFlag(context, "It names the repository the issue lives in.");
   const target = parseCallerToken(() => parseTarget(targetRaw), (error) => error instanceof TargetError);
-  const issueRaw = requireValue(context.args, "issue", "It is the issue number whose stage labels are checked.");
-  if (!/^[1-9][0-9]*$/.test(issueRaw)) throw new VerbUsageError(`--issue '${issueRaw}' is not an issue number.`);
-  const issue = Number(issueRaw);
+  const single = context.args.values["issue"];
+  const several = context.args.values["issues"];
+  if ((single === undefined) === (several === undefined)) {
+    throw new VerbUsageError("give exactly one of --issue <N> or --issues <n,...>: the issue number(s) whose stage labels are checked.");
+  }
+  const raws = single !== undefined ? [single] : (several as string).split(",").map((part): string => part.trim());
+  const issues: number[] = [];
+  for (const raw of raws) {
+    if (!/^[1-9][0-9]*$/.test(raw)) throw new VerbUsageError(`${single !== undefined ? "--issue" : "--issues"} '${raw}' is not an issue number.`);
+    if (!issues.includes(Number(raw))) issues.push(Number(raw));
+  }
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
   let taxonomy;
   try {
@@ -615,7 +625,20 @@ function doCheck(context: CommandContext): number {
     context.io.err(`nen: could not read nen/labels.json for the stage family: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
-  const report = checkExclusive(target, issue, stageFamily(taxonomy), readIssueLabels(context.seams, target, issue));
-  emit(context.io, context.json, report, renderStageCheck(report));
-  return report.verdict === "exclusive" ? 0 : 1;
+  const family = stageFamily(taxonomy);
+  // NO FAMILY IS A WIRING FAULT, NOT A FINDING (NN#489 AC-2): exit 2 naming
+  // the file, before any issue is read, so a caller can tell "no family to
+  // check" from "two stages found" by the exit code alone.
+  if (family.length === 0) {
+    throw new VerbUsageError(`${taxonomy.path} declares no '<namespace>:stage/<leaf>' label, so there is no stage family to hold an issue to. Declare the family, or do not ask this check.`);
+  }
+  const reports = issues.map((issue) => checkExclusive(target, issue, family, readIssueLabels(context.seams, target, issue)));
+  if (single !== undefined) {
+    const report = reports[0] as StageCheckReport;
+    emit(context.io, context.json, report, renderStageCheck(report));
+    return report.verdict === "exclusive" ? 0 : 1;
+  }
+  const ok = reports.every((report): boolean => report.verdict === "exclusive");
+  emit(context.io, context.json, { target: target.slug, ok, reports }, reports.flatMap(renderStageCheck));
+  return ok ? 0 : 1;
 }

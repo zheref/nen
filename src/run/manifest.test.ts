@@ -9,6 +9,7 @@ import {
   parseIdleAnswers,
   parseRunManifest,
   planAppend,
+  planPark,
   planStart,
   readRunManifest,
   RunManifestError,
@@ -18,11 +19,12 @@ import {
 } from "./manifest.js";
 
 const NOW = "2026-10-22T00:00:00.000Z";
-const empty = (): RunManifest => ({ contract: RUN_CONTRACT, id: "r1", startedAt: NOW, idleAnswers: null, prs: [] });
+const empty = (): RunManifest => ({ contract: RUN_CONTRACT, id: "r1", repo: "o/n", startedAt: NOW, idleAnswers: null, prs: [], parked: [] });
 const input = (over: Partial<AppendInput> = {}): AppendInput => ({
   issue: "NN#12",
   pr: 480,
   base: "integration/x",
+  branch: "opus/kurapika/x",
   kind: "delivery",
   head: "abcdef1",
   effort: "opus/kurapika/x",
@@ -32,26 +34,32 @@ const input = (over: Partial<AppendInput> = {}): AppendInput => ({
 
 describe("planStart", () => {
   it("starts a run with the manifest's keys in contract order", () => {
-    const result = planStart(null, "r1", NOW, { "direct-mismatch": "default" });
+    const result = planStart(null, "r1", "o/n", NOW, { "direct-mismatch": "default" });
     expect(result.outcome).toBe("started");
-    expect(Object.keys(result.manifest)).toEqual(["contract", "id", "startedAt", "idleAnswers", "prs"]);
+    expect(Object.keys(result.manifest)).toEqual(["contract", "id", "repo", "startedAt", "idleAnswers", "prs", "parked"]);
     expect(result.manifest.prs).toEqual([]);
+    expect(result.manifest.parked).toEqual([]);
+  });
+
+  it("refuses a re-start for another repository", () => {
+    const existing = planStart(null, "r1", "o/n", NOW, null).manifest;
+    expect(planStart(existing, "r1", "o/other", NOW, null).outcome).toBe("conflict");
   });
 
   it("is the resume when the answers are the same, in any key order", () => {
-    const existing = planStart(null, "r1", NOW, { a: "hold", b: "default" }).manifest;
-    expect(planStart(existing, "r1", "2026-10-23T00:00:00.000Z", { b: "default", a: "hold" }).outcome).toBe("existing");
-    expect(planStart(empty(), "r1", NOW, null).outcome).toBe("existing");
-    expect(planStart(empty(), "r1", NOW, {}).outcome).toBe("existing");
+    const existing = planStart(null, "r1", "o/n", NOW, { a: "hold", b: "default" }).manifest;
+    expect(planStart(existing, "r1", "o/n", "2026-10-23T00:00:00.000Z", { b: "default", a: "hold" }).outcome).toBe("existing");
+    expect(planStart(empty(), "r1", "o/n", NOW, null).outcome).toBe("existing");
+    expect(planStart(empty(), "r1", "o/n", NOW, {}).outcome).toBe("existing");
   });
 
   it("refuses other answers: launch answers are fixed at start (HR-5)", () => {
-    const existing = planStart(null, "r1", NOW, { a: "hold" }).manifest;
-    const result = planStart(existing, "r1", NOW, { a: "refuse" });
+    const existing = planStart(null, "r1", "o/n", NOW, { a: "hold" }).manifest;
+    const result = planStart(existing, "r1", "o/n", NOW, { a: "refuse" });
     expect(result.outcome).toBe("conflict");
     expect(result.outcome === "conflict" ? result.reason : "").toMatch(/fixed at start/);
-    expect(planStart(existing, "r1", NOW, null).outcome).toBe("conflict");
-    expect(planStart(existing, "r1", NOW, {}).outcome).toBe("conflict");
+    expect(planStart(existing, "r1", "o/n", NOW, null).outcome).toBe("conflict");
+    expect(planStart(existing, "r1", "o/n", NOW, {}).outcome).toBe("conflict");
   });
 });
 
@@ -60,7 +68,7 @@ describe("planAppend", () => {
     const result = planAppend(empty(), input({ base: "main" }));
     expect(result.outcome).toBe("appended");
     expect(result.manifest.prs).toHaveLength(1);
-    expect(Object.keys(result.manifest.prs[0] as object)).toEqual(["issue", "pr", "base", "kind", "head", "effort", "recordedAt"]);
+    expect(Object.keys(result.manifest.prs[0] as object)).toEqual(["issue", "pr", "base", "branch", "kind", "head", "effort", "recordedAt"]);
   });
 
   it("is unchanged on the same facts, the retry after a partial failure", () => {
@@ -96,6 +104,26 @@ describe("planAppend", () => {
   });
 });
 
+describe("planPark", () => {
+  it("records an effort parked on a row once, keys in contract order, and is unchanged on the retry", () => {
+    const parked = planPark(empty(), "NN#12", "direct-mismatch", NOW);
+    expect(parked.outcome).toBe("parked");
+    expect(Object.keys(parked.entry)).toEqual(["issue", "row", "at"]);
+    const again = planPark(parked.manifest, "NN#12", "direct-mismatch", "2026-10-23T00:00:00.000Z");
+    expect(again.outcome).toBe("unchanged");
+    expect(again.manifest.parked).toHaveLength(1);
+  });
+});
+
+describe("integration and release PRs carry no issue", () => {
+  it("records issue null for an integration PR, and refuses null on a delivery row when read back", () => {
+    const appended = planAppend(empty(), input({ issue: null, kind: "integration" })).manifest;
+    expect(parseRunManifest("m.json", JSON.parse(JSON.stringify(appended))).prs[0]?.issue).toBeNull();
+    const bad = { ...appended, prs: [{ ...appended.prs[0], kind: "delivery" }] };
+    expect(() => parseRunManifest("m.json", bad)).toThrow(/issue is null/);
+  });
+});
+
 describe("parseIdleAnswers", () => {
   it("reads a row map to the three HR-5 resolutions", () => {
     expect(parseIdleAnswers('{"direct-mismatch":"default","port-drift":"hold","wrap-up":"refuse"}')).toEqual({
@@ -113,7 +141,7 @@ describe("parseIdleAnswers", () => {
 });
 
 describe("parseRunManifest / readRunManifest", () => {
-  const good = planAppend(planStart(null, "r1", NOW, { a: "hold" }).manifest, input()).manifest;
+  const good = planAppend(planStart(null, "r1", "o/n", NOW, { a: "hold" }).manifest, input()).manifest;
 
   it("round-trips what start and append wrote", () => {
     expect(parseRunManifest("m.json", JSON.parse(JSON.stringify(good)))).toEqual(good);
@@ -134,6 +162,10 @@ describe("parseRunManifest / readRunManifest", () => {
       { ...good, prs: [{ ...good.prs[0], issue: "twelve" }] },
       { ...good, prs: [{ ...good.prs[0], base: "-x" }] },
       { ...good, prs: [{ ...good.prs[0], effort: 3 }] },
+      { ...good, prs: [{ ...good.prs[0], branch: 7 }] },
+      { ...good, repo: "nope" },
+      { ...good, parked: "none" },
+      { ...good, parked: [{ issue: "NN#1", row: "Bad Row", at: NOW }] },
     ];
     for (const value of bad) expect(() => parseRunManifest("m.json", value)).toThrow(/is not a nen.run\/v0.1 manifest/);
   });

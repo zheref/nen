@@ -1271,12 +1271,13 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   run: {
     subcommands: {
       "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs"),
-      // The batch run's manifest (SDD piece N7): start and append write it
+      // The batch run's manifest (SDD piece N7): start, append and park write it
       // under the git common dir unless --dry-run, whose form reads it and
       // writes nothing; verify and budget only read (gh pr view, the usage
       // ledgers), and a refused budget claim writes nothing either.
       start: DRY("writes the run manifest under the git common dir unless --dry-run is given"),
-      append: DRY("records a PR in the run manifest unless --dry-run is given"),
+      append: DRY("reads the PR over gh pr view and records it in the run manifest unless --dry-run is given"),
+      park: DRY("records a parked effort in the run manifest unless --dry-run is given"),
       verify: RO("reads the run manifest and every recorded PR over gh pr view"),
       budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
     },

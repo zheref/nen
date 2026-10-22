@@ -18,6 +18,7 @@ interface Live {
   readonly base?: string;
   readonly headRef?: string;
   readonly head?: string;
+  readonly createdAt?: string;
 }
 
 function repo(): { root: string; common: string } {
@@ -29,16 +30,19 @@ function repo(): { root: string; common: string } {
 
 async function capture(
   argv: readonly string[],
-  options: { common: string | null; prs?: Record<number, Live | "fail">; repoFlag?: string | null; json?: boolean },
+  options: { common: string | null; prs?: Record<number, Live | "fail">; repoFlag?: string | null; json?: boolean; now?: string; env?: (env: Readonly<Record<string, string | undefined>> | undefined) => void },
 ): Promise<{ code: number; out: string[]; err: string[]; calls: string[][] }> {
   const out: string[] = [];
   const err: string[] = [];
   const calls: string[][] = [];
   const io: Io = { out: (l): void => void out.push(l), err: (l): void => void err.push(l) };
   const seams: Seams = {
-    run: (command, args): CommandResult => {
+    run: (command, args, runOptions): CommandResult => {
       calls.push([command, ...args]);
-      if (command === "git" && args.includes("--git-common-dir")) return options.common === null ? failed("fatal: not a git repository") : ok(`${options.common}\n`);
+      if (command === "git" && args.includes("--git-common-dir")) {
+        options.env?.(runOptions?.env);
+        return options.common === null ? failed("fatal: not a git repository") : ok(`${options.common}\n`);
+      }
       if (command === "gh" && args[0] === "pr" && args[1] === "view") {
         const number = Number(args[2]);
         const live = options.prs?.[number];
@@ -50,11 +54,12 @@ async function capture(
           baseRefName: live.base ?? "integration/x",
           headRefName: live.headRef ?? `branch-${number}`,
           headRefOid: live.head ?? "abcdef1000000000000000000000000000000000",
+          createdAt: live.createdAt ?? "2026-10-22T00:00:01Z",
         }));
       }
       throw new Error(`unexpected call: ${command} ${args.join(" ")}`);
     },
-    now: (): Date => new Date("2026-10-22T00:00:00Z"),
+    now: (): Date => new Date(options.now ?? "2026-10-22T00:00:00Z"),
     env: {},
     probePort: noPortProbe,
     runInteractive: (): never => {
@@ -70,86 +75,132 @@ async function capture(
 }
 
 const append = (id: string, pr: number, extra: readonly string[] = []): string[] => [
-  "run", "append", "--id", id, "--issue", `NN#${pr - 400}`, "--pr", String(pr), "--base", "integration/x", "--kind", "delivery", "--head", "abcdef1", ...extra,
+  "run", "append", "--id", id, "--issue", `NN#${pr - 400}`, "--pr", String(pr), "--kind", "delivery", ...extra,
 ];
+const START = ["run", "start", "--id", "r1", "--target", "zheref/nen"];
+const OPEN_ALL: Record<number, Live> = { 480: { state: "OPEN" }, 481: { state: "OPEN" }, 482: { state: "OPEN" }, 483: { state: "OPEN", base: "main" } };
 
 describe("nen run start", () => {
-  it("writes <git-common-dir>/hatsu/runs/<id>.json, and a dry run writes nothing", async () => {
+  it("writes <git-common-dir>/.nen/runs/<id>.json with the run's repo, and a dry run writes nothing", async () => {
     const { root, common } = repo();
-    const dry = await capture(["run", "start", "--id", "r1", "--dry-run"], { common, repoFlag: root, json: true });
+    const dry = await capture([...START, "--dry-run"], { common, repoFlag: root, json: true });
     expect(dry.code).toBe(0);
     expect(JSON.parse(dry.out.join("\n")).outcome).toBe("dry-run");
-    expect(existsSync(join(common, "hatsu", "runs", "r1.json"))).toBe(false);
+    expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(false);
 
-    const started = await capture(["run", "start", "--id", "r1", "--idle-answers", '{"direct-mismatch":"default"}'], { common, repoFlag: root });
+    const started = await capture([...START, "--idle-answers", '{"direct-mismatch":"default"}'], { common, repoFlag: root });
     expect(started.code).toBe(0);
-    expect(started.out[0]).toBe(`started: run r1 -- ${join(common, "hatsu", "runs", "r1.json")}`);
-    const stored = JSON.parse(readFileSync(join(common, "hatsu", "runs", "r1.json"), "utf8"));
-    expect(stored).toEqual({ contract: "nen.run/v0.1", id: "r1", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: { "direct-mismatch": "default" }, prs: [] });
+    expect(started.out[0]).toBe(`started: run r1 -- ${join(common, ".nen", "runs", "r1.json")}`);
+    const stored = JSON.parse(readFileSync(join(common, ".nen", "runs", "r1.json"), "utf8"));
+    expect(stored).toEqual({ contract: "nen.run/v0.1", id: "r1", repo: "zheref/nen", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: { "direct-mismatch": "default" }, prs: [], parked: [] });
   });
 
   it("is the resume on the same answers and refuses other answers at exit 1", async () => {
     const { root, common } = repo();
-    await capture(["run", "start", "--id", "r1"], { common, repoFlag: root });
-    expect((await capture(["run", "start", "--id", "r1"], { common, repoFlag: root })).out[0]).toMatch(/^existing:/);
-    const changed = await capture(["run", "start", "--id", "r1", "--idle-answers", '{"a":"hold"}'], { common, repoFlag: root });
+    await capture(START, { common, repoFlag: root });
+    expect((await capture(START, { common, repoFlag: root })).out[0]).toMatch(/^existing:/);
+    const changed = await capture([...START, "--idle-answers", '{"a":"hold"}'], { common, repoFlag: root });
     expect(changed.code).toBe(1);
     expect(changed.out[0]).toMatch(/^refused: .*fixed at start/);
   });
 
-  it("requires --repo and a usable id, and refuses malformed answers at exit 2", async () => {
+  it("requires --repo, --target and a usable id, and refuses malformed answers at exit 2", async () => {
     const { root, common } = repo();
-    expect((await capture(["run", "start", "--id", "r1"], { common })).code).toBe(2);
-    expect((await capture(["run", "start", "--id", "../up"], { common, repoFlag: root })).code).toBe(2);
-    expect((await capture(["run", "start", "--id", "r1", "--idle-answers", '{"a":"maybe"}'], { common, repoFlag: root })).code).toBe(2);
+    expect((await capture(START, { common })).code).toBe(2);
+    expect((await capture(["run", "start", "--id", "r1"], { common, repoFlag: root })).code).toBe(2);
+    expect((await capture(["run", "start", "--id", "../up", "--target", "o/n"], { common, repoFlag: root })).code).toBe(2);
+    expect((await capture([...START, "--idle-answers", '{"a":"maybe"}'], { common, repoFlag: root })).code).toBe(2);
   });
 
   it("refuses a checkout git cannot name a common dir for, at exit 1, writing nowhere", async () => {
     const { root } = repo();
-    const result = await capture(["run", "start", "--id", "r1"], { common: null, repoFlag: root });
+    const result = await capture(START, { common: null, repoFlag: root });
     expect(result.code).toBe(1);
     expect(result.err.join("\n")).toMatch(/could not read the git common dir/);
+  });
+
+  it("asks git with an inherited GIT_DIR, GIT_COMMON_DIR and GIT_WORK_TREE dropped, so a hook's environment cannot steer it", async () => {
+    const { root, common } = repo();
+    let seen: Readonly<Record<string, string | undefined>> | undefined;
+    await capture(START, { common, repoFlag: root, env: (env) => (seen = env) });
+    for (const key of ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"]) {
+      expect(seen !== undefined && key in seen && seen[key] === undefined, key).toBe(true);
+    }
+    expect(seen).toMatchObject({ LC_ALL: "C" });
+  });
+
+  it("moves a manifest an earlier build wrote at <common>/hatsu/runs/ to <common>/.nen/runs/ once", async () => {
+    const { root, common } = repo();
+    mkdirSync(join(common, "hatsu", "runs"), { recursive: true });
+    writeFileSync(join(common, "hatsu", "runs", "r1.json"), JSON.stringify({ contract: "nen.run/v0.1", id: "r1", repo: "zheref/nen", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: null, prs: [], parked: [] }));
+    const result = await capture(START, { common, repoFlag: root });
+    expect(result.out[0]).toMatch(/^existing:/);
+    expect(result.err.join("\n")).toMatch(/moved run manifest 'r1'/);
+    expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(true);
+    expect(existsSync(join(common, "hatsu", "runs", "r1.json"))).toBe(false);
   });
 });
 
 describe("nen run append", () => {
-  it("records a PR, is unchanged on a retry, and refuses a run nobody started", async () => {
+  it("records a PR read live, is unchanged on a retry, and refuses a run nobody started", async () => {
     const { root, common } = repo();
-    expect((await capture(append("r1", 480), { common, repoFlag: root })).code).toBe(1);
-    await capture(["run", "start", "--id", "r1"], { common, repoFlag: root });
-    const first = await capture(append("r1", 480, ["--effort", "opus/kurapika/x"]), { common, repoFlag: root, json: true });
+    expect((await capture(append("r1", 480), { common, repoFlag: root, prs: OPEN_ALL })).code).toBe(1);
+    await capture(START, { common, repoFlag: root });
+    const first = await capture(append("r1", 480, ["--effort", "opus/kurapika/x"]), { common, repoFlag: root, json: true, prs: OPEN_ALL });
     expect(first.code).toBe(0);
     const doc = JSON.parse(first.out.join("\n"));
     expect(Object.keys(doc)).toEqual(["outcome", "path", "reason", "entry", "previous"]);
     expect(doc.outcome).toBe("appended");
-    expect((await capture(append("r1", 480), { common, repoFlag: root })).out[0]).toMatch(/^unchanged:/);
+    expect(doc.entry).toMatchObject({ issue: "NN#80", base: "integration/x", branch: "branch-480", head: "abcdef1000000000000000000000000000000000" });
+    expect((await capture(append("r1", 480), { common, repoFlag: root, prs: OPEN_ALL })).out[0]).toMatch(/^unchanged:/);
+  });
+
+  it("refuses a PR created before the run started, one gh could not read, and --base or --head that disagree with the live PR", async () => {
+    const { root, common } = repo();
+    await capture(START, { common, repoFlag: root });
+    const early = await capture(append("r1", 480), { common, repoFlag: root, prs: { 480: { state: "OPEN", createdAt: "2026-10-21T23:59:59Z" } } });
+    expect(early.code).toBe(1);
+    expect(early.err.join("\n")).toMatch(/before run 'r1' started/);
+    expect((await capture(append("r1", 480), { common, repoFlag: root, prs: { 480: "fail" } })).code).toBe(1);
+    expect((await capture(append("r1", 480, ["--base", "main"]), { common, repoFlag: root, prs: OPEN_ALL })).code).toBe(1);
+    expect((await capture(append("r1", 480, ["--head", "1234567"]), { common, repoFlag: root, prs: OPEN_ALL })).code).toBe(1);
+    expect(existsSync(join(common, ".nen", "runs", "r1.json")) && JSON.parse(readFileSync(join(common, ".nen", "runs", "r1.json"), "utf8")).prs).toEqual([]);
+  });
+
+  it("records an integration PR with no issue (null), and requires --issue for a delivery PR", async () => {
+    const { root, common } = repo();
+    await capture(START, { common, repoFlag: root });
+    const integration = await capture(["run", "append", "--id", "r1", "--pr", "483", "--kind", "integration"], { common, repoFlag: root, prs: OPEN_ALL, json: true });
+    expect(integration.code).toBe(0);
+    expect(JSON.parse(integration.out.join("\n")).entry).toMatchObject({ issue: null, base: "main", kind: "integration" });
+    expect((await capture(["run", "append", "--id", "r1", "--pr", "480", "--kind", "delivery"], { common, repoFlag: root, prs: OPEN_ALL })).code).toBe(2);
   });
 
   it("previews an update under --dry-run and writes it without", async () => {
     const { root, common } = repo();
-    await capture(["run", "start", "--id", "r1"], { common, repoFlag: root });
-    await capture(append("r1", 480), { common, repoFlag: root });
-    const moved = ["run", "append", "--id", "r1", "--issue", "NN#80", "--pr", "480", "--base", "main", "--kind", "delivery", "--head", "1234567"];
-    const dry = await capture([...moved, "--dry-run"], { common, repoFlag: root });
+    await capture(START, { common, repoFlag: root });
+    await capture(append("r1", 480), { common, repoFlag: root, prs: OPEN_ALL });
+    const moved: Record<number, Live> = { 480: { state: "OPEN", base: "main", head: "1234567000000000000000000000000000000000" } };
+    const dry = await capture([...append("r1", 480), "--dry-run"], { common, repoFlag: root, prs: moved });
     expect(dry.out[0]).toMatch(/^dry-run \(would be updated\):/);
-    const path = join(common, "hatsu", "runs", "r1.json");
+    const path = join(common, ".nen", "runs", "r1.json");
     expect(JSON.parse(readFileSync(path, "utf8")).prs[0].base).toBe("integration/x");
-    expect((await capture(moved, { common, repoFlag: root })).out[0]).toMatch(/^updated:/);
-    expect(JSON.parse(readFileSync(path, "utf8")).prs[0]).toMatchObject({ base: "main", head: "1234567" });
+    expect((await capture(append("r1", 480), { common, repoFlag: root, prs: moved })).out[0]).toMatch(/^updated:/);
+    expect(JSON.parse(readFileSync(path, "utf8")).prs[0]).toMatchObject({ base: "main", head: "1234567000000000000000000000000000000000" });
   });
 
   it("refuses another issue for a recorded PR at exit 1, and malformed flags at exit 2", async () => {
     const { root, common } = repo();
-    await capture(["run", "start", "--id", "r1"], { common, repoFlag: root });
-    await capture(append("r1", 480), { common, repoFlag: root });
-    const clash = await capture(["run", "append", "--id", "r1", "--issue", "NN#99", "--pr", "480", "--base", "integration/x", "--kind", "delivery", "--head", "abcdef1"], { common, repoFlag: root });
+    await capture(START, { common, repoFlag: root });
+    await capture(append("r1", 480), { common, repoFlag: root, prs: OPEN_ALL });
+    const clash = await capture(["run", "append", "--id", "r1", "--issue", "NN#99", "--pr", "480", "--kind", "delivery"], { common, repoFlag: root, prs: OPEN_ALL });
     expect(clash.code).toBe(1);
     expect(clash.out[0]).toMatch(/^refused: PR #480 is already recorded/);
     for (const [flag, value] of [["--kind", "hotfix"], ["--head", "xyz"], ["--issue", "twelve"], ["--pr", "0"], ["--base", "-x"], ["--effort", "#bad"]]) {
       const argv = append("r1", 481);
       const at = argv.indexOf(flag as string);
       const next = at === -1 ? [...argv, flag as string, value as string] : argv.map((v, i): string => (i === at + 1 ? (value as string) : v));
-      expect((await capture(next, { common, repoFlag: root })).code, `${flag} ${value}`).toBe(2);
+      expect((await capture(next, { common, repoFlag: root, prs: OPEN_ALL })).code, `${flag} ${value}`).toBe(2);
     }
   });
 
@@ -158,15 +209,30 @@ describe("nen run append", () => {
     expect((await capture([...append("r1", 480), "--target", "o/n"], { common, repoFlag: root })).code).toBe(2);
     expect((await capture(["run", "verify", "--id", "r1", "--target", "o/n", "--dry-run"], { common, repoFlag: root })).code).toBe(2);
     expect((await capture(["run", "rerun-failed", "--target", "o/n", "--run-id", "4", "--id", "r1"], { common, repoFlag: root })).code).toBe(2);
+    expect((await capture(["run", "append", "--id", "r1", "--pr", "480", "--kind", "integration", "--row", "x"], { common, repoFlag: root })).code).toBe(2);
+  });
+});
+
+describe("nen run park", () => {
+  it("records parked[] { issue, row, at } once, and refuses a run nobody started and a malformed row", async () => {
+    const { root, common } = repo();
+    expect((await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"], { common, repoFlag: root })).code).toBe(1);
+    await capture(START, { common, repoFlag: root });
+    const parked = await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"], { common, repoFlag: root, json: true });
+    expect(parked.code).toBe(0);
+    expect(JSON.parse(parked.out.join("\n"))).toMatchObject({ outcome: "parked", entry: { issue: "NN#80", row: "direct-mismatch", at: "2026-10-22T00:00:00.000Z" } });
+    expect((await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"], { common, repoFlag: root })).out[0]).toMatch(/^unchanged:/);
+    expect(JSON.parse(readFileSync(join(common, ".nen", "runs", "r1.json"), "utf8")).parked).toHaveLength(1);
+    expect((await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "Bad Row"], { common, repoFlag: root })).code).toBe(2);
   });
 });
 
 describe("nen run verify", () => {
   async function seeded(): Promise<{ root: string; common: string }> {
     const { root, common } = repo();
-    await capture(["run", "start", "--id", "r1"], { common, repoFlag: root });
-    for (const pr of [480, 481, 482]) await capture(append("r1", pr), { common, repoFlag: root });
-    await capture(["run", "append", "--id", "r1", "--issue", "NN#90", "--pr", "483", "--base", "main", "--kind", "integration", "--head", "abcdef1"], { common, repoFlag: root });
+    await capture(START, { common, repoFlag: root });
+    for (const pr of [480, 481, 482]) await capture(append("r1", pr), { common, repoFlag: root, prs: OPEN_ALL });
+    await capture(["run", "append", "--id", "r1", "--issue", "NN#90", "--pr", "483", "--kind", "integration"], { common, repoFlag: root, prs: OPEN_ALL });
     return { root, common };
   }
 
@@ -189,7 +255,7 @@ describe("nen run verify", () => {
     expect(result.calls.filter((call): boolean => call[0] === "gh").map((call): string => call[3] as string)).toEqual(["480", "481", "482", "483"]);
   });
 
-  it("exits 1 when any PR could not be read, and counts it nowhere", async () => {
+  it("exits 1 when any PR could not be read, counts it nowhere, and says the unmerged list is unknown", async () => {
     const { root, common } = await seeded();
     const result = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen"], {
       common,
@@ -199,6 +265,16 @@ describe("nen run verify", () => {
     expect(result.code).toBe(1);
     expect(result.out[0]).toBe("run r1 on zheref/nen: 4 PR(s) recorded -- 0 open, 3 merged, 0 closed unmerged, 1 unread");
     expect(result.out.join("\n")).toMatch(/#481 NN#81 \[delivery\] unread:/);
+    expect(result.out.at(-1)).toBe("unmerged: unknown (1 unread)");
+    const json = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen"], { common, repoFlag: root, json: true, prs: { 480: { state: "MERGED" }, 481: "fail", 482: { state: "MERGED" }, 483: { state: "MERGED" } } });
+    expect(JSON.parse(json.out.join("\n")).unmerged).toBeNull();
+  });
+
+  it("refuses a --target that is not the run's repository at exit 2, reading nothing", async () => {
+    const { root, common } = await seeded();
+    const result = await capture(["run", "verify", "--id", "r1", "--target", "o/other"], { common, repoFlag: root, prs: OPEN_ALL });
+    expect(result.code).toBe(2);
+    expect(result.calls.filter((call): boolean => call[0] === "gh")).toEqual([]);
   });
 
   it("exits 1 for a run that was never started -- never 'all merged'", async () => {
@@ -220,39 +296,61 @@ describe("nen run budget", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, `${encodeURIComponent(effort)}.json`), JSON.stringify({ contract: "nen.usage.ledger/v0.1", effort, entries }));
   }
-  const entry = (minutes: number, input: number, output: number): Record<string, unknown> => ({
-    recordedAt: "2026-10-22T00:00:00Z", surface: "claude-code", model: "opus", input, output, cacheRead: 10, cacheWrite: 0, minutes, source: "test", note: null, notReported: false, dial: "medium",
+  const entry = (minutes: number, input: number, output: number, notReported = false): Record<string, unknown> => ({
+    recordedAt: "2026-10-22T00:00:00Z", surface: "claude-code", model: "opus", input, output, cacheRead: 10, cacheWrite: 0, minutes, source: "test", note: null, notReported, dial: "medium",
   });
+  const AFTER = (minutes: number): string => new Date(Date.parse("2026-10-22T00:00:00Z") + minutes * 60_000).toISOString();
 
   async function seeded(): Promise<{ root: string; common: string }> {
     const { root, common } = repo();
-    await capture(["run", "start", "--id", "r1"], { common, repoFlag: root });
-    await capture(append("r1", 480, ["--effort", "opus/kurapika/a"]), { common, repoFlag: root });
-    await capture(append("r1", 481, ["--effort", "opus/kurapika/b"]), { common, repoFlag: root });
+    await capture(START, { common, repoFlag: root });
+    await capture(append("r1", 480, ["--effort", "opus/kurapika/a"]), { common, repoFlag: root, prs: OPEN_ALL });
+    await capture(append("r1", 481, ["--effort", "opus/kurapika/b"]), { common, repoFlag: root, prs: OPEN_ALL });
     return { root, common };
   }
 
-  it("grants a claim under the ceiling and refuses it at exit 1 once reached", async () => {
+  it("counts minutes as wall-clock since startedAt, prints the efforts' own minutes as effortMinutes, and refuses a claim once reached", async () => {
     const { root, common } = await seeded();
     ledger(root, "opus/kurapika/a", [entry(30, 100, 50)]);
-    const under = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "60", "--max-tokens", "1000"], { common, repoFlag: root, json: true });
+    ledger(root, "opus/kurapika/b", [entry(45, 1, 1)]);
+    const under = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "60", "--max-tokens", "1000"], { common, repoFlag: root, json: true, now: AFTER(20) });
     expect(under.code).toBe(0);
     const doc = JSON.parse(under.out.join("\n"));
-    expect(Object.keys(doc)).toEqual(["run", "claim", "verdict", "granted", "ceiling", "spent", "efforts", "noLedger", "unread", "reasons"]);
-    expect(doc).toMatchObject({ verdict: "within", granted: true, spent: { minutes: 30, tokens: 160 }, noLedger: ["opus/kurapika/b"] });
+    expect(Object.keys(doc)).toEqual(["run", "claim", "verdict", "granted", "ceiling", "spent", "effortMinutes", "efforts", "noLedger", "unread", "tokensUnread", "reasons"]);
+    expect(doc).toMatchObject({ verdict: "within", granted: true, spent: { minutes: 20, tokens: 172 }, effortMinutes: 75, noLedger: [] });
 
-    ledger(root, "opus/kurapika/b", [entry(30, 1, 1)]);
-    const at = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "60", "--max-tokens", "1000"], { common, repoFlag: root });
+    const at = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "60", "--max-tokens", "1000"], { common, repoFlag: root, now: AFTER(60) });
     expect(at.code).toBe(1);
-    expect(at.out.at(-1)).toBe("claim: refused (reached) -- minutes 60 >= 60 (--max-minutes)");
+    expect(at.out.at(-1)).toBe("claim: refused (reached) -- minutes 60 since 2026-10-22T00:00:00.000Z >= 60 (--max-minutes)");
+  });
+
+  it("fails closed when a delivery PR's effort has no ledger: tokens unread, verdict unevaluated, claim refused, exit 1", async () => {
+    const { root, common } = await seeded();
+    ledger(root, "opus/kurapika/a", [entry(30, 100, 50)]);
+    const result = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "600", "--max-tokens", "100000"], { common, repoFlag: root, json: true });
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n"));
+    expect(doc).toMatchObject({ verdict: "unevaluated", granted: false, spent: { tokens: null } });
+    expect(doc.tokensUnread).toEqual(["delivery PR #481's effort opus/kurapika/b has no usage ledger"]);
+  });
+
+  it("fails closed when an entry was recorded --not-reported", async () => {
+    const { root, common } = await seeded();
+    ledger(root, "opus/kurapika/a", [entry(30, 100, 50)]);
+    ledger(root, "opus/kurapika/b", [entry(0, 0, 0, true)]);
+    const result = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "600", "--max-tokens", "100000"], { common, repoFlag: root });
+    expect(result.code).toBe(1);
+    expect(result.out.at(-1)).toMatch(/^claim: refused \(unevaluated\) -- token sum unread: opus\/kurapika\/b has 1 entry recorded --not-reported/);
   });
 
   it("reports without --claim at exit 0 even when reached, and counts --effort efforts with no PR yet", async () => {
     const { root, common } = await seeded();
+    ledger(root, "opus/kurapika/a", [entry(1, 1, 1)]);
+    ledger(root, "opus/kurapika/b", [entry(1, 1, 1)]);
     ledger(root, "opus/kurapika/c", [entry(5, 2000, 0)]);
     const result = await capture(["run", "budget", "--id", "r1", "--max-minutes", "60", "--max-tokens", "1000", "--effort", "opus/kurapika/c"], { common, repoFlag: root });
     expect(result.code).toBe(0);
-    expect(result.out.at(-1)).toMatch(/^budget: reached -- tokens 2010 >= 1000/);
+    expect(result.out.at(-1)).toMatch(/^budget: reached -- tokens 2034 >= 1000/);
   });
 
   it("is unevaluated, exit 1, on a ledger that will not read -- never a zero", async () => {
@@ -266,12 +364,14 @@ describe("nen run budget", () => {
 
   it("takes the ceiling from nen/workflow.json idle.budget, and refuses at exit 2 when neither states one", async () => {
     const { root, common } = await seeded();
+    ledger(root, "opus/kurapika/a", [entry(1, 1, 1)]);
+    ledger(root, "opus/kurapika/b", [entry(1, 1, 1)]);
     expect((await capture(["run", "budget", "--id", "r1", "--claim"], { common, repoFlag: root })).code).toBe(2);
     mkdirSync(join(root, "nen"), { recursive: true });
     writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ idle: { budget: { minutes: 90, tokens: 5000 } } }));
-    const result = await capture(["run", "budget", "--id", "r1", "--claim", "--max-tokens", "10"], { common, repoFlag: root, json: true });
+    const result = await capture(["run", "budget", "--id", "r1", "--claim", "--max-tokens", "100"], { common, repoFlag: root, json: true });
     const doc = JSON.parse(result.out.join("\n"));
-    expect(doc.ceiling).toEqual({ minutes: 90, tokens: 10, source: { minutes: expect.stringMatching(/idle\.budget\.minutes$/), tokens: "--max-tokens" } });
+    expect(doc.ceiling).toEqual({ minutes: 90, tokens: 100, source: { minutes: expect.stringMatching(/idle\.budget\.minutes$/), tokens: "--max-tokens" } });
     expect(result.code).toBe(0);
     expect((await capture(["run", "budget", "--id", "r1", "--max-minutes", "0", "--max-tokens", "10"], { common, repoFlag: root })).code).toBe(2);
   });

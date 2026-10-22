@@ -36,6 +36,7 @@ import {
   describeProfile,
   describeRunners,
   describeWorkflow,
+  describeAlwaysOverlaps,
   describeIdle,
   DEFAULT_TARGET_NONE,
   loadWorkflow,
@@ -334,6 +335,12 @@ function idleCheck(root: string): SchemaCheck {
   const idle = workflow.idle ?? null;
   if (idle === null) return row(true, false, "none declared");
   const summary = describeIdle(idle);
+  // A KEY NEN DOES NOT READ IS SAID, never accepted silently: a consumer that
+  // states a rule nen ignores believes it is in force (delivery round on
+  // zheref/nen#498, reading 5).
+  if (idle.unreadKeys.length > 0) {
+    return row(false, false, `${summary} -- idle.${idle.unreadKeys.join(", idle.")} ${idle.unreadKeys.length === 1 ? "is a key" : "are keys"} nen does not read; nothing it says is enforced here`);
+  }
   const ids = Object.keys(idle.decisions);
   if (ids.length === 0) return row(true, false, summary);
   let matrix;
@@ -657,6 +664,8 @@ export function checkTaxonomy(options: CheckOptions = {}): CheckReport {
     pointerCheck(root, "release", describeRelease),
     // The idle profile (HR-5), cross-checked against nen/decisions.json.
     idleCheck(root),
+    // The paths `nen wc overlap` counts as touched by every effort (NN#488 AC-2).
+    pointerCheck(root, "alwaysOverlaps", describeAlwaysOverlaps),
     // `nen/decisions.json` LAST OF THE nen/ FILES: newest file, optional, and read by the
     // stop verb and by every skill that would otherwise ask.
     decisionsCheck(root),

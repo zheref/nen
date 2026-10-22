@@ -8,13 +8,25 @@
 // work and the answer is no. Nothing is written: the spend is the usage
 // ledgers' (`nen usage record`), and the claim is a question asked of them.
 //
-// WHAT IS SUMMED. Every distinct effort id the manifest's PRs name, plus any
-// `--effort` the caller adds for an effort still without a PR, read from
-// `.nen/usage/<effort>.json` under --repo exactly as `nen usage show` reads it.
-// Tokens are input + output + cache read + cache write -- every number the
-// ledger holds, the reading that reaches the ceiling soonest. An effort with no
-// ledger has recorded nothing and is listed under `noLedger`; a ledger that
-// will not read is `unevaluated`, exit 1, never a zero.
+// MINUTES ARE WALL-CLOCK FROM THE MANIFEST'S `startedAt` (delivery round on
+// zheref/nen#498, reading 4): `idle.budget.minutes` is Hatsu's catalogue row
+// workflow.idle.budget.minutes, "wall-clock minutes an idle run may claim new
+// efforts for, counted from the run manifest's startedAt", and nen reads the
+// key the way its owner defines it. The minutes the efforts' usage ledgers
+// self-report are summed and printed as `effortMinutes` -- information, never
+// compared against the key (parallel efforts multiply them, silent ones zero
+// them).
+//
+// TOKENS FAIL CLOSED. Every distinct effort id the manifest's PRs name, plus
+// any `--effort` the caller adds for an effort still without a PR, is read
+// from `.nen/usage/<effort>.json` under --repo exactly as `nen usage show`
+// reads it. Tokens are input + output + cache read + cache write. The token
+// sum is UNREAD -- verdict `unevaluated`, a claim refused, exit 1 -- when any
+// entry was recorded `--not-reported`, when a recorded delivery PR names no
+// effort, or when a delivery PR's effort has no usage ledger: an absent spend
+// is never a zero spend (NN#490 AC-2). An effort named only by --effort with
+// no ledger yet is listed under `noLedger`; a ledger that will not read is
+// `unevaluated` too.
 
 import { usageLedgerPath, readUsageLedger, type UsageLedger } from "../usage/ledger.js";
 import { totalsOf } from "../usage/command.js";
@@ -38,10 +50,15 @@ export interface BudgetReport {
   /** null unless --claim; true only when the verdict is `within`. */
   readonly granted: boolean | null;
   readonly ceiling: BudgetCeiling;
-  readonly spent: { readonly minutes: number; readonly tokens: number };
+  /** `minutes` wall-clock since the manifest's startedAt; `tokens` null when the token sum is unread. */
+  readonly spent: { readonly minutes: number; readonly tokens: number | null };
+  /** The efforts' self-reported minutes, summed: information, never compared against the ceiling. */
+  readonly effortMinutes: number;
   readonly efforts: readonly { readonly effort: string; readonly minutes: number; readonly tokens: number; readonly entries: number; readonly notReported: number }[];
   readonly noLedger: readonly string[];
   readonly unread: readonly { readonly effort: string; readonly reason: string }[];
+  /** Why the token sum is unread; empty when it was read. */
+  readonly tokensUnread: readonly string[];
   readonly reasons: readonly string[];
 }
 
@@ -59,6 +76,7 @@ export function computeBudget(
   efforts: readonly string[],
   ceiling: BudgetCeiling,
   claim: boolean,
+  now: Date,
   read: (path: string, effort: string) => UsageLedger = readUsageLedger,
 ): BudgetReport {
   const rows: BudgetReport["efforts"][number][] = [];
@@ -86,15 +104,22 @@ export function computeBudget(
       notReported: totals.reduce((sum, t): number => sum + t.notReported, 0),
     });
   }
-  const spent = {
-    minutes: rows.reduce((sum, row): number => sum + row.minutes, 0),
-    tokens: rows.reduce((sum, row): number => sum + row.tokens, 0),
-  };
+  const tokensUnread: string[] = [];
+  for (const row of rows) if (row.notReported > 0) tokensUnread.push(`${row.effort} has ${row.notReported} entr${row.notReported === 1 ? "y" : "ies"} recorded --not-reported`);
+  for (const pr of manifest.prs) {
+    if (pr.kind !== "delivery") continue;
+    if (pr.effort === null) tokensUnread.push(`delivery PR #${pr.pr} names no effort, so its spend has no ledger to read`);
+    else if (noLedger.includes(pr.effort)) tokensUnread.push(`delivery PR #${pr.pr}'s effort ${pr.effort} has no usage ledger`);
+  }
+  for (const row of unread) tokensUnread.push(`could not read ${row.effort}'s usage ledger`);
+  const elapsed = Math.max(0, Math.floor((now.getTime() - Date.parse(manifest.startedAt)) / 60_000));
+  const tokens = tokensUnread.length > 0 ? null : rows.reduce((sum, row): number => sum + row.tokens, 0);
+  const spent = { minutes: elapsed, tokens };
   const reasons: string[] = [];
-  if (spent.minutes >= ceiling.minutes) reasons.push(`minutes ${spent.minutes} >= ${ceiling.minutes} (${ceiling.source.minutes})`);
-  if (spent.tokens >= ceiling.tokens) reasons.push(`tokens ${spent.tokens} >= ${ceiling.tokens} (${ceiling.source.tokens})`);
-  for (const row of unread) reasons.push(`could not read ${row.effort}'s usage ledger`);
-  const verdict: BudgetVerdict = unread.length > 0 ? "unevaluated" : reasons.length > 0 ? "reached" : "within";
+  if (spent.minutes >= ceiling.minutes) reasons.push(`minutes ${spent.minutes} since ${manifest.startedAt} >= ${ceiling.minutes} (${ceiling.source.minutes})`);
+  if (spent.tokens !== null && spent.tokens >= ceiling.tokens) reasons.push(`tokens ${spent.tokens} >= ${ceiling.tokens} (${ceiling.source.tokens})`);
+  for (const why of tokensUnread) reasons.push(`token sum unread: ${why}`);
+  const verdict: BudgetVerdict = tokensUnread.length > 0 ? "unevaluated" : reasons.length > 0 ? "reached" : "within";
   return {
     run: manifest.id,
     claim,
@@ -102,16 +127,19 @@ export function computeBudget(
     granted: claim ? verdict === "within" : null,
     ceiling,
     spent,
+    effortMinutes: rows.reduce((sum, row): number => sum + row.minutes, 0),
     efforts: rows,
     noLedger,
     unread,
+    tokensUnread,
     reasons,
   };
 }
 
 export function renderBudget(report: BudgetReport): string[] {
   const lines = [
-    `run ${report.run}: spent ${report.spent.minutes} min of ${report.ceiling.minutes} (${report.ceiling.source.minutes}), ${report.spent.tokens} tokens of ${report.ceiling.tokens} (${report.ceiling.source.tokens})`,
+    `run ${report.run}: ${report.spent.minutes} min since start of ${report.ceiling.minutes} (${report.ceiling.source.minutes}), ${report.spent.tokens === null ? "tokens unread" : `${report.spent.tokens} tokens`} of ${report.ceiling.tokens} (${report.ceiling.source.tokens})`,
+    `  effortMinutes: ${report.effortMinutes} (the efforts' own minutes, summed; information, not the budget)`,
   ];
   for (const row of report.efforts) {
     lines.push(`  ${row.effort}: ${row.minutes} min, ${row.tokens} tokens (${row.entries} entr${row.entries === 1 ? "y" : "ies"}${row.notReported === 0 ? "" : `, ${row.notReported} not reported`})`);

@@ -517,8 +517,16 @@ export interface IdlePolicy {
   readonly decisions: Readonly<Record<string, IdleResolution>>;
   /** The terminal state the batch runs to, in the repository's own words. `null` when unstated. */
   readonly terminal: string | null;
-  /** The batch's budget; each half `null` when unstated. */
+  /** The batch's budget; each half `null` when unstated. `minutes` is wall-clock from the run manifest's startedAt. */
   readonly budget: { readonly minutes: number | null; readonly tokens: number | null };
+  /**
+   * `idle.localSlotFrees`: when a local slot frees under an idle run. Read by
+   * `nen loop slots` in preference to `monitor.localSlotFrees` (delivery round
+   * on zheref/nen#498, reading 5); null when unstated.
+   */
+  readonly localSlotFrees: LocalSlotRule | null;
+  /** Keys of the block nen does not read (not `$`-prefixed): `nen schema check`'s idle row reports them rather than accepting them silently. */
+  readonly unreadKeys: readonly string[];
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -593,6 +601,13 @@ export interface Workflow {
   readonly runners: RunnersPolicy | null;
   /** `idle` -- the typed idle profile (HR-5), or null when none is declared. No default. */
   readonly idle?: IdlePolicy | null;
+  /**
+   * `alwaysOverlaps` -- paths every delivery touches sooner or later (a
+   * manifest version, the CHANGELOG, generated mirrors), read by `nen wc
+   * overlap` as touched by every effort (NN#488 AC-2). An entry ending in '/'
+   * is a directory prefix. Empty when undeclared.
+   */
+  readonly alwaysOverlaps?: readonly string[];
   /** The document exactly as the file states it, every key preserved. */
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -692,6 +707,7 @@ export function defaultWorkflow(): Workflow {
     runners: null,
     ci: null,
     idle: null,
+    alwaysOverlaps: [],
     raw: empty,
   };
 }
@@ -719,6 +735,7 @@ const ROOT_KEYS: readonly string[] = [
   "futon",
   "runners", "ci",
   "idle",
+  "alwaysOverlaps",
 ];
 
 const BRANCH_KEYS: readonly string[] = ["template", "base"];
@@ -741,7 +758,7 @@ const COMMITS_KEYS: readonly string[] = [
   "bodyMaxLineLength",
 ];
 const MONITOR_KEYS: readonly string[] = ["maxCycles", "pollSeconds", "localSlotFrees"];
-const IDLE_KEYS: readonly string[] = ["decisions", "terminal", "budget"];
+const IDLE_KEYS: readonly string[] = ["decisions", "terminal", "budget", "localSlotFrees"];
 const IDLE_BUDGET_KEYS: readonly string[] = ["minutes", "tokens"];
 /** A decisions.json row id, as ../schema/decisions.ts spells one. */
 const DECISION_ROW_ID = /^[a-z0-9][a-z0-9-]*$/;
@@ -2203,7 +2220,10 @@ function parseIdle(path: string, value: unknown): IdlePolicy | null {
     minutes = whole("minutes");
     tokens = whole("tokens");
   }
-  return { decisions, terminal, budget: { minutes, tokens }, raw };
+  const slotRaw = raw["localSlotFrees"];
+  const localSlotFrees = slotRaw === undefined || slotRaw === null ? null : requireEnum(path, "idle.localSlotFrees", slotRaw, LOCAL_SLOT_RULES);
+  const unreadKeys = Object.keys(raw).filter((key): boolean => !key.startsWith("$") && !IDLE_KEYS.includes(key));
+  return { decisions, terminal, budget: { minutes, tokens }, localSlotFrees, unreadKeys, raw };
 }
 
 /** The `nen/workflow.json#idle` row's text when a profile is declared. */
@@ -2213,7 +2233,7 @@ export function describeIdle(idle: IdlePolicy): string {
     idle.budget.minutes === null ? null : `${idle.budget.minutes} min`,
     idle.budget.tokens === null ? null : `${idle.budget.tokens} tokens`,
   ].filter((part): part is string => part !== null);
-  return `${ids.length} ask-once row resolution${ids.length === 1 ? "" : "s"}${ids.length === 0 ? "" : ` (${ids.map((id): string => `${id}=${idle.decisions[id] ?? ""}`).join(", ")})`}; terminal ${idle.terminal === null ? "unstated" : JSON.stringify(idle.terminal)}; budget ${budget.length === 0 ? "unstated" : budget.join(", ")}`;
+  return `${ids.length} ask-once row resolution${ids.length === 1 ? "" : "s"}${ids.length === 0 ? "" : ` (${ids.map((id): string => `${id}=${idle.decisions[id] ?? ""}`).join(", ")})`}; terminal ${idle.terminal === null ? "unstated" : JSON.stringify(idle.terminal)}; budget ${budget.length === 0 ? "unstated" : budget.join(", ")}; local slot frees ${idle.localSlotFrees ?? "unstated"}`;
 }
 
 /**
@@ -2336,7 +2356,14 @@ function parseCi(path: string, value: unknown): CiPolicy | null {
 
 export function parseWorkflow(path: string, value: unknown): Workflow {
   const raw = requireRecord(path, "(root)", value);
-  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twenty blocks are");
+  refuseNearMissKey(path, "", raw, ROOT_KEYS, "A workflow's twenty-one blocks are");
+  const monitor = parseMonitor(path, raw["monitor"]);
+  const idle = parseIdle(path, raw["idle"]);
+  // ONE RULE, ONE VALUE: a repository that states the slot rule under both
+  // keys with two values has not said when a slot frees.
+  if (idle !== null && idle.localSlotFrees !== null && monitor.localSlotFreesDeclared && idle.localSlotFrees !== monitor.localSlotFrees) {
+    throw new SchemaError(path, "idle.localSlotFrees", `is '${idle.localSlotFrees}' while monitor.localSlotFrees is '${monitor.localSlotFrees}'. State the rule once (idle.localSlotFrees is read under an idle profile), or state the same value in both`);
+  }
   return {
     // `$schema` IS A `$`-KEY LIKE EVERY OTHER -- surfaced when it happens to be
     // a string, ignored otherwise, and preserved either way by `raw`. The same
@@ -2353,7 +2380,7 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     reports: parseReports(path, raw["reports"]),
     notifications: parseNotifications(path, raw["notifications"]),
     commits: parseCommits(path, raw["commits"]),
-    monitor: parseMonitor(path, raw["monitor"]),
+    monitor,
     models: parseModels(path, raw["models"]),
     review: parseReview(path, raw["review"]),
     profile: parseProfile(path, raw["profile"]),
@@ -2361,9 +2388,31 @@ export function parseWorkflow(path: string, value: unknown): Workflow {
     futon: parseFutonPolicy(path, raw["futon"]),
     runners: parseRunners(path, raw["runners"]),
     ci: parseCi(path, raw["ci"]),
-    idle: parseIdle(path, raw["idle"]),
+    idle,
+    alwaysOverlaps: parseAlwaysOverlaps(path, raw["alwaysOverlaps"]),
     raw,
   };
+}
+
+/** `alwaysOverlaps`: a list of non-empty repository-relative paths, each once; refused by pointer otherwise. */
+function parseAlwaysOverlaps(path: string, value: unknown): readonly string[] {
+  if (value === undefined || value === null) return [];
+  const list = requireArray(path, "alwaysOverlaps", value).map((item, index): string => {
+    const entry = requireString(path, `alwaysOverlaps[${index}]`, item);
+    if (entry.trim() === "" || entry.startsWith("/") || entry.split("/").includes("..")) {
+      throw new SchemaError(path, `alwaysOverlaps[${index}]`, `is ${JSON.stringify(entry)}: a repository-relative path (a trailing '/' for a directory prefix), never empty, absolute or climbing out with '..'`);
+    }
+    return entry;
+  });
+  const twice = list.find((entry, index): boolean => list.indexOf(entry) !== index);
+  if (twice !== undefined) throw new SchemaError(path, "alwaysOverlaps", `names '${twice}' twice`);
+  return list;
+}
+
+/** The `nen/workflow.json#alwaysOverlaps` row's text. */
+export function describeAlwaysOverlaps(workflow: Workflow): string {
+  const list = workflow.alwaysOverlaps ?? [];
+  return list.length === 0 ? "none declared" : `${list.length} path${list.length === 1 ? "" : "s"} every effort counts as touching (${list.join(", ")})`;
 }
 
 /**

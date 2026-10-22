@@ -12,6 +12,7 @@ import { stageCommand } from "./command.js";
 import { checkExclusive, stageFamily } from "./check.js";
 
 const BANKAI = join(process.cwd(), "src", "schema", "fixtures", "bankai-repo");
+const ALT_REPO = join(process.cwd(), "src", "schema", "fixtures", "alt-repo");
 const target = parseTarget("o/r");
 
 describe("checkExclusive", () => {
@@ -90,6 +91,26 @@ describe("nen stage check (CLI)", () => {
     const result = await capture(["stage", "check", "--exclusive", "--target", "o/r", "--issue", "7"], null);
     expect(result.code).toBe(1);
     expect(result.out[0]).toMatch(/^o\/r#7: unread -- HTTP 404/);
+  });
+
+  it("checks several issues with --issues, exit 1 when any holds two stages", async () => {
+    const result = await capture(["stage", "check", "--exclusive", "--target", "o/r", "--issues", "7,8"], ["bankai:stage/idea"], true);
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out.join("\n")) as { ok: boolean; reports: { issue: number }[] };
+    expect(doc.ok).toBe(true);
+    expect(doc.reports.map((report) => report.issue)).toEqual([7, 8]);
+    const two = await capture(["stage", "check", "--exclusive", "--target", "o/r", "--issues", "7,8"], ["bankai:stage/idea", "bankai:stage/building"]);
+    expect(two.code).toBe(1);
+    expect((await capture(["stage", "check", "--exclusive", "--target", "o/r", "--issue", "7", "--issues", "8"], [])).code).toBe(2);
+    expect((await capture(["stage", "check", "--exclusive", "--target", "o/r", "--issues", "7,x"], [])).code).toBe(2);
+  });
+
+  it("exits 2 naming the file when nen/labels.json declares no stage family, before any issue is read (NN#489 AC-2)", async () => {
+    // alt-repo's vocabulary has phases and no stage family.
+    const result = await capture(["stage", "check", "--exclusive", "--target", "o/r", "--issue", "7"], ["bug"], false, ALT_REPO);
+    expect(result.err.join("\n")).toMatch(/labels\.json declares no '<namespace>:stage\/<leaf>' label/);
+    expect(result.code).toBe(2);
+    expect(result.calls).toEqual([]);
   });
 
   it("refuses without --exclusive, a malformed target or issue, and triage's flags, at exit 2", async () => {

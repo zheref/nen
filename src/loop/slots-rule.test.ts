@@ -89,7 +89,7 @@ describe("nen loop slots reads monitor.localSlotFrees from --repo", () => {
     const { root, path } = repo(undefined, efforts);
     const result = await capture(["loop", "slots", "--efforts", path, "--local-cap", "1"], root);
     expect(result.code).toBe(0);
-    expect(result.out[0]).toBe("local slot frees: ready+prompted (default (monitor.localSlotFrees not declared))");
+    expect(result.out[0]).toBe("local slot frees: ready+prompted (default (neither idle.localSlotFrees nor monitor.localSlotFrees declared))");
   });
 
   it("holds a ready-and-prompted slot under a declared merged rule, and says where the rule came from", async () => {
@@ -106,6 +106,22 @@ describe("nen loop slots reads monitor.localSlotFrees from --repo", () => {
     const { root, path } = repo({ monitor: { localSlotFrees: "whenever" } }, efforts);
     const result = await capture(["loop", "slots", "--efforts", path, "--local-cap", "1"], root);
     expect(result.code).toBe(1);
-    expect(result.err.join("\n")).toMatch(/could not read nen\/workflow.json for monitor.localSlotFrees/);
+    expect(result.err.join("\n")).toMatch(/could not read nen\/workflow.json for the local slot rule/);
   });
 });
+
+describe("nen loop slots under Hatsu's committed nen/workflow.json (idle.localSlotFrees: merged)", () => {
+  it("holds a ready-and-prompted local PR until it merges: the idle profile's rule, not the default", async () => {
+    const repo = join(process.cwd(), "src", "loop", "fixtures", "hatsu-workflow");
+    const dir = mkdtempSync(join(tmpdir(), "nen-slots-hatsu-"));
+    writeFileSync(join(dir, "efforts.json"), JSON.stringify([{ id: "a", plane: "local", prOpen: true, ready: true, prompted: true }]));
+    const result = await capture(["loop", "slots", "--efforts", join(dir, "efforts.json"), "--local-cap", "1"], repo, true);
+    expect(result.err).toEqual([]);
+    const doc = JSON.parse(result.out.join("\n")) as { localSlotFrees: { rule: string; source: string }; local: { occupied: number }; done: string[] };
+    expect(doc.localSlotFrees.rule).toBe("merged");
+    expect(doc.localSlotFrees.source).toMatch(/idle\.localSlotFrees$/);
+    expect(doc.local.occupied).toBe(1);
+    expect(doc.done).toEqual([]);
+  });
+});
+

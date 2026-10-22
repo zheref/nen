@@ -119,7 +119,7 @@ describe("nen/workflow.json idle (HR-5)", () => {
 
   it("refuses a near-miss key inside the block and at the root", () => {
     expect(() => parseWorkflow("<doc>", { idle: { decision: {} } })).toThrow(/An idle profile's three keys are/);
-    expect(() => parseWorkflow("<doc>", { idles: {} })).toThrow(/A workflow's twenty blocks are/);
+    expect(() => parseWorkflow("<doc>", { idles: {} })).toThrow(/A workflow's twenty-one blocks are/);
   });
 });
 
@@ -212,3 +212,24 @@ describe("nen/repos.json families[] (zheref/nen#453, HR-16)", () => {
     expect(() => parse([family(), family({ name: "APP", members: [{ code: "RC" }] })])).toThrow(/families\[1\]\.name.*duplicates families\[0\]/);
   });
 });
+
+describe("nen/workflow.json alwaysOverlaps (NN#488 AC-2)", () => {
+  it("reads a list of repository-relative paths and refuses an empty, absolute, climbing or repeated one by pointer", () => {
+    expect(parseWorkflow("<doc>", { alwaysOverlaps: ["CHANGELOG.md", "dist/"] }).alwaysOverlaps).toEqual(["CHANGELOG.md", "dist/"]);
+    expect(parseWorkflow("<doc>", {}).alwaysOverlaps).toEqual([]);
+    for (const bad of [[""], ["/abs"], ["../up"], ["a", "a"], "CHANGELOG.md"]) {
+      expect(() => parseWorkflow("<doc>", { alwaysOverlaps: bad })).toThrow(/alwaysOverlaps/);
+    }
+  });
+});
+
+describe("nen/workflow.json idle.localSlotFrees (delivery round on #498, reading 5)", () => {
+  it("reads the idle profile's slot rule, refuses a value outside the set, lists keys nen does not read, and refuses two values for one rule", () => {
+    expect(parseWorkflow("<doc>", { idle: { localSlotFrees: "merged" } }).idle?.localSlotFrees).toBe("merged");
+    expect(() => parseWorkflow("<doc>", { idle: { localSlotFrees: "whenever" } })).toThrow(/idle.localSlotFrees/);
+    expect(parseWorkflow("<doc>", { idle: { cadence: "daily", $note: "x" } }).idle?.unreadKeys).toEqual(["cadence"]);
+    expect(() => parseWorkflow("<doc>", { idle: { localSlotFrees: "merged" }, monitor: { localSlotFrees: "ready+prompted" } })).toThrow(/State the rule once/);
+    expect(parseWorkflow("<doc>", { idle: { localSlotFrees: "merged" }, monitor: { localSlotFrees: "merged" } }).idle?.localSlotFrees).toBe("merged");
+  });
+});
+

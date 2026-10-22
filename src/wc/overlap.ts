@@ -23,7 +23,7 @@
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
 
-export type OverlapVerdict = "disjoint" | "overlap" | "unknown";
+export type OverlapVerdict = "disjoint" | "stack" | "overlap" | "unknown";
 
 export interface EffortFiles {
   readonly effort: string;
@@ -41,6 +41,48 @@ export interface OverlapReport {
   readonly overlaps: readonly { readonly path: string; readonly efforts: readonly string[]; readonly always: boolean }[];
   readonly efforts: readonly EffortFiles[];
   readonly unread: readonly string[];
+  /** The efforts in stack order (each contains the one before) when the verdict is `stack`; null otherwise. */
+  readonly stack: readonly string[] | null;
+}
+
+/** Whether `ancestor` is an ancestor of `descendant`: true, false, or null when git could not say. */
+export type AncestryRead = (ancestor: string, descendant: string) => boolean | null;
+
+export function ancestryReader(seams: Seams, root: string): AncestryRead {
+  return (ancestor, descendant) => {
+    const result = seams.run(GIT, ["-C", root, "merge-base", "--is-ancestor", ancestor, descendant]);
+    if (result.spawnFailed) return null;
+    if (result.code === 0) return true;
+    if (result.code === 1) return false;
+    return null;
+  };
+}
+
+/**
+ * The efforts in an order where each is an ancestor of the next, or null when
+ * no such chain exists (or git could not answer one of the questions). Two
+ * efforts at the same commit chain either way; the order given is kept.
+ */
+export function stackOrder(efforts: readonly string[], isAncestor: AncestryRead): readonly string[] | null {
+  const order = [...efforts];
+  // Insertion by ancestry: a chain is a total order, so a sort by "how many of
+  // the others contain it" recovers it, and the check after confirms each link.
+  const below = new Map<string, number>();
+  for (const effort of order) {
+    let count = 0;
+    for (const other of order) {
+      if (other === effort) continue;
+      const answer = isAncestor(other, effort);
+      if (answer === null) return null;
+      if (answer) count += 1;
+    }
+    below.set(effort, count);
+  }
+  order.sort((a, b): number => (below.get(a) ?? 0) - (below.get(b) ?? 0));
+  for (let at = 1; at < order.length; at += 1) {
+    if (isAncestor(order[at - 1] as string, order[at] as string) !== true) return null;
+  }
+  return order;
 }
 
 export function diffArgv(root: string, base: string, effort: string): readonly string[] {
@@ -59,7 +101,7 @@ export function readEffortFiles(seams: Seams, root: string, base: string, effort
 
 const matches = (entry: string, path: string): boolean => (entry.endsWith("/") ? path.startsWith(entry) : path === entry);
 
-export function computeOverlap(base: string, efforts: readonly EffortFiles[], alwaysOverlaps: readonly string[]): OverlapReport {
+export function computeOverlap(base: string, efforts: readonly EffortFiles[], alwaysOverlaps: readonly string[], isAncestor: AncestryRead | null = null): OverlapReport {
   const unread = efforts.filter((row): boolean => row.files === null).map((row): string => row.effort);
   const owners = new Map<string, { efforts: string[]; always: boolean }>();
   const all = efforts.map((row): string => row.effort);
@@ -84,13 +126,15 @@ export function computeOverlap(base: string, efforts: readonly EffortFiles[], al
     .filter(([, owner]): boolean => owner.efforts.length > 1)
     .map(([path, owner]) => ({ path, efforts: all.filter((name): boolean => owner.efforts.includes(name)), always: owner.always }))
     .sort((a, b): number => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  const verdict: OverlapVerdict = unread.length > 0 ? "unknown" : overlaps.length > 0 ? "overlap" : "disjoint";
-  return { verdict, base, alwaysOverlaps: [...alwaysOverlaps], overlaps, efforts, unread };
+  const stack = unread.length === 0 && overlaps.length > 0 && isAncestor !== null ? stackOrder(all, isAncestor) : null;
+  const verdict: OverlapVerdict = unread.length > 0 ? "unknown" : overlaps.length === 0 ? "disjoint" : stack !== null ? "stack" : "overlap";
+  return { verdict, base, alwaysOverlaps: [...alwaysOverlaps], overlaps, efforts, unread, stack };
 }
 
 export function renderOverlap(report: OverlapReport): string[] {
   const lines: string[] = [];
   if (report.verdict === "unknown") lines.push(`verdict: unknown (could not read ${report.unread.join(", ")})`);
+  else if (report.verdict === "stack") lines.push(`verdict: stack(${(report.stack ?? []).join(" <- ")})`);
   else if (report.verdict === "overlap") lines.push(`verdict: overlap(${report.overlaps.map((row): string => row.path).join(", ")})`);
   else lines.push("verdict: disjoint");
   lines.push(`base: ${report.base}`);

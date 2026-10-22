@@ -75,11 +75,11 @@ export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): 
       notEfforts.push(row.pr);
       continue;
     }
-    const id = `${row.issue} #${row.pr}`;
+    const id = `${row.issue ?? "-"} #${row.pr}`;
     const read = live.get(row.pr) as LiveRead;
     if (!read.ok) {
       unread.push({ pr: row.pr, reason: `PR not read: ${read.reason}` });
-      efforts.push({ id, pr: row.pr, issue: row.issue, plane: "local", prOpen: true, ready: false, prompted: false, merged: false, stacked: false, facts: "unread -- held" });
+      efforts.push({ id, pr: row.pr, issue: row.issue ?? "-", plane: "local", prOpen: true, ready: false, prompted: false, merged: false, stacked: false, facts: "unread -- held" });
       continue;
     }
     if (read.pr.state === "closed-unmerged") {
@@ -87,7 +87,7 @@ export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): 
       continue;
     }
     if (read.pr.state === "merged") {
-      efforts.push({ id, pr: row.pr, issue: row.issue, plane: "local", prOpen: true, ready: true, prompted: true, merged: true, stacked: false, facts: "merged" });
+      efforts.push({ id, pr: row.pr, issue: row.issue ?? "-", plane: "local", prOpen: true, ready: true, prompted: true, merged: true, stacked: false, facts: "merged" });
       continue;
     }
     const stacked = [...headBranches].some(([other, branch]): boolean => other !== row.pr && branch === read.pr.base);
@@ -103,7 +103,7 @@ export async function effortsFromRun(manifest: RunManifest, deps: FromRunDeps): 
       marker.ok ? (marker.present ? `stop marker at ${marker.where ?? "?"}` : "no stop marker") : "stop marker unread",
       stacked ? `stacked on ${read.pr.base}` : `base ${read.pr.base}`,
     ].join(", ");
-    efforts.push({ id, pr: row.pr, issue: row.issue, plane: "local", prOpen: true, ready, prompted, merged: false, stacked, facts });
+    efforts.push({ id, pr: row.pr, issue: row.issue ?? "-", plane: "local", prOpen: true, ready, prompted, merged: false, stacked, facts });
   }
   return { run: manifest.id, efforts, notEfforts, closedUnmerged, unread };
 }

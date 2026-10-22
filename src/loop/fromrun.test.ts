@@ -2,7 +2,7 @@
 // document built from the manifest and live reads, no field caller-typed.
 
 import { describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -14,9 +14,9 @@ import { loopCommand } from "./command.js";
 import { effortsFromRun, markerForBranch, readinessInProcess, type FromRunDeps, type MarkerRead, type ReadinessRead } from "./fromrun.js";
 
 const NOW = "2026-10-22T00:00:00.000Z";
-const row = (pr: number, kind: RunPr["kind"] = "delivery"): RunPr => ({ issue: `NN#${pr - 400}`, pr, base: "integration/x", kind, head: "abcdef1", effort: null, recordedAt: NOW });
-const manifest = (prs: readonly RunPr[]): RunManifest => ({ contract: RUN_CONTRACT, id: "r1", startedAt: NOW, idleAnswers: null, prs });
-const open = (base: string, headRef: string): LiveRead => ({ ok: true, pr: { state: "open", base, headRef, head: "abcdef1" } });
+const row = (pr: number, kind: RunPr["kind"] = "delivery"): RunPr => ({ issue: `NN#${pr - 400}`, pr, base: "integration/x", branch: `branch-${pr}`, kind, head: "abcdef1", effort: null, recordedAt: NOW });
+const manifest = (prs: readonly RunPr[]): RunManifest => ({ contract: RUN_CONTRACT, id: "r1", repo: "o/n", startedAt: NOW, idleAnswers: null, prs, parked: [] });
+const open = (base: string, headRef: string): LiveRead => ({ ok: true, pr: { state: "open", base, headRef, head: "abcdef1", createdAt: NOW } });
 
 function deps(live: Record<number, LiveRead>, ready: Record<number, ReadinessRead>, markers: Record<string, MarkerRead>): FromRunDeps {
   return {
@@ -50,8 +50,8 @@ describe("effortsFromRun", () => {
       manifest([row(480), row(481), row(482), row(483)]),
       deps(
         {
-          480: { ok: true, pr: { state: "merged", base: "integration/x", headRef: "b480", head: "x" } },
-          481: { ok: true, pr: { state: "closed-unmerged", base: "integration/x", headRef: "b481", head: "x" } },
+          480: { ok: true, pr: { state: "merged", base: "integration/x", headRef: "b480", head: "x", createdAt: NOW } },
+          481: { ok: true, pr: { state: "closed-unmerged", base: "integration/x", headRef: "b481", head: "x", createdAt: NOW } },
           482: { ok: false, reason: "gh exit 1" },
           483: open("integration/x", "b483"),
         },
@@ -144,7 +144,8 @@ describe("nen loop slots --from-run (CLI)", () => {
     const root = mkdtempSync(join(tmpdir(), "nen-slots-run-"));
     const common = join(root, ".git");
     mkdirSync(join(common, "hatsu", "runs"), { recursive: true });
-    writeFileSync(join(common, "hatsu", "runs", "r1.json"), JSON.stringify(manifest(prs)));
+    // Seeded at the spelling an earlier build used: the read moves it to <common>/.nen/runs/ once.
+    writeFileSync(join(common, "hatsu", "runs", "r1.json"), JSON.stringify({ ...manifest(prs), repo: "zheref/nen" }));
     return common;
   }
 
@@ -157,6 +158,10 @@ describe("nen loop slots --from-run (CLI)", () => {
     expect(doc.localSlotFrees.rule).toBe("ready+prompted");
     expect(doc.fromRun).toMatchObject({ run: "r1", notEfforts: [482], closedUnmerged: [481], unread: [] });
     expect(doc.done).toEqual(["NN#80 #480"]);
+    expect(existsSync(join(common, ".nen", "runs", "r1.json"))).toBe(true);
+    expect(existsSync(join(common, "hatsu", "runs", "r1.json"))).toBe(false);
+    const other = await capture(["loop", "slots", "--from-run", "r1", "--target", "o/other", "--local-cap", "1"], common, {});
+    expect(other.code).toBe(2);
   });
 
   it("refuses --efforts beside --from-run, --target without it, and a run nobody started", async () => {

@@ -8,7 +8,7 @@
 // a fixed path with the core-to-worktree copy.
 
 import { runPrune } from "./prune.js";
-import { computeOverlap, readEffortFiles, renderOverlap } from "./overlap.js";
+import { ancestryReader, computeOverlap, readEffortFiles, renderOverlap } from "./overlap.js";
 import { assertRepoRoot } from "../repo/root.js";
 import {
   emit,
@@ -49,13 +49,16 @@ const SQUASH_CONTRACT = "nen.wc.squash/v0.1";
 const USAGE = `nen wc overlap --efforts <a,b,...> --repo <path> [--base <ref>] [--always-overlaps <paths>] [--json]
   File disjointness of parallel efforts, computed: each effort's changed paths
   are 'git diff --name-only <base>...<effort>' (the merge-base diff), --base
-  defaulting to origin/<nen/workflow.json branch.base>. --always-overlaps
-  (comma-separated; an entry ending in '/' is a directory prefix) names paths
-  every delivery touches sooner or later -- a manifest version, the CHANGELOG,
-  generated mirrors -- each counted as touched by EVERY effort. Verdict:
-  disjoint | overlap(<paths>) | unknown (an effort's diff could not be read --
-  never read as "touches nothing"). Exit 0 disjoint, 1 overlap or unknown.
-  Which effort stacks on which is the caller's to decide; nen names no order.
+  defaulting to origin/<nen/workflow.json branch.base>. nen/workflow.json's
+  alwaysOverlaps list, plus --always-overlaps (comma-separated; an entry ending
+  in '/' is a directory prefix), names paths every delivery touches sooner or
+  later -- a manifest version, the CHANGELOG, generated mirrors -- each counted
+  as touched by EVERY effort. Verdict: disjoint | stack(<a> <- <b> ...) when
+  the overlapping efforts' branches already chain (each contains the one
+  before, by git merge-base --is-ancestor) | overlap(<paths>) when they do not
+  | unknown (an effort's diff could not be read -- never read as "touches
+  nothing"). Exit 0 disjoint, 1 stack, overlap or unknown. Where efforts
+  overlap and do not chain, which stacks on which is the caller's to decide.
 
 nen wc prune --repo <path> --plan <file> [--dry-run | --run] [--json]
   An explicit JSON array, processed in order. Default: dry run, no fetch,
@@ -923,21 +926,25 @@ function doOverlap(context: CommandContext): number {
   const root = assertRepoRoot({ repoFlag: requireRepoFlag(context, "It names the checkout whose refs the efforts are read from.") });
   const efforts = splitList(context.args.values["efforts"]);
   if (efforts.length === 0) throw new VerbUsageError("--efforts <a,b,...> is required: the effort branches (or refs) whose changed files are compared.");
-  const always = splitList(context.args.values["always-overlaps"]);
+  const flagged = splitList(context.args.values["always-overlaps"]);
   for (const ref of [...efforts, context.args.values["base"] ?? ""]) {
     if (ref.startsWith("-")) throw new VerbUsageError(`'${ref}' starts with '-', which git would read as an option; refused rather than escaped.`);
   }
   if (new Set(efforts).size !== efforts.length) throw new VerbUsageError("--efforts names an effort twice; one effort cannot overlap itself.");
   let base = context.args.values["base"];
-  if (base === undefined) {
-    try {
-      base = `origin/${loadWorkflow(root).workflow.branch.base}`;
-    } catch (error) {
-      context.io.err(`nen: could not read nen/workflow.json for branch.base: ${error instanceof Error ? error.message : String(error)}. Pass --base.`);
-      return 1;
-    }
+  let declared: readonly string[];
+  try {
+    const workflow = loadWorkflow(root).workflow;
+    declared = workflow.alwaysOverlaps ?? [];
+    if (base === undefined) base = `origin/${workflow.branch.base}`;
+  } catch (error) {
+    // A POLICY THAT WILL NOT LOAD IS NOT "NO POLICY": its alwaysOverlaps list
+    // would go uncounted and two efforts would read disjoint.
+    context.io.err(`nen: could not read nen/workflow.json for alwaysOverlaps and branch.base: ${error instanceof Error ? error.message : String(error)}.`);
+    return 1;
   }
-  const report = computeOverlap(base, efforts.map((effort) => readEffortFiles(context.seams, root, base as string, effort)), always);
+  const always = [...declared, ...flagged.filter((entry): boolean => !declared.includes(entry))];
+  const report = computeOverlap(base, efforts.map((effort) => readEffortFiles(context.seams, root, base as string, effort)), always, ancestryReader(context.seams, root));
   emit(context.io, context.json, report, renderOverlap(report));
   return report.verdict === "disjoint" ? 0 : 1;
 }
@@ -950,7 +957,7 @@ export const wcCommand: Command = {
   ],
   name: "wc",
   subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap"],
-  summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, or keep one at a fixed path.",
+  summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, keep one at a fixed path, or compute whether efforts overlap.",
   usage: USAGE,
   flags: {
     values: ["base", "onto", "message-file", "strategy", "remote", "name", "plan", "efforts", "always-overlaps"],

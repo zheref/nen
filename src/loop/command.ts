@@ -22,7 +22,7 @@ import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./
 import { loadWorkflow, type LocalSlotRule } from "../schema/workflow.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
 import { effortsFromRun, markerForBranch, readinessInProcess, type FromRunReport } from "./fromrun.js";
-import { gitCommonDir, readRunManifest, runIdSegment, runManifestPath } from "../run/manifest.js";
+import { gitCommonDir, locateRunManifest, readRunManifest, runIdSegment } from "../run/manifest.js";
 import { readLivePr } from "../run/verify.js";
 import { parseTarget, type Target } from "../github/target.js";
 import type { Effort } from "./slots.js";
@@ -202,20 +202,30 @@ export const loopCommand: Command = {
   },
 };
 
-/** monitor.localSlotFrees with where it came from, or null with the reason printed (exit 1). */
+/**
+ * When a local slot frees, with where the rule came from, or null with the
+ * reason printed (exit 1). Under a declared idle profile its own
+ * `idle.localSlotFrees` is read first (delivery round on zheref/nen#498,
+ * reading 5: Hatsu's catalogue row owns the key there), then
+ * `monitor.localSlotFrees`, then the default.
+ */
 function readLocalRule(context: CommandContext, root: string): { rule: LocalSlotRule; source: string } | null {
   try {
     const loaded = loadWorkflow(root);
+    const idle = loaded.workflow.idle ?? null;
+    if (loaded.present && idle !== null && idle.localSlotFrees !== null) {
+      return { rule: idle.localSlotFrees, source: `${loaded.path}: idle.localSlotFrees` };
+    }
     return {
       rule: loaded.workflow.monitor.localSlotFrees,
       source: loaded.present && loaded.workflow.monitor.localSlotFreesDeclared
         ? `${loaded.path}: monitor.localSlotFrees`
-        : "default (monitor.localSlotFrees not declared)",
+        : "default (neither idle.localSlotFrees nor monitor.localSlotFrees declared)",
     };
   } catch (error) {
     // A POLICY THAT WILL NOT LOAD IS NOT "NO POLICY": counting under the
     // default would free slots the repository's own rule holds.
-    context.io.err(`nen: could not read nen/workflow.json for monitor.localSlotFrees: ${error instanceof Error ? error.message : String(error)}`);
+    context.io.err(`nen: could not read nen/workflow.json for the local slot rule: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }
@@ -261,7 +271,7 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
   }
   let manifest;
   try {
-    const path = runManifestPath(gitCommonDir(context.seams, root), id);
+    const path = locateRunManifest(gitCommonDir(context.seams, root), id).path;
     manifest = readRunManifest(path);
     if (manifest === null) {
       context.io.err(`nen: no run '${id}' at ${path} -- nothing to count from. A run nobody started is not a run with every slot free.`);
@@ -270,6 +280,9 @@ async function slotsFromRun(context: CommandContext, root: string, id: string, c
   } catch (error) {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
+  }
+  if (manifest.repo.toLowerCase() !== target.slug.toLowerCase()) {
+    throw new VerbUsageError(`--target ${target.slug} is not run '${id}''s repository ${manifest.repo}; its PR numbers name PRs there.`);
   }
   const built = await effortsFromRun(manifest, {
     readPr: (pr) => readLivePr(context.seams, target, pr),

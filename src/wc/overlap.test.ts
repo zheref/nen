@@ -39,6 +39,17 @@ describe("computeOverlap", () => {
     expect(computeOverlap("origin/main", [files("a", ["src/a.ts"])], ["CHANGELOG.md"]).verdict).toBe("disjoint");
   });
 
+  it("is stack(<order>) when the overlapping efforts' branches chain, and overlap when they do not (NN#488 AC-1)", () => {
+    const chain = (ancestor: string, descendant: string): boolean => (ancestor === "a" && descendant !== "a") || (ancestor === "b" && descendant === "c");
+    const stacked = computeOverlap("origin/main", [files("c", ["x"]), files("a", ["x"]), files("b", ["x"])], [], chain);
+    expect(stacked.verdict).toBe("stack");
+    expect(stacked.stack).toEqual(["a", "b", "c"]);
+    const forked = computeOverlap("origin/main", [files("a", ["x"]), files("b", ["x"])], [], () => false);
+    expect(forked.verdict).toBe("overlap");
+    expect(forked.stack).toBeNull();
+    expect(computeOverlap("origin/main", [files("a", ["x"]), files("b", ["x"])], [], () => null).verdict).toBe("overlap");
+  });
+
   it("is unknown when any effort's diff could not be read -- never 'touches nothing'", () => {
     const report = computeOverlap("origin/main", [files("a", ["x"]), files("b", null)], []);
     expect(report.verdict).toBe("unknown");
@@ -99,11 +110,22 @@ describe("nen wc overlap (CLI)", () => {
     const overlap = await capture(["wc", "overlap", "--efforts", "a,b", "--base", "origin/main", "--always-overlaps", "CHANGELOG.md"], root, { a: ["x.ts"], b: ["y.ts"] }, true);
     expect(overlap.code).toBe(1);
     const doc = JSON.parse(overlap.out.join("\n"));
-    expect(Object.keys(doc)).toEqual(["verdict", "base", "alwaysOverlaps", "overlaps", "efforts", "unread"]);
+    expect(Object.keys(doc)).toEqual(["verdict", "base", "alwaysOverlaps", "overlaps", "efforts", "unread", "stack"]);
     expect(doc.overlaps[0].path).toBe("CHANGELOG.md");
     const unknown = await capture(["wc", "overlap", "--efforts", "a,gone"], root, { a: ["x.ts"], gone: null });
     expect(unknown.code).toBe(1);
     expect(unknown.out[0]).toMatch(/^verdict: unknown \(could not read gone\)/);
+  });
+
+  it("counts nen/workflow.json's alwaysOverlaps list as touched by every effort, beside the flag", async () => {
+    const root = mkdtempSync(join(tmpdir(), "nen-overlap-"));
+    mkdirSync(join(root, "nen"));
+    writeFileSync(join(root, "nen", "workflow.json"), JSON.stringify({ branch: { base: "main" }, alwaysOverlaps: ["package.json"] }));
+    const result = await capture(["wc", "overlap", "--efforts", "a,b"], root, { a: ["x.ts"], b: ["y.ts"] }, true);
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n")) as { alwaysOverlaps: string[]; overlaps: { path: string }[] };
+    expect(doc.alwaysOverlaps).toEqual(["package.json"]);
+    expect(doc.overlaps.map((row) => row.path)).toEqual(["package.json"]);
   });
 
   it("refuses an empty, repeated or dash-led effort list and another verb's flags at exit 2", async () => {
