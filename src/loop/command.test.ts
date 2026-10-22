@@ -432,6 +432,38 @@ describe("nen loop iterate -- the ledger lives in the git common directory", () 
     expect(lost.err.join("\n")).toContain("ledger lost");
   });
 
+  it("finds and migrates an older build's ledger left in ANOTHER worktree", async () => {
+    const { core, worktree, common } = repoWithWorktree();
+    const legacy = mkdtempSync(join(tmpdir(), "nen-loop-"));
+    await capture(["loop", "iterate", "--id", "elsewhere", "--line", LINE], { repoFlag: legacy });
+    mkdirSync(join(worktree, ".nen", "loop"), { recursive: true });
+    writeFileSync(
+      join(worktree, ".nen", "loop", "elsewhere.json"),
+      readFileSync(join(legacy, ".nen", "loop", "elsewhere.json"), "utf8"),
+      "utf8",
+    );
+    // Claimed from the MAIN checkout, not the worktree that holds the old file.
+    const result = await capture(["loop", "iterate", "--id", "elsewhere", "--line", LINE], { repoFlag: core });
+    expect(result.code).toBe(0);
+    expect(result.out[0]).toBe("iteration 2/3 -- address the backlog until it is empty");
+    expect(existsSync(join(worktree, ".nen", "loop", "elsewhere.json"))).toBe(false);
+    expect(existsSync(join(common, "nen", "loop", "elsewhere.opened"))).toBe(true);
+  });
+
+  it("refuses an older build's ledger in two worktrees at once", async () => {
+    const { core, worktree } = repoWithWorktree();
+    const legacy = mkdtempSync(join(tmpdir(), "nen-loop-"));
+    await capture(["loop", "iterate", "--id", "split", "--line", LINE], { repoFlag: legacy });
+    const text = readFileSync(join(legacy, ".nen", "loop", "split.json"), "utf8");
+    for (const at of [core, worktree]) {
+      mkdirSync(join(at, ".nen", "loop"), { recursive: true });
+      writeFileSync(join(at, ".nen", "loop", "split.json"), text, "utf8");
+    }
+    const result = await capture(["loop", "iterate", "--id", "split", "--line", LINE], { repoFlag: core });
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toContain("2 homes at once");
+  });
+
   it("refuses a ledger found in both homes rather than choosing a count", async () => {
     const { worktree, common } = repoWithWorktree();
     await capture(["loop", "iterate", "--id", "twice", "--line", LINE], { repoFlag: worktree });
@@ -443,7 +475,7 @@ describe("nen loop iterate -- the ledger lives in the git common directory", () 
     );
     const result = await capture(["loop", "iterate", "--id", "twice", "--line", LINE], { repoFlag: worktree });
     expect(result.code).toBe(2);
-    expect(result.err.join("\n")).toContain("two homes at once");
+    expect(result.err.join("\n")).toContain("2 homes at once");
   });
 
   it("refuses an unrecognised file at the old path rather than migrating it", async () => {

@@ -20,7 +20,7 @@ import { resolveAgainstRepo } from "../cli/inputs.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./slots.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
-import { LOOP_COMMON_DIR, LOOP_LEDGER_DIR, present, resolveLoopHome } from "./home.js";
+import { LOOP_COMMON_DIR, LOOP_LEDGER_DIR, legacyDirs, present, resolveLoopHome } from "./home.js";
 
 // Where a loop's ledger lives is ./home.ts's: `<git-common-dir>/nen/loop/`,
 // with `<--repo>/.nen/loop/` (`.nen/`, never the committed `nen/`) only outside
@@ -83,15 +83,17 @@ linked worktree, so removing an effort worktree never resets a cap. Only when
 --repo is not inside a git repository is it '${LOOP_LEDGER_DIR}/<id>.json' under
 --repo. Every claim also writes '<id>.opened' beside the ledger; a missing
 ledger beside that marker is a LOST ledger, refused, never iteration 1. A
-ledger an older build left at '${LOOP_LEDGER_DIR}/<id>.json' under --repo is
-moved to the common-dir home once, on the first read, and reported.
+ledger an older build left at '${LOOP_LEDGER_DIR}/<id>.json' under --repo, or under
+any other checkout 'git worktree list' names, is moved to the common-dir home
+once, on the first read, and reported.
 
 Exit 0 on a claim or a release; exit 1 when the cap is REACHED -- an answer,
 not a failure: izanagi's cap is grammar rather than a default precisely so that
 reaching it is a decision to bring to a human, never a bound to raise and
 re-run. Exit 2 for a malformed id, a malformed line, a changed line, a claim
 after a release, an unreadable ledger, a lost ledger ('ledger lost'), a ledger
-in both homes at once, or a git that cannot name the common directory.`;
+in more than one home, or a git that cannot name the common directory or list
+the worktrees.`;
 
 function print(context: CommandContext, report: PlaneReport): void {
   context.io.out(
@@ -207,7 +209,8 @@ function iterate(context: CommandContext): number {
   const home = resolveLoopHome(root, context.seams);
   const path = join(home.dir, `${segment}.json`);
   const marker = join(home.dir, `${segment}.opened`);
-  const located = locateLedger(context, home.legacyDir === null ? null : join(home.legacyDir, `${segment}.json`), path, marker, id);
+  const legacyPaths = legacyDirs(root, home, context.seams).map((dir): string => join(dir, `${segment}.json`));
+  const located = locateLedger(context, legacyPaths, path, marker, id);
   const existing = located.ledger;
   const migratedFrom = located.migratedFrom;
 
@@ -340,27 +343,30 @@ interface Located {
 /**
  * Find the ledger for one id, applying the migration and the lost-ledger rule.
  *
- * In order: a ledger in BOTH homes is refused (nen never picks which count is
- * true); a ledger only at the old worktree-local path is moved to the durable
- * home once and reported; a ledger at neither, beside an existing `.opened`
- * marker, is LOST and refused; a ledger at neither with no marker is a loop
- * that never began.
+ * In order: a ledger in the durable home AND at any old worktree-local path,
+ * or at more than one old path, is refused (nen never picks which count is
+ * true); a ledger at exactly one old path -- under --repo or under any other
+ * checkout of the repository -- is moved to the durable home once and
+ * reported; a ledger at neither, beside an existing `.opened` marker, is LOST
+ * and refused; a ledger at neither with no marker is a loop that never began.
  */
 function locateLedger(
   context: CommandContext,
-  legacyPath: string | null,
+  legacyPaths: readonly string[],
   path: string,
   marker: string,
   id: string,
 ): Located {
   const here = present(path, "ledger");
-  const legacy = legacyPath !== null && legacyPath !== path && present(legacyPath, "ledger");
-  if (here && legacy) {
+  const legacy = legacyPaths.filter((candidate): boolean => candidate !== path && present(candidate, "ledger"));
+  if ((here && legacy.length > 0) || legacy.length > 1) {
+    const homes = [...(here ? [path] : []), ...legacy];
     throw new VerbUsageError(
-      `loop '${id}' has a ledger in two homes at once:\n  ${path}\n  ${legacyPath}\nRefusing rather than choosing which count is true. Keep the one that carries the loop's real count, delete the other, and claim again.`,
+      `loop '${id}' has a ledger in ${homes.length} homes at once:\n${homes.map((home): string => `  ${home}`).join("\n")}\nRefusing rather than choosing which count is true. Keep the one that carries the loop's real count, delete the others, and claim again.`,
     );
   }
-  if (legacy && legacyPath !== null) {
+  const legacyPath = legacy[0];
+  if (legacyPath !== undefined) {
     // Read (and so validate) BEFORE moving: an unrecognised file at the old
     // path is refused where it stands, never carried into the durable home.
     const moved = readLedger(legacyPath);
@@ -373,9 +379,12 @@ function locateLedger(
     writeMarker(marker, moved);
     moveLedger(legacyPath, path);
     context.io.err(`nen: migrated loop ledger '${id}' from ${legacyPath} to ${path} (the durable git-common-dir home; this happens once).`);
-    return { ledger: readLedger(path), migratedFrom: legacyPath };
+    return { ledger: moved, migratedFrom: legacyPath };
   }
-  if (!here) {
+  // A ledger that vanished between the lstat above and the read is absent,
+  // and goes through the lost-ledger rule like any other absence.
+  const ledger = here ? readLedger(path) : null;
+  if (ledger === null) {
     if (present(marker, "loop marker")) {
       throw new VerbUsageError(
         `ledger lost: loop '${id}' was opened under this repository (${marker}) but its ledger at ${path} is gone. Refusing rather than starting at iteration 1: the iterations it spent are unknown, and a fresh count would hand out a whole cap's worth more. Restore the ledger, or end the loop by hand and begin a new one under its own --id.`,
@@ -383,7 +392,7 @@ function locateLedger(
     }
     return { ledger: null, migratedFrom: null };
   }
-  return { ledger: readLedger(path), migratedFrom: null };
+  return { ledger, migratedFrom: null };
 }
 
 function moveLedger(from: string, to: string): void {
@@ -407,7 +416,12 @@ function moveLedger(from: string, to: string): void {
 
 function writeMarker(path: string, ledger: LoopLedger): void {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${ledger.id} opened ${ledger.startedAt}\n`, "utf8");
+  // Written once: an existing marker already says what it needs to.
+  try {
+    writeFileSync(path, `${ledger.id} opened ${ledger.startedAt}\n`, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | null)?.code !== "EEXIST") throw error;
+  }
 }
 
 function writeLedger(path: string, ledger: LoopLedger): void {

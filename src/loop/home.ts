@@ -42,10 +42,38 @@ export interface LoopHome {
   /** True when `dir` is under the git common directory. */
   readonly durable: boolean;
   /**
-   * The worktree-local directory an older build wrote to, when it differs from
-   * `dir` -- the one place a ledger is migrated FROM. Null in the fallback.
+   * The worktree-local directory an older build wrote to under --repo, when it
+   * differs from `dir`. Null in the fallback.
    */
   readonly legacyDir: string | null;
+}
+
+/**
+ * Every worktree-local `.nen/loop/` an older build could have written to: the
+ * one under `root` first, then each checkout `git worktree list` names (the
+ * main checkout and every linked worktree), deduplicated. A loop begun in
+ * worktree A under an older build and claimed from core after the upgrade must
+ * be FOUND, not read as a fresh loop.
+ *
+ * A worktree list git cannot produce is a refusal, never "no other worktrees".
+ */
+export function legacyDirs(root: string, home: LoopHome, seams: Pick<Seams, "run">): string[] {
+  if (home.legacyDir === null) return [];
+  const result = seams.run("git", ["-C", root, "-c", "core.quotePath=false", "worktree", "list", "--porcelain", "-z"], {
+    env: { LC_ALL: "C", LANGUAGE: undefined, GIT_DIR: undefined, GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined },
+  });
+  if (result.spawnFailed || result.code !== 0) {
+    throw new VerbUsageError(
+      `git worktree list failed under ${root} (exit ${result.code}). Refusing rather than assuming no other checkout holds an older build's ledger for this loop: missing one would start its count again.`,
+    );
+  }
+  const dirs = [home.legacyDir];
+  for (const entry of result.stdout.split("\0")) {
+    if (!entry.startsWith("worktree ")) continue;
+    const dir = join(entry.slice("worktree ".length), ...LOOP_LEDGER_DIR.split("/"));
+    if (!dirs.some((known): boolean => resolve(known) === resolve(dir))) dirs.push(dir);
+  }
+  return dirs;
 }
 
 /** "Not a git repository", as git itself words it, and nothing looser. */
@@ -63,7 +91,13 @@ export function resolveLoopHome(root: string, seams: Pick<Seams, "run">): LoopHo
   // behaviour (create it on the first claim) is kept for it.
   if (!existsSync(root)) return { dir: local, durable: false, legacyDir: null };
 
-  const result = seams.run("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  // LC_ALL=C so "not a git repository" is git's English wording under any
+  // locale, and the inherited repository-selecting variables dropped so a
+  // caller's GIT_DIR (a hook, a wrapper) cannot point the lookup at another
+  // repository's git directory.
+  const result = seams.run("git", ["-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
+    env: { LC_ALL: "C", LANGUAGE: undefined, GIT_DIR: undefined, GIT_COMMON_DIR: undefined, GIT_WORK_TREE: undefined },
+  });
   if (result.spawnFailed) {
     throw new VerbUsageError(
       `git could not be run to find this repository's common directory, so the loop ledger's durable home is unknown. Refusing rather than writing a worktree-local ledger a worktree cleanup would lose: install git, or run nen where it is on PATH.`,
