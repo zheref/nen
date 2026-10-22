@@ -22,7 +22,7 @@
 
 ## Acceptance criteria
 
-<!-- - AC-{n}: Given <context> When <event> Then <observable outcome>. Numbered from 1, contiguous. Intent only: no flag, verb, path or technology name. -->
+<!-- - AC-{n}: Given <context> When <event> Then <observable outcome>. Numbered from 1, contiguous. Intent only: no flag, verb, path or technology name. A spec dispatch ends each row with the folder's id it maps onto one-to-one, `(F<nnn>-AC-###)`, and keeps the scenarios verbatim in a fenced source-data block (docs/config/spec-repo.md). -->
 
 ## Success criteria
 
