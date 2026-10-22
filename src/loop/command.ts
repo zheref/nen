@@ -27,8 +27,9 @@ import { readLivePr } from "../run/verify.js";
 import { parseTarget, type Target } from "../github/target.js";
 import type { Effort } from "./slots.js";
 import { LOOP_COMMON_DIR, LOOP_LEDGER_DIR, legacyDirs, present, resolveLoopHome } from "./home.js";
+import { withLedgerLock, writeLedgerAtomically } from "../ledger/lock.js";
 
-// Where a loop's ledger lives is ./home.ts's: `<git-common-dir>/nen/loop/`,
+// Where a loop's ledger lives is ./home.ts's: `<git-common-dir>/.nen/loop/`,
 // with `<--repo>/.nen/loop/` (`.nen/`, never the committed `nen/`) only outside
 // a git repository. Re-exported for the callers that named it here.
 export { LOOP_COMMON_DIR, LOOP_LEDGER_DIR };
@@ -110,18 +111,21 @@ The ledger is '<git-common-dir>/${LOOP_COMMON_DIR}/<id>.json' -- git rev-parse
 --git-common-dir of --repo, one home shared by the main checkout and every
 linked worktree, so removing an effort worktree never resets a cap. Only when
 --repo is not inside a git repository is it '${LOOP_LEDGER_DIR}/<id>.json' under
---repo. Every claim also writes '<id>.opened' beside the ledger; a missing
+--repo; a --repo that does not exist is refused (exit 2). Claims run under the
+shared ledger lock and write atomically, so parallel claims never lose a count.
+Every claim also writes '<id>.opened' beside the ledger; a missing
 ledger beside that marker is a LOST ledger, refused, never iteration 1. A
-ledger an older build left at '${LOOP_LEDGER_DIR}/<id>.json' under --repo, or under
-any other checkout 'git worktree list' names, is moved to the common-dir home
-once, on the first read, and reported.
+ledger an older build left at '<git-common-dir>/nen/loop/<id>.json', at
+'${LOOP_LEDGER_DIR}/<id>.json' under --repo, or under any other checkout
+'git worktree list' names, is moved to the common-dir home once, on the first
+read, and reported.
 
 Exit 0 on a claim or a release; exit 1 when the cap is REACHED -- an answer,
 not a failure: izanagi's cap is grammar rather than a default precisely so that
 reaching it is a decision to bring to a human, never a bound to raise and
 re-run. Exit 2 for a malformed id, a malformed line, a changed line, a claim
 after a release, an unreadable ledger, a lost ledger ('ledger lost'), a ledger
-in more than one home, or a git that cannot name the common directory or list
+in more than one home, a --repo that does not exist, or a git that cannot name the common directory or list
 the worktrees.`;
 
 function print(context: CommandContext, report: PlaneReport): void {
@@ -321,19 +325,38 @@ function iterate(context: CommandContext): number {
   const path = join(home.dir, `${segment}.json`);
   const marker = join(home.dir, `${segment}.opened`);
   const legacyPaths = legacyDirs(root, home, context.seams).map((dir): string => join(dir, `${segment}.json`));
-  const located = locateLedger(context, legacyPaths, path, marker, id);
+  // ONE CLAIM AT A TIME (Feitan, delivery round on zheref/nen#498). The
+  // ledger lives in the git common dir every worktree shares, so two claims
+  // from two checkouts race on one file: locate -> claim -> write runs under
+  // the shared ledger lock, and the ledger is written through a temp file and
+  // a rename, so N parallel claims leave `iterations === N` (or are refused
+  // past the cap) and a reader never sees a torn ledger.
+  const { located, result } = withLedgerLock(
+    path,
+    () => {
+      const found = locateLedger(context, legacyPaths, path, marker, id);
+      const claimed = claimIteration(found.ledger, {
+        id,
+        line: line.trim(),
+        task: parsed.value.task,
+        condition: parsed.value.condition,
+        cap: parsed.value.cap,
+        now: context.seams.now().toISOString(),
+        release: release === null ? null : release.trim(),
+      });
+      if (claimed.ok) {
+        // THE MARKER FIRST, THEN THE LEDGER. A marker without a ledger is the
+        // lost-ledger refusal, the safe direction; a ledger without a marker
+        // would be a loop whose loss later reads as a fresh start.
+        writeMarker(marker, claimed.ledger);
+        writeLedgerAtomically(path, claimed.ledger);
+      }
+      return { located: found, result: claimed };
+    },
+    { waitMs: LOOP_LOCK_WAIT_MS, warn: (text: string): void => context.io.err(text) },
+  );
   const existing = located.ledger;
   const migratedFrom = located.migratedFrom;
-
-  const result = claimIteration(existing, {
-    id,
-    line: line.trim(),
-    task: parsed.value.task,
-    condition: parsed.value.condition,
-    cap: parsed.value.cap,
-    now: context.seams.now().toISOString(),
-    release: release === null ? null : release.trim(),
-  });
 
   if (!result.ok) {
     if (result.error.kind === "usage") throw new VerbUsageError(result.error.message);
@@ -363,11 +386,6 @@ function iterate(context: CommandContext): number {
     return 1;
   }
 
-  // THE MARKER FIRST, THEN THE LEDGER. A marker without a ledger is the
-  // lost-ledger refusal, the safe direction; a ledger without a marker would be
-  // a loop whose loss later reads as a fresh start.
-  writeMarker(marker, result.ledger);
-  writeLedger(path, result.ledger);
   const ledger = result.ledger;
   const lines = result.released
     ? [`released ${ledger.id} after ${ledger.iterations}/${ledger.cap} iteration(s): ${ledger.releaseReason ?? ""}`]
@@ -535,7 +553,5 @@ function writeMarker(path: string, ledger: LoopLedger): void {
   }
 }
 
-function writeLedger(path: string, ledger: LoopLedger): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(ledger, null, 2)}\n`, "utf8");
-}
+/** How long a claim waits for another claim on the same loop before refusing. */
+const LOOP_LOCK_WAIT_MS = 10_000;

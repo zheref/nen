@@ -16,12 +16,11 @@
 
 import { emit, refuseExtraPositionals, requireSubcommand, type Command, type CommandContext } from "../cli/command.js";
 import { assertRepoRoot } from "../repo/root.js";
-import { loadDecisions, type DecisionMatrix } from "../schema/decisions.js";
+import { GATES, loadDecisions, type DecisionMatrix } from "../schema/decisions.js";
 
 export const DECISIONS_SUMMARY_CONTRACT = "nen.decisions.summary/v0.1";
 
 const CLASSES = ["autonomous", "ask-once-per-run", "human-gate"] as const;
-const GATES = ["G1", "G1-M", "G2", "G3", "G4", "G5"] as const;
 
 const USAGE = `nen decisions summary [--repo <path>] [--json]
 

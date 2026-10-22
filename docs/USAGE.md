@@ -954,7 +954,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`epic`](#family-epic) | [`nen epic next-wave`](#nen-epic-next-wave) | flips a completed child, redraws the progress bar, computes the next releasable wave | local file (--body-file), optional write (--out) | yes |
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
 | [`loop`](#family-loop) | [`nen loop slots`](#nen-loop-slots) | counts how many CI and local concurrency slots are free, from a caller-supplied efforts file or -- `--from-run` -- one built from a run's manifest and live reads (PR state, `pr ready`, the stop marker), and explicit caps, a local slot freeing by --repo's declared `monitor.localSlotFrees` | local file (--efforts), or the run manifest, github (gh pr view, pr ready's reads) and git (worktree list) with the stop markers it names; nen/workflow.json under --repo | yes |
-| [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `<git-common-dir>/nen/loop/<id>.json` and `<id>.opened` (reads and writes; `.nen/loop/` under --repo only outside a git repository) | yes |
+| [`loop`](#family-loop) | [`nen loop iterate`](#nen-loop-iterate) | claims one iteration of an izanagi loop against its own `up to <N>` cap, refusing the claim past it | `<git-common-dir>/.nen/loop/<id>.json` and `<id>.opened` (reads and writes under a lock; `.nen/loop/` under --repo only outside a git repository) | yes |
 | [`phase`](#family-phase) | [`nen phase`](#nen-phase) | records when a workflow phase began and ended for one effort, with the elapsed milliseconds and exit code, in a per-effort ledger | `.nen/phases/<effort>.json` under --repo (reads and writes); no git/gh | yes |
 | [`session`](#family-session) | [`nen session`](#nen-session) | records caller-reported session identity and effort dial per effort, and shows the ledger | `.nen/sessions/<effort>.json` under --repo; no git/gh or harness reads | yes |
 | [`usage`](#family-usage) | [`nen usage`](#nen-usage) | records what a surface and model spent on an effort -- token counts, minutes, the source of the numbers, or `notReported` -- in a per-effort ledger, and shows the ledger with totals per surface and model | `.nen/usage/<effort>.json` under --repo (reads and writes); no git/gh | yes |
@@ -5945,14 +5945,16 @@ nen loop iterate --id <id> --line "<task> until <condition> up to <N>"
 | `--id <id>` | yes | This loop's own label, and the name of its ledger. | One path segment: 1–100 characters of `[A-Za-z0-9._-]`, starting with a letter or digit, no `..`. **Refused, never sanitised** — two ids mangled to one segment would silently share a cap between two loops, which is the failure this verb exists to prevent. |
 | `--line "<...>"` | yes | The invocation, restated on **every** claim and parsed by the izanagi grammar. | A claim whose line differs from the running one is refused (exit 2), naming both: a cap a caller can raise by re-typing the line with a bigger N is not a cap. It also catches the honest version — a second loop reusing an id that already belongs to a different task. |
 | `--release <why>` | no | End the loop instead of claiming: the condition became true, or a gate ended it. | The reason is required text; an empty one records that a loop stopped and not why. Releasing twice is not an error; claiming after a release is. A loop at its cap can always still be released — the way out is never blocked. |
-| `--repo <path>` | no | The repository the ledger belongs to. | Ledger path is `<git-common-dir>/nen/loop/<id>.json`, where the common directory is `git rev-parse --git-common-dir` of `--repo`: one home shared by the main checkout and every linked worktree, which no worktree removal and no `git clean` touches, so cleaning up an effort worktree never resets its cap (the same durable home Hatsu's futon effort record uses). Only when `--repo` is not inside a git repository (or does not exist yet) is it `.nen/loop/<id>.json` under `--repo` — the dot-prefixed generated tree, never the committed `nen/`. A git that cannot be run, or that refuses for any reason other than "not a git repository", is exit 2, never the fallback. |
+| `--repo <path>` | no | The repository the ledger belongs to. | Ledger path is `<git-common-dir>/.nen/loop/<id>.json` -- nen's one root for its own records under the common directory, shared with [`stop answer`](#nen-stop-answer)'s `.nen/stops/` and [`run`](#nen-run-start)'s `.nen/runs/` -- where the common directory is `git rev-parse --git-common-dir` of `--repo`: one home shared by the main checkout and every linked worktree, which no worktree removal and no `git clean` touches, so cleaning up an effort worktree never resets its cap. Only when `--repo` is not inside a git repository is it `.nen/loop/<id>.json` under `--repo` — the dot-prefixed generated tree, never the committed `nen/` -- the one documented exception: the stop-answer ledger and the run manifest refuse outside git. A `--repo` that does not exist is exit 2 and nothing is created (a typo never opens a fresh count). A git that cannot be run, or that refuses for any reason other than "not a git repository", is exit 2, never the fallback. |
 | `--json` | no | One machine document per claim. | `{ contract: "nen.loop.iterate/v0.1", id, claimed, capReached, task, condition, cap, iterations, remaining, released, releaseReason, startedAt, lastAt, path, durable, marker, migratedFrom }`. `durable` is `true` when the ledger is in the common directory; `marker` is the `<id>.opened` path; `migratedFrom` is the old worktree-local path when this read moved the ledger, else `null`. The cap-refusal document carries `durable` and `migratedFrom` after `released`. The three keys are appended, so the contract stays `v0.1`. |
 
 **Output and exit codes** — `iteration <n>/<cap> -- <task> until <condition>` on a claim, `released <id> after <n>/<cap> iteration(s): <why>` on a release. Exit **0** on either. Exit **1** when the cap is REACHED — an answer, not a failure: izanagi's cap is grammar rather than a default precisely so that reaching it is a decision to bring to a human, never a bound to raise and re-run. Exit **2** for a malformed `--id`, a `--line` the grammar refuses, a changed line, a claim after a release, or a ledger that cannot be read (refused rather than started again: a loop whose count nen cannot read has an unknown number of writes behind it, and beginning at 1 would hand out a whole cap's worth more).
 
 **The lost-ledger rule.** Every claim and release writes `<id>.opened` beside the ledger, before the ledger itself. A missing ledger with that marker present is a loop that began and whose count is gone: exit **2** with `ledger lost`, never iteration 1 — for a claim and for a `--release` alike. A missing ledger with no marker is a loop that never began. A marker that cannot be read is exit 2, not "no marker".
 
-**Migration on read.** A ledger an older build left at `.nen/loop/<id>.json` under `--repo`, or under any other checkout `git worktree list` names (a loop begun in an effort worktree and claimed from the main checkout after the upgrade), is validated, marked, moved to the common-dir home once (copy-then-remove across filesystems), and reported on stderr as `nen: migrated loop ledger '<id>' from <old> to <new> ...` and in `migratedFrom`. An unrecognised file at the old path is refused where it stands and not moved. A ledger in the durable home and at an old path, or at more than one old path, is exit 2 (`<n> homes at once`): nen does not choose which count is true. A worktree list git cannot produce is exit 2, not "no other checkouts". git is asked in the C locale with an inherited `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` dropped, so a caller's environment cannot point the ledger at another repository.
+**One claim at a time.** Locate, claim and write run under the shared ledger lock (`<ledger>.lock`, as the phase and usage ledgers take it), and the ledger is written through a temp file and a rename, so parallel claims from several worktrees never lose a count: N granted claims leave `iterations` at N. A claim that waits more than ten seconds for another is refused.
+
+**Migration on read.** A ledger an older build left at `<git-common-dir>/nen/loop/<id>.json` (an earlier spelling of this home), at `.nen/loop/<id>.json` under `--repo`, or under any other checkout `git worktree list` names (a loop begun in an effort worktree and claimed from the main checkout after the upgrade), is validated, marked, moved to the common-dir home once (copy-then-remove across filesystems), and reported on stderr as `nen: migrated loop ledger '<id>' from <old> to <new> ...` and in `migratedFrom`. An unrecognised file at the old path is refused where it stands and not moved. A ledger in the durable home and at an old path, or at more than one old path, is exit 2 (`<n> homes at once`): nen does not choose which count is true. A worktree list git cannot produce is exit 2, not "no other checkouts". git is asked in the C locale with an inherited `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` dropped, so a caller's environment cannot point the ledger at another repository.
 
 **Example**
 
@@ -5961,7 +5963,7 @@ nen loop iterate --id sweep --line "address the backlog until it is empty up to 
 ```
 ```text
 iteration 1/3 -- address the backlog until it is empty
-  2 remaining after this one; ledger /repo/.git/nen/loop/sweep.json
+  2 remaining after this one; ledger /repo/.git/.nen/loop/sweep.json
 ```
 The fourth claim, after three:
 ```text
@@ -15345,7 +15347,7 @@ nen stop --who Kurapika --gate G5 --title "dirty tree at breath" --body "which d
 
 Answers "what was this stop asked, what was on the table, and what did the maintainer say" -- the
 general form of [`direct answer`](#nen-direct-answer), for every gate a skill stops at. One call writes
-one JSON record: the gate, who asked, the question read from `--question-file`, every option with its
+one JSON record: the gate (or, for a stop whose decisions row has no gate, the row alone), the decisions row when named, who asked, the question read from `--question-file`, every option with its
 key, label and consequence, and the answer, then prints the record's id. **It records and never
 chooses**: the caller states the question, the options and the answer; nen validates the shape, stamps
 the instant and the id, and writes.
@@ -15372,7 +15374,7 @@ an exact comparison, never a reading of intent.
 **Usage**
 
 ```text
-nen stop answer --record <effort-id> --gate G1|G1-M|G2|G3|G4|G5 --who <name>
+nen stop answer --record <effort-id> (--gate G1|G1-M|G2|G3|G4|G5 | --row <id>) [--row <id>] --who <name>
                 --question-file <path> --option <key>=<label>::<consequence> [--option ...]
                 (--pick <key> | --typed-file <path>) [--dry-run] [--repo <path>] [--json]
 nen stop answer show <effort-id> [--repo <path>] [--json]
@@ -15383,7 +15385,8 @@ nen stop answer show <effort-id> [--repo <path>] [--json]
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
 | `--record <effort-id>` | yes | The effort the stop belongs to (`<CODE>-IS-#<N>`, `inline-<ISO>`, ...). | Percent-encoded into the directory name like `direct resolve --record`; empty, absolute, a backslash, a NUL, or a `.`/`..` segment -> exit 2. |
-| `--gate <g>` | yes | The gate the stop asked at. | One of `nen stop`'s gates; any other -> exit 2. |
+| `--gate <g>` | yes, unless `--row` is given | The gate the stop asked at. | One of the gates of `nen/decisions.json`'s one vocabulary (`G1`, `G1-M`, `G2`, `G3`, `G4`, `G5`); any other -> exit 2. |
+| `--row <id>` | no | The `nen/decisions.json` row the stop answers, kept in `row` so the answer joins HR-5's idle answers (keyed by row). | A stop at an ask-once row whose gate is null (a picker, a typed reply) gives `--row` alone and records `gate: null`; neither `--gate` nor `--row` -> exit 2. A row id is a letter or digit, then letters, digits, `.`, `_`, `:`, `-`. |
 | `--who <name>` | yes | The persona that asked. | Nen ships no built-in name. |
 | `--question-file <path>` | yes | The question as it was asked. | Kept as read (EOL-normalized); unreadable, not valid UTF-8, or empty -> exit 2. |
 | `--option <key>=<label>::<consequence>` | yes, **repeatable** | One option the stop offered. | Split at the first `=` and the first `::` after it, so `=` and `:` may appear in the label and the consequence. The key is letters, digits, `_`, `-`; every part non-empty; a key or a label twice -> exit 2 (two options with one label would leave a typed reply naming either, and the verb would have to choose). |
@@ -15394,7 +15397,7 @@ nen stop answer show <effort-id> [--repo <path>] [--json]
 
 The banner's flags (`--title`, `--body`, `--report-url`, `--options`, `--propose-issue`, `--notified`,
 `--template`, `--mark`) are refused on `answer` at exit 2, and the answer flags (`--record`,
-`--question-file`, `--option`, `--pick`, `--typed-file`, `--dry-run`) are refused on every other form of
+`--question-file`, `--option`, `--pick`, `--typed-file`, `--row`, `--dry-run`) are refused on every other form of
 `nen stop`: one flag spec serves the family, and a flag a form would silently drop is a record the
 caller believes was written.
 
@@ -15408,8 +15411,8 @@ is exit 2.
 **Output and exit codes** -- `answer` prints `recorded <id> -> <path>` and `  <gate> · <who> · picked: <key>`
 or `· typed (verbatim): <first line>`; under `--dry-run`, `(dry run) would record <id> -> <path>` and a
 closing `nothing written` line. `--json`: `{ dryRun, path, record }`, where `record` is the document
-written: `{ contract, id, effortId, n, gate, who, question, options[{ key, label, consequence }], kind,
-pick, typed, answeredAt }` -- `contract` is `nen.stop.answer/v0.1`, `kind` `picked` or `typed`, `pick` a
+written: `{ contract, id, effortId, n, gate, row, who, question, options[{ key, label, consequence }], kind,
+pick, typed, answeredAt }` -- `contract` is `nen.stop.answer/v0.1`, `gate` a gate or null (only beside a `row`), `row` the decisions row id or null, `kind` `picked` or `typed`, `pick` a
 key or null, `typed` the verbatim reply or null, `answeredAt` the verb's clock in ISO 8601 UTC. `show`
 prints one line per record (`<id>  <gate>  <who>  picked: <key> | typed: <first line>  · <question's
 first line>`); `--json`: `{ effortId, directory, records }`, `records` the documents as written. Exit 0

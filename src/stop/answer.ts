@@ -42,17 +42,18 @@ import { readVerbatimTextFile } from "../cli/inputs.js";
 import { realContainment } from "../repo/contain.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { encodeEffortId } from "../usage/ledger.js";
-import { GATE_NAMES } from "./marker.js";
+import { GATES } from "../schema/decisions.js";
+import { STOP_IDS_COMMON_SEGMENTS, STOPS_COMMON_SEGMENTS } from "../ledger/roots.js";
 
 /** The record's own versioned contract string. */
 export const STOP_ANSWER_CONTRACT = "nen.stop.answer/v0.1";
-/** Under the git common directory: one subdirectory per effort. */
-export const STOPS_DIR: readonly string[] = [".nen", "stops"];
+/** Under the git common directory: one subdirectory per effort (../ledger/roots.json, nen's one common-dir root). */
+export const STOPS_DIR: readonly string[] = STOPS_COMMON_SEGMENTS;
 /** Under the git common directory: one empty file per reserved id. */
-export const STOP_IDS_DIR: readonly string[] = [".nen", "stop-ids"];
+export const STOP_IDS_DIR: readonly string[] = STOP_IDS_COMMON_SEGMENTS;
 
 /** Flags only `stop answer` reads; refused on every other form of `nen stop`. */
-export const ANSWER_VALUE_FLAGS: readonly string[] = ["record", "question-file", "pick", "typed-file"];
+export const ANSWER_VALUE_FLAGS: readonly string[] = ["record", "question-file", "pick", "typed-file", "row"];
 export const ANSWER_LIST_FLAGS: readonly string[] = ["option"];
 export const ANSWER_BOOLEAN_FLAGS: readonly string[] = ["dry-run"];
 /** Flags of the banner form that `stop answer` refuses rather than ignores. */
@@ -70,7 +71,10 @@ export interface StopAnswerRecord {
   readonly id: string;
   readonly effortId: string;
   readonly n: number;
-  readonly gate: string;
+  /** The gate the stop asked at; null only when the stop names a decisions row instead (a picker, an ask-once row). */
+  readonly gate: string | null;
+  /** The `nen/decisions.json` row the stop answers, so an answer joins HR-5's idle answers; null when none was named. */
+  readonly row: string | null;
   readonly who: string;
   readonly question: string;
   readonly options: readonly AnswerOption[];
@@ -79,6 +83,9 @@ export interface StopAnswerRecord {
   readonly typed: string | null;
   readonly answeredAt: string;
 }
+
+/** A decisions row id as `nen/decisions.json` spells one. */
+const ROW_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 /** A failure that is not the caller's typing: exit 1. */
 export class StopAnswerError extends Error {
@@ -268,10 +275,23 @@ export function runAnswer(context: CommandContext): number {
 
 function recordAnswer(context: CommandContext): number {
   const effort = requireValue(context, "record", "It names the effort whose stop this answer belongs to.");
-  const gate = requireValue(context, "gate", `It is the gate the stop asked at: ${Object.keys(GATE_NAMES).join(", ")}.`);
-  if (!Object.hasOwn(GATE_NAMES, gate)) {
-    throw new VerbUsageError(`--gate must be one of ${Object.keys(GATE_NAMES).join(", ")}, got '${gate}'.`);
+  // A STOP AT A GATE, OR AT A DECISIONS ROW. Every ask-once row of a
+  // decisions file carries gate null (a picker, a typed reply), so a stop may
+  // name its row with --row and no gate; one of the two is required, and the
+  // row id is kept so the answer joins HR-5's idle answers, which are keyed by
+  // row (Chrollo, delivery round on zheref/nen#498).
+  const row = context.args.values["row"] ?? null;
+  if (row !== null && !ROW_ID.test(row)) {
+    throw new VerbUsageError(`--row '${row}' is not a decisions row id (a letter or digit, then letters, digits, '.', '_', ':' or '-').`);
   }
+  const gateFlag = context.args.values["gate"];
+  if (gateFlag === undefined && row === null) {
+    throw new VerbUsageError(`--gate <${GATES.join("|")}> or --row <decisions-row-id> is required: a stop asks at a gate, or answers one decisions row whose gate is null.`);
+  }
+  if (gateFlag !== undefined && !(GATES as readonly string[]).includes(gateFlag)) {
+    throw new VerbUsageError(`--gate must be one of ${GATES.join(", ")}, got '${gateFlag}'.`);
+  }
+  const gate = gateFlag ?? null;
   const who = requireValue(context, "who", "It is the persona that asked; nen ships no built-in name.");
   const questionFile = requireValue(context, "question-file", "It is the file holding the question as it was asked.");
   const rawOptions = context.args.lists["option"] ?? [];
@@ -329,7 +349,7 @@ function recordAnswer(context: CommandContext): number {
   const date = answeredAt.slice(0, 10);
   const dryRun = context.args.booleans.has("dry-run");
   const build = (id: string, n: number): StopAnswerRecord => ({
-    contract: STOP_ANSWER_CONTRACT, id, effortId: effort, n, gate, who, question, options, kind, pick, typed, answeredAt,
+    contract: STOP_ANSWER_CONTRACT, id, effortId: effort, n, gate, row, who, question, options, kind, pick, typed, answeredAt,
   });
 
   let path: string;
@@ -349,7 +369,7 @@ function recordAnswer(context: CommandContext): number {
     : `picked: ${record.pick ?? ""}${record.typed === null ? "" : " (typed text matched that option's label)"}`;
   emit(context.io, context.json, { dryRun, path, record }, [
     `${dryRun ? "(dry run) would record" : "recorded"} ${record.id} -> ${path}`,
-    `  ${record.gate} · ${record.who} · ${answerLine}`,
+    `  ${record.gate ?? `row ${record.row ?? ""}`}${record.gate !== null && record.row !== null ? ` (row ${record.row})` : ""} · ${record.who} · ${answerLine}`,
     ...(dryRun ? ["nothing written -- the id shown is the next free one now and is not reserved."] : []),
   ]);
   return 0;
@@ -368,7 +388,13 @@ export function recordDefect(document: unknown, effort: string, n: number): stri
   if (r["effortId"] !== effort) return `records the effort ${JSON.stringify(r["effortId"] ?? null)}, not '${effort}'`;
   if (r["n"] !== n) return `records n ${JSON.stringify(r["n"] ?? null)} but is named ${n}.json`;
   if (typeof r["id"] !== "string" || !/^R-\d{4}-\d{2}-\d{2}-\d{2,}$/.test(r["id"])) return "has no R-YYYY-MM-DD-nn id";
-  if (typeof r["gate"] !== "string" || !Object.hasOwn(GATE_NAMES, r["gate"])) return "has no known gate";
+  const row = r["row"] ?? null;
+  if (row !== null && (typeof row !== "string" || !ROW_ID.test(row))) return "has a row that is neither a decisions row id nor null";
+  if (r["gate"] === null || r["gate"] === undefined) {
+    if (row === null) return "has neither a known gate nor a decisions row";
+  } else if (typeof r["gate"] !== "string" || !(GATES as readonly string[]).includes(r["gate"])) {
+    return "has no known gate";
+  }
   for (const key of ["who", "question", "answeredAt"]) if (typeof r[key] !== "string") return `has no '${key}' string`;
   if (!Array.isArray(r["options"])) return "has no options array";
   const optionKeys: string[] = [];
@@ -418,7 +444,7 @@ function showAnswers(context: CommandContext): number {
   }
   const lines = records.length === 0
     ? [`no stop answers recorded for '${effort}' (${directory}).`]
-    : records.map((r): string => `${r.id}  ${r.gate}  ${r.who}  ${r.kind === "typed" ? `typed: ${firstLine(r.typed ?? "")}` : `picked: ${r.pick ?? ""}`}  · ${firstLine(r.question)}`);
+    : records.map((r): string => `${r.id}  ${r.gate ?? `row:${r.row ?? ""}`}  ${r.who}  ${r.kind === "typed" ? `typed: ${firstLine(r.typed ?? "")}` : `picked: ${r.pick ?? ""}`}  · ${firstLine(r.question)}`);
   emit(context.io, context.json, { effortId: effort, directory, records }, lines);
   return 0;
 }

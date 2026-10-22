@@ -8,12 +8,18 @@
 // had already spent one. A cap that resets when a directory is cleaned up is
 // not a cap.
 //
-// SO THE LEDGER MOVES TO THE GIT COMMON DIRECTORY, `<git-common-dir>/nen/loop/`:
+// SO THE LEDGER MOVES TO THE GIT COMMON DIRECTORY, `<git-common-dir>/.nen/loop/`
+// (../ledger/roots.json, the one root every nen ledger under the common dir
+// reads; an older build of this change wrote `<git-common-dir>/nen/loop/`,
+// which is migrated from like the worktree-local spelling):
 // one directory shared by the main checkout and every linked worktree of the
 // repository, which no worktree removal and no `git clean` touches -- the same
 // durable home Hatsu's futon effort record and hanten's `.opened` traces use.
 // Only when `--repo` is not inside a git repository at all does the ledger stay
-// under `<--repo>/.nen/loop/`, which is then the only home there is.
+// under `<--repo>/.nen/loop/`, which is then the only home there is -- the one
+// documented exception to "outside git, refuse" that the stop-answer ledger
+// and the run manifest follow. A `--repo` that does not exist is refused
+// (exit 2): a typo must not open a second, independent count.
 //
 // AND A LOST LEDGER IS NEVER A FRESH ONE. Every claim also writes
 // `<id>.opened` beside the ledger. A missing ledger with that marker present is
@@ -29,12 +35,13 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import type { Seams } from "../seam/exec.js";
+import { LOOP_COMMON_SEGMENTS, LOOP_LEGACY_SEGMENTS } from "../ledger/roots.js";
 
 /** The worktree-local home: the only home before this change, and the fallback. */
 export const LOOP_LEDGER_DIR = ".nen/loop";
 
-/** The durable home, relative to the git common directory. */
-export const LOOP_COMMON_DIR = "nen/loop";
+/** The durable home, relative to the git common directory (../ledger/roots.json). */
+export const LOOP_COMMON_DIR = LOOP_COMMON_SEGMENTS.join("/");
 
 export interface LoopHome {
   /** Absolute directory the ledger and its `.opened` marker live in. */
@@ -46,6 +53,8 @@ export interface LoopHome {
    * differs from `dir`. Null in the fallback.
    */
   readonly legacyDir: string | null;
+  /** Older spellings of the durable home under the common dir (`<common>/nen/loop/`), migrated from once. Empty in the fallback. */
+  readonly legacyCommonDirs: readonly string[];
 }
 
 /**
@@ -77,7 +86,7 @@ export function legacyDirs(root: string, home: LoopHome, seams: Pick<Seams, "run
     const checkout = entry.slice("worktree ".length);
     if (!roots.some((known): boolean => same(known, checkout))) roots.push(checkout);
   }
-  return [home.legacyDir, ...roots.slice(1).map((checkout): string => join(checkout, ...LOOP_LEDGER_DIR.split("/")))];
+  return [...home.legacyCommonDirs, home.legacyDir, ...roots.slice(1).map((checkout): string => join(checkout, ...LOOP_LEDGER_DIR.split("/")))];
 }
 
 /** "Not a git repository", as git itself words it, and nothing looser. */
@@ -91,9 +100,11 @@ const NOT_A_REPOSITORY = /not a git repository/i;
  */
 export function resolveLoopHome(root: string, seams: Pick<Seams, "run">): LoopHome {
   const local = join(root, ...LOOP_LEDGER_DIR.split("/"));
-  // A --repo that does not exist yet is not inside any repository; the old
-  // behaviour (create it on the first claim) is kept for it.
-  if (!existsSync(root)) return { dir: local, durable: false, legacyDir: null };
+  // A --repo that does not exist is a typo, not a place to start a count: the
+  // old behaviour created the whole tree and began a fresh cap there.
+  if (!existsSync(root)) {
+    throw new VerbUsageError(`--repo '${root}' does not exist. Refusing rather than creating it and starting a fresh count there: a mistyped --repo would open a second, independent cap.`);
+  }
 
   // LC_ALL=C so "not a git repository" is git's English wording under any
   // locale, and the inherited repository-selecting variables dropped so a
@@ -108,7 +119,7 @@ export function resolveLoopHome(root: string, seams: Pick<Seams, "run">): LoopHo
     );
   }
   if (result.code !== 0) {
-    if (NOT_A_REPOSITORY.test(result.stderr)) return { dir: local, durable: false, legacyDir: null };
+    if (NOT_A_REPOSITORY.test(result.stderr)) return { dir: local, durable: false, legacyDir: null, legacyCommonDirs: [] };
     const detail = result.stderr.trim().split(/\r?\n/)[0] ?? "";
     throw new VerbUsageError(
       `git rev-parse --git-common-dir failed under ${root} (exit ${result.code}${detail === "" ? "" : `: ${detail}`}). Refusing rather than falling back to a worktree-local ledger: a loop whose count could live in two homes is a loop whose cap can be spent twice.`,
@@ -122,7 +133,12 @@ export function resolveLoopHome(root: string, seams: Pick<Seams, "run">): LoopHo
     );
   }
   const common = isAbsolute(line) ? line : resolve(root, line);
-  return { dir: join(common, ...LOOP_COMMON_DIR.split("/")), durable: true, legacyDir: local };
+  return {
+    dir: join(common, ...LOOP_COMMON_SEGMENTS),
+    durable: true,
+    legacyDir: local,
+    legacyCommonDirs: LOOP_LEGACY_SEGMENTS.map((segments): string => join(common, ...segments)),
+  };
 }
 
 /**

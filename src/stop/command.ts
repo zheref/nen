@@ -67,6 +67,7 @@ import { parsePipeTable, renderPipeTable } from "../cli/table.js";
 import { assertRepoRoot, resolveRepoRoot } from "../repo/root.js";
 import { normalizeEol } from "../seam/exec.js";
 import { ANSWER_BOOLEAN_FLAGS, ANSWER_LIST_FLAGS, ANSWER_VALUE_FLAGS, runAnswer } from "./answer.js";
+import type { GateId } from "../schema/decisions.js";
 
 import {
   GATE_NAMES, MARKER_FILE, STOP_MARK_CONTRACT, STOP_MARK_CONTRACT_V2,
@@ -83,7 +84,7 @@ const USAGE = `nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified]
 nen stop clear [--repo <path>]
 nen stop show  [--repo <path>] [--json]
 nen stop --template
-nen stop answer --record <effort-id> --gate G1|G1-M|G2|G3|G4|G5 --who <name>
+nen stop answer --record <effort-id> (--gate G1|G1-M|G2|G3|G4|G5 | --row <id>) [--row <id>] --who <name>
          --question-file <path> --option <key>=<label>::<consequence> [--option ...]
          (--pick <key> | --typed-file <path>) [--dry-run] [--repo <path>] [--json]
 nen stop answer show <effort-id> [--repo <path>] [--json]
@@ -134,15 +135,19 @@ show:
 
 answer:
   Record the answer a stop received, as one JSON record
-  { contract, id, effortId, n, gate, who, question, options[{key,label,consequence}],
-  kind, pick, typed, answeredAt } at <git common dir>/.nen/stops/<effort>/<n>.json,
+  { contract, id, effortId, n, gate, row, who, question,
+  options[{key,label,consequence}], kind, pick, typed, answeredAt } at
+  <git common dir>/.nen/stops/<effort>/<n>.json,
   and print its id R-YYYY-MM-DD-nn -- never reused: reserved by an exclusive
   create under <git common dir>/.nen/stop-ids/ before the record is written.
   --pick <key> records kind 'picked'. --typed-file keeps the reply VERBATIM
   (the verbatim text is for a typed reply only; a pick records the key): kind
   'typed', unless the text is word for word one option's label, which records
   kind 'picked' with that key and the text kept. This verb records; it never
-  chooses. --dry-run writes nothing and shows the record and the next free id.
+  chooses. --gate names the gate; --row <id> names the decisions row the stop
+  answers (an ask-once row whose gate is null may name --row alone, gate null).
+  --question-file and --typed-file that are not valid UTF-8 are refused (exit 2).
+  --dry-run writes nothing and shows the record and the next free id.
   'answer show <effort-id>' lists the effort's records; one that is not JSON
   or not this contract's is exit 1, never skipped.
 
@@ -242,7 +247,7 @@ export const stopCommand: Command = {
 
     lines.push("=== YOUR INPUT IS NEEDED " + "=".repeat(30));
     if (who !== null) lines.push(`who: ${who}`);
-    if (gate !== null) lines.push(`gate: ${gate} -- ${GATE_NAMES[gate]}`);
+    if (gate !== null) lines.push(`gate: ${gate} -- ${GATE_NAMES[gate as GateId]}`);
     lines.push(
       notified
         ? "rung 1 (push notification): reported sent by the caller."

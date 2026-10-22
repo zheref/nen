@@ -16,11 +16,11 @@ describe("resolveLoopHome", () => {
 
   it("homes the ledger under the git common directory", () => {
     const home = resolveLoopHome(root, answer({ stdout: "/repo/.git\n" }));
-    expect(home).toEqual({ dir: join("/repo/.git", "nen", "loop"), durable: true, legacyDir: join(root, ".nen", "loop") });
+    expect(home).toEqual({ dir: join("/repo/.git", ".nen", "loop"), durable: true, legacyDir: join(root, ".nen", "loop"), legacyCommonDirs: [join("/repo/.git", "nen", "loop")] });
   });
 
   it("resolves a relative common dir against --repo", () => {
-    expect(resolveLoopHome(root, answer({ stdout: ".git\n" })).dir).toBe(join(root, ".git", "nen", "loop"));
+    expect(resolveLoopHome(root, answer({ stdout: ".git\n" })).dir).toBe(join(root, ".git", ".nen", "loop"));
   });
 
   it("falls back to the worktree-local home only outside a git repository", () => {
@@ -28,7 +28,7 @@ describe("resolveLoopHome", () => {
       root,
       answer({ code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git\n" }),
     );
-    expect(home).toEqual({ dir: join(root, ".nen", "loop"), durable: false, legacyDir: null });
+    expect(home).toEqual({ dir: join(root, ".nen", "loop"), durable: false, legacyDir: null, legacyCommonDirs: [] });
   });
 
   it("asks git in the C locale with no inherited repository selection", () => {
@@ -45,14 +45,15 @@ describe("resolveLoopHome", () => {
     }
   });
 
-  it("falls back for a --repo that does not exist yet, without running git", () => {
+  it("refuses a --repo that does not exist, without running git or creating anything (a typo never opens a fresh count)", () => {
     const missing = join(root, "not-yet");
-    const home = resolveLoopHome(missing, {
-      run: (): never => {
-        throw new Error("git must not run for a missing --repo");
-      },
-    });
-    expect(home.durable).toBe(false);
+    expect(() =>
+      resolveLoopHome(missing, {
+        run: (): never => {
+          throw new Error("git must not run for a missing --repo");
+        },
+      }),
+    ).toThrow(/does not exist/);
   });
 
   it("refuses any other git failure rather than guessing a home", () => {
@@ -73,11 +74,12 @@ describe("resolveLoopHome", () => {
 
 describe("legacyDirs", () => {
   const root = mkdtempSync(join(tmpdir(), "nen-loop-legacy-"));
-  const home = { dir: join("/repo/.git", "nen", "loop"), durable: true, legacyDir: join(root, ".nen", "loop") };
+  const home = { dir: join("/repo/.git", ".nen", "loop"), durable: true, legacyDir: join(root, ".nen", "loop"), legacyCommonDirs: [join("/repo/.git", "nen", "loop")] };
 
-  it("lists --repo's old home first, then every other checkout's, once each", () => {
+  it("lists the common dir's older spelling, then --repo's old home, then every other checkout's, once each", () => {
     const listing = `worktree ${root}\0HEAD abc\0branch refs/heads/main\0\0worktree /elsewhere\0HEAD def\0\0`;
     expect(legacyDirs(root, home, answer({ stdout: listing }))).toEqual([
+      join("/repo/.git", "nen", "loop"),
       join(root, ".nen", "loop"),
       join("/elsewhere", ".nen", "loop"),
     ]);

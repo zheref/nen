@@ -75,6 +75,7 @@ describe("nen stop answer --record", () => {
       effortId: "HA-IS-#401",
       n: 1,
       gate: "G5",
+      row: null,
       who: "kurapika",
       question: "Which door at breath?\n",
       options: [
@@ -98,6 +99,23 @@ describe("nen stop answer --record", () => {
     expect(record.kind).toBe("typed");
     expect(record.pick).toBeNull();
     expect(record.typed).toBe("Take the  second door, but  keep the tree.\n");
+  });
+
+  it("records a stop at a decisions row with no gate (--row, gate null), and refuses a stop naming neither", async () => {
+    const root = repo();
+    const noGate = BASE.filter((arg, index) => arg !== "--gate" && BASE[index - 1] !== "--gate");
+    const result = await run([...noGate, "--row", "idle.terminal", "--pick", "A"], root, seams(), true);
+    expect(result.err).toEqual([]);
+    expect(result.code).toBe(0);
+    const doc = JSON.parse(result.out.join("\n"));
+    expect(doc.record).toMatchObject({ gate: null, row: "idle.terminal", kind: "picked", pick: "A" });
+    const shown = await run(["stop", "answer", "show", "HA-IS-#401"], root);
+    expect(shown.code).toBe(0);
+    expect(shown.out.join("\n")).toMatch(/row:idle\.terminal/);
+    const neither = await run([...noGate, "--pick", "A"], root);
+    expect(neither.code).toBe(2);
+    expect(neither.err.join("\n")).toMatch(/--gate .* or --row/);
+    expect((await run([...noGate, "--row", "bad row", "--pick", "A"], root)).code).toBe(2);
   });
 
   it("refuses a --typed-file or --question-file that is not valid UTF-8 at exit 2 naming the file, and records nothing", async () => {
