@@ -234,6 +234,16 @@ describe("effortStage, gate and stageClass -- the documented table", () => {
     expect(atG4.doc).toMatchObject({ effortStage: "in review", gate: "G4 — pending" });
   });
 
+  it("a family's spec repository stands at G2, even when maintained_tools also lists it (zheref/nen#453)", async () => {
+    const spec = repo({
+      ...CANON,
+      product_codes: { NN: "zheref/other" },
+      families: [{ name: "f", spec: { repo: "zheref/nen", gate: "G2" }, members: [{ code: "NN" }] }],
+    });
+    const captured = await capture(data(spec, "--objects-from", objectsFile(spec, [prRow()])), script({ pushed: true }));
+    expect(captured.doc).toMatchObject({ effortStage: "in review", gate: "G2 — pending" });
+  });
+
   it("warns when the matched PR's head is origin/<branch> and HEAD has moved on (N12)", async () => {
     const root = repo(CONSUMER);
     const captured = await capture(data(root, "--objects-from", objectsFile(root, [prRow()])), script({ pushed: true }));
