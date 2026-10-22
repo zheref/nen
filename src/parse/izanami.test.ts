@@ -333,6 +333,11 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen spec index --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen spec index --repo . --write").classification).toBe("mutating");
     expect(classifyCommand("nen spec index --repo . --write --dry-run").classification).toBe("read-only");
+    // The canon prose verbs (SDD piece N9): four reads.
+    expect(classifyCommand("nen canon lint --root . --rules contracts/prose.lint.json --baseline b.json --base origin/main --json").classification).toBe("read-only");
+    expect(classifyCommand("nen canon clause check --file docs/ROSTER.md --prefix HR --base origin/main:docs/ROSTER.md --leaves 'claude/**/*.md'").classification).toBe("read-only");
+    expect(classifyCommand("nen ref resolve --citation HR-2 --root .").classification).toBe("read-only");
+    expect(classifyCommand("nen decisions summary --repo . --json").classification).toBe("read-only");
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md").classification).toBe("mutating");
     expect(classifyCommand("nen scaffold init").classification).toBe("mutating");
     expect(classifyCommand("nen fanout record --range v1..v2").classification).toBe("mutating");

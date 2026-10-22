@@ -13,8 +13,8 @@ with the `nen` spelling. This document covers the **v0.13.0 line** (one new fami
 new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 45 command
-families, 155 verbs, every flag checked against the binary this repository
+arrive with them): 46 command
+families, 159 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -209,7 +209,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **84 shapes** and **87 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **89 shapes** and **92 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -244,17 +244,19 @@ command family and is not always one (`contract`, `decisions` and `workflow` are
 file formats).
 
 <!-- contract-ids:begin -->
-- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
+- **`canon`** — `nen.canon.checkout/v0.1` · `nen.canon.clause-check/v0.1` · `nen.canon.lint/v0.1` · `nen.canon.mirror.check/v0.1` · `nen.canon.mirror.generate/v0.1` · `nen.canon.pin.write/v0.1` · `nen.canon.pin/v0.1`
 - **`classify`** — `nen.classify.apply/v0.1` · `nen.classify.install/v0.1` · `nen.classify.labels/v0.1` · `nen.classify.status/v0.1`
 - **`commit`** — `nen.commit.check/v0.1` · `nen.commit.write/v0.1`
 - **`contract`** — `nen.contract/v0.1`
-- **`decisions`** — `nen.decisions/v0.1`
+- **`decisions`** — `nen.decisions.summary/v0.1` · `nen.decisions/v0.1`
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
+- **`prose-lint`** — `nen.prose-lint/v0.1` (the `$schema` a [`canon lint`](#nen-canon-lint) rules contract may carry)
+- **`ref`** — `nen.ref.resolve/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1` · `nen.repo.family/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
@@ -325,6 +327,15 @@ verb's own **Output and exit codes** paragraph is authoritative.
 [`bootstrap`](#nen-bootstrap) is the one exception to the three-code scheme: it
 relays the bootstrap script's own published codes unchanged (see [Getting the
 binary](#getting-the-binary)).
+
+Three verbs read a caller-named file as their input and keep "could not
+read" apart from a finding the way [`canon mirror check`](#nen-canon-mirror-check)
+does (zheref/nen#101): [`canon lint`](#nen-canon-lint) and
+[`canon clause check`](#nen-canon-clause-check) exit `2` on **wiring** — a
+contract, baseline, base or file they could not read or parse — and
+[`ref resolve`](#nen-ref-resolve) exits `2` on a target it could not read, so
+`1` stays "looked and found" (a finding, or a citation that lands nowhere) and
+nothing they could not read ever reads as clean.
 
 The [`shu`](#family-shu) family **extends** the scheme with three codes rather
 than reinterpreting any of the first three, because each names a fact the
@@ -884,7 +895,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 155 verbs, grouped as the README groups them. **Reads** is what a
+All 159 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -957,6 +968,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`repo`](#family-repo) | [`nen repo classify`](#nen-repo-classify) | one verdict about a repository: role (canon / consumer / spec / unregistered), kind (product / process / library / unknown), stack, lanes, and the gate a change there stands at | nen/repos.json + nen/contract.json under --repo; `git remote get-url origin` when no --target | yes |
 | [`ref`](#family-ref) | [`nen ref format`](#nen-ref-format) | formats the &lt;CODE&gt;-&lt;IS\|PR&gt;-#&lt;N&gt; notation, checking the code against the registry first | nen/repos.json | yes |
 | [`ref`](#family-ref) | [`nen ref parse`](#nen-ref-parse) | parses a token in object notation | none | yes |
+| [`ref`](#family-ref) | [`nen ref resolve`](#nen-ref-resolve) | where one canon citation (`<path> § N`, `§ *Title*`, `#anchor`, `HR-n`, `CON-n`) lands, or `unresolved` with candidates; never re-aims one | the cited Markdown file under --root | yes |
 | [`release`](#family-release) | [`nen release preflight`](#nen-release-preflight) | every getsuga §2 release-cut precondition, checked and reported whole | github (gh variable get, git ls-remote), CHANGELOG.md, changelog.d/, git log --merges, git ls-tree/cat-file (the CHANGELOG's history, for the release-PR allowance) | yes |
 | [`release`](#family-release) | [`nen release resolve-target`](#nen-release-resolve-target) | resolve a release token (main/last-commit/checkout/hash/branch) to a SHA and test trunk ancestry | git (fetch/rev-parse/merge-base, reaches origin) | yes |
 | [`release`](#family-release) | [`nen release self-check`](#nen-release-self-check) | whether a release PR should list itself in its own range | git (merge-base ancestry, local only) | yes |
@@ -1010,6 +1022,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`canon`](#family-canon) | [`nen canon checkout`](#nen-canon-checkout) | resolve WHERE the canon checkout is on this machine -- `--canon-checkout`, then the variable the pinned entry's `checkout_env` names, then its `checkout` path template -- and verify it is a clean checkout of the pinned source at the pinned tag, reporting every step | nen/repos.json + the environment; read-only, isolated git (rev-parse, remote get-url on the checkout and the consumer, status, ls-files); fetches nothing | yes |
 | [`canon`](#family-canon) | [`nen canon mirror generate`](#nen-canon-mirror-generate) | render every canonical rule file, {{TOKEN}}s bound, into the rules location of EACH agent surface the consumer declares (a directory of marked files, or one marked block inside AGENTS.md), writing only changed files, deleting marked orphans, refusing to touch a hand-written file | --rules-dir, or --stack-dir/--leaf inside the canon checkout `canon checkout` resolves (read-only git) + --canon-values; the surface table (src/surface/rules.ts); writes under --repo; no gh | yes |
 | [`canon`](#family-canon) | [`nen canon mirror check`](#nen-canon-mirror-check) | render the mirror in memory and diff every declared surface's committed copy against it: ok / missing / extra / stale / hand-edited per file, foreign for the consumer's own | --rules-dir, or --stack-dir/--leaf inside the resolved canon checkout (read-only git) + --canon-values; the surface table; reads under --repo; --markdown-out writes its table (and its parent directory) there; no gh | yes |
+| [`canon`](#family-canon) | [`nen canon lint`](#nen-canon-lint) | a canon repository's prose held to a caller-owned rules contract (each rule's class picks the check) behind a shrink-only baseline; fenced code and quoted words exempt; never green over a file it could not read | the --rules contract and the files it names (version source, decisions, rulings, declared values), the --baseline, the Markdown its include globs match under --root; with --base, git (merge-base, diff, show) | yes |
+| [`canon`](#family-canon) | [`nen canon clause check`](#nen-canon-clause-check) | a clause id space (HR-{n}, CON-{n}) held unique -- definitions counted, citations never, gaps a notice -- and, with --leaves, every changed clause matched by a change in each file citing it or a `no-leaf-change:` line | --file under --repo; --base as a file or `git show <ref>:<path>`; with --leaves, git (ls-files, diff) and the --body-from file | yes |
 | [`quality`](#family-quality) | [`nen quality tooling`](#nen-quality-tooling) | look up the e2e/adversarial/perf tooling recorded for a scenario in a caller-supplied table | caller's own --table JSON (never a table shipped in nen) | yes |
 | [`quality`](#family-quality) | [`nen quality perf-compare`](#nen-quality-perf-compare) | classify a measured-vs-baseline regression at QA-13's fixed 10%/25% thresholds | none (pure arithmetic over the two numbers given) | yes |
 | [`quality`](#family-quality) | [`nen quality method-check`](#nen-quality-method-check) | validate a QA-15 method block: device/OS stated, Release with no debugger, n&gt;=5 with the first discarded, median+p90, thermal+network stated | caller's own --input JSON method block | yes |
@@ -1020,6 +1034,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`spec`](#family-spec) | [`nen spec check`](#nen-spec-check) | a spec folder or the constitution held to citation-or-marker, plus Spec Kit analyze's computable passes (duplicate ids, placeholders, inferred tier in a MUST/SC, FR↔task both ways, the caller's vague terms) and the open markers ranked by clarify's taxonomy; CRITICAL exits 1 | spec.md/tasks.md or .specify/memory/constitution.md under --repo; the --vocabulary file; no git/gh | yes |
 | [`spec`](#family-spec) | [`nen spec cite-check`](#nen-spec-cite-check) | every `[src:]` range in a folder resolves at its own sha in the member checkout the checkouts file names; excerpt hashes against `capture/<CODE>/inventory.json`; `--at` reports [STALE] candidates | the folder's .md files and nen/repos.json under --repo; the --checkouts file; git (remote get-url, rev-parse, cat-file) in each member checkout | yes |
 | [`spec`](#family-spec) | [`nen spec index`](#nen-spec-index) | `<root>/INDEX.md` regenerated from each folder's spec.md header; reports current / stale / hand-edited / absent; `--write` refuses over a hand edit | spec.md headers and INDEX.md under --repo; WRITES `<root>/INDEX.md` under --write unless --dry-run | yes |
+| [`decisions`](#family-decisions) | [`nen decisions summary`](#nen-decisions-summary) | rows per class and per gate and the G5 ids of nen/decisions.json, so prose never carries those numbers | nen/decisions.json under --repo | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -8027,6 +8042,71 @@ nen ref parse "KP-PR-#386" --json
 ```
 (from a real run — no registry involved)
 
+
+### `nen ref resolve`
+
+Where one canon citation lands — or that it lands nowhere, and what is there
+instead (zheref/nen#482; SDD piece N9). The reading is
+[`canon lint`](#nen-canon-lint)'s `citation` class and
+[`canon clause check`](#nen-canon-clause-check)'s definition, shared code, so
+the resolver, the lint and the id guard cannot disagree about a citation. **It
+never re-aims a citation**: `unresolved` comes with candidates, and the choice
+is the caller's.
+
+| Form | Resolves to |
+|---|---|
+| `<path> § N` | every ATX heading or bold paragraph lead whose text opens with `N` (`N.`, `N ·`, `§ N`); `N` is `2`, `2a`, `3.1` |
+| `<path> § *Title*` | every heading or lead whose normalised text (links to text, emphasis and quotes dropped, case folded) equals the title or starts with it at a word boundary, with or without a leading number |
+| `<path>#anchor` | the heading whose GitHub slug it is (a repeated slug suffixed `-1`, `-2`, …) or an explicit `<a id\|name="…">`; `#anchor` alone is a same-file anchor and needs `--from` |
+| `<path>` | the file, when it exists |
+| `P-N` (`HR-2`, `CON-48`) | the clause's definition (`<a id="p-N"></a>**P-N**` or a column-0 `- **P-N.`); `HR-2` never matches `HR-20` |
+
+The path may be written as a Markdown link, `[x](path) § N`, as prose carries
+it. A fenced block and YAML frontmatter carry no heading; CRLF reads as LF.
+
+**Usage**
+
+```text
+nen ref resolve --citation '<path> § N | <path> § *Title* | <path>#anchor | <path> | HR-n | CON-n' --root <checkout> [--from <file>] [--in <file>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--citation <c>` | yes | The citation, in one of the forms above. | Missing or in no form exits 2, naming the forms. |
+| `--root <checkout>` | no | The canon checkout. | `--repo <path>` is the same directory; default the current directory; both naming different ones exits 2. |
+| `--from <file>` | no | The citing file, relative to the root: a relative target resolves from its directory. | Default: targets resolve from the root. |
+| `--in <file>` | no | The file a clause id is defined in. | Defaults: `HR` → `docs/ROSTER.md`, `CON` → `CONSTITUTION.md`; any other prefix without it exits 2. |
+
+**Output and exit codes** — `resolved · <target>:<line> · <via> · <text> · #<anchor>`
+per match (a number two headings share is two matches, never a pick), or
+`unresolved · <citation> · <reason>` followed by one `candidate · …` line each
+(the target's headings and leads in document order, at most 60, or the five
+clause ids defined nearest). `--json` top-level keys: `contract`
+(`nen.ref.resolve/v0.1`), `citation`, `kind` (`section`, `title`, `anchor`,
+`file`, `clause`), `root`, `target` (null when the target leaves the root),
+`resolved`, `matches`, `reason`, `candidates`; each match and candidate is
+`{ line, text, anchor, via }`, `via` one of `heading`, `lead`, `anchor`,
+`definition`, `file`. Exit **0** resolved; **1** unresolved (a missing file, a
+target leaving the root, no such heading, lead, anchor or definition); **2** a
+usage error or a target that could not be read (unreadable, not UTF-8) — neither
+resolved nor unresolved.
+
+**Example**
+
+```bash
+nen ref resolve --root ../hatsu --citation 'claude/skills/breath/SKILL.md § 9'
+```
+```text
+unresolved · claude/skills/breath/SKILL.md § 9 · no heading or bold lead numbered 9 in claude/skills/breath/SKILL.md
+  candidate · claude/skills/breath/SKILL.md:6 · heading · Breath — the first breath of an effort
+  candidate · claude/skills/breath/SKILL.md:8 · lead · Nature: Transmuter.
+  candidate · claude/skills/breath/SKILL.md:12 · heading · 0. Standalone entry — preserve → prove → place → restore
+…
+```
+(exit 1; a real run against a Hatsu checkout, abridged)
+
 ## Release mechanics
 
 The local release machinery: the preconditions a cut depends on, the changelog
@@ -10560,6 +10640,171 @@ drift: yes
 
 **Driving the pair from a skill or CI.** Where the consumer declares its checkout (`checkout_env`/`checkout`, [`canon checkout`](#nen-canon-checkout)), the whole sequence is one portable command per half: `nen canon mirror generate|check --repo <consumer> --canon-values <path> --stack-dir handbooks/stacks --leaf rules --not-mirrored README.md,placeholders.md` -- the pin, the checkout and the rules directory are all resolved from data, and a checkout that is missing, behind or dirty is exit 2 with its code. Without a declaration, the sequence a sync skill runs is: `nen canon pin --repo <consumer> --json` to learn the canonical repository and the tag the consumer is pinned to; check that repository out **at the tag**; `nen canon resolve --repo <consumer> --target <owner/name> --always-load <manifest> --stack-dir <checkout>/handbooks/stacks --leaf rules` to derive `--rules-dir` from the consumer's recorded scenario; `nen canon mirror generate --repo <consumer> --rules-dir <that> --canon-values <path>` (source and ref default to the recorded pin; its `--json` says what changed per surface, and exit 2 with nothing written names a collision the human resolves); commit. The consumer's CI runs `nen canon mirror check` with the same inputs and fails on exit 1 -- the drift check `CON-13` asks for. Repinning is then `nen canon pin --repo <consumer> --write <tag>` (fetch the tag into the canon checkout first) followed by one `generate`, committed together; a repin without the regenerate is what `check` reports as stale on every surface, and the pin verb says so when it writes.
 
+### `nen canon lint`
+
+A canon repository's prose held to a **rules contract the caller owns**,
+behind a **shrink-only baseline** (zheref/nen#481; SDD piece N9; Hatsu rulings
+HR-13 — the ratchet — and HR-4 — the one open-question marker). It is the port
+of Hatsu's interim guard `scripts/prose_ambiguity_check.mts`, and that guard's
+fixture is this verb's test suite (`src/canon/lint.test.ts`), so the two cannot
+disagree on a verdict and the guard retires at Hatsu's repin.
+
+**Nen detects and reports; it decides nothing.** The rules — their ids,
+severities and patterns, the paths linted, which paths are dated records, where
+the version pin is read from, which decisions rows a marker may name — are the
+contract's (`$schema` `nen.prose-lint/v0.1` when stated). A rule's **class**
+picks the check; nothing dispatches on an id, so a contract may renumber:
+
+| Class | Fires on | Fields the class needs |
+|---|---|---|
+| `by-hand` | a match whose clause does not refuse, retire or name a human | `pattern`, `negations` |
+| `stale-residue` | a match in a paragraph without the `requires` reference | `pattern`, `requires` |
+| `stale-version` | a pin claim (`patterns[0]`) or floor claim (the rest) that is neither the contract's `versionSource` minimum nor its pinned ref, read at run time; a pin claim near `otherPins` or after a `pastWords` word is history | `patterns[]`, `otherPins` (`pastWords` optional) |
+| `citation` | a relative link to no file, to a file outside the root, to a missing `#anchor`, or a linked `§ N` / `§ *Title*` that resolves to no heading or bold lead — exactly as [`ref resolve`](#nen-ref-resolve) reads it | none |
+| `bare-ref` | a match outside a link target | `pattern` |
+| `unverified-claim` | a match in a paragraph without both a `date` and an `evidence` match | `pattern`, `date`, `evidence` |
+| `hedge`, `adjective` | every match | `pattern` |
+| `number-not-declared` | a captured number on a `nen …` line that no `declaredValues` JSON file carries | `pattern` |
+| `residue-unfiled` | a list item under a `## Residue…` section (`section` overrides) without the `requires` reference | `requires` |
+| `open-question-shape` | a match not in the `marker` shape; a marker naming a human-gate row of `decisionsFile` or a row outside `markerRows`; a marker without a `ledger` reference; more than `markerLimit` markers in one file of `skillPaths` | `pattern`, `marker`, `ledger` |
+| `reading-cited-as-ruled` | a clause id (`pattern`, capture 1) whose status in `rulingsFile` is `reading`, in a `skillPaths` file, in a paragraph without the word *reading* | `pattern` (`prefix` optional, default `HR`) |
+
+**Exemptions.** Fenced code is never read; quoted words (`"…"`, `“…”`, so also
+`*"…"*`) are blanked unless `exemptions.quotedWords` is `false`; a RETIRED block
+exempts the `stale-residue`, `stale-version`, `bare-ref` and `residue-unfiled`
+classes; a `records.paths` file exempts the `records.rules` ids. `.git`,
+`node_modules`, `.nen` and `.claude` at the root are never walked; `paths.exclude`
+adds globs; a symlink is followed only inside the root.
+
+**The baseline** (`--baseline`) is `{ "findings": [{ path, rule, text, count }] }`,
+keyed by path, rule id and the finding's normalised text — never a line number.
+A `fail` finding the baseline holds reads clean; a row no finding uses any more
+is **stale** (red: remove it); with `--base`, a row the base's copy did not carry
+is **grown** (red: the baseline only shrinks). A rule id in `emptyBaseline` is
+refused in any baseline. `advisory` findings print and are never counted or
+baselined.
+
+**Usage**
+
+```text
+nen canon lint --root <checkout> --rules <contract> [--baseline <file>] [--base <ref>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--root <checkout>` | yes | The canon checkout to lint. | `--repo <path>` is the same directory; both naming different ones exits 2. |
+| `--rules <contract>` | yes | The rules contract, relative to the root. | Never built in. Missing, unreadable, not JSON or of the wrong shape (a rule without a field its class needs included) exits 2. |
+| `--baseline <file>` | no | The shrink-only baseline, relative to the root. | Absent: every `fail` finding is new. Named and missing, or malformed, exits 2. |
+| `--base <ref>` | no | Lint only the files changed since `git merge-base <ref> HEAD` (working tree included), and refuse a baseline row the base's copy lacks. | The hanten form. A ref starting `-` exits 2; a git read that fails exits 2. |
+
+**Output and exit codes** — one line per new finding, `path:line · <rule> · text`,
+then `baseline · <rule> · path · text — no longer found; remove the row` per stale
+row and `… — added over <ref>; the baseline only shrinks` per grown row; under
+`--base` every advisory finding as `advisory path:line · <rule> · text`; last, one
+summary line per rule (`<id> <total>/<baselined>b`, or `<id> <total>a` for an
+advisory rule). `--json` top-level keys: `contract` (`nen.canon.lint/v0.1`),
+`root`, `rules`, `baseline`, `base`, `files`, `exit`, `counts` (per rule id
+`{ total, baselined, new }`), `findings` (every `fail` finding,
+`{ path, line, rule, severity, text, inBaseline }`), `advisory` (the same without
+`inBaseline`), `staleBaseline`, `grownBaseline` (baseline rows). Exit **0** no
+`fail` finding outside the baseline and no stale or grown row; **1** at least one;
+**2** wiring — an unreadable or invalid contract, baseline, decisions, rulings or
+version file, an unlistable directory, an unreadable or non-UTF-8 file, a symlink
+leaving the root or dangling, a failed git read — and every usage error. **A file
+the lint could not read is never a file it found clean**: nothing is printed on
+stdout under exit 2.
+
+Two deliberate differences from the guard: nen does not probe for a Hatsu
+checkout (the contract's own files are the root's credentials), and a finding
+inside YAML frontmatter names the file's own line (the guard reports it one line
+early). Where the guard used built-in `claude/…` and `surfaces/` paths, the
+contract now says so: `skillPaths` (the files the marker limit and the reading
+rule apply to; absent, every linted file) and `paths.exclude`.
+
+**Example**
+
+```bash
+nen canon lint --root ../hatsu --rules contracts/prose.lint.json --baseline contracts/prose.lint.baseline.json
+```
+```text
+claude/skills/ten/SKILL.md:205 · PL-05 · Fixed in #154 last week.
+canon lint: 180 files · 1 new · 0 stale · 0 grown · PL-01 185/185b · PL-02 8/8b · PL-03 0/0b · PL-04 0/0b · PL-05 604/603b · PL-06 387/387b · PL-07 357a · PL-08 441a · PL-09 10a · PL-10 50a · PL-11 1/1b · PL-12 0/0b
+```
+(exit 1; a real run over an export of Hatsu's `opus/kurapika/sdd-p5-prose-lint`
+tree with one bare reference planted — the unplanted tree reads `0 new` at exit 0,
+the guard's verdict and counts exactly)
+
+### `nen canon clause check`
+
+A clause id space held unique, and a changed clause held to the files that cite
+it — Hatsu's `HR-{n}` in `docs/ROSTER.md` (HR-2) and Akatsuki's `CON-{n}` in
+`CONSTITUTION.md` (CON-48). The port of Hatsu's `scripts/clause_id_guard.mts`
+and Akatsuki's `clause_id_guard.ts` / `clause_leaf_guard.ts`, their rules
+carried as written:
+
+1. **Definitions are counted, citations never are.** A definition is the anchor
+   `<a id="p-N"></a>**P-N**` (any number per line) or the column-0 bullet
+   `- **P-N.`; `[P-N](#p-N)`, a bare `P-N` and `reversed by P-N` are citations.
+2. **A duplicate id exits 1** — two efforts minting one id merge cleanly and leave
+   every citation ambiguous. An anchor whose `p-N` and `**P-M**` disagree exits 1.
+3. **Gaps are a notice, never a failure** (a missing id is a retired clause).
+4. **Order is not asserted.**
+5. **A tooling failure is not a finding** — exit 2 for an unreadable file or base,
+   a file with no definitions at all, or a failed git read.
+6. **Ids are whole numbers**: `HR-2` never matches `HR-20`, in a definition or a citation.
+
+**The leaf obligation.** With `--base <ref>:<path>`, every clause whose block
+changed against the base (edited, minted or removed; a table-row definition's
+block is its row, a bullet's runs to the next definition or `#`/`##` heading,
+trailing blank lines ignored) must be matched by a change against `<ref>` in
+every `--leaves` file that cites it, or the PR body (`--body-from`) must carry a
+`no-leaf-change: <reason>` line. Nen lists the stale leaves either way; whether
+the reason is good enough is the reviewer's.
+
+**Usage**
+
+```text
+nen canon clause check --file <md> --prefix <HR|CON> [--base <md> | --base <ref>:<path>] [--leaves <paths>] [--body-from <file>] [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--file <md>` | yes | The document that defines the ids, relative to `--repo` (default the current directory). | Missing, a directory, unreadable, or holding no definition exits 2. |
+| `--prefix <P>` | yes | The id prefix (`HR`, `CON`, …): upper-case letters and digits. | Malformed exits 2. |
+| `--base <md>` or `<ref>:<path>` | no | The base copy: a file on disk, else a git object read with `git show <ref>:./<path>`. | Reports `minted`, `removed`, `edited`. A ref starting `-` or an unreadable object exits 2. Pass the PR's base sha (or the merge base) for a branch behind its base. |
+| `--leaves <paths>` | no | Comma-separated paths or globs (`*`, `**`) over `git ls-files`: the files that may cite a clause. | Needs `--base <ref>:<path>` (the leaves are compared with that ref by `git diff --name-only --relative <ref>`). A pattern matching no tracked file exits 2: a leaf set that names nothing would pass every obligation. |
+| `--body-from <file>` | no | The PR body whose `no-leaf-change: <reason>` line waives the obligation. | Needs `--leaves`. |
+
+**Output and exit codes** — `duplicate · P-N · defined k times (lines …)`,
+`mismatch · line L · anchor p-N labels P-M`, `notice · gaps (reported, never
+failed): …`, under `--base` one `base · … · minted … · removed … · edited …` line,
+under `--leaves` one `stale leaf · P-N · <path> …` line per stale citer and the
+`opt-out` line when one waived them, then a summary line. `--json` top-level
+keys: `contract` (`nen.canon.clause-check/v0.1`), `repo`, `file`, `prefix`,
+`definitions` (a count), `duplicates` (`{ id, count, lines }`), `mismatches`
+(`{ line, anchor, label }`), `gaps`, `base` (`{ from, kind: file|ref, minted,
+removed, edited }` or null), `leaves` (`{ patterns, ref, optOut, obligations:
+[{ id, citing, stale }], stale }` or null), `exit`. Exit **0** unique, agreeing
+and no stale leaf (or an opt-out); **1** a duplicate, a mismatch, or a stale leaf
+without an opt-out; **2** a tooling failure or a usage error, with nothing on stdout.
+
+**Example**
+
+```bash
+nen canon clause check --repo ../akatsuki-ai --file CONSTITUTION.md --prefix CON --base 959584b:CONSTITUTION.md --leaves 'agents/**/*.md,docs/**/*.md'
+```
+```text
+base · 959584b:CONSTITUTION.md · minted none · removed none · edited CON-22, CON-33
+stale leaf · CON-22 · agents/_conventions.md cites it and has no change against 959584b
+…
+canon clause check: 55 CON definitions in CONSTITUTION.md · 0 duplicate · 0 mismatch · 11 stale leaf · exit 1
+```
+(exit 1; a real run against an older CONSTITUTION.md, abridged)
+
 <a id="family-quality"></a>
 
 **`nen quality`**
@@ -11296,6 +11541,53 @@ specs/INDEX.md: absent · action none
   002 other-feature Specified · 0 open marker(s) · Other | feature
 ```
 (exit 1; run live against this repository's fixture)
+
+<a id="family-decisions"></a>
+
+**`nen decisions`**
+
+### `nen decisions summary`
+
+The counts a canon's prose would otherwise carry about its own decision matrix,
+read from `nen/decisions.json` so the prose cites this verb instead (SDD piece
+N9; Hatsu ruling HR-13's ratchet exists for exactly the number that is true the
+day it is written): rows per class, rows per gate, and the ids of the G5 rows in
+file order. It validates the file through the loader
+[`schema check`](#nen-schema-check) uses and counts; it decides nothing.
+
+**Usage**
+
+```text
+nen decisions summary [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | no | The repository whose `nen/decisions.json` is read. | Default the current directory; not a directory exits 2. |
+
+**Output and exit codes** — `decisions:`, `rows:`, `classes:`, `gates:` and `g5:`
+lines. `--json` top-level keys: `contract` (`nen.decisions.summary/v0.1`), `repo`,
+`path`, `rows` (a count), `classes` (`{ autonomous, ask-once-per-run, human-gate }`),
+`gates` (`{ G1, G1-M, G2, G3, G4, G5, none }`), `g5` (ids in file order). Exit **0**
+with the summary; **1** when `nen/decisions.json` is absent — **an absent matrix
+is never an empty summary** — or does not validate (the loader's pointer is
+named); **2** a usage error.
+
+**Example**
+
+```bash
+nen decisions summary --repo ../hatsu
+```
+```text
+decisions: ../hatsu/nen/decisions.json
+rows: 42
+classes: autonomous 14 · ask-once-per-run 14 · human-gate 14
+gates: G1 1 · G1-M 0 · G2 1 · G3 1 · G4 1 · G5 10 · none 28
+g5: semantic-conflict, unsettled-finding, hand-edited-canon-mirror, rewrite-published-history, secret-shape, signing-material, on-device-act, supply-chain-failure, unruled-policy-surface, ambiguous-intent
+```
+(exit 0; a real run against a Hatsu checkout, the path shortened)
 
 ## Stack-aware developer verbs
 

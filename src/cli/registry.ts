@@ -32,6 +32,7 @@ import { changelogCommand } from "../changelog/command.js";
 import { classifyCommand } from "../classify/command.js";
 import { colorCommand } from "../color/command.js";
 import { commitCommand } from "../commit/command.js";
+import { decisionsCommand } from "../decisions/command.js";
 import { devCommand } from "../dev/command.js";
 import { directCommand } from "../direct/command.js";
 import { effortCommand } from "../effort/command.js";
@@ -77,6 +78,7 @@ export const COMMANDS: readonly Command[] = [
   classifyCommand,
   colorCommand,
   commitCommand,
+  decisionsCommand,
   devCommand,
   directCommand,
   effortCommand,
