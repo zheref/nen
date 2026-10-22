@@ -943,6 +943,11 @@ function doOverlap(context: CommandContext): number {
 }
 
 export const wcCommand: Command = {
+  exits: [
+    { verb: "wc squash", code: 3, meaning: "squashed, and the read-back found a refused trailer on the fold" },
+    { verb: "wc swap", code: 3, meaning: "a tree is dirty; nothing moved" },
+    { verb: "wc catch-up", code: 3, meaning: "stopped on a conflict whose every path is declared mechanical; nothing resolved" },
+  ],
   name: "wc",
   subcommands: ["classify", "squash", "catch-up", "publish", "worktrees", "swap", "worktree", "prune", "overlap"],
   summary: "Classify the working copy, squash it, catch it up, publish it, list the worktrees, swap one into core, or keep one at a fixed path.",

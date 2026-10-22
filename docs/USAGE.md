@@ -9,13 +9,10 @@ caller reads the result and decides what to do about it. Run it as `nen` once
 the bootstrap has fetched and verified a pinned binary (see [Getting the
 binary](#getting-the-binary)), or as `bun src/index.ts` from a checkout of this
 repository — the two are the same program, and every example below is written
-with the `nen` spelling. This document covers the **v0.13.0 line** (one new family, `usage`, and five
-new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
-`commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
-leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 45 command
-families, 155 verbs, every flag checked against the binary this repository
-builds.
+with the `nen` spelling. This document covers the binary this repository
+builds — `nen --version` names it, and [CHANGELOG.md](../CHANGELOG.md) says
+what each version changed: 46 command
+families, 156 verbs, every flag checked against that binary.
 
 ## Conventions
 
@@ -174,7 +171,7 @@ and the [`wake`](#family-wake) family take `--repo-slug`;
 which scopes changelog link matching to one repository rather than naming an
 API target; and [`bootstrap`](#nen-bootstrap) takes `--source` for the
 repository whose release assets it fetches. `--repo` and any of these are never
-interchangeable: `--repo ../bankai-core` handed to a fetcher would produce a
+interchangeable: `--repo ../alpha` handed to a fetcher would produce a
 bewildering 404, which is exactly why the two meanings carry two names.
 
 ### The one-surface `--json` contract
@@ -209,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **84 shapes** and **87 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **86 shapes** and **89 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -240,7 +237,7 @@ here and moving the two counts in the same change.** The command-family count is
 not this list's: `src/cli/surface.test.ts` pins it.
 
 The ids are grouped by their first segment after `nen.`, which is usually a
-command family and is not always one (`contract`, `decisions` and `workflow` are
+command family and is not always one (`contract`, `decisions`, `refusal` and `workflow` are
 file formats).
 
 <!-- contract-ids:begin -->
@@ -250,6 +247,7 @@ file formats).
 - **`contract`** — `nen.contract/v0.1`
 - **`decisions`** — `nen.decisions/v0.1`
 - **`dev`** — `nen.dev.release-publish/v0.1`
+- **`exits`** — `nen.exits/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
 - **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.criteria/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
@@ -257,6 +255,7 @@ file formats).
 - **`pr`** — `nen.pr.converge/v0.1` · `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
 - **`release`** — `nen.release.unit-check/v0.1`
 - **`repo`** — `nen.repo.classify/v0.1` · `nen.repo.family/v0.1`
+- **`refusal`** — `nen.refusal/v0.1`
 - **`report`** — `nen.report.data/v0.1` · `nen.report.graph/v0.1` · `nen.report.render/v0.1`
 - **`review`** — `nen.review.scopes/v0.1`
 - **`run`** — `nen.run/v0.1`
@@ -279,11 +278,27 @@ their subprocess's stdio, [`bootstrap`](#nen-bootstrap) prints only the
 verified binary path, and [`report mermaid`](#nen-report-mermaid) prints the
 diagram text itself. The last of them **refuses `--json` by name** rather than
 accepting and ignoring it; the other three predate that rule and still accept
-it silently. And a handful of verbs — [`issue file`](#nen-issue-file),
-[`idea file`](#nen-idea-file), [`canon resolve`](#nen-canon-resolve),
-[`commit format`](#nen-commit-format) — print refusals as plain `nen: <reason>`
-lines even under `--json`: only the success path is machine-shaped, because a
-caller that mis-invoked a verb needs the sentence more than it needs a schema.
+it silently. <a id="the-refusal-envelope"></a>
+
+**The refusal envelope.** [`issue file`](#nen-issue-file),
+[`idea file`](#nen-idea-file), [`canon resolve`](#nen-canon-resolve) and
+[`commit format`](#nen-commit-format) refuse under `--json` with one JSON
+document on stdout, `nen.refusal/v0.1`, and print no refusal prose on stderr:
+
+```json
+{ "contract": "nen.refusal/v0.1", "ok": false, "verb": "idea file", "code": 2,
+  "refused": ["--target owner/name is required. ..."] }
+```
+
+`code` is the exit code the process returns with it; `refused` lists every
+reason in the order the verb found them, never empty. A flag the parser
+refuses, a usage error, a body that does not validate and a read that failed
+all travel the same way. Without `--json` the refusal is the `nen: <reason>`
+prose it always was. `commit format` keeps its `warning:` and `note:` lines on
+stderr, because they are facts about the subject and not the refusal. Through
+v0.25.0 these four verbs printed the prose even under `--json`, so an
+unattended caller met an unparseable line on the one path where it had to
+branch (Hatsu SDD plan N5).
 
 ### Exit codes
 
@@ -340,8 +355,10 @@ the wrong thing:
 `shu` is the only *family* that returns `3` **and** `4` in that table's sense.
 Every code above `2` is per verb, and **the same number means different things
 in different verbs** — a caller branching on anything above `2` must know which
-verb it invoked. The complete list:
+verb it invoked — and [`nen exits`](#nen-exits) answers that from the binary.
+The complete list:
 
+<!-- exits:begin -->
 | Verb | Code | Meaning |
 |---|---|---|
 | every [`shu`](#family-shu) verb | `3` / `4` / `5` | the table above; [`shu warmup`](#nen-shu-warmup) passes them through from the build it delegates |
@@ -366,15 +383,11 @@ verb it invoked. The complete list:
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted but did not list in the response's pending-review page; this does not prove recording failure or allowance exhaustion. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
+<!-- exits:end -->
 
-One inconsistency is worth knowing before it surprises you: a missing
-`--target` exits `1` rather than `2` on eighteen verbs — every verb routed
-through one of the four families' local `requireTarget()` helpers (including
-[`issue edit-body`](#nen-issue-edit-body) and
-[`pr edit-body`](#nen-pr-edit-body), which reuse the SAME helper as the rest
-of their families rather than inventing a one-off exit-2 spelling for
-themselves). See the note under [`labels sync`](#nen-labels-sync), and
-[zheref/nen#93](https://github.com/zheref/nen/issues/93).
+[`nen exits`](#nen-exits) prints this table as data — every row above, read
+from the families that own them — and `src/exits/exits.test.ts` fails the build
+when the two disagree by a single verb or code.
 
 ### `--dry-run` discipline
 
@@ -884,7 +897,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 155 verbs, grouped as the README groups them. **Reads** is what a
+All 156 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -925,7 +938,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`backlog`](#family-backlog) | [`nen backlog fetch`](#nen-backlog-fetch) | fetches open issues + open PRs fresh over 'gh api' (never cached) and assembles one row per effort | gh (issues, pulls, paginated) | yes |
 | [`backlog`](#family-backlog) | [`nen backlog order`](#nen-backlog-order) | applies backlog-loop's severity/blocks/consumer/age priority order to a pre-fetched row set | local file (--rows-from) | yes |
 | [`board`](#family-board) | [`nen board build`](#nen-board-build) | assembles a Board from already-computed rows (gate from 'gate derive', colour from 'color status') | local file (--rows-from) | yes |
-| [`board`](#family-board) | [`nen board render`](#nen-board-render) | renders a Board snapshot as the padded-markdown table bankai-core's own script established | local file (--board-from) | yes |
+| [`board`](#family-board) | [`nen board render`](#nen-board-render) | renders a Board snapshot as the padded-markdown table the retired shell board script established | local file (--board-from) | yes |
 | [`board`](#family-board) | [`nen board diff`](#nen-board-diff) | field-level diff of two Board snapshots, by row id | local files (--before, --after) | yes |
 | [`epic`](#family-epic) | [`nen epic next-wave`](#nen-epic-next-wave) | flips a completed child, redraws the progress bar, computes the next releasable wave | local file (--body-file), optional write (--out) | yes |
 | [`effort`](#family-effort) | [`nen effort classify`](#nen-effort-classify) | classifies one epic/child against senkei's five-class (plus undecidable) taxonomy from caller-supplied facts | local file (--input) | yes |
@@ -1047,6 +1060,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wake`](#family-wake) | [`nen wake fire`](#nen-wake-fire) | edge-trigger one object by removing then re-applying a label, then post an optional settle comment | gh (issue edit x2, api comment; --run required to write) | yes |
 | [`stop`](#family-stop) | [`nen stop`](#nen-stop) | render the gate-stop banner plus a padded-markdown efforts table read from a file/stdin, or (--template) a blank table to fill in; --mark also records the stop for a host hook | a local efforts.md file or stdin; no git/gh. --mark WRITES .nen/last-stop.json under --repo | yes |
 | [`stop`](#family-stop) | [`nen stop answer`](#nen-stop-answer) | record the answer a stop received -- the question, every option with its consequence, and a picked key or the typed reply verbatim -- as one record with a never-reused id `R-YYYY-MM-DD-nn`; `answer show` lists an effort's records. Records, never chooses | git (rev-parse --git-common-dir); the --question-file/--typed-file under --repo; WRITES `<git common dir>/.nen/stops/<effort>/<n>.json` and `<git common dir>/.nen/stop-ids/<id>` unless --dry-run | yes |
+| [`exits`](#family-exits) | [`nen exits`](#nen-exits) | every exit code above the shared 0/1/2 scheme, verb -> code -> meaning, read from the registry; USAGE's exit table is held to it | nothing outside the binary | yes |
 
 ## Readiness & pull requests
 
@@ -1110,9 +1124,12 @@ supply its token variable even when `gh` is already authenticated.
 Reports one pull request's CON-32 readiness: the deterministic gate's
 verdict, quoted, plus every conjunct row — `ready`, `FAILED`, or `unknown`
 with the missing fact named. It is
-read-only: it never labels, merges or comments, and it holds no readiness
-*authority* today (the shell gate still does; see the verb's own header for
-the shadow-window position). A `<CODE>#<N>` ref is resolved through the
+read-only: it never labels, merges or comments. **It is the one producer of
+the CON-32 readiness verdict**: a caller that claims a pull request is ready
+quotes this verb's verdict line, and no other gate decides it. The shell gate
+this verb was ported from is retired; the shadow-window comparison against it
+under `docs/evidence/` is a dated record of the port, not a second authority.
+A `<CODE>#<N>` ref is resolved through the
 target repository's `nen/repos.json` `product_codes`; a bare number needs
 `--gh-repo` or its `--target` alias. `--pr <n>` is an additive alias for the
 positional number, so `ready --target owner/name --pr 334` is accepted too.
@@ -5486,11 +5503,11 @@ truncated (truncation is reported, not failed); exit 2 for a missing `--repo-slu
 **Example**
 
 ```bash
-nen backlog fetch --repo-slug zheref/bankai-core --limit 200 --json
+nen backlog fetch --repo-slug example/alpha --limit 200 --json
 ```
 ```text
 {
-  "repo": "zheref/bankai-core",
+  "repo": "example/alpha",
   "truncated": false,
   "rows": [
     { "issueNumber": 1, "title": "an issue", "labels": ["a"], "prNumbers": [5], "createdAt": "2026-01-01T00:00:00Z" }
@@ -5581,10 +5598,10 @@ required flag is missing or a row fails the shape check (missing/wrong-typed `id
 **Example**
 
 ```bash
-nen board build --repo-slug zheref/bankai-core --rows-from board-rows.json
+nen board build --repo-slug example/alpha --rows-from board-rows.json
 ```
 ```text
-zheref/bankai-core -- generated 2026-09-07T22:56:32.469Z
+example/alpha -- generated 2026-09-07T22:56:32.469Z
 
 | Effort                            | Refs                   | Status (gate)    | Needs             |
 | --------------------------------- | ---------------------- | ---------------- | ----------------- |
@@ -5596,7 +5613,7 @@ zheref/bankai-core -- generated 2026-09-07T22:56:32.469Z
 ### `nen board render`
 
 Renders a `Board` (a `board build --json` result) as the same padded-markdown table
-`scripts/ichigo_board.sh` (bankai-core#653) established. It is the read half of `board build`, split
+the retired shell board script `ichigo_board.sh` established. It is the read half of `board build`, split
 out so a caller holding an already-assembled board (from disk, or piped from `build`) can re-render it
 without re-supplying the raw rows.
 
@@ -5623,7 +5640,7 @@ fails the shape check (malformed `refs`, etc.) — fixed in #99 (issue #92).
 nen board render --board-from board.json
 ```
 ```text
-zheref/bankai-core -- generated 2026-09-07T22:56:32.507Z
+example/alpha -- generated 2026-09-07T22:56:32.507Z
 
 | Effort                            | Refs                   | Status (gate)    | Needs             |
 | --------------------------------- | ---------------------- | ---------------- | ----------------- |
@@ -6773,7 +6790,7 @@ Any failed pair makes exit 1. An unappendable ledger refuses before any mutation
 **Example**
 
 ```bash
-nen label apply BC-IS-#386 --label "bankai:stage/human-review" --repo-slug zheref/bankai-core \
+nen label apply BC-IS-#386 --label "bankai:stage/human-review" --repo-slug example/alpha \
   --repo src/schema/fixtures/bankai-repo \
   --reason "watch classifier landed; needs maintainer review" --ledger /tmp/label-ledger.jsonl
 ```
@@ -7752,7 +7769,7 @@ nen repo inventory --target <owner/name> --epic-label <label> --integration-pref
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--target <owner/name>` | yes | The repository to enumerate, live. | Missing -> exit 1 (same `requireTarget` inconsistency as `labels sync`, above — confirmed live: `nen repo inventory --epic-label ... --integration-prefix ...` with no `--target` prints `--target owner/name is required.` and exits 1, not 2). |
+| `--target <owner/name>` | yes | The repository to enumerate, live. | Missing or malformed -> exit 2, the shared [`--target` rule](#exit-codes). |
 | `--epic-label <label>` | yes | The label marking an epic issue. | Missing -> exit 2. |
 | `--integration-prefix <prefix>` | yes | The naming convention for a live integration branch. | No default — the convention is the target repository's own; missing -> exit 2. |
 | `--trunk <branch>` | no | Branch integration branches are compared against. | Default `main`. |
@@ -8871,8 +8888,9 @@ This verb reads no `--repo` — it has no reason to touch a local checkout.
 `would run: <command>`; `--json` top-level keys: `ok`, `message`, `dryRun`,
 `command` (the `gh` call as one POSIX-shell line; `dryRun` and `command`
 appended by the SDD plan N6, every earlier key in place). Exit 0 on success and on a
-dry run, exit 1 when `gh` fails or `--target` is malformed, exit 2 on a
-missing `--target`/`--run-id`.
+dry run, exit 1 when `gh` fails, exit 2 on a missing or malformed
+`--target` or a missing `--run-id` (a malformed `--target` was exit 1 through
+v0.25.0).
 
 **Example**
 
@@ -9103,7 +9121,7 @@ nen issue search --target <owner/name> --subject <text>
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `--target <owner/name>` | yes | The GitHub repository to search. | Absence is a refusal at **exit 1** (a plain thrown error, not a parser usage error) -- an inconsistency worth knowing: every other required flag in this family that is checked at the parser boundary exits 2. |
+| `--target <owner/name>` | yes | The GitHub repository to search. | Missing or malformed -> exit 2, the shared [`--target` rule](#exit-codes). |
 | `--subject <text>` | no | Free-text problem statement, matched against open and recently-closed issues. | Omit it and both subject-driven passes report `skipped`; the files/rule-ids and lane passes still run if their own flags are given. |
 | `--files a,b` | no | Paths the problem touches; each becomes an `in:body` OR-term for the fold-candidate pass. | Comma list. |
 | `--rule-ids X-1,X-2` | no | Clause/rule identifiers, in whatever vocabulary the target repository spells them. | Comma list; joined into the SAME fold-candidate pass as `--files`. |
@@ -9115,12 +9133,12 @@ nen issue search --target <owner/name> --subject <text>
 **Example**
 
 ```bash
-nen issue search --target zheref/bankai-core \
+nen issue search --target example/alpha \
   --subject "wake verify swallows a paginated PR comment thread" \
   --files src/wake/command.ts,src/wake/detect.ts --rule-ids CON-38
 ```
 ```text
-repository: zheref/bankai-core
+repository: example/alpha
 
 [subject-open] the same problem, already open -- amend it with the new evidence instead of filing a second one
   query: wake verify swallows a paginated PR comment thread
@@ -9161,7 +9179,7 @@ nen issue open-pr-check --target <owner/name> --issues 12,34
 **Example**
 
 ```bash
-nen issue open-pr-check --target zheref/bankai-core --issues 41,52,60
+nen issue open-pr-check --target example/alpha --issues 41,52,60
 ```
 ```text
 open pull requests scanned: 37
@@ -9203,18 +9221,18 @@ nen issue file --target <owner/name> --repo <path>
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 | `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
-**Output and exit codes** -- human rendering: `filed #<n> <url>` on success, or `would run: gh issue create ... --body-file - ...` and a `stdin:` line naming the file the checked bytes came from under `--dry-run`. `--json`: `{ ...FileResult, labels, bodyFile, privateNameCheck }` on success (`FileResult` = `{ url, number }`), `{ dryRun: true, argv, bodyFile, privateNameCheck }` under `--dry-run` (`bodyFile` the resolved path the body was read from), `{ dryRun, filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses. Refusals are ALWAYS printed as plain `nen: <reason>` lines to stderr, even under `--json` -- a caller in JSON mode still gets prose for a refusal, only the success path is machine-shaped. Exit 0 on a successful file (dry or real); exit 1 when title/labels/assignee/label-taxonomy/forbidden-family checks fail (every failing check is reported at once, not one round trip at a time); exit 2 when `--repo` or `--body-file` was omitted outright, `--body-file` cannot be read, or the label taxonomy itself could not be loaded; exit **4** when the [private-name guard](#the-private-name-guard) finds a private repository named in the title or body of a filing to a PUBLIC target, and exit 1 when that guard could not run.
+**Output and exit codes** -- human rendering: `filed #<n> <url>` on success, or `would run: gh issue create ... --body-file - ...` and a `stdin:` line naming the file the checked bytes came from under `--dry-run`. `--json`: `{ ...FileResult, labels, bodyFile, privateNameCheck }` on success (`FileResult` = `{ url, number }`), `{ dryRun: true, argv, bodyFile, privateNameCheck }` under `--dry-run` (`bodyFile` the resolved path the body was read from), `{ dryRun, filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses. Refusals print as plain `nen: <reason>` lines on stderr; under `--json` every refusal -- a flag the parser refuses, a usage error, the filing's own checks -- is the [refusal envelope](#the-refusal-envelope) on stdout instead, `code` the exit. Exit 0 on a successful file (dry or real); exit 1 when title/labels/assignee/label-taxonomy/forbidden-family checks fail (every failing check is reported at once, not one round trip at a time); exit 2 when `--repo` or `--body-file` was omitted outright, `--body-file` cannot be read, or the label taxonomy itself could not be loaded; exit **4** when the [private-name guard](#the-private-name-guard) finds a private repository named in the title or body of a filing to a PUBLIC target, and exit 1 when that guard could not run.
 
 **Example**
 
 ```bash
-nen issue file --target zheref/bankai-core --repo src/schema/fixtures/bankai-repo \
+nen issue file --target example/alpha --repo src/schema/fixtures/bankai-repo \
   --title "wake verify does not paginate PR comments past one page" \
   --body-file /tmp/body.md \
   --label bankai:stage/idea,bankai:severity/medium --assignee zheref --dry-run
 ```
 ```text
-would run: gh issue create --repo zheref/bankai-core --title wake verify does not paginate PR comments past one page --body-file - --assignee zheref --label bankai:stage/idea --label bankai:severity/medium
+would run: gh issue create --repo example/alpha --title wake verify does not paginate PR comments past one page --body-file - --assignee zheref --label bankai:stage/idea --label bankai:severity/medium
 stdin: the 611 byte(s) read and checked from /tmp/body.md (gh reads these, not the file)
 ```
 (a `--dry-run` — no GitHub write. Captured before [#329](https://github.com/zheref/nen/issues/329) and updated to its shape: the argv's `--body-file -` and the `stdin:` line are #329's, the byte count illustrative; a dry run now also reads the target's visibility and, for a public target, the private list)
@@ -9250,11 +9268,11 @@ nen issue comment --target <owner/name> --issue <n>
 **Example**
 
 ```bash
-nen issue comment --target zheref/bankai-core --issue 90 \
+nen issue comment --target example/alpha --issue 90 \
   --body "Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up." --dry-run
 ```
 ```text
-would run: gh issue comment 90 --repo zheref/bankai-core --body Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up.
+would run: gh issue comment 90 --repo example/alpha --body Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up.
 --- body as it would be posted ---
 Filed as part of the USAGE.md doc pass; see docs/USAGE.md#issue for the wire-up.
 --- end of body (no trailing newline) ---
@@ -9634,7 +9652,7 @@ fallback task list for the parent's body:
   - [ ] #52
 
 nen does NOT write this. To apply it, put the CURRENT body of #12 plus these lines in a file and run:
-  nen issue edit-body --target zheref/bankai-core --issue 12 --body-file <file>
+  nen issue edit-body --target example/alpha --issue 12 --body-file <file>
 ```
 
 [`issue edit-body`](#nen-issue-edit-body) requires `--target` the same way this verb does, so the line above is copy/pastable as written; and it **replaces** a body, so the file is the parent's current body *plus* those lines -- handing it only the lines loses the body. And say which form was used: a task list is not a sub-issue graph, and a later sweep that reads one as the other is wrong about the whole chain.
@@ -9644,11 +9662,11 @@ nen does NOT write this. To apply it, put the CURRENT body of #12 plus these lin
 **Example**
 
 ```bash
-nen issue attach-sub --target zheref/bankai-core --parent 12 --children 41,52 --dry-run
+nen issue attach-sub --target example/alpha --parent 12 --children 41,52 --dry-run
 ```
 ```text
-would run: gh api --method POST repos/zheref/bankai-core/issues/12/sub_issues -F sub_issue_id=100041   (#41 -> id 100041)
-would run: gh api --method POST repos/zheref/bankai-core/issues/12/sub_issues -F sub_issue_id=100052   (#52 -> id 100052)
+would run: gh api --method POST repos/example/alpha/issues/12/sub_issues -F sub_issue_id=100041   (#41 -> id 100041)
+would run: gh api --method POST repos/example/alpha/issues/12/sub_issues -F sub_issue_id=100052   (#52 -> id 100052)
 ```
 (shape derived from `src/issue/subissue.ts`'s `attachSub` and `src/issue/subissue.test.ts` -- not run live: even `--dry-run` reads GitHub to certify `--parent`/`--children` are issues, never pull requests)
 
@@ -9691,7 +9709,7 @@ nen issue consolidate-close --target <owner/name> --parent <n>
 **Example**
 
 ```bash
-nen issue consolidate-close --target zheref/bankai-core --repo src/schema/fixtures/bankai-repo \
+nen issue consolidate-close --target example/alpha --repo src/schema/fixtures/bankai-repo \
   --parent 12 --children 41,52 --severity-family bankai:severity \
   --close-comment "Folded into #{parent} -- see its own body for the combined evidence." --dry-run
 ```
@@ -9699,10 +9717,10 @@ nen issue consolidate-close --target zheref/bankai-core --repo src/schema/fixtur
 parent: #12
 label union: bankai:stage/idea, bankai:severity/high
 severity: bankai:severity/high (max of bankai:severity/medium, bankai:severity/high)
-would run: gh api --method POST repos/zheref/bankai-core/issues/12/sub_issues -F sub_issue_id=100041   (#41 -> id 100041)
-would run: gh api --method POST repos/zheref/bankai-core/issues/12/sub_issues -F sub_issue_id=100052   (#52 -> id 100052)
-would run: gh issue close 41 --repo zheref/bankai-core --comment "Folded into #12 -- see its own body for the combined evidence."
-would run: gh issue close 52 --repo zheref/bankai-core --comment "Folded into #12 -- see its own body for the combined evidence."
+would run: gh api --method POST repos/example/alpha/issues/12/sub_issues -F sub_issue_id=100041   (#41 -> id 100041)
+would run: gh api --method POST repos/example/alpha/issues/12/sub_issues -F sub_issue_id=100052   (#52 -> id 100052)
+would run: gh issue close 41 --repo example/alpha --comment "Folded into #12 -- see its own body for the combined evidence."
+would run: gh issue close 52 --repo example/alpha --comment "Folded into #12 -- see its own body for the combined evidence."
 ```
 (shape derived from `src/issue/subissue.ts`'s `consolidateClose`/`planConsolidation` and `src/issue/command.test.ts` -- not run live: reads and the open-PR guard reach GitHub even under `--dry-run`)
 
@@ -9731,7 +9749,7 @@ nen issue chain-position --target <owner/name> --issue <n> [--repo <path>]
 **Example**
 
 ```bash
-nen issue chain-position --target zheref/bankai-core --issue 41 \
+nen issue chain-position --target example/alpha --issue 41 \
   --chain-labels idea=bankai:stage/idea,building=bankai:stage/building,in-review=bankai:stage/in-review,epic=bankai:epic,researched=bankai:stage/researched,approved-team=,approved-direct=,chore=
 ```
 ```text
@@ -9767,7 +9785,7 @@ nen issue terminus --target <owner/name> --issue <n>
 **Example**
 
 ```bash
-nen issue terminus --target zheref/bankai-core --issue 12 \
+nen issue terminus --target example/alpha --issue 12 \
   --chain-labels epic=bankai:epic,chore=,approved-team=bankai:stage/approved-team,approved-direct= \
   --integration-prefix release/ --trunk main
 ```
@@ -10027,17 +10045,17 @@ nen idea file --target <owner/name> --repo <path>
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 | `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
-**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)); `{ dryRun: true, argv, bodyFile, privateNameCheck }` under `--dry-run` (`bodyFile` the resolved path), whose human form is `would run: gh issue create ...` and a `stdin:` line, exactly [`issue file`](#nen-issue-file)'s. Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
+**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)); `{ dryRun: true, argv, bodyFile, privateNameCheck }` under `--dry-run` (`bodyFile` the resolved path), whose human form is `would run: gh issue create ...` and a `stdin:` line, exactly [`issue file`](#nen-issue-file)'s. Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines, and under `--json` as the [refusal envelope](#the-refusal-envelope) on stdout, same as `issue file`; so is a read-back that answered as a pull request, whose reason names the number that was filed. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
 
 **Example**
 
 ```bash
-nen idea file --target zheref/bankai-core --repo src/schema/fixtures/bankai-repo \
+nen idea file --target example/alpha --repo src/schema/fixtures/bankai-repo \
   --title "Consider a --paginate flag on wake verify's three gh api reads" \
   --body-file /tmp/idea-body.md --label bankai:stage/idea --assignee zheref
 ```
 ```text
-filed #97 https://github.com/zheref/bankai-core/issues/97
+filed #97 https://github.com/example/alpha/issues/97
 read-back OK -- title, body and labels match what was submitted.
 ```
 (shape derived from `src/idea/file.ts`'s `fileIdea`/`FileIdeaResult` and `src/idea/file.test.ts` -- not run live, this reaches GitHub)
@@ -10248,7 +10266,7 @@ nen canon resolve --repo <path> --target <owner/name>
 | `--stack-dir <dir>` | yes | Directory the one stack handbook is resolved under. | The `handbooks/stacks` directory of a `bankai-handbooks` checkout at the pinned tag; the stack path is `<stack-dir>/<scenario>/<leaf>`. |
 | `--leaf <file>` | no | The stack handbook's filename. | Defaults to `architecture.md`. `--leaf rules` resolves the stack's operational rule directory, which is what [`canon mirror generate`](#nen-canon-mirror-generate) takes as `--rules-dir`. |
 
-**Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line even under `--json`. Exit 0 on a resolved scenario; exit 1 on an unrecorded target, one with no (or conflicting) recorded scenario, or an invalid scenario shape.
+**Output and exit codes** -- prints `scenario: <name>`, `always load: <a, b, ...>`, `stack handbook: <stack-dir>/<scenario>/<leaf>`. `--json`: `{ scenario, alwaysLoad, stackHandbook }`. Every refusal (unrecorded target, empty always-load, a path-shaped scenario) prints as a plain `nen:` line, and under `--json` as the [refusal envelope](#the-refusal-envelope) on stdout instead. Exit 0 on a resolved scenario; exit 1 on an unrecorded target, one with no (or conflicting) recorded scenario, or an invalid scenario shape; exit 2 on a missing or malformed `--target` (a malformed one was exit 1 through v0.25.0).
 
 **Example** -- for a consumer whose `consumers[]` entry records `swiftui-tca-uzf-v2` (`owner/name` and `/path/to/repo` are placeholders), passing the five always-load baselines `handbooks/INDEX.md` names at `v0.6.0`:
 
@@ -10720,7 +10738,7 @@ nen commit format --type feat --subject "a short imperative subject"
 | `--trailer key=value,key2=value2` | no | Comma-separated `key=value` pairs. | A key containing `:` or empty is refused. An attribution-shaped key the repository's `nen/workflow.json` does not admit is refused too — see above. |
 | `--repo <path>` | no | The repository whose `nen/workflow.json` states the trailer policy, `commits.subjectCase` and `commits.bodyMaxLineLength`, and whose commitlint config states `subject-case`, `body-max-line-length` and `footer-max-line-length`. | Defaults to the cwd. Both are read on every run, so a `--repo` that does not exist is exit 2. |
 
-**Output and exit codes** -- prints the formatted message, its `--body` wrapped as above. `--json`: `{ message }` -- unchanged; no key was added for `subject-case` or the line length, and `message` is the wrapped one. All shape violations, policy refusals and `subject-case` refusals, warnings and notes print as plain `nen:` lines on stderr even under `--json`, and **every** one of them is printed, not just the first -- a shape violation, a refused trailer and a capitalized subject in the same invocation are three problems reported together. Exit 0 on a valid shape (a `nen: warning:` or `nen: note:` line may accompany it — and in a repository whose commitlint config is code and that declares no `commits.subjectCase`, every run carries a `subject-case NOT checked` warning, so exit 0 is **not** a subject-case verdict there); exit 2 on any shape violation, trailer-policy refusal, level-2 `subject-case` break — commitlint's own or the declared one — or line over a level-2 `body-max-line-length`/`footer-max-line-length`, the declared `commits.bodyMaxLineLength`, or the 100 assumed for a body whose config nen cannot read; exit **1** when a `nen/workflow.json` (a malformed `commits.subjectCase` or `commits.bodyMaxLineLength` included) or a `.commitlintrc` (a line-length rule of a shape commitlint rejects included) is present and could not be read. A broken config is reported **first**: both files are named when both are broken, and then any shape violation the run could still establish is printed after them rather than dropped — the exit stays 1, because the repository's files are what is wrong. [`commit write`](#nen-commit-write) reports the same failures in the same order.
+**Output and exit codes** -- prints the formatted message, its `--body` wrapped as above. `--json`: `{ message }` -- unchanged; no key was added for `subject-case` or the line length, and `message` is the wrapped one. All shape violations, policy refusals and `subject-case` refusals print as plain `nen:` lines on stderr; under `--json` they are the [refusal envelope](#the-refusal-envelope) on stdout instead (a broken config's failures first, then the shape refusals, `code` the exit), while warnings and notes stay `nen:` lines on stderr either way. **Every** one of them is reported, not just the first -- a shape violation, a refused trailer and a capitalized subject in the same invocation are three problems reported together. Exit 0 on a valid shape (a `nen: warning:` or `nen: note:` line may accompany it — and in a repository whose commitlint config is code and that declares no `commits.subjectCase`, every run carries a `subject-case NOT checked` warning, so exit 0 is **not** a subject-case verdict there); exit 2 on any shape violation, trailer-policy refusal, level-2 `subject-case` break — commitlint's own or the declared one — or line over a level-2 `body-max-line-length`/`footer-max-line-length`, the declared `commits.bodyMaxLineLength`, or the 100 assumed for a body whose config nen cannot read; exit **1** when a `nen/workflow.json` (a malformed `commits.subjectCase` or `commits.bodyMaxLineLength` included) or a `.commitlintrc` (a line-length rule of a shape commitlint rejects included) is present and could not be read. A broken config is reported **first**: both files are named when both are broken, and then any shape violation the run could still establish is printed after them rather than dropped — the exit stays 1, because the repository's files are what is wrong. [`commit write`](#nen-commit-write) reports the same failures in the same order.
 
 ```bash
 nen commit format --type fix --subject "stop dropping the last row" --trailer "Co-Authored-By=A" --repo .
@@ -14596,10 +14614,10 @@ before `then`; given twice it is refused with one kept. On any other skill it is
 **Example**
 
 ```bash
-nen parse futon --repo src/schema/fixtures/bankai-repo "BC@high+ then tag" --self zheref/bankai-core
+nen parse futon --repo src/schema/fixtures/alt-repo "AL@high+ then tag" --self example/alpha
 ```
 ```text
-repo: zheref/bankai-core (BC)
+repo: example/alpha (AL)
 band: high+ -> critical, high
 terminal: tag
 ```
@@ -14835,7 +14853,7 @@ nen wake verify --repo-slug <owner/name> --now <ISO-8601> --author-pattern <rege
 **Example**
 
 ```bash
-nen wake verify --repo-slug zheref/bankai-core --now 2026-09-07T00:00:00Z \
+nen wake verify --repo-slug example/alpha --now 2026-09-07T00:00:00Z \
   --author-pattern '^(kaido-bot|senku-bot)\[bot\]$' --run
 ```
 ```text
@@ -14884,13 +14902,13 @@ nen wake fire --repo-slug <owner/name> --ref <object-ref> --label <name> [--comm
 **Example**
 
 ```bash
-nen wake fire --repo-slug zheref/bankai-core --ref "BC-PR-#63" --label bankai:stage/in-review \
+nen wake fire --repo-slug example/alpha --ref "BC-PR-#63" --label bankai:stage/in-review \
   --comment "Re-firing tenma-review after the merge conflict was resolved."
 ```
 ```text
-(dry run) remove label 'bankai:stage/in-review' from zheref/bankai-core#63
-(dry run) re-apply label 'bankai:stage/in-review' to zheref/bankai-core#63
-(dry run) post settle comment on zheref/bankai-core#63
+(dry run) remove label 'bankai:stage/in-review' from example/alpha#63
+(dry run) re-apply label 'bankai:stage/in-review' to example/alpha#63
+(dry run) post settle comment on example/alpha#63
 nothing written -- pass --run to fire for real.
 ```
 (shape derived from `src/wake/command.ts`'s `fire()` and `src/wake/command.test.ts` -- not run live, this reaches GitHub; the dry-run text itself needs no network and is byte-accurate)
@@ -14899,7 +14917,7 @@ nothing written -- pass --run to fire for real.
 
 **`nen stop`**
 
-Renders the gate-stop banner and the padded-markdown efforts table -- the ceremony that says "your input is needed" and shows what is waiting, ported from bankai-core's `scripts/gate_stop.sh` + `scripts/ichigo_prompt.sh` with the embedded python3 removed (there is only ever this one renderer) and with no built-in persona name or ASCII portrait (this repository's own rule against a hard-coded persona in shipped code). It renders rung 4 of a four-rung escalation ladder (an OS notification and an audible cue, rungs 2-3, are NOT fired -- nen only ever shells out to `git`/`gh`, neither of which is a notification primitive) and states rung 1's status, which is the caller's to have actually fired.
+Renders the gate-stop banner and the padded-markdown efforts table -- the ceremony that says "your input is needed" and shows what is waiting, ported from the retired shell scripts `gate_stop.sh` + `ichigo_prompt.sh` with the embedded python3 removed (there is only ever this one renderer) and with no built-in persona name or ASCII portrait (this repository's own rule against a hard-coded persona in shipped code). It renders rung 4 of a four-rung escalation ladder (an OS notification and an audible cue, rungs 2-3, are NOT fired -- nen only ever shells out to `git`/`gh`, neither of which is a notification primitive) and states rung 1's status, which is the caller's to have actually fired.
 
 ### `nen stop`
 
@@ -15095,6 +15113,52 @@ recorded R-2026-10-22-01 -> /work/app/.git/.nen/stops/HA-IS-%23401/1.json
   G5 · kurapika · picked: A
 ```
 (shape derived from `src/stop/answer.ts` and `src/stop/answer.test.ts`; the absolute path is elided to `/work/app`)
+
+## Exit vocabulary
+
+What a code means, for the verb that returned it.
+
+<a id="family-exits"></a>
+
+**`nen exits`**
+
+Every exit code above the shared `0`/`1`/`2` scheme, verb -> code -> meaning, as data. Each family states its own codes on its registry entry, this verb renders the union, and `src/exits/exits.test.ts` holds the [exit-code table](#exit-codes) above to it row for row (Hatsu SDD plan N5).
+
+### `nen exits`
+
+The same number means different things in different verbs -- `3` is "unsupported host" on every `shu` verb, "a tree is dirty" on `wc swap` and "conflict, nothing written" on `issue edit-body` -- so a caller branching on a code above `2` reads it here for the verb it invoked, instead of reading a sentence. It reports what a code means; what to do about it is the caller's.
+
+**Usage**
+
+```text
+nen exits [<family> [<verb>]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `<family> [<verb>]` | no | Only the rows for that family, and verb. | A row spelled `<family> *` answers for every verb of the family and is kept under any verb. `bootstrap`, `schema` and the release row's `release-publish` script are accepted beside the registry families. An unknown family, or a third positional, is exit 2. A verb with no row of its own prints the scheme and `above 2: none`. |
+| `--json` | no | Print the report as JSON. | |
+
+**Output and exit codes** -- human lines: `every verb:` and the three shared codes, then `above 2:` and one `<verb>  <code>  <meaning>` line per row (or `above 2: none -- this verb returns only 0, 1 and 2.`). `--json` top-level keys: `contract` (`nen.exits/v0.1`), `filter` (the `<family> [<verb>]` asked for, or `null`), `scheme` (`[{ verb: "*", code, meaning }]` for `0`, `1`, `2`) and `verbs` (`[{ verb, code, meaning }]`, by verb then code). Reads nothing outside the binary. Exit 0 printed; exit 2 on an unknown family or a third positional.
+
+**Example**
+
+```bash
+nen exits pr merge
+```
+```text
+every verb:
+  0  success
+  1  the verb's own refusal or failure: the thing you asked for did not work
+  2  a usage error: you typed it wrong (a missing or malformed flag, --target included)
+above 2:
+  pr merge  5  gh pr merge refused
+  pr merge  6  gh could not be started
+  pr merge  7  --delivery: merged without authority; GitHub reports a base other than the one gated
+```
+(run for real)
 
 ## Reports
 
@@ -16866,7 +16930,7 @@ nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code N
 plan: 1 runner(s) for zheref/nen, pool windows-x64
 ...
 nen runner plan: warning: .\lordzheref already runs 11 runner service(s) on this host for repositories whose visibility differs from zheref/nen's (public) or cannot be told -- one account is one trust domain, so either repository's jobs can rewrite the other's runners (#330):
-nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
+nen runner plan:   actions.runner.example-alpha.NZ-BCR1 -- example/alpha, private
 ...
 nen runner plan:   actions.runner.zheref-KroWindows.NZ-KWIR5 -- zheref/KroWindows, private
 nen runner plan: recommended: a local account for zheref/nen alone, e.g. --service-account runner-nen (create it yourself first; nen never creates an account or handles its password).
@@ -16880,7 +16944,7 @@ nen runner plan --repo . --target zheref/nen --pool windows-x64 --machine-code N
 ```text
 ...
 nen runner plan: warning: zheref/nen's existing runner service(s) actions.runner.zheref-nen.NZ-NNR1, actions.runner.zheref-nen.NZ-NNR2, actions.runner.zheref-nen.NZ-NNR3 log on as .\lordzheref, which also serves repositories whose visibility differs or cannot be told; a new account moves only the runners this plan adds -- these keep .\lordzheref until they are removed and registered again under the new account (#330):
-nen runner plan:   actions.runner.zheref-bankai-core.NZ-BCR1 -- zheref/bankai-core, private
+nen runner plan:   actions.runner.example-alpha.NZ-BCR1 -- example/alpha, private
 ...
 ```
 (the same host, following the recommendation: exit 0; the plan and all but the
@@ -18028,7 +18092,7 @@ put it. Under `watch until` it is `mutating`: the walk reads the spawned argumen
 # 3. Check a skill invocation against its published grammar, before running it.
 nen parse izanami "gh pr checks 112 until it is green"
 nen parse izanagi "retry the flaky build until CI is green up to 3"
-nen parse futon --repo src/schema/fixtures/bankai-repo "BC@high+ then tag" --self zheref/bankai-core
+nen parse futon --repo src/schema/fixtures/alt-repo "AL@high+ then tag" --self example/alpha
 ```
 
 `parse izanami` classifies every command in the task and refuses the *whole*

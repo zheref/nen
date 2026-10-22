@@ -163,7 +163,7 @@ describe("nen idea file -- CLI wiring", () => {
   // surfaced as an error line and exit 1, with no result object because there
   // is no verdict to report. The test exists so that contract is a decision on
   // the record rather than an accident of where the throw lands.
-  it("--json emits no verdict object for that failure -- exit 1 and the message on stderr", async () => {
+  it("--json emits no verdict object for that failure -- exit 1 and the refusal envelope on stdout", async () => {
     const dir = mkdtempSync(join(tmpdir(), "nen-idea-"));
     const bodyFile = join(dir, "body.md");
     writeFileSync(bodyFile, "the body");
@@ -202,9 +202,16 @@ describe("nen idea file -- CLI wiring", () => {
         },
       ],
     );
+    // Since Hatsu SDD plan N5 the failure is the nen.refusal/v0.1 envelope on
+    // stdout under --json -- still no verdict object: no readBack, no
+    // mismatches, nothing a caller could read as a match.
     expect(result.code).toBe(1);
-    expect(result.out).toEqual([]);
-    expect(result.err.join("\n")).toMatch(/PULL REQUEST, not an issue/);
+    expect(result.err).toEqual([]);
+    const envelope = JSON.parse(result.out.join("\n")) as Record<string, unknown>;
+    expect(envelope).toMatchObject({ contract: "nen.refusal/v0.1", ok: false, verb: "idea file", code: 1 });
+    expect(envelope).not.toHaveProperty("readBack");
+    expect(envelope).not.toHaveProperty("mismatches");
+    expect(String((envelope["refused"] as string[])[0])).toMatch(/PULL REQUEST, not an issue/);
   });
 
   it("idea --help documents the read-back's object-class check", async () => {

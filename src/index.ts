@@ -54,6 +54,7 @@
 import { parseArgs, UsageError } from "./cli/args.js";
 import { mergeFlags, VerbUsageError, type Command } from "./cli/command.js";
 import { plainLine } from "./cli/plain.js";
+import { refuse } from "./cli/refusal.js";
 import { COMMANDS, findCommand } from "./cli/registry.js";
 import { RepoRootError } from "./repo/root.js";
 import { checkTaxonomy } from "./schema/taxonomy.js";
@@ -467,6 +468,11 @@ export async function run(argv: readonly string[], io: Io, seams: Seams = defaul
   }
 }
 
+/** Whether `family`'s `subcommand` refuses in a `nen.refusal/v0.1` envelope here. */
+function envelopes(family: Command, subcommand: string | undefined, json: boolean): boolean {
+  return json && subcommand !== undefined && (family.jsonRefusals ?? []).includes(subcommand);
+}
+
 // Dispatch to a registry family: re-parse the remainder against ITS spec plus
 // the globals, then run it.
 //
@@ -499,11 +505,17 @@ export async function runFamily(
     args = parseArgs(argv, mergeFlags(family.flags));
   } catch (error) {
     if (error instanceof UsageError) {
+      // A family's opted-in verb refuses in JSON under --json (Hatsu SDD plan
+      // N5): the parse failed, so the subcommand and --json are read off argv.
+      const hint = argv.map((token): string => token.split("=")[0] ?? token).find((name): boolean => family.hints?.[name] !== undefined);
+      if (envelopes(family, argv[1], headJson || argv.includes("--json"))) {
+        const reasons = [error.message, ...(hint === undefined ? [] : [family.hints?.[hint] ?? ""])];
+        return refuse(io, true, `${family.name} ${argv[1] ?? ""}`, 2, reasons);
+      }
       io.err(`${PROGRAM} ${family.name}: ${error.message}`);
       // A HINT FOR A FLAG THE FAMILY KNOWS IT DOES NOT TAKE: the token as
       // typed (a `--flag=value` spelling counts by its name), matched exactly.
-      const hinted = argv.map((token): string => token.split("=")[0] ?? token).find((name): boolean => family.hints?.[name] !== undefined);
-      if (hinted !== undefined) io.err(`${PROGRAM} ${family.name}: ${family.hints?.[hinted] ?? ""}`);
+      if (hint !== undefined) io.err(`${PROGRAM} ${family.name}: ${family.hints?.[hint] ?? ""}`);
       io.err(`Run '${PROGRAM} ${family.name} --help'.`);
       return 2;
     }
@@ -540,6 +552,10 @@ export async function runFamily(
     // nen did not write -- and a terminal executes a control character in it.
     // Line breaks the message itself carries are kept; each line is cleaned.
     const message = error instanceof Error ? error.message : String(error);
+    const code = error instanceof VerbUsageError || error instanceof RepoRootError ? 2 : 1;
+    if (envelopes(family, args.positionals[1], args.booleans.has("json") || headJson)) {
+      return refuse(io, true, `${family.name} ${args.positionals[1] ?? ""}`, code, [plainLine(message.replace(/\r?\n/g, " "))]);
+    }
     io.err(`${PROGRAM} ${family.name}: ${message.split(/\r?\n/).map((line): string => plainLine(line)).join("\n")}`);
     if (error instanceof VerbUsageError) {
       io.err(`Run '${PROGRAM} ${family.name} --help'.`);

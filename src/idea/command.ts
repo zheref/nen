@@ -15,6 +15,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
+import { refuse } from "../cli/refusal.js";
 import { createArgv, stdinLine, validateFiling, type FileRequest } from "../issue/file.js";
 import { readTitleFile } from "../issue/title.js";
 import { blockingExit, blocksWrite } from "../issue/privacy.js";
@@ -81,6 +82,10 @@ loudly (exit 1, the issue named), like any other read-back that could not
 confirm what it read.`;
 
 export const ideaCommand: Command = {
+  jsonRefusals: ["file"],
+  exits: [
+    { verb: "idea file", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+  ],
   name: "idea",
   subcommands: ["file"],
   summary: "File an idea issue and verify it read back exactly as submitted.",
@@ -139,8 +144,7 @@ export const ideaCommand: Command = {
       // make nen disagree with itself about what it sent.
       submittedBody = readFileSync(resolveAgainstRepo(root, bodyFile), "utf8");
     } catch (error) {
-      context.io.err(`nen: could not read --body-file '${bodyFile}': ${String(error)}`);
-      return 1;
+      return refuse(context.io, context.json, "idea file", 1, [`could not read --body-file '${bodyFile}': ${String(error)}`]);
     }
 
     const request: FileRequest = {
@@ -157,8 +161,7 @@ export const ideaCommand: Command = {
     // from GitHub. fileIdea validates again; the two cannot disagree.
     const refusals = validateFiling(request, taxonomy);
     if (refusals.length > 0) {
-      for (const refusal of refusals) context.io.err(`nen: ${refusal.reason}`);
-      return 1;
+      return refuse(context.io, context.json, "idea file", 1, refusals.map((refusal): string => refusal.reason));
     }
     // THE PRIVATE-NAME GUARD (zheref/nen#363), before the create: the title and
     // the very bytes that travel to gh on stdin.
@@ -192,8 +195,7 @@ export const ideaCommand: Command = {
     const result = fileIdea(context.seams, target, request, submittedBody, taxonomy);
 
     if ("refusals" in result) {
-      for (const refusal of result.refusals) context.io.err(`nen: ${refusal.reason}`);
-      return 1;
+      return refuse(context.io, context.json, "idea file", 1, result.refusals.map((refusal): string => refusal.reason));
     }
 
     if (context.json) {

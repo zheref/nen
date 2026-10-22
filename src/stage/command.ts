@@ -542,6 +542,9 @@ function runList(context: CommandContext, entries: readonly StatusEntry[], triag
 }
 
 export const stageCommand: Command = {
+  exits: [
+    { verb: "stage list", code: 3, meaning: "the add list is empty and nothing is flagged: no stageable change" },
+  ],
   name: "stage",
   subcommands: ["triage", "list", "check"],
   summary: "Flag secrets, local config, oversized files, binaries and unmentioned deletions before staging; emit the exact add list.",
