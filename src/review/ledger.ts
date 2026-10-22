@@ -1,7 +1,7 @@
 // Review-cycle storage, preserving Hatsu's v0.1 document and durable traces.
 // The repository supplies the roster; unknown historical rows are retained.
 import { lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, win32 } from "node:path";
+import { dirname, isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import { withLedgerLock, writeLedgerAtomically } from "../ledger/lock.js";
 import { loadWorkflow } from "../schema/workflow.js";
@@ -119,7 +119,7 @@ function names(path: string): string[] {
 export function sameCycleRoot(first: string, second: string, platform: string): boolean {
   // Git may spell a Windows checkout with forward slashes or different case.
   // relative() compares with the filesystem platform's path semantics.
-  return (platform === "win32" ? win32.relative : relative)(first, second) === "";
+  return (platform === "win32" ? win32.relative : posix.relative)(first, second) === "";
 }
 export function prKeyed(name: string, key: string, suffix: string): boolean {
   const prefix = `${key}-pr`;
