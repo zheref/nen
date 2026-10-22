@@ -34,7 +34,7 @@ import { ownerNameFromRemote } from "./resolve.js";
 
 export const CLASSIFY_CONTRACT = "nen.repo.classify/v0.1";
 
-export type RepoRole = "canon" | "consumer" | "unregistered";
+export type RepoRole = "canon" | "consumer" | "spec" | "unregistered";
 export type RepoKind = "product" | "process" | "library" | "unknown";
 
 export interface RepoClassification {
@@ -44,7 +44,7 @@ export interface RepoClassification {
   readonly kind: RepoKind;
   readonly stack: string | null;
   readonly lanes: readonly string[];
-  /** G4 for canon, G2 for a consumer, null for an unregistered repository -- never a guess. */
+  /** G4 for canon, G2 for a consumer or a family's spec repository, null for an unregistered repository -- never a guess. */
   readonly defaultGate: "G2" | "G4" | null;
   readonly sources: {
     readonly role: string;
@@ -87,8 +87,26 @@ export function readOrigin(seams: Seams, cwd: string): string {
   return slug;
 }
 
-export function roleOf(registry: RepoRegistry, target: string): { role: RepoRole; source: string } {
+export function roleOf(registry: RepoRegistry, target: string): { role: RepoRole; source: string; also?: string } {
   const lower = target.toLowerCase();
+  // A FAMILY'S SPECIFICATION REPOSITORY IS ROLE `spec`, GATE G2 (zheref/nen#453,
+  // HR-16), and the declaration wins over any other listing of the same slug:
+  // `families[].spec` is the one place the registry says what the repository
+  // IS, where `consumers`/`maintained_tools` say only how it is consumed. The
+  // other listing is not dropped silently -- it is returned for a note.
+  const family = (registry.families ?? []).find((entry): boolean => entry.spec.repo.toLowerCase() === lower);
+  if (family !== undefined) {
+    const others = [
+      registry.maintainedTools.some((repo): boolean => repo.toLowerCase() === lower) ? "maintained_tools" : null,
+      registry.consumers.some((entry): boolean => entry.repo.toLowerCase() === lower) ? "consumers" : null,
+      registry.pendingOnboarding.some((repo): boolean => repo.toLowerCase() === lower) ? "pending_onboarding" : null,
+    ].filter((name): name is string => name !== null);
+    return {
+      role: "spec",
+      source: `${registry.path}: families[${family.index}].spec.repo (family '${family.name}')`,
+      ...(others.length === 0 ? {} : { also: others.join(", ") }),
+    };
+  }
   if (registry.maintainedTools.some((repo): boolean => repo.toLowerCase() === lower)) {
     return { role: "canon", source: `${registry.path}: maintained_tools` };
   }
@@ -153,7 +171,10 @@ export function classifyRepo(options: ClassifyOptions): RepoClassification {
     originWhy = error.message;
   }
   const target = options.target ?? (origin as string);
-  const { role, source: roleSource } = roleOf(registry, target);
+  const { role, source: roleSource, also } = roleOf(registry, target);
+  if (also !== undefined) {
+    notes.push(`'${target}' is also listed under ${also}; families[].spec decides its role (spec, gate G2) -- the other listing does not`);
+  }
 
   let contract: RepositoryContract | null = null;
   const contractPath = `${options.root}/nen/contract.json`;
@@ -191,7 +212,7 @@ export function classifyRepo(options: ClassifyOptions): RepoClassification {
     kind,
     stack,
     lanes,
-    defaultGate: role === "canon" ? "G4" : role === "consumer" ? "G2" : null,
+    defaultGate: role === "canon" ? "G4" : role === "consumer" || role === "spec" ? "G2" : null,
     sources: { role: roleSource, kind: kindSource },
     notes,
   };

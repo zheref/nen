@@ -25,6 +25,17 @@
 // a counter that assumed it would free every local slot the moment a gate
 // script printed something.
 
+import { DEFAULT_LOCAL_SLOT_RULE, type LocalSlotRule } from "../schema/workflow.js";
+
+// WHEN A LOCAL SLOT FREES IS THE REPOSITORY'S DECLARATION (HR-5), read from
+// nen/workflow.json's `monitor.localSlotFrees` by the verb and handed here. The
+// default, `ready+prompted`, is the rule this header argues for; `merged` is
+// strictly later (nothing frees before the merge); `stacked-open` frees an
+// effort whose PR is open AND stacked onto another effort's branch -- the
+// stack's owner drives it from there, as a CI slot's builder does -- and
+// leaves every unstacked effort on `ready+prompted`. None of the three frees
+// an unstacked local PR at open: that is the stranding above.
+
 export type Plane = "ci" | "local";
 
 export interface Effort {
@@ -36,6 +47,10 @@ export interface Effort {
   readonly ready: boolean;
   /** The human has been prompted for this PR. Only meaningful on the local plane. */
   readonly prompted: boolean;
+  /** The PR has merged. Read by the `merged` rule; optional, absent reads false. */
+  readonly merged?: boolean;
+  /** The PR is stacked onto another effort's branch. Read by `stacked-open`; optional, absent reads false. */
+  readonly stacked?: boolean;
 }
 
 export interface Caps {
@@ -80,7 +95,7 @@ export interface SlotsReport {
 
 // Whether an effort still occupies a slot, and the reason -- returned together,
 // because a count with no reason is a number a reader has to re-derive to trust.
-export function occupancy(effort: Effort): { occupied: boolean; why: string } {
+export function occupancy(effort: Effort, rule: LocalSlotRule = DEFAULT_LOCAL_SLOT_RULE): { occupied: boolean; why: string } {
   if (effort.plane === "ci") {
     if (effort.prOpen) {
       return {
@@ -90,7 +105,22 @@ export function occupancy(effort: Effort): { occupied: boolean; why: string } {
     }
     return { occupied: true, why: "released, but no PR yet" };
   }
+  if (rule === "merged") {
+    if (effort.merged === true) return { occupied: false, why: "merged -- the local slot frees on merge (monitor.localSlotFrees: merged)" };
+    return {
+      occupied: true,
+      why: effort.prOpen
+        ? "PR open, not merged -- this repository frees a local slot only on merge (monitor.localSlotFrees: merged)"
+        : "authored locally, no PR yet",
+    };
+  }
   if (!effort.prOpen) return { occupied: true, why: "authored locally, no PR yet" };
+  if (rule === "stacked-open" && effort.stacked === true) {
+    return {
+      occupied: false,
+      why: "PR open and stacked -- the stack's owner drives it from here (monitor.localSlotFrees: stacked-open)",
+    };
+  }
   if (!effort.ready) {
     return {
       occupied: true,
@@ -114,13 +144,14 @@ export function occupancy(effort: Effort): { occupied: boolean; why: string } {
 export function computeSlots(
   efforts: readonly Effort[],
   caps: Caps,
+  localRule: LocalSlotRule = DEFAULT_LOCAL_SLOT_RULE,
 ): SlotsReport {
   const done: string[] = [];
   const build = (plane: Plane, cap: number): PlaneReport => {
     const holding: { id: string; why: string }[] = [];
     for (const effort of efforts) {
       if (effort.plane !== plane) continue;
-      const state = occupancy(effort);
+      const state = occupancy(effort, localRule);
       if (state.occupied) holding.push({ id: effort.id, why: state.why });
       else done.push(effort.id);
     }
@@ -170,6 +201,8 @@ export function parseEfforts(json: string): ParsedEfforts {
       prOpen: record["prOpen"] === true,
       ready: record["ready"] === true,
       prompted: record["prompted"] === true,
+      merged: record["merged"] === true,
+      stacked: record["stacked"] === true,
     });
   });
   return { efforts, errors };

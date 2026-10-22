@@ -19,6 +19,7 @@ import { resolveRepoRoot } from "../repo/root.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./slots.js";
+import { loadWorkflow, type LocalSlotRule } from "../schema/workflow.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
 
 /**
@@ -33,15 +34,26 @@ export const LOOP_LEDGER_DIR = ".nen/loop";
 const USAGE = `nen loop slots -- how many concurrency slots each plane has free.
 
 usage:
-  nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>]
+  nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>] [--repo <path>] [--json]
 
 The efforts file is a JSON array of
-  {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool}
+  {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool,
+   "merged": bool, "stacked": bool}
+('merged' and 'stacked' are optional, absent reads false).
 
-A CI slot frees when the PR OPENS -- something else drives it from there. A
-LOCAL slot frees only when the PR is READY and the human has been PROMPTED,
-because nothing else is behind a locally-authored PR. The two budgets are
-counted separately and never traded against each other.
+A CI slot frees when the PR OPENS -- something else drives it from there. When
+a LOCAL slot frees is --repo's nen/workflow.json 'monitor.localSlotFrees'
+(HR-5), one of a closed set:
+  ready+prompted  (the default) the PR is READY and the human has been
+                  PROMPTED, because nothing else is behind a locally-authored PR
+  merged          only once the PR has merged
+  stacked-open    a PR open and stacked onto another effort's branch frees (the
+                  stack's owner drives it); every other effort as ready+prompted
+The rule in force and where it came from are printed ('local slot frees: ...')
+and carried by --json as 'localSlotFrees': { rule, source }. A
+nen/workflow.json that is present and will not load is exit 1, never the
+default. The two budgets are counted separately and never traded against each
+other.
 
 --local-cap is REQUIRED. It used to default to 7, and that default was removed
 (issue #52): a concurrency guard must be chosen, not inherited -- every real
@@ -143,10 +155,26 @@ export const loopCommand: Command = {
       for (const error of parsed.errors) context.io.err(`nen: ${error}`);
       return 1;
     }
-    const report = computeSlots(parsed.efforts, caps);
+    let localRule: { rule: LocalSlotRule; source: string };
+    try {
+      const loaded = loadWorkflow(root);
+      localRule = {
+        rule: loaded.workflow.monitor.localSlotFrees,
+        source: loaded.present && loaded.workflow.monitor.localSlotFreesDeclared
+          ? `${loaded.path}: monitor.localSlotFrees`
+          : "default (monitor.localSlotFrees not declared)",
+      };
+    } catch (error) {
+      // A POLICY THAT WILL NOT LOAD IS NOT "NO POLICY": counting under the
+      // default would free slots the repository's own rule holds.
+      context.io.err(`nen: could not read nen/workflow.json for monitor.localSlotFrees: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+    const report = { ...computeSlots(parsed.efforts, caps, localRule.rule), localSlotFrees: localRule };
     if (context.json) {
       context.io.out(JSON.stringify(report, null, 2));
     } else {
+      context.io.out(`local slot frees: ${localRule.rule} (${localRule.source})`);
       print(context, report.ci);
       print(context, report.local);
       if (report.done.length > 0) context.io.out(`freed: ${report.done.join(", ")}`);

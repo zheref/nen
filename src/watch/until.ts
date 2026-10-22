@@ -38,7 +38,13 @@ export interface WatchIteration {
   readonly message: string;
 }
 
-export type WatchOutcome = "condition-true" | "error-streak" | "max-iterations";
+/**
+ * `terminal` (zheref/nen#454): an observation said the condition can NEVER
+ * become true (a pull request closed without a merge, watched `--until
+ * merged`). Only the async form's observer can say so; the loop stops there
+ * rather than polling to the bound.
+ */
+export type WatchOutcome = "condition-true" | "error-streak" | "max-iterations" | "terminal";
 
 export interface WatchResult {
   readonly outcome: WatchOutcome;
@@ -140,6 +146,8 @@ export interface WatchObservation {
   readonly errored: boolean;
   readonly conditionTrue: boolean;
   readonly message: string;
+  /** The condition can never become true; stop with outcome `terminal`. Ignored on an errored or true reading. */
+  readonly terminal?: boolean;
 }
 
 export interface AsyncWatchOptions {
@@ -194,6 +202,9 @@ export async function watchUntilAsync(options: AsyncWatchOptions): Promise<Watch
       consecutiveErrors = 0;
       if (conditionTrue) {
         return { outcome: "condition-true", iterations };
+      }
+      if (observed.terminal === true) {
+        return { outcome: "terminal", iterations };
       }
     }
 

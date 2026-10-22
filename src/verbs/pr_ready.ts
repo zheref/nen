@@ -165,7 +165,7 @@ export const PR_READY_FLAGS = {
 
 // A token is never read ambiently the way `gh` reads one; the caller names the
 // variable, and this is only the DEFAULT NAME, not a fallback chain.
-const DEFAULT_TOKEN_ENV = "GH_TOKEN";
+export const DEFAULT_TOKEN_ENV = "GH_TOKEN";
 
 // `${COPILOT_STALL_MINUTES:-30}` and `${MAX_THREAD_PAGES:-50}` -- the shell's
 // two numeric knobs, at the shell's values. Operator settings, not PR data.
