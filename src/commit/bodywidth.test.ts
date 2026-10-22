@@ -298,7 +298,13 @@ describe("lineLengthFindings -- the one check both verbs run", () => {
     expect(within.notes[1]).toMatch(/^'footer-max-line-length' NOT read: /);
     const bare = lineLengthFindings(message("w".repeat(60), "Refs: #1"), readLineLengthRules(repo({}), declared(50)));
     expect(bare.refusals).toHaveLength(1);
-    expect(lineLengthFindings(message("short"), readLineLengthRules(repo({}), declared(50))).notes).toEqual([expect.stringMatching(/applies it because no commitlint config was found at .*[^p]$/)]);
+    // The note ends at the scratch path: no "keep the two in step" clause. Matched by
+    // what follows the path, never by the path's own last character -- the temp
+    // directory's random suffix ends in any letter (a suffix ending in 'p' failed
+    // the old `[^p]$` on the macOS runner, delivery round on zheref/nen#498).
+    const notes = lineLengthFindings(message("short"), readLineLengthRules(repo({}), declared(50))).notes;
+    expect(notes).toEqual([expect.stringMatching(/applies it because no commitlint config was found at \S+$/)]);
+    expect(notes[0]).not.toMatch(/keep the two in step/);
   });
 
   it("prints the not-applied note on every run beside a readable config, and follows the config", () => {
