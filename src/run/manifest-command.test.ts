@@ -222,6 +222,8 @@ describe("nen run park", () => {
     expect(parked.code).toBe(0);
     expect(JSON.parse(parked.out.join("\n"))).toMatchObject({ outcome: "parked", entry: { issue: "NN#80", row: "direct-mismatch", at: "2026-10-22T00:00:00.000Z" } });
     expect((await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "direct-mismatch"], { common, repoFlag: root })).out[0]).toMatch(/^unchanged:/);
+    const verified = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen"], { common, repoFlag: root, json: true });
+    expect(JSON.parse(verified.out.join("\n")).parked).toEqual([{ issue: "NN#80", row: "direct-mismatch", at: "2026-10-22T00:00:00.000Z" }]);
     expect(JSON.parse(readFileSync(join(common, ".nen", "runs", "r1.json"), "utf8")).parked).toHaveLength(1);
     expect((await capture(["run", "park", "--id", "r1", "--issue", "NN#80", "--row", "Bad Row"], { common, repoFlag: root })).code).toBe(2);
   });
@@ -247,7 +249,7 @@ describe("nen run verify", () => {
     const result = await capture(["run", "verify", "--id", "r1", "--target", "zheref/nen"], { common, repoFlag: root, prs, json: true });
     expect(result.code).toBe(0);
     const doc = JSON.parse(result.out.join("\n"));
-    expect(Object.keys(doc)).toEqual(["run", "target", "recorded", "counts", "open", "unmerged", "unread", "prs"]);
+    expect(Object.keys(doc)).toEqual(["run", "target", "recorded", "counts", "open", "unmerged", "unread", "prs", "parked"]);
     expect(doc.counts).toEqual({ open: 2, merged: 1, closedUnmerged: 1, unread: 0 });
     expect(doc.open).toEqual([481, 483]);
     expect(doc.unmerged).toEqual([481, 482, 483]);
@@ -316,8 +318,8 @@ describe("nen run budget", () => {
     const under = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "60", "--max-tokens", "1000"], { common, repoFlag: root, json: true, now: AFTER(20) });
     expect(under.code).toBe(0);
     const doc = JSON.parse(under.out.join("\n"));
-    expect(Object.keys(doc)).toEqual(["run", "claim", "verdict", "granted", "ceiling", "spent", "effortMinutes", "efforts", "noLedger", "unread", "tokensUnread", "reasons"]);
-    expect(doc).toMatchObject({ verdict: "within", granted: true, spent: { minutes: 20, tokens: 172 }, effortMinutes: 75, noLedger: [] });
+    expect(Object.keys(doc)).toEqual(["run", "claim", "verdict", "granted", "ceiling", "spent", "remaining", "effortMinutes", "efforts", "noLedger", "unread", "tokensUnread", "reasons"]);
+    expect(doc).toMatchObject({ verdict: "within", granted: true, spent: { minutes: 20, tokens: 172 }, remaining: { minutes: 40, tokens: 828 }, effortMinutes: 75, noLedger: [] });
 
     const at = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "60", "--max-tokens", "1000"], { common, repoFlag: root, now: AFTER(60) });
     expect(at.code).toBe(1);

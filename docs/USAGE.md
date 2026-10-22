@@ -9200,7 +9200,8 @@ from ...)` where the live read differs from the record), then `unmerged: #<n>, .
 `recorded`, `counts` (`{open, merged, closedUnmerged, unread}`), `open`, `unmerged` (open plus
 closed-unmerged, in record order; **null** when any PR was unread), `unread` (`[{pr, reason}]`), `prs`
 (`[{issue, pr, kind, recordedBase, recordedHead, state, base, headRef, head, headMoved,
-unreadReason}]`, the live fields null when unread). Exit 0 when every PR was read; exit 1 when any could
+unreadReason}]`, the live fields null when unread), `parked` (the manifest's `[{issue, row, at}]`, also
+printed as `parked <issue> on row <row> since <at>` lines). Exit 0 when every PR was read; exit 1 when any could
 not be, or the run or its manifest could not be read; exit 2 on a malformed flag or another repository.
 
 **Example**
@@ -9251,11 +9252,11 @@ nen run budget --id <run-id> [--claim] [--max-minutes <n>] [--max-tokens <n>]
 | `--repo <path>` | no | The checkout whose `.nen/usage/` and `nen/workflow.json` are read. | Default the current directory. |
 
 **Output and exit codes** -- prints `run <id>: <m> min since start of <max> (<source>), <t> tokens of
-<max> (<source>)` (or `tokens unread of <max>`), then `  effortMinutes: <n> (...)`, one line per effort,
+<max> (<source>)` (or `tokens unread of <max>`), then `  remaining: <m> min, <t> tokens`, `  effortMinutes: <n> (...)`, one line per effort,
 then `claim: granted`, `claim: refused (<verdict>) -- <reasons>` or, without `--claim`, `budget:
 <verdict>[ -- <reasons>]`. `--json` top-level keys: `run`, `claim`, `verdict` (`within` \| `reached` \|
 `unevaluated`), `granted` (null without `--claim`), `ceiling` (`{minutes, tokens, source: {minutes,
-tokens}}`), `spent` (`{minutes, tokens}`; `tokens` null when unread), `effortMinutes`, `efforts`
+tokens}}`), `spent` (`{minutes, tokens}`; `tokens` null when unread), `remaining` (`{minutes, tokens}`, never below 0; `tokens` null when unread), `effortMinutes`, `efforts`
 (`[{effort, minutes, tokens, entries, notReported}]`), `noLedger`, `unread` (`[{effort, reason}]`),
 `tokensUnread` (why the token sum is unread), `reasons`. Exit 0 within the ceiling, or reached without
 `--claim`; exit 1 on a refused claim, on `unevaluated`, or when the run or `nen/workflow.json` could not
@@ -9268,6 +9269,7 @@ nen run budget --id sdd-2026-10-22 --repo . --claim --max-minutes 60 --max-token
 ```
 ```text
 run r1: 60 min since start of 60 (--max-minutes), 172 tokens of 1000 (--max-tokens)
+  remaining: 0 min, 828 tokens
   effortMinutes: 75 (the efforts' own minutes, summed; information, not the budget)
   opus/kurapika/a: 30 min, 160 tokens (1 entry)
   opus/kurapika/b: 45 min, 12 tokens (1 entry)

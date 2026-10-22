@@ -52,6 +52,8 @@ export interface BudgetReport {
   readonly ceiling: BudgetCeiling;
   /** `minutes` wall-clock since the manifest's startedAt; `tokens` null when the token sum is unread. */
   readonly spent: { readonly minutes: number; readonly tokens: number | null };
+  /** What is left under each ceiling (never below 0); `tokens` null when the token sum is unread. */
+  readonly remaining: { readonly minutes: number; readonly tokens: number | null };
   /** The efforts' self-reported minutes, summed: information, never compared against the ceiling. */
   readonly effortMinutes: number;
   readonly efforts: readonly { readonly effort: string; readonly minutes: number; readonly tokens: number; readonly entries: number; readonly notReported: number }[];
@@ -127,6 +129,7 @@ export function computeBudget(
     granted: claim ? verdict === "within" : null,
     ceiling,
     spent,
+    remaining: { minutes: Math.max(0, ceiling.minutes - spent.minutes), tokens: spent.tokens === null ? null : Math.max(0, ceiling.tokens - spent.tokens) },
     effortMinutes: rows.reduce((sum, row): number => sum + row.minutes, 0),
     efforts: rows,
     noLedger,
@@ -139,6 +142,7 @@ export function computeBudget(
 export function renderBudget(report: BudgetReport): string[] {
   const lines = [
     `run ${report.run}: ${report.spent.minutes} min since start of ${report.ceiling.minutes} (${report.ceiling.source.minutes}), ${report.spent.tokens === null ? "tokens unread" : `${report.spent.tokens} tokens`} of ${report.ceiling.tokens} (${report.ceiling.source.tokens})`,
+    `  remaining: ${report.remaining.minutes} min, ${report.remaining.tokens === null ? "tokens unknown (unread)" : `${report.remaining.tokens} tokens`}`,
     `  effortMinutes: ${report.effortMinutes} (the efforts' own minutes, summed; information, not the budget)`,
   ];
   for (const row of report.efforts) {

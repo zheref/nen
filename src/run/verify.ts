@@ -95,6 +95,8 @@ export interface VerifyReport {
   readonly unmerged: readonly number[] | null;
   readonly unread: readonly { readonly pr: number; readonly reason: string }[];
   readonly prs: readonly VerifiedPr[];
+  /** The efforts the run parked on an unanswered ask-once row (HR-5), as recorded. */
+  readonly parked: RunManifest["parked"];
 }
 
 export function verifyRun(manifest: RunManifest, target: Target, read: (pr: number) => LiveRead): VerifyReport {
@@ -123,6 +125,7 @@ export function verifyRun(manifest: RunManifest, target: Target, read: (pr: numb
     unmerged: unread.length > 0 ? null : prs.filter((row): boolean => row.state === "open" || row.state === "closed-unmerged").map((row): number => row.pr),
     unread,
     prs,
+    parked: manifest.parked,
   };
 }
 
@@ -139,6 +142,7 @@ export function renderVerify(report: VerifyReport): string[] {
     const rebased = row.base !== row.recordedBase ? ` (base now ${row.base}, recorded ${row.recordedBase})` : "";
     lines.push(`  #${row.pr} ${row.issue ?? "-"} [${row.kind}] ${row.state} -> ${row.base}${rebased}${moved}`);
   }
+  for (const row of report.parked) lines.push(`  parked ${row.issue} on row ${row.row} since ${row.at}`);
   lines.push(
     report.unmerged === null
       ? `unmerged: unknown (${report.counts.unread} unread)`
