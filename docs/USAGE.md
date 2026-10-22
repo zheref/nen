@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 44 command
-families, 139 verbs, every flag checked against the binary this repository
+families, 140 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -206,7 +206,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **73 shapes** and **76 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **74 shapes** and **77 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -261,7 +261,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
-- **`stop`** — `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
+- **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
 - **`wc`** — `nen.wc.catch-up/v0.2` · `nen.wc.prune/v0.1` · `nen.wc.publish/v0.1` · `nen.wc.squash/v0.1` · `nen.wc.swap.state/v0.1` · `nen.wc.swap/v0.1` · `nen.wc.worktree.copies/v0.1` · `nen.wc.worktree.copies/v0.2` · `nen.wc.worktree/v0.1` · `nen.wc.worktrees/v0.1`
@@ -413,6 +413,7 @@ verb does by default:
 | [`shu deploy`](#nen-shu-deploy) | **yes** | `--run` | the one executing verb in this family that is **dry-run-first**, and the only one whose blast radius is *other people's users*: every other verb here spawns something inside a directory and can be undone by running it again, and a deploy cannot. Without `--run` it prints the fully resolved plan — the destination substituted into the argv, every precondition asserted, each step as `would run:` — and spawns **nothing**, at exit 0. `--dry-run` is the explicit spelling of that same form, and `--run --dry-run` together is exit 2 rather than a guess about which of two contradicting instructions was meant. **Two flags and no single-flag path to acting**: `--target <name>` says *where* (required, no default ever, resolved after the lane, the verb and the host, so a lane that declares no deploy answers its own refusal first) and `--run` says *now*. So this row is `write-flag-gated` on `--run` in izanami's table — like [`label apply`](#nen-label-apply) and [`wake fire`](#nen-wake-fire), and unlike the nine above: the bare form classifies **read-only** because nen spawns nothing whatever the declaration says, which is a property of nen rather than a claim about that file |
 | [`shu tools`](#nen-shu-tools) | yes — nen writes nothing, but see the note | `--install` | the **only verb in this CLI whose blast radius is the developer's machine**, and the only row with three izanami answers rather than two. The bare check form spawns the version probes the *target repository* declares, so it classifies **`unknown`** — refused, and honestly labelled "not provably a read" rather than mislabelled "writes"; `--install` classifies **mutating**; and `--dry-run` classifies **read-only**, because that form spawns nothing at all, probes included. `--install --dry-run` is refused anyway: the write flag is decisive, because a read-only claim that hinges on one adjacent token still being present is exactly what the write-flag rule exists for |
 | [`stop`](#nen-stop) | **yes** | `--mark` | the banner and the table are a pure render, and this verb fires nothing, ever. `--mark` is its one writing form: `.nen/last-stop.json`, the marker a host hook reads to ring the two rungs nen may not ring itself. So this row is `write-flag-gated` on `--mark` in izanami's table — the bare form is **read-only** because nen provably writes nothing without the flag, which is a property of nen rather than a claim about anybody's file |
+| [`stop answer`](#nen-stop-answer) | no | `--dry-run` | reserves an id and creates one record under the git common directory; the dry form still runs `git rev-parse --git-common-dir` and reads the question and typed files, prints the record and the next free id, and writes nothing. `answer show` writes nothing and refuses `--dry-run`. A `stop` subcommand typed after a flag (`nen stop --gate G5 answer ...`) classifies **unknown** in izanami's table, never as the family-wide `--mark` row |
 | [`shu warmup`](#nen-shu-warmup) | no | `--dry-run` | **the only verb in the `shu` family that mutates git state.** `--dry-run` prints every git command *and* every delegated toolchain command, in order, and runs **none** of them — not even the fetch. Unlike the ten rows above, that form still classifies **mutating** in izanami's table, dry run included: nobody watches a warm-up, so the fail-closed answer costs nothing. `--discard` is its *other* dangerous flag, and it is the destructive one: without it a dirty tree is refused at exit 2 with every path listed, and with it the tree is reset and cleaned (`git reset --hard`, then `git clean -fd`) and then **read again**, refusing at 2 if anything survived — but **never** `git clean -x` and never a second `-f`, because an ignored file is the developer's own cache and a nested repository is not this verb's to delete |
 
 "Still reads GitHub" matters in CI: a dry run of those five needs a token even
@@ -818,7 +819,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 139 verbs, grouped as the README groups them. **Reads** is what a
+All 140 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -965,6 +966,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`wake`](#family-wake) | [`nen wake verify`](#nen-wake-verify) | scan open PRs whose author matches --author-pattern for a swallowed (action_required/startup_failure, never-executed) workflow run, auto-redriving what is safe and flagging the rest for a human | gh (pulls, actions/runs, issue comments; --run also writes reruns + comments) | yes |
 | [`wake`](#family-wake) | [`nen wake fire`](#nen-wake-fire) | edge-trigger one object by removing then re-applying a label, then post an optional settle comment | gh (issue edit x2, api comment; --run required to write) | yes |
 | [`stop`](#family-stop) | [`nen stop`](#nen-stop) | render the gate-stop banner plus a padded-markdown efforts table read from a file/stdin, or (--template) a blank table to fill in; --mark also records the stop for a host hook | a local efforts.md file or stdin; no git/gh. --mark WRITES .nen/last-stop.json under --repo | yes |
+| [`stop`](#family-stop) | [`nen stop answer`](#nen-stop-answer) | record the answer a stop received -- the question, every option with its consequence, and a picked key or the typed reply verbatim -- as one record with a never-reused id `R-YYYY-MM-DD-nn`; `answer show` lists an effort's records. Records, never chooses | git (rev-parse --git-common-dir); the --question-file/--typed-file under --repo; WRITES `<git common dir>/.nen/stops/<effort>/<n>.json` and `<git common dir>/.nen/stop-ids/<id>` unless --dry-run | yes |
 
 ## Readiness & pull requests
 
@@ -13855,9 +13857,11 @@ The marker goes under the dot-prefixed, gitignored `.nen/` (generated output), n
 nen stop [--who <name>] [--gate G1|G1-M|G2|G3|G4|G5] [--notified] [--mark]
          [--title <line>] [--body <text>] [--report-url <url>]
          [--options <file.json>] [--propose-issue <file.json>]
-nen stop clear [--repo <path>]
          [--repo <path>] [efforts.md | -]
+nen stop clear [--repo <path>]
+nen stop show  [--repo <path>] [--json]
 nen stop --template
+nen stop answer ...   (see nen stop answer below)
 ```
 
 **Arguments**
@@ -13944,6 +13948,96 @@ nen stop --who Kurapika --gate G5 --title "dirty tree at breath" --body "which d
   --report-url https://claude.ai/artifact/… --options options.json --propose-issue issue.json --mark
 ```
 (run for real against a scratch repository; the absolute path is elided to `/tmp/site`)
+
+### `nen stop answer`
+
+Answers "what was this stop asked, what was on the table, and what did the maintainer say" -- the
+general form of [`direct answer`](#nen-direct-answer), for every gate a skill stops at. One call writes
+one JSON record: the gate, who asked, the question read from `--question-file`, every option with its
+key, label and consequence, and the answer, then prints the record's id. **It records and never
+chooses**: the caller states the question, the options and the answer; nen validates the shape, stamps
+the instant and the id, and writes.
+
+**Where.** `<git common dir>/.nen/stops/<percent-encoded effort>/<n>.json`: the common directory (`git
+rev-parse --git-common-dir` under `--repo`), not the worktree, so every worktree of one repository
+writes into one ledger and an effort's stops outlive the worktree that asked them. `<n>` counts up from
+the records already present. A record is **created, never replaced**: it is written to a temp file and
+hard-linked into place, so a racing writer takes the next `<n>` and a reader never sees a torn record.
+
+**The id is never reused.** `R-YYYY-MM-DD-nn` -- the answer's UTC date and a number counted from the ids
+already reserved that day across every effort -- is reserved by an exclusive create of `<git common
+dir>/.nen/stop-ids/<id>` before the record is written. Two writers racing for one number get one success
+and one refusal, and the loser takes the next. A reservation is never removed, so a deleted record never
+frees its id.
+
+**Picked and typed.** `--pick <key>` records `kind: "picked"`, the key in `pick`, `typed: null`.
+`--typed-file <path>` keeps the reply **verbatim** in `typed` -- the verbatim text is for a typed reply
+only; a pick records the key, not the label's words -- as `kind: "typed"`, `pick: null`. The one thing
+the verb detects is a typed text that is word for word one option's label (surrounding whitespace
+aside, case kept): that is recorded `kind: "picked"` with that key, the text still kept in `typed`. It is
+an exact comparison, never a reading of intent.
+
+**Usage**
+
+```text
+nen stop answer --record <effort-id> --gate G1|G1-M|G2|G3|G4|G5 --who <name>
+                --question-file <path> --option <key>=<label>::<consequence> [--option ...]
+                (--pick <key> | --typed-file <path>) [--dry-run] [--repo <path>] [--json]
+nen stop answer show <effort-id> [--repo <path>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--record <effort-id>` | yes | The effort the stop belongs to (`<CODE>-IS-#<N>`, `inline-<ISO>`, ...). | Percent-encoded into the directory name like `direct resolve --record`; empty, absolute, a backslash, a NUL, or a `.`/`..` segment -> exit 2. |
+| `--gate <g>` | yes | The gate the stop asked at. | One of `nen stop`'s gates; any other -> exit 2. |
+| `--who <name>` | yes | The persona that asked. | Nen ships no built-in name. |
+| `--question-file <path>` | yes | The question as it was asked. | Kept as read (EOL-normalized); unreadable or empty -> exit 2. |
+| `--option <key>=<label>::<consequence>` | yes, **repeatable** | One option the stop offered. | Split at the first `=` and the first `::` after it, so `=` and `:` may appear in the label and the consequence. The key is letters, digits, `_`, `-`; every part non-empty; a key twice -> exit 2. |
+| `--pick <key>` | one of the two | The option the maintainer picked. | Must be one of the `--option` keys -> otherwise exit 2. |
+| `--typed-file <path>` | one of the two | The maintainer's reply in their own words. | Kept byte for byte; unreadable or blank -> exit 2. Both, or neither, of `--pick` and `--typed-file` -> exit 2. |
+| `--dry-run` | no | Validate and print the record and the next free id; write nothing. | The id shown is not reserved. Refused on `show`. |
+| `--repo <path>` | no | The checkout whose git common directory holds the ledger. | Default: the current directory. |
+
+The banner's flags (`--title`, `--body`, `--report-url`, `--options`, `--propose-issue`, `--notified`,
+`--template`, `--mark`) are refused on `answer` at exit 2, and the answer flags (`--record`,
+`--question-file`, `--option`, `--pick`, `--typed-file`, `--dry-run`) are refused on every other form of
+`nen stop`: one flag spec serves the family, and a flag a form would silently drop is a record the
+caller believes was written.
+
+**`nen stop answer show <effort-id>`** lists the effort's records in `<n>` order. An effort with no
+directory is an empty ledger (exit 0, `no stop answers recorded for '<id>'`). A record that is not JSON,
+not `nen.stop.answer/v0.1`, names another effort, or whose `n` disagrees with its file name is exit 1
+naming the file -- "could not read" is never "nothing found", and the ledger is never reported shorter
+than it is. A record that is a symbolic link, or a directory that resolves outside the common directory,
+is exit 2.
+
+**Output and exit codes** -- `answer` prints `recorded <id> -> <path>` and `  <gate> · <who> · picked: <key>`
+or `· typed (verbatim): <first line>`; under `--dry-run`, `(dry run) would record <id> -> <path>` and a
+closing `nothing written` line. `--json`: `{ dryRun, path, record }`, where `record` is the document
+written: `{ contract, id, effortId, n, gate, who, question, options[{ key, label, consequence }], kind,
+pick, typed, answeredAt }` -- `contract` is `nen.stop.answer/v0.1`, `kind` `picked` or `typed`, `pick` a
+key or null, `typed` the verbatim reply or null, `answeredAt` the verb's clock in ISO 8601 UTC. `show`
+prints one line per record (`<id>  <gate>  <who>  picked: <key> | typed: <first line>  · <question's
+first line>`); `--json`: `{ effortId, directory, records }`, `records` the documents as written. Exit 0
+on a record written (or shown); exit 1 when git cannot name the common directory, a record or an id
+cannot be written, or `show` meets an unreadable record; exit 2 for a missing or refused flag, an
+unknown gate, a `--pick` that is no option's key, or an unreadable or empty input file.
+
+**Example**
+
+```bash
+nen stop answer --record "HA-IS-#401" --gate G5 --who kurapika --question-file q.md \
+  --option "A=Open a fresh worktree::the dirty tree stays untouched" \
+  --option "B=Discard the tree::uncommitted work is lost" --pick A
+```
+```text
+recorded R-2026-10-22-01 -> /work/app/.git/.nen/stops/HA-IS-%23401/1.json
+  G5 · kurapika · picked: A
+```
+(shape derived from `src/stop/answer.ts` and `src/stop/answer.test.ts`; the absolute path is elided to `/work/app`)
+
 ## Reports
 
 The two halves of an effort report: the facts, and the fill that turns them
