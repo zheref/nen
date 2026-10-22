@@ -59,6 +59,13 @@ export interface PhaseEntry {
   readonly steps?: readonly PhaseStep[];
   /** Caller-reported effort level; null on ledgers written before #437. */
   readonly dial: string | null;
+  /**
+   * Every instant `nen phase begin --resume` continued this OPEN entry (Hatsu
+   * SDD plan N6), oldest first. Absent until the first resume -- additive, as
+   * `steps` was, so the contract stays v0.1 and an older entry reads as never
+   * resumed.
+   */
+  readonly resumedAt?: readonly string[];
 }
 
 export interface PhaseLedger {

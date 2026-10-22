@@ -406,7 +406,8 @@ verb does by default:
 | [`schema set`](#nen-schema-set) | no | `--dry-run` | writes one value into a `nen/` JSON declaration, no other byte; the dry form reads the file, validates the edited text through its loader and prints before → after, writing nothing. In izanami's table `schema` is keyed by subcommand from [#338](https://github.com/zheref/nen/issues/338): `schema check` **read-only**, `schema set` **mutating** and `schema set --dry-run` **read-only**; a bare `nen schema` or another subcommand classifies **unknown** |
 | [`scaffold init`](#nen-scaffold-init) | no | `--dry-run` | prints every write, every migration and every refusal, and performs none. It spawns **nothing**, probes included — the closing [`shu tools`](#nen-shu-tools) check is reported as `would check` rather than run, which is why the dry form classifies **read-only** in izanami's table while the bare form classifies **mutating**. `--dry-run --install-tools` is refused at exit 2: one says nothing happens, the other changes the HOST |
 | [`scaffold new`](#nen-scaffold-new) | no | `--dry-run` | prints the tree it would write. Even the bare form spawns nothing at all: **every post-step is printed and none is run**, the toolchain check included |
-| [`pr retarget`](#nen-pr-retarget), [`pr cascade-main`](#nen-pr-cascade-main), [`run rerun-failed`](#nen-run-rerun-failed) | no | — | one narrow `gh`/`git` call each, with no preview form |
+| [`pr retarget`](#nen-pr-retarget), [`run rerun-failed`](#nen-run-rerun-failed) | no | `--dry-run` | print the one `gh` call as `would run:` and spawn **nothing** — not even a read, so the preview needs no token (Hatsu SDD plan N6). izanami still classifies both **mutating** in every spelling, fail-closed |
+| [`pr cascade-main`](#nen-pr-cascade-main) | no | `--dry-run` | prints `git fetch`, `git merge --no-edit` and (unless `--no-push`) `git push` as `would run:` and spawns **nothing**, so whether the merge would conflict is not known. `--no-push` alone is not a preview: it still merges. izanami keeps the verb **mutating** in every spelling, the dry form included |
 | [`run start`](#nen-run-start), [`run append`](#nen-run-append) | no | `--dry-run` | write the run manifest under the git common dir; the dry form reads it (and asks git for the common dir) and reports the outcome it would write, writing nothing. izanami's table classifies the bare forms **mutating** and the dry forms **read-only**; `run verify`, `run budget`, [`wc overlap`](#nen-wc-overlap), [`stage check`](#nen-stage-check) and `loop slots --from-run` are **read-only** |
 | [`pr edit-body`](#nen-pr-edit-body) | no | `--dry-run` | **still reads GitHub** to certify the number reads as a pull request, and runs the [private-name guard](#the-private-name-guard) ([#363](https://github.com/zheref/nen/issues/363)), before printing the byte count and first/last line |
 | [`pr mark-ready`](#nen-pr-mark-ready) | no | `--dry-run` | **still reads GitHub** — the one GraphQL read that certifies the number, its state and its head — so every refusal (not a PR, closed/merged, head mismatch, already ready) answers exactly as the real run would; prints the `markPullRequestReadyForReview` argv and sends nothing |
@@ -905,7 +906,7 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`pr`](#family-pr) | [`nen pr edit-body`](#nen-pr-edit-body) | replaces a pull request's body outright with a file's bytes, certifying the number IS a pull request before any write | github (gh api read to certify, gh pr edit unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr mark-ready`](#nen-pr-mark-ready) | moves ONE existing draft pull request out of draft through GitHub's `markPullRequestReadyForReview` mutation, after certifying it is an open PR at the pinned head, and reports success only on a not-draft read back — never the CON-32 verdict, which stays `pr ready`'s | github (gh api graphql: one certifying read; the mutation and a read back unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr threads`](#nen-pr-threads) | a pull request's review threads: list them all (paginated to completion, with path, line, author, first comment and url), reply to one, resolve one, or settle a batch from one file | github (gh api graphql: one read walk; one mutation for reply/resolve, one reply and one resolve per entry for settle, unless --dry-run) | yes |
-| [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2 and reporting an already-open one at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
+| [`pr`](#family-pr) | [`nen pr open`](#nen-pr-open) | open exactly one pull request from a head the remote already holds at the local sha, refusing an unpushed head at exit 2; one already open for the head against the same base is returned as `opened: existing` at exit 0, against another base at exit 1 | git (symbolic-ref, rev-parse, ls-remote), github (gh pr list always; gh pr create unless --dry-run) | yes |
 | [`pr`](#family-pr) | [`nen pr merge`](#nen-pr-merge) | the bounded merge, two forms. `--release-unit`: `pr ready` (in-process) + head pin + `pr body-check` (live body, one fetch) + `release unit-check` (policy from the PR's base) + whose-pr. `--delivery`: a run's own PR into a non-main, unprotected base — a protected base is refused by ruling (exit 2), then base + `pr ready` + head pin + `pr body-check` + whose-pr (viewer and run-form head). Every gate must pass; `gh pr merge --merge --match-head-commit` only under `--run` | github (gh pr view, gh repo view, gh pr list, gh api contents/trees/user/branches/rules, gh pr merge unless plan-only), nen/gates.json, nen/workflow.json, nen/repos.json (a `CODE#n` ref) | yes |
 | [`gate`](#family-gate) | [`nen gate derive`](#nen-gate-derive) | derive G2 vs G4 from a changed-file set against two caller-supplied path sets | git diff (for --range), no schema file -- path sets are flags | yes |
 | [`split`](#family-split) | [`nen split verify`](#nen-split-verify) | prove the union of per-axis branch diffs equals one original diff | caller-supplied --original/--branches diff files, no git/gh | yes |
@@ -2787,7 +2788,7 @@ or not.
 **Usage**
 
 ```text
-nen pr cascade-main --repo <path> [--trunk main] [--no-push]
+nen pr cascade-main --repo <path> [--trunk main] [--no-push] [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -2796,7 +2797,8 @@ nen pr cascade-main --repo <path> [--trunk main] [--no-push]
 |---|---|---|---|
 | `--repo <path>` | **yes** | the repository whose current branch the trunk is merged into | unbracketed in usage; omitted is refused at exit 2 — this verb mutates whatever it is pointed at (#28) |
 | `--trunk <branch>` | no | the trunk branch | default `main` |
-| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; there is no read-only or preview form (see the `--dry-run` discipline table above). Refused at exit 2 on every other `pr` subcommand, naming 'pr cascade-main' (the family's per-subcommand flag table, [#351](https://github.com/zheref/nen/issues/351)) |
+| `--no-push` | no | fetch and merge exactly as always, then stop — never push | still merges into the working tree and index, so izanami's table keeps this verb `mutating` in every spelling; the preview form is `--dry-run` (see the `--dry-run` discipline table above). Refused at exit 2 on every other `pr` subcommand, naming 'pr cascade-main' (the family's per-subcommand flag table, [#351](https://github.com/zheref/nen/issues/351)) |
+| `--dry-run` | no | print every git call the run would make — `git fetch origin <trunk>`, `git merge --no-edit origin/<trunk>`, and `git push` unless `--no-push` — as `would run:` lines, and run none of them, the fetch included | exit 0; nothing in the working tree, the index or the remote moves, so whether the merge would conflict is not known (only merging tells). izanami still classifies the dry form `mutating`, fail-closed |
 | `--json` | no | machine-readable cascade result | — |
 
 **Output and exit codes** — human lines are the `log[]` entries (`fetched
@@ -2811,7 +2813,8 @@ block per conflict when the merge failed:
 ```
 
 `--json` top-level keys: `conflicted`, `pushed`, `noPush`, `log[]`, `error`,
-`conflicts[]`. `noPush` echoes whether `--no-push` was given (`false`
+`conflicts[]`, `dryRun` (whether `--dry-run` was given, appended by the SDD plan N6;
+under it `log[]` carries the `would run:` lines). `noPush` echoes whether `--no-push` was given (`false`
 otherwise, never omitted). `conflicts[]` is `[]` except on a conflicted
 merge, where it carries one entry per unmerged path from `git diff
 --name-only --diff-filter=U`:
@@ -2868,7 +2871,7 @@ command; the judgment of which PR moves and to what base stays the caller's.
 **Usage**
 
 ```text
-nen pr retarget --target <owner/name> --pr <n> --base <branch>
+nen pr retarget --target <owner/name> --pr <n> --base <branch> [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -2878,14 +2881,18 @@ nen pr retarget --target <owner/name> --pr <n> --base <branch>
 | `--target <owner/name>` | yes | the GitHub repository | missing exits 1 |
 | `--pr <n>` | yes | the pull-request number | missing/invalid exits 2 |
 | `--base <branch>` | yes | the new base branch | empty/missing exits 2 |
+| `--dry-run` | no | print `would run: gh pr edit <n> --repo <owner/name> --base <branch>` and call nothing, not even a read | exit 0; needs no token |
 | `--json` | no | machine-readable result | — |
 
 This verb reads no `--repo` — `gh pr edit` addresses the PR entirely via `--target`/`--pr`.
 
 **Output and exit codes** — human line: `<target>#<pr> now targets
-'<base>'`, or the `gh` failure message; `--json` top-level keys: `ok`,
-`message`. Exit 0 on success, exit 1 when `gh` fails, exit 2 on a missing
-`--base`.
+'<base>'`, or the `gh` failure message, or under `--dry-run` `would run:
+<command>`; `--json` top-level keys: `ok`, `message`, `dryRun`, `command`
+(the `gh` call as one POSIX-shell line — the one made, or the one that would
+be; `dryRun` and `command` appended by the SDD plan N6, every earlier key in place).
+Exit 0 on success and on a dry run, exit 1 when `gh` fails, exit 2 on a
+missing `--base`.
 
 **Example**
 
@@ -3545,9 +3552,21 @@ upstream (never published); a head whose local sha is not what its
 older sha — because a pull request opened now would not show the commits
 here. Push first ([`wc publish`](#nen-wc-publish)). A git failure echoed
 into any of these messages has remote credentials redacted (`://user:***@`,
-`***` for a GitHub token) before it is printed. **Exit 1, nothing opened:** a
-pull request is already open for that head (`gh pr list --head <branch>
---state open`), reported with its number and url — one head, one pull
+`***` for a GitHub token) before it is printed. **A pull request already
+open for that head** (`gh pr list --head <branch> --state open --json
+number,url,baseRefName,headRefOid`) is never a second one: against the
+**same** `--base`, at the **same head commit** this checkout pushed, it is the
+pull request a previous call opened — a retry after a timeout, a
+resumed run — so it is returned as `opened: existing <owner/name>#<n>: <url>`
+at **exit 0** with `existing: true`, and nothing is created. Every listed
+row is compared, so a fork's same-named pull request listed first does not
+hide this branch's. With `--assignee` the adopted pull request's assignees
+are **read back**, never re-applied: one missing, or a read-back that fails,
+is exit 1 with the pull request named and nothing assigned. Against **another** base, at **another** head commit
+(`--head` matches a branch *name*, from any fork, so a different commit is
+not provably this branch's pull request), or when its number, url, base or
+head commit cannot be read, it is **exit 1**, `existing: true`, nothing opened or
+retargeted — which base is right is the caller's call. One head, one pull
 request. Then `gh pr create --repo --base --head --title --body-file -
 [--draft]`, the body on stdin, and the number is **read out of the url gh printed**: a create
 that prints none is exit 1, never reported as opened; one that exits
@@ -3572,8 +3591,9 @@ and nothing retried.
 
 **`--json`** — `nen.pr.open/v0.1`: `{ contract, number, url, head, base,
 draft, dryRun, existing, assignees, me, assigned }`. `number` and `url` are
-`null` on a dry run; `existing` is `true` on the exit-1 case, where they name
-the pull request already there. `assignees` is the validated logins asked for
+`null` on a dry run; `existing` is `true` when a pull request was already
+open for the head — `opened: existing` at exit 0, or another base at exit 1 —
+and they name the pull request already there. `assignees` is the validated logins asked for
 (`[]` without `--assignee`); `me` the login `@me` resolved to, else `null`;
 `assigned` the logins the read-back found, `null` when nothing was opened or
 nothing was read back. The three are appended — every earlier key keeps its
@@ -5930,7 +5950,7 @@ measures how long every step took and prints it; nothing recorded when a workflo
 `.nen/phases/<effort>.json` (generated output, gitignored), contract `nen.phase.ledger/v0.1`.
 
 ```
-nen phase begin --effort <id> --phase <name> [--surface <s>] [--model <alias>] [--dial <level>] [--note <text>]
+nen phase begin --effort <id> --phase <name> [--resume] [--surface <s>] [--model <alias>] [--dial <level>] [--note <text>]
 nen phase end   --effort <id> [--phase <name>] [--exit <code>] [--note <text>]
 nen phase show  --effort <id> [--json]
 ```
@@ -5951,6 +5971,19 @@ executes while the entry is open — the executor never opens an entry of its ow
 indented under their phase. The contract stays `v0.1`: the key is additive, and an entry written before it
 existed reads as `steps: []`. `--dial <level>` records the caller's effort level verbatim;
 omitted or legacy fields read `dial: null`. It is additive under the same contract.
+
+**`begin --resume`** (Hatsu SDD plan N6) makes re-entering a phase idempotent. An entry already **open**
+with the same `--phase` name is continued rather than refused: this invocation's instant is appended to its
+`resumedAt` array and nothing else changes — `startedAt`, `steps` and every other field stay — so a run
+interrupted mid-phase and picked up again reads as one phase, re-entered, at exit 0; `--json` emits
+`{ path, entry, resumed: true }`. With nothing open at all it begins a fresh entry, exactly as `begin`
+(`resumed: false`). With a **differently named** phase open and this one not, it is refused at exit **2**
+naming the open phase(s), and nothing is written: that is not a resume, and which phase the run is in is
+the caller's call. Without `--resume` the same-name refusal is unchanged (its message now names
+`--resume`). `--resume` on `end` or `show` is exit 2. `resumedAt` is absent until the first resume —
+additive, so the contract stays `v0.1`. `end` still measures from the original `startedAt`, so a resumed
+entry's `durationMs` spans the interruption; `show` prints a `resumed at …` line under it. `nen report
+data` does not carry `resumedAt` yet.
 
 ```
 nen phase begin --effort HA/85 --phase breath --surface codex
@@ -8819,7 +8852,7 @@ Exactly `gh run rerun <n> --failed`.
 **Usage**
 
 ```text
-nen run rerun-failed --target <owner/name> --run-id <n>
+nen run rerun-failed --target <owner/name> --run-id <n> [--dry-run] [--json]
 ```
 
 **Arguments**
@@ -8828,14 +8861,18 @@ nen run rerun-failed --target <owner/name> --run-id <n>
 |---|---|---|---|
 | `--target <owner/name>` | yes | the GitHub repository | missing exits 2 (this family's own refusal uses `VerbUsageError`, unlike `pr`'s); a malformed slug is caught and exits 1 |
 | `--run-id <n>` | yes | the Actions run id | missing/non-numeric exits 2 |
+| `--dry-run` | no | print `would run: gh run rerun <n> --repo <owner/name> --failed` and call nothing | exit 0; needs no token |
 | `--json` | no | machine-readable result | — |
 
 This verb reads no `--repo` — it has no reason to touch a local checkout.
 
 **Output and exit codes** — human line: `re-ran the failed job(s) of
-<target>'s run <n>`, or the `gh` failure message; `--json` top-level keys:
-`ok`, `message`. Exit 0 on success, exit 1 when `gh` fails or `--target` is
-malformed, exit 2 on a missing `--target`/`--run-id`.
+<target>'s run <n>`, or the `gh` failure message, or under `--dry-run`
+`would run: <command>`; `--json` top-level keys: `ok`, `message`, `dryRun`,
+`command` (the `gh` call as one POSIX-shell line; `dryRun` and `command`
+appended by the SDD plan N6, every earlier key in place). Exit 0 on success and on a
+dry run, exit 1 when `gh` fails or `--target` is malformed, exit 2 on a
+missing `--target`/`--run-id`.
 
 **Example**
 
@@ -14461,6 +14498,8 @@ Parses a skill invocation against the grammar that skill itself publishes, echoe
 The generic engine: any skill name, its `--grammar` template (`<name>` for a slot, `<name:a|b|c>` for an enumerated slot, `word(s) <slot>` for a slot introduced by literal words matched at its LAST whole-word occurrence, `@<slot>`/`#<slot>` for a symbol-separated slot, `[ ... ]` for an optional trailing clause, `[+]` for an optional literal suffix, `<slot>{+}` / `<slot>{&}` for a LIST slot — one or more values joined by the literal in the braces, every item of an enumerated list checked, an empty item refused — and `<a:..>{+}|<b:..>[+]|<c>` for an ALTERNATION, one position filled by the first alternative the value fits), and `--line`, the invocation to check.
 
 **Lists and alternations (zheref/nen#410).** An alternation tries its enumerated alternatives in template order — a list fits when every item is one of its values, a single value when it is one of them with its suffix at most once — and only then its **free** alternative (no value set, allowed only last, with no suffix), and only when **no piece** of the value (split at every enumerated joiner and suffix) is an enumerated value. So against `<repo>[@<gate:G1|G1-M|G2|G3|G4|G5|all>{+}|<severity:critical|high|medium|low>[+]|<label>][#<labels>{&}]`, `x@g4+g5` is `gate: G4+G5`, `x@high+` is `severity: high (+)`, `x@model/gpt` and `x@c++` are labels kept as typed, while `x@high+g4` (both enumerations), `x@g4+model/gpt` (a gate list with a non-gate item), `x@high+low`, `x@high++`, `x@g4+` and `x@g9+g5` are refused at exit 2 with the reason. A template the engine could not resolve unambiguously — a free alternative before another, a value in two enumerations, a list that also takes a suffix, a `|` or `{…}` that follows no slot — is refused at template time. Since this release `{`, `}` and `|` written OUTSIDE a `<…>` carry meaning in a template (a list joiner and an alternation), so a template that used them as literal text must move them inside a slot's value set. `--json` adds `alternative` (which alternative filled the position, on an alternating slot only) and `items` (on a list only) to a slot's value; the position's `name` is its alternatives' names joined by `|`, and a plain slot's shape is unchanged.
+
+**Every slot after the first needs a separator ([#419](https://github.com/zheref/nen/issues/419)).** The slots are resolved right to left by what introduces them, so a later slot with **no** literal word and **no** `@`/`#` symbol in front of it could never be told apart from the end of the slot before it: it was never captured, never checked (a required or enumerated one included) and never reported missing, while the parse answered `ok: true`. Such a template is now refused at template time, exit **2**, naming the slot and a rewrite (`<a> then <b>`, `<a>@<b>`, or `<a>|<b>` to alternate): `<a> <b>`, `<a> <b:x|y>`, `<a> [<b>]` and `<a> {x} <b>` (where `{x}` is `<a>`'s list joiner, never a separator) are refused; `<a>`, `<a>@<b>`, `<a> then <b>`, `<a>{+}` and an alternation `<a:..>|<b>` are unchanged. A template refused this way never checked its later slot, so the refusal reveals a template that was already wrong.
 
 **Usage**
 

@@ -336,6 +336,20 @@ export function parseTemplate(template: string): Grammar {
     // it from the working directory, not from an optional slot
     // (see ../repo/resolve.ts).
     const optional = depth > 0;
+    if (slots.length > 0 && separator === null) {
+      // A LATER SLOT WITH NOTHING INTRODUCING IT (zheref/nen#419). The slots
+      // are resolved right to left by their separators, so one with none is
+      // never captured, never checked and never reported missing: the slot
+      // before it swallows the whole tail and the parse answers ok:true --
+      // a required or enumerated <${name}> included. That is the silent
+      // mis-parse this engine exists to refuse, so the TEMPLATE is refused.
+      // '<a> {x} <b>' lands here too: '{x}' is <a>'s list joiner (#410),
+      // never a separator.
+      const previous = slots[slots.length - 1] as Slot;
+      throw new GrammarError(
+        `template '${template}' is refused: <${name}> follows <${previous.name}> with no separator -- no literal word and no symbol introduces it -- so it could never be told apart from the end of <${previous.name}> and would be silently dropped. Introduce it with a word or a symbol, e.g. '<${previous.name}> then <${name}>' or '<${previous.name}>@<${name}>'; to alternate the two, write '<${previous.name}>|<${name}>'.`,
+      );
+    }
     if (optional && slots.length === 0 && separator === null) {
       throw new GrammarError(
         `template '${template}' is refused: its leading slot <${name}> is bracketed but nothing introduces it, so an omitted value cannot be told apart from a mistyped one. Anchor it behind a literal ('word [<${name}>]') or drop the brackets.`,

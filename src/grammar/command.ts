@@ -76,6 +76,11 @@ parse, and refuse an unparseable line with the corrected line ready to paste.
                                          '@c++' is free text. --json names the
                                          'alternative' that filled it and a
                                          list's 'items'
+                     Every slot after the first needs a word or a symbol
+                     in front of it: '<a> <b>', '<a> [<b>]' and '<a> {x} <b>'
+                     are refused at exit 2 (zheref/nen#419) -- such a slot
+                     could never be told apart from the end of the one
+                     before it, and was silently dropped at ok:true.
   --line <text>      The invocation to parse. MAY BE EMPTY when every clause
                      of the grammar is optional: 'at [<gate>]' accepts
                      --line "" and --line "at" identically, both reporting

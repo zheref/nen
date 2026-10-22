@@ -51,7 +51,7 @@ const USAGE = `nen run rerun-failed -- re-run a workflow run's failed jobs, senk
 nen run start|append|verify|budget -- a batch run's manifest (${RUN_CONTRACT}, HR-5).
 
 usage:
-  nen run rerun-failed --target <owner/name> --run-id <n>
+  nen run rerun-failed --target <owner/name> --run-id <n> [--dry-run] [--json]
   nen run start  --id <run-id> --repo <path> [--idle-answers <json>] [--dry-run] [--json]
   nen run append --id <run-id> --issue <ref> --pr <N> --base <branch>
                  --kind delivery|integration|release --head <sha> [--effort <id>]
@@ -62,7 +62,8 @@ usage:
 
 rerun-failed: 'gh run rerun <n> --failed', exactly. senkei's own instruction:
 re-run the failed job when a reviewer job dies mid-run, NEVER re-label to force
-a re-vote -- this verb only ever runs the rerun.
+a re-vote -- this verb only ever runs the rerun. --dry-run prints 'would run:'
+and that line, and calls nothing; --json: { ok, message, dryRun, command }.
 
 The manifest lives at '<git-common-dir>/${RUN_MANIFEST_DIR}/<run-id>.json' -- the git
 common dir, so every worktree of the project shares it and no effort cleanup
@@ -105,7 +106,7 @@ const OWNED: Readonly<Record<string, readonly Subcommand[]>> = {
   "max-tokens": ["budget"],
 };
 const OWNED_BOOLEANS: Readonly<Record<string, readonly Subcommand[]>> = {
-  "dry-run": ["start", "append"],
+  "dry-run": ["rerun-failed", "start", "append"],
   claim: ["budget"],
 };
 
@@ -159,7 +160,7 @@ function doRerun(context: CommandContext): number {
     context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
-  const result = rerunFailed(context.seams, target, runIdValue);
+  const result = rerunFailed(context.seams, target, runIdValue, context.args.booleans.has("dry-run"));
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
     return result.ok ? 0 : 1;

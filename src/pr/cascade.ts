@@ -20,8 +20,17 @@
 // skips is the network write at the end. izanami's policy table (../parse/
 // izanami.ts) therefore keeps this verb `mutating` in every spelling; a
 // caller that wants a read-only preview has no such thing here, on purpose.
+//
+// `--dry-run` IS THAT PREVIEW, AND IT SPAWNS NOTHING (Hatsu SDD plan N6). It
+// prints the exact git calls the real run would make -- fetch, merge, and push
+// unless `--no-push` -- as `would run:` lines and runs none of them, not even
+// the fetch, so nothing about the working tree, the index or the remote moves.
+// What it cannot say is whether the merge would conflict: that is only known
+// by merging. izanami still classifies the verb `mutating` in every spelling,
+// the dry form included -- fail-closed, as `shu warmup`'s dry form is.
 
 import { GIT, outputLines, type Seams } from "../seam/exec.js";
+import { renderCommand } from "../wc/mechanical.js";
 
 /**
  * One unmerged path from a conflicted merge, per `git ls-files -u`'s stage
@@ -52,11 +61,15 @@ export interface CascadeResult {
   readonly error: string | null;
   /** Populated only when `conflicted` is true; `[]` on every other outcome. */
   readonly conflicts: readonly CascadeConflict[];
+  /** Echoes whether `--dry-run` was given; appended last, so every earlier key keeps its place. */
+  readonly dryRun: boolean;
 }
 
 export interface CascadeOptions {
   /** Fetch and merge exactly as always, then stop -- never push. */
   readonly noPush?: boolean;
+  /** Print every git call as `would run:` and spawn none. */
+  readonly dryRun?: boolean;
 }
 
 /**
@@ -147,6 +160,19 @@ function collectConflicts(seams: Seams, cwd: string, trunk: string): readonly Ca
 export function cascadeMain(seams: Seams, cwd: string, trunk = "main", options: CascadeOptions = {}): CascadeResult {
   const log: string[] = [];
   const noPush = options.noPush ?? false;
+  const dryRun = options.dryRun ?? false;
+
+  if (dryRun) {
+    const steps: readonly (readonly string[])[] = [
+      ["fetch", "origin", trunk],
+      ["merge", "--no-edit", `origin/${trunk}`],
+      ...(noPush ? [] : [["push"]]),
+    ];
+    for (const step of steps) log.push(`would run: ${renderCommand([GIT, ...step])}`);
+    if (noPush) log.push("would not push (--no-push)");
+    log.push("dry run: nothing fetched, merged or pushed; whether the merge conflicts is only known by merging");
+    return { conflicted: false, pushed: false, noPush, log, error: null, conflicts: [], dryRun };
+  }
 
   const fetch = seams.run(GIT, ["fetch", "origin", trunk], { cwd });
   if (fetch.code !== 0) {
@@ -157,6 +183,7 @@ export function cascadeMain(seams: Seams, cwd: string, trunk = "main", options: 
       log,
       error: `could not fetch origin/${trunk}: ${outputLines(fetch.stderr).join(" ") || `exit ${fetch.code}`}`,
       conflicts: [],
+      dryRun,
     };
   }
   log.push(`fetched origin/${trunk}`);
@@ -164,13 +191,13 @@ export function cascadeMain(seams: Seams, cwd: string, trunk = "main", options: 
   const merge = seams.run(GIT, ["merge", "--no-edit", `origin/${trunk}`], { cwd });
   if (merge.code !== 0) {
     log.push(`merge left conflicts -- resolve them, then commit and push yourself; this cascade never picks a side`);
-    return { conflicted: true, pushed: false, noPush, log, error: null, conflicts: collectConflicts(seams, cwd, trunk) };
+    return { conflicted: true, pushed: false, noPush, log, error: null, conflicts: collectConflicts(seams, cwd, trunk), dryRun };
   }
   log.push(`merged origin/${trunk} cleanly`);
 
   if (noPush) {
     log.push("not pushed (--no-push)");
-    return { conflicted: false, pushed: false, noPush, log, error: null, conflicts: [] };
+    return { conflicted: false, pushed: false, noPush, log, error: null, conflicts: [], dryRun };
   }
 
   const push = seams.run(GIT, ["push"], { cwd });
@@ -182,8 +209,9 @@ export function cascadeMain(seams: Seams, cwd: string, trunk = "main", options: 
       log,
       error: `merged cleanly but could not push: ${outputLines(push.stderr).join(" ") || `exit ${push.code}`}`,
       conflicts: [],
+      dryRun,
     };
   }
   log.push("pushed");
-  return { conflicted: false, pushed: true, noPush, log, error: null, conflicts: [] };
+  return { conflicted: false, pushed: true, noPush, log, error: null, conflicts: [], dryRun };
 }
