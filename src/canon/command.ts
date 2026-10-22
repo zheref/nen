@@ -33,10 +33,11 @@ import { assertRepoRoot, looksLikeOwnerSlug } from "../repo/root.js";
 import { loadRepoRegistry, parseRepoRegistry, type RepoRegistry } from "../schema/repos.js";
 import { readSchemaFile, REPOS_FILE } from "../schema/source.js";
 import { commaList } from "../cli/comma.js";
-import { emit, requireRepoFlag, requireSubcommand, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { emit, parseCallerToken, requireRepoFlag, requireSubcommand, requireTargetFlag, VerbUsageError, type Command, type CommandContext } from "../cli/command.js";
+import { refuse } from "../cli/refusal.js";
 import { containedOn, resolvedOrSelf, samePath } from "./paths.js";
 import { shellSingleQuote } from "../shu/render.js";
-import { parseTarget } from "../github/target.js";
+import { parseTarget, TargetError, type Target } from "../github/target.js";
 import { resolveScenario } from "../repo/scenario.js";
 import { canonSurfaceNames, canonSurfaces, type SurfaceRow } from "../surface/rules.js";
 import type { ToolCheckout } from "../schema/repos.js";
@@ -311,6 +312,7 @@ ${SURFACE_LIST}
       never 1, which is drift.`;
 
 export const canonCommand: Command = {
+  jsonRefusals: ["resolve"],
   name: "canon",
   subcommands: ["resolve", "mirror", "pin", "checkout"],
   summary: "Resolve a repo's handbook set, read its canon pin, or render/check its canon-rule mirror on every surface it uses.",
@@ -886,8 +888,13 @@ function resolveVerb(context: CommandContext): number {
     "It is the checkout whose nen/repos.json maps --target to the scenario this handbook set derives from; defaulting to the current directory reported that directory's missing-or-unrelated registry instead of the forgotten flag.",
   );
   refuseForeignFlags(context, "resolve", ["canon-checkout", "write"]);
-  const targetRaw = context.args.values["target"];
-  if (targetRaw === undefined) throw new VerbUsageError("--target owner/name is required.");
+  // The shared --target refusal (Hatsu SDD plan N5): missing OR malformed is
+  // exit 2, as on every other verb that takes the flag. A malformed one used
+  // to fall into the read below and exit 1.
+  const target = parseCallerToken(
+    (): Target => parseTarget(requireTargetFlag(context)),
+    (error: unknown): boolean => error instanceof TargetError,
+  );
   const stackDir = context.args.values["stack-dir"];
   if (stackDir === undefined) throw new VerbUsageError("--stack-dir <dir> is required.");
   const alwaysLoadRaw = context.args.values["always-load"];
@@ -896,20 +903,16 @@ function resolveVerb(context: CommandContext): number {
   }
 
   let root: string;
-  let target;
   try {
     root = assertRepoRoot({ repoFlag });
-    target = parseTarget(targetRaw);
   } catch (error) {
-    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
+    return refuse(context.io, context.json, "canon resolve", 1, [error instanceof Error ? error.message : String(error)]);
   }
 
   const registry = loadRepoRegistry(root);
   const scenarioResult = resolveScenario(registry, target.slug);
   if (!scenarioResult.ok) {
-    context.io.err(`nen: ${scenarioResult.reason}`);
-    return 1;
+    return refuse(context.io, context.json, "canon resolve", 1, [scenarioResult.reason]);
   }
 
   const alwaysLoad = commaList(alwaysLoadRaw);
@@ -926,8 +929,7 @@ function resolveVerb(context: CommandContext): number {
     leaf: context.args.values["leaf"],
   });
   if (!result.ok) {
-    context.io.err(`nen: ${result.reason}`);
-    return 1;
+    return refuse(context.io, context.json, "canon resolve", 1, [result.reason]);
   }
   const resolution = result.value;
 

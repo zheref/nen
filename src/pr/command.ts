@@ -1270,6 +1270,19 @@ function refuseFlagsSubcommandDoesNotRead(context: CommandContext, subcommand: s
 }
 
 export const prCommand: Command = {
+  exits: [
+    { verb: "pr open", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "pr edit-body", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "pr threads", code: 3, meaning: "the thread is already resolved (settle: every other entry settled)" },
+    { verb: "pr threads", code: 4, meaning: "no thread with that id, the pull request is not visible, or (reply/settle) the private-name guard" },
+    { verb: "pr threads", code: 5, meaning: "the credential could not authenticate" },
+    { verb: "pr merge", code: 5, meaning: "gh pr merge refused" },
+    { verb: "pr merge", code: 6, meaning: "gh could not be started" },
+    { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
+    { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
+    { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
+    { verb: "pr request-reviews", code: 9, meaning: "a bot request GitHub accepted but did not list as pending" },
+  ],
   name: "pr",
   subcommands: PR_SUBCOMMANDS,
   summary:

@@ -153,12 +153,13 @@ function doRerun(context: CommandContext): number {
     throw new VerbUsageError("--run-id <n> is required.");
   }
 
-  let target;
+  // A malformed --target is the same typo as a missing one: exit 2, as on
+  // every other verb that takes the flag (Hatsu SDD plan N5). It was exit 1.
+  let target: Target;
   try {
     target = parseTarget(targetRaw);
   } catch (error) {
-    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
+    throw new VerbUsageError(error instanceof Error ? error.message : String(error));
   }
   const result = rerunFailed(context.seams, target, runIdValue, context.args.booleans.has("dry-run"));
   if (context.json) {
