@@ -9,7 +9,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { run, runFamily } from "../index.js";
 import { defaultSeams } from "../seam/exec.js";
 import { reviewCommand } from "./command.js";
-import { cycleKey, cyclePath, cycleTraceDir, cycleTraceLock, ensureCycle, prKeyed, readBudgets, readCycle, runCycle, type Cycle, type CycleOptions } from "./ledger.js";
+import { cycleKey, cyclePath, cycleTraceDir, cycleTraceLock, ensureCycle, prKeyed, readBudgets, readCycle, runCycle, sameCycleRoot, type Cycle, type CycleOptions } from "./ledger.js";
 
 const roots: string[] = [];
 const roster = { alpha: 2, beta: 1, gamma: 1, delta: 1, epsilon: 2, zeta: 3, eta: 1 };
@@ -173,6 +173,11 @@ describe("repository policy and lossless legacy reads", () => {
 });
 
 describe("ensure parity — trunk, durable markers, exact PR keys and other worktrees", () => {
+  it("recognizes Windows checkout aliases without folding case on POSIX", () => {
+    expect(sameCycleRoot("C:/Users/Runner/Repo", "c:\\users\\runner\\repo", "win32")).toBe(true);
+    expect(sameCycleRoot("C:/Users/Runner/Repo", "c:\\users\\runner\\repo-other", "win32")).toBe(false);
+    expect(sameCycleRoot("/repo/A", "/repo/a", "linux")).toBe(false);
+  });
   it.each(["main", "HEAD", "", "refs/heads/topic"])("refuses trunk or non-branch %s at exit 3 without a lock", (branch): void => {
     const o = { ...fixture(), branch }; expect(ensureCycle(o).code).toBe(3); expect(existsSync(join(o.root, ".nen", "hanten"))).toBe(false);
   });
