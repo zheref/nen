@@ -603,6 +603,9 @@ interface AgentOutput {
  */
 const WRITE_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
+/** What a tool name is made of once its `(…)` scope is cut: anything else is a list this parse did not understand. */
+const TOOL_NAME = /^[A-Za-z0-9_*:.-]+$/;
+
 /**
  * True when the frontmatter has a `tools` key with at least one tool and none
  * of WRITE_TOOLS. A persona with no `tools` key inherits every tool, so it is
@@ -621,6 +624,10 @@ export function isReadOnlyPersona(entries: readonly FrontmatterEntry[]): boolean
     .split(",")
     .map((part): string => part.trim().replace(/^-\s*/, "").replace(/^["']|["']$/g, "").replace(/\(.*$/, "").trim())
     .filter((name): boolean => name !== "");
+  // Fail closed: a name that does not look like a tool name (a stray quote,
+  // `#`, space or backslash left by an odd spelling the comment scan misread)
+  // means the list was not understood, so the persona is not read-only.
+  if (names.some((name): boolean => !TOOL_NAME.test(name))) return false;
   return names.length > 0 && !names.some((name): boolean => WRITE_TOOLS.has(name) || name.startsWith("mcp__"));
 }
 

@@ -990,9 +990,13 @@ describe("a read-only persona keeps its intent on every surface (zheref/nen#473)
     expect(isReadOnlyPersona(entries('tools:\n  - Read\n  - "Edit" # c'))).toBe(false);
     expect(isReadOnlyPersona(entries("tools: Read # Edit"))).toBe(true);
     expect(isReadOnlyPersona(entries("tools:\n  # Write once\n  - Read"))).toBe(true);
-    expect(isReadOnlyPersona(entries('tools: ["Read", "a#b"]'))).toBe(true);
+    expect(isReadOnlyPersona(entries('tools: ["Read", "Grep"] # Edit'))).toBe(true);
+    expect(isReadOnlyPersona(entries('tools: ["Read # x", Edit]'))).toBe(false);
     // An MCP tool may write, and nothing here can tell.
     expect(isReadOnlyPersona(entries("tools: Read, mcp__fs__write_file"))).toBe(false);
+    // A spelling the comment scan misreads fails closed rather than hiding a writer.
+    expect(isReadOnlyPersona(entries("tools: Read, Bob's, Edit # x"))).toBe(false);
+    expect(isReadOnlyPersona(entries('tools: ["a\\" # b", Edit]'))).toBe(false);
     // No tools key inherits every tool; an empty one names nothing.
     expect(isReadOnlyPersona(entries("name: x"))).toBe(false);
     expect(isReadOnlyPersona(entries("tools:"))).toBe(false);
@@ -1032,7 +1036,10 @@ describe("a read-only persona keeps its intent on every surface (zheref/nen#473)
   });
 
   it("codex: the note is there without --models too (the AGENTS.md appendix carries no control either)", () => {
-    expect(report("codex", cast()).notes.some((note): boolean => note.startsWith("codex: reader is read-only"))).toBe(true);
+    const notes = report("codex", cast()).notes.filter((note): boolean => note.startsWith("codex: "));
+    expect(notes).toEqual([
+      "codex: reader is read-only at source; Codex documents no per-agent read-only control (custom agents inherit the parent sandbox)",
+    ]);
   });
 
   it("antigravity: the tools list still travels as written, with no readonly key", () => {
