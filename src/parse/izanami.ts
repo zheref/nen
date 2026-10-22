@@ -1460,6 +1460,14 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   stop: {
     subcommands: {
       clear: MUT("removes the .nen/last-stop.json marker -- a local delete, but a write"),
+      // `answer` IS A SUBCOMMAND WITH ITS OWN WRITE, so it must never fall to
+      // the "*" row below: that row is gated on --mark alone and would certify
+      // `nen stop answer --record ...` read-only while it reserves an id and
+      // creates a record under the git common directory. The two-token key is
+      // tried first, so `answer show` (a pure read of those records) keeps its
+      // own read-only row.
+      "answer show": RO("lists the stop-answer records under the git common directory's .nen/stops/<effort>/; writes nothing"),
+      answer: DRY("reserves an id under .nen/stop-ids/ and creates one record under .nen/stops/<effort>/ in the git common directory unless --dry-run is given"),
       "*": GATED(
         ["--mark"],
         "renders the gate-stop banner and fires nothing itself; --mark additionally writes the .nen/last-stop.json marker a host hook reads",
@@ -1796,6 +1804,25 @@ function classifyNenInvocation(raw: string): ClassifyResult {
   if (familyWide !== undefined) {
     // A "*" row is selected by the FAMILY alone (stop, warmup, parse), so the
     // subcommand token is an argument here, not part of the path.
+    //
+    // A SIBLING SUBCOMMAND BEHIND A FLAG IS NOT THE FAMILY-WIDE FORM. The
+    // reader (../cli/args.ts) collects positionals around flags, so `nen stop
+    // --gate G5 answer --record x` runs `stop answer` -- a write -- while the
+    // token right after the family is a flag and no keyed row matched. When a
+    // word this family keys as a subcommand appears anywhere on the line, the
+    // "*" row cannot be shown to apply: unknown, never the "*" verdict. Over-
+    // refusal at worst (a flag VALUE that happens to spell a subcommand).
+    const siblings = new Set(
+      Object.keys(entry.subcommands)
+        .filter((key): boolean => key !== "*")
+        .map((key): string => key.split(" ")[0] ?? key),
+    );
+    const sibling = tokens.slice(index + 1).find((token): boolean => siblings.has(token));
+    if (sibling !== undefined) {
+      return nenUnknown(
+        `'${sibling}' is a subcommand of 'nen ${family}' but does not follow the family directly -- the reader would still run 'nen ${family} ${sibling}', so the family-wide row cannot vouch for this line`,
+      );
+    }
     return unprovableVerbPath(tokens, index) ?? evaluateNenPolicy(familyWide, `nen ${family}`, tokens, lineFaithful);
   }
   return nenUnknown(
