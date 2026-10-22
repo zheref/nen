@@ -19,8 +19,38 @@ import { headingNumber, parseDoc, titleMatches, type Doc } from "../canon/markdo
 
 export const REF_RESOLVE_CONTRACT = "nen.ref.resolve/v0.1";
 
-/** The files a clause prefix lives in when --in does not say. */
+/**
+ * The files a clause prefix lives in when --in does not say: DOCUMENTED
+ * DEFAULTS, today's values. The root's own `nen/contract.json` → `clauseHomes`
+ * (`{ "<PREFIX>": "<repo-relative file>" }`) is read first and wins per
+ * prefix, so a consumer's layout is the consumer's data (delivery round on
+ * zheref/nen#498, reading 10).
+ */
 export const CLAUSE_HOMES: Readonly<Record<string, string>> = { HR: "docs/ROSTER.md", CON: "CONSTITUTION.md" };
+
+/** `<root>/nen/contract.json` → `clauseHomes` over the defaults; a malformed block is a wiring refusal. */
+export function clauseHomes(root: string): Readonly<Record<string, string>> {
+  const path = resolve(root, "nen", "contract.json");
+  if (!existsSync(path)) return CLAUSE_HOMES;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new ResolveWiringError(`nen/contract.json under the root is not readable JSON (${(error as Error).message}); its clauseHomes cannot be read`);
+  }
+  const block = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>)["clauseHomes"] : undefined;
+  if (block === undefined || block === null) return CLAUSE_HOMES;
+  if (typeof block !== "object" || Array.isArray(block)) throw new ResolveWiringError("nen/contract.json clauseHomes is not an object of <PREFIX> -> <repo-relative file>");
+  const homes: Record<string, string> = { ...CLAUSE_HOMES };
+  for (const [prefix, file] of Object.entries(block as Record<string, unknown>)) {
+    if (prefix.startsWith("$")) continue;
+    if (!/^[A-Z][A-Z0-9]{0,7}$/.test(prefix) || typeof file !== "string" || file === "" || isAbsolute(file) || file.split(/[\\/]/).includes("..")) {
+      throw new ResolveWiringError(`nen/contract.json clauseHomes.${prefix} is not a <PREFIX> -> repo-relative file pair`);
+    }
+    homes[prefix] = file;
+  }
+  return homes;
+}
 
 export class ResolveWiringError extends Error {
   constructor(message: string) {
@@ -50,9 +80,10 @@ export function parseCitation(raw: string): Citation {
   const text = raw.trim();
   const clause = /^([A-Z][A-Z0-9]{0,7})-(\d+)$/.exec(text);
   if (clause !== null) return { kind: "clause", prefix: clause[1] ?? "", id: Number(clause[2]) };
-  const link = /^\[[^\]]*\]\(([^)\s]+)\)(.*)$/.exec(text);
-  const target = link !== null ? (link[1] ?? "") : (/^([^\s§]+)/.exec(text)?.[1] ?? "");
-  const rest = link !== null ? (link[2] ?? "") : text.slice(target.length);
+  // A link destination is `(<path>)`, or CommonMark's `(<path with spaces>)`.
+  const link = /^\[[^\]]*\]\((?:<([^<>\n]+)>|([^)\s]+))\)(.*)$/.exec(text);
+  const target = link !== null ? (link[1] ?? link[2] ?? "") : (/^([^\s§]+)/.exec(text)?.[1] ?? "");
+  const rest = link !== null ? (link[3] ?? "") : text.slice(target.length);
   if (target === "") throw new CitationSyntaxError(`'${raw}' names no path; expected '<path> § N', '<path> § *Title*', '<path>#anchor', '<path>' or a clause id like HR-2`);
   const tail = rest.trim();
   if (tail === "") {
@@ -130,8 +161,8 @@ export function resolveCitation(options: ResolveOptions): ResolveReport {
   // The file the citation points into, kept inside the root.
   let rel: string;
   if (citation.kind === "clause") {
-    const home = options.in ?? CLAUSE_HOMES[citation.prefix];
-    if (home === undefined) throw new CitationSyntaxError(`no default file for ${citation.prefix} clauses; name it with --in <file>`);
+    const home = options.in ?? clauseHomes(root)[citation.prefix];
+    if (home === undefined) throw new CitationSyntaxError(`no default file for ${citation.prefix} clauses (nen/contract.json clauseHomes names none); name it with --in <file>`);
     rel = home;
   } else {
     if (citation.path === "" && options.from === null) throw new CitationSyntaxError(`'${options.citation}' is a same-file anchor; name the citing file with --from`);

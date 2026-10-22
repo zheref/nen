@@ -17,6 +17,7 @@
 import { VerbUsageError } from "../cli/command.js";
 import type { ProductFamily, RepoRegistry } from "../schema/repos.js";
 import { resolveProductCode } from "../verbs/pr_ready.js";
+import type { GateId } from "../schema/decisions.js";
 
 export const FAMILY_CONTRACT = "nen.repo.family/v0.1";
 
@@ -30,7 +31,7 @@ export interface ResolvedMember {
 export interface FamilyResolution {
   readonly contract: string;
   readonly family: string;
-  readonly spec: { readonly repo: string; readonly role: "spec"; readonly gate: "G2" };
+  readonly spec: { readonly repo: string; readonly role: "spec"; readonly gate: GateId };
   readonly members: readonly ResolvedMember[];
   /** Where the family was read, by pointer. */
   readonly source: string;

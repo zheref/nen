@@ -58,14 +58,16 @@ resolve:
                    (the file exists), or a clause id 'P-N' (a definition as
                    'nen canon clause check' counts one; P-2 never matches
                    P-20). The path may be written as a Markdown link,
-                   '[x](path) § N'. Fenced blocks and frontmatter carry no
+                   '[x](path) § N', or '[x](<path with spaces>) § N'. Fenced blocks and frontmatter carry no
                    heading; CRLF reads as LF.
   --root <checkout> The canon checkout (or --repo; one directory, named once).
   --from <file>    The citing file, relative to the root: a relative target
                    resolves from its directory (default: the root). A target
                    that leaves the root is unresolved by name.
-  --in <file>      Where a clause id is defined. Defaults: HR -> docs/ROSTER.md,
-                   CON -> CONSTITUTION.md; any other prefix needs it.
+  --in <file>      Where a clause id is defined. Else --root's
+                   nen/contract.json clauseHomes ({ "<PREFIX>": "<file>" }),
+                   else the documented defaults HR -> docs/ROSTER.md,
+                   CON -> CONSTITUTION.md; any other prefix needs one.
   Exit 0 resolved (every match listed: a number two headings share is two
   matches, never a pick); 1 unresolved, with candidates (the target's headings
   and leads, or the five clause ids defined nearest) and the reason -- the

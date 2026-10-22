@@ -380,3 +380,20 @@ describe("canon lint internals", () => {
     expect(walk(root, realpathSync(root), ["docs/**/*.md"], ["docs/gen/**"])).toEqual(["docs/ROSTER.md"]);
   });
 });
+
+// A HOSTILE LINE IS BOUNDED (Feitan, delivery round on zheref/nen#498, SEC-7):
+// at the old unbounded link pattern, a 320 KB line of '[a](' took ~10 s and grew
+// quadratically. A 1 MB line of each hostile shape now finishes in a few seconds.
+describe("canon lint on a 1 MB hostile line", () => {
+  it("finishes a line of repeated '[a](' and one of repeated '[' within the time bound", async () => {
+    for (const unit of ["[a](", "["]) {
+      const root = base();
+      put(root, "claude/skills/hostile/SKILL.md", `# Hostile\n\n${unit.repeat(Math.ceil(1_000_000 / unit.length))}\n`);
+      const started = Date.now();
+      const r = await lint(root);
+      const elapsed = Date.now() - started;
+      expect(r.code, r.stderr).not.toBe(2);
+      expect(elapsed, `${unit}: ${elapsed} ms`).toBeLessThan(15_000);
+    }
+  }, 60_000);
+});

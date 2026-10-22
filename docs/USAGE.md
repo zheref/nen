@@ -551,17 +551,22 @@ read which one the repository ranks higher instead of carrying a prose order:
 { "precedence": ["skill.hardLimit", "roster.ruling", "nen/decisions.json", "docs/WORKFLOW.md", "docs/PROCESS.md", "akatsuki.CON", "handbooks"] }
 ```
 
-The **vocabulary is closed** — six fixed sources, `skill.hardLimit`,
-`roster.ruling`, `nen/decisions.json`, `docs/WORKFLOW.md`, `docs/PROCESS.md`
-and `handbooks`, and one shape, `<plane>.CON`, a governance plane's
-constitution clauses (`akatsuki.CON` in the example) — because an entry no
-reader can locate would outrank every source after it and point at nothing.
+Each entry is **checked by shape**: `<plane>.CON`, a governance plane's
+constitution clauses (`akatsuki.CON` in the example); a dotted source name
+(`roster.ruling`, `skill.hardLimit`); or a repository-relative path or bare
+name (`docs/WORKFLOW.md`, `handbooks`) — never absolute, never climbing with
+`..`. A closed list here would gate a canon ruling that names a new source on a
+nen release. The six names in use today -- `skill.hardLimit`, `roster.ruling`,
+`nen/decisions.json`, `docs/WORKFLOW.md`, `docs/PROCESS.md` and `handbooks` --
+stay **documented known names**: an entry one edit from one of them is refused
+as the typo it is, because an entry no reader can locate would outrank every
+source after it and point at nothing.
 **The plane's name is data**: nen ships no system's name ([names are
 data](#taxonomy-as-data)), so a `<plane>.CON` entry is checked by shape only — a
 lower-case slug, a dot, `CON` (`Akatsuki.CON`, `akatsuki.con` and `.CON` are
 refused) — and the same plane listed twice is refused like any repeat. [`schema check`](#nen-schema-check) refuses, by
-pointer, an empty list, a non-string entry, an entry outside the vocabulary
-(naming the one it is one edit from: `precedence[1]` `"roster.rulings"`), a
+pointer, an empty list, a non-string entry, an entry of no source shape or one
+edit from a known name (naming it: `precedence[1]` `"roster.rulings"`), a
 source listed twice, and a root key one edit from `precedence` (`precedense`),
 which would otherwise be preserved and read by nobody. **The order is the
 repository's and is never checked against any preferred order**: nen validates
@@ -590,7 +595,7 @@ platform repositories that deliver it:
 | `name` | a non-empty string, unique across families (letter case ignored) |
 | `spec.repo` | an `owner/name` slug |
 | `spec.role` | optional; when stated, exactly `spec` |
-| `spec.gate` | required, exactly `G2` — product specification is the maintainer's to merge at G2; this file declares that gate, it does not choose one |
+| `spec.gate` | optional, one of the gate vocabulary (`G1`, `G1-M`, `G2`, `G3`, `G4`, `G5`); **default `G2`**, the gate HR-16 names today — read from the registry, so a ruling that moves it needs no nen release |
 | `members[]` | non-empty; each `code` an **exact** key of `product_codes` (a typo'd or mis-cased code fails, listing the declared codes); no code twice in one family, and no code in two families; `platform` an optional non-empty string |
 
 A member's stack scenario stays on its own `consumers[]` entry. The spec repository
@@ -8111,7 +8116,9 @@ is the caller's.
 | `<path>` | the file, when it exists |
 | `P-N` (`HR-2`, `CON-48`) | the clause's definition (`<a id="p-N"></a>**P-N**` or a column-0 `- **P-N.`); `HR-2` never matches `HR-20` |
 
-The path may be written as a Markdown link, `[x](path) § N`, as prose carries
+The path may be written as a Markdown link, `[x](path) § N` -- or with
+CommonMark's angle-bracket destination, `[x](<docs/with space.md>) § N`, for a
+path holding a space (a percent-encoded `%20` reads too) -- as prose carries
 it. A fenced block and YAML frontmatter carry no heading; CRLF reads as LF.
 
 **Usage**
@@ -8127,7 +8134,7 @@ nen ref resolve --citation '<path> § N | <path> § *Title* | <path>#anchor | <p
 | `--citation <c>` | yes | The citation, in one of the forms above. | Missing or in no form exits 2, naming the forms. |
 | `--root <checkout>` | no | The canon checkout. | `--repo <path>` is the same directory; default the current directory; both naming different ones exits 2. |
 | `--from <file>` | no | The citing file, relative to the root: a relative target resolves from its directory. | Default: targets resolve from the root. |
-| `--in <file>` | no | The file a clause id is defined in. | Defaults: `HR` → `docs/ROSTER.md`, `CON` → `CONSTITUTION.md`; any other prefix without it exits 2. |
+| `--in <file>` | no | The file a clause id is defined in. | Without it: `--root`'s `nen/contract.json` → `clauseHomes` (`{ "<PREFIX>": "<repo-relative file>" }`, read first, per prefix; a malformed block exits 2), else the documented defaults `HR` → `docs/ROSTER.md`, `CON` → `CONSTITUTION.md`; any other prefix with neither exits 2. |
 
 **Output and exit codes** — `resolved · <target>:<line> · <via> · <text> · #<anchor>`
 per match (a number two headings share is two matches, never a pick), or
@@ -10898,7 +10905,7 @@ the reason is good enough is the reviewer's.
 **Usage**
 
 ```text
-nen canon clause check --file <md> --prefix <HR|CON> [--base <md> | --base <ref>:<path>] [--leaves <paths>] [--body-from <file>] [--repo <path>] [--json]
+nen canon clause check --file <md> --prefix <P> [--base <md> | --base <ref>:<path>] [--leaves <paths>] [--body-from <file>] [--repo <path>] [--json]
 ```
 
 **Arguments**

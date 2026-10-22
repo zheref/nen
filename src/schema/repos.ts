@@ -25,6 +25,7 @@
 // several tags behind.
 
 import { requireArray, requireRecord, requireString, SchemaError } from "./errors.js";
+import { GATES, type GateId } from "./decisions.js";
 import { optionalString } from "./errors.js";
 import { readSchemaJson, REPOS_FILE } from "./source.js";
 
@@ -184,8 +185,13 @@ export interface RepoRegistry {
   affectedBy(changed: readonly string[]): readonly ConsumerEntry[];
 }
 
-/** The one gate a family's specification repository stands at (HR-16). */
-export const FAMILY_SPEC_GATE = "G2";
+/**
+ * The gate a family's specification repository stands at when the registry
+ * does not say: G2, today's value (HR-16). The registry's own `spec.gate` is
+ * read when stated -- any gate of the one vocabulary -- so a G4 ruling that
+ * moves it needs no nen release (delivery round on zheref/nen#498, reading 10).
+ */
+export const FAMILY_SPEC_GATE: GateId = "G2";
 /** The one role a family's `spec` block may state. */
 export const FAMILY_SPEC_ROLE = "spec";
 
@@ -201,16 +207,16 @@ export interface ProductFamily {
   readonly name: string;
   /** The entry's position in `families`, so a report can name it by pointer. */
   readonly index: number;
-  readonly spec: { readonly repo: string; readonly role: typeof FAMILY_SPEC_ROLE; readonly gate: typeof FAMILY_SPEC_GATE };
+  readonly spec: { readonly repo: string; readonly role: typeof FAMILY_SPEC_ROLE; readonly gate: GateId };
   readonly members: readonly FamilyMember[];
 }
 
 /**
  * `families[]`, validated (zheref/nen#453). Every FAIL names its pointer:
  * `name` a non-empty string unique across families; `spec.repo` an
- * `owner/name`; `spec.role`, when stated, exactly `spec`; `spec.gate` exactly
- * `G2` (HR-16 -- product specification is the maintainer's to merge at G2,
- * never a gate this file may raise or lower); `members[]` non-empty, each
+ * `owner/name`; `spec.role`, when stated, exactly `spec`; `spec.gate`, when
+ * stated, one of the gates of ../schema/decisions.ts's GATES (default G2,
+ * HR-16's value: product specification is the maintainer's to merge); `members[]` non-empty, each
  * `code` an EXACT key of `product_codes` (a typo'd code names no repository
  * and must not pass silently), no code twice in one family, and no code in two
  * families. Unknown keys on an entry are preserved, as everywhere in this file.
@@ -241,9 +247,13 @@ function parseFamilies(path: string, raw: unknown, productCodes: Readonly<Record
         throw new SchemaError(path, `${at}.spec.role`, `must be exactly '${FAMILY_SPEC_ROLE}', got '${role}'. A family's specification repository has one role; omit the key or state it`);
       }
     }
-    const gate = requireString(path, `${at}.spec.gate`, spec["gate"]);
-    if (gate !== FAMILY_SPEC_GATE) {
-      throw new SchemaError(path, `${at}.spec.gate`, `must be exactly '${FAMILY_SPEC_GATE}', got '${gate}'. Product specification is the maintainer's to merge at ${FAMILY_SPEC_GATE} (HR-16); this file declares that gate, it does not choose one`);
+    let gate: GateId = FAMILY_SPEC_GATE;
+    if (spec["gate"] !== undefined && spec["gate"] !== null) {
+      const stated = requireString(path, `${at}.spec.gate`, spec["gate"]);
+      if (!(GATES as readonly string[]).includes(stated)) {
+        throw new SchemaError(path, `${at}.spec.gate`, `must be one of ${GATES.join(", ")}, got '${stated}'. Omit it for ${FAMILY_SPEC_GATE}, the gate HR-16 names today`);
+      }
+      gate = stated as GateId;
     }
 
     const rawMembers = requireArray(path, `${at}.members`, record["members"]);
@@ -278,7 +288,7 @@ function parseFamilies(path: string, raw: unknown, productCodes: Readonly<Record
       }
       return { code, platform };
     });
-    return { name, index, spec: { repo: specRepo, role: FAMILY_SPEC_ROLE, gate: FAMILY_SPEC_GATE }, members };
+    return { name, index, spec: { repo: specRepo, role: FAMILY_SPEC_ROLE, gate }, members };
   });
 }
 

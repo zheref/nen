@@ -33,6 +33,14 @@ describe("nen/contract.json precedence (HR-1)", () => {
     expect(() => parse({ precedence: ["one.CON", "one.CON"] })).toThrow(/precedence\[1\].*repeats precedence\[0\]/);
   });
 
+  it("validates shape only: a new dotted source or repository path is read, a near-miss of a known name, an absolute or climbing path refused (reading 10)", () => {
+    expect(parse({ precedence: ["skill.hardLimit", "canon.newSource", "docs/NEW-RULES.md"] }).precedence).toEqual(["skill.hardLimit", "canon.newSource", "docs/NEW-RULES.md"]);
+    expect(() => parse({ precedence: ["roster.rulings"] })).toThrow(/one edit from 'roster.ruling'/);
+    expect(() => parse({ precedence: ["/etc/rules"] })).toThrow(/precedence\[0\]/);
+    expect(() => parse({ precedence: ["../outside.md"] })).toThrow(/precedence\[0\]/);
+    expect(() => parse({ precedence: [""] })).toThrow(/precedence\[0\]/);
+  });
+
   it("is optional: absent reads null", () => {
     expect(parse({ mechanical: { changelog: ["CHANGELOG.md"] } }).precedence).toBeNull();
   });
@@ -191,10 +199,11 @@ describe("nen/repos.json families[] (zheref/nen#453, HR-16)", () => {
     expect(() => parse([family({ members: [{ code: "ra" }] })])).toThrow(/members\[0\]\.code/);
   });
 
-  it("refuses a spec gate other than G2 and a role other than spec", () => {
-    expect(() => parse([family({ spec: { repo: "acme/app-spec", gate: "G4" } })])).toThrow(/families\[0\]\.spec\.gate.*exactly 'G2'/);
+  it("reads the registry's spec gate (any gate of the one vocabulary), defaults it to G2, and refuses a role other than spec (reading 10)", () => {
+    expect(parse([family({ spec: { repo: "acme/app-spec", gate: "G4" } })]).families?.[0]?.spec.gate).toBe("G4");
+    expect(parse([family({ spec: { repo: "acme/app-spec" } })]).families?.[0]?.spec.gate).toBe("G2");
+    expect(() => parse([family({ spec: { repo: "acme/app-spec", gate: "G9" } })])).toThrow(/families\[0\]\.spec\.gate.*one of G1, G1-M, G2, G3, G4, G5/);
     expect(() => parse([family({ spec: { repo: "acme/app-spec", role: "canon", gate: "G2" } })])).toThrow(/families\[0\]\.spec\.role.*exactly 'spec'/);
-    expect(() => parse([family({ spec: { repo: "acme/app-spec" } })])).toThrow(/families\[0\]\.spec\.gate/);
   });
 
   it("refuses a spec.repo that is not owner/name, and an empty name", () => {

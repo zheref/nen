@@ -370,7 +370,32 @@ export function hasTitled(doc: Doc, title: string): boolean {
   return doc.headings.some((h): boolean => titleMatches(h.text, title)) || doc.leads.some((l): boolean => titleMatches(l.text, title));
 }
 
-const LINK = /\[(?:[^\]\n]|\n)*?\]\(([^)\s]+)\)((?:'s)?\s*§§?\s*(?:(\d+[a-z]?(?:\.\d+)*)|\*([^*\n]+)\*))?/g;
+// BOUNDED (Feitan, delivery round on zheref/nen#498, SEC-7): a label of at most
+// 500 characters and a target of at most 2048, so the scan from each '[' gives
+// up after a bounded walk instead of backtracking across the whole paragraph --
+// a hostile MB-scale line of '[a](' used to cost quadratic time in a CI gate.
+const LINK = /\[[^\]]{0,500}?\]\(([^)\s]{1,2048})\)((?:'s)?\s*§§?\s*(?:(\d+[a-z]?(?:\.\d+)*)|\*([^*\n]{1,500})\*))?/g;
+
+/** Each `](target` run in `flat`, as [start, end] offsets, found in one linear pass. */
+function linkTargetSpans(flat: string): (readonly [number, number])[] {
+  const spans: (readonly [number, number])[] = [];
+  for (const m of flat.matchAll(/\]\(([^)\s]*)/g)) spans.push([m.index + 2, m.index + 2 + (m[1] ?? "").length]);
+  return spans;
+}
+
+/** Whether `offset` sits inside one of `spans` (sorted by start): a binary search, never a prefix slice. */
+function insideSpan(spans: readonly (readonly [number, number])[], offset: number): boolean {
+  let low = 0;
+  let high = spans.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const [start, end] = spans[mid] as readonly [number, number];
+    if (offset < start) high = mid - 1;
+    else if (offset > end) low = mid + 1;
+    else return true;
+  }
+  return false;
+}
 
 function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
   const out: Finding[] = [];
@@ -401,7 +426,8 @@ function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
         case "by-hand": {
           const negation = re(rule, "negations");
           for (const m of flat.matchAll(re(rule))) {
-            const clause = flat.slice(0, m.index).split(/[.;:!?—–]\s|\(/).pop() ?? "";
+            // The clause before the match, read from a bounded window: never a prefix slice per match.
+            const clause = flat.slice(Math.max(0, m.index - 400), m.index).split(/[.;:!?—–]\s|\(/).pop() ?? "";
             negation.lastIndex = 0;
             if (!negation.test(clause)) add(rule, para, m.index, around(m.index, m[0].length));
           }
@@ -420,7 +446,7 @@ function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
                 // A pin claim: nen's (no other tool's pin named nearby), not after a past word.
                 const near = flat.slice(Math.max(0, offset - 80), offset + m[0].length + 40);
                 if (new RegExp(rule["otherPins"] as string, "i").test(near)) continue;
-                const previous = (flat.slice(0, offset).match(/[A-Za-z]+/g) ?? []).slice(-2).map((w): string => w.toLowerCase());
+                const previous = (flat.slice(Math.max(0, offset - 200), offset).match(/[A-Za-z]+/g) ?? []).slice(-2).map((w): string => w.toLowerCase());
                 if (previous.some((w): boolean => pastWords.includes(w))) continue;
                 if (`${maj}.${min}` === ctx.min && pat === undefined) continue;
                 if (`${maj}.${min}.${pat}` === ctx.pin.replace(/^v/, "")) continue;
@@ -453,12 +479,14 @@ function checkDoc(ctx: Ctx, doc: Doc): Finding[] {
           }
           break;
         }
-        case "bare-ref":
+        case "bare-ref": {
+          const spans = linkTargetSpans(flat);
           for (const m of flat.matchAll(re(rule))) {
-            if (/\]\([^)\s]*$/.test(flat.slice(0, m.index))) continue; // inside a link target
+            if (insideSpan(spans, m.index)) continue; // inside a link target
             add(rule, para, m.index, around(m.index, m[0].length));
           }
           break;
+        }
         case "unverified-claim":
           if (!(re(rule, "date").test(flat) && re(rule, "evidence").test(flat))) for (const m of flat.matchAll(re(rule))) add(rule, para, m.index, around(m.index, m[0].length));
           break;

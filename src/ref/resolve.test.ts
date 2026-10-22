@@ -47,6 +47,7 @@ put("claude/skills/crlf/SKILL.md", "# C\r\n\r\n## 4. Real\r\n");
 put("docs/ROSTER.md", '| HR | Status |\n|--|--|\n| <a id="hr-1"></a>**HR-1** | ruled |\n| <a id="hr-2"></a>**HR-2** | reading |\n| <a id="hr-20"></a>**HR-20** | ruled |\n');
 put("CONSTITUTION.md", "# C\n\n- **CON-48.** **Clause-leaf coupling.**\n");
 put("bad.md", Buffer.from([0x23, 0x20, 0xff, 0x0a]));
+put("docs/with space.md", "# W\n\n## 1. First\n");
 
 interface Run {
   readonly code: number;
@@ -149,6 +150,28 @@ describe("nen ref resolve -- clause ids", () => {
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/--in <file>/);
     expect((await resolve("CON-48", ["--in", "CONSTITUTION.md"])).code).toBe(0);
+  });
+});
+
+describe("nen ref resolve -- the consumer's clause homes and CommonMark destinations (delivery round on #498)", () => {
+  it("reads <root>/nen/contract.json clauseHomes before the documented defaults", async () => {
+    const own = mkdtempSync(join(tmpdir(), "nen-ref-homes-"));
+    mkdirSync(join(own, "nen"));
+    mkdirSync(join(own, "canon"));
+    writeFileSync(join(own, "nen", "contract.json"), JSON.stringify({ clauseHomes: { QA: "canon/QA.md" } }));
+    writeFileSync(join(own, "canon", "QA.md"), "- **QA-1.** **One.**\n");
+    const out: string[] = [];
+    const io: Io = { out: (l): void => void out.push(l), err: (): void => {} };
+    const code = await runFamily(refCommand, ["ref", "resolve", "--citation", "QA-1", "--root", own], null, true, io, new ScriptedSeams([]));
+    expect(code).toBe(0);
+    expect((JSON.parse(out.join("\n")) as { target: string }).target).toBe("canon/QA.md");
+    writeFileSync(join(own, "nen", "contract.json"), JSON.stringify({ clauseHomes: { QA: "../out.md" } }));
+    expect(await runFamily(refCommand, ["ref", "resolve", "--citation", "QA-1", "--root", own], null, false, io, new ScriptedSeams([]))).toBe(2);
+  });
+
+  it("accepts the CommonMark <...> link destination, so a path with a space resolves", async () => {
+    expect((await resolve("[x](<docs/with space.md>) § 1")).code).toBe(0);
+    expect((await resolve("[x](docs/with%20space.md) § 1")).code).toBe(0);
   });
 });
 

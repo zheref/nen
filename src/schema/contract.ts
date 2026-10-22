@@ -2759,16 +2759,22 @@ export function parseMechanical(path: string, value: unknown): MechanicalBlock {
 //
 // ONE ORDERED LIST OF CANON SOURCES, FIRST WINS. Hatsu's ruling HR-1 replaced a
 // three-item prose order with this machine-readable list, and asked that
-// `nen schema check` validate it. The VOCABULARY is closed -- six fixed
-// sources and one shape, `<plane>.CON` -- because a source nobody can name is
-// a source no reader can locate: a typo'd entry would sit in the list, outrank
-// everything after it, and point at nothing. The ORDER is the
-// repository's own and is never checked against any preferred order -- nen
-// detects and validates; it does not decide which text wins.
+// `nen schema check` validate it. The list is checked by SHAPE ONLY (delivery
+// round on zheref/nen#498, reading 10): each entry is a `<plane>.CON`, a dotted
+// source name (`roster.ruling`) or a repository-relative path, non-empty and
+// unique. A closed list in this binary would gate a G4 canon ruling -- a new
+// source, a renamed one -- on a nen release. The six sources the consumer
+// names today stay as DOCUMENTED KNOWN NAMES: an entry one edit from one of
+// them is refused as the typo it almost certainly is, because a typo'd entry
+// would sit in the list, outrank everything after it, and point at nothing.
+// The ORDER is the repository's own and is never checked against any
+// preferred order -- nen detects and validates; it does not decide which text
+// wins.
 
 /**
- * The fixed sources a `precedence` entry may name. A seventh shape is open:
- * `<plane>.CON` (see `CON_SOURCE`).
+ * The sources a consumer names today: documented known names, used to refuse
+ * a near-miss (one edit away) as a typo. Not a closed vocabulary -- any entry
+ * of the right shape is read.
  */
 export const PRECEDENCE_SOURCES = [
   "skill.hardLimit",
@@ -2791,6 +2797,19 @@ export const CON_SOURCE = /^[a-z][a-z0-9-]*\.CON$/;
 /** A `precedence` entry: one of the fixed sources, or a `<plane>.CON`. */
 export type PrecedenceSource = string;
 
+/** A dotted source name (`roster.ruling`, `skill.hardLimit`). */
+const DOTTED_SOURCE = /^[a-z][A-Za-z0-9-]*(?:\.[A-Za-z][A-Za-z0-9-]*)+$/;
+/** A repository-relative path or bare name (`docs/WORKFLOW.md`, `handbooks`): no leading '/', no '..', no empty segment. */
+const PATH_SOURCE = /^(?![/\\])(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+
+/** Whether `name` has a precedence source's shape: `<plane>.CON`, a dotted name, or a repository-relative path. */
+export function precedenceShape(name: string): boolean {
+  if (CON_SOURCE.test(name)) return true;
+  // A last segment that spells CON in any other way is a malformed plane entry, never a dotted name.
+  if (/\.con$/i.test(name)) return false;
+  return DOTTED_SOURCE.test(name) || PATH_SOURCE.test(name);
+}
+
 export function parsePrecedence(path: string, value: unknown): readonly PrecedenceSource[] | null {
   if (value === undefined || value === null) return null;
   const list = requireArray(path, "precedence", value);
@@ -2805,13 +2824,13 @@ export function parsePrecedence(path: string, value: unknown): readonly Preceden
   return list.map((item, index): PrecedenceSource => {
     const pointer = `precedence[${index}]`;
     const name = requireString(path, pointer, item);
-    const fixed = (PRECEDENCE_SOURCES as readonly string[]).includes(name);
-    if (!fixed && !CON_SOURCE.test(name)) {
-      const meant = PRECEDENCE_SOURCES.find((source): boolean => withinOneEdit(name, source) || source.toLowerCase() === name.toLowerCase());
+    const known = (PRECEDENCE_SOURCES as readonly string[]).includes(name);
+    const meant = known ? undefined : PRECEDENCE_SOURCES.find((source): boolean => withinOneEdit(name, source) || source.toLowerCase() === name.toLowerCase());
+    if (!known && (meant !== undefined || !precedenceShape(name))) {
       throw new SchemaError(
         path,
         pointer,
-        `${JSON.stringify(name)} is not a precedence source.${meant === undefined ? "" : ` It is one edit from '${meant}'.`} The sources are ${PRECEDENCE_SOURCES.join(", ")}, and '<plane>.CON' for a governance plane's constitution clauses (a lower-case slug, a dot, CON); an entry no reader can locate would outrank every source after it and point at nothing`,
+        `${JSON.stringify(name)} is not a precedence source.${meant === undefined ? "" : ` It is one edit from '${meant}'.`} A source is '<plane>.CON' for a governance plane's constitution clauses (a lower-case slug, a dot, CON), a dotted source name (as ${PRECEDENCE_SOURCES[1]}), or a repository-relative path (as ${PRECEDENCE_SOURCES[3]}); the names in use are ${PRECEDENCE_SOURCES.join(", ")}. An entry no reader can locate would outrank every source after it and point at nothing`,
       );
     }
     const previous = seen.get(name);

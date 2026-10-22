@@ -112,7 +112,7 @@ usage:
       files, exit, counts, findings, advisory, staleBaseline, grownBaseline }.
 
   nen canon clause check --file <md> --prefix <P> [--base <md> | --base <ref>:<path>]
-                         [--leaves <paths>] [--body-from <file>] [--json]
+                         [--leaves <paths>] [--body-from <file>] [--repo <path>] [--json]
       A clause id space held unique: definitions (<a id="p-N"></a>**P-N**, or a
       column-0 '- **P-N.') are counted, citations never; a duplicate or an
       anchor/label mismatch exits 1; gaps are a notice; P-2 never matches
@@ -1420,7 +1420,7 @@ function clauseVerb(context: CommandContext): number {
   const file = nonEmpty(context, "file");
   if (file === null) throw new VerbUsageError("--file <md> is required: the document that defines the clause ids (e.g. docs/ROSTER.md).");
   const prefix = nonEmpty(context, "prefix");
-  if (prefix === null) throw new VerbUsageError("--prefix <HR|CON> is required: the clause id prefix to count.");
+  if (prefix === null) throw new VerbUsageError("--prefix <P> is required: the clause id prefix to count (upper-case letters and digits, e.g. HR or CON).");
   if (!/^[A-Z][A-Z0-9]{0,7}$/.test(prefix)) throw new VerbUsageError(`--prefix '${prefix}' is not an id prefix (upper-case letters and digits, starting with a letter, e.g. HR or CON).`);
   const base = nonEmpty(context, "base");
   const leavesRaw = nonEmpty(context, "leaves");
