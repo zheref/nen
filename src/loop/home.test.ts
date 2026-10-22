@@ -16,7 +16,7 @@ describe("resolveLoopHome", () => {
 
   it("homes the ledger under the git common directory", () => {
     const home = resolveLoopHome(root, answer({ stdout: "/repo/.git\n" }));
-    expect(home).toEqual({ dir: "/repo/.git/nen/loop", durable: true, legacyDir: join(root, ".nen", "loop") });
+    expect(home).toEqual({ dir: join("/repo/.git", "nen", "loop"), durable: true, legacyDir: join(root, ".nen", "loop") });
   });
 
   it("resolves a relative common dir against --repo", () => {
