@@ -699,8 +699,10 @@ export function resolveDeclaredExclusions(
 //            delivery branch -> READY.
 //
 // A port that reads READY where its source reads NOT-READY is the one class of
-// divergence that cannot be allowed to ship, and CON-42/1 keeps the shell as
-// the single readiness authority until it is retired.
+// divergence that cannot be allowed to ship. CON-42/1 kept the shell as the
+// single readiness authority until it was retired; it is, and `nen pr ready`
+// is now the one producer of the verdict -- which is why the fidelity this
+// paragraph guards had to hold before the hand-over, not after it.
 //
 // FIDELITY, NOT IMPROVEMENT (BC-6). Trimming a non-breaking space is arguably
 // better behaviour. Adopting it HERE would be this file authoring policy: the

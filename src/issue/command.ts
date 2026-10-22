@@ -29,6 +29,7 @@ import {
   parseCallerToken,
   emit,
 } from "../cli/command.js";
+import { refuse } from "../cli/refusal.js";
 import {
   closedSince,
   findCanonical,
@@ -756,6 +757,14 @@ usage:
       text, line }], duplicates: [{ id, lines }] }'.`;
 
 export const issueCommand: Command = {
+  jsonRefusals: ["file"],
+  exits: [
+    { verb: "issue edit-body", code: 3, meaning: "conflict, nothing written: the current body is not the --expect-body-sha256 version" },
+    { verb: "issue file", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "issue comment", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "issue edit-body", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "issue consolidate-close", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+  ],
   name: "issue",
   subcommands: ISSUE_SUBCOMMANDS,
   summary: "Search, guard, file, attach and classify issues.",
@@ -993,8 +1002,7 @@ function file(context: CommandContext): number {
   }
   const refusals = validateFiling(request, taxonomy);
   if (refusals.length > 0) {
-    for (const refusal of refusals) context.io.err(`nen: ${refusal.reason}`);
-    return 1;
+    return refuse(context.io, context.json, "issue file", 1, refusals.map((refusal): string => refusal.reason));
   }
   // Read here, not by `gh`, so the guard sees the bytes `gh` is about to send.
   const body = readTextFile(

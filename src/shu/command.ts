@@ -1423,6 +1423,15 @@ function runTools(context: CommandContext, repoRoot: string, options: ToolsOptio
 }
 
 export const shuCommand: Command = {
+  exits: [
+    { verb: "shu *", code: 3, meaning: "unsupported host: the verb is real, this machine cannot run it" },
+    { verb: "shu *", code: 4, meaning: "unsupported verb for this lane: the declaration says so, in its own words" },
+    { verb: "shu *", code: 5, meaning: "the declared program could not be started: not installed, not on PATH" },
+    { verb: "shu coverage", code: 6, meaning: "--touched measured nothing: no touched file joined a report row" },
+    { verb: "shu test", code: 6, meaning: "--select resolved to zero executed tests" },
+    { verb: "shu coverage", code: 8, meaning: "--from-capture refused the capture on disk as not proven this tree's; nothing measured" },
+    { verb: "shu tools", code: 7, meaning: "every row passes, but nen is behind dependency.pinned_ref (a BEHIND row)" },
+  ],
   name: "shu",
   subcommands: SHU_SUBCOMMANDS,
   summary: "Stack-aware developer verbs, from the target repo's own declaration.",

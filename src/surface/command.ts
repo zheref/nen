@@ -641,6 +641,16 @@ function runCheck(context: CommandContext): number {
 }
 
 export const surfaceCommand: Command = {
+  exits: [
+    { verb: "surface mirror check", code: 3, meaning: "--plugin: not installed" },
+    { verb: "surface mirror check", code: 4, meaning: "--plugin: not comparable; no independent source exists" },
+    { verb: "surface mirror check", code: 5, meaning: "--plugin: broken install" },
+    { verb: "surface install", code: 3, meaning: "refused: the destination or an installed copy is not this verb's to replace; nothing written" },
+    { verb: "surface install", code: 4, meaning: "owed: installed and read back, and a settings.json declaration the caller must clear" },
+    { verb: "surface install", code: 5, meaning: "the surface's CLI could not be started" },
+    { verb: "surface status", code: 3, meaning: "not installed" },
+    { verb: "surface status", code: 5, meaning: "the surface's CLI could not be started; nothing is known to be served" },
+  ],
   name: "surface",
   subcommands: ["mirror", "capabilities", "install", "status"],
   summary: "Mirror a skills directory into another agent surface's layout, check it for drift, and make or report a host's first-party plugin install.",

@@ -214,10 +214,14 @@
 // pr_ready_gate.ts -- the TypeScript port of scripts/pr_ready_gate.sh
 // (BC-IS-#733 Phase 2, BC-IS-#737, rank 1).
 //
-// THIS IS THE FILE THE EPIC WAS WRITTEN ABOUT. CON-42/1 makes
-// scripts/pr_ready_gate.sh the ONE place a CON-32 readiness claim is decided
-// (bankai-core#568/#570), and BC-IS-#733's complaint is that the maintainer
-// cannot audit a six-line `jq` expression. Every predicate below exists because
+// THIS IS THE FILE THE EPIC WAS WRITTEN ABOUT, AND IT IS NOW THE ONE PLACE A
+// CON-32 READINESS CLAIM IS DECIDED: `nen pr ready` (../verbs/pr_ready.ts) is
+// the one producer of the verdict, and a caller that claims a pull request is
+// ready quotes its line (Hatsu SDD plan N5, finding D16). The shell gate this
+// was ported from held that role before it (CON-42/1, bankai-core#568/#570); it
+// is retired, exists in no repository this binary serves, and is cited below
+// only as the provenance of each predicate. BC-IS-#733's complaint was that the
+// maintainer could not audit a six-line `jq` expression. Every predicate below exists because
 // a specific production failure happened, and the comment naming that failure is
 // the only thing standing between a future maintainer and "simplifying" the
 // predicate back into the bug. #737 makes carrying those comments across a

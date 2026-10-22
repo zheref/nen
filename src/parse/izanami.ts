@@ -1105,6 +1105,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
   },
   effort: { subcommands: { classify: RO("classifies an effort -- pure computation") } },
   epic: { subcommands: { "next-wave": GATED(["--out"], "writes the rewritten body to --out") } },
+  exits: { subcommands: { "*": RO("prints the exit vocabulary the binary carries -- reads nothing") } },
   fanout: {
     subcommands: {
       compute: RO("computes the fan-out set from git/workflow reads"),

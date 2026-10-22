@@ -429,6 +429,10 @@ function fire(context: CommandContext): number {
 }
 
 export const wakeCommand: Command = {
+  exits: [
+    { verb: "wake fire", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+    { verb: "wake verify", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
+  ],
   name: "wake",
   subcommands: ["fire", "verify"],
   summary: "Fire or verify a wake: redrive/flag a swallowed run, or edge-trigger a re-apply.",
