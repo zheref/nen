@@ -112,6 +112,13 @@ describe("checkIssueBody", () => {
     expect(report.misses.map((miss) => `${miss.section}:${miss.kind}`)).toEqual(["problem:missing", "ac:missing"]);
   });
 
+  it("reads rows from a table and from struck or emphasised list items", () => {
+    const body = ["## Problem", "The maintainer.", "## Acceptance criteria", "| AC-1 | first |", "|---|---|", "| AC-2 | second |", "- ~~AC-3~~: dropped"].join("\n");
+    const report = checkIssueBody(body, CATALOGUE, "bug");
+    expect(report.rows.map((row) => row.id)).toEqual(["AC-1", "AC-2", "AC-3"]);
+    expect(report.ok).toBe(true);
+  });
+
   it("does not count a fenced row toward contiguity", () => {
     const body = ["## Problem", "The maintainer.", "## Acceptance criteria", "- AC-1: a", "```", "- AC-5: example", "```", "- AC-2: b"].join("\n");
     expect(checkIssueBody(body, CATALOGUE, "bug").ok).toBe(true);
@@ -153,6 +160,11 @@ describe("countQuestions -- counts, never decides", () => {
     );
     expect(report.counts).toEqual({ open: 0, resolved: 0, needsMarkers: 0, unrecognised: 2 });
     expect(report.unrecognised.map((row) => row.line)).toEqual([1, 2]);
+  });
+
+  it("masks a double-backtick code span that holds a single backtick, and lists a bold OQ row as unrecognised", () => {
+    const report = countQuestions(["``[NEEDS CLARIFICATION: `x`]``", "- **OQ-1** (G4): bold"].join("\n"));
+    expect(report.counts).toEqual({ open: 0, resolved: 0, needsMarkers: 0, unrecognised: 1 });
   });
 
   it("reads an empty body as zero of everything", () => {

@@ -38,6 +38,7 @@ import {
 import {
   createArgv,
   fileIssue,
+  stdinLine,
   openPrCheck,
   validateFiling,
   type FileRequest,
@@ -1210,9 +1211,6 @@ function comment(context: CommandContext): number {
  * The dry-run line saying where `--body-file -`'s stdin comes from: the bytes
  * already read (and checked) from that path, not the path itself.
  */
-function stdinLine(path: string, body: string): string {
-  return `stdin: the ${Buffer.byteLength(body, "utf8")} byte(s) read and checked from ${path} (gh reads these, not the file)`;
-}
 
 /** `bodyFile` for a --json report: the path a file body was read from, absent for an inline one. */
 function bodyFileField(request: CommentRequest): { readonly bodyFile?: string } {

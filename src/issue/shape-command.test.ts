@@ -147,6 +147,13 @@ describe("nen issue questions", () => {
     expect(result.out).toBe("");
   });
 
+  it("refuses a --ref that names a pull request (exit 2)", async () => {
+    const pr: ScriptedCall = { match: "gh api repos/o/n/issues/4", result: { stdout: JSON.stringify({ number: 4, pull_request: {}, body: QUESTIONS }) } };
+    const result = await run(issueCommand, ["issue", "questions", "--ref", "4", "--target", "o/n"], [pr]);
+    expect(result.code).toBe(2);
+    expect(result.out).toBe("");
+  });
+
   it("refuses --target with --body-file (exit 2)", async () => {
     const dir = scratch({ "q.md": QUESTIONS });
     expect((await run(issueCommand, ["issue", "questions", "--body-file", "q.md", "--target", "o/n"], [], { repoFlag: dir })).code).toBe(2);
@@ -192,6 +199,13 @@ describe("--title-file on nen issue file and nen idea file (zheref/nen#444)", ()
       const dir = scratch({ "body.md": "the body" });
       const result = await run(command, filing(family, ["--title-file", join(dir, "absent.txt")]).map((arg) => (arg === "body.md" ? join(dir, "body.md") : arg)), [], { repoFlag: BANKAI_REPO });
       expect(result.code).toBe(2);
+    });
+
+    it(`${family} file: a leading BOM in --title-file is dropped, not sent`, async () => {
+      const dir = scratch({ "title.txt": "\uFEFFPlain title\r\n", "body.md": "the body" });
+      const result = await run(command, filing(family, ["--title-file", join(dir, "title.txt")], ["--dry-run"]).map((arg) => (arg === "body.md" ? join(dir, "body.md") : arg)), [PRIVATE_TARGET], { repoFlag: BANKAI_REPO, json: true });
+      const report = JSON.parse(result.out) as { argv: string[] };
+      expect(report.argv[report.argv.indexOf("--title") + 1]).toBe("Plain title");
     });
   }
 

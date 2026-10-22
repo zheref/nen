@@ -19,7 +19,7 @@
 // EVERY MISS IS REPORTED, NEVER THE FIRST ONE ONLY -- the house rule for a check
 // a caller round-trips on (../release/preflight.ts, ../pr/bodycheck.ts).
 
-import { readLines, stripComments, validFenceOpening, type ReadLine } from "../pr/template.js";
+import { escapeRegExp, readLines, stripComments, validFenceOpening, type ReadLine } from "../pr/template.js";
 
 /** The `--json` contract of `nen issue body-check`. */
 export const ISSUE_BODY_CHECK_CONTRACT = "nen.issue.body-check/v0.1";
@@ -210,7 +210,7 @@ function maskedLines(body: string): MaskedLine[] {
       masked.push({ line: index + 1, text: "" });
       return;
     }
-    masked.push({ line: index + 1, text: stripped.text.replace(/(`+)[^`]*?\1/g, " ") });
+    masked.push({ line: index + 1, text: stripped.text.replace(/(`+)(?!`)[\s\S]*?(?<!`)\1(?!`)/g, " ") });
   });
   return masked;
 }
@@ -272,10 +272,6 @@ function extentOf(read: readonly ReadLine[], index: number, level: number): numb
     indexes.push(at);
   }
   return indexes;
-}
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** A list item or table row whose first token is `<prefix>-<n>` (bold, struck or code-quoted spans allowed). */

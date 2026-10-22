@@ -8,7 +8,8 @@
 //
 // VERBATIM, ONE TRAILING NEWLINE STRIPPED. An editor, `printf '%s\n'` and a
 // heredoc all end the file with one newline that is not part of the title, so
-// exactly one `\n` (or `\r\n`) is dropped. Nothing else is trimmed: a leading
+// exactly one `\n` (or `\r\n`) is dropped, with a leading byte-order mark
+// (an encoding mark, not a character). Nothing else is trimmed: a leading
 // space or a second trailing newline is the caller's byte, and a title with a
 // line break left in it is refused rather than flattened, because GitHub would
 // store a different title than the one in the file.
@@ -35,7 +36,8 @@ export function readTitleFile(context: CommandContext, root: string): string | u
     "--title-file names the title this verb files, read verbatim so no shell ever expands it.",
     true,
   );
-  const title = raw.replace(/\r?\n$/, "");
+  // A leading BOM is the file's encoding mark, never a character of the title.
+  const title = raw.replace(/^\uFEFF/, "").replace(/\r?\n$/, "");
   if (/[\r\n]/.test(title)) {
     throw new VerbUsageError(
       `--title-file '${path}' holds more than one line; a title is one line, and nen will not join or cut the lines into one.`,

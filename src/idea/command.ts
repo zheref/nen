@@ -15,7 +15,7 @@ import {
   type Command,
   type CommandContext,
 } from "../cli/command.js";
-import { createArgv, validateFiling, type FileRequest } from "../issue/file.js";
+import { createArgv, stdinLine, validateFiling, type FileRequest } from "../issue/file.js";
 import { readTitleFile } from "../issue/title.js";
 import { blockingExit, blocksWrite } from "../issue/privacy.js";
 import { guardPrivateNames, PRIVATE_NAME_FLAGS, readIgnoreFlag } from "../issue/privacyguard.js";
@@ -186,7 +186,7 @@ export const ideaCommand: Command = {
         return 0;
       }
       context.io.out(`would run: gh ${argv.join(" ")}`);
-      context.io.out(`stdin: the ${Buffer.byteLength(submittedBody, "utf8")} byte(s) read and checked from ${resolveAgainstRepo(root, bodyFile)} (gh reads these, not the file)`);
+      context.io.out(stdinLine(resolveAgainstRepo(root, bodyFile), submittedBody));
       return 0;
     }
     const result = fileIdea(context.seams, target, request, submittedBody, taxonomy);
