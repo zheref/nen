@@ -144,6 +144,31 @@ export type CanonMirrorRule =
       readonly caveat: string;
     };
 
+/**
+ * How a surface is told that a persona may not write (zheref/nen#473). The
+ * source states it as a Claude Code `tools:` list naming none of the write
+ * tools (./mirror.ts `isReadOnlyPersona`); each surface carries that intent in
+ * its own control, or documents none:
+ *
+ * - `tools`: the persona's `tools` key is a kept key on this surface, so the
+ *   list itself is the control and travels as written.
+ * - `key`: the surface documents a frontmatter key of its own, emitted as
+ *   `<key>: <value>` on a read-only persona that does not already set it.
+ *   Where that key is known not to hold is a capabilities fact
+ *   (./capabilities.ts `readOnly`), not something the generator acts on.
+ * - `none`: the surface documents no per-persona control; the generate report
+ *   names every read-only persona instead, so the run can disclose it.
+ */
+export type ReadOnlyControl =
+  | { readonly kind: "tools"; readonly source: string }
+  | {
+      readonly kind: "key";
+      readonly key: string;
+      readonly value: string;
+      readonly source: string;
+    }
+  | { readonly kind: "none"; readonly reason: string; readonly source: string };
+
 export interface SurfaceRow {
   /** The `--surface` value that selects this row. */
   readonly surface: string;
@@ -187,6 +212,8 @@ export interface SurfaceRow {
     readonly documentedPath: string;
     readonly source: string;
   } | null;
+  /** How a read-only persona's intent reaches this surface (zheref/nen#473). */
+  readonly readOnlyControl: ReadOnlyControl;
   /**
    * The surface's hook manifest, or null where the surface documents no hooks
    * (in which case `--hooks` emits nothing and the report says
@@ -387,6 +414,18 @@ export const SURFACES: readonly SurfaceRow[] = [
       documentedPath: ".codex/agents/<name>.toml",
       source: "https://learn.chatgpt.com/docs/agent-configuration/subagents",
     },
+    // Re-read 2026-10-21 from the same page, *Custom agent file schema*:
+    // `sandbox_mode` is among the settings that "don't override the parent
+    // configuration when placed in a custom agent file", and "Custom agent
+    // instructions can ask an agent to avoid edits, but they don't create a
+    // separate read-only sandbox." The only per-agent reductions it documents
+    // are `features.*` keys, none of which removes file edits -- so nothing is
+    // emitted, and the report says which personas that leaves unrestricted.
+    readOnlyControl: {
+      kind: "none",
+      reason: "Codex documents no per-agent read-only control (custom agents inherit the parent sandbox)",
+      source: "https://learn.chatgpt.com/docs/agent-configuration/subagents",
+    },
     hooks: {
       file: "hooks.json",
       documentedPath: ".codex/hooks.json",
@@ -479,6 +518,18 @@ export const SURFACES: readonly SurfaceRow[] = [
       required: [],
     },
     agentToml: null,
+    // *Configuration fields*, read 2026-10-21: `readonly` -- "If `true`, the
+    // subagent runs with restricted write permissions (no file edits, no
+    // state-changing shell commands)", default `false`. Cursor forum thread
+    // 173787 (open, staff-acknowledged 2026-10-16) reports the key is NOT
+    // applied to a subagent shipped inside a plugin; a project's own
+    // .cursor/agents/ file honours it.
+    readOnlyControl: {
+      kind: "key",
+      key: "readonly",
+      value: "true",
+      source: "https://cursor.com/docs/subagents",
+    },
     hooks: {
       file: "hooks.json",
       documentedPath: ".cursor/hooks.json",
@@ -546,7 +597,7 @@ export const SURFACES: readonly SurfaceRow[] = [
     pluginManifest: null,
     verbatim: false,
     source: "https://cursor.com/docs/context/skills",
-    agentSource: "https://cursor.com/docs/agent/subagents",
+    agentSource: "https://cursor.com/docs/subagents",
     caveat:
       "this surface documents that a skill's `name` must be lowercase letters, numbers and hyphens and must match its folder name; nen mirrors the folder name and the `name` line it was given, and refuses neither",
   },
@@ -577,6 +628,11 @@ export const SURFACES: readonly SurfaceRow[] = [
       required: ["description"],
     },
     agentToml: null,
+    // The `tools` key travels, but in the source's Claude Code names; the page
+    // documents its own (view_file, replace_file_content, run_command), so
+    // whether the carried list restricts anything here is unverified
+    // (./capabilities.ts says so).
+    readOnlyControl: { kind: "tools", source: "https://antigravity.google/docs/subagents" },
     hooks: {
       file: "hooks.json",
       documentedPath: ".agents/hooks.json",
@@ -659,6 +715,8 @@ export const SURFACES: readonly SurfaceRow[] = [
       required: [],
     },
     agentToml: null,
+    // Verbatim: the source's own `tools` list is the control.
+    readOnlyControl: { kind: "tools", source: "https://code.claude.com/docs/en/sub-agents" },
     hooks: {
       file: "hooks/hooks.json",
       documentedPath: "hooks/hooks.json (plugin) or .claude/settings.json",

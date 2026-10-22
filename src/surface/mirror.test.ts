@@ -21,6 +21,7 @@ import {
   generateSurfaceMirror,
   generateSurfaceMirrorReport,
   hostMode,
+  isReadOnlyPersona,
   markerFor,
   markerText,
   mirrorReportOk,
@@ -226,7 +227,8 @@ describe("personas", () => {
   it("become one file apiece where the surface documents subagent files", () => {
     const content = at(generate("cursor"), "agents/scout.md");
     const keys = splitDocument(content).entries.map((entry): string => entry.key);
-    expect(keys).toEqual(["name", "description", "model"]);
+    // `readonly` is ADDED: scout's tools list names no write tool (zheref/nen#473).
+    expect(keys).toEqual(["name", "description", "model", "readonly"]);
     // `tools` and `color` are not documented subagent keys on this surface.
     expect(keys).not.toContain("tools");
     expect(keys).not.toContain("color");
@@ -952,5 +954,99 @@ describe("a summary is valid YAML whatever shape the description takes (zheref/n
       expect(parseYaml(`summary: ${scalar}`)).toEqual({ summary: broken });
       expect(parseYaml(`summary: ${scalar}`, { version: "1.1" })).toEqual({ summary: broken });
     }
+  });
+});
+
+describe("a read-only persona keeps its intent on every surface (zheref/nen#473)", () => {
+  const entries = (front: string): ReturnType<typeof splitDocument>["entries"] => splitDocument(`---\n${front}\n---\nbody\n`).entries;
+  const MODELS = { target: { frontier: "x", fast: "y" }, surface: "codex", source: null, sourceSurface: "claude", known: ["codex"], surfaces: { codex: { frontier: "x", fast: "y" } } };
+
+  /** A persona directory holding a reader (no write tool), a writer, and one with no tools key. */
+  function cast(extra = ""): string {
+    const dir = tempDir();
+    writeFileSync(join(dir, "reader.md"), `---\nname: reader\ndescription: Reads.\ntools: Read, Grep, Bash, WebFetch\n${extra}---\n\nreads\n`);
+    writeFileSync(join(dir, "writer.md"), "---\nname: writer\ndescription: Writes.\ntools: Read, Edit, Write, Bash\n---\n\nwrites\n");
+    writeFileSync(join(dir, "open.md"), "---\nname: open\ndescription: Inherits every tool.\n---\n\nanything\n");
+    return dir;
+  }
+  const report = (surface: string, dir: string, models = false): ReturnType<typeof generateSurfaceMirrorReport> =>
+    generateSurfaceMirrorReport({
+      row: row(surface),
+      skills: [],
+      agents: readSourceAgents(dir),
+      invocationPrefix: null,
+      ...(models ? { models: MODELS } : {}),
+    });
+
+  it("derives read-only from a tools list naming no write tool, in every spelling", () => {
+    expect(isReadOnlyPersona(entries("tools: Read, Grep, Glob"))).toBe(true);
+    expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - Bash(git:*)"))).toBe(true);
+    expect(isReadOnlyPersona(entries('tools: ["Read", "WebFetch"]'))).toBe(true);
+    expect(isReadOnlyPersona(entries("tools: Read, Edit"))).toBe(false);
+    expect(isReadOnlyPersona(entries("tools:\n  - Read\n  - MultiEdit"))).toBe(false);
+    expect(isReadOnlyPersona(entries("tools: Read, NotebookEdit"))).toBe(false);
+    // A YAML comment never hides a write tool, and never invents one.
+    expect(isReadOnlyPersona(entries("tools: Read, Edit # the one writer"))).toBe(false);
+    expect(isReadOnlyPersona(entries('tools:\n  - Read\n  - "Edit" # c'))).toBe(false);
+    expect(isReadOnlyPersona(entries("tools: Read # Edit"))).toBe(true);
+    expect(isReadOnlyPersona(entries("tools:\n  # Write once\n  - Read"))).toBe(true);
+    expect(isReadOnlyPersona(entries('tools: ["Read", "Grep"] # Edit'))).toBe(true);
+    expect(isReadOnlyPersona(entries('tools: ["Read # x", Edit]'))).toBe(false);
+    // An MCP tool may write, and nothing here can tell.
+    expect(isReadOnlyPersona(entries("tools: Read, mcp__fs__write_file"))).toBe(false);
+    // A spelling the comment scan misreads fails closed rather than hiding a writer.
+    expect(isReadOnlyPersona(entries("tools: Read, Bob's, Edit # x"))).toBe(false);
+    expect(isReadOnlyPersona(entries('tools: ["a\\" # b", Edit]'))).toBe(false);
+    // No tools key inherits every tool; an empty one names nothing.
+    expect(isReadOnlyPersona(entries("name: x"))).toBe(false);
+    expect(isReadOnlyPersona(entries("tools:"))).toBe(false);
+  });
+
+  it("cursor: readonly: true on a read-only persona, nothing on the others", () => {
+    const files = report("cursor", cast()).files;
+    expect(at(files, "agents/reader.md")).toMatch(/^---\n[\s\S]*\nreadonly: true\n---\n/);
+    expect(at(files, "agents/writer.md")).not.toContain("readonly");
+    expect(at(files, "agents/open.md")).not.toContain("readonly");
+  });
+
+  it("cursor: a source that sets readonly itself keeps its own value", () => {
+    const files = report("cursor", cast("readonly: false\n")).files;
+    const reader = at(files, "agents/reader.md");
+    expect(reader).toContain("readonly: false");
+    expect(reader).not.toContain("readonly: true");
+  });
+
+  it("cursor: check reports a hand-removed readonly line as drift", () => {
+    const out = tempDir();
+    const files = report("cursor", cast()).files;
+    writeSurfaceMirror(out, files, row("cursor"));
+    const path = join(out, "agents", "reader.md");
+    writeFileSync(path, readFileSync(path, "utf8").replace("readonly: true\n", ""));
+    expect(checkSurfaceMirror(out, files, row("cursor")).handEdited).toEqual(["agents/reader.md"]);
+  });
+
+  it("codex: no control is written, and the report names each read-only persona", () => {
+    const result = report("codex", cast(), true);
+    const toml = at(result.files, "agents/reader.toml");
+    expect(toml).not.toMatch(/sandbox_mode|readonly|features\./);
+    expect(result.notes).toContain(
+      "codex: reader is read-only at source; Codex documents no per-agent read-only control (custom agents inherit the parent sandbox)",
+    );
+    expect(result.notes.filter((note): boolean => note.startsWith("codex: "))).toHaveLength(1);
+  });
+
+  it("codex: the note is there without --models too (the AGENTS.md appendix carries no control either)", () => {
+    const notes = report("codex", cast()).notes.filter((note): boolean => note.startsWith("codex: "));
+    expect(notes).toEqual([
+      "codex: reader is read-only at source; Codex documents no per-agent read-only control (custom agents inherit the parent sandbox)",
+    ]);
+  });
+
+  it("antigravity: the tools list still travels as written, with no readonly key", () => {
+    const result = report("antigravity", cast());
+    const reader = at(result.files, "agents/reader.md");
+    expect(reader).toContain("tools: Read, Grep, Bash, WebFetch");
+    expect(reader).not.toContain("readonly");
+    expect(result.notes.some((note): boolean => note.includes("read-only at source"))).toBe(false);
   });
 });
