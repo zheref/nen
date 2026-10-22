@@ -25,7 +25,7 @@
 // worktree-local path there would silently split one loop's count across two
 // homes.
 
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { VerbUsageError } from "../cli/command.js";
 import type { Seams } from "../seam/exec.js";
@@ -67,13 +67,17 @@ export function legacyDirs(root: string, home: LoopHome, seams: Pick<Seams, "run
       `git worktree list failed under ${root} (exit ${result.code}). Refusing rather than assuming no other checkout holds an older build's ledger for this loop: missing one would start its count again.`,
     );
   }
-  const dirs = [home.legacyDir];
+  // Checkouts are compared by their REAL path: git may spell one differently
+  // from --repo (forward slashes, a Windows short name, macOS /private), and
+  // listing --repo's own old home twice would read as two homes for one loop.
+  const same = (first: string, second: string): boolean => canonical(first) === canonical(second);
+  const roots = [root];
   for (const entry of result.stdout.split("\0")) {
     if (!entry.startsWith("worktree ")) continue;
-    const dir = join(entry.slice("worktree ".length), ...LOOP_LEDGER_DIR.split("/"));
-    if (!dirs.some((known): boolean => resolve(known) === resolve(dir))) dirs.push(dir);
+    const checkout = entry.slice("worktree ".length);
+    if (!roots.some((known): boolean => same(known, checkout))) roots.push(checkout);
   }
-  return dirs;
+  return [home.legacyDir, ...roots.slice(1).map((checkout): string => join(checkout, ...LOOP_LEDGER_DIR.split("/")))];
 }
 
 /** "Not a git repository", as git itself words it, and nothing looser. */
@@ -137,4 +141,15 @@ export function present(path: string, what: string): boolean {
       `the ${what} at ${path} could not be read (${code ?? String(error)}). Refusing rather than treating it as absent: an absent ${what} would hand out a fresh cap.`,
     );
   }
+}
+
+/** A path's real spelling when it exists, else its resolved one; case-folded on Windows. */
+function canonical(path: string): string {
+  let real: string;
+  try {
+    real = realpathSync.native(path);
+  } catch {
+    real = resolve(path);
+  }
+  return process.platform === "win32" ? real.toLowerCase() : real;
 }
