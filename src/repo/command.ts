@@ -11,6 +11,7 @@ import { assertRepoRoot, resolveRepoRoot } from "./root.js";
 import { inventoryRepo } from "./inventory.js";
 import { resolveScenario } from "./scenario.js";
 import { classifyRepo, ClassifyError, renderClassification } from "./classify.js";
+import { FamilyResolutionError, renderFamily, resolveFamily } from "./family.js";
 
 function requireTarget(context: CommandContext): Target {
   const raw = requireTargetFlag(context, "It is the GitHub side of the pair; --repo names a checkout on disk and is never used to address the API.");
@@ -62,16 +63,20 @@ nen repo resolve [<token>] [--repo <path>]
 nen repo resolve [--from <dir>] [--repo <path>]
 nen repo inventory --target <owner/name> --epic-label <label> --integration-prefix <prefix> [--trunk main]
 nen repo scenario --repo <path> --target <owner/name>
+nen repo family <name> [--repo <path>] [--json]
+
 
 classify:
   ONE verdict about what kind of repository this is (zheref/nen#216): role
-  (canon | consumer | unregistered, from nen/repos.json -- maintained_tools is
-  canon, consumers and pending_onboarding are consumers), kind (product |
+  (canon | consumer | spec | unregistered, from nen/repos.json -- a
+  families[].spec.repo is spec at G2 (zheref/nen#453) whatever else lists it,
+  maintained_tools is canon, consumers and pending_onboarding are
+  consumers), kind (product |
   process | library | unknown: a declared project.kind wins -- the only way
   to read library -- else nen/contract.json's lane stacks), the default lane's
   stack, the lanes, and the gate a change there stands at -- G4 for canon,
   G2 otherwise, by the maintainer's ruling of 2026-09-18 that the gate is the
-  repository's ROLE, not the file's kind. Every fact names its source; an
+  repository's ROLE, not the file's kind (a spec repository is G2). Every fact names its source; an
   unregistered repository is reported as such with a note, never rounded to
   consumer. --target names the repository; omitted, the checkout's own
   'origin' is read. Kind, stack and lanes are read from nen/contract.json
@@ -139,7 +144,18 @@ scenario:
   row that carries no scenario (the remedy names the section it is
   already in); is recorded only as a product_codes value; or has rows
   that disagree -- those are the target repository's own data, not the
-  invocation.`;
+  invocation.
+
+family:
+  One product family from --repo's nen/repos.json families[] (zheref/nen#453):
+  the specification repository (role spec, gate G2) and each member as
+  '<code> <owner/name> <platform>', the code resolved through product_codes
+  by the same lookup a <CODE>#<n> reference uses. <name> is matched exactly,
+  case-insensitively. Exit 2 when the registry declares no families, or
+  <name> is not one of them (the declared names are listed); exit 1 when a
+  member's code cannot be resolved to an owner/name. --json prints
+  { contract: "nen.repo.family/v0.1", family, spec: { repo, role, gate },
+  members: [{ code, repo, platform }], source }.`;
 
 function render(resolution: Resolution): string[] {
   const lines: string[] = [];
@@ -154,14 +170,15 @@ function render(resolution: Resolution): string[] {
 
 export const repoCommand: Command = {
   name: "repo",
-  subcommands: ["resolve", "inventory", "scenario", "classify"],
-  summary: "Resolve a repository token, inventory a consumer's backlog, or read its recorded scenario.",
+  subcommands: ["resolve", "inventory", "scenario", "classify", "family"],
+  summary: "Resolve a repository token or product family, inventory a consumer's backlog, or read its recorded scenario.",
   usage: USAGE,
   flags: {
     values: ["from", "target", "epic-label", "integration-prefix", "trunk"],
   },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("repo", context.args, ["resolve", "inventory", "scenario", "classify"]);
+    const subcommand = requireSubcommand("repo", context.args, ["resolve", "inventory", "scenario", "classify", "family"]);
+    if (subcommand === "family") return family(context);
     if (subcommand === "inventory") return inventory(context);
     if (subcommand === "scenario") return scenario(context);
     if (subcommand === "classify") return classify(context);
@@ -271,6 +288,28 @@ function classify(context: CommandContext): number {
   } catch (error) {
     if (error instanceof ClassifyError) {
       context.io.err(`nen repo classify: ${error.message}`);
+      return 1;
+    }
+    throw error;
+  }
+}
+
+function family(context: CommandContext): number {
+  const name = context.args.positionals[2] ?? "";
+  if (name.trim() === "") throw new VerbUsageError("'repo family' needs a family name: nen repo family <name> [--repo <path>].");
+  if (context.args.positionals.length > 3) throw new VerbUsageError("'repo family' takes one family name.");
+  for (const flag of ["from", "target", "epic-label", "integration-prefix", "trunk"]) {
+    if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'repo family'.`);
+  }
+  const taxonomy = openTaxonomy({ repoFlag: context.repoFlag });
+  const registry = requireRegistry((): RepoRegistry => taxonomy.repos());
+  try {
+    const resolution = resolveFamily(registry, name);
+    emit(context.io, context.json, resolution, renderFamily(resolution));
+    return 0;
+  } catch (error) {
+    if (error instanceof FamilyResolutionError) {
+      context.io.err(`nen repo family: ${error.message}`);
       return 1;
     }
     throw error;

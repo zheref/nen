@@ -315,6 +315,17 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen pr request-reviews --target o/r --pr 1 --add-reviewers a").classification).toBe("mutating");
     expect(classifyCommand("nen tag cut --name v1.0.0 --at abc123").classification).toBe("mutating");
     expect(classifyCommand("nen run rerun-failed --target o/r --run-id 9").classification).toBe("mutating");
+    // The run manifest (SDD piece N7): start/append write unless --dry-run;
+    // verify, budget, wc overlap, stage check and loop slots --from-run read.
+    expect(classifyCommand("nen run start --id r1 --repo .").classification).toBe("mutating");
+    expect(classifyCommand("nen run start --id r1 --repo . --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1").classification).toBe("mutating");
+    expect(classifyCommand("nen run append --id r1 --issue NN#1 --pr 2 --base main --kind delivery --head abcdef1 --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen run verify --id r1 --target o/r").classification).toBe("read-only");
+    expect(classifyCommand("nen run budget --id r1 --claim --max-minutes 5 --max-tokens 9").classification).toBe("read-only");
+    expect(classifyCommand("nen wc overlap --efforts a,b --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen stage check --exclusive --target o/r --issue 7").classification).toBe("read-only");
+    expect(classifyCommand("nen loop slots --from-run r1 --target o/r --local-cap 2").classification).toBe("read-only");
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md").classification).toBe("mutating");
     expect(classifyCommand("nen scaffold init").classification).toBe("mutating");
     expect(classifyCommand("nen fanout record --range v1..v2").classification).toBe("mutating");

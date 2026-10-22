@@ -14,6 +14,7 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
         label: null,
         terminal: null,
         then: null,
+        idle: false,
       });
     }
   });
@@ -58,7 +59,7 @@ describe("parseFutonInvocation -- resolve or refuse, never guess", () => {
     const result = parseFutonInvocation("bc@bug then tag");
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value).toEqual({ repoToken: "bc", band: null, label: "bug", terminal: "tag", then: { kind: "terminal", terminal: "tag" } });
+      expect(result.value).toEqual({ repoToken: "bc", band: null, label: "bug", terminal: "tag", then: { kind: "terminal", terminal: "tag" }, idle: false });
     }
   });
 
@@ -448,5 +449,51 @@ describe("resolveFutonRepo -- a nested $comment never surfaces, against a REAL l
   it("the loaded registry's productCodes carries none of the file's $comment", () => {
     const registry = loadRepoRegistry(BANKAI_REPO);
     expect(registry.productCodes["$comment"]).toBeUndefined();
+  });
+});
+
+describe("parseFutonInvocation -- the optional --idle flag (HR-5)", () => {
+  it("reads --idle as the last or the first token of the scope, before any then", () => {
+    for (const line of ["nen@bug --idle", "--idle nen@bug", "nen@bug --idle then getsuga", "--idle nen@high+ then tag"]) {
+      const result = parseFutonInvocation(line);
+      expect(result.ok, line).toBe(true);
+      if (result.ok) expect(result.value.idle, line).toBe(true);
+    }
+    const plain = parseFutonInvocation("nen@bug then getsuga");
+    expect(plain.ok && plain.value.idle).toBe(false);
+  });
+
+  it("keeps the scope it was stripped from", () => {
+    const result = parseFutonInvocation("nen@high+ --idle then getsuga");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.repoToken).toBe("nen");
+      expect(result.value.band?.severities).toEqual(["critical", "high"]);
+      expect(result.value.then).toEqual({ kind: "skills", steps: [{ skill: "getsuga", target: null }] });
+    }
+  });
+
+  it("never reads a quoted label that contains the text as the flag", () => {
+    const result = parseFutonInvocation('nen@"x --idle"');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.idle).toBe(false);
+      expect(result.value.label).toBe("x --idle");
+    }
+  });
+
+  it("refuses --idle after then, with the line moved before it", () => {
+    const result = parseFutonInvocation("nen@bug then getsuga --idle");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toMatch(/put it before 'then'/);
+      expect(result.error.correctedLine).toBe("nen@bug --idle then getsuga");
+    }
+  });
+
+  it("refuses --idle given twice, with one kept", () => {
+    const result = parseFutonInvocation("--idle nen@bug --idle");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.correctedLine).toBe("nen@bug --idle");
   });
 });

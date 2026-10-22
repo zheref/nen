@@ -132,6 +132,8 @@ export const PULL_REQUEST_QUERY = `
       defaultBranchRef { name target { oid } }
       pullRequest(number:$pr) {
         number
+        state
+        mergeCommit { oid }
         mergeable
         isDraft
         headRefOid
@@ -311,6 +313,15 @@ export interface GhPullRequestNode {
    * its own failing check by editing the declaration on its own head.
    */
   readonly baseRefOid?: unknown;
+  /**
+   * `OPEN | CLOSED | MERGED` and the merge commit (zheref/nen#454): what
+   * `nen watch until --pr <ref> --until merged` reads to tell a merge from a
+   * close without one. OPTIONAL so every hand-built node keeps compiling;
+   * absent reads as unreadable there, never as open.
+   */
+  readonly state?: unknown;
+  /** `mergeCommit.oid`, unwrapped; `null`/absent while unmerged. */
+  readonly mergeCommitOid?: unknown;
   readonly author: unknown;
   // Unwrapped from `labels(first:100) { nodes { name } }`.
   readonly labels: unknown;
@@ -475,6 +486,8 @@ function toGhPullRequestNode(raw: unknown): GhPullRequestNode | undefined {
     headRefName: raw["headRefName"],
     baseRefName: raw["baseRefName"],
     baseRefOid: raw["baseRefOid"],
+    state: raw["state"],
+    mergeCommitOid: digPath(raw, "mergeCommit", "oid"),
     // `author { login }` is ALREADY the shape parsePullRequest() reads
     // (`{login}` object or bare string), so it is carried across untouched.
     author: raw["author"],

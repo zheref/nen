@@ -19,7 +19,13 @@ import { resolveRepoRoot } from "../repo/root.js";
 import { resolveAgainstRepo } from "../cli/inputs.js";
 import { parseIzanagiInvocation } from "../parse/izanagi.js";
 import { computeSlots, parseEfforts, DEFAULT_CI_CAP, type PlaneReport } from "./slots.js";
+import { loadWorkflow, type LocalSlotRule } from "../schema/workflow.js";
 import { claimIteration, loopIdSegment, parseLedger, type LoopLedger } from "./ledger.js";
+import { effortsFromRun, markerForBranch, readinessInProcess, type FromRunReport } from "./fromrun.js";
+import { gitCommonDir, readRunManifest, runIdSegment, runManifestPath } from "../run/manifest.js";
+import { readLivePr } from "../run/verify.js";
+import { parseTarget, type Target } from "../github/target.js";
+import type { Effort } from "./slots.js";
 
 /**
  * Where a loop's ledger lives, repo-relative and forward-slashed.
@@ -33,15 +39,38 @@ export const LOOP_LEDGER_DIR = ".nen/loop";
 const USAGE = `nen loop slots -- how many concurrency slots each plane has free.
 
 usage:
-  nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>]
+  nen loop slots --efforts <path.json> --local-cap <n> [--ci-cap <n>] [--repo <path>] [--json]
+  nen loop slots --from-run <run-id> --target <owner/name> --local-cap <n>
+                 [--ci-cap <n>] [--repo <path>] [--json]
 
 The efforts file is a JSON array of
-  {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool}
+  {"id": "...", "plane": "ci"|"local", "prOpen": bool, "ready": bool, "prompted": bool,
+   "merged": bool, "stacked": bool}
+('merged' and 'stacked' are optional, absent reads false).
 
-A CI slot frees when the PR OPENS -- something else drives it from there. A
-LOCAL slot frees only when the PR is READY and the human has been PROMPTED,
-because nothing else is behind a locally-authored PR. The two budgets are
-counted separately and never traded against each other.
+A CI slot frees when the PR OPENS -- something else drives it from there. When
+a LOCAL slot frees is --repo's nen/workflow.json 'monitor.localSlotFrees'
+(HR-5), one of a closed set:
+  ready+prompted  (the default) the PR is READY and the human has been
+                  PROMPTED, because nothing else is behind a locally-authored PR
+  merged          only once the PR has merged
+  stacked-open    a PR open and stacked onto another effort's branch frees (the
+                  stack's owner drives it); every other effort as ready+prompted
+The rule in force and where it came from are printed ('local slot frees: ...')
+and carried by --json as 'localSlotFrees': { rule, source }. A
+nen/workflow.json that is present and will not load is exit 1, never the
+default. The two budgets are counted separately and never traded against each
+other.
+
+--from-run BUILDS the efforts document instead of reading one (HR-5): the run's
+manifest ('nen run start') names the efforts -- its delivery PRs; integration
+and release PRs hold no slot -- and every field is read, none typed: prOpen and
+merged from the PR's live state, ready from 'nen pr ready' in process, prompted
+from a valid stop marker (.nen/last-stop.json) in the worktree checked out on
+the PR's head branch, stacked when the PR's base is another recorded delivery PR's head
+branch. A PR closed without a merge frees its slot. Anything that could not be
+read keeps its effort HELD and is listed under 'unread'. --from-run and
+--efforts are refused together: during a run no field is caller-typed.
 
 --local-cap is REQUIRED. It used to default to 7, and that default was removed
 (issue #52): a concurrency guard must be chosen, not inherited -- every real
@@ -98,12 +127,24 @@ export const loopCommand: Command = {
   subcommands: ["slots", "iterate"],
   summary: "Count the concurrency budgets, and enforce izanagi's iteration cap.",
   usage: USAGE,
-  flags: { values: ["efforts", "ci-cap", "local-cap", "id", "line", "release"], booleans: [] },
-  run(context: CommandContext): number {
+  flags: { values: ["efforts", "ci-cap", "local-cap", "id", "line", "release", "from-run", "target"], booleans: [] },
+  run(context: CommandContext): number | Promise<number> {
     const subcommand = requireSubcommand("loop", context.args, ["slots", "iterate"]);
-    if (subcommand === "iterate") return iterate(context);
+    if (subcommand === "iterate") {
+      for (const flag of ["from-run", "target"]) {
+        if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'loop iterate'; only 'loop slots' takes it. A flag accepted and ignored is worse than one refused.`);
+      }
+      return iterate(context);
+    }
+    const fromRun = context.args.values["from-run"];
     const path = context.args.values["efforts"];
-    if (path === undefined) throw new VerbUsageError("--efforts <path.json> is required.");
+    if (fromRun !== undefined && path !== undefined) {
+      throw new VerbUsageError("--from-run and --efforts are refused together: under a run the efforts document is built from the manifest and live reads, and no field of it is caller-typed (HR-5).");
+    }
+    if (fromRun === undefined && context.args.values["target"] !== undefined) {
+      throw new VerbUsageError("--target is read only with --from-run, where it names the repository the run's PRs live in.");
+    }
+    if (fromRun === undefined && path === undefined) throw new VerbUsageError("--efforts <path.json> or --from-run <run-id> is required.");
 
     // Required, no default (issue #52). The old default of 7 sat more than
     // three times looser than every real caller's own stated policy of 2, so a
@@ -131,29 +172,99 @@ export const loopCommand: Command = {
   // under a "could not read --efforts" message about a file nobody had a path to
   // yet, which is the wrong code and the wrong sentence at once.
     const root = resolveRepoRoot({ repoFlag: context.repoFlag });
+    if (fromRun !== undefined) return slotsFromRun(context, root, fromRun, caps);
     let parsed;
     try {
-      const full = resolveAgainstRepo(root, path);
+      const full = resolveAgainstRepo(root, path as string);
       parsed = parseEfforts(readFileSync(full, "utf8").replace(/\r\n/g, "\n"));
     } catch (error) {
-      context.io.err(`nen: could not read --efforts '${path}': ${String(error)}`);
+      context.io.err(`nen: could not read --efforts '${path as string}': ${String(error)}`);
       return 1;
     }
     if (parsed.errors.length > 0) {
       for (const error of parsed.errors) context.io.err(`nen: ${error}`);
       return 1;
     }
-    const report = computeSlots(parsed.efforts, caps);
-    if (context.json) {
-      context.io.out(JSON.stringify(report, null, 2));
-    } else {
-      print(context, report.ci);
-      print(context, report.local);
-      if (report.done.length > 0) context.io.out(`freed: ${report.done.join(", ")}`);
-    }
-    return report.ci.binding || report.local.binding ? 1 : 0;
+    return countAndReport(context, root, parsed.efforts, caps, null);
   },
 };
+
+/** monitor.localSlotFrees with where it came from, or null with the reason printed (exit 1). */
+function readLocalRule(context: CommandContext, root: string): { rule: LocalSlotRule; source: string } | null {
+  try {
+    const loaded = loadWorkflow(root);
+    return {
+      rule: loaded.workflow.monitor.localSlotFrees,
+      source: loaded.present && loaded.workflow.monitor.localSlotFreesDeclared
+        ? `${loaded.path}: monitor.localSlotFrees`
+        : "default (monitor.localSlotFrees not declared)",
+    };
+  } catch (error) {
+    // A POLICY THAT WILL NOT LOAD IS NOT "NO POLICY": counting under the
+    // default would free slots the repository's own rule holds.
+    context.io.err(`nen: could not read nen/workflow.json for monitor.localSlotFrees: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+function countAndReport(
+  context: CommandContext,
+  root: string,
+  efforts: readonly Effort[],
+  caps: { ci: number; local: number },
+  fromRun: FromRunReport | null,
+): number {
+  const localRule = readLocalRule(context, root);
+  if (localRule === null) return 1;
+  const counted = computeSlots(efforts, caps, localRule.rule);
+  const report = fromRun === null ? { ...counted, localSlotFrees: localRule } : { ...counted, localSlotFrees: localRule, fromRun };
+  if (context.json) {
+    context.io.out(JSON.stringify(report, null, 2));
+  } else {
+    context.io.out(`local slot frees: ${localRule.rule} (${localRule.source})`);
+    if (fromRun !== null) {
+      context.io.out(`from run ${fromRun.run}: ${fromRun.efforts.length} effort(s)`);
+      for (const effort of fromRun.efforts) context.io.out(`    ${effort.id}: ${effort.facts}`);
+      if (fromRun.notEfforts.length > 0) context.io.out(`not efforts (integration/release): ${fromRun.notEfforts.map((n): string => `#${n}`).join(", ")}`);
+      if (fromRun.closedUnmerged.length > 0) context.io.out(`closed unmerged: ${fromRun.closedUnmerged.map((n): string => `#${n}`).join(", ")}`);
+      for (const row of fromRun.unread) context.io.out(`unread #${row.pr}: ${row.reason} -- held`);
+    }
+    print(context, report.ci);
+    print(context, report.local);
+    if (report.done.length > 0) context.io.out(`freed: ${report.done.join(", ")}`);
+  }
+  return report.ci.binding || report.local.binding ? 1 : 0;
+}
+
+/** `loop slots --from-run`: the efforts document built from the manifest and live reads (./fromrun.ts). */
+async function slotsFromRun(context: CommandContext, root: string, id: string, caps: { ci: number; local: number }): Promise<number> {
+  if (runIdSegment(id) === null) throw new VerbUsageError(`--from-run '${id}' is not a run id ([A-Za-z0-9._-], no '..').`);
+  const targetRaw = requireValue(context.args, "target", "It names the repository the run's PRs live in.");
+  let target: Target;
+  try {
+    target = parseTarget(targetRaw);
+  } catch (error) {
+    throw new VerbUsageError(error instanceof Error ? error.message : String(error));
+  }
+  let manifest;
+  try {
+    const path = runManifestPath(gitCommonDir(context.seams, root), id);
+    manifest = readRunManifest(path);
+    if (manifest === null) {
+      context.io.err(`nen: no run '${id}' at ${path} -- nothing to count from. A run nobody started is not a run with every slot free.`);
+      return 1;
+    }
+  } catch (error) {
+    context.io.err(`nen: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const built = await effortsFromRun(manifest, {
+    readPr: (pr) => readLivePr(context.seams, target, pr),
+    readiness: (pr) => readinessInProcess(target.slug, pr, root),
+    marker: (branch) => markerForBranch(context.seams, root, branch),
+  });
+  return countAndReport(context, root, built.efforts, caps, built);
+}
 
 /**
  * `nen loop iterate` -- claim one iteration against the invocation's own cap.

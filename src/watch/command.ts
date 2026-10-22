@@ -25,6 +25,7 @@ import { requireSubcommand, VerbUsageError, type Command, type CommandContext } 
 import type { CommandResult } from "../seam/exec.js";
 import { watchUntil, watchUntilAsync, type WatchResult } from "./until.js";
 import { observePr, parsePrPredicate, type PrPredicate } from "./pr.js";
+import { observeLifecycle, readLifecycle, resolveLifecycleRef, type LifecycleRead } from "./merged.js";
 import { defaultDeps, PR_READY_FLAGS, readReady, renderDeclaredExclusions, type PrReadyDeps, type ReadyRead, type ReadyReport } from "../verbs/pr_ready.js";
 import { plainLine } from "../cli/plain.js";
 import { loadWorkflow } from "../schema/workflow.js";
@@ -37,7 +38,7 @@ usage:
   nen watch until --command "<bin> <args...>" [--true-pattern <regex>]
                   [--interval-ms 5000] [--max-iterations <n>] [--cwd <path>]
                   [--error-exit-threshold <n>] [--repo <path>]
-  nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed
+  nen watch until --pr <ref> --until checks-settled|review-posted|ready|settled-and-reviewed|merged
                   [--interval-ms 30000] [--max-iterations <n>] [--repo <path>]
                   [<every 'nen pr ready' flag: --gh-repo --reviewers
                    --reviewer-login --approvers --round-policy --exclude-run
@@ -126,6 +127,23 @@ usage:
                     ready           'pr ready' would answer ready
                     settled-and-reviewed
                                     checks-settled AND (review-posted OR ready)
+                    merged          the pull request has MERGED (zheref/nen#454):
+                                    GitHub's state and merge commit, read off
+                                    the same snapshot, with no reviewer
+                                    identities or gate -- so only --gh-repo
+                                    and --token-env are read beside it
+                                    (every other 'pr ready' flag refuses,
+                                    exit 2). OPEN is not yet; MERGED stops at
+                                    exit 0 and the final line names the merge
+                                    commit and the base branch; CLOSED without
+                                    a merge stops on that read at exit 1 with
+                                    outcome 'terminal' -- never the same
+                                    reading as a merge, and never polled to
+                                    the bound. An unreadable state is an
+                                    observation error. --json adds 'until',
+                                    'pr', 'state' (OPEN|CLOSED|MERGED, null
+                                    when never read), 'mergeCommit', 'base'
+                                    and 'head'.
                   ONLY 'ready' IS A MERGE SIGNAL. checks-settled, review-posted
                   and settled-and-reviewed are WAKES: the caller looks again,
                   and asks 'nen pr ready' (or watches --until ready) before
@@ -277,6 +295,7 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   }
   refuseForeign(context, COMMAND_ONLY_VALUES, "--pr");
   const predicate: PrPredicate = parsePrPredicate(context.args.values["until"]);
+  if (predicate === "merged") return runMerged(context, deps, typedRef);
 
   const pace = readPace(context);
   if (pace === null) return 1;
@@ -375,6 +394,89 @@ async function runPr(context: CommandContext, deps: WatchDeps): Promise<number> 
   return result.outcome === "condition-true" ? 0 : 1;
 }
 
+/** The `pr ready` flags `--until merged` does not read: it needs no identity, gate or round. */
+const MERGED_REFUSED_VALUES: readonly string[] = PR_READY_FLAGS.values.filter((name): boolean => name !== "gh-repo" && name !== "token-env");
+
+/**
+ * `--pr <ref> --until merged` (zheref/nen#454): GitHub's state, polled under
+ * the same pace, floor, bound and streak as every other `--pr` predicate.
+ */
+async function runMerged(context: CommandContext, deps: WatchDeps, typedRef: string): Promise<number> {
+  refuseForeign(context, [...MERGED_REFUSED_VALUES, ...PR_ONLY_LISTS], "--until merged");
+  if (context.args.booleans.has("require-base-gates")) {
+    throw new VerbUsageError("--require-base-gates is not read by the --until merged form of 'watch until': a merge needs no gate.");
+  }
+  const pace = readPace(context);
+  if (pace === null) return 1;
+  let intervalMs = pace.intervalMs;
+  if (intervalMs < PR_MIN_INTERVAL_MS) {
+    if (pace.intervalSource === "flag") {
+      throw new VerbUsageError(
+        `--interval-ms ${intervalMs} is under the --pr floor of ${PR_MIN_INTERVAL_MS} ms: every poll is a GitHub API call.`,
+      );
+    }
+    context.io.err(
+      `${PROGRAM} watch until: ${pace.intervalSource === "policy" ? "nen/workflow.json's monitor.pollSeconds" : "the default interval"} (${intervalMs} ms) is under the --pr floor; polling every ${PR_MIN_INTERVAL_MS} ms instead.`,
+    );
+    intervalMs = PR_MIN_INTERVAL_MS;
+  }
+  const maxIterations = pace.maxIterations ?? Math.max(1, Math.ceil(PR_DEFAULT_BOUND_MS / intervalMs));
+  const input = {
+    positionals: ["pr", "ready", typedRef],
+    values: context.args.values,
+    booleans: new Set<string>(),
+    lists: context.args.lists,
+    repoFlag: context.repoFlag,
+  };
+  // The ref is resolved ONCE: a malformed one would refuse every poll alike.
+  let ref;
+  try {
+    ref = resolveLifecycleRef(typedRef, input);
+  } catch (error) {
+    throw new VerbUsageError(error instanceof Error ? error.message : String(error));
+  }
+  const last: { read: LifecycleRead | null } = { read: null };
+  const result = await watchUntilAsync({
+    observe: async () => {
+      last.read = await readLifecycle(ref, input, deps.prReady);
+      return observeLifecycle(last.read);
+    },
+    intervalMs,
+    maxIterations,
+    ...(deps.sleep === undefined ? {} : { sleep: deps.sleep }),
+    onIteration: context.json
+      ? undefined
+      : (iteration): void => {
+          context.io.out(plainLine(`[${iteration.iteration}] ${iteration.message}`));
+        },
+  });
+  const lifecycle = last.read !== null && last.read.kind === "state" ? last.read.lifecycle : null;
+  if (context.json) {
+    context.io.out(
+      JSON.stringify(
+        {
+          ...result,
+          until: "merged",
+          pr: typedRef,
+          state: lifecycle?.state ?? null,
+          mergeCommit: lifecycle?.mergeCommit ?? null,
+          base: lifecycle?.base ?? null,
+          head: lifecycle?.head ?? null,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (result.outcome === "condition-true" && lifecycle !== null) {
+    context.io.out(plainLine(`merged: ${lifecycle.repo}#${lifecycle.number} into ${lifecycle.base ?? "(base unread)"} at ${lifecycle.mergeCommit ?? ""}`));
+  } else if (result.outcome === "terminal" && lifecycle !== null) {
+    context.io.err(plainLine(`nen: ${lifecycle.repo}#${lifecycle.number} was CLOSED without a merge -- merged can never become true`));
+  } else {
+    printOutcome(context, result);
+  }
+  return result.outcome === "condition-true" ? 0 : 1;
+}
+
 /** The read's non-verdict context, as `pr ready`'s own renderers word it. */
 function contextLines(report: ReadyReport): string[] {
   return [
@@ -467,6 +569,9 @@ function printOutcome(context: CommandContext, result: WatchResult): void {
       return;
     case "max-iterations":
       context.io.err(`nen: stopped at the --max-iterations bound (${result.iterations.length}) without the condition becoming true`);
+      return;
+    case "terminal":
+      context.io.err("nen: stopped -- the last observation says the condition can never become true");
       return;
   }
 }

@@ -1,0 +1,4 @@
+{
+  "$comment": "Where a batch run's manifest (nen.run/v0.1) lives under the project's git common dir: the directory the calling plane named for it (SDD plan piece N7, Hatsu ruling HR-5). Data, not a name nen decides with -- src/taxonomy-purity.test.ts's rule; src/review/storage.json is the same shape for the hanten cycle markers.",
+  "manifestDirectory": ["hatsu", "runs"]
+}

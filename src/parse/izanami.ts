@@ -1152,7 +1152,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       rename: DRY("renames GitHub labels in place unless --dry-run is given"),
     },
   },
-  loop: { subcommands: { slots: RO("counts concurrency budgets from a report file") } },
+  loop: { subcommands: { slots: RO("counts concurrency budgets from a report file, or from a run's manifest and live reads (--from-run: gh pr view, pr ready, git worktree list)") } },
   phase: {
     subcommands: {
       begin: MUT("writes an entry to the .nen/phases/<effort>.json ledger -- a local write, but a write"),
@@ -1261,7 +1261,19 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       scopes: RO("classifies '<base>...HEAD' against review.scopes and reports the raised scopes -- one git read, one file read, nothing written"),
     },
   },
-  run: { subcommands: { "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs") } },
+  run: {
+    subcommands: {
+      "rerun-failed": MUT("gh run rerun -- re-runs workflow jobs"),
+      // The batch run's manifest (SDD piece N7): start and append write it
+      // under the git common dir unless --dry-run, whose form reads it and
+      // writes nothing; verify and budget only read (gh pr view, the usage
+      // ledgers), and a refused budget claim writes nothing either.
+      start: DRY("writes the run manifest under the git common dir unless --dry-run is given"),
+      append: DRY("records a PR in the run manifest unless --dry-run is given"),
+      verify: RO("reads the run manifest and every recorded PR over gh pr view"),
+      budget: RO("reads the run manifest and the usage ledgers; a claim is a question and writes nothing"),
+    },
+  },
   // THE RUNNER FAMILY'S HOST ACT IS NEVER A ROW HERE, because nen never
   // performs it: `script` writes a file and prints a launch line, and running
   // that line (elevated) is the maintainer's. `verify` polls reads only.
@@ -1452,7 +1464,12 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   split: { subcommands: { verify: RO("proves diff equality over git reads") } },
-  stage: { subcommands: { triage: RO("reads 'git status --porcelain'; stages nothing") } },
+  stage: {
+    subcommands: {
+      triage: RO("reads 'git status --porcelain'; stages nothing"),
+      check: RO("reads nen/labels.json and an issue's labels over gh issue view; labels nothing"),
+    },
+  },
   // `stop` GAINED A WRITE FORM, so its row gained a gate. The banner and the
   // table are still a pure render -- this verb fires no notification and never
   // could (../stop/command.ts's header states why) -- but `--mark` writes
@@ -1531,6 +1548,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // moves or drops-and-recreates one worktree and copies files into it.
       // --dry-run fetches nothing and writes nothing, so it alone is a read.
       worktree: DRY("fetches origin/<base>, adds, moves or recreates one worktree at <core>/.nen/worktrees/<name> and copies files from core into it, unless --dry-run is given"),
+      overlap: RO("compares the efforts' git diff --name-only against a base; writes nothing"),
     },
   },
 };

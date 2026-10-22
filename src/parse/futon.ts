@@ -84,6 +84,12 @@ export interface FutonInvocation {
   readonly terminal: Terminal | null;
   /** The whole `then` clause, classified; `null` when there is none. */
   readonly then: FutonThen | null;
+  /**
+   * `--idle` was typed (HR-5): the run is an idle batch under the repository's
+   * typed idle profile. nen reports the flag; what an idle run may do is the
+   * calling skill's rule and nen/workflow.json's `idle` block.
+   */
+  readonly idle: boolean;
 }
 
 export interface FutonParseError {
@@ -177,7 +183,37 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
   // near-miss terminal, a reserved step name, a duplicate step): '@ then
   // mugetsu+mugetsu' is refused for its missing selector, never for the
   // duplicate 'mugetsu' step the chain also happens to carry.
-  const at = head.indexOf("@");
+  // `--idle` (HR-5) is an OPTIONAL FLAG OF THE SCOPE, before any `then`: the
+  // first or the last token of the head (`--idle nen@bug`, `nen@bug --idle`).
+  // Only those two places, so a quoted label that merely contains the text
+  // (`nen@"x --idle"`) is never read as the flag. After `then` it would be
+  // indistinguishable from prose, so it is refused there with the line moved,
+  // never silently dropped: an idle run read as attended (or the reverse) is a
+  // guess with side effects.
+  let idle = false;
+  let scopeHead = head;
+  const leading = /^--idle(?:\s+|$)/;
+  const trailing = /(?:^|\s+)--idle$/;
+  for (const pattern of [leading, trailing]) {
+    if (!pattern.test(scopeHead)) continue;
+    if (idle) {
+      return { ok: false, error: { message: "'--idle' is given twice. It is one flag of the scope.", correctedLine: `${scopeHead.replace(pattern, "").trim()} --idle${tail === null ? "" : ` then ${tail}`}` } };
+    }
+    idle = true;
+    scopeHead = scopeHead.replace(pattern, "").trim();
+  }
+  if (tail !== null && /(?:^|\s)--idle(?:\s|$)/.test(tail)) {
+    const moved = tail.replace(/(?:^|\s+)--idle(?=\s|$)/g, "").trim();
+    return {
+      ok: false,
+      error: {
+        message: "'--idle' after 'then' is read as part of the then clause. It is a flag of the scope: put it before 'then'.",
+        correctedLine: `${scopeHead} --idle${moved === "" ? "" : ` then ${moved}`}`,
+      },
+    };
+  }
+
+  const at = scopeHead.indexOf("@");
   if (at === -1) {
     return {
       ok: false,
@@ -187,8 +223,8 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
       },
     };
   }
-  const repoPart = head.slice(0, at).trim();
-  const selectorPart = head.slice(at + 1).trim();
+  const repoPart = scopeHead.slice(0, at).trim();
+  const selectorPart = scopeHead.slice(at + 1).trim();
   // F6: a trailing '+' is the band operator ONLY when the token in front of
   // it is itself a severity -- otherwise it stays part of the label verbatim
   // ('c++' is the label 'c++', not the label 'c' with a refused '+').
@@ -332,7 +368,7 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
     // ('c++' is the label 'c++', not a refused severity-band operator).
     return {
       ok: true,
-      value: { repoToken: repoPart === "" ? null : repoPart, band: null, label: selectorRaw, terminal, then },
+      value: { repoToken: repoPart === "" ? null : repoPart, band: null, label: selectorRaw, terminal, then, idle },
     };
   }
 
@@ -344,6 +380,7 @@ export function parseFutonInvocation(raw: string): FutonParseResult {
       label: null,
       terminal,
       then,
+      idle,
     },
   };
 }
