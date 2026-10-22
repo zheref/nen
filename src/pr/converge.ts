@@ -85,7 +85,7 @@ function record(value: unknown): Record<string, unknown> | null {
 /**
  * An `owner/name` GitHub could have issued. The slug comes from the payload
  * and becomes a `gh api repos/<slug>/...` path, so a value with a `..`, a
- * slash too many or a query character is refused (exit 2), never sent.
+ * slash too many or a query character is refused (exit 1, could not read), never sent.
  */
 const SLUG = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
 

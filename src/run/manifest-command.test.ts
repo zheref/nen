@@ -336,6 +336,17 @@ describe("nen run budget", () => {
     expect(doc.tokensUnread).toEqual(["delivery PR #481's effort opus/kurapika/b has no usage ledger"]);
   });
 
+  it("fails closed when an --effort id has no ledger: tokens unread, verdict unevaluated, claim refused, exit 1", async () => {
+    const { root, common } = await seeded();
+    ledger(root, "opus/kurapika/a", [entry(1, 1, 1)]);
+    ledger(root, "opus/kurapika/b", [entry(1, 1, 1)]);
+    const result = await capture(["run", "budget", "--id", "r1", "--claim", "--max-minutes", "1000", "--max-tokens", "1000000", "--effort", "opus/kurapika/e2"], { common, repoFlag: root, json: true });
+    expect(result.code).toBe(1);
+    const doc = JSON.parse(result.out.join("\n"));
+    expect(doc).toMatchObject({ verdict: "unevaluated", granted: false, spent: { tokens: null }, noLedger: ["opus/kurapika/e2"] });
+    expect(doc.tokensUnread).toEqual(["effort opus/kurapika/e2 (named by --effort) has no usage ledger"]);
+  });
+
   it("fails closed when an entry was recorded --not-reported", async () => {
     const { root, common } = await seeded();
     ledger(root, "opus/kurapika/a", [entry(30, 100, 50)]);

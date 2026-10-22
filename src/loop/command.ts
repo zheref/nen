@@ -47,8 +47,9 @@ The efforts file is a JSON array of
 ('merged' and 'stacked' are optional, absent reads false).
 
 A CI slot frees when the PR OPENS -- something else drives it from there. When
-a LOCAL slot frees is --repo's nen/workflow.json 'monitor.localSlotFrees'
-(HR-5), one of a closed set:
+a LOCAL slot frees is --repo's nen/workflow.json 'idle.localSlotFrees' under a
+declared idle profile, else 'monitor.localSlotFrees', else the default (HR-5);
+the two keys stating different values is refused. One of a closed set:
   ready+prompted  (the default) the PR is READY and the human has been
                   PROMPTED, because nothing else is behind a locally-authored PR
   merged          only once the PR has merged
@@ -212,18 +213,19 @@ export const loopCommand: Command = {
  * reading 5: Hatsu's catalogue row owns the key there), then
  * `monitor.localSlotFrees`, then the default.
  */
-function readLocalRule(context: CommandContext, root: string): { rule: LocalSlotRule; source: string } | null {
+function readLocalRule(context: CommandContext, root: string): { rule: LocalSlotRule; source: string; key: string } | null {
   try {
     const loaded = loadWorkflow(root);
     const idle = loaded.workflow.idle ?? null;
     if (loaded.present && idle !== null && idle.localSlotFrees !== null) {
-      return { rule: idle.localSlotFrees, source: `${loaded.path}: idle.localSlotFrees` };
+      return { rule: idle.localSlotFrees, source: `${loaded.path}: idle.localSlotFrees`, key: "idle.localSlotFrees" };
     }
     return {
       rule: loaded.workflow.monitor.localSlotFrees,
       source: loaded.present && loaded.workflow.monitor.localSlotFreesDeclared
         ? `${loaded.path}: monitor.localSlotFrees`
         : "default (neither idle.localSlotFrees nor monitor.localSlotFrees declared)",
+      key: "monitor.localSlotFrees",
     };
   } catch (error) {
     // A POLICY THAT WILL NOT LOAD IS NOT "NO POLICY": counting under the
@@ -242,8 +244,9 @@ function countAndReport(
 ): number {
   const localRule = readLocalRule(context, root);
   if (localRule === null) return 1;
-  const counted = computeSlots(efforts, caps, localRule.rule);
-  const report = fromRun === null ? { ...counted, localSlotFrees: localRule } : { ...counted, localSlotFrees: localRule, fromRun };
+  const counted = computeSlots(efforts, caps, localRule.rule, localRule.key);
+  const localSlotFrees = { rule: localRule.rule, source: localRule.source };
+  const report = fromRun === null ? { ...counted, localSlotFrees } : { ...counted, localSlotFrees, fromRun };
   if (context.json) {
     context.io.out(JSON.stringify(report, null, 2));
   } else {

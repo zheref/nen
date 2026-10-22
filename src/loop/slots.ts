@@ -95,7 +95,14 @@ export interface SlotsReport {
 
 // Whether an effort still occupies a slot, and the reason -- returned together,
 // because a count with no reason is a number a reader has to re-derive to trust.
-export function occupancy(effort: Effort, rule: LocalSlotRule = DEFAULT_LOCAL_SLOT_RULE): { occupied: boolean; why: string } {
+// `ruleKey` names the key the rule was read from (`idle.localSlotFrees` or
+// `monitor.localSlotFrees`), so a per-effort line names the key the report's
+// header named (delivery round on zheref/nen#498, verification pass).
+export function occupancy(
+  effort: Effort,
+  rule: LocalSlotRule = DEFAULT_LOCAL_SLOT_RULE,
+  ruleKey: string = "monitor.localSlotFrees",
+): { occupied: boolean; why: string } {
   if (effort.plane === "ci") {
     if (effort.prOpen) {
       return {
@@ -106,11 +113,11 @@ export function occupancy(effort: Effort, rule: LocalSlotRule = DEFAULT_LOCAL_SL
     return { occupied: true, why: "released, but no PR yet" };
   }
   if (rule === "merged") {
-    if (effort.merged === true) return { occupied: false, why: "merged -- the local slot frees on merge (monitor.localSlotFrees: merged)" };
+    if (effort.merged === true) return { occupied: false, why: `merged -- the local slot frees on merge (${ruleKey}: merged)` };
     return {
       occupied: true,
       why: effort.prOpen
-        ? "PR open, not merged -- this repository frees a local slot only on merge (monitor.localSlotFrees: merged)"
+        ? `PR open, not merged -- this repository frees a local slot only on merge (${ruleKey}: merged)`
         : "authored locally, no PR yet",
     };
   }
@@ -118,7 +125,7 @@ export function occupancy(effort: Effort, rule: LocalSlotRule = DEFAULT_LOCAL_SL
   if (rule === "stacked-open" && effort.stacked === true) {
     return {
       occupied: false,
-      why: "PR open and stacked -- the stack's owner drives it from here (monitor.localSlotFrees: stacked-open)",
+      why: `PR open and stacked -- the stack's owner drives it from here (${ruleKey}: stacked-open)`,
     };
   }
   if (!effort.ready) {
@@ -145,13 +152,14 @@ export function computeSlots(
   efforts: readonly Effort[],
   caps: Caps,
   localRule: LocalSlotRule = DEFAULT_LOCAL_SLOT_RULE,
+  ruleKey: string = "monitor.localSlotFrees",
 ): SlotsReport {
   const done: string[] = [];
   const build = (plane: Plane, cap: number): PlaneReport => {
     const holding: { id: string; why: string }[] = [];
     for (const effort of efforts) {
       if (effort.plane !== plane) continue;
-      const state = occupancy(effort, localRule);
+      const state = occupancy(effort, localRule, ruleKey);
       if (state.occupied) holding.push({ id: effort.id, why: state.why });
       else done.push(effort.id);
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -8,6 +8,7 @@ import { noPortProbe } from "../seam/scripted.js";
 import { classifyCommand } from "../parse/izanami.js";
 import { effortDirectory, formatId, parseOptionSpec, recordDefect, STOP_ANSWER_CONTRACT } from "./answer.js";
 import { stopCommand } from "./command.js";
+import { BANKAI_REPO } from "../schema/fixtures/paths.js";
 
 // THE ONLY SUBPROCESS THIS VERB RUNS is `git rev-parse --git-common-dir`; the
 // seam answers it with a RELATIVE `.git`, as git does from a core checkout, so
@@ -116,6 +117,22 @@ describe("nen stop answer --record", () => {
     expect(neither.code).toBe(2);
     expect(neither.err.join("\n")).toMatch(/--gate .* or --row/);
     expect((await run([...noGate, "--row", "bad row", "--pick", "A"], root)).code).toBe(2);
+  });
+
+  it("checks --row against --repo's nen/decisions.json: an unknown row is exit 2 naming the ask-once ids; no file says 'row not checked'", async () => {
+    const root = repo();
+    const noGate = BASE.filter((arg, index) => arg !== "--gate" && BASE[index - 1] !== "--gate");
+    const unchecked = await run([...noGate, "--row", "no-such-row-zzz", "--pick", "A", "--dry-run"], root);
+    expect(unchecked.code).toBe(0);
+    expect(unchecked.out.join("\n")).toMatch(/row no-such-row-zzz not checked: .*nen\/decisions\.json is absent/);
+    mkdirSync(join(root, "nen"), { recursive: true });
+    copyFileSync(join(BANKAI_REPO, "nen", "decisions.json"), join(root, "nen", "decisions.json"));
+    const unknown = await run([...noGate, "--row", "no-such-row-zzz", "--pick", "A", "--dry-run"], root);
+    expect(unknown.code).toBe(2);
+    expect(unknown.err.join("\n")).toMatch(/--row 'no-such-row-zzz' is no row of .*ask-once rows are: mode-unknown\./);
+    const known = await run([...noGate, "--row", "mode-unknown", "--pick", "A", "--dry-run"], root, seams(), true);
+    expect(known.code).toBe(0);
+    expect(JSON.parse(known.out.join("\n")).rowChecked).toBe(true);
   });
 
   it("refuses a --typed-file or --question-file that is not valid UTF-8 at exit 2 naming the file, and records nothing", async () => {

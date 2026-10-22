@@ -109,8 +109,8 @@ GIT_WORK_TREE dropped. nen records and reads; it decides nothing.
           --max-tokens, default --repo's nen/workflow.json idle.budget. The
           token sum is UNREAD -- 'unevaluated', a claim refused, exit 1 --
           when an entry was recorded --not-reported, a delivery PR names no
-          effort, a delivery PR's effort has no ledger, or a ledger will not
-          read. With --claim: exit 1 once either ceiling is reached -- an
+          effort, a delivery PR's or an --effort's effort has no ledger, or a
+          ledger will not read. With --claim: exit 1 once either ceiling is reached -- an
           answer, not a failure, the loop cap's shape. Nothing is written.
 
 Exit 2 for a malformed flag or a flag another subcommand owns.`;

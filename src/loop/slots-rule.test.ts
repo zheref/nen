@@ -125,3 +125,11 @@ describe("nen loop slots under Hatsu's committed nen/workflow.json (idle.localSl
   });
 });
 
+
+describe("the per-effort line names the key the rule came from", () => {
+  it("idle.localSlotFrees is named when the rule was read there", () => {
+    expect(occupancy(local({}), "merged", "idle.localSlotFrees").why).toContain("(idle.localSlotFrees: merged)");
+    expect(computeSlots([local({})], { ci: 1, local: 1 }, "merged", "idle.localSlotFrees").local.holding[0]?.why).toContain("idle.localSlotFrees");
+    expect(occupancy(local({}), "merged").why).toContain("(monitor.localSlotFrees: merged)");
+  });
+});

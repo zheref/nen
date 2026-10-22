@@ -34,7 +34,7 @@ import {
   requireTargetFlag,
   parseCallerToken,
 } from "../cli/command.js";
-import { readJsonFile, readTextFile, resolveAgainstRepo } from "../cli/inputs.js";
+import { readJsonFile, readTextFile, readVerbatimTextFile, resolveAgainstRepo } from "../cli/inputs.js";
 import { mergeUnit, MergeUnitUsageError, EXIT_GH_REFUSED, EXIT_GH_NOT_RUNNABLE } from "./mergeunit.js";
 import { deliveryExit, mergeDelivery } from "./mergedelivery.js";
 import { commaList } from "../cli/comma.js";
@@ -2418,7 +2418,9 @@ function open(context: CommandContext): number {
   const bodyPath = requireValue(context.args, "body-file", "It is the pull request body, read once, checked and handed to gh on stdin.");
   const ignore = readIgnoreFlag(context);
   const root = resolveRepoRoot({ repoFlag: context.repoFlag });
-  const title = readTextFile(titlePath, root, "It is the pull request's title -- 'pr open' reads no other source for it.")
+  // VERBATIM: a title whose bytes are not UTF-8 is refused (exit 2), never
+  // opened with replacement characters (delivery round on zheref/nen#498).
+  const title = readVerbatimTextFile(titlePath, root, "It is the pull request's title -- 'pr open' reads no other source for it.")
     .split("\n")
     .map((line): string => line.trim())
     .find((line): boolean => line !== "");

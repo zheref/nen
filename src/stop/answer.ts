@@ -42,7 +42,7 @@ import { readVerbatimTextFile } from "../cli/inputs.js";
 import { realContainment } from "../repo/contain.js";
 import { assertRepoRoot } from "../repo/root.js";
 import { encodeEffortId } from "../usage/ledger.js";
-import { GATES } from "../schema/decisions.js";
+import { GATES, loadDecisions } from "../schema/decisions.js";
 import { STOP_IDS_COMMON_SEGMENTS, STOPS_COMMON_SEGMENTS } from "../ledger/roots.js";
 
 /** The record's own versioned contract string. */
@@ -316,6 +316,32 @@ function recordAnswer(context: CommandContext): number {
   }
 
   const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  // THE ROW IS CHECKED AGAINST --repo's nen/decisions.json when it has one: a
+  // typo'd row id joins no idle answer, so it is refused (exit 2) naming the
+  // ask-once ids; with no file the row is recorded and said to be unchecked
+  // (delivery round on zheref/nen#498, verification pass).
+  let rowChecked: boolean | null = null;
+  let decisionsPath: string | null = null;
+  if (row !== null) {
+    let matrix;
+    try {
+      matrix = loadDecisions(root);
+    } catch (error) {
+      throw new StopAnswerError(`could not read nen/decisions.json to check --row '${row}': ${error instanceof Error ? error.message : String(error)}`);
+    }
+    decisionsPath = matrix.path;
+    if (matrix.present) {
+      if (matrix.row(row) === undefined) {
+        const askOnce = matrix.rows.filter((r): boolean => r.class === "ask-once-per-run").map((r): string => r.id);
+        throw new VerbUsageError(
+          `--row '${row}' is no row of ${matrix.path}; its ask-once rows are: ${askOnce.length === 0 ? "(none)" : askOnce.join(", ")}.`,
+        );
+      }
+      rowChecked = true;
+    } else {
+      rowChecked = false;
+    }
+  }
   const question = readVerbatimTextFile(questionFile, root, "The question is what this record is about; an unreadable file is refused rather than recorded as an empty question.");
   if (question.trim() === "") throw new VerbUsageError(`--question-file ${questionFile} is empty: a record of an answer to no question says nothing.`);
 
@@ -367,9 +393,10 @@ function recordAnswer(context: CommandContext): number {
   const answerLine = record.kind === "typed"
     ? `typed (verbatim): ${firstLine(record.typed ?? "")}`
     : `picked: ${record.pick ?? ""}${record.typed === null ? "" : " (typed text matched that option's label)"}`;
-  emit(context.io, context.json, { dryRun, path, record }, [
+  emit(context.io, context.json, { dryRun, path, record, rowChecked }, [
     `${dryRun ? "(dry run) would record" : "recorded"} ${record.id} -> ${path}`,
     `  ${record.gate ?? `row ${record.row ?? ""}`}${record.gate !== null && record.row !== null ? ` (row ${record.row})` : ""} · ${record.who} · ${answerLine}`,
+    ...(rowChecked === false ? [`row ${record.row ?? ""} not checked: ${decisionsPath ?? "nen/decisions.json"} is absent`] : []),
     ...(dryRun ? ["nothing written -- the id shown is the next free one now and is not reserved."] : []),
   ]);
   return 0;

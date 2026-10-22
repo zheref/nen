@@ -98,6 +98,15 @@ describe("nen pr open -- refusals before anything is created", () => {
     expect(missing.seams.calls).toEqual([]);
   });
 
+  it("refuses a title file that is not valid UTF-8 at exit 2, before any call", async () => {
+    const { root } = repo();
+    writeFileSync(join(root, "title.txt"), Buffer.from([0xff, 0xfe, 0x41, 0x0a]));
+    const result = await capture(root, ["--dry-run"]);
+    expect(result.code).toBe(2);
+    expect(result.err.join("\n")).toMatch(/is not valid UTF-8/);
+    expect(result.seams.calls).toEqual([]);
+  });
+
   it("refuses a detached HEAD with no --head, at exit 2", async () => {
     const { root } = repo();
     const result = await capture(root, [], [{ match: "git symbolic-ref --short HEAD", result: { code: 128, stderr: "fatal: ref HEAD is not a symbolic ref" } }]);

@@ -25,8 +25,9 @@
 // entry was recorded `--not-reported`, when a recorded delivery PR names no
 // effort, or when a delivery PR's effort has no usage ledger: an absent spend
 // is never a zero spend (NN#490 AC-2). An effort named only by --effort with
-// no ledger yet is listed under `noLedger`; a ledger that will not read is
-// `unevaluated` too.
+// no ledger is listed under `noLedger` and makes the sum unread too -- the
+// caller named it as spending (delivery round on zheref/nen#498, verification
+// pass); a ledger that will not read is `unevaluated` too.
 
 import { usageLedgerPath, readUsageLedger, type UsageLedger } from "../usage/ledger.js";
 import { totalsOf } from "../usage/command.js";
@@ -112,6 +113,10 @@ export function computeBudget(
     if (pr.kind !== "delivery") continue;
     if (pr.effort === null) tokensUnread.push(`delivery PR #${pr.pr} names no effort, so its spend has no ledger to read`);
     else if (noLedger.includes(pr.effort)) tokensUnread.push(`delivery PR #${pr.pr}'s effort ${pr.effort} has no usage ledger`);
+  }
+  const prEfforts = manifest.prs.map((pr): string | null => pr.effort);
+  for (const effort of noLedger) {
+    if (!prEfforts.includes(effort)) tokensUnread.push(`effort ${effort} (named by --effort) has no usage ledger`);
   }
   for (const row of unread) tokensUnread.push(`could not read ${row.effort}'s usage ledger`);
   const elapsed = Math.max(0, Math.floor((now.getTime() - Date.parse(manifest.startedAt)) / 60_000));
