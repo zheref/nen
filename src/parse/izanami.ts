@@ -1107,7 +1107,7 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
     },
   },
   gate: { subcommands: { derive: RO("derives a gate from a changed-file set -- pure computation") } },
-  idea: { subcommands: { file: MUT("creates a GitHub issue; it has no dry-run form") } },
+  idea: { subcommands: { file: DRY("creates a GitHub issue unless --dry-run is given") } },
   issue: {
     subcommands: {
       search: RO("the four duplicate searches -- gh reads only"),
@@ -1133,6 +1133,8 @@ export const NEN_VERB_TABLE: Readonly<Record<string, NenFamilyEntry>> = {
       // delivery): it proposes closures and never
       // performs one, so there is no write for a --dry-run to gate.
       reconcile: RO("proposes closures for issues a landed PR already closes -- gh reads only"),
+      "body-check": RO("checks an issue body against a caller catalogue -- file or gh reads only"),
+      questions: RO("counts open and resolved questions in an issue body -- file or gh reads only"),
     },
   },
   label: {

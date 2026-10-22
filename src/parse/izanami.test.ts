@@ -331,7 +331,19 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
   // and reason improve.
   it("an always-mutating verb answers 'mutating', not 'unknown', even with a passthrough '--' on the line", () => {
     expect(classifyCommand("nen tag cut --name x --at y -- z").classification).toBe("mutating");
-    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md -- z").classification).toBe("mutating");
+  });
+
+  // zheref/nen#444: `idea file` gained --dry-run, so its row is dry-run-gated
+  // like `issue file`'s; and the two issue-shape reads are read-only.
+  it("classifies idea file by its --dry-run, and the issue-shape reads as read-only", () => {
+    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md").classification).toBe("mutating");
+    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md --dry-run").classification).toBe("read-only");
+    expect(classifyCommand("nen issue body-check --body-file b.md --requirements-from c.json").classification).toBe("read-only");
+    expect(classifyCommand("nen issue questions --ref NN#1 --target o/r").classification).toBe("read-only");
+    // No longer always-mutating: past a passthrough '--' it reads as 'issue file' does.
+    expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md -- z").classification).toBe(
+      classifyCommand("nen issue file --target o/r --title x --body-file b.md -- z").classification,
+    );
   });
 
   // BOTH `scaffold` VERBS, PINNED IN BOTH DIRECTIONS. The rows moved from

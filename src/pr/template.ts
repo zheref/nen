@@ -420,7 +420,7 @@ function normalized(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function escapeRegExp(text: string): string {
+export function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
