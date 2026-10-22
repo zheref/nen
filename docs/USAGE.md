@@ -14,7 +14,7 @@ new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
 arrive with them): 44 command
-families, 140 verbs, every flag checked against the binary this repository
+families, 142 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -67,9 +67,11 @@ the paths and slugs they are handed. Every verb of
 [`issue`](#family-issue) subcommands — every one except
 [`issue file`](#nen-issue-file) and
 [`issue consolidate-close`](#nen-issue-consolidate-close), which require it,
-and [`issue comment`](#nen-issue-comment) and
-[`issue edit-body`](#nen-issue-edit-body), which read it as the base their
-relative `--body-file`, `--current-body-out` and
+and [`issue comment`](#nen-issue-comment),
+[`issue edit-body`](#nen-issue-edit-body),
+[`issue body-check`](#nen-issue-body-check) and
+[`issue questions`](#nen-issue-questions), which read it as the base their
+relative `--body-file`, `--current-body-out`, `--requirements-from` and
 `--private-names-ignore-file` resolve against. Their argument tables say so.
 
 One verb reads it **conditionally**, which is a third thing again:
@@ -206,7 +208,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **74 shapes** and **77 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **76 shapes** and **79 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -248,7 +250,7 @@ file formats).
 - **`decisions`** — `nen.decisions/v0.1`
 - **`dev`** — `nen.dev.release-publish/v0.1`
 - **`direct`** — `nen.direct.answer/v0.1` · `nen.direct.matrix/v0.1` · `nen.direct.registry/v0.1` · `nen.direct.resolve/v0.1`
-- **`issue`** — `nen.issue.edit-body/v0.3` · `nen.issue.reconcile/v0.1`
+- **`issue`** — `nen.issue.body-check/v0.1` · `nen.issue.edit-body/v0.3` · `nen.issue.questions/v0.1` · `nen.issue.reconcile/v0.1`
 - **`loop`** — `nen.loop.iterate/v0.1`
 - **`phase`** — `nen.phase.ledger/v0.1`
 - **`pr`** — `nen.pr.edit-body/v0.1` · `nen.pr.mark-ready/v0.1` · `nen.pr.merge-delivery/v0.1` · `nen.pr.merge-unit/v0.1` · `nen.pr.open/v0.1` · `nen.pr.sections/v0.1` · `nen.pr.ready.head-mismatch/v0.1` · `nen.pr.ready/v0.1` · `nen.pr.threads-settle/v0.1` · `nen.pr.threads/v0.1`
@@ -819,7 +821,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 140 verbs, grouped as the README groups them. **Reads** is what a
+All 142 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -926,6 +928,8 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`issue`](#family-issue) | [`nen issue terminus`](#nen-issue-terminus) | classify which object ends an issue's delivery run (its own PR, each child's PR, or one integration-branch delivery PR) | gh (api read) | yes |
 | [`issue`](#family-issue) | [`nen issue reconcile`](#nen-issue-reconcile) | read-only, proposes only: which OPEN issues a MERGED pull request already closes, each proposal citing the PR, its merge commit and the closing reference | gh (repo view, issue list, api graphql search and per-PR commit queries, api compare, api labels when --hold-labels is given, pr list for delivery PRs and the open-PR guard) | yes |
 | [`issue`](#family-issue) | [`nen issue edit-body`](#nen-issue-edit-body) | replaces an issue's body outright with a file's bytes, certifying the number is an ISSUE (never a PR) before any write | gh (api read to certify, issue edit unless --dry-run) | yes |
+| [`issue`](#family-issue) | [`nen issue body-check`](#nen-issue-body-check) | read-only: does an issue body carry every section its kind requires in the caller's catalogue, with content patterns, contiguous and measurable numbered rows, and vague-word advisories | --body-file or gh (api read), the --requirements-from catalogue | yes |
+| [`issue`](#family-issue) | [`nen issue questions`](#nen-issue-questions) | read-only: counts an issue body's open OQ-{n} rows, resolved ones and [NEEDS ...] markers; counts, never decides | --body-file or gh (api read) | yes |
 | [`idea`](#family-idea) | [`nen idea file`](#nen-idea-file) | file an idea issue (reusing issue file's own choreography), then read it back over the API and diff title/body/labels against what was submitted | nen/labels.json; gh (issue create + api read) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold init`](#nen-scaffold-init) | stand an EXISTING repository up: the directory skeleton, the trailer-enforcing commit-msg hook, the trunk-guarding pre-commit hook, a canon-values.yml template, nen/contract.json's project block, nen/workflow.json's policy, the schemas/-&gt;nen/ copy migration, the stack's CI workflow, .gitignore upkeep, and a closing `shu tools` CHECK that installs nothing | nen/contract.json + nen/workflow.json (both hooks are generated FROM the policy) + the legacy schemas/ copies; the bundled profiles pack and templates/; writes to disk under --repo; spawns the version probes the target declares (never on --dry-run) | yes |
 | [`scaffold`](#family-scaffold) | [`nen scaffold new`](#nen-scaffold-new) | write a FRESH tree for one stack into an empty --dir: the template's files with {{name}} substituted, the CI workflow, .gitignore, both git hooks, nen/workflow.json's policy, and nen/contract.json as `shu detect` proposes it off the marker just written -- every post-step PRINTED, none run | the bundled profiles pack and templates/; writes to disk under --dir; spawns nothing at all | yes |
@@ -8557,7 +8561,8 @@ Creates the issue with its labels and assignee IN the create call -- never a fol
 **Usage**
 
 ```text
-nen issue file --target <owner/name> --repo <path> --title <t>
+nen issue file --target <owner/name> --repo <path>
+               (--title <t> | --title-file <path>)
                --body-file <path> --label a,b --assignee <user>
                [--forbid-family ns:family] [--dry-run]
                [--skip-private-name-check]
@@ -8570,7 +8575,8 @@ nen issue file --target <owner/name> --repo <path> --title <t>
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository to file into. | Missing exits 1. |
 | `--repo <path>` | yes | The checkout whose `nen/labels.json` validates every `--label`. | Listed unbracketed in usage: omitted, this exits **2** by name, never silently reads the cwd's own taxonomy. |
-| `--title <t>` | yes | The issue title. | Empty title is refused as part of the batch below (exit 1), not at the parser. |
+| `--title <t>` | one of `--title`/`--title-file` | The issue title. | Empty title is refused as part of the batch below (exit 1), not at the parser. |
+| `--title-file <path>` | one of `--title`/`--title-file` | The title, read from a file verbatim with **one** trailing newline (`\n` or `\r\n`) stripped and nothing else trimmed, so the maintainer's words never pass through shell source ([#444](https://github.com/zheref/nen/issues/444)). | Resolves against `--repo`'s root. Refused at exit **2** with `--title`, when unreadable, and when the title still holds a line break. |
 | `--body-file <path>` | yes | Path to the issue body. A body typed inline on the command line is a body nobody reviewed, so there is no `--body`. | Omitted entirely exits **2** (checked ahead of the batch); an unreadable path is refused at exit **2** before any `gh` call. Resolves against `--repo`'s root, and the **resolved** path is what `gh` is handed (since [#329](https://github.com/zheref/nen/issues/329): the private-name guard reads the file, and it and `gh` must read the same one). |
 | `--label a,b` | yes | Comma-separated labels, applied in the create call. | Every label must exist in `--repo`'s taxonomy; an empty list is refused. |
 | `--assignee <user>` | yes | A single GitHub login. | Empty is refused: an unassigned issue reaches nobody by notification. |
@@ -9229,6 +9235,109 @@ hold labels: keep-open
 ```
 (shape derived from `src/issue/reconcile.ts`'s `renderReconcile` and `src/issue/reconcile.test.ts` -- not run live, this reaches GitHub)
 
+### `nen issue body-check`
+
+The issue-side sibling of [`pr body-check`](#nen-pr-body-check): does one issue body carry every section its kind requires, with the content and the numbered rows those sections promise. **Read-only**, and it never decides what an issue should say: the sections, their content patterns, the row prefixes and the vague-word list are all the caller's catalogue (`--requirements-from`), and with several kinds declared and no `--kind` it refuses rather than picking one. Every miss is reported at once.
+
+**Usage**
+
+```text
+nen issue body-check (--body-file <path> | --ref <CODE>#<N> --target <owner/name>)
+                     --requirements-from <catalogue.json> [--kind <kind>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--body-file <path>` | one of the two | The issue body to check, read from disk. | Resolves against `--repo`'s root (default the current directory). An unreadable file exits **2**, never reads as empty. Refused with `--ref`, and with `--target` (a file addresses no repository). |
+| `--ref <CODE>#<N>` | one of the two | The issue to read the body of. Also `<owner/name>#<N>`, `#<N>` or `<N>`. | Needs `--target`, which is what addresses the API; the `CODE` is echoed in the report and never resolved, and an `owner/name` prefix must name `--target` itself (exit 2 otherwise). A number that names a pull request is refused at exit **2** -- [`pr body-check`](#nen-pr-body-check) reads those. |
+| `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | Missing or malformed exits 2. |
+| `--requirements-from <path>` | yes | The [issue-sections catalogue](#the-issue-sections-catalogue). | Resolves against `--repo`'s root. Unreadable, not JSON, or malformed exits **2**, naming the file and the field. |
+| `--kind <kind>` | when the catalogue declares more than one kind | Which kind's required sections to check. | An undeclared kind exits 2 naming the declared ones; with one kind declared it may be omitted. |
+
+<a id="the-issue-sections-catalogue"></a>
+
+**The issue-sections catalogue.** A JSON object, the caller's data -- nen ships none. Hatsu's `contracts/issue-sections.json` is written in this shape.
+
+```json
+{
+  "contract": "<the caller's own id, echoed, never interpreted>",
+  "sections": [
+    { "id": "problem", "title": "Problem", "level": 2,
+      "content": [{ "name": "names who is affected", "pattern": "\\b(maintainer|consumer)\\b" }] },
+    { "id": "acceptance", "title": ["Acceptance criteria", "Acceptance"], "level": 2,
+      "rows": { "prefix": "AC", "contiguous": true } },
+    { "id": "success", "title": "Success criteria", "rows": { "prefix": "SC", "measurable": true } }
+  ],
+  "kinds": { "feature": ["problem", "acceptance", "success"], "bug": ["problem", "acceptance"] },
+  "vagueAdjectives": ["fast", "intuitive", "seamless"]
+}
+```
+
+- `sections[]` -- `id` (unique), `title` (a heading's words or a list of accepted spellings), optional `level` (1-6; when given the heading must be at exactly that level), optional `content` (`{ name, pattern }` pairs, each a regular expression the section's content must match, case-insensitive and multi-line), optional `rows` (`prefix`, a letter then letters and digits; `contiguous` and `measurable` booleans).
+- `kinds` -- kind name to the section ids an issue of that kind must carry; keys beginning `$` are skipped. Every id must be declared under `sections`.
+- `vagueAdjectives` -- optional; words reported as advisories.
+
+**What it reads.** Headings are read as [`pr body-check`](#nen-pr-body-check)'s derived check reads them: a heading inside fenced code or an HTML comment is not a heading, and a section runs to the next heading at its level or higher. A heading matches a title with letter case, whitespace runs and a leading or trailing glyph run (an emoji, `§`) folded. A section is **missing** when no heading matches, **empty** when its heading has no content line under it. A present section is then held to each `content` pattern. A `rows` section's rows are its list items or table rows whose first token is `<prefix>-<n>` (bold, struck and emphasised spellings read), outside fenced and inline code and comments: none at all is a miss; `contiguous` requires `<prefix>-1` to `<prefix>-n` in document order, so a gap, a reorder or a repeated number is a miss at its line; `measurable` requires each row's text after its id to carry a digit or `%`. Each `vagueAdjectives` word found as a whole word outside headings, code and comments is an **advisory** with its line, never a miss.
+
+**Output and exit codes** -- the verdict line `<ok>/<required> section(s) present for kind '<kind>', <n> miss(es) -- <source>`, then `ok|MISSING|EMPTY  <id> (line <n>)` per section, `MISS <kind> line <n>: <detail>` per content or row miss, and `ADVISORY line <n>: vague '<word>'`. `--json`: `{ contract, source, catalogue: { path, contract }, kind, ok, sections, rows, misses, advisories }` -- `contract` is `nen.issue.body-check/v0.1`; `source` is `{ kind: "file", path }` or `{ kind: "issue", ref, target, number }`; `sections` each `{ id, title, status, line }` (`status` `ok`, `missing` or `empty`, `line` null when missing); `rows` each `{ section, id, number, line }`; `misses` each `{ section, kind, line, detail }` (`kind` one of `missing`, `empty`, `content`, `no-rows`, `row-order`, `row-unmeasurable`); `advisories` each `{ kind: "vague", word, line }`. Exit 0 with no miss (advisories do not count); exit 1 on any miss, and when `--ref`'s issue could not be read or its payload carried no body; exit 2 on usage, a malformed catalogue, an undeclared or unchosen kind, or a pull-request number.
+
+**Example**
+
+```bash
+nen issue body-check --body-file /tmp/issue.md --requirements-from contracts/issue-sections.json --kind feature
+```
+```text
+2/3 section(s) present for kind 'feature', 3 miss(es) -- '/tmp/issue.md'
+ok  problem (line 1)
+ok  acceptance (line 5)
+MISSING  success
+MISS row-order line 8: AC-3 is row 2; rows are numbered AC-1 to AC-2 in order
+ADVISORY line 3: vague 'fast'
+```
+(shape from `src/issue/shape-command.test.ts`; the content is illustrative -- the missing section is the third miss, printed on its own `MISSING` line)
+
+### `nen issue questions`
+
+Counts an issue body's unresolved questions -- the one admitted shape for an open question in an issue (Hatsu's ruling HR-4) -- so a caller can refuse to build on an issue that still holds one. It **counts and never decides**: whether an open question blocks anything is the caller's rule.
+
+**Usage**
+
+```text
+nen issue questions (--body-file <path> | --ref <CODE>#<N> --target <owner/name>) [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--body-file <path>` | one of the two | The issue body, read from disk. | As [`issue body-check`](#nen-issue-body-check)'s. |
+| `--ref <CODE>#<N>` | one of the two | The issue to read. | As [`issue body-check`](#nen-issue-body-check)'s: needs `--target`; a pull request is refused at exit 2. |
+| `--target <owner/name>` | with `--ref` | The repository `--ref` is read from. | |
+
+**What it counts**, outside fenced code, inline code and HTML comments:
+
+- **open** -- a list row `- OQ-{n} (<gate>): …`, reported with its number, gate and line;
+- **resolved** -- a list row `- ~~OQ-{n}~~ → A: …` (`->` is read as `→`);
+- **NEEDS markers** -- `[NEEDS CLARIFICATION: …]` and `[NEEDS <row-id>: …]`, each with its label;
+- **unrecognised** -- a list row whose first token is `OQ-{n}` in neither shape above, listed with its text and counted as neither, so a malformed row is visible rather than lost.
+
+**Output and exit codes** -- the line `<open> open, <resolved> resolved, <n> [NEEDS] marker(s), <n> unrecognised -- <source>`, then `OPEN`, `RESOLVED`, `NEEDS` and `UNRECOGNISED` rows with their lines. `--json`: `{ contract, source, counts: { open, resolved, needsMarkers, unrecognised }, open, resolved, needsMarkers, unrecognised }` -- `contract` is `nen.issue.questions/v0.1`, `source` as `body-check`'s, `open` each `{ id, number, gate, line }`, `resolved` each `{ id, number, line }`, `needsMarkers` each `{ label, line }`, `unrecognised` each `{ line, text }`. Exit 0 whenever the body was read, whatever the counts; exit 1 when `--ref`'s issue could not be read or carried no body (never zero counts); exit 2 on usage.
+
+**Example**
+
+```bash
+nen issue questions --body-file /tmp/issue.md
+```
+```text
+1 open, 1 resolved, 1 [NEEDS] marker(s), 0 unrecognised -- '/tmp/issue.md'
+OPEN      OQ-1 (G4) line 1
+RESOLVED  OQ-2 line 2
+NEEDS     CLARIFICATION line 3
+```
+(shape from `src/issue/shape-command.test.ts`)
+
 <a id="family-idea"></a>
 
 **`nen idea`**
@@ -9242,9 +9351,11 @@ Answers "did GitHub store this idea exactly as sent" -- a `gh issue create` exit
 **Usage**
 
 ```text
-nen idea file --target <owner/name> --repo <path> --title <t>
+nen idea file --target <owner/name> --repo <path>
+             (--title <t> | --title-file <path>)
              --body-file <path> --label a,b --assignee <user>
-             [--forbid-family ns:family] [--skip-private-name-check]
+             [--forbid-family ns:family] [--dry-run]
+             [--skip-private-name-check]
              [--private-names-ignore-file <path> [--allow-all-ignored]]
 ```
 
@@ -9254,7 +9365,9 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 |---|---|---|---|
 | `--target <owner/name>` | yes | The GitHub repository to file into. | |
 | `--repo <path>` | yes | The checkout whose `nen/labels.json` validates every `--label`. | Listed unbracketed: omitted, exits 2 by name. |
-| `--title <t>` | yes | The idea's title. | |
+| `--title <t>` | one of `--title`/`--title-file` | The idea's title. | |
+| `--title-file <path>` | one of `--title`/`--title-file` | The title read from a file, exactly as [`issue file`](#nen-issue-file)'s `--title-file` reads it ([#444](https://github.com/zheref/nen/issues/444)). | Resolves against `--repo`'s root; refused at exit **2** with `--title`, when unreadable, and when the title holds a line break. The read-back compares the title read from the file. |
+| `--dry-run` | no | Run every check a real filing runs, then print the exact `gh issue create` argv and the `stdin:` line instead of filing ([#444](https://github.com/zheref/nen/issues/444)). | Creates nothing and reads nothing back. It still READS GitHub for the [private-name guard](#the-private-name-guard), so its verdict is the real run's. |
 | `--body-file <path>` | yes | Path to the idea body. | Omitted entirely exits 2; the read text is compared byte-for-byte against the read-back. |
 | `--label a,b` | yes | Comma-separated labels. | Same taxonomy validation as `issue file`. |
 | `--assignee <user>` | yes | A single GitHub login. | |
@@ -9263,7 +9376,7 @@ nen idea file --target <owner/name> --repo <path> --title <t>
 | `--private-names-ignore-file <path>` | no | Private repositories the caller ruled too generic to police ([private-name guard](#the-private-name-guard)). | No default path is read; a missing file exits **2** before any `gh` call. Resolves against `--repo`'s root. Ignored hits are reported, never silent. |
 | `--allow-all-ignored` | no | Permit an ignore file that exempts **every** private name (otherwise exit 1). | Only with `--private-names-ignore-file` or a named list declared by `--repo`'s `privateNames.namedFile`; with neither it exits **2**. |
 
-**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)). Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
+**Output and exit codes** -- prints `filed #<n> <url>`, then either `read-back OK -- title, body and labels match what was submitted.` or, per mismatch, `<field>: expected '<expected>', got '<actual>'`. `--json`: the full `FileIdeaResult` plus the guard's verdict -- `{ filed: { url, number }, readBack: { title, body, labels }, mismatches, privateNameCheck }`; `{ filed: false, privateNameCheck }` when the [private-name guard](#the-private-name-guard) refuses ([#363](https://github.com/zheref/nen/issues/363)); `{ dryRun: true, argv, bodyFile, privateNameCheck }` under `--dry-run` (`bodyFile` the resolved path), whose human form is `would run: gh issue create ...` and a `stdin:` line, exactly [`issue file`](#nen-issue-file)'s. Exit **4** when that guard finds a private repository named in the title or body of a filing to a PUBLIC target -- checked after the filing's own refusals and before the create, nothing filed -- and exit 1 when it could not run. Content refusals (empty title, no labels, unknown/forbidden label) print as plain `nen:` lines regardless of `--json`, same as `issue file`. Exit 0 when filed and the read-back matches exactly; exit 1 on any mismatch, on a read-back that could not be confirmed at all, or on a read-back that answers as a pull request; exit 2 when `--repo`/`--body-file` was omitted, and when `--target` is missing **or malformed** — this family kept a fifth copy of that check which answered a bad slug with exit 1, and it now refuses the way the other four do ([#93](https://github.com/zheref/nen/issues/93)).
 
 **Example**
 
