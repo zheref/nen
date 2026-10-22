@@ -326,6 +326,13 @@ describe("classifyCommand -- nen's own verbs (#31)", () => {
     expect(classifyCommand("nen wc overlap --efforts a,b --repo .").classification).toBe("read-only");
     expect(classifyCommand("nen stage check --exclusive --target o/r --issue 7").classification).toBe("read-only");
     expect(classifyCommand("nen loop slots --from-run r1 --target o/r --local-cap 2").classification).toBe("read-only");
+    // The spec family (SDD piece N10): three reads; index writes only under --write, and not under --dry-run.
+    expect(classifyCommand("nen spec number --repo . --layout specs/{nnn}-{slug}").classification).toBe("read-only");
+    expect(classifyCommand("nen spec check --repo . --folder specs/001-a --markers --rank").classification).toBe("read-only");
+    expect(classifyCommand("nen spec cite-check --repo . --folder specs/001-a --checkouts c --at HEAD").classification).toBe("read-only");
+    expect(classifyCommand("nen spec index --repo .").classification).toBe("read-only");
+    expect(classifyCommand("nen spec index --repo . --write").classification).toBe("mutating");
+    expect(classifyCommand("nen spec index --repo . --write --dry-run").classification).toBe("read-only");
     expect(classifyCommand("nen idea file --target o/r --title x --body-file b.md").classification).toBe("mutating");
     expect(classifyCommand("nen scaffold init").classification).toBe("mutating");
     expect(classifyCommand("nen fanout record --range v1..v2").classification).toBe("mutating");
@@ -901,6 +908,7 @@ describe("write-flag-gated rows -- coupled to what ../cli/args.ts accepts (#31 r
     // #340: `--target` is mandatory (a write verb never falls back to a remote).
     "runner relabel": "nen runner relabel --target o/r --pool p",
     "shu detect": "nen shu detect",
+    "spec index": "nen spec index --repo .",
     // `--target` is mandatory on this verb, so the base line carries it: a
     // base that could never run would prove the coupling against a command
     // nobody types.

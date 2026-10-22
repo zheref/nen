@@ -13,8 +13,8 @@ with the `nen` spelling. This document covers the **v0.13.0 line** (one new fami
 new verbs, `usage record`, `usage show`, `wc catch-up`, `wc publish`,
 `commit write` and `pr open`; the usage ledger, the `steps[]` a `shu` run
 leaves on an open phase, the pinned stall rule and the `profile` policy key
-arrive with them): 44 command
-families, 151 verbs, every flag checked against the binary this repository
+arrive with them): 45 command
+families, 155 verbs, every flag checked against the binary this repository
 builds.
 
 ## Conventions
@@ -209,7 +209,7 @@ change from a compatible one.
 **What the list below is.** The ruling above is quoted as it was written at
 [#79](https://github.com/zheref/nen/issues/79) and is not reworded here. The list
 below is not the set that ruling would qualify: it is every **versioned id the
-binary carries**, writing or reading — **80 shapes** and **83 ids** (`nen.runner.plan`,
+binary carries**, writing or reading — **84 shapes** and **87 ids** (`nen.runner.plan`,
 `nen.stop.mark` and `nen.wc.worktree.copies` each have two versions, and
 `nen.shu.<verb>/v0.1` is one id standing for the per-verb string
 `nen.shu.${verb}/v0.1` that every executing `shu` verb stamps on its own report).
@@ -265,6 +265,7 @@ file formats).
 - **`schema`** — `nen.schema.set/v0.1`
 - **`session`** — `nen.session.ledger/v0.1`
 - **`shu`** — `nen.shu.<verb>/v0.1` · `nen.shu.coverage-capture/v0.1` · `nen.shu.coverage/v0.1` · `nen.shu.detect/v0.1` · `nen.shu.evidence/v0.1` · `nen.shu.proof/v0.1` · `nen.shu.test-report/v0.1` · `nen.shu.tools/v0.1` · `nen.shu.warmup/v0.1`
+- **`spec`** — `nen.spec.check/v0.1` · `nen.spec.cite-check/v0.1` · `nen.spec.index/v0.1` · `nen.spec.number/v0.1`
 - **`stop`** — `nen.stop.answer/v0.1` · `nen.stop.mark/v0.1` · `nen.stop.mark/v0.2` · `nen.stop.proposed-issue/v0.1`
 - **`surface`** — `nen.surface.capabilities/v0.1` · `nen.surface.install/v0.1` · `nen.surface.mirror.check-installed/v0.1` · `nen.surface.mirror.check-plugin/v0.1` · `nen.surface.mirror.check/v0.1` · `nen.surface.mirror.generate/v0.1` · `nen.surface.status/v0.1`
 - **`usage`** — `nen.usage.ledger/v0.1`
@@ -882,7 +883,7 @@ job that already has one `nen` and wants a pinned second one.
 
 ## Verb index
 
-All 151 verbs, grouped as the README groups them. **Reads** is what a
+All 155 verbs, grouped as the README groups them. **Reads** is what a
 verb actually opens — a taxonomy file under `--repo`, a caller-supplied
 file, `git`, or GitHub through `gh`; it is the fastest way to tell which
 verbs need a token and which run offline. Every verb accepts the global
@@ -1014,6 +1015,10 @@ verbs need a token and which run offline. Every verb accepts the global
 | [`commit`](#family-commit) | [`nen commit format`](#nen-commit-format) | format and validate ONE Conventional Commits message's shape (type, subject, scope, breaking, trailers) the repository's `subject-case` rule (commitlint's own when readable as data, else `commits.subjectCase`), and its body/footer line lengths, wrapping `--body` to them (commitlint's own when readable as data, else `commits.bodyMaxLineLength`, else 100) -- never its content | on every run: nen/workflow.json under --repo (the attribution-trailer policy, commits.subjectCase and commits.bodyMaxLineLength), and the commitlint config commitlint would load from --repo's root (data forms parsed; JS/TS never executed) | yes |
 | [`commit`](#family-commit) | [`nen commit check`](#nen-commit-check) | is this working copy the one a green build proved? compares .nen/proof/<lane>.json's tree against the tree now | .nen/proof/<lane>.json under --repo, git (add/rm/write-tree into a scratch index) | yes |
 | [`commit`](#family-commit) | [`nen commit write`](#nen-commit-write) | commit the index with a message file validated under `commit format`'s own rules plus every `--trailer`, refusing a red `--require-proof` and an empty index; `git commit -F` is the one write | nen/workflow.json under --repo (the trailer policy, commits.subjectCase and commits.bodyMaxLineLength), the commitlint config at --repo's root (`subject-case`, `body-max-line-length`, `footer-max-line-length`), .nen/proof/<lane>.json and the scratch-index hash under --require-proof, git (diff --cached, commit -F, rev-parse, interpret-trailers --parse --no-divider, config trailer.separators and cat-file commit for the written commit's trailer read-back -- exit 3 on an injected one, #273) | yes |
+| [`spec`](#family-spec) | [`nen spec number`](#nen-spec-number) | the next free `{nnn}` in a spec repository: the highest taken on `origin/<base>` (as last fetched) or by an open PR's files, plus one; names a collision, picks no winner | git (rev-parse, ls-tree) under --repo; nen/workflow.json branch.base; github (gh pr list --json number,files); `git remote get-url origin` when no --target | yes |
+| [`spec`](#family-spec) | [`nen spec check`](#nen-spec-check) | a spec folder or the constitution held to citation-or-marker, plus Spec Kit analyze's computable passes (duplicate ids, placeholders, inferred tier in a MUST/SC, FR↔task both ways, the caller's vague terms) and the open markers ranked by clarify's taxonomy; CRITICAL exits 1 | spec.md/tasks.md or .specify/memory/constitution.md under --repo; the --vocabulary file; no git/gh | yes |
+| [`spec`](#family-spec) | [`nen spec cite-check`](#nen-spec-cite-check) | every `[src:]` range in a folder resolves at its own sha in the member checkout the checkouts file names; excerpt hashes against `capture/<CODE>/inventory.json`; `--at` reports [STALE] candidates | the folder's .md files and nen/repos.json under --repo; the --checkouts file; git (remote get-url, rev-parse, cat-file) in each member checkout | yes |
+| [`spec`](#family-spec) | [`nen spec index`](#nen-spec-index) | `<root>/INDEX.md` regenerated from each folder's spec.md header; reports current / stale / hand-edited / absent; `--write` refuses over a hand edit | spec.md headers and INDEX.md under --repo; WRITES `<root>/INDEX.md` under --write unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu detect`](#nen-shu-detect) | read the markers on disk and PROPOSE a nen/contract.json project block; never writes without --write and never overwrites one | the target repo's own files (framework configs, package.json, project files); writes nen/contract.json only with --write | yes |
 | [`shu`](#family-shu) | [`nen shu build`](#nen-shu-build) | compile or assemble a lane, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
 | [`shu`](#family-shu) | [`nen shu test`](#nen-shu-test) | run a lane's test suite, from the invocation its declaration states | nen/contract.json (project block); spawns the declared argv unless --dry-run | yes |
@@ -10004,7 +10009,8 @@ read-back OK -- title, body and labels match what was submitted.
 
 Standing a repository up and keeping its canon honest: the deterministic
 scaffold, the handbook set and its generated rule mirror, the three mechanical
-questions the pre-release quality gate asks, and Conventional Commits shape.
+questions the pre-release quality gate asks, Conventional Commits shape, and
+the read-only verbs over a Spec Kit spec repository.
 
 <a id="family-scaffold"></a>
 
@@ -10970,6 +10976,286 @@ message:
 
   Hatsu-Agent: kurapika
 ```
+
+<a id="family-spec"></a>
+
+**`nen spec`**
+
+The first slice of the verbs Hatsu's capture skill (`dowsing-chain`, Hatsu
+ruling HR-12) reads a Spec Kit spec repository through: number a new folder,
+hold a folder or the constitution to citation-or-marker, resolve every
+citation against the member checkouts, and keep `INDEX.md` generated. They
+**report and refuse; none decides** — no slug is picked, no question is chosen,
+no citation is rewritten, no hand edit is overwritten — and "could not read"
+is exit 1 on every one of them, never a clean report.
+
+One grammar serves all four (`src/spec/lines.ts`). A requirement line ends in
+
+```text
+[src: <CODE>:<path>:<l1>-<l2> @ <sha> · declared|observed|inferred]
+```
+
+(one or more) or in **exactly one** of `[NEEDS CLARIFICATION: <question>]` ·
+`[NEEDS RULING]` · `[UNVERIFIED]`. `<CODE>` is a product code
+(`[A-Z][A-Z0-9]{1,7}`), `<path>` a relative path with no `.`/`..` segment,
+`<sha>` 7–40 lowercase hex. A **fenced block is source data** (SEC-15) and is
+never read as a requirement, a citation, a marker or a placeholder. A
+**layout** is `<dir>[/<dir>…]/<final>` whose final segment carries `{nnn}`
+(`[0-9]{3}`) and `{slug}` (`[a-z0-9]+(-[a-z0-9]+)*`) once each — Spec Kit's own
+is `specs/{nnn}-{slug}`; `..`, an absolute path or a placeholder outside the
+final segment exits 2 (Hatsu `docs/config/ports.md`, *Slug, number and
+layout*).
+
+### `nen spec number`
+
+The next free `{nnn}`. Two captures in flight would both read the base, both
+see the same highest number and both open the next one, so an **open pull
+request's folder reserves its number**: the verb reads the folders on
+`origin/<base>` (`git ls-tree`, as the checkout last fetched it — nen fetches
+nothing, and the sha is reported so a stale fetch is visible) and every open
+PR's changed files (`gh pr list --json number,files`), and answers the highest
+`{nnn}` taken anywhere **plus one** — a gap a closed PR left is not reused.
+Two different folders claiming one `{nnn}` is a collision, named and never
+resolved.
+
+**Usage**
+
+```text
+nen spec number --repo <spec-checkout> --layout <pattern> [--base <branch>] [--target <owner/name>] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--layout <pattern>` | yes | Where feature folders live, e.g. `specs/{nnn}-{slug}`. | A malformed layout exits 2. |
+| `--base <branch>` | no | The base whose `origin/<base>` is read. | Default `nen/workflow.json` → `branch.base`, else `main`; a value starting `-` or holding `..` exits 2. |
+| `--target <owner/name>` | no | The repository whose open PRs reserve numbers. | Default the checkout's `origin`; a malformed slug exits 2. |
+
+**Output and exit codes** — prints `next: <nnn>`, the layout, base, sha and
+PR count, one line per taken folder (`on base` or `reserved by #<n>`) and any
+collision. `--json` top-level keys: `contract` (`nen.spec.number/v0.1`),
+`repo`, `target`, `layout`, `base`, `baseSource`, `baseSha`, `openPrs`,
+`taken` (`{ nnn, slug, folder, source: "base"|"pr", pr }` each), `collisions`,
+`next` (null once `999` is taken), `reason`. Exit 0 with a next number and no
+collision; exit 1 when `origin/<base>` does not resolve, `gh` fails or answers
+something unreadable, the open-PR list reaches its 500 limit (some may be
+unread), two folders claim one `{nnn}`, or no next number exists; exit 2 on a
+missing or malformed flag, or another verb's flag.
+
+**Example**
+
+```bash
+nen spec number --repo . --layout 'specs/{nnn}-{slug}'
+```
+```text
+next: 006
+layout specs/{nnn}-{slug} · base origin/main (default (no nen/workflow.json)) at aaaaaaaaaaaa · 2 open PR(s) on fixture-owner/fixture-spec
+  001 specs/001-sample-feature on base
+  002 specs/002-other-feature on base
+  002 specs/002-other-feature reserved by #42
+  005 specs/005-reserved reserved by #41
+```
+(exit 0; from `src/spec/number.test.ts`, which scripts the git and `gh pr
+list` reads — this verb reaches GitHub, so it was not run live here)
+
+### `nen spec check`
+
+A folder's `spec.md` (with `--folder`) or `.specify/memory/constitution.md`
+(with `--constitution`) held to **citation-or-marker**, plus the passes of
+Spec Kit's analyze that need no judgement. In a folder, the held lines are
+every line that **defines** an `FR-<n>`, `SC-<n>` or `US-<n>` (a list item or
+bold lead `**FR-001**:`) and every `User Story <n>` heading; in the
+constitution, every list item under a heading naming *Product rules*.
+
+| Rule | Severity | Fires on |
+|---|---|---|
+| `uncited` | CRITICAL | a held line ending in neither a citation nor a marker |
+| `malformed-citation` | CRITICAL | a trailing `[src: …]` that is not the shape above, or a range with `l2 < l1` |
+| `inferred-tier` | CRITICAL | an `inferred` citation on an SC line, or on an FR line containing `MUST` |
+| `duplicate-id` | CRITICAL | an FR, SC or US id defined twice |
+| `task-cites-unknown-fr` | CRITICAL | a `tasks.md` task line citing an FR `spec.md` never defines |
+| `several-markers` · `cited-and-marked` | HIGH | more than one marker, or a citation and a marker, on one line |
+| `placeholder` | HIGH | `$ARGUMENTS`, `[###-feature-name]`, an all-caps bracket token (`[DATE]`, `[FEATURE NAME]`; the three markers, `[STALE]`, `[P]`, `[X]`, `[US<n>]`, `[T<n>]` exempt), `TODO`, `TBD`, `FIXME` |
+| `fr-without-task` | HIGH | an FR no `tasks.md` task line cites (only when `tasks.md` exists) |
+| `no-version-line` | HIGH | a constitution with no `**Version**:` line |
+| `vague-term` | MEDIUM | a held line using a term from `--vocabulary` (whole word, any case) |
+| `no-product-rules` | LOW | a constitution with no list item under a *Product rules* heading |
+
+nen ships **no list of vague words**: the vocabulary is the caller's (one term
+per line, `#` lines and blanks skipped), and without one the pass is reported
+as not run, never as clean. `--markers` lists every open marker in line order;
+`--rank` orders the `[NEEDS CLARIFICATION]` markers by **Spec Kit clarify's
+taxonomy** — the category is the one the nearest heading names
+(*Non-Functional* before *Functional*, then data model, UX flow, integration,
+edge cases, constraints and assumptions, terminology, success criteria, else
+*Misc / Placeholders*), ordered by the taxonomy's own order and then by line.
+That is a stable default order, not an estimate of impact; which question to
+ask stays the caller's. `--max <n>` caps the ranked list.
+
+**Usage**
+
+```text
+nen spec check --repo <path> (--folder <dir> | --constitution) [--vocabulary <file>] [--markers [--rank [--max <n>]]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--folder <dir>` | one of | The feature folder, relative to `--repo`. | `..`, absolute or empty segments exit 2; a folder or `spec.md` that is not there exits 1. |
+| `--constitution` | one of | Check `.specify/memory/constitution.md` instead. | Both or neither exits 2. |
+| `--vocabulary <file>` | no | The caller's vague terms. | An unreadable file exits 2. |
+| `--markers` | no | List every open marker. | |
+| `--rank` | no | Rank the clarifications by the taxonomy. | Needs `--markers` (exit 2). |
+| `--max <n>` | no | Cap the ranked list. | Needs `--rank`; not a positive whole number exits 2. |
+
+**Output and exit codes** — prints the held-line counts, the marker counts,
+whether `tasks.md` was checked, the finding counts by severity and one line
+per finding (`<id> <severity> <rule> <file>:<line> -- <message>`, ids
+`C1`/`H2`/… in severity order), then the markers when asked. `--json`
+top-level keys: `contract` (`nen.spec.check/v0.1`), `repo`, `mode`
+(`folder` \| `constitution`), `path`, `files`, `vocabulary`, `requirements`
+(`{ total, cited, marked, FR, SC, US }`), `markers` (`{ needsClarification,
+needsRuling, unverified, total }`), `open` (null without `--markers`),
+`ranked` (`{ max, total, shown }`, null without `--rank`), `tasks`
+(`checked` \| `absent` \| `not-applicable`), `findings` (`{ id, severity,
+rule, file, line, message }` each), `counts` (per severity). Exit 1 when any
+CRITICAL finding stands or the file could not be read; exit 0 otherwise; exit
+2 on a usage error.
+
+**Example**
+
+```bash
+nen spec check --repo src/spec/fixtures/spec-repo --constitution
+```
+```text
+constitution .specify/memory/constitution.md: 3 requirement line(s) -- 1 cited, 1 marked (FR 0 · SC 0 · US 0)
+markers: 1 open -- 0 needs-clarification · 1 needs-ruling · 0 unverified
+tasks: not-applicable · vocabulary: not supplied (vague-term pass not run)
+findings: 1 CRITICAL · 1 HIGH · 0 MEDIUM · 0 LOW
+  C1 CRITICAL uncited .specify/memory/constitution.md:10 -- product rule ends in neither a [src:] citation nor one of [NEEDS CLARIFICATION: …] · [NEEDS RULING] · [UNVERIFIED]
+  H2 HIGH no-version-line .specify/memory/constitution.md -- the constitution carries no '**Version**:' line
+```
+(exit 1; run live against this repository's fixture)
+
+### `nen spec cite-check`
+
+Every `[src:]` range in the folder's `.md` files (fenced blocks skipped)
+**resolves at its own sha** in the member's checkout. The chain has three
+declared links and nen guesses none: the code becomes `owner/name` through the
+**spec repository's** `nen/repos.json` (the same product-code lookup every
+`<CODE>#<n>` ref uses); the slug becomes a directory through the **checkouts
+file** — Hatsu's `docs/config/ports.md` shape, one `<owner>/<name><TAB><absolute
+path>` per line, `#` lines comments; and that directory's `origin` must read
+back as the same slug before any read runs in it. A broken link leaves the
+citation `unresolved-member` with the reason — never another checkout, never
+a clone.
+
+The **excerpt** is lines `l1..l2` of the file at the sha, each ending in a
+newline. With `--verify-excerpt` its sha256 is compared with the row of
+`capture/<CODE>/inventory.json` (`{ rows: [{ path, lines: "l1-l2" | [l1, l2],
+sha, excerptSha256? }] }`, sha matched as a prefix either way) that carries
+one; a citation with no row, or a row with no hash, is reported and is not a
+failure. With `--at <sha>|HEAD`, each range is read at that ref too, and one
+that reads differently there (or is gone) is a **`[STALE]` candidate** —
+reported, never rewritten.
+
+**Usage**
+
+```text
+nen spec cite-check --repo <spec> --folder <dir> --checkouts <file> [--at <sha>|HEAD] [--verify-excerpt] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout (its `nen/repos.json` maps codes). | Omitted exits 2. |
+| `--folder <dir>` | yes | The feature folder, relative to `--repo`. | A folder that is not there exits 1. |
+| `--checkouts <file>` | yes | Each member's `owner/name` → checkout path. | Unreadable, a malformed line (no tab, slug off `^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$`, relative path) or a slug listed twice exits 2, naming the line. |
+| `--at <sha>\|HEAD` | no | A second ref to read every range at. | Anything but `HEAD` or 7–40 hex exits 2. |
+| `--verify-excerpt` | no | Compare inventory rows' excerpt hashes. | An inventory that is not JSON with `rows[]` exits 1. |
+
+**Output and exit codes** — prints the counts, one line per member
+(`verified` or `unresolved` with the reason), then one line per citation that
+does not resolve, mismatches or reads stale. `--json` top-level keys:
+`contract` (`nen.spec.cite-check/v0.1`), `repo`, `folder`, `checkouts`, `at`,
+`verifyExcerpt`, `members` (`{ code, repo, path, verdict, reason, at }` each),
+`citations` (`{ file, line, text, code, member, path, lines, sha, tier,
+verdict, reason, excerpt, stale }` each; `verdict` one of `resolves`,
+`malformed`, `unresolved-member`, `missing-commit`, `missing-path`,
+`out-of-range`; `excerpt` one of `match`, `mismatch`, `no-row`, `no-hash`,
+`not-checked`), `counts` (`{ total, resolves, failing, excerptMismatch,
+stale }`). Exit 1 when any citation does not resolve, any excerpt hash
+mismatches, `--at` does not resolve in a member checkout, or the folder
+could not be read; a `[STALE]` candidate alone is exit 0; exit 2 on a usage
+error.
+
+**Example**
+
+```bash
+nen spec cite-check --repo . --folder specs/005-cite --checkouts ~/.config/hatsu/checkouts --at HEAD
+```
+```text
+specs/005-cite: 2 citation(s) -- 2 resolve, 0 failing, 0 excerpt mismatch, 1 [STALE] candidate(s) at HEAD
+  member FX fixture-owner/fixture-app verified
+  specs/005-cite/spec.md:1 [src: FX:app/List.kt:10-12 @ <sha> · observed] [STALE] candidate
+```
+(exit 0; from `src/spec/citecheck.test.ts`, which builds a member repository
+with two commits and points the checkouts file at it)
+
+### `nen spec index`
+
+`<root>/INDEX.md` regenerated from each matching folder's `spec.md` header:
+the title of `# Feature Specification: <title>` (else the first `#` heading),
+the `**Status**:` and `**Created**:` values, and the open-marker count —
+never inferred. Directories the layout does not match are listed as
+`ignored`. The file's first line is a marker holding the sha256 of every byte
+below it, so the verb tells **stale** (nen wrote it, a folder changed since)
+from **hand-edited** (the body no longer hashes to the marker, or there is no
+marker). `--write` regenerates an absent or stale file and **refuses a hand
+edit** — overwriting would destroy an edit nen cannot judge — and refuses
+while any folder's `spec.md` is unreadable.
+
+**Usage**
+
+```text
+nen spec index --repo <spec> [--layout <pattern>] [--write [--dry-run]] [--json]
+```
+
+**Arguments**
+
+| Flag | Required | Meaning | Notes |
+|---|---|---|---|
+| `--repo <path>` | yes | The spec repository's checkout. | Omitted exits 2. |
+| `--layout <pattern>` | no | Where the folders live. | Default `specs/{nnn}-{slug}`; a root that does not exist exits 1. |
+| `--write` | no | Write `<root>/INDEX.md` when absent or stale. | Refused (exit 1) when hand-edited. |
+| `--dry-run` | no | With `--write`: say `would-write`, write nothing. | Without `--write` exits 2. |
+
+**Output and exit codes** — prints `<root>/INDEX.md: <state> · action
+<action>`, one line per folder and per ignored directory. `--json` top-level
+keys: `contract` (`nen.spec.index/v0.1`), `repo`, `layout`, `path`, `rows`
+(`{ nnn, slug, folder, title, status, created, openMarkers, error }` each),
+`ignored`, `state` (`current` \| `stale` \| `hand-edited` \| `absent`),
+`action` (`none` \| `written` \| `would-write` \| `refused`), `reason`.
+Without `--write`, exit 0 only when the file is `current`; with it, exit 0
+unless refused. Exit 1 too when any folder's `spec.md` could not be read;
+exit 2 on a usage error.
+
+**Example**
+
+```bash
+nen spec index --repo src/spec/fixtures/spec-repo
+```
+```text
+specs/INDEX.md: absent · action none
+  001 sample-feature Draft · 6 open marker(s) · Sample feature
+  002 other-feature Specified · 0 open marker(s) · Other | feature
+```
+(exit 1; run live against this repository's fixture)
 
 ## Stack-aware developer verbs
 

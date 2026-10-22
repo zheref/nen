@@ -1,0 +1,5 @@
+# vague terms, one per line
+quickly
+fast
+
+robust
