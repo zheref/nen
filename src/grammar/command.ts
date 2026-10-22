@@ -40,7 +40,7 @@ import { classifyInvocation, parseIzanamiInvocation } from "../parse/izanami.js"
 const SKILL_GRAMMARS = new Set(["futon", "izanagi", "izanami"]);
 
 const USAGE = `nen parse <skill> --grammar <template> --line <invocation>
-nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
+nen parse futon --repo <path> "<repo>@<severity>[+]|<repo>@<label> [--idle] [then <tag|tag+fanout|skill[@target][+skill...]|prose>]" [--self <owner/name>]
 nen parse izanagi "<task> until <condition> up to <N>"
 nen parse izanami "<task> until <condition>"
 
@@ -101,6 +101,9 @@ futon:
   joined by '+' (each optionally plugin-prefixed and '@<target>'-suffixed)
   are a skill chain, anything else is prose kept
   verbatim -- skill and prose are classified, never authorized, here.
+  An optional '--idle' (HR-5), the first or last token before 'then',
+  marks an idle batch: reported as 'idle: yes' / --json 'idle: true',
+  never acted on here; after 'then' it is refused with the line moved.
   A tag terminal is refused unless
   the resolved repo IS the one you are standing in (or --self names it) --
   a consumer's release is a different job than the registry owner's.
@@ -121,9 +124,12 @@ export const parseCommand: Command = {
   name: "parse",
   summary: "Parse a skill invocation against its published grammar (or futon/izanagi/izanami's own).",
   usage: USAGE,
-  flags: { values: ["grammar", "line", "self"] },
+  flags: { values: ["grammar", "line", "self"], booleans: ["idle"] },
   run(context: CommandContext): number {
     const skill = context.args.positionals[1];
+    if (context.args.booleans.has("idle") && skill !== "futon") {
+      throw new VerbUsageError("--idle belongs to 'parse futon' alone: it is a flag of futon's grammar (HR-5).");
+    }
     if (skill === undefined) {
       throw new VerbUsageError(
         "'parse' needs the skill whose grammar is being applied, e.g. 'parse my-skill --grammar ... --line ...' (or 'parse futon|izanagi|izanami ...').",
@@ -135,7 +141,10 @@ export const parseCommand: Command = {
       // newline-joined) as their own invocation string, not --line -- exactly
       // as they did before this merge (verbs/4-remainders' own parse/verb.ts).
       const rest = context.args.positionals.slice(2);
-      if (skill === "futon") return futon(context, rest.join(" "));
+      // `--idle` typed as its own argv word reaches here as a boolean flag,
+      // not as text; it is put back in front of the scope, where the grammar
+      // reads it, so a quoted line and an unquoted one parse the same.
+      if (skill === "futon") return futon(context, context.args.booleans.has("idle") ? `--idle ${rest.join(" ")}` : rest.join(" "));
       if (skill === "izanagi") return izanagi(context, rest.join(" "));
       return izanami(context, rest.join("\n"));
     }
@@ -357,6 +366,7 @@ function futon(context: CommandContext, raw: string): number {
     label: parsed.value.label,
     terminal: parsed.value.terminal,
     then: gatedThen,
+    idle: parsed.value.idle,
   };
   if (context.json) {
     context.io.out(JSON.stringify(result, null, 2));
@@ -368,6 +378,7 @@ function futon(context: CommandContext, raw: string): number {
   } else {
     context.io.out(`label: ${result.label ?? ""} (exact match, no expansion)`);
   }
+  if (result.idle) context.io.out("idle: yes (--idle: an idle batch under the repository's typed idle profile, HR-5)");
   const renderedThen = result.then;
   if (renderedThen === null) context.io.out("terminal: (none -- build-only)");
   else if (renderedThen.kind === "terminal") context.io.out(`terminal: ${renderedThen.terminal}`);

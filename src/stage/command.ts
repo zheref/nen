@@ -4,12 +4,19 @@
 // same triage and never re-derived in shell (zheref/nen#237).
 
 import { assertRepoRoot } from "../repo/root.js";
+import { parseTarget, TargetError } from "../github/target.js";
+import { loadLabelTaxonomy } from "../schema/labels.js";
+import { checkExclusive, readIssueLabels, renderStageCheck, stageFamily } from "./check.js";
 import { GIT, outputLines } from "../seam/exec.js";
 import { commaList } from "../cli/comma.js";
 import { plainLine } from "../cli/plain.js";
 import {
+  emit,
+  parseCallerToken,
   requireRepoFlag,
   requireSubcommand,
+  requireTargetFlag,
+  requireValue,
   VerbUsageError,
   type Command,
   type CommandContext,
@@ -36,8 +43,17 @@ import {
 
 const USAGE = `nen stage triage -- flag what should never be staged blind, tensho §3.
 nen stage list   -- the exact add list: what a checkpoint stages, nothing else.
+nen stage check  -- --exclusive: an issue carries at most one stage-family label.
 
 usage:
+  nen stage check --exclusive --target <owner/name> --issue <N> [--repo <path>] [--json]
+                   The stage family is every label --repo's nen/labels.json
+                   declares as '<namespace>:stage/<leaf>'; an undeclared
+                   stage-shaped label on the issue counts too. Exit 0 with one
+                   stage label or none; 1 when two coexist (both named, neither
+                   picked), when the taxonomy declares no stage family, or when
+                   the issue could not be read; 2 on a malformed flag.
+
   nen stage triage --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
                    [--large-bytes <n>] [--range <base>..<head>]
   nen stage list   --repo <path> [--scope src/,docs/] [--mentions "<free text>"]
@@ -527,12 +543,17 @@ function runList(context: CommandContext, entries: readonly StatusEntry[], triag
 
 export const stageCommand: Command = {
   name: "stage",
-  subcommands: ["triage", "list"],
+  subcommands: ["triage", "list", "check"],
   summary: "Flag secrets, local config, oversized files, binaries and unmentioned deletions before staging; emit the exact add list.",
   usage: USAGE,
-  flags: { values: ["scope", "mentions", "large-bytes", "range"], booleans: ["nul"] },
+  flags: { values: ["scope", "mentions", "large-bytes", "range", "target", "issue"], booleans: ["nul", "exclusive"] },
   run(context: CommandContext): number {
-    const subcommand = requireSubcommand("stage", context.args, ["triage", "list"]);
+    const subcommand = requireSubcommand("stage", context.args, ["triage", "list", "check"]);
+    if (subcommand === "check") return doCheck(context);
+    for (const flag of ["target", "issue"]) {
+      if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'stage ${subcommand}'; only 'stage check' takes it. A flag accepted and ignored is worse than one refused.`);
+    }
+    if (context.args.booleans.has("exclusive")) throw new VerbUsageError(`--exclusive is not read by 'stage ${subcommand}'; only 'stage check' takes it.`);
     const nul = context.args.booleans.has("nul");
     if (nul && subcommand !== "list") {
       throw new VerbUsageError("--nul belongs to 'stage list' -- 'stage triage' prints a human report, not a list to feed git.");
@@ -568,3 +589,30 @@ export const stageCommand: Command = {
     return subcommand === "list" ? runList(context, read.entries, read.triage, nul) : runTriage(context, read.triage);
   },
 };
+
+/** `nen stage check --exclusive` (./check.ts): at most one stage-family label on an issue. */
+function doCheck(context: CommandContext): number {
+  for (const flag of ["scope", "mentions", "large-bytes", "range"]) {
+    if (context.args.values[flag] !== undefined) throw new VerbUsageError(`--${flag} is not read by 'stage check'. A flag accepted and ignored is worse than one refused.`);
+  }
+  if (context.args.booleans.has("nul")) throw new VerbUsageError("--nul is not read by 'stage check'.");
+  if (!context.args.booleans.has("exclusive")) {
+    throw new VerbUsageError("'stage check' needs --exclusive -- the one invariant it checks: an issue carries at most one stage-family label.");
+  }
+  const targetRaw = requireTargetFlag(context, "It names the repository the issue lives in.");
+  const target = parseCallerToken(() => parseTarget(targetRaw), (error) => error instanceof TargetError);
+  const issueRaw = requireValue(context.args, "issue", "It is the issue number whose stage labels are checked.");
+  if (!/^[1-9][0-9]*$/.test(issueRaw)) throw new VerbUsageError(`--issue '${issueRaw}' is not an issue number.`);
+  const issue = Number(issueRaw);
+  const root = assertRepoRoot({ repoFlag: context.repoFlag });
+  let taxonomy;
+  try {
+    taxonomy = loadLabelTaxonomy(root);
+  } catch (error) {
+    context.io.err(`nen: could not read nen/labels.json for the stage family: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const report = checkExclusive(target, issue, stageFamily(taxonomy), readIssueLabels(context.seams, target, issue));
+  emit(context.io, context.json, report, renderStageCheck(report));
+  return report.verdict === "exclusive" ? 0 : 1;
+}

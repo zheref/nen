@@ -137,6 +137,16 @@ describe("nen parse futon -- CLI wiring (verbs/4-remainders, merged into this fa
     expect(parsed.band.severities).toEqual(["critical", "high"]);
   });
 
+  it("reports --idle (HR-5) whether it is typed inside the line or as its own argv word, and refuses it on another skill", async () => {
+    const inline = await capture(["parse", "futon", "KP@bug --idle", "--self", "zheref/bankai-core"], [], { json: true });
+    expect(inline.code).toBe(0);
+    expect(JSON.parse(inline.out.join("\n"))).toMatchObject({ label: "bug", idle: true });
+    const word = await capture(["parse", "futon", "KP@bug", "--idle", "--self", "zheref/bankai-core"]);
+    expect(word.code).toBe(0);
+    expect(word.out).toContain("idle: yes (--idle: an idle batch under the repository's typed idle profile, HR-5)");
+    expect((await capture(["parse", "izanagi", "a until b up to 2", "--idle"])).code).toBe(2);
+  });
+
   it("emits a label selector with band null", async () => {
     const result = await capture(["parse", "futon", "KP@bug", "--self", "zheref/bankai-core"], [], { json: true });
     expect(result.code).toBe(0);
