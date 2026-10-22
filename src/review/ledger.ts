@@ -8,8 +8,10 @@ import { loadWorkflow } from "../schema/workflow.js";
 import { SchemaError } from "../schema/errors.js";
 import type { Seams } from "../seam/exec.js";
 import { realContainment } from "../repo/contain.js";
+import storage from "./storage.json";
 
-export const CYCLE_CONTRACT = "hatsu.hanten.cycle/v0.1";
+export const CYCLE_CONTRACT = storage.contract;
+export const CYCLE_MARKER_DIRECTORY = storage.markerDirectory;
 export const CYCLE_STALE_MS = 30_000;
 export interface Budget { max: number; source: string }
 export type Budgets = Record<string, Budget>;
@@ -106,7 +108,7 @@ function git(options: CycleOptions, args: readonly string[]): string | null {
 export function cycleTraceDir(options: CycleOptions): string | null {
   const lines = (git(options, ["rev-parse", "--git-common-dir"]) ?? "").trim().split(/\r?\n/);
   const line = lines[0];
-  return lines.length !== 1 || !line ? null : join(isAbsolute(line) ? line : resolve(options.root, line), "hatsu", "hanten");
+  return lines.length !== 1 || !line ? null : join(isAbsolute(line) ? line : resolve(options.root, line), ...CYCLE_MARKER_DIRECTORY);
 }
 function names(path: string): string[] {
   try { return readdirSync(path).sort(); } catch (error) {
@@ -213,8 +215,8 @@ function locked<T>(options: CycleOptions, body: () => T): T {
   }, { warn: options.warn });
 }
 function trunk(options: CycleOptions): string {
-  if (options.base?.trim()) return options.base.trim();
   const loaded = workflowAt(options.root);
+  if (options.base?.trim()) return options.base.trim();
   const base = loaded.workflow.branch.base;
   const raw = loaded.raw;
   if (object(raw["branch"]) && typeof raw["branch"]["base"] === "string") return base;

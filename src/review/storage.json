@@ -1,0 +1,5 @@
+{
+  "$comment": "Legacy storage identity required by NN#346. These are compatibility data, never persona names or budget defaults. Keep the on-disk contract and git-common-dir marker namespace readable by existing consumers.",
+  "contract": "hatsu.hanten.cycle/v0.1",
+  "markerDirectory": ["hatsu", "hanten"]
+}

@@ -26,7 +26,7 @@ import { assertRepoRoot } from "../repo/root.js";
 import { assertBase } from "../report/data.js";
 import { loadWorkflow, WORKFLOW_FILE } from "../schema/workflow.js";
 import { assembleScopes, readChangedPaths, renderScopes } from "./scopes.js";
-import { ensureCycle, runCycle } from "./ledger.js";
+import { CYCLE_CONTRACT, CYCLE_MARKER_DIRECTORY, ensureCycle, runCycle } from "./ledger.js";
 import { plainLine } from "../cli/plain.js";
 
 const USAGE = `nen review scopes --base <ref> [--repo <path>] [--json]
@@ -34,7 +34,7 @@ nen review ledger init|ensure|decide|record|show|recover-first --branch <name> [
 
 ledger:
   Own the review-cycle ledger under .nen/hanten/<branch-slug>[-pr<N>].cycle.json,
-  preserving contract hatsu.hanten.cycle/v0.1 and all historical rows.
+  preserving contract ${CYCLE_CONTRACT} and all historical rows.
   Budgets and persona names come only from nen/workflow.json review.scopes;
   duplicate personas use the smallest declared budget. No built-in defaults.
   init opens a new key; ensure opens only when no earlier trace survives;
@@ -44,7 +44,7 @@ ledger:
   key ONLY after the maintainer confirms that no review ran under it.
   --pr <n> selects a separate effort key; --base <trunk> is only for ensure.
   ensure checks the workflow base, else origin/HEAD, else main. It reads
-  durable <git-common-dir>/hatsu/hanten/<key>.opened markers, exactly matched
+  durable <git-common-dir>/${CYCLE_MARKER_DIRECTORY.join("/")}/<key>.opened markers, exactly matched
   -pr<digits> keys, other worktrees and lock age before waiting on a mutex.
   Nen uses .cycle.json.lock as its mutex and retains .cycle.lock as a legacy
   trace. Stop legacy writers before migration; their OS locks are distinct.

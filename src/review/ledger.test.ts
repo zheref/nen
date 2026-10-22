@@ -241,8 +241,10 @@ describe("command contract and recovery authority", () => {
     const o = fixture(); if (existing) act(o, "init");
     const before = existing ? bytes(o) : null;
     policy(o.root, { alpha: -1 });
-    const result = await cli(o, ["ensure", "--branch", o.branch]);
-    expect(result.code).toBe(2); expect(result.err).toContain("budget");
+    for (const extra of [[], ["--base", "main"]]) {
+      const result = await cli(o, ["ensure", "--branch", o.branch, ...extra]);
+      expect(result.code).toBe(2); expect(result.err).toContain("budget");
+    }
     if (existing) expect(bytes(o)).toBe(before);
     else expect(existsSync(join(o.root, ".nen", "hanten"))).toBe(false);
   });
