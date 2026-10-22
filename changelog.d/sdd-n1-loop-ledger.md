@@ -1,5 +1,0 @@
-#### Behaviour changes
-
-- `nen loop iterate` keeps its ledger in the git common directory, `<git-common-dir>/nen/loop/<id>.json` (`git rev-parse --git-common-dir` of `--repo`), shared by the main checkout and every linked worktree, so removing an effort worktree no longer resets an acting-cycle cap to a fresh count. `.nen/loop/<id>.json` under `--repo` is now only the fallback outside a git repository; a git that cannot answer for any other reason is exit 2. (Hatsu SDD plan, finding D2 / autonomy-loop#1; HR-5)
-- Every claim and release also writes `<id>.opened` beside the ledger. A missing ledger beside that marker now exits 2 with `ledger lost` instead of starting again at iteration 1.
-- A ledger an older build left at `.nen/loop/<id>.json` under `--repo` or under any other checkout of the repository is moved to the common-dir home once, on read, and reported on stderr and in the new `migratedFrom` key. A ledger in more than one home exits 2. The `--json` document gains `durable`, `marker` and `migratedFrom`, appended, so the contract stays `nen.loop.iterate/v0.1`.
