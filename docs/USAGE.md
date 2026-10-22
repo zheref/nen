@@ -10716,10 +10716,11 @@ leaving the root or dangling, a failed git read — and every usage error. **A f
 the lint could not read is never a file it found clean**: nothing is printed on
 stdout under exit 2.
 
-Two deliberate differences from the guard: nen does not probe for a Hatsu
-checkout (the contract's own files are the root's credentials), and a finding
-inside YAML frontmatter names the file's own line (the guard reports it one line
-early). Where the guard used built-in `claude/…` and `surfaces/` paths, the
+Three deliberate differences from the guard: nen does not probe for a Hatsu
+checkout (the contract's own files are the root's credentials); a finding inside
+YAML frontmatter names the file's own line (the guard reports it one line
+early); and a cited file reached through a symlink that resolves outside the root
+is a `citation` finding (`leaves the root`), never read. Where the guard used built-in `claude/…` and `surfaces/` paths, the
 contract now says so: `skillPaths` (the files the marker limit and the reading
 rule apply to; absent, every linted file) and `paths.exclude`.
 

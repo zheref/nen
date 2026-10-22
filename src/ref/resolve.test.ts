@@ -3,7 +3,7 @@
 // prose_ambiguity_check_fixture.mts) and to clause ids as
 // `nen canon clause check` counts them.
 import { afterAll, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runFamily, type Io } from "../index.js";
@@ -110,6 +110,16 @@ describe("nen ref resolve -- § *Title*, anchors, files", () => {
     expect(missing.code).toBe(1);
     expect(missing.stdout).toMatch(/no anchor #nowhere/);
     expect((await resolve("#custom", ["--from", "claude/skills/target/SKILL.md"])).code).toBe(0);
+  });
+
+  it("a symlink inside the root that resolves outside it is unresolved, never read", async () => {
+    const outside = join(tmpdir(), `nen-ref-outside-${process.pid}.md`);
+    writeFileSync(outside, "# O\n\n## 1. Here\n");
+    symlinkSync(outside, join(root, "linked.md"));
+    const j = await doc("linked.md § 1");
+    rmSync(outside, { force: true });
+    expect(j["resolved"]).toBe(false);
+    expect(j["reason"]).toBe("leaves the root");
   });
 
   it("a plain path resolves when the file exists; a missing one and one leaving the root are unresolved by name", async () => {

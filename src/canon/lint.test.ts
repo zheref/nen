@@ -234,6 +234,16 @@ describe("nen canon lint -- hostile cases", () => {
     await expectWiring(root, /symlink docs\/linked\.md leaves the root/);
   });
 
+  it("a citation through a symlink that resolves outside the root is a finding, never a read outside", async () => {
+    const root = base();
+    const outside = join(scratch, `outside-cited-${n}.md`);
+    writeFileSync(outside, "# Outside\n\n## 1. Here\n");
+    mkdirSync(join(root, "other"), { recursive: true });
+    symlinkSync(outside, join(root, "other/linked.md")); // a directory the walk never enters
+    put(root, "claude/skills/plant/SKILL.md", "# P\n\nSee [`x`](../../../other/linked.md) § 1.\n");
+    await expectFinding(root, "PL-04", /linked\.md — leaves the root/);
+  });
+
   it("an unparseable contract and a contract of the wrong shape are wiring", async () => {
     const a = base();
     put(a, "contracts/prose.lint.json", '{ "rules": [ ');
@@ -352,6 +362,11 @@ describe("canon lint internals", () => {
   it("reads reading status from a Status column by header and from a (reading) token", () => {
     const doc = parseDoc("r.md", '| HR | Status | X |\n|--|--|--|\n| <a id="hr-3"></a>**HR-3** | reading | x |\n| <a id="hr-4"></a>**HR-4** | ruled | x |\n\n<a id="hr-5"></a>**HR-5** (reading) A paragraph ruling.\n');
     expect([...readingClauses(doc, "HR")].sort()).toEqual(["3", "5"]);
+  });
+
+  it("a new table without a Status header falls back to the fifth column", () => {
+    const doc = parseDoc("r.md", '| A | Status |\n|--|--|\n| <a id="hr-1"></a>**HR-1** | reading |\n\nText.\n\n| HR | Q | O | P | S |\n|--|--|--|--|--|\n| <a id="hr-2"></a>**HR-2** | reading | o | p | ruled |\n');
+    expect([...readingClauses(doc, "HR")]).toEqual(["1"]);
   });
 
   it("the contract may omit classes it does not use, and refuses an unknown $schema", () => {

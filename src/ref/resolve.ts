@@ -12,7 +12,7 @@
 // target's headings and leads, or the clause ids defined nearest -- and the
 // choice among them is the caller's.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { scanClauses } from "../canon/clause.js";
 import { headingNumber, parseDoc, titleMatches, type Doc } from "../canon/markdown.js";
@@ -148,6 +148,12 @@ export function resolveCitation(options: ResolveOptions): ResolveReport {
   }
   const abs = isAbsolute(rel) ? rel : resolve(root, rel);
   if (!existsSync(abs)) return unresolved(rel, "no such file");
+  if (citation.kind !== "clause") {
+    // A symlink inside the root that resolves outside it leaves the root too.
+    const realRoot = realpathSync(root);
+    const real = realpathSync(abs);
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) return unresolved(null, "leaves the root");
+  }
   if (citation.kind === "file") return { ...base, target: rel, resolved: true, matches: [{ line: 1, text: rel, anchor: null, via: "file" }], reason: null, candidates: [] };
   if (!statSync(abs).isFile()) return unresolved(rel, "not a file");
   const text = readUtf8(abs, rel);

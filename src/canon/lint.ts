@@ -352,6 +352,11 @@ export function resolveLinkTarget(root: string, from: string, target: string): {
   const abs = resolve(root, dirname(from), path);
   if (abs !== root && !abs.startsWith(root + sep)) return { rel: null, why: "leaves the root" };
   if (!existsSync(abs)) return { rel: null, why: "no such file" };
+  // A symlink inside the root that resolves outside it leaves the root too:
+  // nothing outside the checkout is read to answer a citation.
+  const realRoot = realpathSync(root);
+  const real = realpathSync(abs);
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) return { rel: null, why: "leaves the root" };
   return { rel: relative(root, abs).split(sep).join("/") };
 }
 
@@ -518,8 +523,13 @@ export function readingClauses(doc: Doc, prefix: string): Set<string> {
   const lower = prefix.toLowerCase();
   const definition = new RegExp(`<a id="${lower}-(\\d+)"></a>\\*\\*${prefix}-\\d+\\*\\*`);
   let statusColumn = 5;
+  let inTable = false;
   for (const line of doc.lines) {
-    if (/^\s*\|/.test(line) && !definition.test(line)) {
+    const isRow = /^\s*\|/.test(line);
+    // A new table starts with the guard's fixed column; its header may move it.
+    if (isRow && !inTable) statusColumn = 5;
+    inTable = isRow;
+    if (isRow && !definition.test(line)) {
       const cells = line.split(/(?<!\\)\|/).map((cell): string => cell.trim());
       const at = cells.findIndex((cell): boolean => /^status$/i.test(cell));
       if (at > 0) statusColumn = at;
