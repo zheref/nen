@@ -8,7 +8,7 @@
 // on one side.
 
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runFamily, type Io } from "../index.js";
 import { COMMANDS } from "../cli/registry.js";
@@ -91,10 +91,11 @@ describe("USAGE's exit table is the registry's", () => {
     expect(cellCodes(" `3` / `5` ")).toEqual([3, 5]);
   });
 
-  it("states only codes above the shared scheme, each on a verb this binary has", () => {
+  it("states only codes above the shared scheme (or a verb's own meaning of 2), each on a verb this binary has", () => {
     for (const command of COMMANDS) {
       for (const row of command.exits ?? []) {
-        expect(row.code, `${row.verb} restates a shared code`).toBeGreaterThan(2);
+        expect(row.code, `${row.verb} restates 0 or 1`).toBeGreaterThanOrEqual(2);
+        if (row.code === 2) expect(row.verb.endsWith(" *"), `${row.verb}: a family-wide 2 would restate the shared scheme`).toBe(false);
         expect(row.meaning.trim(), `${row.verb} ${String(row.code)} has no meaning`).not.toBe("");
         const [family, verb] = row.verb.split(" ");
         expect(family, `${row.verb} is stated by the '${command.name}' family`).toBe(command.name);
@@ -140,3 +141,75 @@ describe("nen exits", () => {
     expect((await run(["bootstrap"], true)).code).toBe(0);
   });
 });
+
+// EVERY CODE A VERB CAN RETURN HAS A ROW (delivery round on zheref/nen#498,
+// reading 25). The table above holds USAGE to the registry; this holds the
+// registry to the SOURCE: every exported `EXIT_*` constant above 2, every
+// literal `code: N` and every `return N;` above 2 under src/<family>/ must be
+// stated by that family's registry. A code returned in source and declared on
+// neither side fails here, naming the file and line.
+describe("the exit registry is total over the source", () => {
+  const SRC = join(process.cwd(), "src");
+  /** Directories whose name is not their family's. */
+  const FAMILY_OF: Readonly<Record<string, string>> = { verbs: "pr" };
+  /** Codes that are not exit codes: process-level data a reader would mistake for one. */
+  const NOT_EXITS: readonly string[] = ["src/supply/bootstrap.ts", "src/seam/"];
+
+  function sources(dir: string): string[] {
+    const found: string[] = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "fixtures") found.push(...sources(path));
+      } else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts") && !entry.name.endsWith(".testkit.ts")) {
+        found.push(path);
+      }
+    }
+    return found;
+  }
+
+  it("finds a registry row for every EXIT_* constant, literal code: N and return N above 2", () => {
+    const table = exitTable();
+    const families = new Set(COMMANDS.map((command): string => command.name));
+    const missing: string[] = [];
+    for (const file of sources(SRC)) {
+      const relative = file.slice(process.cwd().length + 1).split("\\").join("/");
+      if (NOT_EXITS.some((prefix): boolean => relative.startsWith(prefix))) continue;
+      const dir = relative.split("/")[1] ?? "";
+      const family = FAMILY_OF[dir] ?? dir;
+      if (!families.has(family)) continue;
+      const lines = readFileSync(file, "utf8").split("\n");
+      lines.forEach((line, index): void => {
+        if (/\{\s*verb:/.test(line) || /^\s*(\/\/|\*)/.test(line)) return;
+        const codes = [
+          ...[...line.matchAll(/export const EXIT_[A-Z_]+\s*(?::\s*\w+)?\s*=\s*(\d+)/g)].map((m): number => Number(m[1])),
+          ...[...line.matchAll(/\bcode:\s*(\d+)\b/g)].map((m): number => Number(m[1])),
+          ...[...line.matchAll(/^\s*return (\d+);/g)].map((m): number => Number(m[1])),
+        ].filter((code): boolean => code > 2);
+        for (const code of codes) {
+          const stated = table.some((row): boolean => row.code === code && (row.verb === `${family} *` || row.verb.startsWith(`${family} `)));
+          if (!stated) missing.push(`${relative}:${index + 1} ${family} ${code}`);
+        }
+      });
+    }
+    expect(missing).toEqual([]);
+  });
+});
+
+describe("nen exits <family> <verb>", () => {
+  it("refuses a verb the family does not declare at exit 2, naming the family's verbs", async () => {
+    const result = await run(["pr", "nosuchverb"], false);
+    expect(result.code).toBe(2);
+    expect(result.err).toMatch(/'pr' has no verb 'nosuchverb'; it declares .*converge/);
+  });
+
+  it("prints a verb's own meaning of 2 beside the scheme", async () => {
+    const result = await run(["loop", "iterate"], false);
+    expect(result.code).toBe(0);
+    expect(result.out).toMatch(/its own codes/);
+    expect(result.out).toMatch(/loop iterate {2}2 {2}also: the loop's count cannot be established/);
+    const markReady = await run(["pr", "mark-ready"], true);
+    expect((JSON.parse(markReady.out) as ExitsReport).verbs.map((row) => row.code)).toEqual([3, 8]);
+  });
+});
+

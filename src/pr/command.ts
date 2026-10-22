@@ -683,7 +683,8 @@ open:
   against the same --base, at the head commit pushed here, it is the pull
   request a previous call opened (a retry after a timeout), reported
   'opened: existing' with its number and url at EXIT 0, nothing created;
-  another base or head commit (a same-named branch on a fork), EXIT 1,
+  another base or head commit (a same-named branch on a fork), or a fork's
+  pull request even at the same commit (isCrossRepository), EXIT 1,
   nothing opened or retargeted.
   --json: '{ contract: "${OPEN_CONTRACT}", number, url, head, base, draft,
   dryRun, existing, assignees, me, assigned }' -- number and url null on a
@@ -1291,6 +1292,7 @@ export const prCommand: Command = {
     { verb: "pr merge", code: 6, meaning: "gh could not be started" },
     { verb: "pr merge", code: 7, meaning: "--delivery: merged without authority; GitHub reports a base other than the one gated" },
     { verb: "pr ready", code: 8, meaning: "--require-head did not match GitHub's head; no verdict" },
+    { verb: "pr mark-ready", code: 3, meaning: "the pull request is CLOSED or MERGED; nothing sent" },
     { verb: "pr mark-ready", code: 8, meaning: "--require-head did not match GitHub's head" },
     { verb: "pr request-reviews", code: 9, meaning: "a bot request GitHub accepted but did not list as pending" },
   ],

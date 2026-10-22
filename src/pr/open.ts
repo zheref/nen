@@ -238,8 +238,14 @@ function readAssigned(seams: Seams, target: Target, number: number): { readonly 
   }
 }
 
+/** A `headRepositoryOwner` object's login, or null. */
+function ownerLogin(value: unknown): string | null {
+  const login = value !== null && typeof value === "object" ? (value as { login?: unknown }).login : undefined;
+  return typeof login === "string" ? login : null;
+}
+
 export function listArgv(target: Target, head: string): readonly string[] {
-  return ["pr", "list", "--repo", target.slug, "--head", head, "--state", "open", "--json", "number,url,baseRefName,headRefOid"];
+  return ["pr", "list", "--repo", target.slug, "--head", head, "--state", "open", "--json", "number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner"];
 }
 
 export function openPullRequest(seams: Seams, cwd: string, target: Target, options: OpenOptions): OpenOutcome {
@@ -293,11 +299,11 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
   // 3. ONE PULL REQUEST PER HEAD.
   const listed = seams.run(GH, listArgv(target, head));
   if (listed.spawnFailed || listed.code !== 0) throw new Error(`could not list open pull requests for '${head}' on ${target.slug} ('gh pr list' failed: ${gitError(listed.stderr, listed.code)}).`);
-  let open: { number?: unknown; url?: unknown; baseRefName?: unknown; headRefOid?: unknown }[];
+  let open: { number?: unknown; url?: unknown; baseRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown; headRepositoryOwner?: unknown }[];
   try {
     const parsed = JSON.parse(listed.stdout.trim() === "" ? "[]" : listed.stdout) as unknown;
     if (!Array.isArray(parsed)) throw new Error("not an array");
-    open = parsed as { number?: unknown; url?: unknown; baseRefName?: unknown; headRefOid?: unknown }[];
+    open = parsed as { number?: unknown; url?: unknown; baseRefName?: unknown; headRefOid?: unknown; isCrossRepository?: unknown; headRepositoryOwner?: unknown }[];
   } catch (error) {
     throw new Error(`'gh pr list' for '${head}' did not answer a JSON array (${error instanceof Error ? error.message : String(error)}).`);
   }
@@ -315,16 +321,21 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
     assigned,
   });
   // THE ONE THIS BRANCH OPENED, if any of the listed is: same base, same head
-  // commit. Every row is looked at -- a fork's same-named pull request listed
-  // first must not hide ours. Failing that, the first row is reported.
-  const ours = open.find((row): boolean => typeof row.number === "number" && typeof row.url === "string" && row.baseRefName === options.base && row.headRefOid === localSha);
+  // commit, and NOT FROM A FORK. Every row is looked at -- a fork's same-named
+  // pull request listed first must not hide ours. A fork row at the same commit
+  // is still somebody else's: the sha is public once pushed, and the fork's
+  // author can move that head (Feitan, delivery round on zheref/nen#498,
+  // SEC-7). Failing that, the first row is reported.
+  const sameRepository = (row: { isCrossRepository?: unknown }): boolean => row.isCrossRepository === false;
+  const ours = open.find((row): boolean => typeof row.number === "number" && typeof row.url === "string" && row.baseRefName === options.base && row.headRefOid === localSha && sameRepository(row));
   const first = ours ?? open[0];
   if (first !== undefined) {
     const number = typeof first.number === "number" ? first.number : null;
     const url = typeof first.url === "string" ? first.url : null;
     const openBase = typeof first.baseRefName === "string" ? first.baseRefName : null;
     const openHead = typeof first.headRefOid === "string" ? first.headRefOid : null;
-    if (number === null || url === null || openBase !== options.base || openHead !== localSha) {
+    const fork = first.isCrossRepository !== false;
+    if (number === null || url === null || openBase !== options.base || openHead !== localSha || fork) {
       // NOT PROVABLY THE PULL REQUEST THIS CALL WOULD HAVE OPENED: another
       // base, or an answer nen could not read whole. Reported, never adopted
       // and never retargeted -- exit 1, nothing opened.
@@ -337,7 +348,9 @@ export function openPullRequest(seams: Seams, cwd: string, target: Target, optio
           ? `${target.slug}#${number} is already open for '${head}', and its ${openBase === null ? "base" : "head commit"} could not be read`
           : openBase !== options.base
             ? `${target.slug}#${number} is already open for '${head}' against '${openBase}', not '${options.base}'`
-            : `${target.slug}#${number} is already open for a branch named '${head}', but its head commit is ${openHead}, not the ${localSha} this checkout pushed -- it is not provably this branch's pull request`;
+            : openHead !== localSha
+              ? `${target.slug}#${number} is already open for a branch named '${head}', but its head commit is ${openHead}, not the ${localSha} this checkout pushed -- it is not provably this branch's pull request`
+              : `${target.slug}#${number} is open for a branch named '${head}' at the same commit, but ${first.isCrossRepository === true ? `from a fork${ownerLogin(first.headRepositoryOwner) === null ? "" : ` (${ownerLogin(first.headRepositoryOwner) as string})`}` : "gh did not say whether it is from a fork"} -- a fork's head is its author's to move, so it is not provably this branch's pull request`;
       return {
         kind: "done",
         report: report(number, url, true),

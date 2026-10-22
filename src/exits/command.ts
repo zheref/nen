@@ -13,6 +13,12 @@
 //
 // IT REPORTS AND NEVER CHOOSES. It says what a code means; what a caller does
 // about it is the caller's.
+//
+// A VERB MAY RESTATE 2. The shared 2 is "you typed it wrong"; a verb that also
+// returns 2 for something that is not a typo -- a wiring fault, a ledger that
+// cannot be established -- declares its own meaning of 2 as a row of its own
+// (`code: 2`), and this verb prints it beside the scheme (delivery round on
+// zheref/nen#498, reading 9). A retry wrapper branching on 2 reads it here.
 
 import { emit, VerbUsageError, type Command, type CommandContext, type ExitCode } from "../cli/command.js";
 import { COMMANDS } from "../cli/registry.js";
@@ -43,7 +49,7 @@ export const OUTSIDE_REGISTRY: readonly ExitCode[] = [
   { verb: "release-publish", code: 4, meaning: "a private repository named in text bound for a PUBLIC target; nothing written (the private-name guard)" },
 ];
 
-/** Every code above 2, registry first, in verb then code order. */
+/** Every code above 2, and every verb's own meaning of 2, registry first, in verb then code order. */
 export function exitTable(commands: readonly Command[] = COMMANDS): ExitCode[] {
   const rows = [...commands.flatMap((command): readonly ExitCode[] => command.exits ?? []), ...OUTSIDE_REGISTRY];
   return rows.sort((a, b): number => a.verb.localeCompare(b.verb) || a.code - b.code);
@@ -74,14 +80,17 @@ here for the verb it invoked.
 
   <family> [<verb>]  Only the rows for that family (and verb). A row spelled
                      '<family> *' answers for every verb of the family. An
-                     unknown family is exit 2; a verb with no row of its own
-                     returns only 0, 1 and 2, and prints the scheme alone.
+                     unknown family, or a verb the family does not declare,
+                     is exit 2 naming what it does declare; a verb with no row
+                     of its own returns only 0, 1 and 2, and prints the scheme
+                     alone. A row with code 2 is that verb's own meaning of
+                     2, restating the shared one.
 
 Reads nothing outside the binary. --json prints
   { contract: "${EXITS_CONTRACT}", filter, scheme: [{verb, code, meaning}],
     verbs: [{verb, code, meaning}] }.
 
-Exit codes: 0 printed; 2 usage (an unknown family, a third positional).`;
+Exit codes: 0 printed; 2 usage (an unknown family or verb, a third positional).`;
 
 export const exitsCommand: Command = {
   name: "exits",
@@ -96,6 +105,10 @@ export const exitsCommand: Command = {
     if (family !== undefined && !known.has(family)) {
       throw new VerbUsageError(`unknown family '${family}'. Run 'nen --help' for the families this binary carries.`);
     }
+    const command = COMMANDS.find((entry): boolean => entry.name === family);
+    if (verb !== undefined && command?.subcommands !== undefined && !command.subcommands.includes(verb)) {
+      throw new VerbUsageError(`'${family}' has no verb '${verb}'; it declares ${command.subcommands.join(", ")}.`);
+    }
     const all = exitTable();
     const verbs = family === undefined ? all : all.filter((row): boolean => matches(row, family, verb));
     const report: ExitsReport = {
@@ -105,10 +118,11 @@ export const exitsCommand: Command = {
       verbs,
     };
     const width = Math.max(4, ...verbs.map((row): number => row.verb.length));
+    const restated = verbs.some((row): boolean => row.code === 2);
     const lines = [
       "every verb:",
       ...SHARED_SCHEME.map((row): string => `  ${String(row.code)}  ${row.meaning}`),
-      verbs.length === 0 ? "above 2: none -- this verb returns only 0, 1 and 2." : "above 2:",
+      verbs.length === 0 ? "above 2: none -- this verb returns only 0, 1 and 2." : restated ? "its own codes (a 2 here restates the shared one for that verb), and above 2:" : "above 2:",
       ...verbs.map((row): string => `  ${row.verb.padEnd(width)}  ${String(row.code)}  ${row.meaning}`),
     ];
     emit(context.io, context.json, report, lines);

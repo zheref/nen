@@ -136,6 +136,9 @@ function print(context: CommandContext, report: PlaneReport): void {
 }
 
 export const loopCommand: Command = {
+  exits: [
+    { verb: "loop iterate", code: 2, meaning: "also: the loop's count cannot be established -- a lost ledger, a ledger in two homes, an unreadable ledger, or a git that cannot name the common dir; never retried as a typo" },
+  ],
   name: "loop",
   subcommands: ["slots", "iterate"],
   summary: "Count the concurrency budgets, and enforce izanagi's iteration cap.",

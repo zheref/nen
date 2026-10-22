@@ -393,6 +393,11 @@ The complete list:
 | [`pr ready`](#nen-pr-ready) | `8` | `--require-head` did not match GitHub's head; no verdict |
 | [`pr mark-ready`](#nen-pr-mark-ready) | `8` | `--require-head` did not match GitHub's head — deliberately `pr ready`'s code for the same fact, so a caller pinning a head across both verbs branches on one number |
 | [`pr request-reviews`](#nen-pr-request-reviews) | `9` | a bot request GitHub accepted but did not list in the response's pending-review page; this does not prove recording failure or allowance exhaustion. Its `2` is also **refused by the round ceiling** (`round_policy.maxRounds`, [#240](https://github.com/zheref/nen/issues/240)), told apart from usage by its `refused:` line |
+| [`pr mark-ready`](#nen-pr-mark-ready) | `3` | the pull request is CLOSED or MERGED; nothing sent |
+| `review ledger` | `3` / `4` | refused: the branch is the trunk or not a branch, no ledger opened / lost: no ledger here, but one was opened under this key before -- recover it, never a fresh init |
+| [`loop iterate`](#nen-loop-iterate) | `2` | its own meaning of 2, beside usage: the loop's count cannot be established -- a lost ledger, a ledger in two homes, an unreadable ledger, or a git that cannot name the common dir; never retried as a typo |
+| [`canon lint`](#nen-canon-lint) | `2` | its own meaning of 2, beside usage: wiring -- an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read |
+| [`canon clause check`](#nen-canon-clause-check) | `2` | its own meaning of 2, beside usage: a tooling failure -- an unreadable file or base, no definitions at all, a leaf pattern matching nothing, a failed git read |
 | [`bootstrap`](#nen-bootstrap) | `3`–`7` | not on the three-code scheme at all: it relays the bootstrap script's own published codes unchanged ([Getting the binary](#getting-the-binary)), and those numbers mean the script's things |
 <!-- exits:end -->
 
@@ -3591,9 +3596,9 @@ here. Push first ([`wc publish`](#nen-wc-publish)). A git failure echoed
 into any of these messages has remote credentials redacted (`://user:***@`,
 `***` for a GitHub token) before it is printed. **A pull request already
 open for that head** (`gh pr list --head <branch> --state open --json
-number,url,baseRefName,headRefOid`) is never a second one: against the
-**same** `--base`, at the **same head commit** this checkout pushed, it is the
-pull request a previous call opened — a retry after a timeout, a
+number,url,baseRefName,headRefOid,isCrossRepository,headRepositoryOwner`) is never a second one: against the
+**same** `--base`, at the **same head commit** this checkout pushed, and **not
+from a fork** (`isCrossRepository: false`), it is the pull request a previous call opened — a retry after a timeout, a
 resumed run — so it is returned as `opened: existing <owner/name>#<n>: <url>`
 at **exit 0** with `existing: true`, and nothing is created. Every listed
 row is compared, so a fork's same-named pull request listed first does not
@@ -3601,8 +3606,10 @@ hide this branch's. With `--assignee` the adopted pull request's assignees
 are **read back**, never re-applied: one missing, or a read-back that fails,
 is exit 1 with the pull request named and nothing assigned. Against **another** base, at **another** head commit
 (`--head` matches a branch *name*, from any fork, so a different commit is
-not provably this branch's pull request), or when its number, url, base or
-head commit cannot be read, it is **exit 1**, `existing: true`, nothing opened or
+not provably this branch's pull request), **from a fork** even at the same
+commit and base (the sha is public once pushed, and the fork's author can move
+that head), or when its number, url, base, head commit or fork flag cannot be
+read, it is **exit 1**, `existing: true`, nothing opened or
 retargeted — which base is right is the caller's call. One head, one pull
 request. Then `gh pr create --repo --base --head --title --body-file -
 [--draft]`, the body on stdin, and the number is **read out of the url gh printed**: a create
@@ -15537,10 +15544,10 @@ nen exits [<family> [<verb>]] [--json]
 
 | Flag | Required | Meaning | Notes |
 |---|---|---|---|
-| `<family> [<verb>]` | no | Only the rows for that family, and verb. | A row spelled `<family> *` answers for every verb of the family and is kept under any verb. `bootstrap`, `schema` and the release row's `release-publish` script are accepted beside the registry families. An unknown family, or a third positional, is exit 2. A verb with no row of its own prints the scheme and `above 2: none`. |
+| `<family> [<verb>]` | no | Only the rows for that family, and verb. | A row spelled `<family> *` answers for every verb of the family and is kept under any verb. `bootstrap`, `schema` and the release row's `release-publish` script are accepted beside the registry families. An unknown family, a verb the family does not declare (the refusal names the family's verbs), or a third positional, is exit 2. A verb with no row of its own prints the scheme and `above 2: none`. A row with code `2` is that verb's **own meaning of 2**, beside the shared usage meaning (a wiring fault, a ledger that cannot be established): a retry wrapper reads it here. |
 | `--json` | no | Print the report as JSON. | |
 
-**Output and exit codes** -- human lines: `every verb:` and the three shared codes, then `above 2:` and one `<verb>  <code>  <meaning>` line per row (or `above 2: none -- this verb returns only 0, 1 and 2.`). `--json` top-level keys: `contract` (`nen.exits/v0.1`), `filter` (the `<family> [<verb>]` asked for, or `null`), `scheme` (`[{ verb: "*", code, meaning }]` for `0`, `1`, `2`) and `verbs` (`[{ verb, code, meaning }]`, by verb then code). Reads nothing outside the binary. Exit 0 printed; exit 2 on an unknown family or a third positional.
+**Output and exit codes** -- human lines: `every verb:` and the three shared codes, then `above 2:` (or, when a row restates 2, `its own codes (a 2 here restates the shared one for that verb), and above 2:`) and one `<verb>  <code>  <meaning>` line per row (or `above 2: none -- this verb returns only 0, 1 and 2.`). `--json` top-level keys: `contract` (`nen.exits/v0.1`), `filter` (the `<family> [<verb>]` asked for, or `null`), `scheme` (`[{ verb: "*", code, meaning }]` for `0`, `1`, `2`) and `verbs` (`[{ verb, code, meaning }]`, by verb then code). Reads nothing outside the binary. Exit 0 printed; exit 2 on an unknown family or verb, or a third positional. `src/exits/exits.test.ts` also holds the registry total over the source: every exported `EXIT_*` constant, literal `code: N` and `return N;` above 2 under a family's directory must have a row.
 
 **Example**
 

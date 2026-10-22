@@ -351,6 +351,10 @@ ${SURFACE_LIST}
       never 1, which is drift.`;
 
 export const canonCommand: Command = {
+  exits: [
+    { verb: "canon lint", code: 2, meaning: "also wiring: an unreadable or invalid contract, baseline or file, a symlink leaving the root, a failed git read" },
+    { verb: "canon clause check", code: 2, meaning: "also a tooling failure: an unreadable file or base, no definitions at all, a leaf pattern matching nothing, a failed git read" },
+  ],
   jsonRefusals: ["resolve"],
   name: "canon",
   subcommands: ["resolve", "mirror", "pin", "checkout", "lint", "clause"],
