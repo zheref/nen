@@ -83,7 +83,7 @@ describe("nen run start", () => {
 
     const started = await capture(["run", "start", "--id", "r1", "--idle-answers", '{"direct-mismatch":"default"}'], { common, repoFlag: root });
     expect(started.code).toBe(0);
-    expect(started.out[0]).toMatch(/^started: run r1 -- .*hatsu\/runs\/r1\.json$/);
+    expect(started.out[0]).toBe(`started: run r1 -- ${join(common, "hatsu", "runs", "r1.json")}`);
     const stored = JSON.parse(readFileSync(join(common, "hatsu", "runs", "r1.json"), "utf8"));
     expect(stored).toEqual({ contract: "nen.run/v0.1", id: "r1", startedAt: "2026-10-22T00:00:00.000Z", idleAnswers: { "direct-mismatch": "default" }, prs: [] });
   });
